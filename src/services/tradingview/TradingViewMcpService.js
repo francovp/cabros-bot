@@ -119,6 +119,18 @@ function createMcpError(message) {
 	return error;
 }
 
+function createEmptyConfluenceEnrichmentStatus() {
+	return {
+		enabled: process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT === 'true',
+		attemptedCount: 0,
+		appliedCount: 0,
+		failedCount: 0,
+		budgetExhaustedCount: 0,
+		lastAppliedAt: null,
+		lastFailureCategory: null,
+	};
+}
+
 function createRuntimeStatus({ includeEnrichment = true } = {}) {
 	const status = {
 		status: 'unknown',
@@ -137,6 +149,7 @@ function createRuntimeStatus({ includeEnrichment = true } = {}) {
 			fullCount: 0,
 			partialCount: 0,
 			failedCount: 0,
+			confluence: createEmptyConfluenceEnrichmentStatus(),
 		};
 	}
 
@@ -723,6 +736,13 @@ class TradingViewMcpService {
 
 			// Respect both the per-call timeout and the overall enrichment budget
 			const combinedSignal = AbortSignal.any([confluenceController.signal, budgetController.signal]);
+			// These counters count CALLS, not enrichments. One alert enrichment issues up
+			// to two confluence calls (combined_analysis, then multi_timeframe_analysis when
+			// enabled), so each call records its own attempt and exactly one outcome. The
+			// alternative - one attempt per enrichment - makes applied+failed<=attempted
+			// arithmetically impossible, because a budget-starved second call would then be
+			// charged to the first call's attempt and be reported as both applied and failed.
+			this._recordConfluenceOutcome({ attempted: true });
 
 			try {
 				confluenceAnalysis = await this.callCombinedAnalysis({
@@ -731,27 +751,33 @@ class TradingViewMcpService {
 					timeframe,
 					signal: combinedSignal,
 				});
+				this._recordConfluenceOutcome({ applied: true });
 				console.debug(`[TradingViewMcpService] Confluence analysis fetched for ${symbol}`);
 				if (multiTimeframeEnabled) {
 					if (budgetController.signal.aborted) {
 						optionalEnrichmentPartial = true;
+						this._recordConfluenceOutcome({ budgetExhausted: true });
 					} else {
+						this._recordConfluenceOutcome({ attempted: true });
 						multiTimeframeAnalysis = await this.callMultiTimeframeAnalysis({
 							symbol,
 							exchange,
 							signal: combinedSignal,
 						});
+						this._recordConfluenceOutcome({ applied: true });
 						console.debug(`[TradingViewMcpService] Multi-timeframe confluence analysis fetched for ${symbol}`);
 					}
 				}
 			} catch (error) {
 				optionalEnrichmentPartial = true;
+				this._recordConfluenceOutcome({ failed: true, error });
 				this.logger.warn(`[TradingViewMcpService] Confluence enrichment failed for ${symbol} (fail-open): ${error.message}`);
 			} finally {
 				clearTimeout(confluenceTimeoutId);
 			}
 		} else if (confluenceEnabled) {
 			optionalEnrichmentPartial = true;
+			this._recordConfluenceOutcome({ budgetExhausted: true });
 		}
 
 		cleanBudget();
@@ -1544,6 +1570,34 @@ class TradingViewMcpService {
 				[countKey]: enrichment[countKey] + 1,
 			},
 		};
+	}
+
+	_recordConfluenceOutcome(outcome = {}) {
+		try {
+			const enrichment = this.runtimeStatus.enrichment || {};
+			const confluence = enrichment.confluence || createEmptyConfluenceEnrichmentStatus();
+			const next = { ...confluence };
+			if (outcome.attempted) {
+				next.attemptedCount += 1;
+			}
+			if (outcome.applied) {
+				next.appliedCount += 1;
+				next.lastAppliedAt = new Date().toISOString();
+			}
+			if (outcome.failed) {
+				next.failedCount += 1;
+				next.lastFailureCategory = this._getErrorCategory(outcome.error) || 'unknown_error';
+			}
+			if (outcome.budgetExhausted) {
+				next.budgetExhaustedCount += 1;
+			}
+			this.runtimeStatus = {
+				...this.runtimeStatus,
+				enrichment: { ...enrichment, confluence: next },
+			};
+		} catch (error) {
+			this.logger?.warn?.(`[TradingViewMcpService] Failed to record confluence enrichment outcome: ${error.message}`);
+		}
 	}
 
 	_getAlertPathEnrichmentStatus() {

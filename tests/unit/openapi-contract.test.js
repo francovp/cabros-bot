@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const SwaggerParser = require('@apidevtools/swagger-parser');
+const MarkdownV2Formatter = require('../../src/services/notification/formatters/markdownV2Formatter');
 const { getRoutes } = require('../../src/routes');
 
 const contractPath = path.join(__dirname, '../../src/openapi/openapi.json');
@@ -583,6 +584,99 @@ describe('OpenAPI contract', () => {
 			const noBarriersAlert = examples.analyzedNoBarriers.value.results[0].alert;
 			expect(noBarriersAlert.stop).toBeUndefined();
 			expect(noBarriersAlert.target).toBeUndefined();
+		});
+	});
+
+	describe('TestAlertRequest.text non-empty contract (GH-1157)', () => {
+		// postTestAlert() forwards a caller-supplied body.text straight to
+		// validateAlert(), which throws for any falsy or blank string and the handler
+		// maps to 400 INVALID_REQUEST. A schema that still accepts "" lets a validator
+		// or generated client build a request the endpoint always rejects.
+		it('rejects an empty string on the test-alert probe text', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+			const text = contract.components.schemas.TestAlertRequest.properties.text;
+
+			expect(text.type).toBe('string');
+			expect(text.minLength).toBe(1);
+			expect(text.description).toContain('non-empty');
+		});
+
+		it('keeps the probe text optional so omitting it still uses the default marker', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+			const schema = contract.components.schemas.TestAlertRequest;
+
+			// The handler only substitutes its own smoke-probe marker when text is
+			// absent, so requiring the field would break the documented minimal
+			// `{}` request body.
+			expect(schema.required).toBeUndefined();
+			expect(contract.components.requestBodies.TestAlert.required).toBe(false);
+			expect(contract.components.requestBodies.TestAlert.content['application/json'].examples.minimal.value)
+				.toEqual({});
+		});
+
+		it('bounds every optional string field the runtime validates for emptiness', () => {
+			// Generalises GH-1157: an optional string with neither `pattern` nor
+			// `minLength` is unbounded below, so it accepts "" while the handler
+			// rejects it. telegramChatId/whatsappChatId already carried minLength 1;
+			// text did not.
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+			const properties = contract.components.schemas.TestAlertRequest.properties;
+
+			const unbounded = Object.entries(properties)
+				.filter(([, schema]) => schema.type === 'string' && !schema.pattern)
+				.filter(([, schema]) => schema.minLength !== 1)
+				.map(([name]) => name);
+
+			expect(unbounded).toEqual([]);
+		});
+	});
+
+	describe('TestAlertResult dry-run preview contract (GH-1158)', () => {
+		// The dryRun example documents the default-marker path: body {} -> the
+		// handler substitutes `[TEST-ALERT] cabros-bot smoke probe <ISO timestamp>`.
+		// For the telegram channel the preview is MarkdownV2Formatter#format() of that
+		// text, echoed verbatim as `text` with length: preview.length, so the example
+		// is pinned to the formatter instead of a hand-copied excerpt.
+		it('derives the default-marker telegram preview from the formatter', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+			const example = contract.components.responses.TestAlertResult
+				.content['application/json'].examples.dryRun.value;
+			const telegram = example.formatted.telegram;
+
+			// The documented response carries the channel-formatted string, so the raw
+			// marker is recovered by reversing MarkdownV2 escaping before it is matched
+			// against the marker the handler substitutes for an empty body.
+			const marker = telegram.text.replace(/\\(.)/g, '$1');
+			expect(marker).toMatch(
+				/^\[TEST-ALERT\] cabros-bot smoke probe \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+			);
+			expect(telegram.preview).toBe(new MarkdownV2Formatter().format(marker));
+			expect(telegram.text).toBe(telegram.preview);
+			expect(telegram.length).toBe(telegram.preview.length);
+		});
+
+		it('keeps the dry-run side-effect-free envelope the handler returns', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+			const example = contract.components.responses.TestAlertResult
+				.content['application/json'].examples.dryRun.value;
+
+			// postTestAlert() answers 200 with ok/dryRun true, persisted false and an
+			// empty results array on the dry-run branch, and never writes to Firestore.
+			expect(example).toEqual(expect.objectContaining({
+				ok: true,
+				dryRun: true,
+				persisted: false,
+				results: [],
+			}));
+			expect(Object.keys(example.formatted)).toEqual(['telegram']);
+			const properties = contract.components.schemas.TestAlertResult.properties;
+			expect(properties.formatted.nullable).toBe(true);
+			expect(properties.formatted.description).toContain('dryRun');
 		});
 	});
 });

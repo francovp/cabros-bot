@@ -271,6 +271,63 @@ describe('NewsAnalysisStorageService', () => {
 			expect(summary.falsePositiveProxy.noFollowupCount).toBe(2);
 			expect(summary.falsePositiveProxy.ratePercent).toBe(66.67);
 		});
+
+		// Regression (#1152)
+		it('excludes high-confidence analyses that never sent an alert from the false-positive proxy', async () => {
+			await NewsAnalysisStorageService.recordAnalyses([
+				{
+					symbol: 'BTCUSDT',
+					eventCategory: 'price_surge',
+					confidence: 0.95,
+					alertSent: false,
+				},
+			]);
+
+			const summary = await NewsAnalysisStorageService.summarizeAnalyses({ threshold: 0.7 });
+
+			// The analysis still counts as an analysis, just not as an evaluated alert.
+			expect(summary.totalAnalyses).toBe(1);
+			expect(summary.totalAlertsSent).toBe(0);
+			expect(summary.bySymbol.BTCUSDT.alertsSent).toBe(0);
+			expect(summary.bySymbol.BTCUSDT.averageConfidence).toBe(0.95);
+
+			expect(summary.falsePositiveProxy.totalEvaluated).toBe(0);
+			expect(summary.falsePositiveProxy.noFollowupCount).toBe(0);
+			expect(summary.falsePositiveProxy.ratePercent).toBe(0);
+		});
+
+		it('ignores a no-follow-up unsent record when a delivered alert shares its symbol', async () => {
+			const now = Date.now();
+			const collectionState = global.__firebaseAdminMockState.collections.get('news_analysis') || new Map();
+			global.__firebaseAdminMockState.collections.set('news_analysis', collectionState);
+
+			// Unsent high-confidence analysis 1h before the delivered alert. It must not
+			// become the follow-up that masks the delivered alert as a true positive.
+			collectionState.set('doc-unsent', {
+				id: 'doc-unsent',
+				symbol: 'BTCUSDT',
+				eventCategory: 'price_surge',
+				confidence: 0.95,
+				alertSent: false,
+				createdAt: { toDate: () => new Date(now - 3600000) },
+			});
+			collectionState.set('doc-sent', {
+				id: 'doc-sent',
+				symbol: 'BTCUSDT',
+				eventCategory: 'price_surge',
+				confidence: 0.9,
+				alertSent: true,
+				createdAt: { toDate: () => new Date(now - 100000) },
+			});
+
+			const summary = await NewsAnalysisStorageService.summarizeAnalyses({ threshold: 0.7 });
+
+			expect(summary.totalAnalyses).toBe(2);
+			expect(summary.totalAlertsSent).toBe(1);
+			expect(summary.falsePositiveProxy.totalEvaluated).toBe(1);
+			expect(summary.falsePositiveProxy.noFollowupCount).toBe(1);
+			expect(summary.falsePositiveProxy.ratePercent).toBe(100);
+		});
 	});
 
 	describe('listAnalyses', () => {

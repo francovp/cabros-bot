@@ -7,6 +7,7 @@ const sentryService = require('../../services/monitoring/SentryService');
 const signalOutcomeService = require('../../services/storage/SignalOutcomeService');
 const { parseTelegramTopicRoutes, resolveTelegramThreadId } = require('../../services/notification/telegramTopicRouting');
 const { VALID_SIGNAL_CLASSES } = require('../../lib/validation');
+const { isFirestoreErrorCategory } = require('../../services/storage/firestoreErrorCategories');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -37,6 +38,8 @@ const EXPORT_FIELDS = [
 	'tokenUsage',
 	'enrichmentData',
 	'text',
+	'currentPrice',
+	'priceCurrency',
 ];
 
 function parseLimit(rawLimit) {
@@ -1236,13 +1239,30 @@ function handleAsync(req, res, endpoint, handler) {
 				method: req.method,
 				statusCode,
 			},
+			// `extra.category` is what SentryService maps onto a Sentry tag, so this
+			// is the supported way to make a read-path outage alertable by category
+			// instead of by message text (#1285).
+			...(isFirestoreErrorCategory(error.category)
+				? { extra: { category: error.category, missingIndex: error.missingIndex === true } }
+				: {}),
 		});
 
 		if (statusCode === 503) {
-			return res.status(503).json({
+			// `category` is the sanitized Firestore enum from the storage layer, so
+			// an operator can tell a rejected query from a credential/init failure
+			// without a Cloud Logging session (#1285). It is never the provider
+			// message, which embeds the project/database path and index definition.
+			const body = {
 				error: error.message,
 				code: alertStorageService.STORAGE_UNAVAILABLE_CODE,
-			});
+			};
+			if (isFirestoreErrorCategory(error.category)) {
+				body.category = error.category;
+			}
+			if (error.missingIndex === true) {
+				body.missingIndex = true;
+			}
+			return res.status(503).json(body);
 		}
 
 		if (statusCode === 400) {

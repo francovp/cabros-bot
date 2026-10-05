@@ -50,15 +50,83 @@ services:
   - key: ENABLE_TELEGRAM_BOT
     value: true
     previewValue: false
+  # Durable webhook idempotency: web service only, previews off. See AGENTS.md.
+  - key: ENABLE_FIRESTORE_IDEMPOTENCY
+    value: true
+    previewValue: false
   - key: NEWS_GEMINI_CONCURRENCY
     value: 3
     previewValue: 3
+  # Signal outcome tracking (GH-1110). Pinned here, not dashboard-only, so the
+  # gate that controls signal recording, the evaluation sweep and the whole
+  # /api/outcomes surface is reviewable in the repo. Previews stay off: a PR
+  # preview would record and evaluate against the production collection.
+  # The web process records signals and sweeps them. The dedicated
+  # cabros-crypto-bot-signal-outcome-worker below remains the cutover target;
+  # the Firestore lease in SignalOutcomeService keeps exactly one of them acting
+  # on a pending signal while both are configured.
+  - key: ENABLE_SIGNAL_OUTCOME_TRACKING
+    value: true
+    previewValue: false
   - key: SIGNAL_OUTCOME_WORKER_ROLE
     value: web
+  - key: SIGNAL_OUTCOME_EVALUATION_LEASE_MS
+    value: 120000
   - key: JOB_EXECUTION_MODE
     value: local
     previewValue: local
+  # BullMQ queue contract. Declared at the code defaults so an operator can see and
+  # change them in the Render dashboard; until the paid Key Value is provisioned
+  # these match the in-code defaults exactly, so declaring them changes nothing.
+  - key: JOB_QUEUE_ATTEMPTS
+    value: 5
+  - key: JOB_QUEUE_BACKOFF_MS
+    value: 30000
+  - key: JOB_QUEUE_CONCURRENCY
+    value: 1
+  - key: JOB_QUEUE_CLAIM_LEASE_MS
+    value: 60000
+  - key: JOB_QUEUE_CONNECT_TIMEOUT_MS
+    value: 5000
+  - key: JOB_QUEUE_PROBE_TIMEOUT_MS
+    value: 5000
   - key: ENABLE_FIRESTORE_JOB_STORAGE
+    value: true
+    previewValue: false
+  # Durable scanner presets: web service only, previews off. See AGENTS.md.
+  - key: ENABLE_FIRESTORE_SCANNER_PRESETS
+    value: true
+    previewValue: false
+  # Server-side Remote Config. Enabled on every compute service that starts the
+  # loader so they cannot evaluate different effective configs. Previews stay off.
+  - key: ENABLE_FIREBASE_REMOTE_CONFIG
+    value: true
+    previewValue: false
+  # Langfuse dynamic prompts (#1178). Declared on every compute service that can
+  # resolve a prompt, because PromptService falls back to the local file on any
+  # remote failure: a split gate makes two processes silently use different prompt
+  # versions for the same alert. Previews stay off so a throwaway PR deploy cannot
+  # publish traces against the production Langfuse project or consume its quota.
+  # `dependencies.langfuse.ready` is proven from observed resolutions, not this flag.
+  - key: ENABLE_LANGFUSE_PROMPTS
+    value: true
+    previewValue: false
+  - key: LANGFUSE_PROMPT_LABEL
+    value: production
+  - key: LANGFUSE_PROMPT_CACHE_TTL_SECONDS
+    value: 300
+  - key: LANGFUSE_PUBLIC_KEY
+    sync: false
+  - key: LANGFUSE_SECRET_KEY
+    sync: false
+  # TradingView confluence enrichment: web service only, previews off. See AGENTS.md.
+  - key: ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT
+    value: true
+    previewValue: false
+  # MTF is nested inside the confluence gate, so it needs a web-service value of its
+  # own: without this the worker's fromService mirror below pointed at a key the web
+  # service never set - the same dangling-mirror shape as the flag above.
+  - key: ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME
     value: true
     previewValue: false
   - key: REDIS_URL
@@ -79,6 +147,63 @@ services:
   envVars:
   - key: JOB_EXECUTION_MODE
     value: render-worker
+  # Mirrored from web so both sides resolve the same queue contract; the values
+  # below are the in-code defaults.
+  - key: JOB_QUEUE_ATTEMPTS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: JOB_QUEUE_ATTEMPTS
+  - key: JOB_QUEUE_BACKOFF_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: JOB_QUEUE_BACKOFF_MS
+  - key: JOB_QUEUE_CONCURRENCY
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: JOB_QUEUE_CONCURRENCY
+  - key: JOB_QUEUE_CLAIM_LEASE_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: JOB_QUEUE_CLAIM_LEASE_MS
+  - key: JOB_QUEUE_CONNECT_TIMEOUT_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: JOB_QUEUE_CONNECT_TIMEOUT_MS
+  - key: JOB_QUEUE_PROBE_TIMEOUT_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: JOB_QUEUE_PROBE_TIMEOUT_MS
+  - key: ENABLE_FIREBASE_REMOTE_CONFIG
+    value: true
+    previewValue: false
+  # This worker starts `newsMonitorSchedulerService` and `alertSchedulerService`,
+  # which resolve prompts through the same PromptService as the web service, so it
+  # needs the same Langfuse gate or the two processes would use different prompt
+  # versions for the same alert (#1178). The credentials are `sync: false`: an
+  # operator must set them in the Render dashboard for this service.
+  - key: ENABLE_LANGFUSE_PROMPTS
+    value: true
+    previewValue: false
+  - key: LANGFUSE_PROMPT_LABEL
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: LANGFUSE_PROMPT_LABEL
+  - key: LANGFUSE_PROMPT_CACHE_TTL_SECONDS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: LANGFUSE_PROMPT_CACHE_TTL_SECONDS
+  - key: LANGFUSE_PUBLIC_KEY
+    sync: false
+  - key: LANGFUSE_SECRET_KEY
+    sync: false
   - key: ENABLE_NOTIFICATION_REDRIVE
     fromService:
       name: cabros-crypto-bot-telegram-iac
@@ -383,7 +508,8 @@ services:
   - key: ENABLE_SIGNAL_OUTCOME_TRACKING
     sync: false
   - key: ENABLE_FIREBASE_REMOTE_CONFIG
-    sync: false
+    value: true
+    previewValue: false
   - key: ENABLE_SENTRY
     sync: false
   - key: SENTRY_DSN

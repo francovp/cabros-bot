@@ -29,12 +29,25 @@
 const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
-const { loadFirebaseAdminCredentialsOrNull } = require('./firebaseAdminCredentials');
+const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
+const {
+	classifyFirestoreError,
+	describeFirestoreErrorCategory,
+	isConfigurationErrorCategory,
+	isFirestoreErrorCategory,
+	isMissingIndexError,
+	FIRESTORE_ERROR_CATEGORIES,
+} = require('./firestoreErrorCategories');
 const { adminSseService } = require('../sse/AdminSseService');
 const { VALID_SIGNAL_CLASSES } = require('../../lib/validation');
+const {
+	toPositiveFiniteNumber,
+	computeDeterministicRiskReward,
+} = require('../tradingview/riskRewardMath');
 const { deriveAssetContext } = require('../tradingview/parseTradingViewSignal');
+const { analyzeSentimentScoreDistribution } = require('../grounding/sentimentDistribution');
 
 function createEmptySignalClassCounts() {
 	return {
@@ -51,6 +64,8 @@ function createEmptySignalClassCounts() {
 
 const WRITE_METRICS_DOMAIN_ALERTS = 'alerts';
 const WRITE_METRICS_DOMAIN_REPLAYS = 'alertReplays';
+const READ_METRICS_DOMAIN_ALERTS = 'alerts';
+const READ_METRICS_DOMAIN_REPLAYS = 'alertReplays';
 
 const COLLECTION_NAME = 'alerts';
 const REPLAY_COLLECTION_NAME = 'alertReplays';
@@ -252,6 +267,16 @@ function formatAlertDocument(doc, options = {}) {
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
 	}
+	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
+		const currentPrice = toPositiveFiniteNumber(data.enrichmentData.current_price);
+		if (currentPrice !== null) {
+			docObj.currentPrice = currentPrice;
+		}
+		const priceCurrency = data.enrichmentData.price_currency;
+		if (typeof priceCurrency === 'string' && /^[A-Z]{2,5}$/.test(priceCurrency.trim().toUpperCase())) {
+			docObj.priceCurrency = priceCurrency.trim().toUpperCase();
+		}
+	}
 	if (typeof data.eventCategory === 'string' && data.eventCategory.trim()) {
 		docObj.eventCategory = data.eventCategory.trim();
 	} else if (data.enrichmentData && typeof (data.enrichmentData.eventCategory || data.enrichmentData.event_category) === 'string' && (data.enrichmentData.eventCategory || data.enrichmentData.event_category).trim()) {
@@ -334,7 +359,88 @@ function sanitizeEnrichmentData(enrichmentData) {
 		}
 	}
 
+	if (Object.prototype.hasOwnProperty.call(sanitized, 'current_price')) {
+		const price = toPositiveFiniteNumber(sanitized.current_price);
+		if (price !== null) {
+			sanitized.current_price = price;
+		} else {
+			delete sanitized.current_price;
+			delete sanitized.price_currency;
+		}
+	}
+	if (Object.prototype.hasOwnProperty.call(sanitized, 'price_currency')) {
+		if (typeof sanitized.price_currency === 'string') {
+			const trimmed = sanitized.price_currency.trim().toUpperCase();
+			if (/^[A-Z]{2,5}$/.test(trimmed)) {
+				sanitized.price_currency = trimmed;
+			} else {
+				delete sanitized.price_currency;
+			}
+		} else {
+			delete sanitized.price_currency;
+		}
+	}
+	if (!Object.prototype.hasOwnProperty.call(sanitized, 'current_price')) {
+		delete sanitized.price_currency;
+	}
+
 	return sanitized;
+}
+
+function applyDeterministicRiskReward(enrichmentData, side) {
+	if (!enrichmentData || typeof enrichmentData !== 'object' || Array.isArray(enrichmentData)) {
+		return enrichmentData;
+	}
+
+	const entry = toPositiveFiniteNumber(enrichmentData.current_price);
+	if (entry === null) {
+		return enrichmentData;
+	}
+
+	const invalidation = toPositiveFiniteNumber(
+		enrichmentData.invalidation_level,
+	);
+	const target = toPositiveFiniteNumber(
+		enrichmentData.target_level,
+	);
+
+	if (invalidation === null || target === null) {
+		return enrichmentData;
+	}
+
+	const existing = enrichmentData.risk_reward_ratio;
+	const existingIsValid = (typeof existing === 'number' && Number.isFinite(existing) && existing > 0)
+		|| (typeof existing === 'string' && existing.trim().length > 0);
+	if (existingIsValid) {
+		return enrichmentData;
+	}
+
+	const deterministic = computeDeterministicRiskReward({
+		entry,
+		invalidation,
+		target,
+		side,
+	});
+
+	if (deterministic === null) {
+		return enrichmentData;
+	}
+
+	// Round for readability, but never round a real ratio away. A ratio below 5e-5 (a
+	// near-flat stop against a target just above entry) rounds to 0 at 4 decimals, and 0
+	// fails the `existingIsValid` test above — so it would be re-derived on every read and
+	// counted as populated coverage while being indistinguishable from a genuine zero grade.
+	// A sub-5e-5 R:R is not actionable either, so drop it rather than persist a bad value.
+	const rounded = Number(deterministic.toFixed(4));
+	if (!(rounded > 0)) {
+		return enrichmentData;
+	}
+
+	return {
+		...enrichmentData,
+		risk_reward_ratio: rounded,
+		risk_reward_ratio_source: 'computed',
+	};
 }
 
 // Firestore Admin SDK rejects `undefined` field values anywhere in a write.
@@ -529,6 +635,66 @@ function createEvidenceCoverageBucket() {
 		totalSourceCount: 0,
 		averageSourceCount: 0,
 	};
+}
+
+// ---------------------------------------------------------------------------
+// Sentiment calibration — is the emitted sentiment_score still able to rank
+// alerts? (issue #1031). Production saw 87.6% of enriched scores at or above
+// 0.75, which makes the field useless for threshold tuning and outcome-gated
+// ranking. The durable view lives here rather than only in the process-local
+// gemini.js window so it survives a restart.
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the stored `sentiment_score` magnitude, tolerating the camelCase alias
+ * and a legacy string value. Returns null when nothing usable is stored, so a
+ * malformed legacy record is excluded from the sample instead of widening the
+ * distribution or throwing mid-summary.
+ */
+function readStoredSentimentScore(enrichmentData) {
+	if (!enrichmentData || typeof enrichmentData !== 'object' || Array.isArray(enrichmentData)) {
+		return null;
+	}
+	const raw = Number.isFinite(enrichmentData.sentiment_score)
+		? enrichmentData.sentiment_score
+		: enrichmentData.sentimentScore;
+	const numeric = typeof raw === 'string' && raw.trim() ? Number(raw) : raw;
+	if (typeof numeric !== 'number' || !Number.isFinite(numeric)) {
+		return null;
+	}
+	return Math.min(1, Math.abs(numeric));
+}
+
+function createEmptySentimentCalibration() {
+	return {
+		sampleCount: 0,
+		evaluated: false,
+		saturated: false,
+		reason: 'no_samples',
+		min: null,
+		max: null,
+		p10: null,
+		p50: null,
+		p90: null,
+		spread: null,
+		distinctValueCount: 0,
+		bucketCount: 0,
+		buckets: [],
+		topBandCount: 0,
+		topBandShare: null,
+		rawScoreCapCount: 0,
+	};
+}
+
+function buildSentimentCalibration(sentimentScores, rawScoreCapCount) {
+	let report;
+	try {
+		report = analyzeSentimentScoreDistribution(sentimentScores);
+	} catch (error) {
+		console.warn('[AlertStorageService] Sentiment calibration analysis failed:', error.message);
+		report = analyzeSentimentScoreDistribution([]);
+	}
+	return { ...report, rawScoreCapCount };
 }
 
 function getSourceCount(enrichmentData) {
@@ -1096,6 +1262,20 @@ function formatExportRecord(doc, { includeText, includeEnrichment } = {}) {
 		record.dedupStatus = data.dedupStatus;
 	}
 
+	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
+		const exportCurrentPrice = toPositiveFiniteNumber(data.enrichmentData.current_price);
+		if (exportCurrentPrice !== null) {
+			record.currentPrice = exportCurrentPrice;
+		}
+		const exportPriceCurrency = data.enrichmentData.price_currency;
+		if (typeof exportPriceCurrency === 'string') {
+			const trimmed = exportPriceCurrency.trim().toUpperCase();
+			if (/^[A-Z]{2,5}$/.test(trimmed)) {
+				record.priceCurrency = trimmed;
+			}
+		}
+	}
+
 	if (includeEnrichment) {
 		record.enrichmentData = formatExportEnrichmentData(data.enrichmentData, data);
 	}
@@ -1282,13 +1462,115 @@ function matchesFilters(alert, filters) {
 	return true;
 }
 
-function createStorageUnavailableError(cause) {
-	const error = new Error('Alert storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.');
+/**
+ * Build the `STORAGE_UNAVAILABLE` error, with a message that names the actual
+ * failing subsystem.
+ *
+ * Issue #1285: this used to emit one fixed message asserting "Check Firestore
+ * credentials and project configuration" for *every* failure. When the client
+ * had already initialized and only the query was rejected, that hint pointed
+ * operators at credentials that were demonstrably working (writes were
+ * succeeding), which is worse than no hint at all. The credential/project hint is
+ * now reserved for categories where it can actually be the cause; a rejected
+ * query reports its own sanitized category instead.
+ */
+function createStorageUnavailableError(cause, options = {}) {
+	const category = isFirestoreErrorCategory(options.category)
+		? options.category
+		: classifyFirestoreError(cause, options);
+	const missingIndex = isMissingIndexError(cause);
+	const reason = isConfigurationErrorCategory(category)
+		? 'Check Firestore credentials and project configuration.'
+		: `Firestore ${category.replace(/_/g, ' ')}: ${describeFirestoreErrorCategory(category)}`;
+	const error = new Error(`Alert storage is enabled but Firestore is unavailable. ${reason}`);
 	error.code = STORAGE_UNAVAILABLE_CODE;
+	error.category = category;
+	error.missingIndex = missingIndex;
+	if (missingIndex) {
+		error.message += ' Deploy the composite indexes declared in firestore.indexes.json (firebase deploy --only firestore:indexes).';
+	}
 	if (cause) {
 		error.cause = cause;
 	}
 	return error;
+}
+
+/**
+ * Record a read outcome and return the storage error to throw, so every read
+ * catch block stays a single expression and no read failure can escape the
+ * counters. Fail-open: metric recording never throws.
+ */
+function recordReadFailure(domain, cause, logPrefix) {
+	const category = classifyFirestoreError(cause);
+	const error = createStorageUnavailableError(cause, { category });
+	console.warn(`${logPrefix} ${error.category}:`, extractProviderErrorMessage(cause));
+	firestoreWriteMetricsService.recordReadFailure(domain, category);
+	return error;
+}
+
+function recordReadSuccess(domain) {
+	firestoreWriteMetricsService.recordReadSuccess(domain);
+}
+
+/**
+ * Null-client guard for read paths. Pinned to the `uninitialized` category
+ * because there is no provider error to classify here, and counted as a read
+ * failure so a broken read path cannot leave `dependencies.firestore.ready`
+ * green while every read endpoint answers 503.
+ */
+function storageUnavailableUninitializedRead(domain) {
+	const error = createStorageUnavailableError(null, {
+		category: FIRESTORE_ERROR_CATEGORIES.UNINITIALIZED,
+	});
+	firestoreWriteMetricsService.recordReadFailure(domain, error.category);
+	return error;
+}
+
+/**
+ * Execute the exact ordered `alerts` query used by `listAlerts`, bounded to a
+ * single document, as a read-path liveness probe for `/ready`.
+ *
+ * `listCollections()` — the probe used before #1285 — is a metadata call that
+ * never executes a collection query, so it reported a healthy Firestore while
+ * every ordered read was being rejected for a missing composite index. This
+ * probe runs the failing shape itself and is read-only, so it costs one cheap
+ * indexed document read per probe window.
+ */
+async function probeOrderedAlertRead() {
+	if (!isEnabled()) {
+		return null;
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
+	}
+	try {
+		await firestore
+			.collection(COLLECTION_NAME)
+			.orderBy('receivedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc')
+			.limit(1)
+			.get();
+	} catch (error) {
+		// Routed through the same helper as user reads so a probe-detected fault
+		// also feeds `dependencies.firestore.readHealth` and carries its
+		// category into the `/ready` payload.
+		throw recordReadFailure(READ_METRICS_DOMAIN_ALERTS, error, 'Firestore alerts read probe failed');
+	}
+	recordReadSuccess(READ_METRICS_DOMAIN_ALERTS);
+	return true;
+}
+
+/**
+ * The provider message is logged but never propagated into a response body or a
+ * status payload: Firestore embeds the fully-qualified project/database path and
+ * the index definition in it.
+ */
+function extractProviderErrorMessage(error) {
+	if (!error) {
+		return 'unknown error';
+	}
+	return typeof error.message === 'string' ? error.message : String(error);
 }
 
 function createInvalidCursorError() {
@@ -1344,7 +1626,8 @@ function getRawDocCursorValues(doc) {
 
 /**
  * Initialize Firebase Admin (idempotent) and return Firestore client.
- * Returns null when the feature is disabled or initialization fails.
+ * Returns null when the feature is disabled, when initialization fails, or when
+ * configured Firebase credentials are invalid (in-memory fallback).
  *
  * Credential resolution is delegated to the shared helper at
  * src/services/storage/firebaseAdminCredentials.js, which consolidates
@@ -1363,17 +1646,13 @@ function getFirestore() {
 	}
 
 	try {
-		const loaded = loadFirebaseAdminCredentialsOrNull();
-		const appOptions = {};
-		if (loaded && loaded.credential) {
-			appOptions.credential = loaded.credential;
-		}
-		if (loaded && loaded.projectId) {
-			appOptions.projectId = loaded.projectId;
-		}
-
-		if (!admin.apps.length) {
-			admin.initializeApp(appOptions);
+		const initialization = initializeFirebaseAdminApp({ admin });
+		if (!initialization.ok) {
+			console.warn(
+				`[AlertStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`
+			);
+			db = null;
+			return null;
 		}
 
 		db = admin.firestore();
@@ -1465,6 +1744,7 @@ async function saveAlertInternal(params = {}) {
 		whatsappChatId,
 		discordWebhookUrl,
 		routing,
+		side,
 		alertId: providedAlertId,
 	} = params;
 	if (!isEnabled()) {
@@ -1549,6 +1829,8 @@ async function saveAlertInternal(params = {}) {
 		if (extracted.exchange) {
 			document.exchange = extracted.exchange;
 		}
+
+		document.enrichmentData = applyDeterministicRiskReward(document.enrichmentData, side);
 		if (typeof eventCategory === 'string' && eventCategory.trim()) {
 			document.eventCategory = eventCategory.trim();
 		}
@@ -1637,7 +1919,7 @@ async function listAlerts({
 
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
 	}
 
 	const pageSize = clampLimit(limit);
@@ -1677,9 +1959,9 @@ async function listAlerts({
 		try {
 			snapshot = await query.get();
 		} catch (error) {
-			console.warn('[AlertStorageService] Failed to read alerts from Firestore:', error.message);
-			throw createStorageUnavailableError(error);
+			throw recordReadFailure(READ_METRICS_DOMAIN_ALERTS, error, 'Failed to read alerts from Firestore');
 		}
+		recordReadSuccess(READ_METRICS_DOMAIN_ALERTS);
 
 		if (!snapshot || snapshot.empty || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
 			break;
@@ -1733,16 +2015,16 @@ async function getAlertById(alertId) {
 
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
 	}
 
 	let snapshot;
 	try {
 		snapshot = await firestore.collection(COLLECTION_NAME).doc(alertId).get();
 	} catch (error) {
-		console.warn('[AlertStorageService] Failed to read alert from Firestore:', error.message);
-		throw createStorageUnavailableError(error);
+		throw recordReadFailure(READ_METRICS_DOMAIN_ALERTS, error, 'Failed to read alert from Firestore');
 	}
+	recordReadSuccess(READ_METRICS_DOMAIN_ALERTS);
 	if (!snapshot || !snapshot.exists) {
 		return null;
 	}
@@ -1886,7 +2168,7 @@ async function listReplayAttempts({ limit = DEFAULT_PAGE_SIZE, alertId, before }
 
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_REPLAYS);
 	}
 
 	const pageSize = clampLimit(limit);
@@ -1936,9 +2218,9 @@ async function listReplayAttempts({ limit = DEFAULT_PAGE_SIZE, alertId, before }
 		try {
 			snapshot = await query.get();
 		} catch (error) {
-			console.warn('[AlertStorageService] Failed to list replay attempts:', error.message);
-			throw createStorageUnavailableError(error);
+			throw recordReadFailure(READ_METRICS_DOMAIN_REPLAYS, error, 'Failed to list replays from Firestore');
 		}
+		recordReadSuccess(READ_METRICS_DOMAIN_REPLAYS);
 
 		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
 			break;
@@ -1998,7 +2280,7 @@ async function getLatestReplayForAlert(alertId) {
 
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_REPLAYS);
 	}
 
 	let pageCursor = null;
@@ -2017,9 +2299,9 @@ async function getLatestReplayForAlert(alertId) {
 		try {
 			snapshot = await query.get();
 		} catch (error) {
-			console.warn('[AlertStorageService] Failed to read latest replay for alert:', error.message);
-			throw createStorageUnavailableError(error);
+			throw recordReadFailure(READ_METRICS_DOMAIN_REPLAYS, error, 'Failed to read latest replay for alert');
 		}
+		recordReadSuccess(READ_METRICS_DOMAIN_REPLAYS);
 
 		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
 			return null;
@@ -2053,7 +2335,7 @@ async function getReplayAttemptByIdempotencyKey(alertId, idempotencyKey) {
 
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_REPLAYS);
 	}
 
 	const idempotencyKeyHash = crypto.createHash('sha256').update(idempotencyKey.trim()).digest('hex');
@@ -2065,6 +2347,7 @@ async function getReplayAttemptByIdempotencyKey(alertId, idempotencyKey) {
 			.where('idempotencyKeyHash', '==', idempotencyKeyHash)
 			.limit(1)
 			.get();
+		recordReadSuccess(READ_METRICS_DOMAIN_REPLAYS);
 
 		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
 			return null;
@@ -2080,8 +2363,7 @@ async function getReplayAttemptByIdempotencyKey(alertId, idempotencyKey) {
 			...doc.data(),
 		};
 	} catch (error) {
-		console.warn('[AlertStorageService] Failed to query replay by idempotency key:', error.message);
-		throw createStorageUnavailableError(error);
+		throw recordReadFailure(READ_METRICS_DOMAIN_REPLAYS, error, 'Failed to read replay attempt by idempotency key');
 	}
 }
 
@@ -2105,7 +2387,7 @@ async function exportAlerts({ from, to, limit, source, enriched, signalClass, in
 
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
 	}
 
 	const window = buildExportWindow({ from, to, limit });
@@ -2129,9 +2411,9 @@ async function exportAlerts({ from, to, limit, source, enriched, signalClass, in
 		try {
 			snapshot = await query.get();
 		} catch (error) {
-			console.warn('[AlertStorageService] Failed to export alerts from Firestore:', error.message);
-			throw createStorageUnavailableError(error);
+			throw recordReadFailure(READ_METRICS_DOMAIN_ALERTS, error, 'Failed to read alerts for export from Firestore');
 		}
+		recordReadSuccess(READ_METRICS_DOMAIN_ALERTS);
 
 		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
 			break;
@@ -2182,7 +2464,7 @@ async function getAlertsByIds(alertIds) {
 	}
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
 	}
 	if (!Array.isArray(alertIds) || alertIds.length === 0) {
 		return [];
@@ -2195,12 +2477,12 @@ async function getAlertsByIds(alertIds) {
 	let snapshots;
 	try {
 		snapshots = await Promise.all(
-			uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get())
+			uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get()),
 		);
 	} catch (error) {
-		console.warn('[AlertStorageService] Failed to read alert batch from Firestore:', error.message);
-		throw createStorageUnavailableError(error);
+		throw recordReadFailure(READ_METRICS_DOMAIN_ALERTS, error, 'Failed to read alert batch from Firestore');
 	}
+	recordReadSuccess(READ_METRICS_DOMAIN_ALERTS);
 
 	const validDocs = [];
 	for (const snap of snapshots) {
@@ -2226,7 +2508,7 @@ async function exportAlertsByIds({ alertIds, includeText = false, includeEnrichm
 	}
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
 	}
 	const docs = await getAlertsByIds(alertIds);
 	const alerts = (docs || []).map(doc => formatExportRecord(doc, { includeText, includeEnrichment }));
@@ -2247,7 +2529,7 @@ async function deleteAlerts(alertIds) {
 	}
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
 	}
 	if (!Array.isArray(alertIds) || alertIds.length === 0) {
 		return { deleted: 0 };
@@ -2260,12 +2542,12 @@ async function deleteAlerts(alertIds) {
 	let snapshots;
 	try {
 		snapshots = await Promise.all(
-			uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get())
+			uniqueIds.map(id => firestore.collection(COLLECTION_NAME).doc(id).get()),
 		);
 	} catch (error) {
-		console.warn('[AlertStorageService] Failed to read alert batch before delete from Firestore:', error.message);
-		throw createStorageUnavailableError(error);
+		throw recordReadFailure(READ_METRICS_DOMAIN_ALERTS, error, 'Failed to read alert batch before delete from Firestore');
 	}
+	recordReadSuccess(READ_METRICS_DOMAIN_ALERTS);
 
 	const existingIds = [];
 	for (const snap of snapshots) {
@@ -2376,7 +2658,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 
 	const firestore = getFirestore();
 	if (!firestore) {
-		throw createStorageUnavailableError();
+		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
 	}
 
 	const window = buildSummaryWindow({ from, to, limit });
@@ -2405,9 +2687,9 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		try {
 			snapshot = await query.get();
 		} catch (error) {
-			console.warn('[AlertStorageService] Failed to summarize alerts from Firestore:', error.message);
-			throw createStorageUnavailableError(error);
+			throw recordReadFailure(READ_METRICS_DOMAIN_ALERTS, error, 'Failed to summarize alerts from Firestore');
 		}
+		recordReadSuccess(READ_METRICS_DOMAIN_ALERTS);
 
 		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
 			break;
@@ -2472,6 +2754,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 				...createEvidenceCoverageBucket(),
 				byPromptProvenance: [],
 			},
+			sentimentCalibration: createEmptySentimentCalibration(),
 			tokenUsage: {
 				inputTokens: 0,
 				outputTokens: 0,
@@ -2497,6 +2780,8 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 	const processingLatencySamples = [];
 	const deliveryLatencySamples = [];
 	const channelLatencySamples = {};
+	const sentimentScores = [];
+	let rawScoreCapCount = 0;
 
 	for (const doc of docs) {
 		const data = doc.data() || {};
@@ -2519,6 +2804,17 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 			summary.enrichment.enrichedAlerts += 1;
 			recordRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage, data.enrichmentData);
 			recordEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage, data.enrichmentData);
+
+			const storedScore = readStoredSentimentScore(data.enrichmentData);
+			if (storedScore !== null) {
+				sentimentScores.push(storedScore);
+				// `sentiment_score_raw` only exists when CB-238 rewrote the score, so
+				// counting it reports how much of the window is capped rather than
+				// model-emitted.
+				if (Number.isFinite(data.enrichmentData.sentiment_score_raw)) {
+					rawScoreCapCount += 1;
+				}
+			}
 		} else {
 			summary.byFeatureFlag.plain += 1;
 			summary.enrichment.plainAlerts += 1;
@@ -2577,6 +2873,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 
 	finalizeRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage);
 	finalizeEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage);
+	summary.enrichment.sentimentCalibration = buildSentimentCalibration(sentimentScores, rawScoreCapCount);
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
 	summary.latency.averageProcessingMs = averageLatency(processingLatencySamples);
 	summary.latency.averageDeliveryMs = averageLatency(deliveryLatencySamples);
@@ -2618,6 +2915,8 @@ module.exports = {
 	extractSourceDomains,
 	formatAlertDocument,
 	STORAGE_UNAVAILABLE_CODE,
+	probeOrderedAlertRead,
+	FIRESTORE_ERROR_CATEGORIES,
 	INVALID_CURSOR_MESSAGE,
 	parseAlertPaginationCursor,
 	MAX_ALERT_TEXT_LENGTH,

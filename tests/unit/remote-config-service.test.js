@@ -1,3 +1,6 @@
+const fs = require('fs');
+const path = require('path');
+
 const admin = require('firebase-admin');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const { isFirestoreConfigured } = require('../../src/services/storage/firestoreConfig');
@@ -155,6 +158,37 @@ describe('RemoteConfigService', () => {
 
 		expect(remoteConfigService.getRuntimeConfig().SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES).toBe('binance');
 		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
+	});
+
+	/**
+	 * `firebase-remote-config-template.json` publishes
+	 * `SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES` with an intentional empty default,
+	 * which is exactly that parameter's schema default. A blank remote value
+	 * carries no tuning, so it must not be reported as a misconfiguration: once
+	 * the production template is published this would otherwise pin
+	 * `lastErrorCategory: "invalid_value"` on every load and make a genuinely
+	 * malformed value indistinguishable from the shipped default.
+	 */
+	it('treats a blank remote value as no override instead of an invalid value', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = '';
+		const template = JSON.parse(fs.readFileSync(
+			path.join(__dirname, '../../firebase-remote-config-template.json'),
+			'utf8',
+		));
+		mockTemplate({
+			SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES: '',
+			NEWS_ALERT_THRESHOLD: 0.75,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		expect(template.parameters.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES.defaultValue.value).toBe('');
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.getStatus().lastErrorCategory).toBeNull();
+		expect(remoteConfigService.getStatus().ready).toBe(true);
+		expect(remoteConfigService.getStatus().source).toBe('remote');
+		expect(remoteConfigService.getRuntimeConfig().NEWS_ALERT_THRESHOLD).toBe(0.75);
 	});
 
 	it('applies validated allow-listed values and records safe template metadata', async () => {
