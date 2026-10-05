@@ -2,36 +2,46 @@
 
 This reference defines the verification rules, readiness criteria, and quiet window policies for PR submission.
 
+## Documentation-only PRs
+
+Use the docs-only classification in SKILL.md Hard Rule 23. Mark code tests, lint, code checks, and preview deployment verification as `N/A (documentation-only)`; do not manually trigger them or wait for automatic runs. A PR integration may start a preview automatically; do not wait for or verify it. Use `[skip ci]` in the commit message to suppress supported GitHub Actions workflows. Continue the pre-PR review sessions and Codex review workflow. Never bypass required branch protection; if a skipped required check blocks merge, hand the PR off for human handling.
+
 ## Merge Gate
 
 A PR is ready to merge directly only if all of these are true and the agent is confident no human review is needed:
 
 1. **No Unresolved Discussions**: No open actionable inline discussions, review threads, or top-level PR conversation comments remain, especially from `@francovp` and Codex. Establish inline state with paginated GraphQL `reviewThreads`, paginate and track every thread comment by ID and `createdAt`/`updatedAt`, and track paginated top-level conversation comments by ID and timestamp; flat comments alone are not proof of inline resolution. Match automated review authors by their actual login, including `chatgpt-codex-connector` when present, before applying the Codex rate-limit fallback below. A thread requiring product authority or human clarification is an explicit `IN_REVIEW` handoff exception, not a merge-ready state.
-2. **All Checks Green**: All required checks are green or conclusively non-blocking.
-3. **Preview Live**: The Railway preview deploy is live and operational (Render is disabled).
-4. **Direct Verification**: Direct `curl` verification against the Railway preview succeeds (see Preview and E2E).
+2. **All Checks Green**: For code changes, all required checks are green or conclusively non-blocking. This gate is not applicable to documentation-only PRs.
+3. **Preview Live**: For code changes, the configured preview deployment is live and operational, verified against the URL resolved for that PR. This gate is not applicable to documentation-only PRs.
+4. **Direct Verification**: For code changes, direct `curl` verification against the resolved preview succeeds (see Preview and E2E). This gate is not applicable to documentation-only PRs.
 5. **Criteria Matched**: The implementation matches all issue acceptance criteria.
 6. **No Ownership Conflict**: No active ownership conflicts remain.
 7. **Stability Period**: The head SHA has been stable for at least 5 minutes with no new Codex reviews or unresolved threads appearing.
+8. **Codex Review Disposition**: Codex gave its configured 👍 approval on the PR description, or the complete quiet window ended without new actionable feedback. A rate-limit response uses the fallback below; any other review error blocks merge. If Codex still requests changes after the third review request, hand off for human revision.
 
 If any criterion is uncertain, or a discussion requires human input, keep the same gate but hand the PR off through `In review` instead of merging it directly.
 
 ## Preview and E2E
 
-1. **Preview URL Scheme (Railway)**: PR previews are at `https://cabros-bot-cabros-bot-pr-<PR_NUMBER>.up.railway.app` (e.g. PR 359 → `https://cabros-bot-cabros-bot-pr-359.up.railway.app`). Production (`master`) is at `https://cabros-bot-production.up.railway.app`. Verify health and new endpoints against those URLs via `scripts/verify-preview.sh`.
-2. **Deploy Proof**: Perform a direct `curl` call against the preview base URL as final deploy proof — at minimum `/healthcheck`, plus `/openapi.json` and any new endpoints introduced by the PR.
+These steps apply to code changes. For documentation-only PRs, do not create, trigger, or verify a preview deployment.
+
+1. **Preview URL Resolution (dynamic)**: Never assume a host from the PR number. Resolve the live preview URL with `scripts/get-pr-deployment-url.sh <PR_NUMBER>`, which returns the `environment_url` of the latest `success`/`active` GitHub Deployment for that PR — so the target may be Railway, OpenClaw, Tailscale, Fly.io, or any other provider the PR was deployed to. Only when no GitHub deployment exists does the resolver fall back to the Railway host pattern `https://cabros-bot-cabros-bot-pr-<PR_NUMBER>.up.railway.app`, and it prints a warning when it does; treat that warning as "this URL is unproven", not as a deployment fact. Production (`master`) is the fixed `https://cabros-bot-production.up.railway.app`, also returned by the resolver for the `production` / `prod` / `master` aliases. `scripts/verify-preview.sh` performs this resolution internally and echoes the resolved base URL, so prefer it over hand-built URLs.
+2. **Deploy Proof**: Perform a direct `curl` call against the resolved preview base URL as final deploy proof — at minimum `/healthcheck`, plus `/openapi.json` and any new endpoints introduced by the PR.
 3. **Healthcheck Ping**: Use `/healthcheck` for liveness; use `/openapi.json` for contract reachability; use auth-gated `/api/status` with `x-api-key` when verifying private endpoints.
 4. **Root Route 404s**: Treat `GET /` returning `404` as acceptable only if the service intentionally lacks a root route.
-5. **E2E Executions**: Run the relevant E2E flow against the deployed Railway preview (not Render). Pass new-endpoint paths to `scripts/verify-preview.sh <PR_NUMBER> "/healthcheck,/openapi.json,/api/your-new-endpoint"`.
-6. **Repeated Failures**: If preview or E2E checks fail repeatedly due to the same issue-specific blocker, end the run with outcome `LOCAL_DEADLOCK`.
-7. **Railway bounded retry / stale deployment**: If health verification fails with a Railway `429` bounded-retry, `502/504`, or the deployed commit does not match the PR head, attempt the recovery described in SKILL.md Step 5/Step 6 (merge `master` or trigger Railway deploy, wait, re-verify). Only after the retry fails, label `need manual PR deploy`.
-8. **Firebase Hosting previews**: `RESOURCE_EXHAUSTED` / channel quota errors from `firebase hosting:channel:deploy` are NOT a blocker. Run `node scripts/cleanup-preview-channels.js` (or `pnpm run cleanup:preview-channels`) locally to free channels, then retry. Do not mark the PR `GLOBAL_BLOCKED` for this reason.
+5. **Stale Deployments**: Pass the PR head SHA as the third `EXPECTED_SHA` argument — `scripts/verify-preview.sh <PR_NUMBER> "/healthcheck,/openapi.json,/api/your-new-endpoint" "$(gh pr view <PR_NUMBER> --json headRefOid --jq .headRefOid)"`. The deployed SHA is read from the GitHub Deployments API, so this works for every provider. A mismatch exits `2` and routes to Step 6.5 recovery.
+6. **E2E Executions**: Run the relevant E2E flow against the resolved preview. Pass new-endpoint paths to `scripts/verify-preview.sh <PR_NUMBER> "/healthcheck,/openapi.json,/api/your-new-endpoint"`.
+7. **Repeated Failures**: If preview or E2E checks fail repeatedly due to the same issue-specific blocker, end the run with outcome `LOCAL_DEADLOCK`.
+8. **Railway bounded retry / stale deployment**: When the resolved host is Railway, or when the resolver fell back to the Railway host, a health verification failure caused by a Railway `429` bounded-retry, `502/504`, or a deployed commit that does not match the PR head is recoverable: attempt the recovery described in SKILL.md Step 5/Step 6 (merge `master` or trigger a Railway deploy, wait, re-verify). Only after the retry fails, label `need manual PR deploy`.
+9. **Non-Railway Preview Failures**: When the resolved host belongs to another provider, do not run `railway up` / `railway redeploy` — that deploys a host the PR is not being served from. Re-resolve after waiting for the provider's deployment to settle, and only escalate to `need manual PR deploy` when the resolved host is still not serving the PR head after the bounded wait.
+10. **Firebase Hosting previews**: `RESOURCE_EXHAUSTED` / channel quota errors from `firebase hosting:channel:deploy` are NOT a blocker. Run `node scripts/cleanup-preview-channels.js` (or `pnpm run cleanup:preview-channels`) locally to free channels, then retry. Do not mark the PR `GLOBAL_BLOCKED` for this reason.
 
 ## Retry and Livelock Control
 
 1. **Bounded Checks**: Each quiet-window check is bounded; check paginated inline `reviewThreads` plus every paginated comment within each thread and paginated top-level PR conversation comments, and do not poll continuously outside the required midpoint and endpoint checks.
 2. **Verification Limit**: Allow at most 3 full verification cycles for an unchanged head SHA. Discussion-only activity does not reset this counter.
 3. **Reset Trigger**: A concrete new head commit resets the verification-cycle counter and quiet window. A new discussion resets only the quiet window; address it without resetting the cycle budget.
+   - This verification-cycle limit is separate from the maximum of 3 Codex review requests per PR; the first request counts, and failed requests still use the cap.
 4. **Baseline Discussions**: Before the quiet window starts, triage every unresolved inline thread and actionable top-level conversation comment in the baseline snapshot. Do not treat an existing item as already handled merely because it predates the snapshot.
 5. **Human Input**: If a thread needs product authority or missing requirements, stop the loop and use Step 7 for `IN_REVIEW`; do not force resolution or classify it as a polling blocker.
 6. **Repeated Blockers**: If the same blocker persists across cycles, end with outcome `LOCAL_DEADLOCK`.
