@@ -141,10 +141,9 @@ class NotificationManager {
 	 */
 	getAdminPagingStatus() {
 		const state = this.adminPagingState;
-		// Resolve the candidates ONCE. It was previously evaluated twice here (and the
-		// caller evaluated this method twice more), so a single /api/status read emitted
-		// four console.warn lines for one failing channel and let a status poller turn
-		// that into sustained log noise.
+		// Resolve the candidates ONCE. Previously evaluated twice here and twice more by
+		// the caller, so a single /api/status read emitted four console.warn lines for one
+		// failing channel - sustained log noise for any status poller.
 		const fallbackChannels = this.getAdminPagingFallbackChannels();
 		// Derived from CONSECUTIVE failures, not from "has ever succeeded". Keying on
 		// lifetime successes pinned a block to 'ready' through any number of subsequent
@@ -188,8 +187,8 @@ class NotificationManager {
 	 * @returns {Array<Object>} channel instances
 	 */
 	getAdminPagingFallbackChannels() {
-		// Wrapped because this is called from /api/status as well as the dispatch path,
-		// and a channel whose configuration probe throws would otherwise escape
+		// Wrapped because this runs from /api/status as well as the dispatch path, and a
+		// channel whose configuration probe throws would otherwise escape
 		// _dispatchAdminPage, breaking its documented "never throws" contract.
 		try {
 			return this._collectAdminPagingFallbackChannels();
@@ -376,7 +375,7 @@ class NotificationManager {
 			// documented signal for uptime monitoring to page on - climb without bound
 			// for an operator who never configured admin paging, and asserted in
 			// byChannel that telegram was tried N times when it was tried zero times.
-			// That is the phantom-alarm failure this whole change set out to prevent.
+			// That is the phantom-alarm failure this work set out to prevent.
 		}
 
 		for (const channel of this.getAdminPagingFallbackChannels()) {
