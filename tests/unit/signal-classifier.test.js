@@ -209,4 +209,27 @@ describe('signalClassifier', () => {
 			expect(snapshot.byClass.breakout).toBe(1);
 		});
 	});
+	describe('word-boundary matching (#858 review)', () => {
+		// A bare substring match classified ordinary prose as a signal class, which
+		// pollutes byClass analytics and misleads trader filtering - the exact thing
+		// this classification exists to serve.
+		it.each([
+			['pago las manualidades del prestamo', 'manual'],
+			['the newsroom was quiet today', 'news_event'],
+			['el informe de ceomania', 'unknown'],
+		])('does not match a phrase hidden inside a longer word: %s', (text) => {
+			expect(classifySignal(text)).toBe('unknown');
+		});
+
+		it('still matches genuine standalone phrases', () => {
+			expect(classifySignal('compra manual')).toBe('manual');
+			expect(classifySignal('CEO announces merger')).toBe('news_event');
+			expect(classifySignal('volumen fuerte')).toBe('volume_spike');
+		});
+
+		it('matches multi-word phrases across arbitrary spacing', () => {
+			expect(classifySignal('break   out now')).toBe('breakout');
+			expect(classifySignal('volumen   fuerte')).toBe('volume_spike');
+		});
+	});
 });

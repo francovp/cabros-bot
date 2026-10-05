@@ -190,13 +190,36 @@ function normalizeExplicitSignalClass(value) {
 	return VALID_SIGNAL_CLASSES.has(normalized) ? normalized : null;
 }
 
+// Pre-compile each phrase as a word-boundary regex.
+//
+// A bare `includes()` matches a phrase anywhere inside a longer word, which
+// misclassified ordinary prose: "las manualidades del prestamo" -> manual,
+// "the newsroom was quiet" -> news_event, "el informe de CEO holdings" ->
+// news_event. Those pollute byClass analytics and mislead trader filtering, which
+// is exactly what this classification exists to serve.
+//
+// Boundaries are ASCII-aware on purpose: alert bodies are English/Spanish, and
+// `\\b` would not treat an accented letter as a word character, which would
+// either break real matches or reintroduce the substring problem.
+const PHRASE_MATCHERS = Object.freeze(RULES.map(rule => Object.freeze({
+	class: rule.class,
+	matchers: Object.freeze(rule.phrases.map(phrase => {
+		const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+		// A leading/trailing non-word char in the phrase (none today) needs no
+		// boundary, otherwise the assertion could never match.
+		const left = /^[a-z0-9]/.test(phrase) ? '(?<![a-z0-9])' : '';
+		const right = /[a-z0-9]$/.test(phrase) ? '(?![a-z0-9])' : '';
+		return new RegExp(`${left}${escaped.replace(/\s+/g, '\\s+')}${right}`, 'i');
+	})),
+})));
+
 function deriveSignalClass(normalized) {
 	if (!normalized) {
 		return SignalClass.UNKNOWN;
 	}
-	for (const rule of RULES) {
-		for (const phrase of rule.phrases) {
-			if (normalized.includes(phrase)) {
+	for (const rule of PHRASE_MATCHERS) {
+		for (const matcher of rule.matchers) {
+			if (matcher.test(normalized)) {
 				return rule.class;
 			}
 		}
