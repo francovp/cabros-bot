@@ -1,3 +1,33 @@
+## [LRN-20261005-004] correction
+
+**Logged**: 2026-10-05T10:49:00Z
+**Priority**: high
+**Status**: pending
+**Area**: api
+
+### Summary
+PR #1364 (feat(admin): Diagnostics view for GET /api/selftest and POST /api/selftest/run): QA failed round 1 — PR conflicts with master due to #1351 landing after branch base, and declining the Run self-test confirm dialog destroys the loaded report (replaces it with 'Unavailable' verdict) while the raw HTTP 200 response block still shows all checks.
+
+### Details
+@francovp QA'd PR #1364 (Sherlock, Round 1): The PR cannot merge because it conflicts with origin/master on src/admin/admin.js, src/admin/index.html, public/admin/admin.js, public/admin/index.html and tests/unit/admin-client.test.js — #1351 (fluid shell + Trading dashboard) landed after this branch's base c5518ca0 and rewrote all five files. A second blocker: declining the Run self-test confirm dialog replaces a perfectly good loaded report with an 'Unavailable' verdict reading 'no check evidence exists to show / Treat this as unknown, not as a pass', while the untouched raw response block beneath still shows HTTP 200 with all five checks. Root cause: sendRequest returns undefined on the CANCELLED early return and requestSelfTest's `else renderUnavailable(failure)` treats it identically to an HTTP failure. The existing declined-confirm spec only asserts that no request was dispatched, so it misses this.
+
+### Suggested Action
+1. Rebase onto origin/master before merging — #1351 rewrote the nav markup, view registry, and test harness, so the generated public/admin tree must be regenerated via `pnpm run build:hosting` after the rebase.
+2. Fix the declined-confirm repaint in src/admin/admin.js (createDiagnosticsView -> requestSelfTest): pass `captureOutcome` through and skip the repaint for REQUEST_OUTCOMES.cancelled, authorization_denied, sign_in_expired, invalid_request and superseded — leave the current report on screen and let the existing showError banner carry the message.
+3. Add a spec asserting the loaded report text and absence of the 'Unavailable' badge after a decline; the existing spec only asserts no request was sent.
+4. Always rebase feature branches promptly when master rewrites shared admin files — a conflicting PR is not tested per the floor rule.
+
+### Metadata
+- Source: user_feedback
+- Related Files: PR #1364, PR #1351, src/admin/admin.js, src/admin/admin-diagnostics.js, tests/unit/admin-client.test.js, public/admin/admin.js
+- Tags: admin-console, rebase-conflict, confirm-dialog-regression, qa-failure
+- Pattern-Key: harden.rebase_before_merge
+- Recurrence-Count: 1
+- First-Seen: 2026-10-05
+- Last-Seen: 2026-10-05
+
+---
+
 ## [LRN-20261005-003] correction
 
 **Logged**: 2026-10-05T06:49:00Z
