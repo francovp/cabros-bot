@@ -21,11 +21,13 @@ const ADMIN_PAGING_FALLBACK_ORDER = ['discord', 'whatsapp'];
 
 // Health state rank used to prefer a channel that is actually delivering over one that
 // is merely configured. Lower is better.
+// Note: there is deliberately no `failing` rank. A channel whose observed health is
+// `failing` is EXCLUDED from the candidate list before this ranking is applied, so it
+// can never be compared here.
 const CHANNEL_HEALTH_RANK = {
 	healthy: 0,
 	unknown: 1,
 	degraded: 2,
-	failing: 3,
 };
 
 class NotificationManager {
@@ -139,9 +141,14 @@ class NotificationManager {
 	 */
 	getAdminPagingStatus() {
 		const state = this.adminPagingState;
+		// Derived from CONSECUTIVE failures, not from "has ever succeeded". Keying on
+		// lifetime successes pinned a block to 'ready' through any number of subsequent
+		// total failures, which is the exact state an operator needs to see.
 		let status = 'unknown';
-		if (state.attempts > 0) {
-			status = state.successes > 0 ? 'ready' : 'degraded';
+		if (state.consecutiveFailures > 0) {
+			status = 'degraded';
+		} else if (state.successes > 0) {
+			status = 'ready';
 		}
 		return {
 			enabled: Boolean(process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID),
