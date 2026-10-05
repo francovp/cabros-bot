@@ -467,7 +467,7 @@
 			}
 			const headers = [
 				['Symbol', (row) => String(row.symbol)],
-				['Event category', (row) => formatFraction(row.eventCategory)],
+				['Event category', (row) => row.eventCategory],
 				['Alert sent', (row) => (row.alertSent === true ? 'yes' : 'no')],
 				['Confidence', (row) => formatFraction(row.confidence)],
 				['Sentiment', (row) => formatFraction(row.sentiment)],

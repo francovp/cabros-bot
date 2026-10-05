@@ -5745,11 +5745,43 @@ describe('news monitor operations view', () => {
 		const table = find(view, (node) => node.tagName === 'DIV' && node.attributes['aria-label'] === 'Recorded news analyses (1)');
 		const headers = findAll(table, (node) => node.tagName === 'TH').map((node) => node.textContent);
 		expect(headers).toContain('Analyzed');
-		const analyzedCell = findAll(findAll(table, (node) => node.tagName === 'TR')[1], (node) => node.tagName === 'TD')[5];
+		const cells = findAll(findAll(table, (node) => node.tagName === 'TR')[1], (node) => node.tagName === 'TD')
+			.map((node) => node.textContent);
 		// The record carries createdAt; reading analyzedAt rendered a permanent em dash.
-		expect(analyzedCell.textContent).toContain('ago');
+		expect(cells[5]).toContain('ago');
+		const analyzedCell = findAll(findAll(table, (node) => node.tagName === 'TR')[1], (node) => node.tagName === 'TD')[5];
 		expect(findAll(analyzedCell, (node) => node.className.includes('timestamp'))[0].attributes.title)
 			.toContain('2026');
+		// The category is a string, not a number: formatting it as a fraction blanked it to
+		// an em dash, which is the same "unreadable value" failure as the Analyzed column.
+		expect(cells[1]).toBe('none');
+	});
+
+	it('renders an analyses record with a populated event category', async () => {
+		const { browser } = await openNewsMonitor({
+			handler: async (url) => {
+				const [path] = String(url).split('?');
+				if (path === '/openapi.json') return response(contract);
+				if (path === '/api/news-monitor/status') return response(RUNNING);
+				if (path === '/api/news-monitor/summary') return response(SUMMARY);
+				if (path === '/api/news-monitor/analyses') {
+					return response({
+						success: true,
+						analyses: [{ ...ANALYSES.analyses[0], eventCategory: 'price_surge' }],
+						nextCursor: null,
+					});
+				}
+				return response({});
+			},
+		});
+		const view = browser.elementsById.view;
+		await findForm(view, '/api/news-monitor/analyses').dispatch('submit');
+		await flush();
+		const table = find(view, (node) => node.tagName === 'DIV' && node.attributes['aria-label'] === 'Recorded news analyses (1)');
+		const cells = findAll(findAll(table, (node) => node.tagName === 'TR')[1], (node) => node.tagName === 'TD')
+			.map((node) => node.textContent);
+		expect(cells[1]).toBe('price_surge');
+		expect(cells[3]).toBe('0.41');
 	});
 
 	it('clears the cursor chain when a filter changes so paging cannot skip rows', async () => {
