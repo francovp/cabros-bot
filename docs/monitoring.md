@@ -185,7 +185,7 @@ Repository variables (all optional — each has a working default, so an unset v
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `UPTIME_MONITOR_BASE_URL` | `https://cabros-bot-production.up.railway.app` | Production origin to probe. Update this on any platform or host change. |
+| `UPTIME_MONITOR_BASE_URL` | `https://cabros-crypto-bot-telegram.onrender.com` | Production origin to probe. Update this on any platform or host change. |
 | `UPTIME_MONITOR_CHECK_DOCS` | `true` | Also probe the public `/docs` contract. |
 | `UPTIME_MONITOR_TIMEOUT_MS` | `10000` | Per-request deadline in milliseconds. |
 | `UPTIME_WATCHDOG_MAX_AGE_MINUTES` | `30` | How stale the last monitor run may be before the watchdog fails. |
