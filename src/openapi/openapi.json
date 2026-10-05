@@ -11216,7 +11216,7 @@
           },
           "writesAttempted": {
             "type": "integer",
-            "description": "Durable write attempts, including those where Firebase initialization was rejected — asking for durable storage and not getting it is the event an operator needs to see."
+            "description": "Durable write attempts, including those where Firebase initialization was rejected — asking for durable storage and not getting it is the event an operator needs to see. A rejected initialization is charged to the operation that triggered it, so browsing the collection never increments this counter."
           },
           "writesSucceeded": {
             "type": "integer"
@@ -11225,7 +11225,8 @@
             "type": "integer"
           },
           "readsAttempted": {
-            "type": "integer"
+            "type": "integer",
+            "description": "Durable read attempts, including those where Firebase initialization was rejected. Attribution follows the triggering operation, so a read that fails to initialize is counted here and never as a write."
           },
           "readsSucceeded": {
             "type": "integer",

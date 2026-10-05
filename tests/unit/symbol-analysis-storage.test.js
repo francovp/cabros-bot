@@ -494,6 +494,41 @@ describe('SymbolAnalysisStorageService', () => {
 			initializeSpy.mockRestore();
 		});
 
+		it('attributes a rejected initialization to the operation that triggered it, not always to a write', async () => {
+			process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = INLINE_AUTHORIZED_USER;
+			admin.__resetApps();
+			SymbolAnalysisStorageService.__resetForTesting();
+
+			// `getFirestore()` is shared by the write path and both read paths, so a rejected
+			// initialization used to be recorded as a durable *write* attempt no matter who
+			// called first. An operator who only browsed /api/symbol-analyses therefore saw
+			// "Writes attempted: 1 / Writes failed: 1" with no analysis ever submitted, which
+			// points triage at persistence when the failure was in the read path.
+			await expect(SymbolAnalysisStorageService.listAnalyses()).rejects.toMatchObject({
+				code: 'STORAGE_UNAVAILABLE',
+			});
+
+			const status = SymbolAnalysisStorageService.getStatus();
+			// The dependency still degrades, and the closed reason is still reported.
+			expect(status.status).toBe('degraded');
+			expect(status.readiness).toBe('degraded');
+			expect(status.lastErrorReason).toBe('firestore_not_initialized');
+			expect(status.consecutiveFailures).toBe(1);
+			// Truthfully attributed to the read that actually failed.
+			expect(status.readsAttempted).toBe(1);
+			expect(status.readsFailed).toBe(1);
+			// No write was attempted, so the write counters must stay at zero.
+			expect(status.writesAttempted).toBe(0);
+			expect(status.writesSucceeded).toBe(0);
+			expect(status.writesFailed).toBe(0);
+			// And a read still can never manufacture `ready`.
+			expect(status.ready).toBe(false);
+			// Both per-operation invariants hold independently.
+			expect(status.writesFailed).toBeLessThanOrEqual(status.writesAttempted);
+			expect(status.readsFailed).toBeLessThanOrEqual(status.readsAttempted);
+		});
+
 		it('constrains lastErrorReason to a closed enum so a provider message can never leak', async () => {
 			enableWithValidCredentials();
 			mockDocSet.mockRejectedValueOnce(

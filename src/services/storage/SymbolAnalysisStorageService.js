@@ -36,6 +36,11 @@ const READINESS = Object.freeze({
 	DEGRADED: 'degraded',
 });
 
+// Which counter family a shared Firestore handle was requested for. Only the
+// initialization-rejection path needs it; a successful operation is attributed by
+// its own recorder.
+const READ_INTENT = 'read';
+
 let db = null;
 
 /**
@@ -80,9 +85,18 @@ function _recordWriteFailure(reason) {
 	durability.lastErrorReason = KNOWN_REASONS.has(reason) ? reason : REASONS.UNAVAILABLE;
 }
 
-// A rejected initialization is both the attempt and the failure, because no write
-// ever reached Firestore.
-function _recordInitializationFailure(reason) {
+// A rejected initialization is both the attempt and the failure for whichever
+// operation triggered it, because no work ever reached Firestore. `getFirestore()`
+// is shared by the write path and both read paths, so the intent is carried in:
+// attributing every rejection to a write would report "writes attempted" for an
+// operator who only ever browsed the collection, which points triage at
+// persistence when the failure was in the read path.
+function _recordInitializationFailure(reason, intent) {
+	if (intent === READ_INTENT) {
+		durability.readsAttempted += 1;
+		_recordReadFailure(reason);
+		return;
+	}
 	durability.writesAttempted += 1;
 	_recordWriteFailure(reason);
 }
@@ -246,13 +260,16 @@ function numberOrNull(value) {
  * Initialize Firebase Admin (idempotent) and return the Firestore client, or null
  * when the feature is off or the configured credentials are invalid.
  *
- * A rejected initialization is recorded as a write failure so status reports
- * `degraded` rather than an unproven `ready`, and it never falls through to
- * `admin.initializeApp({})`: issue #1128 established that entering the SDK default-auth
- * path here authenticates with a *different* credential than the operator configured
- * and pays for discovery on the first read or write.
+ * A rejected initialization is recorded as a failure for the operation that
+ * triggered it, so status reports `degraded` rather than an unproven `ready`, and it
+ * never falls through to `admin.initializeApp({})`: issue #1128 established that
+ * entering the SDK default-auth path here authenticates with a *different* credential
+ * than the operator configured and pays for discovery on the first read or write.
+ *
+ * `intent` is `READ_INTENT` on the read paths so a rejection is charged to the read
+ * counters rather than to a write that was never attempted.
  */
-function getFirestore() {
+function getFirestore(intent) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -268,7 +285,7 @@ function getFirestore() {
 				`[SymbolAnalysisStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and dropping the record.`,
 			);
 			db = null;
-			recordDurabilitySafely(() => _recordInitializationFailure(REASONS.NOT_INITIALIZED));
+			recordDurabilitySafely(() => _recordInitializationFailure(REASONS.NOT_INITIALIZED, intent));
 			return null;
 		}
 
@@ -277,7 +294,7 @@ function getFirestore() {
 	} catch (error) {
 		console.warn('[SymbolAnalysisStorageService] Failed to initialize Firestore client:', error.message);
 		db = null;
-		recordDurabilitySafely(() => _recordInitializationFailure(REASONS.NOT_INITIALIZED));
+		recordDurabilitySafely(() => _recordInitializationFailure(REASONS.NOT_INITIALIZED, intent));
 	}
 
 	return db;
@@ -426,7 +443,7 @@ async function summarizeAnalyses({ from, to, limit = 500, symbol, exchange, time
 		throw error;
 	}
 
-	const firestore = getFirestore();
+	const firestore = getFirestore(READ_INTENT);
 	if (!firestore) {
 		const error = new Error('Symbol analysis storage is enabled but Firestore is unavailable.');
 		error.code = 'STORAGE_UNAVAILABLE';
@@ -590,7 +607,7 @@ async function listAnalyses({ from, to, limit = 50, symbol, exchange, timeframe,
 		throw error;
 	}
 
-	const firestore = getFirestore();
+	const firestore = getFirestore(READ_INTENT);
 	if (!firestore) {
 		const error = new Error('Symbol analysis storage is enabled but Firestore is unavailable.');
 		error.code = 'STORAGE_UNAVAILABLE';
