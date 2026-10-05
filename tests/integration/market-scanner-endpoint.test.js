@@ -8,6 +8,7 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
 		callScanTool: jest.fn(),
 		callMultiTimeframeAnalysis: jest.fn(),
+		getStatus: jest.fn(),
 	},
 }));
 
@@ -29,6 +30,7 @@ describe('Market Scanner Alert endpoint', () => {
 		});
 
 		jest.clearAllMocks();
+		tradingViewMcpService.getStatus.mockReset().mockReturnValue(undefined);
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'scan-msg-id' });
 		mockBot = {
@@ -93,7 +95,19 @@ describe('Market Scanner Alert endpoint', () => {
 			timeout: 0,
 			totalItems: 1,
 			delivered: 1,
+			errorCategoryCounts: {
+				mcp_unreachable: 0,
+				mcp_timeout: 0,
+				mcp_rate_limited: 0,
+				mcp_tool_error: 0,
+				mcp_suspended: 0,
+				symbol_invalid: 0,
+				symbol_unsupported: 0,
+				unknown: 0,
+			},
 		});
+		expect(res.body.processingTimeMs).toEqual(expect.any(Number));
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.deliveryResults).toEqual([
 			expect.objectContaining({ success: true, channel: 'telegram', messageId: 'scan-msg-id' }),
 		]);
@@ -180,6 +194,7 @@ describe('Market Scanner Alert endpoint', () => {
 		expect(recorded.side).toBe('SELL');
 		expect(recorded.stop).toBe(60750); // price + atr*1.5
 		expect(recorded.target).toBe(58000); // bb_lower
+		expect(recorded.priceSource).toBe('tradingview-mcp');
 
 		recordSignalSpy.mockRestore();
 		signalOutcomeService.isEnabled.mockRestore();
@@ -398,9 +413,99 @@ describe('Market Scanner Alert endpoint', () => {
 		expect(res.body.success).toBe(false);
 		expect(res.body.code).toBe('ALL_SCANS_FAILED');
 		expect(res.body.scanResults).toEqual([
-			{ scan: 'top_gainers', status: 'error', error: 'Connection failure' },
+			{ scan: 'top_gainers', status: 'error', error: 'Connection failure', errorCategory: 'unknown' },
 		]);
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
+	it('fails fast with skipped scans while the MCP circuit breaker is open', async () => {
+		tradingViewMcpService.getStatus.mockReturnValue({
+			status: 'degraded',
+			lastErrorCategory: 'request_failed',
+			circuitBreaker: { state: 'open', cooldownMs: 600000 },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.send({ scans: ['top_gainers', 'top_losers'] })
+			.expect(502);
+
+		expect(res.body.code).toBe('TRADINGVIEW_MCP_UNAVAILABLE');
+		expect(res.body.scanResults).toEqual([
+			{
+				scan: 'top_gainers',
+				status: 'skipped',
+				reason: expect.stringContaining('request_failed'),
+			},
+			{
+				scan: 'top_losers',
+				status: 'skipped',
+				reason: expect.stringContaining('request_failed'),
+			},
+		]);
+		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
+	// Self-recovery contract: a transient outage must not lock the scanner out forever.
+	// Once the breaker cooldown expires (state 'half-open'), the endpoint must probe again
+	// instead of returning 502 indefinitely (Codex P1 on this PR).
+	it('recovers by probing again after a transient failure once the breaker cooldown expires', async () => {
+		tradingViewMcpService.getStatus.mockReturnValue({
+			status: 'degraded',
+			lastErrorCategory: 'request_failed',
+			circuitBreaker: { state: 'open', cooldownMs: 600000 },
+		});
+		tradingViewMcpService.callScanTool.mockRejectedValue(new Error('Connection failure'));
+
+		const blocked = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.send({ scans: ['top_gainers'] })
+			.expect(502);
+
+		expect(blocked.body.code).toBe('TRADINGVIEW_MCP_UNAVAILABLE');
+		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+
+		// Breaker cooldown elapsed -> half-open -> recovery probe is allowed through.
+		tradingViewMcpService.getStatus.mockReturnValue({
+			status: 'degraded',
+			lastErrorCategory: 'request_failed',
+			circuitBreaker: { state: 'half-open', cooldownMs: 600000 },
+		});
+		tradingViewMcpService.callScanTool.mockReset();
+		tradingViewMcpService.callScanTool.mockResolvedValue([
+			{ symbol: 'BINANCE:BTCUSDT', changePercent: 2.5 },
+		]);
+
+		const recovered = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.send({ scans: ['top_gainers'] })
+			.expect(200);
+
+		expect(recovered.body.success).toBe(true);
+		expect(tradingViewMcpService.callScanTool).toHaveBeenCalledTimes(1);
+		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
+	});
+
+	// Contract check for Codex P2: 502 has two shapes -- the skip-path
+	// TRADINGVIEW_MCP_UNAVAILABLE and the attempt-path ALL_SCANS_FAILED (asserted above).
+	// The OpenAPI 502 response must describe both.
+	it('documents both 502 variants in the OpenAPI contract', async () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const response = spec.paths['/api/webhook/market-scanner-alert'].post.responses['502'];
+		const ref = response.$ref.split('/').pop();
+		const examples = spec.components.responses[ref].content['application/json'].examples;
+
+		expect(Object.keys(examples)).toEqual(
+			expect.arrayContaining(['mcpUnavailable', 'allScansFailed']),
+		);
+		expect(examples.mcpUnavailable.value.code).toBe('TRADINGVIEW_MCP_UNAVAILABLE');
+		expect(examples.mcpUnavailable.value.scanResults[0].status).toBe('skipped');
+		expect(examples.allScansFailed.value.code).toBe('ALL_SCANS_FAILED');
+		expect(examples.allScansFailed.value.scanResults[0].status).toBe('error');
 	});
 
 	it('returns 504 when the scanner times out', async () => {
@@ -417,7 +522,7 @@ describe('Market Scanner Alert endpoint', () => {
 						reject(new Error('AbortError'));
 					});
 				}
-			})
+			}),
 		);
 
 		const res = await request(app)
@@ -527,5 +632,80 @@ describe('Market Scanner Alert endpoint', () => {
 		expect(res.body.scanResults[0].scores[0]).toEqual(expect.objectContaining({
 			trendConfluence: expect.objectContaining({ status: 'aligned', confidence: 82 }),
 		}));
+	});
+
+	it('triggers rating_filter scan with rating parameter and formats report', async () => {
+		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+			{
+				symbol: 'BINANCE:STXUSDT',
+				changePercent: 2.72,
+				bollinger_rating: 3,
+				indicators: { close: 1.85, RSI: 70.2 },
+			},
+		]);
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.query({ dryRun: 'true' })
+			.send({
+				scans: ['rating_filter'],
+				rating: 3,
+				timeframe: '4h',
+				exchange: 'BINANCE',
+			})
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.payload.alertText).toContain('RATING BOLLINGER');
+		expect(res.body.payload.alertText).toContain('BB Rating +3');
+		expect(tradingViewMcpService.callScanTool).toHaveBeenCalledWith(
+			'rating_filter',
+			{ exchange: 'BINANCE', timeframe: '4h', limit: 5, rating: 3 },
+			expect.any(Object),
+		);
+	});
+
+	it('triggers consecutive_candles_scan with pattern_type, candle_count, and min_growth', async () => {
+		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+			{
+				symbol: 'BINANCE:AVAXUSDT',
+				changePercent: 4.8,
+				pattern_type: 'bullish',
+				candle_count: 3,
+				pattern_strength: 85,
+				indicators: { close: 25.4 },
+			},
+		]);
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.query({ dryRun: 'true' })
+			.send({
+				scans: ['consecutive_candles_scan'],
+				pattern_type: 'bullish',
+				candle_count: 3,
+				min_growth: 1.2,
+				timeframe: '4h',
+				exchange: 'BINANCE',
+			})
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(res.body.payload.alertText).toContain('VELAS CONSECUTIVAS');
+		expect(res.body.payload.alertText).toContain('3 velas 🟢 Bullish');
+		expect(tradingViewMcpService.callScanTool).toHaveBeenCalledWith(
+			'consecutive_candles_scan',
+			{
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				limit: 5,
+				pattern_type: 'bullish',
+				candle_count: 3,
+				min_growth: 1.2,
+			},
+			expect.any(Object),
+		);
 	});
 });

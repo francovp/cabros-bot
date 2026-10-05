@@ -179,7 +179,7 @@ describe('Scanner presets API integration tests', () => {
 		expect(deleteResponse.body.storage).toEqual(expectedStorage);
 	});
 
-	it('reports ephemeral storage when durable scanner persistence is enabled but unavailable', async () => {
+	it('reports durable intent as degraded when a scanner preset write fails', async () => {
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
 		const firestoreAdmin = require('firebase-admin');
@@ -191,14 +191,21 @@ describe('Scanner presets API integration tests', () => {
 			.send({ name: 'Ephemeral preset' })
 			.expect(201);
 
-		expect(response.body.storage).toEqual({
+		// A failed write is a store fault, not a credential problem: `mode`/`backend`
+		// stay on the configured target and the unsynced record is reported as pending
+		// workload rather than reclassifying the whole backend as `memory` (#1342).
+		expect(response.body.storage).toEqual(expect.objectContaining({
 			enabled: true,
-			configured: false,
+			configured: true,
 			ready: false,
-			status: 'misconfigured',
-			mode: 'ephemeral',
-			backend: 'memory',
-		});
+			status: 'degraded',
+			readiness: 'degraded',
+			mode: 'durable',
+			backend: 'firestore',
+			lastErrorReason: 'firestore_unavailable',
+			pendingWrites: 1,
+			oldestPendingWriteAt: expect.any(String),
+		}));
 	});
 
 	it('returns structured preview in dry-run mode without calling MCP or delivery services', async () => {
@@ -399,6 +406,8 @@ describe('Scanner presets API integration tests', () => {
 		expect(runResponse.body.requestedChannels).toEqual(['telegram']);
 		expect(runResponse.body.deliveredChannels).toEqual(['telegram']);
 		expect(runResponse.body.deliveryResults).toHaveLength(1);
+		expect(runResponse.body.processingTimeMs).toEqual(expect.any(Number));
+		expect(runResponse.body).not.toHaveProperty('totalDurationMs');
 		expect(mockTelegramSendMessage).toHaveBeenCalledWith(
 			'-100999888777',
 			expect.any(String),
@@ -594,6 +603,97 @@ describe('Scanner presets API integration tests', () => {
 			.expect(400);
 
 		expect(response.body.code).toBe('INVALID_IF_MATCH');
+	});
+
+	it('returns 409 NAME_CONFLICT when creating a duplicate preset name', async () => {
+		await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Conflict preset' })
+			.expect(201);
+
+		const conflictResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'CONFLICT preset' })
+			.expect(409);
+
+		expect(conflictResponse.body.code).toBe('NAME_CONFLICT');
+		expect(conflictResponse.body.preset).toEqual(expect.objectContaining({
+			name: 'Conflict preset',
+		}));
+	});
+
+	it('returns 409 NAME_CONFLICT when renaming a preset onto another preset name', async () => {
+		const first = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Alpha' })
+			.expect(201);
+		const second = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Bravo' })
+			.expect(201);
+
+		const renameResponse = await request(app)
+			.put(`/api/scanner-presets/${second.body.preset.id}`)
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Alpha' })
+			.expect(409);
+
+		expect(renameResponse.body.code).toBe('NAME_CONFLICT');
+		expect(renameResponse.body.preset).toEqual(expect.objectContaining({
+			id: first.body.preset.id,
+			name: 'Alpha',
+		}));
+
+		// Bravo name preserved on the second preset.
+		const refetched = await request(app)
+			.get(`/api/scanner-presets/${second.body.preset.id}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+		expect(refetched.body.preset.name).toBe('Bravo');
+	});
+
+	it('allows a preset to rename itself with a case-only change', async () => {
+		const created = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'My Watchlist' })
+			.expect(201);
+
+		const updated = await request(app)
+			.put(`/api/scanner-presets/${created.body.preset.id}`)
+			.set('x-api-key', 'test-key')
+			.send({ name: 'my watchlist' })
+			.expect(200);
+
+		expect(updated.body.preset.name).toBe('my watchlist');
+		});
+
+			it('returns 400 without invoking MCP when a requested channel is disabled (GH-854 fail-fast)', async () => {
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+		process.env.ENABLE_WHATSAPP_ALERTS = 'false';
+
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Disabled-channel preset', exchange: 'binance', timeframe: '4h', scans: ['top_gainers'] })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+		tradingViewMcpService.callScanTool.mockClear();
+
+		const response = await request(app)
+			.post(`/api/scanner-presets/${presetId}/run`)
+			.set('x-api-key', 'test-key')
+			.send({ channels: ['whatsapp'] })
+			.expect(400);
+
+		expect(response.body.error).toContain('Requested channel(s) disabled or misconfigured');
+		// Fail-fast: the TradingView MCP scan must NOT have been called.
+		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
 	});
 });
 
