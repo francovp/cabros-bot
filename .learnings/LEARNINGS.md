@@ -1,3 +1,32 @@
+## [LRN-20261005-003] correction
+
+**Logged**: 2026-10-05T06:49:00Z
+**Priority**: high
+**Status**: pending
+**Area**: infra
+
+### Summary
+PR #1360 (fix(ops): repoint production monitors): QA failed round 1 — PR uses `Closes #1109` but issue #1109 is an open priority/1-roi issue whose requirement (ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true in production) is still unmet. Merging would auto-close the only tracker for an unresolved production incident; PR #1336 already did this once.
+
+### Details
+@francovp QA'd PR #1360 (Sherlock, Round 1): The engineering is sound — full suite green (244/5317), clean worktree, zero new lint, all live production probes reproduce correctly (exit 0, 5 COMMIT_MISMATCH, 7 FLAG_DISABLED, secretless monitor down→up). The blocker is a single line in the PR description: line 124 says `Closes #1109` but the PR body itself admits two paragraphs earlier (line 7) that 'That flag is still false in production and this PR does not turn it on'. GitHub GraphQL confirms `closingIssuesReferences: [{number:1109, state:OPEN}]`. Merging as written retires the only tracker for an unresolved production incident — #1336 already did this once. Fix: change `Closes #1109` to `Refs #1109`.
+
+### Suggested Action
+1. Never use `Closes` / `Fixes` / `Resolves` keywords on an issue until ALL acceptance criteria are demonstrably met in production. Use `Refs` or `Part of` until the deploy runs and passes.
+2. Self-review: if the PR body admits a requirement is unmet, the closing keyword contradicts the analysis — remove it.
+3. This is a recurrence of LRN-20261004-008 (PR #1310 used `Closes #1285` while criterion 1 unmet).
+
+### Metadata
+- Source: user_feedback
+- Related Files: PR #1360, Issue #1109, ops/production-smoke-probe.sh, .github/workflows/production-smoke-probe.yml
+- Tags: issue-tracking, premature-closes, production-verification, qa-failure
+- Pattern-Key: harden.no_premature_closes
+- Recurrence-Count: 2
+- First-Seen: 2026-10-04
+- Last-Seen: 2026-10-05
+
+---
+
 ## [LRN-20261005-001] correction
 
 **Logged**: 2026-10-05T04:49:00Z
