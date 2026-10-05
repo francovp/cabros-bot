@@ -134,6 +134,6 @@ module.exports = {
 	validateAlert,
 	validateSearchResult,
 	validateGeminiResponse,
-VALID_SIGNAL_CLASSES,
+	VALID_SIGNAL_CLASSES,
 	validateSignalClass,
 };
