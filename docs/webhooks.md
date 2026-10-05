@@ -291,6 +291,51 @@ so a route cannot resurrect a channel that is still in its repeat-suppression co
 Omitting `symbolRoutes` preserves the existing broadcast and request-level routing
 behavior exactly.
 
+### Same-direction burst aggregation
+
+`ENABLE_ALERT_SYNTH_BURST_AGGREGATION=true` (default `false`) buffers a parsed
+TradingView signal for `ALERT_BURST_WINDOW_MS` and collapses alerts sharing the same
+direction and identical routing into one regime message per channel:
+
+```json
+{
+  "success": true,
+  "results": [ { "channel": "telegram", "success": true } ],
+  "aggregated": true,
+  "burstAggregateId": "3f6b2a1e-...",
+  "burstSignalCount": 4,
+  "requestedChannels": ["telegram"],
+  "deliveredChannels": ["telegram"]
+}
+```
+
+The delivered message lists every constituent symbol with its exchange and timeframe, so
+nothing is lost:
+
+```
+⚡ Regime shift: RISK-OFF — 4 same-direction signals
+Direction: SELL
+Symbols:
+BINANCE:BTCUSDT (1D), BINANCE:BTCUSDT (4h), BINANCE:ETHUSDT (4h), BINANCE:BNBUSDT (1D)
+Window: 3000ms window, 2300ms span
+```
+
+Rules:
+
+- **Grouping is by direction, not by exchange.** A risk-on or risk-off event spans asset
+  classes at the same instant; grouping per venue would leave one message per asset class.
+- **Routing must be identical.** Different `channels`, `telegramChatId`, `telegramThreadId`,
+  `whatsappChatId` or `discordWebhookUrl` values are never merged, because one message can
+  only have one destination. `symbolRoutes` requests bypass aggregation entirely.
+- **Each constituent is still persisted** with the shared `burstAggregateId` and its own
+  symbol, so `/api/alerts` analytics and signal outcomes stay per-symbol.
+- **Fail-open everywhere.** A window that closes below `ALERT_BURST_MIN_SIGNALS`, a store
+  error, a failed aggregate dispatch, and shutdown mid-window all deliver the held alerts
+  individually. Aggregation can cost noise reduction, never an alert.
+- **Dry-run requests are never buffered.**
+- The added latency is bounded by `ALERT_BURST_WINDOW_MS`; unparsed alert text is not buffered
+  at all. The buffer is in-process, so a multi-replica deployment may aggregate partially.
+
 ### POST /api/webhook/message
 
 Deliver a generic, non-alert message to the enabled notification channels. Use this when the payload is

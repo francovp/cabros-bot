@@ -441,6 +441,27 @@
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
     },
+    "ENABLE_ALERT_SYNTH_BURST_AGGREGATION": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Aggregate same-direction multi-symbol bursts into one regime message per channel",
+      "valueType": "BOOLEAN"
+    },
+    "ALERT_BURST_WINDOW_MS": {
+      "defaultValue": {
+        "value": "3000"
+      },
+      "description": "Buffered window in milliseconds before a same-direction alert burst is evaluated",
+      "valueType": "NUMBER"
+    },
+    "ALERT_BURST_MIN_SIGNALS": {
+      "defaultValue": {
+        "value": "3"
+      },
+      "description": "Minimum same-direction signals in the window required to send one aggregate message",
+      "valueType": "NUMBER"
+    },
     "ENABLE_USER_PRICE_ALERTS": {
       "defaultValue": {
         "value": "false"

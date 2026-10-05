@@ -27,6 +27,7 @@ const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteCo
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
+const { burstAggregator, buildBurstGroupKey } = require('../../../../services/alerts/burstAggregator');
 const { alertModeration } = require('../../../../services/alerts/alertModeration');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
@@ -98,8 +99,12 @@ function getFirstTelegramMessageId(result) {
 	return Number.isSafeInteger(numericMessageId) ? numericMessageId : rawMessageId;
 }
 
-async function attachInlineKeyboardAfterPersistence({ manager, results, routing, replyMarkup }) {
-	if (!replyMarkup || !Array.isArray(results)) return;
+async function attachInlineKeyboardAfterPersistence({ manager, results, routing, replyMarkup, aggregated }) {
+	// An aggregated burst delivers one synthetic message shared by every
+	// constituent alert. Attaching N per-alert keyboards would race on the same
+	// Telegram message id, and a replay button for one symbol would sit on a
+	// message that represents all of them.
+	if (aggregated || !replyMarkup || !Array.isArray(results)) return;
 	const telegramResult = results.find((result) => result?.channel === 'telegram' && result.success);
 	const messageId = getFirstTelegramMessageId(telegramResult);
 	const telegramService = manager?.channels?.get?.('telegram');
@@ -454,13 +459,39 @@ function postAlert(botOrGetter) {
 				console.warn('[Alert] Failed to attach inline keyboard markup:', error.message);
 				inlineAlertId = null;
 			}
+			let burstAggregateId;
+			let burstSignalCount;
+			let aggregated = false;
 			try {
-				results = suppressedRepeat
-					? []
-					: await sendWithNotificationRouting(notificationManager, alert, deliveryRouting, {
-						parentSpan: requestSpan,
-						repeatCooldown: repeatCooldownOptions,
+				if (suppressedRepeat) {
+					results = [];
+				} else {
+					// A held alert dispatches after its request span ended, so the
+					// deferred send must not claim that span as its parent (it would
+					// report a duration longer than the span that contains it).
+					const willBuffer = burstAggregator.isEnabled()
+						&& buildBurstGroupKey({ parsedSignal, routing: deliveryRouting }) !== null;
+					const dispatchOutcome = await burstAggregator.dispatch({
+						parsedSignal,
+						routing: deliveryRouting,
+						deliver: async (overrides = {}) => sendWithNotificationRouting(
+							notificationManager,
+							overrides.alert || alert,
+							deliveryRouting,
+							{
+								parentSpan: willBuffer ? undefined : requestSpan,
+								// One synthetic message cannot satisfy N per-signal cooldown
+								// reservations; each member finalizes its own reservation
+								// against the shared delivery results instead.
+								repeatCooldown: overrides.dropRepeatCooldown ? undefined : repeatCooldownOptions,
+							},
+						),
 					});
+					results = dispatchOutcome.results;
+					aggregated = dispatchOutcome.aggregated === true;
+					burstAggregateId = dispatchOutcome.burstAggregateId;
+					burstSignalCount = dispatchOutcome.burstSignalCount;
+				}
 			} catch (error) {
 				if (reservation) {
 					signalRepeatCooldown.finalize(reservation.key, reservation.channels, [], [], reservation.generation);
@@ -551,6 +582,9 @@ function postAlert(botOrGetter) {
 				results,
 				enriched,
 				suppressedRepeat: suppressedRepeat || undefined,
+				aggregated: aggregated || undefined,
+				burstAggregateId,
+				burstSignalCount,
 				tokenUsage: tokenUsageJSON,
 				requestedChannels,
 				deliveredChannels,
@@ -596,6 +630,8 @@ function postAlert(botOrGetter) {
 				discordWebhookUrl: routing.discordWebhookUrl,
 				alertId: inlineAlertId || undefined,
 				side: parsedSignal?.side || null,
+				burstAggregateId,
+				burstSignalCount,
 			});
 			Promise.resolve(saveAlertPromise)
 				.then((storedAlertId) => {
@@ -605,6 +641,7 @@ function postAlert(botOrGetter) {
 						results,
 						routing,
 						replyMarkup: inlineReplyMarkup,
+						aggregated,
 					});
 				})
 				.catch(() => {}); // errors already logged inside AlertStorageService

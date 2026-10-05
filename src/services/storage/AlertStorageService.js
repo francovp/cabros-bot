@@ -267,6 +267,7 @@ function formatAlertDocument(doc, options = {}) {
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
 	}
+	applyBurstAggregationMarkers(docObj, data.burstAggregateId, data.burstSignalCount);
 	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
 		const currentPrice = toPositiveFiniteNumber(data.enrichmentData.current_price);
 		if (currentPrice !== null) {
@@ -1701,6 +1702,25 @@ function emitAlertDeliveryEvents(params, alertId = null) {
 }
 
 /**
+ * Attach the burst-aggregation markers shared by every alert in a collapsed
+ * regime message. Each constituent keeps its own document (so outcome analytics
+ * stay per-symbol) and they are correlated by `burstAggregateId`.
+ *
+ * Bounded and non-secret: a fixed-shape id and a small integer count.
+ */
+function applyBurstAggregationMarkers(target, burstAggregateId, burstSignalCount) {
+	if (!target || typeof target !== 'object') {
+		return;
+	}
+	if (typeof burstAggregateId === 'string' && burstAggregateId.trim()) {
+		target.burstAggregateId = burstAggregateId.trim().slice(0, 64);
+	}
+	if (Number.isFinite(burstSignalCount) && burstSignalCount >= 1) {
+		target.burstSignalCount = Math.trunc(burstSignalCount);
+	}
+}
+
+/**
  * Persist an alert document to Firestore.
  *
  * @param {Object} params
@@ -1714,6 +1734,8 @@ function emitAlertDeliveryEvents(params, alertId = null) {
  * @param {Array}   params.deliveryResults   - Array of SendResult from notificationManager.sendToAll()
  * @param {boolean} params.useTradingViewData - Whether ?useTradingViewData=true was set on the request
  * @param {number}  params.processingTimeMs  - Bounded handler processing duration in milliseconds
+ * @param {string}  [params.burstAggregateId] - Shared id of the regime burst this alert joined
+ * @param {number}  [params.burstSignalCount] - Signals collapsed into the shared burst message
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
 async function saveAlertInternal(params = {}) {
@@ -1731,6 +1753,8 @@ async function saveAlertInternal(params = {}) {
 		tradingViewEnrichmentApplied,
 		tradingViewEnrichmentStatus,
 		suppressedRepeat,
+		burstAggregateId,
+		burstSignalCount,
 		processingTimeMs,
 		source,
 		eventCategory,
@@ -1818,6 +1842,7 @@ async function saveAlertInternal(params = {}) {
 			document.suppressedRepeat = true;
 			document.deliveryResults = [];
 		}
+		applyBurstAggregationMarkers(document, burstAggregateId, burstSignalCount);
 		const normalizedProcessingTimeMs = normalizeProcessingTimeMs(processingTimeMs);
 		if (normalizedProcessingTimeMs !== null) {
 			document.processingTimeMs = normalizedProcessingTimeMs;
