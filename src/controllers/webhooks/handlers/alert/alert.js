@@ -283,25 +283,33 @@ function postAlert(botOrGetter) {
 				: undefined;
 			const effectiveSignalClass = rawSignalClass === undefined ? metadataSignalClass : rawSignalClass;
 
-			const { text } = validateAlert(
+			const validatedAlert = validateAlert(
 				alertText,
 				typeof body === 'object' ? body.metadata : undefined,
 				rawSignalClass,
 			);
-			// `validateAlert` returns 'unknown' whenever the caller did not send
-			// an explicit signalClass, which left the badge markers rendering
-			// for a class nothing ever populated (issue #858). Derive the class
-			// from the alert text instead, and keep any caller-supplied value
-			// authoritative. We pass the RAW value, not the validated one:
-			// validation collapses "absent" into the string 'unknown', which
-			// would then always win over derivation. An explicit 'unknown' from
-			// the caller is still honored. Classification is deterministic,
-			// channel neutral, and fails open to 'unknown'.
+			const { text } = validatedAlert;
+			// `validateAlert` collapses "no explicit class" into the string
+			// 'unknown', which would always beat derivation and leave the badge
+			// markers rendering for a class nothing populated (issue #858). So we
+			// classify here from the RAW explicit value instead - honouring an
+			// explicit 'unknown' - and fall back to deriving from the text.
+			// Deterministic, channel neutral, fail-open to 'unknown'.
 			const signalClass = classifySignal(text, { explicit: effectiveSignalClass });
+			const truncation = validatedAlert.truncated === true
+				? {
+					truncated: true,
+					originalLength: validatedAlert.originalLength,
+					deliveredLength: validatedAlert.deliveredLength,
+				}
+				: {};
+			if (truncation.truncated) {
+				console.warn('[Alert] Alert text truncated before processing', truncation);
+			}
 			const source = (typeof body === 'object' && body && typeof body.source === 'string' && body.source.trim())
 				? body.source.trim()
 				: 'webhook-alert';
-			alert = { text, source, signalClass };
+			alert = { text, source, signalClass, ...truncation };
 			// `alert.text` is immutable from here on, so the TradingView signal is parsed
 			// once and shared by the repeat-suppression, persistence, and outcome-eligibility
 			// paths below.
@@ -347,6 +355,7 @@ function postAlert(botOrGetter) {
 				return res.json({
 					success: true,
 					dryRun: true,
+					...truncation,
 					enriched,
 					payload: {
 						text: alert.text,
@@ -571,6 +580,7 @@ function postAlert(botOrGetter) {
 			res.json({
 				success: true,
 				results,
+				...truncation,
 				enriched,
 				suppressedRepeat: suppressedRepeat || undefined,
 				tokenUsage: tokenUsageJSON,
@@ -709,7 +719,7 @@ function postAlert(botOrGetter) {
 						textLength: alertText ? alertText.length : 0,
 						hasEnrichment: !!(alert && alert.enriched),
 						enrichedSource: alert && alert.enriched && alert.enriched.extraText && alert.enriched.extraText.includes('tradingview-mcp') ? 'tradingview-mcp' : (alert && alert.enriched ? 'gemini-grounding' : undefined),
-						truncated: false,
+						truncated: Boolean(alert && alert.truncated),
 					},
 				});
 			}
