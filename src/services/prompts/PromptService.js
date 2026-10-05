@@ -258,7 +258,12 @@ class PromptService {
 		} else if (telemetry.langfuseResolutions === 0) {
 			// Every remote fetch failed: Langfuse answers, but serves no prompt.
 			servingStatus = 'local_fallback';
-		} else if (telemetry.localResolutions > 0) {
+		} else if (telemetry.consecutiveFailures > 0) {
+			// Latch on CONSECUTIVE failures, not on the cumulative local count.
+			// `localResolutions > 0` is monotonic for the life of the process, so one
+			// boot-time probe of a single misconfigured prompt pinned a healthy
+			// deployment to `degraded` forever with no real alert traffic - the exact
+			// latch master's promptReadiness deliberately avoids.
 			servingStatus = 'degraded';
 		} else {
 			servingStatus = 'serving';
@@ -267,8 +272,12 @@ class PromptService {
 		return {
 			enabled,
 			configured,
-			// Configuration readiness only — kept identical to dependencies.langfuse.ready.
-			ready: enabled && configured,
+			// The OBSERVED serving verdict, not credential shape. This previously read
+			// `enabled && configured`, which contradicted its own comment and reported
+			// `ready: true` on a deployment whose servingStatus was `local_fallback` -
+			// a green light on exactly the regression this block exists to expose.
+			// dependencies.langfuse.ready remains the configuration fact.
+			ready: servingStatus === 'serving',
 			servingStatus,
 			servingPrompts: telemetry.langfuseResolutions > 0,
 			label: enabled ? getLangfusePromptLabel() : null,
@@ -519,10 +528,15 @@ class PromptService {
 				label,
 				cacheTtlSeconds,
 			});
-			this._recordFetchSuccess();
 			this.logger.debug?.(`[PromptService] Fetched Langfuse prompt "${definition.name}" successfully`);
 
+			// Compile BEFORE recording success: compile() sits inside this same try, so a
+			// compile failure reaches the catch below and records a failure. Recording
+			// success first counted one attempt as both a success and a failure, so
+			// attempts !== successes + failures and a resolution that fell back to the
+			// local file still reported remoteFetchSuccessRatePercent: 100.
 			const compiledPrompt = prompt.compile(variables);
+			this._recordFetchSuccess();
 			const rawContent = prompt.prompt || prompt.messages || compiledPrompt;
 			const riskSchemaCheck = inspectAlertEnrichmentRiskSchema(definition.name, rawContent);
 
@@ -656,8 +670,6 @@ function resetPromptServiceForTests() {
 module.exports = {
 	REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS,
 	REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE,
-	PROMPT_FETCH_ERROR_CATEGORIES,
-	classifyPromptFetchError,
 	inspectAlertEnrichmentRiskSchema,
 	PromptKeys,
 	PROMPT_DEFINITIONS,

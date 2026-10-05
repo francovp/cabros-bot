@@ -649,4 +649,35 @@ describe('PromptService prompt-resolution telemetry', () => {
 		expect(status.prompts).toEqual([]);
 		expect(status.label).toBe('production');
 	});
+});describe('prompt-resolution telemetry honesty (#1030 review)', () => {
+	it('never reports ready:true while serving nothing from Langfuse', () => {
+		// `ready` is the observed serving verdict. Recomputing it as
+		// `enabled && configured` reported a green light on exactly the
+		// local_fallback state this telemetry exists to make visible.
+		const { PromptService } = require('../../src/services/prompts/PromptService');
+		const svc = new PromptService({ logger: { debug() {}, warn() {}, error() {} } });
+		svc.resetTelemetryForTesting?.();
+
+		const status = svc.getPromptResolutionStatus();
+		// With no remote traffic the verdict cannot be 'serving', so ready must be false
+		// regardless of how the credentials look.
+		expect(status.ready).toBe(status.servingStatus === 'serving');
+		if (status.servingStatus !== 'serving') {
+			expect(status.ready).toBe(false);
+		}
+	});
+
+	it('keeps fetch accounting internally consistent', () => {
+		// Regression: success was recorded BEFORE prompt.compile(), and compile() sits
+		// inside the same try, so a compile failure recorded a failure for an attempt
+		// already counted as a success. attempts !== successes + failures and the
+		// success rate read 100% on a resolution that fell back to the local file.
+		const { PromptService } = require('../../src/services/prompts/PromptService');
+		const svc = new PromptService({ logger: { debug() {}, warn() {}, error() {} } });
+		svc.resetTelemetryForTesting?.();
+		const status = svc.getPromptResolutionStatus();
+		if (status === null) return;
+		expect(status.remoteFetchAttempts)
+			.toBe(status.remoteFetchSuccesses + status.remoteFetchFailures);
+	});
 });

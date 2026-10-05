@@ -384,7 +384,19 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		langfusePrompts = getPromptService().getPromptResolutionStatus();
 	} catch (error) {
 		console.warn(`[status] Failed to read prompt-resolution telemetry: ${error.message}`);
-		langfusePrompts = undefined;
+		// Emit the documented fail-open verdict rather than omitting the key: a
+		// consumer reading status.dependencies.langfusePrompts.servingStatus would
+		// otherwise get a TypeError on exactly the path where telemetry is broken.
+		langfusePrompts = {
+			enabled: langfusePromptsEnabled,
+			configured: hasValue(process.env.LANGFUSE_PUBLIC_KEY) && hasValue(process.env.LANGFUSE_SECRET_KEY),
+			ready: false,
+			servingStatus: 'unknown',
+			servingPrompts: false,
+			lastErrorCategory: null,
+			consecutiveFailures: 0,
+			prompts: [],
+		};
 	}
 	const braveSearch = dependencyStatus({
 		enabled: newsMonitorEnabled && forceBraveSearch,

@@ -909,7 +909,10 @@ describe('Status endpoints', () => {
 			configured: true,
 		}));
 		expect(response.body.dependencies.langfusePrompts).toEqual(expect.objectContaining({
-			ready: true,
+			// `ready` is the OBSERVED serving verdict, so a deployment serving nothing
+			// from Langfuse must not report ready here - that green light on a
+			// local_fallback state is the regression this block exists to expose.
+			ready: false,
 			servingStatus: 'local_fallback',
 			servingPrompts: false,
 			langfuseResolutions: 0,
