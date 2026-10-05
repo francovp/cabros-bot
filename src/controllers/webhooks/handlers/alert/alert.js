@@ -28,6 +28,7 @@ const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
 const { alertModeration } = require('../../../../services/alerts/alertModeration');
+const { classifySignal } = require('../../../../services/alerts/signalClassifier');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
 const { buildReplyMarkup } = require('../../../../services/alerts/telegramAlertKeyboard');
@@ -270,13 +271,31 @@ function postAlert(botOrGetter) {
 			const rawSignalClass = (typeof body === 'object' && body && 'signalClass' in body)
 				? body.signalClass
 				: req.query?.signalClass;
+			// `validateAlert` falls back to `metadata.signalClass` when neither the body
+			// nor the query carried one. The classifier must see the same precedence, or
+			// a caller using the documented metadata form is silently misclassified -
+			// and replay, which preserves metadata, would not round-trip (AGENTS.md
+			// "Replay Payload Preservation"). Mirrors validation's `!== undefined` test
+			// exactly, including the `'signalClass' in body` short-circuit above.
+			const metadataSignalClass = (rawSignalClass === undefined
+				&& typeof body === 'object' && body && body.metadata && typeof body.metadata === 'object')
+				? body.metadata.signalClass
+				: undefined;
+			const effectiveSignalClass = rawSignalClass === undefined ? metadataSignalClass : rawSignalClass;
 
 			const validatedAlert = validateAlert(
 				alertText,
 				typeof body === 'object' ? body.metadata : undefined,
 				rawSignalClass,
 			);
-			const { text, signalClass } = validatedAlert;
+			const { text } = validatedAlert;
+			// `validateAlert` collapses "no explicit class" into the string
+			// 'unknown', which would always beat derivation and leave the badge
+			// markers rendering for a class nothing populated (issue #858). So we
+			// classify here from the RAW explicit value instead - honouring an
+			// explicit 'unknown' - and fall back to deriving from the text.
+			// Deterministic, channel neutral, fail-open to 'unknown'.
+			const signalClass = classifySignal(text, { explicit: effectiveSignalClass });
 			const truncation = validatedAlert.truncated === true
 				? {
 					truncated: true,

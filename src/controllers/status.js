@@ -22,6 +22,7 @@ const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
 const { firestoreWriteMetricsService, READ_HEALTH } = require('../services/storage/FirestoreWriteMetricsService');
+const { signalClassMetrics } = require('../services/alerts/signalClassifier');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsAppService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
@@ -547,6 +548,14 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			firestoreJobStorage,
 			...(firestoreWriteMetricsService.getSnapshot()
 				? { firestoreWriteMetrics: firestoreWriteMetricsService.getSnapshot() }
+				: {}),
+			// `featureFlags.signalClassMarker: true` only says the badge marker
+			// is allowed to render; it says nothing about whether alerts are
+			// actually being classified. Expose the population rate so a silent
+			// regression back to 100% `unknown` is detectable from /api/status
+			// instead of looking healthy.
+			...(signalClassMetrics.getSnapshot()
+				? { signalClassClassification: signalClassMetrics.getSnapshot() }
 				: {}),
 			...(firestoreWriteMetricsService.getReadSnapshot()
 				? { firestoreReadMetrics: firestoreWriteMetricsService.getReadSnapshot() }
