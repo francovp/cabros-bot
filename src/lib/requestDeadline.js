@@ -67,14 +67,60 @@ function readPositiveInteger(name, fallback) {
 	return value;
 }
 
-function parseExemptPaths() {
-	const raw = process.env.REQUEST_DEADLINE_EXEMPT_PATHS;
-	if (!raw) return DEFAULT_EXEMPT_PATHS;
+/**
+ * `/docs` serves a Swagger UI page that then pulls `swagger-ui.css`,
+ * `swagger-ui-bundle.js`, `swagger-ui-standalone-preset.js`, and
+ * `swagger-initializer.js` from the same router. Exact set membership exempts
+ * none of those, so treating `/docs` as a subtree keeps the deadline and the
+ * structured request log in agreement about what counts as a probe route.
+ */
+const EXEMPT_SUBTREES = ['/docs'];
 
-	const paths = new Set(DEFAULT_EXEMPT_PATHS);
+/**
+ * Single normalization rule for both the exemption set and the incoming
+ * request: lower-case, then drop trailing slashes. Applying the same rule to
+ * configured entries is what makes `REQUEST_DEADLINE_EXEMPT_PATHS=/api/slow/`
+ * match a request for `/api/slow`; storing the configured slash while the
+ * request normalizer removes it silently exempts nothing while the operator
+ * believes it worked.
+ */
+function normalizeExemptPath(rawPath) {
+	const lowered = String(rawPath).trim().toLowerCase();
+	if (lowered.length === 0) return '';
+	const withLeadingSlash = lowered.startsWith('/') ? lowered : `/${lowered}`;
+	// `/` normalizes to `/` rather than the empty string, so the root path stays
+	// expressible as a configuration value.
+	return withLeadingSlash.replace(/\/+$/, '') || '/';
+}
+
+/**
+ * The single exemption predicate, shared with `src/lib/requestLogger.js` so the
+ * deadline and the request log cannot drift on what counts as a probe route.
+ */
+function isExemptPath(rawPath, exemptPaths) {
+	const normalized = normalizeExemptPath(rawPath);
+	if (!normalized) return false;
+	if (exemptPaths.has(normalized)) return true;
+	for (const prefix of EXEMPT_SUBTREES) {
+		if (normalized === prefix || normalized.startsWith(`${prefix}/`)) return true;
+	}
+	return false;
+}
+
+function parseExemptPaths() {
+	// Normalized through `normalizeExemptPath` so configured entries follow the
+	// same rule as incoming requests.
+	const paths = new Set();
+	for (const path of DEFAULT_EXEMPT_PATHS) {
+		paths.add(normalizeExemptPath(path));
+	}
+
+	const raw = process.env.REQUEST_DEADLINE_EXEMPT_PATHS;
+	if (!raw) return paths;
+
 	for (const part of String(raw).split(',')) {
 		const trimmed = part.trim();
-		if (trimmed) paths.add(trimmed.startsWith('/') ? trimmed : `/${trimmed}`);
+		if (trimmed) paths.add(normalizeExemptPath(trimmed));
 	}
 	return paths;
 }
@@ -131,13 +177,13 @@ function resolveRequestId(req) {
 
 function normalizePath(req) {
 	const raw = req.originalUrl || req.url || req.path || '';
-	return String(raw).split('?')[0].replace(/\/+$/, '').toLowerCase();
+	return normalizeExemptPath(String(raw).split('?')[0]);
 }
 
 function requestDeadline(req, res, next) {
 	const exemptPaths = resolveExemptPaths();
 	const requestPath = normalizePath(req);
-	if (exemptPaths.has(requestPath)) {
+	if (isExemptPath(requestPath, exemptPaths)) {
 		return next();
 	}
 
@@ -305,5 +351,8 @@ requestDeadline.constants = Object.freeze({
 
 module.exports = requestDeadline;
 requestDeadline.resolveRequestId = resolveRequestId;
+requestDeadline.resolveExemptPaths = resolveExemptPaths;
+requestDeadline.isExemptPath = isExemptPath;
+requestDeadline.normalizeExemptPath = normalizeExemptPath;
 requestDeadline.guard = rejectExpiredRequest;
 requestDeadline.isTerminated = isRequestTerminated;

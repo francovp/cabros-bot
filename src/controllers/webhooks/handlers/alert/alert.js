@@ -121,7 +121,12 @@ async function attachInlineKeyboardAfterPersistence({ manager, results, routing,
 }
 
 async function processEnrichment(alert, options) {
-	const { tokenUsage, useTradingViewData, parentSpan } = options;
+	const { tokenUsage, useTradingViewData, parentSpan, parsedSignal } = options;
+	// `postAlert` parses the same signal for repeat-suppression/persistence/outcome eligibility.
+	// Reuse that parse when supplied so enrichment and persistence agree on the trade direction
+	// used for deterministic risk/reward (GH-599); fall back to a local parse for direct callers.
+	const parsed = parsedSignal || parseTradingViewSignal(alert.text);
+	const hasTradingViewSignal = Boolean(parsed);
 	const runtimeConfig = getRuntimeConfig();
 	const isGeminiEnabled = runtimeConfig.ENABLE_GEMINI_GROUNDING;
 	const isTradingViewMcpEnabled = runtimeConfig.ENABLE_TRADINGVIEW_MCP_ENRICHMENT && useTradingViewData;
@@ -144,7 +149,7 @@ async function processEnrichment(alert, options) {
 
 		try {
 			console.debug('Starting alert enrichment process');
-			const enrichedAlert = await enrichAlert({ text: alert.text }, { tokenUsage, useTradingViewData });
+			const enrichedAlert = await enrichAlert({ text: alert.text }, { tokenUsage, useTradingViewData, parsedSignal: parsed });
 			if (enrichedAlert && typeof enrichedAlert === 'object') {
 				enrichedAlert.tokenUsage = tokenUsage.toJSON();
 				enriched = true;
@@ -153,7 +158,7 @@ async function processEnrichment(alert, options) {
 					const tradingViewEnrichmentStatus = enrichedAlert.tradingViewEnrichmentStatus
 						|| (enrichedAlert.tradingViewEnrichmentApplied === true
 							? 'full'
-							: (parseTradingViewSignal(alert.text) ? 'failed' : 'not_applicable'));
+							: (hasTradingViewSignal ? 'failed' : 'not_applicable'));
 					enrichedAlert.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
 					enrichedAlert.tradingViewEnrichmentApplied = ['full', 'partial'].includes(tradingViewEnrichmentStatus);
 					alert.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
@@ -161,13 +166,13 @@ async function processEnrichment(alert, options) {
 				console.debug('[Alert] Enrichment completed, sources:', (enrichedAlert.sources && enrichedAlert.sources.length) || 0);
 			} else {
 				if (isTradingViewMcpEnabled) {
-					alert.tradingViewEnrichmentStatus = parseTradingViewSignal(alert.text) ? 'failed' : 'not_applicable';
+					alert.tradingViewEnrichmentStatus = hasTradingViewSignal ? 'failed' : 'not_applicable';
 				}
 				console.debug('[Alert] Enrichment skipped: alert text did not match enabled providers');
 			}
 		} catch (error) {
 			if (isTradingViewMcpEnabled) {
-				alert.tradingViewEnrichmentStatus = parseTradingViewSignal(alert.text) ? 'failed' : 'not_applicable';
+				alert.tradingViewEnrichmentStatus = hasTradingViewSignal ? 'failed' : 'not_applicable';
 			}
 			console.warn('[Alert] Enrichment failed, using original text:', error.message);
 		} finally {
@@ -243,7 +248,7 @@ function resolveSignalOutcomePriceSource(enriched, parsed) {
 
 function postAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = resolveRequestId(req);
+		const requestId = req.requestId || resolveRequestId(req);
 		const startTime = Date.now();
 		const { body } = req;
 		const useTradingViewData = req.query && (req.query.useTradingViewData === true || req.query.useTradingViewData === 'true');
@@ -275,6 +280,10 @@ function postAlert(botOrGetter) {
 				? body.source.trim()
 				: 'webhook-alert';
 			alert = { text, source, signalClass };
+			// `alert.text` is immutable from here on, so the TradingView signal is parsed
+			// once and shared by the repeat-suppression, persistence, and outcome-eligibility
+			// paths below.
+			const parsedSignal = parseTradingViewSignal(alert.text);
 
 			if (alertModeration.isEnabled()) {
 				alertModeration.refreshConfig();
@@ -289,7 +298,7 @@ function postAlert(botOrGetter) {
 						requestId,
 					});
 				}
-		}
+			}
 
 			// Fail-fast channel availability check (GH-854): when the caller
 			// explicitly requests channels, validate they are enabled and
@@ -306,7 +315,7 @@ function postAlert(botOrGetter) {
 			}
 
 			const tokenUsage = new TokenUsageTracker();
-			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan });
+			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan, parsedSignal });
 
 			const tokenUsageJSON = tokenUsage.toJSON();
 			tokenUsageJSON.formattedSummary = tokenUsage.formatSummary();
@@ -333,7 +342,7 @@ function postAlert(botOrGetter) {
 				await initializeNotificationServices(bot);
 			}
 			validateNotificationRouting(notificationManager, routing);
-			const requestedChannels = getRequestedChannels(notificationManager, routing);
+			const requestedChannels = getRequestedChannels(notificationManager, routing, alert.text);
 
 			// Opt-in repeat suppression: same (exchange, symbol, timeframe, side)
 			// inside its cooldown window skips channel delivery but is still
@@ -345,7 +354,6 @@ function postAlert(botOrGetter) {
 			let deliveryRouting = routing;
 			let repeatCooldownOptions;
 			if (signalRepeatCooldown.isEnabled()) {
-				const parsedSignal = parseTradingViewSignal(alert.text);
 				// Unsupported timeframes normalize to the default timeframe, so
 				// they must never enter the cooldown store: a raw token like
 				// "3M" collapses to "1h" and stays unsuppressed, while "4H"
@@ -389,7 +397,28 @@ function postAlert(botOrGetter) {
 							})),
 						};
 						if (verdict.channels.length < requestedChannels.length) {
-							deliveryRouting = { ...routing, channels: verdict.channels.map(getChannelName) };
+							const narrowedChannelNames = verdict.channels.map(getChannelName);
+							deliveryRouting = {
+								...routing,
+								channels: narrowedChannelNames,
+								// Repeat suppression is per (channel, destination). When it narrows
+								// the request-level channels, every symbol route must be narrowed to the
+								// same subset; otherwise a route's own channel list resurrects a channel
+								// that is still cooling down and defeats the channel-specific guarantee.
+								symbolRoutes: routing.symbolRoutes
+									? Object.fromEntries(
+										Object.entries(routing.symbolRoutes).map(([symbol, route]) => [
+											symbol,
+											{
+												...route,
+												channels: (route.channels || []).filter((channel) =>
+													narrowedChannelNames.includes(channel),
+												),
+											},
+										]),
+									)
+									: undefined,
+							};
 						}
 					}
 				}
@@ -566,6 +595,7 @@ function postAlert(botOrGetter) {
 				whatsappChatId: routing.whatsappChatId,
 				discordWebhookUrl: routing.discordWebhookUrl,
 				alertId: inlineAlertId || undefined,
+				side: parsedSignal?.side || null,
 			});
 			Promise.resolve(saveAlertPromise)
 				.then((storedAlertId) => {
@@ -580,8 +610,7 @@ function postAlert(botOrGetter) {
 				.catch(() => {}); // errors already logged inside AlertStorageService
 
 			if (signalOutcomeService.isEnabled() && !suppressedRepeat) {
-				const parsed = parseTradingViewSignal(alert.text);
-				if (parsed) {
+				if (parsedSignal) {
 					const mcpPrice = (alert.enriched && typeof alert.enriched.current_price === 'number' && Number.isFinite(alert.enriched.current_price) && alert.enriched.current_price > 0)
 						? alert.enriched.current_price
 						: (alert.enriched && alert.enriched.price_data && typeof alert.enriched.price_data.current_price === 'number' && Number.isFinite(alert.enriched.price_data.current_price) && alert.enriched.price_data.current_price > 0)
@@ -601,15 +630,15 @@ function postAlert(botOrGetter) {
 							: null);
 
 					const priceSource = mcpPrice !== null
-						? resolveSignalOutcomePriceSource(alert.enriched, parsed)
+						? resolveSignalOutcomePriceSource(alert.enriched, parsedSignal)
 						: null;
 
 					signalOutcomeService.recordSignal({
 						requestId,
 						source: 'webhook-alert',
-						symbol: parsed.symbol,
-						exchange: parsed.exchange || 'BINANCE',
-						timeframe: parsed.timeframe,
+						symbol: parsedSignal.symbol,
+						exchange: parsedSignal.exchange || 'BINANCE',
+						timeframe: parsedSignal.timeframe,
 						setupType: (alert.enriched && alert.enriched.setup_type) || 'tradingview-enrichment',
 						score: alert.enriched ? alert.enriched.sentiment_score : null,
 						confidenceScore: (typeof alert.enriched?.confidence === 'number' && Number.isFinite(alert.enriched.confidence) && alert.enriched.confidence >= 0 && alert.enriched.confidence <= 1)
@@ -617,7 +646,7 @@ function postAlert(botOrGetter) {
 							: (typeof alert.enriched?.sentiment_score === 'number' && Number.isFinite(alert.enriched.sentiment_score) && Math.abs(alert.enriched.sentiment_score) <= 1
 								? Math.abs(alert.enriched.sentiment_score)
 								: null),
-						side: parsed.side,
+						side: parsedSignal.side,
 						price: mcpPrice,
 						stop: stopLevel,
 						target: targetLevel,

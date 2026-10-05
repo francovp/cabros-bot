@@ -301,10 +301,12 @@ async function summarizeAnalyses({ from, to, limit = 500, symbol, threshold = 0.
 	}
 
 	// False-positive proxy:
-	// Alerts with confidence >= threshold that had NO subsequent alert for the same symbol within 24h
+	// Delivered alerts with confidence >= threshold that had NO subsequent delivered alert
+	// for the same symbol within 24h. Records that never sent an alert are excluded: the
+	// proxy measures delivered-alert outcomes, not raw analysis scores.
 	const numericThreshold = typeof threshold === 'number' && Number.isFinite(threshold) ? threshold : 0.7;
 	const highConfidenceAlerts = items
-		.filter(item => (item.alertSent || item.confidence >= numericThreshold) && item.confidence >= numericThreshold && item.eventCategory !== 'none')
+		.filter(item => item.alertSent === true && item.confidence >= numericThreshold && item.eventCategory !== 'none')
 		.map(item => ({
 			...item,
 			timestampMs: getTimestampMillis(item.createdAt) || 0,

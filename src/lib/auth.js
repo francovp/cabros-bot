@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+
+const API_KEY_COMPARISON_LENGTH = 4096;
 const sentryService = require('../services/monitoring/SentryService');
 const { isProductionLikeEnvironment, isPreviewEnvironment } = require('./deploymentEnvironment');
 
@@ -119,9 +121,6 @@ function validateApiKey(req, res, next) {
 	if (!apiKey) {
 		return res.status(401).json({ error: 'Unauthorized: Missing API key' });
 	}
-
-	// Ensure apiKey is a string (in case of multiple headers)
-	const keyToCheck = Array.isArray(apiKey) ? apiKey[0] : apiKey;
 
 	if (!isValidApiKey(req)) {
 		return res.status(403).json({ error: 'Forbidden: Invalid API key' });

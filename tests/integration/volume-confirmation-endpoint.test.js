@@ -185,11 +185,17 @@ describe('Volume confirmation endpoint', () => {
 				.send(payload)
 				.expect(200);
 
+			// The replay is a distinct HTTP request, so its correlation id is the
+			// replaying request's own — the deadline, the X-Request-Id header, and
+			// the structured access log all agree. Everything else is replayed
+			// verbatim from the cached record.
 			expect(second.headers['idempotency-replay']).toBe('true');
 			expect(second.body).toEqual({
 				...first.body,
 				idempotencyReplayed: true,
+				requestId: second.body.requestId,
 			});
+			expect(second.body.requestId).toBe(second.headers['x-request-id']);
 			expect(tradingViewMcpService.callVolumeConfirmation).toHaveBeenCalledTimes(1);
 		});
 
