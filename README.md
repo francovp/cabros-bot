@@ -13,7 +13,7 @@ A high-performance crypto, equity, and market intelligence bot service built wit
 
 ## Core Capabilities
 
-- **Multi-Channel Alert Dispatch**: Broadcast alerts concurrently across Telegram, WhatsApp (GreenAPI), and Discord Webhooks with channel-specific Markdown escaping, URL shortening, independent retries, and dead-letter queue redrive.
+- **Multi-Channel Alert Dispatch**: Broadcast alerts concurrently across Telegram, WhatsApp (GreenAPI), and Discord Webhooks with channel-specific Markdown escaping, URL shortening, independent retries, and dead-letter queue redrive. Operator admin pages fail over to the other configured channels — preferring whichever is actually healthy — when the primary Telegram admin destination cannot be delivered, and `GET /api/status` reports `adminPaging` health so a silent operator path is never mistaken for a working one.
 - **TradingView MCP Integration**: Connects to the remote TradingView MCP Streamable HTTP service to fetch multi-timeframe oscillators, moving averages, pivot points, and technical summaries (`coin_analysis`).
 - **AI Grounding & Prompt Management**: Enriches raw signals with Google Gemini Grounding (sentiment, key insights, technical levels, news sources) backed by Langfuse prompt management and token cost budgets.
 - **News Monitoring & Event Detection**: Scans crypto and equity symbols on a schedule, scores news confidence, applies persistent deduplication, and falls back to Binance/Twelve Data real-time prices.
@@ -364,7 +364,7 @@ Verify the rollout on the deployed service rather than trusting the flag:
 
 ```bash
 curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
-  https://cabros-bot-telegram.onrender.com/api/capabilities \
+  https://cabros-crypto-bot-telegram.onrender.com/api/capabilities \
   | jq '{flag: .featureFlags.langfusePrompts,
          dep: .dependencies.langfuse | {status, ready, label, promptsSucceeded,
                                          localFallbackCount, lastErrorReason,
@@ -418,6 +418,101 @@ Setting the variable is **necessary but not sufficient**, because this layer is 
 
 `expiresAt` on each document is only honoured once Firestore's TTL policy exists, so run `bash ops/configure-operational-collection-retention.sh` once per Firebase project; until then the collection grows without bound. Rollback is `false` plus a redeploy — no code change. See [Environment Configuration](docs/environment-configuration.md#verifying-idempotency-storage-is-actually-durable).
 
+### Durable News-Monitor Analysis Records
+
+`ENABLE_FIRESTORE_NEWS_ANALYSIS=true` is enabled in production by `render.yaml` on the **web service only** (previews off), so every analyzed symbol is recorded in the `news_analysis` collection and `GET /api/news-monitor/analyses` and `GET /api/news-monitor/summary` have an audit trail to read. Previews stay off because a PR preview shares the production Firestore project.
+
+Setting the flag is **necessary but not sufficient**. Every Firestore error in this service is swallowed so news alert delivery is never blocked, which means a deployment that cannot reach Firestore behaves exactly as it did before the flag existed. `dependencies.newsAnalysisStorage` therefore reports observed work rather than credential shape:
+
+| `status` | Meaning |
+| :--- | :--- |
+| `disabled` | `ENABLE_FIRESTORE_NEWS_ANALYSIS` is not `true`. |
+| `misconfigured` | Enabled, but Firestore credentials are absent or refused (for example an inline `authorized_user` document, which #1128 refuses rather than silently authenticating as something else). |
+| `unverified` | Configured, but no analysis has been recorded or read yet. Not a failure — and not health. It is the normal state right after every deploy. |
+| `ready` | A durable write or read has actually succeeded. |
+| `degraded` | A durable operation failed and nothing has answered since. `lastErrorReason` names the class and `lastMissingIndex` flags a rejected query. |
+
+`mode`/`backend` keep reporting configured **intent** (`durable`/`firestore`) even after a failure, because `memory` would read as the flag being off. `failOpen` is always `true`: a `degraded` verdict still delivers news alerts, it just stops recording them. Counters are process-local and reset on restart.
+
+Verify the rollout on the deployed service rather than trusting the flag:
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
+  | jq '{flag: .featureFlags.firestoreNewsAnalysis,
+         dep: .dependencies.newsAnalysisStorage | {status, ready, mode, backend,
+                                                  operationsSucceeded, lastErrorReason,
+                                                  lastMissingIndex}}'
+```
+
+`operationsSucceeded` climbing with a non-zero count is the evidence that analysis records are actually landing. The flag alone proves nothing: it reports what was configured.
+
+**Two deployment prerequisites are not code steps.** A merged change is not a working feature until both are done:
+
+1. **Deploy the composite indexes.** `firestore.indexes.json` declares three `news_analysis` composites (`{symbol, createdAt}`, `{eventCategory, createdAt}`, `{symbol, eventCategory, createdAt}`) because Firestore never merges single-field indexes, so an equality filter plus a sort on `createdAt` needs an explicit composite. Run `firebase deploy --only firestore:indexes`; indexes build asynchronously and the query is rejected until the build reaches `READY`. A rejection surfaces as `503 STORAGE_UNAVAILABLE` with `lastMissingIndex: true` — **neither the unit suite (the Firestore double makes `orderBy` a no-op) nor the emulator (which auto-creates indexes) can catch a missing declaration**, so it is asserted at the source level in `tests/unit/news-analysis-storage.test.js`.
+2. **Enable TTL deletion.** `expiresAt` is only honoured once the policy exists, and TTL deletion is eventually consistent and only removes already-expired documents. Run `bash ops/configure-operational-collection-retention.sh` once per project, otherwise the collection grows without bound.
+
+**The gate is environment-only, and that is deliberate.** It is deliberately absent from `firebase-remote-config-template.json`. A template parameter's `defaultValue` is reported by the Admin SDK with source `remote`, so a published `"false"` entry would override `render.yaml` and silently re-disable persistence the first time a Remote Config load succeeded — a fix that reads as applied and does nothing. `NEWS_ANALYSIS_RETENTION_DAYS` is the genuine runtime knob and stays remote-config eligible.
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `ENABLE_FIRESTORE_NEWS_ANALYSIS` | `false` (`render.yaml`: `true` on web, previews off) | Master gate for recording and for the two read endpoints. Environment-only. |
+| `NEWS_ANALYSIS_RETENTION_DAYS` | `30` | Days before a record expires (`1`–`365`). Remote Config eligible. |
+
+### Symbol Analysis Persistence
+`ENABLE_SYMBOL_ANALYSIS_STORAGE=true` is enabled in production, so `/api/webhook/symbol-analysis` results are persisted to the `symbolAnalyses` collection and readable from `/api/symbol-analyses` for operator review and outcome correlation. The flag is declared on the **web service only**, with previews off: the single writer is the HTTP route layer in `src/controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis.js`, `worker.js` never mounts routes, and previews share the production Firestore project — a preview would write throwaway rows into the collection operators read.
+
+Setting the variable is **necessary but not sufficient**, because this layer is fail-open: every Firestore error is swallowed, the record is dropped, and the analysis still returns `200`. A deployment that cannot reach Firestore therefore behaves exactly as it did before the flag existed, so `dependencies.symbolAnalysisStorage` reports observed work rather than credential shape:
+
+| `status` | Meaning | Operator action |
+| :--- | :--- | :--- |
+| `disabled` | `ENABLE_SYMBOL_ANALYSIS_STORAGE` is not `true`. | Nothing. |
+| `misconfigured` | Enabled, but Firestore credentials are absent or unreadable. | Check `FIREBASE_SERVICE_ACCOUNT_JSON` / `GOOGLE_APPLICATION_CREDENTIALS`. |
+| `unverified` | Configured, but no write has landed yet. Not a failure — and not health. It is the normal state right after every deploy. | Send one symbol analysis, then re-check. |
+| `ready` | An analysis has actually been persisted (`writesSucceeded >= 1`). | Nothing. |
+| `degraded` | A durable write failed while the analysis still returned. `lastErrorReason` names the class. | Investigate Firestore reachability. |
+
+**A successful read is not evidence of persistence.** Read and write counters are reported separately (`writesAttempted`, `writesSucceeded`, `writesFailed`, `readsAttempted`, `readsSucceeded`, `readsFailed`); a non-zero `readsSucceeded` proves Firestore reachability only and never sets `ready`. Persistence is the feature, so only a write proves the enablement took effect. A rejected Firebase initialization is charged to the operation that triggered it, so browsing `/api/symbol-analyses` moves `readsAttempted`/`readsFailed` and leaves the write counters at zero — `writesFailed: 1` therefore always means a real write was attempted. `failOpen` is always `true`, and `consecutiveFailures` clears on the next successful Firestore operation, so a transient outage self-heals without a restart. Counters are process-local and a status read never counts as a durable attempt, so polling `/api/status` cannot manufacture a `ready` verdict.
+
+Verify the rollout on the deployed service, then prove it by persisting one analysis:
+
+```bash
+BASE_URL=https://cabros-crypto-bot-telegram.onrender.com
+
+# 1. The gate is on and Firestore credentials are shaped correctly.
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" "$BASE_URL/api/capabilities" \
+  | jq '{flag: .featureFlags.symbolAnalysisStorage,
+         status: .dependencies.symbolAnalysisStorage.status,
+         writes: .dependencies.symbolAnalysisStorage.writesSucceeded,
+         templatePublished: .dependencies.firebaseRemoteConfig.templatePublished,
+         configSource: .dependencies.firebaseRemoteConfig.source}'
+# Expected right after deploy: flag true, status "unverified", writes 0.
+# If flag is false, check templatePublished first: a published template that
+# disagrees with render.yaml is what silently overrides the blueprint.
+
+# 2. Persist one analysis, then re-check.
+curl -s -X POST -H "x-api-key: $WEBHOOK_API_KEY" -H 'Content-Type: application/json' \
+  -d '{"symbol":"BINANCE:BTCUSDT"}' "$BASE_URL/api/webhook/symbol-analysis" >/dev/null
+
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" "$BASE_URL/api/capabilities" \
+  | jq '{status: .dependencies.symbolAnalysisStorage.status,
+         writes: .dependencies.symbolAnalysisStorage.writesSucceeded,
+         lastWriteAt: .dependencies.symbolAnalysisStorage.lastWriteAt}'
+# Expected: status "ready", writes >= 1, lastWriteAt set
+```
+
+`lastWriteAt` advancing with a non-zero `writesSucceeded` is the evidence that the enablement actually took effect. The flag alone proves nothing: it reports what was configured, not what executed.
+
+**Prerequisite — TTL on `symbolAnalyses`.** Every document carries `expiresAt`, but Firestore only deletes on it once the TTL policy exists, and TTL deletion is eventually consistent (~24 h). Run `bash ops/configure-operational-collection-retention.sh` once per Firebase project — it already covers the `symbolAnalyses` collection group — or the collection grows without bound. This is a deployment step, not something the repository can apply for you. Rollback is `false` plus a redeploy; already-stored documents are left for TTL deletion. See [Environment Configuration](docs/environment-configuration.md#verifying-symbol-analysis-persistence-is-actually-working).
+
+| Variable | Default | Bounds | Purpose |
+| :--- | :--- | :--- | :--- |
+| `ENABLE_SYMBOL_ANALYSIS_STORAGE` | `false` | — | Persist symbol analyses to Firestore. Environment-only. |
+| `SYMBOL_ANALYSIS_RETENTION_DAYS` | `7` | `1`–`365` | TTL horizon for stored analyses. Environment-only. |
+
+Both are classified **environment-only** for Firebase Remote Config parity: a process-startup gate that decides where a collection lives, and a retention horizon, are not runtime tuning knobs. Neither is in `RemoteConfigService.js` `PARAMETER_SCHEMA` nor in `firebase-remote-config-template.json`, so `render.yaml` is the only place either value comes from — matching `ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_FIRESTORE_SCANNER_PRESETS` and `ENABLE_SIGNAL_OUTCOME_TRACKING`.
+
+**This matters because a published template outranks `render.yaml`.** Any allow-listed key present in `firebase-remote-config-template.json` beats `process.env` at runtime (`getRemoteValue()` accepts a plain `defaultValue` from the template, not just a targeted condition), so an allow-listed gate whose template value disagrees with the blueprint reports the blueprint's value in `/api/capabilities` while the template keeps the feature off. `tests/unit/remote-config-service.test.js` now fails if the two ever disagree for a shared key. When triaging a flag that is `true` in the blueprint but reports `false` in production, check `dependencies.firebaseRemoteConfig.templatePublished` first — a published template is the usual cause, and the `Deploy Firebase Remote Config Server Template` workflow is the only thing that changes it.
+
 ### External Uptime Monitoring
 
 Production liveness is checked from **outside** the deployment. `.github/workflows/external-uptime-monitor.yml` probes the public `GET /healthcheck` every 5 minutes from GitHub Actions using `ops/external-uptime-monitor.js`; `.github/workflows/external-uptime-watchdog.yml` asserts the monitor itself is still being scheduled. `/healthcheck` is mounted before `validateApiKey`, so the monitor needs **no API key** — which is deliberate, since a monitor that silently no-ops because a secret was never provisioned is what hid the six-day platform-side outage in issue #1107.
@@ -425,6 +520,38 @@ Production liveness is checked from **outside** the deployment. `.github/workflo
 Configure it with the repository variables `UPTIME_MONITOR_BASE_URL`, `UPTIME_MONITOR_CHECK_DOCS`, `UPTIME_MONITOR_TIMEOUT_MS`, and `UPTIME_WATCHDOG_MAX_AGE_MINUTES`; optionally add the `TELEGRAM_BOT_TOKEN` and `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` secrets to page on a down/recovery transition. A non-zero probe exit fails the workflow, which is GitHub's own zero-configuration alert channel. Run `pnpm run uptime:monitor --no-page` to reproduce the verdict locally.
 
 **Any platform or host change must update `UPTIME_MONITOR_BASE_URL` and re-register the third-party uptime monitor** — see the platform migration re-activation checklist in [Observability & Monitoring](docs/monitoring.md#external-uptime-monitoring).
+
+### Production Enablement Verification
+
+The secretless monitor above proves only that *something* answers `/healthcheck`. A build months behind `master` answers 200 perfectly, so liveness alone cannot tell you that production is actually running your latest code or that a feature you declared enabled is enabled.
+
+The authenticated layer is `ops/production-smoke-probe.sh`, run every 15 minutes by `.github/workflows/production-smoke-probe.yml`. It asserts `service.commit` equals the latest `master` SHA (exit `5` on a stale deploy), that named dependencies are `ready` (exit `6`), and — with `PRODUCTION_REQUIRE_ENABLED_FLAGS` — that named `featureFlags` are `true` (exit `7`, `FLAG_DISABLED`).
+
+**A flag absent from the deployed build counts as disabled.** The comparison demands the literal string `true`, so an absent key cannot satisfy it and a stale build cannot look compliant — the same shape-is-not-readiness trap this repository has hit repeatedly. The jq default (`// false`) only labels the diagnostic `value=false`; it is not the enforcement point. That distinction matters because a `render.yaml` `value: true` is a *declaration of intent* and production reality is a separate fact — which is how `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` was declared `true` in the Blueprint while production reported `false` (issue #1109).
+
+Set the `PRODUCTION_REQUIRE_ENABLED_FLAGS` repository variable to a comma-separated flag list; it defaults to empty, so it adds no failure mode until you enable it. Every failure message ends with `(probed <base_url>)`, so a misconfigured target is never mistaken for a real outage. See [Observability & Monitoring](docs/monitoring.md#production-smoke-probe).
+
+### TradingView Confluence Enrichment
+
+`ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true` are declared `true` in `render.yaml` on the **web service only** (previews off) — and production is **not** yet running them: as of this writing `featureFlags.tradingViewConfluenceEnrichment` reports `false` live (issue #1109), because the enablement needs a Blueprint apply plus a redeploy onto a current build, and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` is inert while its parent gate is off. Treat the Blueprint entry as intent and `/api/status` as reality; the check above is how you tell them apart. Together the flags add an optional `combined_analysis` call to each enriched alert webhook followed by a `multi_timeframe_analysis` call. Both are fail-open: a failure never blocks alert delivery, and it is recorded as a `partial` enrichment rather than a dropped alert.
+
+`ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` is nested **inside** the confluence gate, so it is inert until confluence enrichment is on — the two flags cannot disagree. Both keys need a web-service declaration in `render.yaml` even though they are only ever read on the web service, because the worker block mirrors them with `fromService` and a mirror whose source is never declared resolves to nothing.
+
+**The enrichment budget decides how much of this actually runs.** `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` (default `12000`) is the ceiling for the whole webhook enrichment path. Whenever volume confirmation *or* confluence is enabled, the base `coin_analysis` call is reserved 75% of it and the optional calls share what remains — a single split, not a cumulative one, so enabling confluence does not shrink the base slice further when volume confirmation is also on. (Note that `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` is **not** declared in `render.yaml`, so which slice production actually reserves is not verifiable from the repository; the single-ternary conclusion above is a property of the code and holds either way.) Both confluence calls share one deadline of `min(8000, remaining budget)`, so with the default budget the second (`multi_timeframe_analysis`) call is commonly cut short and the alert is stored as `tradingViewEnrichmentStatus: "partial"`. Raise `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` (Remote Config eligible, max `120000`) if you want both to complete — but note the webhook request deadline (`REQUEST_TIMEOUT_MS`, default `30000`) bounds the whole request, so the budget cannot usefully exceed it.
+
+Setting the flag is **necessary but not sufficient**, because the layer is fail-open: a confluence call that fails looks identical in delivery terms to one that was never attempted. `dependencies.tradingViewMcp.enrichment.confluence` reports the observed window — `attemptedCount`, `appliedCount`, `failedCount`, `budgetExhaustedCount`, `lastAppliedAt` and a closed-enum `lastFailureCategory`.
+
+**These counters are per *call*, not per alert.** One alert enrichment issues up to two confluence calls (`combined_analysis`, then `multi_timeframe_analysis` when multi-timeframe mode is on), so a single alert can move `attemptedCount` by 2. Every issued call records exactly one outcome, which is what makes `appliedCount + failedCount <= attemptedCount` hold — including the budget-starved case, where `combined_analysis` applied, `multi_timeframe_analysis` failed, and the result is `appliedCount + failedCount == attemptedCount`. `budgetExhaustedCount` counts stages skipped because the budget was already spent, which is *not* a call and therefore not an attempt. Do not read these counters as alert counts or compare them 1:1 against `enrichment.alertPath.totalCount`.
+
+Counters are process-local and reset on restart, so `enabled: true` with every counter at `0` is the expected state right after a deploy. `enrichment.alertPath` remains the aggregate over the whole webhook path and cannot attribute an outcome to confluence specifically.
+
+Verify after the Blueprint is applied:
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
+  | jq '{flag: .featureFlags.tradingViewConfluenceEnrichment,
+         confluence: .dependencies.tradingViewMcp.enrichment.confluence}'
+```
 
 ### Market Scanner MCP Fast-Fail Gate
 `POST /api/webhook/market-scanner-alert` checks the process-local TradingView MCP status before running its sequential scans. If the status is `degraded` with `http_5xx`, `request_failed`, or `circuit_breaker_open` **and** the circuit breaker still reports `state: "open"`, it skips every scan and returns `502 TRADINGVIEW_MCP_UNAVAILABLE` with each scan as `status: "skipped"`. The endpoint returns `502` in two shapes: `TRADINGVIEW_MCP_UNAVAILABLE` (skipped, nothing attempted) and `ALL_SCANS_FAILED` (attempted, all failed). The gate keys on the breaker's time-based state so that after `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses the next request is allowed through as a recovery probe — a transient outage self-heals without a restart. See [Webhook Alerts](docs/webhooks.md#post-apiwebhookmarket-scanner-alert).

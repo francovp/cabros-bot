@@ -268,7 +268,8 @@
                     {
                       "$ref": "#/components/schemas/ReadinessReport"
                     }
-                  ]
+                  ],
+                  "$ref": "#/components/schemas/BootstrapReadiness"
                 },
                 "examples": {
                   "dependenciesHealthy": {
@@ -358,7 +359,8 @@
                     {
                       "$ref": "#/components/schemas/ReadinessReport"
                     }
-                  ]
+                  ],
+                  "$ref": "#/components/schemas/BootstrapReadiness"
                 },
                 "examples": {
                   "bootstrapPending": {
@@ -535,7 +537,7 @@
         },
         "responses": {
           "200": {
-            "$ref": "#/components/responses/DeliveryResult"
+            "$ref": "#/components/responses/WebhookAlertDeliveryResult"
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -1151,6 +1153,9 @@
           },
           {
             "$ref": "#/components/parameters/AlertSignalClass"
+          },
+          {
+            "$ref": "#/components/parameters/SummaryInterval"
           }
         ],
         "responses": {
@@ -1158,7 +1163,7 @@
             "$ref": "#/components/responses/AlertSummaryResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/AlertSummaryBadRequest"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -1345,7 +1350,7 @@
         ],
         "responses": {
           "200": {
-            "description": "JSON Lines or CSV export",
+            "description": "JSON Lines or CSV export. Export records include a comma-separated `feature` tag column when feature-attributed token usage is available.",
             "headers": {
               "X-Shadow-Mode-Metrics": {
                 "description": "JSON-encoded shadow-mode outcome metrics payload emitted by SignalOutcomeService.getMetricsSummary(). Returns the string \"No measurements found\" when signal-outcome tracking is disabled or no measurements exist. Object form (when tracking is enabled with data) follows the ShadowModeMetrics schema: coverage buckets, per-window hitRatePercent/targetHitRatePercent/stopHitRatePercent/expectancyR plus drawdown proxy and latency/cost metadata. Omitted when source, enriched, or signalClass filters are supplied because the shadow-mode metrics service has no matching filters.",
@@ -4136,6 +4141,19 @@
           "default": 500
         }
       },
+      "SummaryInterval": {
+        "name": "interval",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "hour",
+            "day"
+          ]
+        },
+        "example": "hour",
+        "description": "Optional bucket width for the summary.buckets time series (issue #1287). Omit it for the aggregate-only response, which is byte-for-byte unchanged. `hour` is capped at a 31-day window and `day` at 366 days; a wider window is rejected with 400 rather than silently narrowed. An empty or unrecognised value is rejected with 400 and never falls back to the aggregate-only response. Buckets are aligned to UTC hours or UTC midnights, are returned ascending by bucketStart with empty buckets zero-filled so a chart has no gaps, and are derived from the same limit-bounded sample as the aggregates (so sum(bucket.total) === totalAlerts)."
+      },
       "ExportLimit": {
         "name": "limit",
         "in": "query",
@@ -4585,6 +4603,15 @@
                   "dryValidate": true
                 }
               }
+            },
+            "example": {
+              "message": "Deployment completed",
+              "channels": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ],
+              "idempotencyKey": "generic-message-demo-1"
             }
           }
         }
@@ -5407,6 +5434,50 @@
           }
         }
       },
+      "AlertSummaryBadRequest": {
+        "description": "Summary request validation failure. Interval failures (`interval` empty, unrecognised, or a window wider than the interval cap) use the shared structured error envelope so they carry `success`, `code`, `requestId` and `retryable`. The pre-existing timestamp and filter failures on this operation keep the original `{ error, code }` body.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/InvalidRequestEnvelope"
+            },
+            "examples": {
+              "invalidInterval": {
+                "summary": "Unrecognised interval value",
+                "value": {
+                  "success": false,
+                  "error": "Invalid interval parameter. Allowed values: hour, day.",
+                  "code": "INVALID_REQUEST",
+                  "requestId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+                  "retryable": false
+                }
+              },
+              "windowExceedsIntervalCap": {
+                "summary": "Hourly window wider than the 31-day cap",
+                "value": {
+                  "success": false,
+                  "error": "Invalid summary window for interval \"hour\". Maximum window is 31 days.",
+                  "code": "INVALID_REQUEST",
+                  "requestId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+                  "retryable": false
+                }
+              },
+              "invalidTimestamp": {
+                "summary": "Pre-existing plain-shape timestamp validation failure",
+                "value": {
+                  "error": "Invalid from timestamp. Use an ISO-8601 timestamp.",
+                  "code": "INVALID_REQUEST"
+                }
+              }
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
+      },
       "ScannerPresetResult": {
         "description": "Scanner preset response including the effective durable or ephemeral storage mode. GET, POST, and PUT responses set an ETag header that mirrors the preset version (e.g. \"3\"); supply it back on PUT or DELETE via If-Match to opt into optimistic concurrency.",
         "headers": {
@@ -5699,6 +5770,35 @@
           }
         }
       },
+      "WebhookAlertDeliveryResult": {
+        "description": "Per-channel delivery result for POST /api/webhook/alert. When the shared alert validator clips input above 4,000 characters, the response includes truncated, originalLength, and deliveredLength so callers can detect the loss. When ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION is enabled and the same exchange/symbol/timeframe/side signal fires within its cooldown window, the response includes suppressedRepeat: true with empty results and deliveredChannels while the alert remains persisted with a suppression marker.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/WebhookAlertDeliveryResult"
+            },
+            "example": {
+              "success": true,
+              "requestId": "req-123",
+              "truncated": true,
+              "originalLength": 4001,
+              "deliveredLength": 4003,
+              "results": [
+                {
+                  "channel": "telegram",
+                  "success": true,
+                  "durationMs": 180
+                }
+              ]
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
+      },
       "TestAlertResult": {
         "description": "Test alert verification probe result. Contains channel delivery results or dry-run formatting preview.",
         "content": {
@@ -5732,14 +5832,14 @@
                   "alertId": "dryrun-test-alert-12345",
                   "persisted": false,
                   "results": [],
-                  "dryRun": true,
-                  "enrichmentApplied": false,
                   "tokenUsage": null,
+                  "enrichmentApplied": false,
+                  "dryRun": true,
                   "formatted": {
                     "telegram": {
-                      "length": 45,
-                      "preview": "[TEST-ALERT] cabros-bot smoke probe...",
-                      "text": "[TEST-ALERT] cabros-bot smoke probe 2026-09-12T12:00:00.000Z"
+                      "length": 67,
+                      "preview": "\\[TEST\\-ALERT\\] cabros\\-bot smoke probe 2026\\-09\\-12T12:00:00\\.000Z",
+                      "text": "\\[TEST\\-ALERT\\] cabros\\-bot smoke probe 2026\\-09\\-12T12:00:00\\.000Z"
                     }
                   }
                 }
@@ -6227,6 +6327,19 @@
                   "successCount": 0,
                   "failureCount": 0,
                   "enrichment": {
+                    "lastStatus": "partial",
+                    "fullCount": 1,
+                    "partialCount": 2,
+                    "failedCount": 0,
+                    "confluence": {
+                      "enabled": true,
+                      "attemptedCount": 3,
+                      "appliedCount": 3,
+                      "failedCount": 0,
+                      "budgetExhaustedCount": 2,
+                      "lastAppliedAt": "2026-10-04T09:41:12.482Z",
+                      "lastFailureCategory": null
+                    },
                     "alertPath": {
                       "windowMs": 86400000,
                       "totalCount": 0,
@@ -6271,7 +6384,6 @@
                   ],
                   "timeoutMs": 5000
                 },
- 
                 "langfuse": {
                   "enabled": true,
                   "configured": true,
@@ -6301,7 +6413,8 @@
                     }
                   },
                   "localFallbackByPrompt": {}
-                },               "idempotencyStorage": {
+                },
+                "idempotencyStorage": {
                   "enabled": true,
                   "configured": true,
                   "ready": false,
@@ -6317,7 +6430,7 @@
                   "consecutiveFailures": 0,
                   "lastSuccessAt": null,
                   "lastFailureAt": null,
-"lastErrorReason": null
+                  "lastErrorReason": null
                 },
                 "signalOutcomeWorker": {
                   "enabled": true,
@@ -6361,7 +6474,8 @@
                   "lastErrorCategory": null,
                   "consecutiveFailures": 0,
                   "refreshIntervalMs": 900000,
-                  "maxAgeMs": 3600000
+                  "maxAgeMs": 3600000,
+                  "ready": false
                 },
                 "notificationRedrive": {
                   "enabled": false,
@@ -6434,7 +6548,11 @@
         "description": "Request processing exceeded the global request-deadline ceiling",
         "headers": {
           "X-Request-Id": {
-            "$ref": "#/components/headers/XRequestIdResponseHeader"
+            "$ref": "#/components/headers/XRequestIdResponseHeader",
+            "description": "Unique identifier assigned to the request",
+            "schema": {
+              "type": "string"
+            }
           }
         },
         "content": {
@@ -7120,7 +7238,7 @@
           "text": {
             "type": "string",
             "minLength": 1,
-            "description": "Optional custom alert probe text. Must be non-empty when provided; an empty string returns 400 INVALID_REQUEST. Defaults to formatted smoke alert with timestamp."
+            "description": "Optional custom alert probe text. Must be non-empty when provided; an empty string returns 400 INVALID_REQUEST. Defaults to `[TEST-ALERT] cabros-bot smoke probe <ISO timestamp>` when omitted; with dryRun=true the per-channel `formatted` preview echoes that resolved text after channel formatting."
           },
           "channels": {
             "type": "array",
@@ -7341,6 +7459,65 @@
             "type": "number",
             "format": "double",
             "nullable": true
+          }
+        }
+      },
+      "SignalClassClassification": {
+        "type": "object",
+        "description": "In-memory counters for signal classification on the webhook ingest path. `featureFlags.signalClassMarker` only states that the badge marker is allowed to render; this block states whether alerts are actually being classified, so a silent regression back to 100% `unknown` is detectable instead of looking healthy. Counters reset on process restart, never block delivery or persistence, and the field is omitted entirely from /api/status when no alert has been classified yet. Contains only enum class names and counts — never alert text, symbols, or chat ids.",
+        "required": [
+          "window",
+          "totalAlerts",
+          "classifiedAlerts",
+          "unknownAlerts",
+          "populationRate",
+          "byClass"
+        ],
+        "properties": {
+          "window": {
+            "type": "object",
+            "required": [
+              "startedAt",
+              "durationMs"
+            ],
+            "properties": {
+              "startedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "durationMs": {
+                "type": "integer",
+                "format": "int64"
+              }
+            }
+          },
+          "totalAlerts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "classifiedAlerts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Alerts that resolved to a class other than `unknown`."
+          },
+          "unknownAlerts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "populationRate": {
+            "type": "number",
+            "format": "double",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "classifiedAlerts / totalAlerts. A sustained 0 means no alert is being classified."
+          },
+          "byClass": {
+            "type": "object",
+            "description": "Per-class counts keyed by the signalClass enum.",
+            "additionalProperties": {
+              "type": "integer",
+              "format": "int64"
+            }
           }
         }
       },
@@ -7958,6 +8135,39 @@
           "missingIndex": {
             "type": "boolean",
             "description": "Present and true when the failure was a Firestore missing-composite-index rejection. Resolved by deploying the composite indexes declared in firestore.indexes.json."
+          }
+        }
+      },
+      "InvalidRequestEnvelope": {
+        "type": "object",
+        "description": "Structured error envelope built by src/lib/errorEnvelope.js. Used by the GET /api/alerts/summary interval failures; the endpoint's older timestamp/filter failures still return the plain `{ error, code }` body.",
+        "required": [
+          "success",
+          "error",
+          "code",
+          "requestId",
+          "retryable"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Always false on an error path."
+          },
+          "error": {
+            "type": "string",
+            "description": "Human-readable failure message."
+          },
+          "code": {
+            "type": "string",
+            "description": "Machine-readable code, INVALID_REQUEST for a request validation failure."
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Request correlation id, echoing the X-Request-Id response header."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "False for 400 responses; a validation failure is permanent until the request changes."
           }
         }
       },
@@ -9066,11 +9276,61 @@
           }
         }
       },
+      "FeatureCostSummary": {
+        "type": "object",
+        "required": [
+          "alerts",
+          "batches",
+          "symbols",
+          "inputTokens",
+          "outputTokens",
+          "totalTokens",
+          "totalCost"
+        ],
+        "properties": {
+          "alerts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "batches": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "symbols": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "inputTokens": {
+            "type": "number",
+            "minimum": 0
+          },
+          "outputTokens": {
+            "type": "number",
+            "minimum": 0
+          },
+          "totalTokens": {
+            "type": "number",
+            "minimum": 0
+          },
+          "totalCost": {
+            "type": "number",
+            "minimum": 0
+          }
+        }
+      },
       "AlertSummary": {
         "type": "object",
         "properties": {
           "window": {
-            "$ref": "#/components/schemas/JsonObject"
+            "$ref": "#/components/schemas/JsonObject",
+            "description": "The effective window the aggregates were computed over. Contains from, to, limit and maxDays. When the interval parameter is supplied it also contains interval, and maxDays reports that interval's cap (31 for hour, 366 for day) instead of the aggregate-only 31."
+          },
+          "buckets": {
+            "type": "array",
+            "description": "Present only when the interval parameter is supplied (issue #1287). Time-bucketed alert volume and delivery outcomes, ascending by bucketStart, with empty buckets zero-filled so a chart has no gaps and the array length is predictable for a given window and interval. Derived from the same limit-bounded sample as the aggregates, so sum(bucket.total) equals totalAlerts.",
+            "items": {
+              "$ref": "#/components/schemas/AlertSummaryBucket"
+            }
           },
           "totalAlerts": {
             "type": "integer"
@@ -9084,6 +9344,28 @@
           "byFeatureFlag": {
             "$ref": "#/components/schemas/JsonObject",
             "description": "Includes tradingViewData for requested MCP enrichment, tradingViewDataApplied for successfully applied MCP results, and withoutTradingViewData for requests that did not opt in."
+          },
+          "costByFeature": {
+            "type": "object",
+            "description": "Token usage and cost attribution by feature. Records are attributed from their persisted tokenUsage.byFeature tags; legacy records without tags fall back to their alert source, and records with no real token usage are not attributed at all. totalCost is an estimate from published list pricing (unrecognized models use the default rate, never 0); alerts counts stored documents, batches counts distinct news-monitor requests grouped by requestId/batchId, and symbols counts distinct symbols across a batch including multi-symbol reports stored as a single document.",
+            "properties": {
+              "grounding": {
+                "$ref": "#/components/schemas/FeatureCostSummary"
+              },
+              "news-analysis": {
+                "$ref": "#/components/schemas/FeatureCostSummary"
+              },
+              "expanded-analysis": {
+                "$ref": "#/components/schemas/FeatureCostSummary"
+              },
+              "scanner": {
+                "$ref": "#/components/schemas/FeatureCostSummary"
+              },
+              "enrichment": {
+                "$ref": "#/components/schemas/FeatureCostSummary"
+              }
+            },
+            "additionalProperties": false
           },
           "signalClassCounts": {
             "$ref": "#/components/schemas/JsonObject",
@@ -9238,7 +9520,10 @@
             "description": "True when the distribution is judged unusable for ranking."
           },
           "reason": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "enum": [
               "spread_collapse",
               "top_band_concentration",
@@ -9249,37 +9534,55 @@
             "description": "Which rule produced the verdict. null means healthy. spread_collapse is p90 - p10 below the spread floor; top_band_concentration is at least 75% of samples at or above 0.75; insufficient_sample and no_samples mean no verdict was reached."
           },
           "min": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "Lowest magnitude in the window, or null when there are no samples."
           },
           "max": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "Highest magnitude in the window, or null when there are no samples."
           },
           "p10": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "Nearest-rank 10th percentile magnitude."
           },
           "p50": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "Nearest-rank median magnitude."
           },
           "p90": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "Nearest-rank 90th percentile magnitude."
           },
           "spread": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "p90 - p10. Compared against the spread floor to detect a collapsed distribution."
@@ -9299,7 +9602,11 @@
             "description": "Histogram of magnitudes in 0.1-wide bands, ascending. Only non-empty bands are listed.",
             "items": {
               "type": "object",
-              "required": ["lowerBound", "upperBound", "count"],
+              "required": [
+                "lowerBound",
+                "upperBound",
+                "count"
+              ],
               "properties": {
                 "lowerBound": {
                   "type": "number",
@@ -9324,7 +9631,10 @@
             "description": "Samples at or above the top-band floor (0.75)."
           },
           "topBandShare": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "topBandCount divided by sampleCount, or null when there are no samples."
@@ -9381,6 +9691,72 @@
             "description": "Per-channel delivery latency breakdown. Only channels with recorded delivery samples in the window are included.",
             "additionalProperties": {
               "$ref": "#/components/schemas/ChannelLatencyStats"
+            }
+          }
+        }
+      },
+      "AlertSummaryBucketChannel": {
+        "type": "object",
+        "description": "Delivery outcome counts for one notification channel inside one time bucket.",
+        "required": [
+          "total",
+          "success",
+          "failure"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Delivery attempts recorded for this channel in this bucket."
+          },
+          "success": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Successful deliveries for this channel in this bucket."
+          },
+          "failure": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Failed deliveries for this channel in this bucket."
+          }
+        }
+      },
+      "AlertSummaryBucket": {
+        "type": "object",
+        "description": "One point of the optional time-bucketed series (issue #1287), aligned to a UTC hour or UTC midnight.",
+        "required": [
+          "bucketStart",
+          "total",
+          "success",
+          "failure",
+          "byChannel"
+        ],
+        "properties": {
+          "bucketStart": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Inclusive ISO-8601 start of this bucket. Buckets are returned ascending by this value."
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Stored alerts whose receivedAt falls in this bucket. An empty bucket is reported as 0 rather than omitted."
+          },
+          "success": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Successful deliveries in this bucket across all channels. Equal to the sum of byChannel[*].success."
+          },
+          "failure": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Failed deliveries in this bucket across all channels. Equal to the sum of byChannel[*].failure."
+          },
+          "byChannel": {
+            "type": "object",
+            "description": "Per-channel delivery counts for this bucket. Only channels with a recorded attempt in this bucket are present; a delivery result without a usable channel name is counted under \"unknown\".",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/AlertSummaryBucketChannel"
             }
           }
         }
@@ -10302,6 +10678,130 @@
           }
         }
       },
+      "NewsAnalysisStorage": {
+        "type": "object",
+        "description": "Durable news-monitor analysis records (issue #1180). Every Firestore error in this service is swallowed so news alert delivery is never blocked, which is why `ready` is proven from observed durable work rather than inferred from credential shape: a deployment whose credentials look valid but cannot reach Firestore reports `degraded`, and a process that has not yet recorded or read an analysis reports `unverified`. Counters are process-local and reset on restart, so `unverified` is the normal state right after every deploy.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "mode",
+          "backend",
+          "failOpen",
+          "readiness",
+          "collection",
+          "retentionDays"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "ENABLE_FIRESTORE_NEWS_ANALYSIS is true. Environment-only: it is deliberately absent from the Remote Config allow-list because a published template parameter's defaultValue is reported with source `remote` and would override this env var."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Firestore credential shape only. True does not mean persistence works."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "True only after an observed successful durable write or read, and false again from the first failure until the next success."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "misconfigured",
+              "unverified",
+              "ready",
+              "degraded"
+            ],
+            "description": "`unverified` is no evidence, not health. Gate state wins over observed provider health."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "durable",
+              "ephemeral"
+            ],
+            "description": "Configured intent. It stays `durable` while the gate is on even after a failure, because `memory` would read as the flag being off."
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ]
+          },
+          "failOpen": {
+            "type": "boolean",
+            "description": "Always true. Firestore failures degrade to unrecorded analysis rather than failing the news monitor, so a `degraded` verdict still delivers alerts; it just stops recording an audit trail."
+          },
+          "readiness": {
+            "type": "string",
+            "enum": [
+              "unverified",
+              "verified",
+              "degraded"
+            ]
+          },
+          "collection": {
+            "type": "string",
+            "description": "Firestore collection holding persisted news analysis records."
+          },
+          "retentionDays": {
+            "type": "integer",
+            "description": "Effective NEWS_ANALYSIS_RETENTION_DAYS (1-365, default 30), applied as the document `expiresAt` field. Honoured only once the project's Firestore TTL policy exists."
+          },
+          "operationsAttempted": {
+            "type": "integer",
+            "description": "Durable use attempts, including attempts whose Firebase initialization was rejected. Never incremented by a status read."
+          },
+          "operationsSucceeded": {
+            "type": "integer"
+          },
+          "operationsFailed": {
+            "type": "integer"
+          },
+          "consecutiveFailures": {
+            "type": "integer",
+            "description": "Cleared by the next success, so a transient outage self-heals without a restart."
+          },
+          "lastSuccessAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastFailureAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastErrorReason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "uninitialized",
+              "failed_precondition",
+              "permission_denied",
+              "unauthenticated",
+              "unavailable",
+              "deadline_exceeded",
+              "not_found",
+              "resource_exhausted",
+              "invalid_argument",
+              "aborted",
+              "internal",
+              "unknown_error",
+              null
+            ],
+            "description": "Closed enum so a Firestore error message — which embeds the fully-qualified project/database path — can never reach a status response."
+          },
+          "lastMissingIndex": {
+            "type": "boolean",
+            "description": "True when the most recent failure was a rejected query caused by an undeployed composite index. `news_analysis` reads filter on symbol/eventCategory and sort on createdAt, and Firestore does not merge single-field indexes, so the composites declared in firestore.indexes.json must be deployed with `firebase deploy --only firestore:indexes`."
+          }
+        }
+      },
       "LangfusePromptDependency": {
         "type": "object",
         "description": "Langfuse dynamic prompt management. `configured` is credential shape only: a typo'd, revoked or wrong-project key satisfies it and can still resolve zero prompts. `PromptService` fails open to the local file on any remote failure, so before this contract a deployment that fell back on every alert reported the same `ready` verdict as a working one and the enablement was unverifiable. `ready` is therefore proven from observed resolutions. This is the fifth instance of the repository's 'shape is not readiness' rule, after `firebaseRemoteConfig.ready` (#598), Firestore `readHealth` (#1285), `equityMarketData.ready` (#1116) and `idempotencyStorage.ready` (#1111).",
@@ -10732,6 +11232,116 @@
           "lastReadFellBack": {
             "type": "boolean",
             "description": "True when the most recent durable read or write failed. Cleared by the next success."
+          }
+        }
+      },
+      "SymbolAnalysisStorage": {
+        "type": "object",
+        "description": "Durable symbol-analysis history behind `/api/symbol-analyses`. Every Firestore error in this layer is swallowed into a dropped record so a symbol analysis never fails, which is why `ready` is proven from an observed successful **write** rather than inferred from credential shape: a deployment whose credentials look valid but cannot reach Firestore reports `degraded`. A successful read only proves Firestore reachability, never that analyses are being stored, so read counters are reported separately and do not flip the verdict.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "readiness",
+          "failOpen",
+          "collection",
+          "retentionDays",
+          "writesAttempted",
+          "writesSucceeded",
+          "writesFailed",
+          "readsAttempted",
+          "readsSucceeded",
+          "readsFailed",
+          "consecutiveFailures"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "ENABLE_SYMBOL_ANALYSIS_STORAGE is true. Environment-only: excluded from Remote Config so a published server template cannot override render.yaml. This is configured intent, not evidence that persistence works."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Firestore credential shape only. True does not mean the collection is reachable or writable."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "True only after an observed successful durable write, and false again from the first failure until the next success. It never implies `configured`, and reading the collection does not set it."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "misconfigured",
+              "unverified",
+              "ready",
+              "degraded"
+            ],
+            "description": "`unverified` is no evidence, not health: it is the normal state right after a redeploy until the first analysis is persisted. Gate state wins over observed provider health."
+          },
+          "readiness": {
+            "type": "string",
+            "enum": [
+              "unverified",
+              "verified",
+              "degraded"
+            ]
+          },
+          "failOpen": {
+            "type": "boolean",
+            "description": "Always true. A Firestore failure drops the record and still answers the symbol analysis, so a `degraded` verdict means decision history silently stops accumulating rather than that analysis is unavailable."
+          },
+          "collection": {
+            "type": "string",
+            "description": "Firestore collection group backing the history."
+          },
+          "retentionDays": {
+            "type": "integer",
+            "description": "Days before a document expires. `expiresAt` is only honoured once the Firestore TTL policy exists (`bash ops/configure-operational-collection-retention.sh`); until then the collection grows without bound."
+          },
+          "writesAttempted": {
+            "type": "integer",
+            "description": "Durable write attempts, including those where Firebase initialization was rejected — asking for durable storage and not getting it is the event an operator needs to see. A rejected initialization is charged to the operation that triggered it, so browsing the collection never increments this counter."
+          },
+          "writesSucceeded": {
+            "type": "integer"
+          },
+          "writesFailed": {
+            "type": "integer"
+          },
+          "readsAttempted": {
+            "type": "integer",
+            "description": "Durable read attempts, including those where Firebase initialization was rejected. Attribution follows the triggering operation, so a read that fails to initialize is counted here and never as a write."
+          },
+          "readsSucceeded": {
+            "type": "integer",
+            "description": "Proves Firestore reachability only. A non-zero value does not mean analyses are being persisted."
+          },
+          "readsFailed": {
+            "type": "integer"
+          },
+          "consecutiveFailures": {
+            "type": "integer",
+            "description": "Clears on the next successful Firestore operation, so a transient outage self-heals without a restart and never latches degraded."
+          },
+          "lastWriteAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastFailureAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastErrorReason": {
+            "type": "string",
+            "enum": [
+              "firestore_not_initialized",
+              "firestore_unavailable"
+            ],
+            "nullable": true,
+            "description": "Closed enum so a Firestore error message — which embeds the fully-qualified project and database path — can never leak into a status response."
           }
         }
       },
@@ -11680,6 +12290,33 @@
           }
         }
       },
+      "WebhookAlertDeliveryResult": {
+        "description": "Response for POST /api/webhook/alert. Mirrors the shared DeliveryResult schema and adds endpoint-specific truncation metadata: when the shared alert validator clips submitted text above 4,000 characters the response carries truncated: true, originalLength, and deliveredLength. All three are absent when the text fits, and they never appear on alert replay responses.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DeliveryResult"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "truncated": {
+                "type": "boolean",
+                "description": "True when the shared alert validator clipped submitted text above 4,000 characters."
+              },
+              "originalLength": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Character length of the alert text as submitted, before truncation."
+              },
+              "deliveredLength": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Character length of the alert text actually processed and delivered, including the appended ellipsis."
+              }
+            }
+          }
+        ]
+      },
       "Job": {
         "type": "object",
         "properties": {
@@ -12421,6 +13058,9 @@
           "notificationChannelIntent": {
             "$ref": "#/components/schemas/NotificationChannelIntent"
           },
+          "adminPaging": {
+            "$ref": "#/components/schemas/AdminPagingStatus"
+          },
           "deliveryMetrics": {
             "$ref": "#/components/schemas/DeliveryMetrics"
           },
@@ -12433,6 +13073,9 @@
               },
               "firestoreWriteMetrics": {
                 "$ref": "#/components/schemas/FirestoreWriteMetrics"
+              },
+              "signalClassClassification": {
+                "$ref": "#/components/schemas/SignalClassClassification"
               },
               "firebaseRemoteConfig": {
                 "$ref": "#/components/schemas/FirebaseRemoteConfigDependency"
@@ -12455,11 +13098,17 @@
               "selfTest": {
                 "$ref": "#/components/schemas/SelfTestStatus"
               },
-"firestoreReadMetrics": {
+              "firestoreReadMetrics": {
                 "$ref": "#/components/schemas/FirestoreReadMetrics"
               },
               "idempotencyStorage": {
                 "$ref": "#/components/schemas/IdempotencyStorage"
+              },
+              "symbolAnalysisStorage": {
+                "$ref": "#/components/schemas/SymbolAnalysisStorage"
+              },
+              "newsAnalysisStorage": {
+                "$ref": "#/components/schemas/NewsAnalysisStorage"
               },
               "langfuse": {
                 "$ref": "#/components/schemas/LangfusePromptDependency"
@@ -12469,6 +13118,9 @@
               },
               "firestore": {
                 "$ref": "#/components/schemas/FirestoreDependency"
+              },
+              "langfusePrompts": {
+                "$ref": "#/components/schemas/LangfusePromptsDependency"
               }
             }
           }
@@ -12549,6 +13201,67 @@
           "failureCount": {
             "type": "integer",
             "minimum": 0
+          },
+          "enrichment": {
+            "type": "object",
+            "description": "Alert-path enrichment telemetry. `alertPath` aggregates the whole webhook enrichment path (full/partial/failed), so it cannot attribute an outcome to the confluence call specifically; `confluence` reports the optional ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT calls on their own (issue #1109). Counters are process-local and reset on restart.",
+            "additionalProperties": true,
+            "properties": {
+              "confluence": {
+                "type": "object",
+                "description": "Confluence enrichment counters, measured in CALLS rather than alerts: one alert enrichment issues up to two confluence calls (`combined_analysis`, then `multi_timeframe_analysis` when multi-timeframe mode is enabled). Each issued call records exactly one outcome, so `appliedCount + failedCount <= attemptedCount`. `budgetExhaustedCount` counts stages skipped because the enrichment budget was already spent, which is not a call. `enabled: true` with every counter at 0 means the gate is on but no alert has exercised it yet.",
+                "required": [
+                  "enabled",
+                  "attemptedCount",
+                  "appliedCount",
+                  "failedCount",
+                  "budgetExhaustedCount",
+                  "lastAppliedAt",
+                  "lastFailureCategory"
+                ],
+                "properties": {
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "Effective state of ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT."
+                  },
+                  "attemptedCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Confluence calls issued. One alert enrichment contributes up to two: one `combined_analysis`, plus one `multi_timeframe_analysis` when multi-timeframe mode is enabled."
+                  },
+                  "appliedCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Confluence calls that returned data and were applied to the alert."
+                  },
+                  "failedCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Confluence calls that failed. Fail-open: a failure never blocks alert delivery. Because each issued call records exactly one outcome, `appliedCount + failedCount` never exceeds `attemptedCount`."
+                  },
+                  "budgetExhaustedCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Confluence stages skipped because the enrichment budget was already spent, so no call was issued at that stage. Not a call, and therefore not part of `attemptedCount`."
+                  },
+                  "lastAppliedAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time",
+                    "description": "Timestamp of the last confluence result applied to an alert, or null."
+                  },
+                  "lastFailureCategory": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "Closed-enum category of the last confluence failure, or null. Provider response bodies and error messages are never exposed."
+                  }
+                }
+              }
+            }
           }
         },
         "additionalProperties": true
@@ -12691,6 +13404,75 @@
                 "whatsapp",
                 "discord"
               ]
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "AdminPagingStatus": {
+        "type": "object",
+        "description": "Non-secret health of the operator paging path. Channel readiness blocks report 'ready' from configuration alone, so they report ready for a channel that is failing 100% of live sends. This block reports whether operator pages are actually landing, and which channels can carry a page when the primary Telegram admin destination cannot. Channel names, counters, and a truncated error string only; never tokens, webhook URLs, or chat ids. Omitted entirely when no NotificationManager has been constructed.",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether an admin destination is configured at all (TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID, or a usable fallback channel)."
+          },
+          "status": {
+            "type": "string",
+            "enum": ["unknown", "ready", "degraded"],
+            "description": "unknown before the first page attempt, ready once at least one page landed, degraded when every attempted page failed on every operator channel."
+          },
+          "telegramAdminChatConfigured": {
+            "type": "boolean",
+            "description": "Whether the primary Telegram admin chat id is configured."
+          },
+          "fallbackEnabled": {
+            "type": "boolean",
+            "description": "Whether at least one alternate operator channel is configured and eligible to carry a page."
+          },
+          "fallbackChannels": {
+            "type": "array",
+            "description": "Alternate channel names eligible to carry a page, ordered by observed delivery health. Only channels the operator configured are listed, so a never-configured channel never produces a phantom page.",
+            "items": { "type": "string", "enum": ["whatsapp", "discord"] }
+          },
+          "attempts": {
+            "type": "integer",
+            "description": "Total per-channel admin page attempts in this process."
+          },
+          "successes": {
+            "type": "integer",
+            "description": "Admin page attempts that were delivered."
+          },
+          "failures": {
+            "type": "integer",
+            "description": "Admin page attempts that failed."
+          },
+          "consecutiveFailures": {
+            "type": "integer",
+            "description": "Admin page attempts failed since the last successful page. This is the signal external uptime monitoring can page on."
+          },
+          "lastSuccessAt": { "type": "string", "format": "date-time", "nullable": true },
+          "lastFailureAt": { "type": "string", "format": "date-time", "nullable": true },
+          "lastSuccessChannel": { "type": "string", "nullable": true },
+          "lastAttemptChannel": { "type": "string", "nullable": true },
+          "lastErrorCategory": { "type": "string", "nullable": true },
+          "lastError": {
+            "type": "string",
+            "nullable": true,
+            "description": "Truncated last admin page error, sanitized. Never contains a token, webhook URL, or chat id."
+          },
+          "byChannel": {
+            "type": "array",
+            "description": "Per-page-type, per-channel admin delivery counters.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "pageType": { "type": "string", "enum": ["delivery-failure", "zero-channel"] },
+                "channel": { "type": "string", "enum": ["telegram", "whatsapp", "discord"] },
+                "success": { "type": "integer" },
+                "failure": { "type": "integer" }
+              },
+              "additionalProperties": false
             }
           }
         },
@@ -13365,6 +14147,18 @@
               "ratePercent": {
                 "type": "number",
                 "description": "`noFollowupCount / totalEvaluated` as a percentage, rounded to two decimals. Zero when nothing was evaluated."
+              },
+              "totalHighConfidenceAlerts": {
+                "type": "integer"
+              },
+              "falsePositiveAlerts": {
+                "type": "integer"
+              },
+              "falsePositiveRatePercent": {
+                "type": "number"
+              },
+              "description": {
+                "type": "string"
               }
             }
           },
@@ -13623,16 +14417,25 @@
             "description": "BullMQ queue name. Never contains credentials."
           },
           "brokerReachable": {
-            "type": ["boolean", "null"],
+            "type": [
+              "boolean",
+              "null"
+            ],
             "description": "Result of the bounded broker readiness probe: true once a probe has proven connectivity, false when the last probe ran and the broker did not answer, and null when no probe has produced a verdict — which includes queue mode being disabled, a missing broker URL (misconfigured), and an enabled+configured queue whose probe has not settled yet. Unlike `configured`, this is evidence rather than configuration shape."
           },
           "lastBrokerProbeAt": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time",
             "description": "ISO-8601 timestamp of the most recent broker readiness probe, or null when no probe has run."
           },
           "lastBrokerProbeErrorCode": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Sanitized error code from the most recent failed broker readiness probe, or null after a successful probe. Never contains the broker URL."
           },
           "enqueued": {
@@ -13856,6 +14659,219 @@
           "bootstrapReady": {
             "type": "boolean",
             "description": "Bootstrap gate verdict, ANDed with the dependency verdict. Only present on the `/ready?depth=dependencies` variant."
+          }
+        }
+      },
+      "LangfusePromptsDependency": {
+        "type": "object",
+        "description": "Non-secret prompt-resolution telemetry that separates Langfuse CONFIGURATION readiness (dependencies.langfuse) from actual PROMPT SERVING. Configuration being ready says nothing about whether prompts are actually being served remotely, so a 100% local-fallback regression is reported here as servingStatus=local_fallback instead of looking healthy. Only counts, tiers, timestamps, per-prompt resolved source, and a closed error-category enum are returned; remote prompt content, prompt variables, and credential material are never included. Counters reset on process restart. Langfuse unavailability always fails open to the local fallback and never blocks alert delivery.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "servingStatus",
+          "servingPrompts",
+          "label",
+          "cacheTtlSeconds",
+          "totalResolutions",
+          "langfuseResolutions",
+          "localResolutions",
+          "localResolutionRatePercent",
+          "remoteFetchAttempts",
+          "remoteFetchSuccesses",
+          "remoteFetchFailures",
+          "remoteFetchSuccessRatePercent",
+          "lastSuccessfulFetchAt",
+          "lastFailedFetchAt",
+          "lastErrorCategory",
+          "consecutiveFailures",
+          "prompts"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether Langfuse prompt management is enabled via ENABLE_LANGFUSE_PROMPTS."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Whether LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are both present."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "Configuration readiness only, identical to dependencies.langfuse.ready. It does NOT mean prompts are being served from Langfuse; read servingStatus and servingPrompts for that."
+          },
+          "servingStatus": {
+            "type": "string",
+            "description": "Actual prompt serving state. no_traffic means configured and reachable but nothing has been resolved yet, so serving is genuinely unknown rather than healthy. local_fallback means remote is enabled and reachable but every fetch has failed, so no prompt has ever been served from Langfuse. degraded means at least one resolution came from Langfuse and at least one fell back. unknown is the fail-open value used when telemetry itself is unavailable.",
+            "enum": [
+              "disabled",
+              "unconfigured",
+              "no_traffic",
+              "serving",
+              "degraded",
+              "local_fallback",
+              "unknown"
+            ]
+          },
+          "servingPrompts": {
+            "type": "boolean",
+            "description": "True only when at least one prompt has actually been served from Langfuse in this process. This is the fact that makes a 100% local-fallback regression detectable."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Effective Langfuse prompt label, or null when prompt management is disabled."
+          },
+          "cacheTtlSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Effective SDK prompt cache TTL in seconds, or null when prompt management is disabled."
+          },
+          "totalResolutions": {
+            "type": "integer",
+            "description": "Total prompt resolutions in this process, from either source."
+          },
+          "langfuseResolutions": {
+            "type": "integer",
+            "description": "Resolutions actually served from Langfuse."
+          },
+          "localResolutions": {
+            "type": "integer",
+            "description": "Resolutions served from the local file-backed fallback."
+          },
+          "localResolutionRatePercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Percentage of resolutions served from the local fallback, or null when no resolution has been recorded. 100 means Langfuse served nothing."
+          },
+          "remoteFetchAttempts": {
+            "type": "integer",
+            "description": "Remote prompt fetch attempts, including client-unavailable paths."
+          },
+          "remoteFetchSuccesses": {
+            "type": "integer",
+            "description": "Remote prompt fetch successes."
+          },
+          "remoteFetchFailures": {
+            "type": "integer",
+            "description": "Remote prompt fetch failures."
+          },
+          "remoteFetchSuccessRatePercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Remote prompt fetch success rate, or null when no attempt has been recorded. 0 means every fetch failed."
+          },
+          "lastSuccessfulFetchAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Timestamp of the last successful remote prompt fetch, or null if none has ever succeeded. Null is the direct signal that Langfuse has never served a prompt.",
+            "format": "date-time"
+          },
+          "lastFailedFetchAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Timestamp of the last failed remote prompt fetch, or null.",
+            "format": "date-time"
+          },
+          "lastErrorCategory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sanitized category of the last remote prompt failure, or null. Raw provider error text is never returned because it can embed request context or credential fragments.",
+            "enum": [
+              "client_unavailable",
+              "prompt_not_found",
+              "unauthorized",
+              "rate_limited",
+              "timeout",
+              "compile_failed",
+              "request_failed",
+              "unknown",
+              null
+            ]
+          },
+          "consecutiveFailures": {
+            "type": "integer",
+            "description": "Consecutive remote prompt fetch failures; reset to 0 on the first success."
+          },
+          "prompts": {
+            "type": "array",
+            "description": "Per-prompt resolution counters, present only for prompts resolved in this process.",
+            "items": {
+              "type": "object",
+              "description": "Per-registered-prompt resolution counters and last observed resolved source. Contains no prompt content, no prompt variables, and no key material.",
+              "required": [
+                "name",
+                "type",
+                "langfuseResolutions",
+                "localResolutions",
+                "lastSource",
+                "lastLangfuseVersion",
+                "lastResolvedAt"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Langfuse prompt name, for example alert-enrichment."
+                },
+                "type": {
+                  "type": "string",
+                  "description": "Registered prompt type: chat or text.",
+                  "enum": [
+                    "chat",
+                    "text"
+                  ]
+                },
+                "langfuseResolutions": {
+                  "type": "integer",
+                  "description": "Resolutions of this prompt served from Langfuse."
+                },
+                "localResolutions": {
+                  "type": "integer",
+                  "description": "Resolutions of this prompt served from the local file-backed fallback in src/services/prompts/defaults/."
+                },
+                "lastSource": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Resolved source of the most recent resolution: langfuse, local, or null when never resolved.",
+                  "enum": [
+                    "langfuse",
+                    "local",
+                    null
+                  ]
+                },
+                "lastLangfuseVersion": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Version of the last Langfuse prompt actually served for this prompt, or null when the last resolution used the local fallback."
+                },
+                "lastResolvedAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Timestamp of the most recent resolution for this prompt.",
+                  "format": "date-time"
+                }
+              }
+            }
           }
         }
       }

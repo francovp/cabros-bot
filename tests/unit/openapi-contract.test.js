@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const SwaggerParser = require('@apidevtools/swagger-parser');
+const MarkdownV2Formatter = require('../../src/services/notification/formatters/markdownV2Formatter');
 const { getRoutes } = require('../../src/routes');
 
 const contractPath = path.join(__dirname, '../../src/openapi/openapi.json');
@@ -632,6 +633,52 @@ describe('OpenAPI contract', () => {
 			expect(unbounded).toEqual([]);
 		});
 	});
+
+	describe('TestAlertResult dry-run preview contract (GH-1158)', () => {
+		// The dryRun example documents the default-marker path: body {} -> the
+		// handler substitutes `[TEST-ALERT] cabros-bot smoke probe <ISO timestamp>`.
+		// For the telegram channel the preview is MarkdownV2Formatter#format() of that
+		// text, echoed verbatim as `text` with length: preview.length, so the example
+		// is pinned to the formatter instead of a hand-copied excerpt.
+		it('derives the default-marker telegram preview from the formatter', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+			const example = contract.components.responses.TestAlertResult
+				.content['application/json'].examples.dryRun.value;
+			const telegram = example.formatted.telegram;
+
+			// The documented response carries the channel-formatted string, so the raw
+			// marker is recovered by reversing MarkdownV2 escaping before it is matched
+			// against the marker the handler substitutes for an empty body.
+			const marker = telegram.text.replace(/\\(.)/g, '$1');
+			expect(marker).toMatch(
+				/^\[TEST-ALERT\] cabros-bot smoke probe \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
+			);
+			expect(telegram.preview).toBe(new MarkdownV2Formatter().format(marker));
+			expect(telegram.text).toBe(telegram.preview);
+			expect(telegram.length).toBe(telegram.preview.length);
+		});
+
+		it('keeps the dry-run side-effect-free envelope the handler returns', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+			const example = contract.components.responses.TestAlertResult
+				.content['application/json'].examples.dryRun.value;
+
+			// postTestAlert() answers 200 with ok/dryRun true, persisted false and an
+			// empty results array on the dry-run branch, and never writes to Firestore.
+			expect(example).toEqual(expect.objectContaining({
+				ok: true,
+				dryRun: true,
+				persisted: false,
+				results: [],
+			}));
+			expect(Object.keys(example.formatted)).toEqual(['telegram']);
+			const properties = contract.components.schemas.TestAlertResult.properties;
+			expect(properties.formatted.nullable).toBe(true);
+			expect(properties.formatted.description).toContain('dryRun');
+		});
+	});
 });
 
 describe('status dependency contract drift', () => {
@@ -721,6 +768,31 @@ describe('status dependency contract drift', () => {
 		const missing = documentedDependencyKeys().filter((key) => !seen.has(key));
 		expect(missing).toEqual([]);
 	});
+	// GH-637: the alert truncation fields are endpoint-specific. `DeliveryResult` is
+	// shared with POST /api/alerts/{alertId}/replay, whose runtime response
+	// (src/controllers/alerts/alerts.js) returns only success/alertId/replayId/results.
+	// Documenting truncation there would promise replay callers fields that never appear.
+	it('documents alert truncation metadata on /api/webhook/alert only', () => {
+		const spec = require('../../src/openapi/openapi.json');
+
+		const alert200 = spec.paths['/api/webhook/alert'].post.responses['200'];
+		expect(alert200.$ref).toBe('#/components/responses/WebhookAlertDeliveryResult');
+
+		const alertResponse = spec.components.responses.WebhookAlertDeliveryResult;
+		expect(alertResponse.content['application/json'].schema.$ref)
+			.toBe('#/components/schemas/WebhookAlertDeliveryResult');
+		expect(alertResponse.content['application/json'].example.truncated).toBe(true);
+
+		// The replay contract must stay free of the endpoint-specific fields.
+		const shared = spec.components.schemas.DeliveryResult.properties;
+		for (const field of ['truncated', 'originalLength', 'deliveredLength']) {
+			expect(shared[field]).toBeUndefined();
+		}
+		expect(
+			spec.paths['/api/alerts/{alertId}/replay'].post.responses['200'].$ref,
+		).toBe('#/components/responses/DeliveryResult');
+	});
+
 	it('documents every lastErrorCategory the remote-config service can emit', () => {
 		// The service emits `invalid_value` on a SUCCESSFUL load whose values failed
 		// schema validation. A client validating responses against the published spec

@@ -20,8 +20,11 @@ const symbolAnalysisStorageService = require('../services/storage/SymbolAnalysis
 const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
 const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
+const { getAdminPagingStatus } = require('../services/notification/adminPagingStatus');
 const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
 const { firestoreWriteMetricsService, READ_HEALTH } = require('../services/storage/FirestoreWriteMetricsService');
+const { getPromptService } = require('../services/prompts');
+const { signalClassMetrics } = require('../services/alerts/signalClassifier');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsAppService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
@@ -30,7 +33,6 @@ const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldow
 const { userPriceAlertService } = require('../services/alerts/UserPriceAlertService');
 const { alertModeration } = require('../services/alerts/alertModeration');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
-const { getPromptService } = require('../services/prompts');
 const { getPromptReadiness } = require('../services/prompts/promptReadiness');
 const newsAnalysisStorageService = require('../services/storage/NewsAnalysisStorageService');
 const {
@@ -375,6 +377,28 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		}),
 	};
 	const langfuse = getLangfusePromptDependencyStatus(langfusePromptsEnabled);
+	// Configuration/reachability (dependencies.langfuse) says nothing about whether
+	// prompts are actually served remotely. Keep the two facts apart so a 100%
+	// local-fallback regression is visible instead of silent.
+	let langfusePrompts;
+	try {
+		langfusePrompts = getPromptService().getPromptResolutionStatus();
+	} catch (error) {
+		console.warn(`[status] Failed to read prompt-resolution telemetry: ${error.message}`);
+		// Emit the documented fail-open verdict rather than omitting the key: a
+		// consumer reading status.dependencies.langfusePrompts.servingStatus would
+		// otherwise get a TypeError on exactly the path where telemetry is broken.
+		langfusePrompts = {
+			enabled: langfusePromptsEnabled,
+			configured: hasValue(process.env.LANGFUSE_PUBLIC_KEY) && hasValue(process.env.LANGFUSE_SECRET_KEY),
+			ready: false,
+			servingStatus: 'unknown',
+			servingPrompts: false,
+			lastErrorCategory: null,
+			consecutiveFailures: 0,
+			prompts: [],
+		};
+	}
 	const braveSearch = dependencyStatus({
 		enabled: newsMonitorEnabled && forceBraveSearch,
 		configured: hasValue(process.env.BRAVE_SEARCH_API_KEY),
@@ -530,6 +554,12 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		...(deliveryMetricsService.getSnapshot()
 			? { deliveryMetrics: deliveryMetricsService.getSnapshot() }
 			: {}),
+		// Non-secret operator-paging health. Lets an operator tell a working admin path from
+		// a silent one: readiness alone reports "ready" for a channel that is 0/N at runtime.
+		// Channel names and counters only — never tokens, webhook URLs, or chat IDs.
+		...(getAdminPagingStatus()
+			? { adminPaging: getAdminPagingStatus() }
+			: {}),
 		dependencies: {
 			telegram,
 			whatsapp,
@@ -548,11 +578,20 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			...(firestoreWriteMetricsService.getSnapshot()
 				? { firestoreWriteMetrics: firestoreWriteMetricsService.getSnapshot() }
 				: {}),
+			// `featureFlags.signalClassMarker: true` only says the badge marker
+			// is allowed to render; it says nothing about whether alerts are
+			// actually being classified. Expose the population rate so a silent
+			// regression back to 100% `unknown` is detectable from /api/status
+			// instead of looking healthy.
+			...(signalClassMetrics.getSnapshot()
+				? { signalClassClassification: signalClassMetrics.getSnapshot() }
+				: {}),
 			...(firestoreWriteMetricsService.getReadSnapshot()
 				? { firestoreReadMetrics: firestoreWriteMetricsService.getReadSnapshot() }
 				: {}),
 			sentry,
 			langfuse,
+			...(langfusePrompts ? { langfusePrompts } : {}),
 			braveSearch,
 			newsMonitor: {
 				enabled: newsMonitorEnabled,
@@ -573,6 +612,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			firebaseRemoteConfig: remoteConfigStatus,
 			chatPreferences: chatPreferenceService.getStatus(),
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
+			newsAnalysisStorage: newsAnalysisStorageService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
 			userPriceAlertWorker: userPriceAlertService.getStatus(),
 			newsMonitorScheduler: newsMonitorSchedulerService.getStatus(),
