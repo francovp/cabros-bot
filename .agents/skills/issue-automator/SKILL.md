@@ -56,7 +56,7 @@ The automator must not treat `francovp`'s comments as the only signal. Issues an
 The skill sends notifications for alert-worthy events via the production webhook. The endpoint expects a JSON payload with `x-api-key` auth header.
 
 **Configuration** — set these environment variables before running the skill:
-- `NOTIFY_WEBHOOK_URL` — defaults to `https://cabros-bot-production.up.railway.app/api/webhook/message`
+- `NOTIFY_WEBHOOK_URL` — defaults to `https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message`
 - `NOTIFY_API_KEY` — the `x-api-key` header value (required)
 - `NOTIFY_CHANNELS` — comma-separated, defaults to `whatsapp` (operator requires WhatsApp)
 - `NOTIFY_TELEGRAM_CHAT_ID` — defaults to `-1001234567890` (optional when `whatsapp` only)
@@ -67,7 +67,7 @@ The skill sends notifications for alert-worthy events via the production webhook
 **Notification helper** — use this curl template whenever a notification is required:
 
 ```bash
-curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-bot-production.up.railway.app/api/webhook/message}" \
+curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
   --header 'Content-Type: application/json' \
   --header "x-api-key: ${NOTIFY_API_KEY}" \
   --data-raw '{
@@ -83,7 +83,7 @@ For backward compatibility you may send `["telegram","whatsapp"]` with both chat
 PR_URL="https://github.com/francovp/cabros-bot/pull/${PR_NUMBER}"
 ISSUE_URL="https://github.com/francovp/cabros-bot/issues/${ISSUE_NUM}"
 NOTIFY_MESSAGE="[GLOBAL_BLOCKED] Issue #${ISSUE_NUM} (${ISSUE_URL}) blocked on ${PR_URL} — Railway bounded retry. Needs manual deploy." \
-  curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-bot-production.up.railway.app/api/webhook/message}" \
+  curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
   --header 'Content-Type: application/json' \
   --header "x-api-key: ${NOTIFY_API_KEY}" \
   --data-raw '{
@@ -131,9 +131,9 @@ A claimed issue is a **zero-work skip**: outcome `CLAIMED`, the issue number is 
 
 ## Deployment & Preview
 
-Railway is the primary deployment platform; PRs may also be deployed to other platforms (self-hosted, Tailscale, Fly.io, etc.).
+Render is the deployment platform; PRs may also be deployed to other platforms (self-hosted, Tailscale, Fly.io, etc.).
 
-- **Production**: `https://cabros-bot-production.up.railway.app` (master)
+- **Production**: `https://cabros-crypto-bot-telegram.onrender.com` (master)
 - **PR previews**: The live URL is resolved dynamically from the GitHub Deployments API via `scripts/get-pr-deployment-url.sh <PR_NUMBER>`, which returns the `environment_url` of the latest `success`/`active` deployment for the PR. Deployments are walked newest-first, so a still-`pending` newest deployment is skipped in favour of the previous successful one. If no GitHub deployment is found, it falls back to the Railway pattern `https://cabros-bot-cabros-bot-pr-<PR_NUMBER>.up.railway.app` with a warning.
 - Pass `--details` to `get-pr-deployment-url.sh` when you need the identity of the selected deployment, not just its URL. It emits one line of JSON — `{"url":…,"sha":…,"state":…,"deployment_id":…,"source":…}` — where `sha` is the commit of the **same** deployment whose status supplied `url`, and `source` is `production`, `github-deployment`, or `railway-fallback`. Because the newest deployment may be skipped, never pair a resolved URL with a separately-fetched "latest" deployment SHA; use `--details` or let `verify-preview.sh` do it. Without the flag the output is still the bare URL.
 - Verify health with `scripts/verify-preview.sh <PR_NUMBER>` (or `scripts/verify-preview.sh production` for master). The script resolves the live URL via `get-pr-deployment-url.sh --details`, checks `/healthcheck` and `/openapi.json`, plus any extra endpoints passed as a second argument: `scripts/verify-preview.sh 359 "/healthcheck,/openapi.json,/api/alerts"`.
@@ -318,7 +318,7 @@ If the issue/PR carries `GLOBAL_BLOCKED` **caused by a bounded retry (`429`/`rat
    PR_URL="https://github.com/francovp/cabros-bot/pull/${PR_NUMBER}"
    ISSUE_URL="https://github.com/francovp/cabros-bot/issues/${ISSUE_NUMBER}"
    NOTIFY_MESSAGE="[need manual PR deploy] Railway deploy still stale/bounded-retry for ${PR_URL} (issue #${ISSUE_NUMBER}: ${ISSUE_URL}). Manual deploy required." \
-     curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-bot-production.up.railway.app/api/webhook/message}" \
+     curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
      --header 'Content-Type: application/json' \
      --header "x-api-key: ${NOTIFY_API_KEY}" \
      --data-raw '{"message": "'"${NOTIFY_MESSAGE}"'","channels": ["whatsapp"],"whatsappChatId": "120363422033474991@g.us"}'
@@ -371,7 +371,7 @@ If the primary issue ends with any other (non-skip) outcome, including `IN_REVIE
    ISSUE_NUM="$(gh issue view --json number --jq .number 2>/dev/null || echo "N/A")"
    ISSUE_URL="https://github.com/francovp/cabros-bot/issues/${ISSUE_NUM}"
    NOTIFY_MESSAGE="[IN_REVIEW] PR ready for review — Issue #${ISSUE_NUM}: ${ISSUE_URL}. Review at: ${PR_URL}" \
-     curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-bot-production.up.railway.app/api/webhook/message}" \
+     curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
      --header 'Content-Type: application/json' \
      --header "x-api-key: ${NOTIFY_API_KEY}" \
      --data-raw '{
@@ -392,7 +392,7 @@ Always include a final summary of execution containing:
 2. Outcome of the first non-skip issue, if any (issues with skip outcomes `CLAIMED`, `LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` with no agent writes, or `IN_REVIEW` no-writes are counted as skipped and listed). Write-producing `GLOBAL_BLOCKED` issues are non-skip outcomes and are listed as such. A `NEEDS_USER` outcome is a terminal handoff, not a skip.
 3. Tools utilized (`gh`, GitHub MCP, or scripts).
 4. Details of any global blockers, including each `GLOBAL_BLOCKED` issue skipped, the unblock attempt made, and the next issue advanced to. Include stale-deploy recovery attempts (with the resolved preview host and whether it was Railway) and `need manual PR deploy` label actions.
-5. Performed verification steps (CI, reviews, preview ping, and E2E). Note the URLs verified as resolved by `scripts/get-pr-deployment-url.sh` — the PR preview URL and, when applicable, the production URL (`https://cabros-bot-production.up.railway.app`). Never report a host you did not resolve; if the resolver warned that it fell back to the Railway pattern, say so.
+5. Performed verification steps (CI, reviews, preview ping, and E2E). Note the URLs verified as resolved by `scripts/get-pr-deployment-url.sh` — the PR preview URL and, when applicable, the production URL (`https://cabros-crypto-bot-telegram.onrender.com`). Never report a host you did not resolve; if the resolver warned that it fell back to the Railway pattern, say so.
    - Record both nested pre-PR reviews, the Codex review-request count/result, and screenshot evidence for UI changes.
 6. GitHub issue and PR status after processing, including whether the issue was closed or handed off for review.
 7. **`agent-working` lifecycle confirmation**: For each issue confirm: the claim was acquired at start via `scripts/claim-issue.sh` (label + claim comment with agent/session/timestamp), and released at end (merged or `In review`).
@@ -410,7 +410,7 @@ Refer to this section when encountering execution issues:
     ```bash
     ISSUE_URL="https://github.com/$repo/issues/$issue"
     NOTIFY_MESSAGE="[GLOBAL_BLOCKED] Issue automator halted: GitHub CLI and MCP access both failed for $repo/$issue. Human intervention required. Issue: $ISSUE_URL. PR: ${PR_URL:-none}" \
-      curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-bot-production.up.railway.app/api/webhook/message}" \
+      curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
       --header 'Content-Type: application/json' \
       --header "x-api-key: ${NOTIFY_API_KEY}" \
       --data-raw '{
