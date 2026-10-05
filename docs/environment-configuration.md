@@ -165,11 +165,11 @@ Unlike equity market data, this feature **does** run a bounded startup probe (5s
 
 #### Firestore Alert Storage
 
-- `ENABLE_FIRESTORE_ALERT_STORAGE` - Enable Firestore persistence and alert read API (`true` or `false`, default: `false`)
+- `ENABLE_FIRESTORE_ALERT_STORAGE` - Enable Firestore persistence and alert read API (`true` or `false`, default: `false`). Remote Config eligible.
 - `ALERT_STORAGE_RETENTION_DAYS` - Retention for `alerts` and `alertReplays` records in days (`1`-`3650`, default: `90`). New records get `expiresAt`; run `bash ops/configure-firestore-alert-retention.sh` once per Firebase project to backfill legacy records and enable native Firestore TTL deletion.
 - **Backup & Disaster Recovery**: To safeguard high-value analytical history (`alerts`, `alertReplays`, `tradingSignalOutcomes`, `scannerPresets`) against permanent TTL deletion, automated scheduled workflows (`.github/workflows/firestore-backup.yml`), managed GCS exports (`ops/export-firestore-managed.sh`), and selective JSONL exports (`pnpm run backup:firestore`, `pnpm run restore:firestore`) are provided. See [`docs/firestore-backup-and-restore.md`](firestore-backup-and-restore.md) for the complete runbook and restore procedures.
-- `ENABLE_FIRESTORE_JOB_STORAGE` - Enable Firestore persistence for async TradingView jobs without enabling alert read APIs (`true` or `false`, default: `false`)
-- `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`). **Enabled in production** via `render.yaml` on the web service only (issue #1111). Read [`dependencies.idempotencyStorage`](#verifying-idempotency-storage-is-actually-durable) before treating it as working.
+- `ENABLE_FIRESTORE_JOB_STORAGE` - Enable Firestore persistence for async TradingView jobs without enabling alert read APIs (`true` or `false`, default: `false`). Remote Config eligible.
+- `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`). Remote Config eligible. **Enabled in production** via `render.yaml` on the web service only (issue #1111). Read [`dependencies.idempotencyStorage`](#verifying-idempotency-storage-is-actually-durable) before treating it as working.
 - `ENABLE_FIRESTORE_ALERT_FEEDBACK` - Enable Firestore persistence for trader alert feedback (👍/👎 verdicts from inline keyboard callbacks) (`true` or `false`, default: `false`). Disabled falls back to a process-local in-memory surface so the summary endpoints still return aggregate counts in development.
 - `ALERT_FEEDBACK_RETENTION_DAYS` - Retention for `alertFeedback` records in days (`1`-`3650`, default: `90`, matches alert retention). New records get `expiresAt`; backfill + native TTL can be enabled via `ops/configure-firestore-alert-retention.sh` once per Firebase project.
 - `ENABLE_SIGNAL_OUTCOME_TRACKING` - Enable shadow-mode signal outcome recording and evaluation (`true` or `false`, default: `false`)
@@ -302,7 +302,23 @@ When signal-outcome tracking is disabled, or when no measurements exist in the r
 - `FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS` - Maximum template-load wait (default: `10000`, maximum: `30000`)
 - `FIREBASE_REMOTE_CONFIG_MAX_AGE_MS` - Maximum age of a successful template before environment/default fallback (default: `3600000`, maximum: `604800000`)
 
-The allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_MAINTENANCE_MODE` (an operational incident-response kill switch), and per-chat user preferences (`ENABLE_FIRESTORE_CHAT_PREFERENCES`, `CHAT_PREFERENCES_RETENTION_DAYS` between `1` and `365`, `CHAT_PREFERENCES_CACHE_TTL_MS` between `1000` and `3600000`). Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, permanent security controls, route/security gates, and Telegram destinations are never read from Remote Config.
+The allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_MAINTENANCE_MODE` (an operational incident-response kill switch), per-chat user preferences (`ENABLE_FIRESTORE_CHAT_PREFERENCES`, `CHAT_PREFERENCES_RETENTION_DAYS` between `1` and `365`, `CHAT_PREFERENCES_CACHE_TTL_MS` between `1000` and `3600000`), and the four Firestore storage gates (`ENABLE_FIRESTORE_ALERT_STORAGE`, `ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_FIRESTORE_JOB_STORAGE`, `ENABLE_FIRESTORE_SCANNER_PRESETS`, all boolean, default `false`). Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, permanent security controls, route/security gates, and Telegram destinations are never read from Remote Config.
+
+##### Storage gates resolve `remote ?? env`, not `env || remote`
+
+The four Firestore storage gates are re-evaluated on every call (each gate is checked *before* the cached Firestore client is handed out), so a published value flips durable storage at runtime without a redeploy. That makes precedence load-bearing, and `render.yaml` pins three of them to `true` in production (`ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_FIRESTORE_JOB_STORAGE`, `ENABLE_FIRESTORE_SCANNER_PRESETS` on the web service):
+
+- A **published value always wins**, including `false`. Combining the two sources with `env || remote` would let the `true` pin mask a remote `false`, which would make the gate impossible to switch off in production.
+- **No published value means the environment decides.** Remote Config being disabled, stale, or simply lacking the key is *not* evidence about the gate, so `undefined` falls through to `process.env` rather than being coerced to `false`.
+- Consumers read this through `getRemoteOverride(key)`, not `getRuntimeConfig()`. `getRuntimeConfig()` always returns a value for every schema key — environment-derived when the gate is off — so it cannot distinguish "Remote Config said `false`" from "the environment says `false`".
+
+`ENABLE_FIRESTORE_SCANNER_PRESETS`, `ENABLE_FIRESTORE_JOB_STORAGE`, `ENABLE_FIRESTORE_ALERT_STORAGE` and `ENABLE_FIRESTORE_IDEMPOTENCY` are all declared in the template with **`useInAppDefault: true`**, which means "no published value". That is deliberate, and it is not cosmetic:
+
+> **A template `defaultValue` is an override, not a default.** When no condition matches, `firebase-admin` falls through to `parameter.defaultValue` and tags it with source `'remote'`, which this service accepts as a real override. Shipping `defaultValue: { "value": "false" }` would therefore have silently disabled the three storage modes `render.yaml` pins to `true` (idempotency, job storage, scanner presets) the first time the template was published, re-enabling duplicate alert delivery after every restart and replica. `useInAppDefault: true` makes the SDK skip the parameter, so nothing is overridden and the deployment value decides.
+
+So: to change a storage gate, set a **conditional/actual value** in `firebase-remote-config-template.json` and republish. Do not "just edit the default" — the default is a remote value.
+
+Previews are unaffected either way: they run with `ENABLE_FIREBASE_REMOTE_CONFIG=false`, so `getRemoteOverride()` returns `undefined` and they keep their `render.yaml` values — a throwaway PR deployment can never mutate the production collection through a remote toggle.
 
 The service loads once at startup and refreshes on the bounded cadence; it does not fetch Remote Config per alert. `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS` remains environment-only because the worker timer is created during process startup and is not a request-time setting. Disabled, unavailable, timed-out, stale, malformed, or invalid values fail open to the current environment/default behavior. The server-side Remote Config API is currently a Firebase Preview feature, so monitor its quota and error rate before enabling it in production. `firebase-admin` is upgraded to the Node 24-compatible 12.x line (`^12.1.0`, lockfile resolution `12.7.0`).
 
@@ -450,7 +466,7 @@ The response and audit logs include only sanitized order metadata. API credentia
 
 #### Scanner Preset Storage
 
-- `ENABLE_FIRESTORE_SCANNER_PRESETS` - Enable the scanner-preset Firestore persistence gate independently from alert storage, job storage, and outcome tracking (default: `false`)
+- `ENABLE_FIRESTORE_SCANNER_PRESETS` - Enable the scanner-preset Firestore persistence gate independently from alert storage, job storage, and outcome tracking (default: `false`). Remote Config eligible.
 - `storage.mode` and `storage.backend` are **intent-derived**: they report the configured target and stay `durable`/`firestore` whenever the flag is on and credentials are present. They only report `ephemeral`/`memory` when the flag is off or credentials are unusable — the two cases where presets really are lost on restart or redeploy. Do not read `memory` as "the flag is off": that confusion is what made a transient Firestore error look like a disabled feature in [#1342](https://github.com/francovp/cabros-bot/issues/1342).
 - `dependencies.scannerPresetStorage` reports `status` so the three causes an operator must act on differently stay distinguishable, and `configured`/`ready` are not the same question:
 

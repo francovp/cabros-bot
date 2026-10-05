@@ -615,6 +615,38 @@
       },
       "description": "Interval in milliseconds between periodic async job backlog depth probes (default: 1m)",
       "valueType": "NUMBER"
+    },
+    "ENABLE_FIRESTORE_ALERT_STORAGE": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "conditionalValues": {},
+      "description": "Enable Firestore persistence and read/export APIs for webhook alerts. Ships with useInAppDefault so publishing this template yields NO remote override for this key and the deployment value decides. Without it the Admin SDK reports the defaultValue with source 'remote', which would silently override render.yaml.",
+      "valueType": "BOOLEAN"
+    },
+    "ENABLE_FIRESTORE_IDEMPOTENCY": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "conditionalValues": {},
+      "description": "Enable durable Firestore-backed webhook idempotency reservations. Ships with useInAppDefault so publishing this template yields NO remote override for this key and the deployment value decides. Without it the Admin SDK reports the defaultValue with source 'remote', which would silently override render.yaml.",
+      "valueType": "BOOLEAN"
+    },
+    "ENABLE_FIRESTORE_JOB_STORAGE": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "conditionalValues": {},
+      "description": "Enable durable Firestore persistence for TradingView job state. Ships with useInAppDefault so publishing this template yields NO remote override for this key and the deployment value decides. Without it the Admin SDK reports the defaultValue with source 'remote', which would silently override render.yaml.",
+      "valueType": "BOOLEAN"
+    },
+    "ENABLE_FIRESTORE_SCANNER_PRESETS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "conditionalValues": {},
+      "description": "Enable durable Firestore persistence for scanner presets. Ships with useInAppDefault so publishing this template yields NO remote override for this key and the deployment value decides. Without it the Admin SDK reports the defaultValue with source 'remote', which would silently override render.yaml.",
+      "valueType": "BOOLEAN"
     }
   },
   "version": {

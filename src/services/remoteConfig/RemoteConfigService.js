@@ -126,6 +126,20 @@ const PARAMETER_SCHEMA = Object.freeze({
 	TOKEN_COST_DAILY_BUDGET_USD: { type: 'number', defaultValue: 5.0, min: 0.01, max: 10000 },
 	TOKEN_COST_WARN_THRESHOLD_PCT: { type: 'number', defaultValue: 80, integer: true, min: 1, max: 100 },
 	ENABLE_MAINTENANCE_MODE: { type: 'boolean', defaultValue: false },
+	// Issue #721 — Firestore storage gates. Each is resolved per call (the gate is
+	// checked before the cached `db` handle), so a remote value flips it at runtime
+	// rather than only at process start. Consumers must read `remote ?? env`, never
+	// `env || remote`: `getRuntimeConfig()` always yields a boolean for these keys, so
+	// the `||` form would let a `true` render.yaml pin mask a remote `false` and make
+	// the flag impossible to turn off in production.
+	//
+	// These remain environment-only for *startup* control in one respect: a preview
+	// deployment has ENABLE_FIREBASE_REMOTE_CONFIG=false, so it keeps the render.yaml
+	// value and can never mutate the production collection through a remote toggle.
+	ENABLE_FIRESTORE_ALERT_STORAGE: { type: 'boolean', defaultValue: false },
+	ENABLE_FIRESTORE_IDEMPOTENCY: { type: 'boolean', defaultValue: false },
+	ENABLE_FIRESTORE_JOB_STORAGE: { type: 'boolean', defaultValue: false },
+	ENABLE_FIRESTORE_SCANNER_PRESETS: { type: 'boolean', defaultValue: false },
 });
 
 let remoteOverrides = {};
@@ -300,6 +314,33 @@ function getRuntimeConfig() {
 		Object.assign(config, remoteOverrides);
 	}
 	return config;
+}
+
+/**
+ * Return the *published remote* value for `key`, or `undefined` when Remote
+ * Config has not supplied one.
+ *
+ * `getRuntimeConfig()` cannot answer this question: it always returns a value for
+ * every schema key, environment-derived when the gate is off, so a consumer
+ * reading it cannot tell "Remote Config said false" apart from "the environment
+ * says false". Gating behaviour on that ambiguity is how a deployment-level
+ * `false` silently overrode a published `true`.
+ *
+ * Consumers that need `remote ?? env` semantics must use this instead. A returned
+ * `undefined` is not evidence about the gate, so it must fall through to the
+ * environment rather than being coerced to `false`.
+ *
+ * @param {string} key
+ * @returns {boolean|number|string|undefined}
+ */
+function getRemoteOverride(key) {
+	if (!isEnabled() || !hasFreshRemoteConfig()) {
+		return undefined;
+	}
+	if (!Object.prototype.hasOwnProperty.call(PARAMETER_SCHEMA, key)) {
+		return undefined;
+	}
+	return remoteOverrides[key];
 }
 
 function getSource() {
@@ -585,6 +626,7 @@ function resetForTesting() {
 module.exports = {
 	PARAMETER_SCHEMA,
 	getRuntimeConfig,
+	getRemoteOverride,
 	getStatus,
 	loadNow,
 	start,
