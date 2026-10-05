@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const admin = require('firebase-admin');
 const AlertStorageService = require('./AlertStorageService');
 const equityMarketDataService = require('./EquityMarketDataService');
@@ -7,6 +8,10 @@ const geminiPriceService = require('../grounding/geminiPriceService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { MainClient } = require('binance');
+const {
+	parseEntryPriceSources,
+	getEntryPriceSourceChains: buildEntryPriceSourceChains,
+} = require('../../lib/signalOutcomeEntryPriceSources');
 
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 
@@ -14,6 +19,24 @@ const COLLECTION_NAME = 'tradingSignalOutcomes';
 const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
 const HEARTBEAT_DOCUMENT_ID = 'signal-outcome';
 const HEARTBEAT_WRITE_TIMEOUT_MS = 5000;
+// Exactly one evaluator may sweep at a time; see acquireSweepLease() (GH-1110).
+const LOCK_COLLECTION_NAME = 'signalOutcomeLocks';
+const LOCK_DOCUMENT_ID = 'singleton';
+const DEFAULT_LEASE_MS = 120000;
+const MIN_LEASE_MS = 10000;
+const MAX_LEASE_MS = 600000;
+// Renewal cadence floor, and the fallback for an invalid explicit override.
+// `options.leaseRenewIntervalMs` exists so a test can drive a renewal inside a
+// sweep without waiting out the production cadence.
+const MIN_LEASE_RENEW_INTERVAL_MS = 1000;
+const LEASE_RENEWAL = Object.freeze({
+	ACQUIRED: 'acquired',
+	LOST: 'lost',
+	UNDETERMINED: 'undetermined',
+});
+const LEASE_WRITE_TIMEOUT_MS = 5000;
+// Lease ownership identity. Not a secret; never log it.
+const LEASE_WORKER_ID = crypto.randomUUID();
 const MAX_WORKER_DRAIN_TIMEOUT_MS = 30000;
 const MAX_TIMER_DELAY_MS = 2147483647;
 const MAX_CONFIGURED_INTERVAL_MS = 3600000;
@@ -25,6 +48,7 @@ const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
 const DEFAULT_BINANCE_DATA_BASE_URL = 'https://api.binance.com';
 const REASON_BINANCE_UNAVAILABLE = 'binance_unavailable';
 const REASON_BINANCE_REGION_BLOCKED = 'binance_region_blocked';
+const REASON_GEMINI_UNAVAILABLE = 'gemini_unavailable';
 const REASON_MARKET_DATA_REGION_BLOCKED = 'market_data_region_blocked';
 const REGION_BLOCK_MESSAGE_PATTERNS = [
 	'restricted location',
@@ -34,6 +58,9 @@ const REGION_BLOCK_MESSAGE_PATTERNS = [
 const DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS = 365;
 const MAX_SIGNAL_OUTCOME_RETENTION_DAYS = 3650;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const SESSION_TIME_ZONE = 'America/New_York';
+const SESSION_ANCHOR_VERSION = 'v1';
+const REGULAR_EQUITY_EXCHANGES = new Set(['AMEX', 'BATS', 'NASDAQ', 'NYSE', 'NYSE ARCA']);
 
 let binanceClient = null;
 let isEvaluating = false;
@@ -48,8 +75,31 @@ let lastRunEvaluatedCount = 0;
 let lastRunPendingCount = 0;
 let lastRunErrorCount = 0;
 let lastRunRegionBlockedCount = 0;
+let lastRunLeaseHeld = false;
+let leaseHeldSkipCount = 0;
 let lastEvaluatedDoc = null;
 let lastRetentionWarningValue = null;
+let lastEntryPriceSourcesWarningValue = null;
+
+function getEntryPriceSourceChains() {
+	const rawValue = getRuntimeConfig?.().SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES;
+	try {
+		const chains = buildEntryPriceSourceChains(rawValue);
+		lastEntryPriceSourcesWarningValue = null;
+		return chains;
+	} catch (error) {
+		if (lastEntryPriceSourcesWarningValue !== rawValue) {
+			console.warn('[SignalOutcomeService] Invalid SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES configuration, using existing fallback chains');
+			lastEntryPriceSourcesWarningValue = rawValue;
+		}
+		return buildEntryPriceSourceChains();
+	}
+}
+
+function getEntryPriceSourceChain(exchange, assetClass) {
+	const chains = getEntryPriceSourceChains();
+	return exchange === 'BINANCE' || assetClass === 'crypto' ? chains.crypto : chains.equity;
+}
 
 function getSignalOutcomeRetentionDays() {
 	const rawValue = process.env.SIGNAL_OUTCOME_RETENTION_DAYS;
@@ -113,6 +163,10 @@ function buildRetentionExpiryTimestamp(baseDate = new Date()) {
 }
 
 function isRetentionExpired(data) {
+	if (data && data.retentionPolicy === 'archive') {
+		return false;
+	}
+
 	const now = Date.now();
 	const explicitExpiry = getTimestampMillis(data && data.expiresAt);
 	if (explicitExpiry !== null && explicitExpiry <= now) {
@@ -125,6 +179,220 @@ function isRetentionExpired(data) {
 	}
 
 	return false;
+}
+
+function getLocalDateParts(date) {
+	const parts = new Intl.DateTimeFormat('en-US', {
+		timeZone: SESSION_TIME_ZONE,
+		calendar: 'gregory',
+		weekday: 'short',
+		year: 'numeric',
+		month: '2-digit',
+		day: '2-digit',
+		hour: '2-digit',
+		minute: '2-digit',
+		hourCycle: 'h23',
+	}).formatToParts(date).reduce((result, part) => {
+		if (part.type !== 'literal') result[part.type] = part.value;
+		return result;
+	}, {});
+
+	return {
+		year: Number(parts.year),
+		month: Number(parts.month),
+		day: Number(parts.day),
+		weekday: parts.weekday,
+		hour: Number(parts.hour),
+		minute: Number(parts.minute),
+	};
+}
+
+function localDateKey({ year, month, day }) {
+	return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+function addLocalDays(dateKey, days) {
+	const [year, month, day] = dateKey.split('-').map(Number);
+	const date = new Date(Date.UTC(year, month - 1, day + days));
+	return localDateKey({ year: date.getUTCFullYear(), month: date.getUTCMonth() + 1, day: date.getUTCDate() });
+}
+
+function getWeekday(dateKey) {
+	const [year, month, day] = dateKey.split('-').map(Number);
+	return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+}
+
+function getNthWeekday(year, month, weekday, occurrence) {
+	const first = new Date(Date.UTC(year, month - 1, 1));
+	const day = 1 + ((weekday - first.getUTCDay() + 7) % 7) + ((occurrence - 1) * 7);
+	return localDateKey({ year, month, day });
+}
+
+function getLastWeekday(year, month, weekday) {
+	const last = new Date(Date.UTC(year, month, 0));
+	const day = last.getUTCDate() - ((last.getUTCDay() - weekday + 7) % 7);
+	return localDateKey({ year, month, day });
+}
+
+function getEasterSunday(year) {
+	const a = year % 19;
+	const b = Math.floor(year / 100);
+	const c = year % 100;
+	const d = Math.floor(b / 4);
+	const e = b % 4;
+	const f = Math.floor((b + 8) / 25);
+	const g = Math.floor((b - f + 1) / 3);
+	const h = (19 * a + b - d - g + 15) % 30;
+	const i = Math.floor(c / 4);
+	const k = c % 4;
+	const l = (32 + 2 * e + 2 * i - h - k) % 7;
+	const m = Math.floor((a + 11 * h + 22 * l) / 451);
+	const month = Math.floor((h + l - 7 * m + 114) / 31);
+	const day = ((h + l - 7 * m + 114) % 31) + 1;
+	return localDateKey({ year, month, day });
+}
+
+function getObservedFixedHoliday(year, month, day) {
+	const dateKey = localDateKey({ year, month, day });
+	const weekday = getWeekday(dateKey);
+	if (weekday === 6) return addLocalDays(dateKey, -1);
+	if (weekday === 0) return addLocalDays(dateKey, 1);
+	return dateKey;
+}
+
+function isUsMarketHoliday(dateKey) {
+	const [year, month, day] = dateKey.split('-').map(Number);
+	const fixed = new Set([
+		getObservedFixedHoliday(year, 1, 1),
+		getObservedFixedHoliday(year + 1, 1, 1),
+		getObservedFixedHoliday(year, 6, 19),
+		getObservedFixedHoliday(year, 7, 4),
+		getObservedFixedHoliday(year, 12, 25),
+	]);
+	const movable = new Set([
+		getNthWeekday(year, 1, 1, 3),
+		getNthWeekday(year, 2, 1, 3),
+		addLocalDays(getEasterSunday(year), -2),
+		getLastWeekday(year, 5, 1),
+		getNthWeekday(year, 9, 1, 1),
+		getNthWeekday(year, 11, 4, 4),
+	]);
+	return fixed.has(dateKey) || movable.has(dateKey) || getWeekday(dateKey) === 0 || getWeekday(dateKey) === 6;
+}
+
+function isUsMarketHalfDay(dateKey) {
+	const [year, month, day] = dateKey.split('-').map(Number);
+	const thanksgiving = getNthWeekday(year, 11, 4, 4);
+	const julyFourth = localDateKey({ year, month: 7, day: 4 });
+	const julyFourthWeekday = getWeekday(julyFourth);
+	const isJulyEarlyClose = (julyFourthWeekday === 6 || julyFourthWeekday === 0)
+		? dateKey === localDateKey({ year, month: 7, day: 2 })
+		: (julyFourthWeekday >= 2 && julyFourthWeekday <= 5 && dateKey === localDateKey({ year, month: 7, day: 3 }));
+	return dateKey === addLocalDays(thanksgiving, 1)
+		|| isJulyEarlyClose
+		|| (dateKey === localDateKey({ year, month: 12, day: 24 }) && getWeekday(localDateKey({ year, month: 12, day: 25 })) >= 1 && getWeekday(localDateKey({ year, month: 12, day: 25 })) <= 5);
+}
+
+function localTimeToDate(dateKey, hour, minute) {
+	const [year, month, day] = dateKey.split('-').map(Number);
+	let utcMillis = Date.UTC(year, month - 1, day, hour, minute);
+	for (let attempt = 0; attempt < 2; attempt++) {
+		const local = getLocalDateParts(new Date(utcMillis));
+		const localAsUtc = Date.UTC(local.year, local.month - 1, local.day, local.hour, local.minute);
+		const wantedAsUtc = Date.UTC(year, month - 1, day, hour, minute);
+		utcMillis += wantedAsUtc - localAsUtc;
+	}
+	return new Date(utcMillis);
+}
+
+function getSessionSchedule(dateKey) {
+	if (isUsMarketHoliday(dateKey)) return null;
+	const closeHour = isUsMarketHalfDay(dateKey) ? 13 : 16;
+	return {
+		openAt: localTimeToDate(dateKey, 9, 30),
+		closeAt: localTimeToDate(dateKey, closeHour, 0),
+	};
+}
+
+function getNextSessionOpen(dateKey) {
+	for (let offset = 1; offset <= 14; offset++) {
+		const candidate = addLocalDays(dateKey, offset);
+		const schedule = getSessionSchedule(candidate);
+		if (schedule) return schedule.openAt;
+	}
+	return null;
+}
+
+function getSessionContext({ exchange, assetClass, receivedAt = new Date() } = {}) {
+	const observedDate = receivedAt instanceof Date ? receivedAt : new Date(receivedAt);
+	const observedAt = Number.isNaN(observedDate.getTime()) ? new Date() : observedDate;
+	const base = {
+		observedAt: observedAt.toISOString(),
+		decisionBarClosedAt: null,
+		tradableAt: observedAt.toISOString(),
+		anchorMode: 'raw_received_at',
+		anchorVersion: SESSION_ANCHOR_VERSION,
+		calendarId: null,
+		calendarTimeZone: null,
+		measurementCohort: 'raw_received_at',
+	};
+
+	if (String(assetClass || '').toLowerCase() === 'crypto' || String(exchange || '').toUpperCase() === 'BINANCE') {
+		return { ...base, sessionContext: 'crypto_24_7' };
+	}
+
+	const normalizedExchange = equityMarketDataService.normalizeExchange(exchange)
+		|| String(exchange || '').trim().toUpperCase().replace(/_DLY$/, '');
+	if (!REGULAR_EQUITY_EXCHANGES.has(normalizedExchange)) {
+		return { ...base, sessionContext: 'non_regular_market' };
+	}
+
+	const local = getLocalDateParts(observedAt);
+	const dateKey = localDateKey(local);
+	const nextSessionOpen = getNextSessionOpen(dateKey);
+	const calendarFields = {
+		calendarId: 'nyse',
+		calendarTimeZone: SESSION_TIME_ZONE,
+	};
+	const schedule = getSessionSchedule(dateKey);
+	if (!schedule) {
+		return {
+			...base,
+			...calendarFields,
+			sessionContext: 'market_holiday',
+			tradableAt: nextSessionOpen ? nextSessionOpen.toISOString() : null,
+			measurementCohort: 'raw_market_closed',
+		};
+	}
+
+	const observedMillis = observedAt.getTime();
+	if (observedMillis < schedule.openAt.getTime()) {
+		return {
+			...base,
+			...calendarFields,
+			sessionContext: 'pre_open',
+			tradableAt: schedule.openAt.toISOString(),
+			measurementCohort: 'raw_pre_open',
+		};
+	}
+	if (observedMillis >= schedule.closeAt.getTime()) {
+		return {
+			...base,
+			...calendarFields,
+			sessionContext: 'after_hours',
+			decisionBarClosedAt: schedule.closeAt.toISOString(),
+			tradableAt: nextSessionOpen ? nextSessionOpen.toISOString() : null,
+			measurementCohort: 'raw_received_at_after_hours',
+		};
+	}
+
+	return {
+		...base,
+		...calendarFields,
+		sessionContext: 'regular',
+		tradableAt: observedAt.toISOString(),
+		measurementCohort: 'raw_received_at',
+	};
 }
 
 function awaitWithTimeout(promise, timeoutMs, message) {
@@ -255,6 +523,147 @@ function parseTimerInterval(val, defaultVal) {
 	return parsed <= MAX_TIMER_DELAY_MS ? parsed : defaultVal;
 }
 
+function parseBoundedInteger(val, defaultVal, minVal, maxVal) {
+	const parsed = parsePositiveInteger(val, defaultVal);
+	if (parsed < minVal || parsed > maxVal) {
+		return defaultVal;
+	}
+	return parsed;
+}
+
+function getLeaseMs() {
+	return parseBoundedInteger(
+		process.env.SIGNAL_OUTCOME_EVALUATION_LEASE_MS,
+		DEFAULT_LEASE_MS,
+		MIN_LEASE_MS,
+		MAX_LEASE_MS,
+	);
+}
+
+function getLeaseFirestore() {
+	try {
+		return AlertStorageService.getFirestore();
+	} catch {
+		return null;
+	}
+}
+
+async function acquireSweepLease(nowMs, leaseMs) {
+	// `render.yaml` declares two candidate evaluators: the web service
+	// (SIGNAL_OUTCOME_WORKER_ROLE=web) and the dedicated worker
+	// (SIGNAL_OUTCOME_WORKER_ROLE=worker). startWorker() only compares a
+	// process's own role, so without a shared lock two enabled replicas both
+	// sweep and re-price every pending signal, doubling Binance / Gemini /
+	// Twelve Data quota spend. The lease makes the winner a function of live
+	// lock ownership instead of a per-service dashboard flag.
+	const firestore = getLeaseFirestore();
+	if (!firestore || typeof firestore.runTransaction !== 'function') {
+		return true;
+	}
+
+	const durationMs = parseBoundedInteger(leaseMs, DEFAULT_LEASE_MS, MIN_LEASE_MS, MAX_LEASE_MS);
+
+	try {
+		const acquired = await awaitWithTimeout(
+			firestore.runTransaction(async (tx) => {
+				const docRef = firestore.collection(LOCK_COLLECTION_NAME).doc(LOCK_DOCUMENT_ID);
+				const doc = await tx.get(docRef);
+				const data = doc.exists ? (doc.data() || {}) : {};
+				const lockedUntilMs = data.lockedUntil ? new Date(data.lockedUntil).getTime() : 0;
+				const lockedBy = data.lockedBy || null;
+
+				if (lockedUntilMs > nowMs && lockedBy && lockedBy !== LEASE_WORKER_ID) {
+					return false;
+				}
+
+				tx.set(docRef, {
+					lockedUntil: new Date(nowMs + durationMs).toISOString(),
+					lockedBy: LEASE_WORKER_ID,
+					updatedAt: new Date(nowMs).toISOString(),
+				}, { merge: true });
+				return true;
+			}),
+			LEASE_WRITE_TIMEOUT_MS,
+			`Signal outcome lease acquire timed out after ${LEASE_WRITE_TIMEOUT_MS}ms`,
+		);
+		return Boolean(acquired);
+	} catch (error) {
+		console.warn('[SignalOutcomeService] Lease acquire failed:', error.message);
+		// Fail open: a lease write blip must never disable outcome evaluation.
+		return true;
+	}
+}
+
+async function renewSweepLease(nowMs, leaseMs) {
+	// Renewal answers two different questions, and they must not collapse into one
+	// boolean: LOST means this process provably does not own the sweep and must stop
+	// acting, while UNDETERMINED means the lease could not be checked at all, which
+	// stays fail-open so a Firestore blip cannot disable outcome evaluation.
+	const firestore = getLeaseFirestore();
+	if (!firestore || typeof firestore.runTransaction !== 'function') {
+		return LEASE_RENEWAL.UNDETERMINED;
+	}
+
+	const durationMs = parseBoundedInteger(leaseMs, DEFAULT_LEASE_MS, MIN_LEASE_MS, MAX_LEASE_MS);
+
+	try {
+		const renewal = await awaitWithTimeout(
+			firestore.runTransaction(async (tx) => {
+				const docRef = firestore.collection(LOCK_COLLECTION_NAME).doc(LOCK_DOCUMENT_ID);
+				const doc = await tx.get(docRef);
+				if (!doc.exists) return LEASE_RENEWAL.LOST;
+				const data = doc.data() || {};
+				if (data.lockedBy && data.lockedBy !== LEASE_WORKER_ID) {
+					return LEASE_RENEWAL.LOST;
+				}
+				tx.set(docRef, {
+					lockedUntil: new Date(nowMs + durationMs).toISOString(),
+					updatedAt: new Date(nowMs).toISOString(),
+				}, { merge: true });
+				return LEASE_RENEWAL.ACQUIRED;
+			}),
+			LEASE_WRITE_TIMEOUT_MS,
+			`Signal outcome lease renew timed out after ${LEASE_WRITE_TIMEOUT_MS}ms`,
+		);
+		return renewal;
+	} catch (error) {
+		console.warn('[SignalOutcomeService] Lease renew failed:', error.message);
+		return LEASE_RENEWAL.UNDETERMINED;
+	}
+}
+
+async function releaseSweepLease(completedAtMs) {
+	const firestore = getLeaseFirestore();
+	if (!firestore || typeof firestore.runTransaction !== 'function') {
+		return;
+	}
+
+	try {
+		await awaitWithTimeout(
+			firestore.runTransaction(async (tx) => {
+				const docRef = firestore.collection(LOCK_COLLECTION_NAME).doc(LOCK_DOCUMENT_ID);
+				const doc = await tx.get(docRef);
+				if (!doc.exists) return;
+				const data = doc.data() || {};
+				// Never clear a lease a different replica has taken over.
+				if (data.lockedBy && data.lockedBy !== LEASE_WORKER_ID) {
+					return;
+				}
+				tx.set(docRef, {
+					lockedUntil: null,
+					lockedBy: null,
+					lastCompletedAt: new Date(completedAtMs).toISOString(),
+					updatedAt: new Date().toISOString(),
+				}, { merge: true });
+			}),
+			LEASE_WRITE_TIMEOUT_MS,
+			`Signal outcome lease release timed out after ${LEASE_WRITE_TIMEOUT_MS}ms`,
+		);
+	} catch (error) {
+		console.warn('[SignalOutcomeService] Lease release failed:', error.message);
+	}
+}
+
 function getConfiguredInterval(defaultVal) {
 	const intervalMs = parseTimerInterval(
 		process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS || process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS,
@@ -322,6 +731,7 @@ function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProv
 		const isTransient = equityMarketDataService.isTransientReason(entryPriceReason)
 			|| entryPriceReason === REASON_BINANCE_UNAVAILABLE
 			|| entryPriceReason === REASON_BINANCE_REGION_BLOCKED
+			|| entryPriceReason === REASON_GEMINI_UNAVAILABLE
 			|| entryPriceReason === 'twelve_data_unavailable'
 			|| entryPriceReason === 'twelve_data_rate_limited'
 			|| entryPriceReason === 'twelve_data_timeout';
@@ -351,6 +761,13 @@ const WINDOW_CONFIGS = {
 	'1W': { durationMs: 7 * 24 * 60 * 60 * 1000, interval: '4h' },
 };
 
+function normalizeConfidenceScore(val) {
+	if (typeof val !== 'number' || !Number.isFinite(val)) return null;
+	if (val >= 0 && val <= 1) return val;
+	if (val >= -1 && val < 0) return Math.abs(val);
+	return null;
+}
+
 /**
  * Persist signal metadata to Firestore.
  */
@@ -362,6 +779,7 @@ async function recordSignalInternal({
 	timeframe,
 	setupType,
 	score,
+	confidenceScore,
 	side,
 	price,
 	priceSource,
@@ -386,58 +804,99 @@ async function recordSignalInternal({
 		const normAssetClass = normalizeAssetClass(assetClass);
 		const normSide = normalizeSide(side);
 		const now = new Date();
+		const sessionContext = getSessionContext({
+			exchange: normSymbolInfo.exchange,
+			assetClass: normAssetClass,
+			timeframe,
+			receivedAt: now,
+		});
 		const equityProviderName = equityMarketDataService.getProviderName(normSymbolInfo.exchange, normAssetClass);
+		const entryPriceSourceChains = getEntryPriceSourceChains();
+		const entryPriceSourceChain = normSymbolInfo.exchange === 'BINANCE' || normAssetClass === 'crypto'
+			? entryPriceSourceChains.crypto
+			: entryPriceSourceChains.equity;
 
 		let entryPrice = typeof price === 'number' && Number.isFinite(price) && price > 0 ? price : null;
 		let entryPriceSource = entryPrice !== null
 			? (priceSource || (normSymbolInfo.exchange === 'BINANCE' ? 'tradingview-mcp' : (equityProviderName || 'direct')))
 			: null;
 		let entryPriceReason = null;
+		let suppliedEntryPrice = null;
+		let suppliedEntryPriceSource = null;
+		let entryPriceProvidersToTry = entryPriceSourceChain;
+		if (entryPrice !== null && entryPriceSourceChains.configured) {
+			const incomingProvider = {
+				'tradingview-mcp': 'mcp',
+				'gemini-grounding': 'gemini',
+				'twelve-data': 'twelve-data',
+				binance: 'binance',
+			}[entryPriceSource] || entryPriceSource;
+			const incomingProviderIndex = entryPriceSourceChain.indexOf(incomingProvider);
+			if (incomingProviderIndex === -1) {
+				entryPrice = null;
+				entryPriceSource = null;
+			} else if (incomingProviderIndex > 0) {
+				suppliedEntryPrice = entryPrice;
+				suppliedEntryPriceSource = entryPriceSource;
+				entryPrice = null;
+				entryPriceSource = null;
+				entryPriceProvidersToTry = entryPriceSourceChain.slice(0, incomingProviderIndex);
+			} else {
+				entryPriceProvidersToTry = [];
+			}
+		}
 
-		if (entryPrice === null && normSymbolInfo.exchange === 'BINANCE') {
-			let abortController = null;
-			let timerId = null;
-			try {
-				abortController = new AbortController();
-				const requestOptions = {
-					timeout: 5000,
-					signal: abortController.signal,
-				};
-				const client = getBinanceClient(requestOptions);
-				const timeoutPromise = new Promise((_, reject) => {
-					timerId = setTimeout(() => {
-						abortController.abort();
-						reject(new Error('Binance getAvgPrice timeout (5000ms)'));
-					}, 5000);
-				});
-				const avgPricePromise = client.getAvgPrice({ symbol: normSymbolInfo.symbol });
-				const avgPriceResult = await Promise.race([avgPricePromise, timeoutPromise]);
-				if (avgPriceResult && avgPriceResult.price) {
-					const parsedAvg = parseFloat(avgPriceResult.price);
-					if (Number.isFinite(parsedAvg) && parsedAvg > 0) {
-						entryPrice = parsedAvg;
-						entryPriceSource = 'binance';
+		for (const provider of entryPriceProvidersToTry) {
+			if (entryPrice !== null) break;
+			if (provider === 'mcp') continue;
+
+			if (provider === 'binance' && normSymbolInfo.exchange === 'BINANCE') {
+				let abortController = null;
+				let timerId = null;
+				try {
+					abortController = new AbortController();
+					const requestOptions = {
+						timeout: 5000,
+						signal: abortController.signal,
+					};
+					const client = getBinanceClient(requestOptions);
+					const timeoutPromise = new Promise((_, reject) => {
+						timerId = setTimeout(() => {
+							abortController.abort();
+							reject(new Error('Binance getAvgPrice timeout (5000ms)'));
+						}, 5000);
+					});
+					const avgPriceResult = await Promise.race([client.getAvgPrice({ symbol: normSymbolInfo.symbol }), timeoutPromise]);
+					if (avgPriceResult && avgPriceResult.price) {
+						const parsedAvg = parseFloat(avgPriceResult.price);
+						if (Number.isFinite(parsedAvg) && parsedAvg > 0) {
+							entryPrice = parsedAvg;
+							entryPriceSource = 'binance';
+						}
 					}
+				} catch (err) {
+					const isRegionBlocked = isRegionBlockedError(err);
+					const isInvalidSymbol = err.message
+						&& (err.message.includes('400')
+							|| err.message.includes('UNKNOWN_SYMBOL')
+							|| err.message.includes('Invalid symbol'));
+					if (isRegionBlocked) {
+						entryPriceReason = REASON_BINANCE_REGION_BLOCKED;
+					} else if (isInvalidSymbol) {
+						entryPriceReason = 'binance_invalid_symbol';
+					} else {
+						entryPriceReason = REASON_BINANCE_UNAVAILABLE;
+					}
+					console.warn('[SignalOutcomeService] Failed to fetch entry price from Binance:', err.message);
+					if (isInvalidSymbol) break;
+				} finally {
+					if (timerId) clearTimeout(timerId);
 				}
-			} catch (err) {
-				const isRegionBlocked = isRegionBlockedError(err);
-				const isInvalidSymbol = err.message
-					&& (err.message.includes('400')
-						|| err.message.includes('UNKNOWN_SYMBOL')
-						|| err.message.includes('Invalid symbol'));
-				if (isRegionBlocked) {
-					entryPriceReason = REASON_BINANCE_REGION_BLOCKED;
-				} else if (isInvalidSymbol) {
-					entryPriceReason = 'binance_invalid_symbol';
-				} else {
-					entryPriceReason = REASON_BINANCE_UNAVAILABLE;
-				}
-				console.warn('[SignalOutcomeService] Failed to fetch entry price from Binance:', err.message);
-			} finally {
-				if (timerId) clearTimeout(timerId);
+				continue;
 			}
 
-			if (entryPrice === null && entryPriceReason !== 'binance_invalid_symbol' && geminiPriceService.isGeminiGroundingEnabled({ requireGroundingFlag: true })) {
+			if (provider === 'gemini' && normSymbolInfo.exchange === 'BINANCE'
+				&& geminiPriceService.isGeminiGroundingEnabled({ requireGroundingFlag: true })) {
 				try {
 					const geminiResult = await geminiPriceService.fetchGeminiPrice(normSymbolInfo.symbol, {
 						timeoutMs: 5000,
@@ -449,23 +908,31 @@ async function recordSignalInternal({
 						entryPriceSource = 'gemini-grounding';
 						entryPriceReason = null;
 					}
+					if (entryPrice === null && !entryPriceReason) entryPriceReason = REASON_GEMINI_UNAVAILABLE;
 				} catch (geminiErr) {
-					console.warn('[SignalOutcomeService] Failed to fetch tertiary entry price from Gemini:', geminiErr.message);
+					if (!entryPriceReason) entryPriceReason = geminiErr.reason || REASON_GEMINI_UNAVAILABLE;
+					console.warn('[SignalOutcomeService] Failed to fetch entry price from Gemini:', geminiErr.message);
+				}
+				continue;
+			}
+
+			if (provider === 'twelve-data' && normSymbolInfo.exchange !== 'BINANCE' && equityProviderName) {
+				try {
+					entryPrice = await equityMarketDataService.getEntryPrice({
+						symbol: normSymbolInfo.symbol,
+						exchange: normSymbolInfo.exchange === 'UNKNOWN' ? undefined : normSymbolInfo.exchange,
+					});
+					if (entryPrice !== null) entryPriceSource = equityProviderName;
+				} catch (err) {
+					entryPriceReason = err.reason || equityMarketDataService.REASONS.UNAVAILABLE;
+					console.warn('[SignalOutcomeService] Failed to fetch equity entry price:', entryPriceReason);
 				}
 			}
-		} else if (entryPrice === null && equityProviderName) {
-			try {
-				entryPrice = await equityMarketDataService.getEntryPrice({
-					symbol: normSymbolInfo.symbol,
-					exchange: normSymbolInfo.exchange === 'UNKNOWN' ? undefined : normSymbolInfo.exchange,
-				});
-				if (entryPrice !== null) {
-					entryPriceSource = equityProviderName;
-				}
-			} catch (err) {
-				entryPriceReason = err.reason || equityMarketDataService.REASONS.UNAVAILABLE;
-				console.warn('[SignalOutcomeService] Failed to fetch equity entry price:', entryPriceReason);
-			}
+		}
+		if (entryPrice === null && suppliedEntryPrice !== null) {
+			entryPrice = suppliedEntryPrice;
+			entryPriceSource = suppliedEntryPriceSource;
+			entryPriceReason = null;
 		}
 
 		const eligibility = determineEligibility(normSymbolInfo, normAssetClass, entryPrice, equityProviderName, entryPriceReason);
@@ -477,6 +944,9 @@ async function recordSignalInternal({
 				status: isEligible ? 'pending' : 'unavailable',
 				reason: isEligible ? null : eligibility.state,
 				targetTime: new Date(now.getTime() + config.durationMs).toISOString(),
+				anchorMode: sessionContext.anchorMode,
+				anchorVersion: sessionContext.anchorVersion,
+				measurementCohort: sessionContext.measurementCohort,
 				price: null,
 				return: null,
 				maxFavorableExcursion: null,
@@ -486,6 +956,19 @@ async function recordSignalInternal({
 
 		const document = {
 			receivedAt: admin.firestore.Timestamp.fromDate(now),
+			observedAt: admin.firestore.Timestamp.fromDate(now),
+			decisionBarClosedAt: sessionContext.decisionBarClosedAt
+				? admin.firestore.Timestamp.fromDate(new Date(sessionContext.decisionBarClosedAt))
+				: null,
+			tradableAt: sessionContext.tradableAt
+				? admin.firestore.Timestamp.fromDate(new Date(sessionContext.tradableAt))
+				: null,
+			anchorMode: sessionContext.anchorMode,
+			anchorVersion: sessionContext.anchorVersion,
+			calendarId: sessionContext.calendarId,
+			calendarTimeZone: sessionContext.calendarTimeZone,
+			sessionContext: sessionContext.sessionContext,
+			measurementCohort: sessionContext.measurementCohort,
 			expiresAt: buildRetentionExpiryTimestamp(now),
 			requestId: typeof requestId === 'string' ? requestId : 'unknown',
 			source: typeof source === 'string' ? source : 'unknown',
@@ -495,8 +978,13 @@ async function recordSignalInternal({
 			timeframe: timeframe ? String(timeframe).toLowerCase() : null,
 			setupType: setupType ? String(setupType).toLowerCase() : null,
 			score: typeof score === 'number' && Number.isFinite(score) ? score : null,
+			confidenceScore: normalizeConfidenceScore(confidenceScore) ?? normalizeConfidenceScore(score),
 			side: normSide,
 			price: entryPrice,
+			observedPrice: entryPrice,
+			tradablePrice: sessionContext.sessionContext === 'crypto_24_7' || sessionContext.sessionContext === 'regular'
+				? entryPrice
+				: null,
 			entryPriceSource: entryPriceSource || null,
 			stop: typeof stop === 'number' && Number.isFinite(stop) ? stop : null,
 			target: typeof target === 'number' && Number.isFinite(target) ? target : null,
@@ -543,6 +1031,10 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 	let pendingCount = 0;
 	let errorCount = 0;
 	let regionBlockedCount = 0;
+	let leaseRenewHandle = null;
+	let leaseRenewPromise = Promise.resolve();
+	let leaseAcquired = false;
+	let leaseLost = false;
 
 	try {
 		const firestore = AlertStorageService.getFirestore();
@@ -569,6 +1061,42 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 			options.maxRetryAgeMs !== undefined ? options.maxRetryAgeMs : getRuntimeConfig().SIGNAL_OUTCOME_MAX_RETRY_AGE_MS,
 			DEFAULT_MAX_RETRY_AGE_MS
 		);
+
+		const leaseMs = options.leaseMs !== undefined && options.leaseMs !== null
+			? parseBoundedInteger(options.leaseMs, DEFAULT_LEASE_MS, MIN_LEASE_MS, MAX_LEASE_MS)
+			: getLeaseMs();
+		leaseAcquired = await acquireSweepLease(startTime, leaseMs);
+		if (!leaseAcquired) {
+			leaseHeldSkipCount++;
+			lastRunLeaseHeld = true;
+			return { scannedCount: 0, evaluatedCount: 0, skipped: true, reason: 'lease-held' };
+		}
+		lastRunLeaseHeld = false;
+
+		const renewIntervalMs = options.leaseRenewIntervalMs !== undefined && options.leaseRenewIntervalMs !== null
+			? parsePositiveInteger(options.leaseRenewIntervalMs, MIN_LEASE_RENEW_INTERVAL_MS)
+			: Math.max(MIN_LEASE_RENEW_INTERVAL_MS, Math.floor(leaseMs / 2));
+		// The renewal verdict is the only proof this process still owns the sweep,
+		// so it is recorded instead of discarded. Renewals are serialized on one
+		// chain, and `finally` awaits it, so ownership is never classified while a
+		// renewal is still in flight.
+		leaseRenewHandle = setInterval(() => {
+			leaseRenewPromise = leaseRenewPromise
+				.then(() => renewSweepLease(Date.now(), leaseMs))
+				.then((renewal) => {
+					if (renewal !== LEASE_RENEWAL.LOST) {
+						return;
+					}
+					leaseLost = true;
+					console.warn('[SignalOutcomeService] Lost signal outcome sweep lease ownership mid-sweep. Halting sweep so only one replica prices signals.');
+				})
+				.catch((error) => {
+					console.warn('[SignalOutcomeService] Lease renewal sweep failed:', error.message);
+				});
+		}, renewIntervalMs);
+		if (leaseRenewHandle && typeof leaseRenewHandle.unref === 'function') {
+			leaseRenewHandle.unref();
+		}
 
 		let query = firestore.collection(COLLECTION_NAME).where('outcomeEvaluated', '==', false);
 		if (lastEvaluatedDoc) {
@@ -597,6 +1125,9 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 		let sweepDeadlineExceeded = false;
 
 		for (const doc of snapshot.docs) {
+			if (leaseLost) {
+				break;
+			}
 			if (Date.now() - startTime >= effectiveMaxDurationMs || sweepDeadlineExceeded) {
 				console.warn(`[SignalOutcomeService] Outcome evaluation sweep max duration budget (${effectiveMaxDurationMs}ms) exceeded. Halting sweep.`);
 				break;
@@ -662,91 +1193,119 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 					break;
 				}
 
-				if (data.exchange === 'BINANCE') {
-					let abortController = null;
-					let timerId = null;
-					try {
-						abortController = new AbortController();
-						const requestOptions = {
-							timeout: Math.max(1, remainingMs),
-							signal: abortController.signal,
-						};
-						const sweepClient = getBinanceClient(requestOptions);
-						const timeoutPromise = new Promise((_, reject) => {
-							timerId = setTimeout(() => {
-								abortController.abort();
-								reject(new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`));
-							}, remainingMs);
-						});
+				for (const source of getEntryPriceSourceChain(data.exchange, data.assetClass)) {
+					if (resolvedPrice !== null) break;
+					if (source === 'mcp') continue;
+					const sourceRemainingMs = effectiveMaxDurationMs - (Date.now() - startTime);
+					if (sourceRemainingMs <= 0) {
+						allResolved = false;
+						sweepDeadlineExceeded = true;
+						break;
+					}
 
-						const klinesPromise = sweepClient.getKlines({
-							symbol: data.symbol,
-							interval: '5m',
-							startTime: receivedAtMs,
-							limit: 1,
-						});
-						const klines = await Promise.race([klinesPromise, timeoutPromise]);
-						if (Array.isArray(klines) && klines.length > 0 && klines[0][1]) {
-							const parsed = parseFloat(klines[0][1]);
-							if (Number.isFinite(parsed) && parsed > 0) {
-								resolvedPrice = parsed;
-								resolvedPriceSource = 'binance';
-							}
-						}
-						if (!resolvedPrice) {
-							const remainingAfterKlines = effectiveMaxDurationMs - (Date.now() - startTime);
-							if (remainingAfterKlines <= 0) {
-								throw new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`);
-							}
-							const avgPromise = sweepClient.getAvgPrice({ symbol: data.symbol });
-							const avgRes = await Promise.race([avgPromise, timeoutPromise]);
-							if (avgRes && avgRes.price) {
-								const parsed = parseFloat(avgRes.price);
+					if (source === 'binance' && data.exchange === 'BINANCE') {
+						let abortController = null;
+						let timerId = null;
+						try {
+							abortController = new AbortController();
+							const sweepClient = getBinanceClient({
+								timeout: Math.max(1, sourceRemainingMs),
+								signal: abortController.signal,
+							});
+							const timeoutPromise = new Promise((_, reject) => {
+								timerId = setTimeout(() => {
+									abortController.abort();
+									reject(new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`));
+								}, sourceRemainingMs);
+							});
+							const klines = await Promise.race([sweepClient.getKlines({
+								symbol: data.symbol,
+								interval: '5m',
+								startTime: receivedAtMs,
+								limit: 1,
+							}), timeoutPromise]);
+							if (Array.isArray(klines) && klines.length > 0 && klines[0][1]) {
+								const parsed = parseFloat(klines[0][1]);
 								if (Number.isFinite(parsed) && parsed > 0) {
 									resolvedPrice = parsed;
 									resolvedPriceSource = 'binance';
 								}
 							}
-						}
-					} catch (err) {
-						entryPriceError = err;
-					} finally {
-						if (timerId) clearTimeout(timerId);
-					}
-				} else {
-					try {
-						const bars = await equityMarketDataService.getHistoricalBars({
-							symbol: data.symbol,
-							exchange: data.exchange === 'UNKNOWN' ? undefined : data.exchange,
-							interval: '5m',
-							startTime: receivedAtMs,
-							endTime: receivedAtMs + 2 * 60 * 60 * 1000,
-							timeoutMs: remainingMs,
-						});
-						if (Array.isArray(bars) && bars.length > 0 && bars[0][1]) {
-							const parsed = parseFloat(bars[0][1]);
-							if (Number.isFinite(parsed) && parsed > 0) {
-								resolvedPrice = parsed;
-								resolvedPriceSource = equityProviderName;
-							}
-						}
-					} catch (err) {
-						entryPriceError = err;
-					}
-					if (!resolvedPrice) {
-						try {
-							const quotePrice = await equityMarketDataService.getEntryPrice({
-								symbol: data.symbol,
-								exchange: data.exchange === 'UNKNOWN' ? undefined : data.exchange,
-								timeoutMs: remainingMs,
-							});
-							if (typeof quotePrice === 'number' && Number.isFinite(quotePrice) && quotePrice > 0) {
-								resolvedPrice = quotePrice;
-								resolvedPriceSource = equityProviderName;
-								entryPriceError = null;
+							if (!resolvedPrice) {
+								const remainingAfterKlines = effectiveMaxDurationMs - (Date.now() - startTime);
+								if (remainingAfterKlines <= 0) throw new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`);
+								const avgRes = await Promise.race([sweepClient.getAvgPrice({ symbol: data.symbol }), timeoutPromise]);
+								if (avgRes && avgRes.price) {
+									const parsed = parseFloat(avgRes.price);
+									if (Number.isFinite(parsed) && parsed > 0) {
+										resolvedPrice = parsed;
+										resolvedPriceSource = 'binance';
+									}
+								}
 							}
 						} catch (err) {
-							if (!entryPriceError) entryPriceError = err;
+							entryPriceError = err;
+						} finally {
+							if (timerId) clearTimeout(timerId);
+						}
+						continue;
+					}
+
+					if (source === 'gemini' && data.exchange === 'BINANCE'
+						&& geminiPriceService.isGeminiGroundingEnabled({ requireGroundingFlag: true })) {
+						try {
+							const geminiResult = await geminiPriceService.fetchGeminiPrice(data.symbol, {
+								timeoutMs: sourceRemainingMs,
+								tokenUsage: data.tokenUsage,
+								requireGroundingFlag: true,
+							});
+							if (geminiResult && typeof geminiResult.price === 'number'
+								&& Number.isFinite(geminiResult.price) && geminiResult.price > 0) {
+								resolvedPrice = geminiResult.price;
+								resolvedPriceSource = 'gemini-grounding';
+							}
+							if (resolvedPrice === null) entryPriceError = new Error(REASON_GEMINI_UNAVAILABLE);
+						} catch (err) {
+							entryPriceError = err;
+						}
+						continue;
+					}
+
+					if (source === 'twelve-data' && data.exchange !== 'BINANCE' && equityProviderName) {
+						try {
+							const bars = await equityMarketDataService.getHistoricalBars({
+								symbol: data.symbol,
+								exchange: data.exchange === 'UNKNOWN' ? undefined : data.exchange,
+								interval: '5m',
+								startTime: receivedAtMs,
+								endTime: receivedAtMs + 2 * 60 * 60 * 1000,
+								timeoutMs: sourceRemainingMs,
+							});
+							if (Array.isArray(bars) && bars.length > 0 && bars[0][1]) {
+								const parsed = parseFloat(bars[0][1]);
+								if (Number.isFinite(parsed) && parsed > 0) {
+									resolvedPrice = parsed;
+									resolvedPriceSource = equityProviderName;
+								}
+							}
+						} catch (err) {
+							entryPriceError = err;
+						}
+						if (!resolvedPrice) {
+							try {
+								const quotePrice = await equityMarketDataService.getEntryPrice({
+									symbol: data.symbol,
+									exchange: data.exchange === 'UNKNOWN' ? undefined : data.exchange,
+									timeoutMs: Math.max(1, effectiveMaxDurationMs - (Date.now() - startTime)),
+								});
+								if (typeof quotePrice === 'number' && Number.isFinite(quotePrice) && quotePrice > 0) {
+									resolvedPrice = quotePrice;
+									resolvedPriceSource = equityProviderName;
+									entryPriceError = null;
+								}
+							} catch (err) {
+								if (!entryPriceError) entryPriceError = err;
+							}
 						}
 					}
 				}
@@ -1075,6 +1634,16 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 				const updateFields = { outcomes };
 				if (data.price !== undefined && data.price !== null) {
 					updateFields.price = data.price;
+					const tradableAtMs = getTimestampMillis(data.tradableAt);
+					const isRegularOrCrypto = data.sessionContext === 'crypto_24_7' || data.sessionContext === 'regular';
+					if (isRegularOrCrypto) {
+						updateFields.observedPrice = data.price;
+						updateFields.tradablePrice = data.price;
+					} else if (tradableAtMs !== null && Date.now() >= tradableAtMs) {
+						updateFields.tradablePrice = data.price;
+					} else {
+						updateFields.observedPrice = data.price;
+					}
 				}
 				if (data.entryPriceSource) {
 					updateFields.entryPriceSource = data.entryPriceSource;
@@ -1111,6 +1680,20 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 		console.warn('[SignalOutcomeService] Failed to evaluate pending outcomes:', error.message);
 		return { scannedCount, evaluatedCount, error: error.message };
 	} finally {
+		if (leaseRenewHandle) {
+			clearInterval(leaseRenewHandle);
+			leaseRenewHandle = null;
+		}
+		// Settle the renewal already in flight before deciding whether this sweep
+		// ran as the lease holder; renewSweepLease never rejects.
+		await leaseRenewPromise;
+		if (leaseAcquired) {
+			if (leaseLost) {
+				leaseHeldSkipCount++;
+				lastRunLeaseHeld = true;
+			}
+			await releaseSweepLease(Date.now());
+		}
 		isEvaluating = false;
 		lastRunAt = new Date();
 		lastRunDurationMs = Date.now() - startTime;
@@ -1150,6 +1733,21 @@ function runScheduledSweep() {
 }
 
 /**
+ * A sweep that outlives its own lease can be legitimately taken over mid-run, which
+ * is the only way two replicas both price the same pending signal. Neither value is
+ * validated against the other anywhere, and the sweep budget is Remote Config
+ * eligible while the lease is environment-only, so warn rather than clamp.
+ */
+function warnIfLeaseDoesNotOutliveSweepBudget() {
+	const leaseMs = getLeaseMs();
+	const maxDurationMs = parseTimerInterval(getRuntimeConfig().SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 30000);
+	if (leaseMs > maxDurationMs) {
+		return;
+	}
+	console.warn(`[SignalOutcomeService] SIGNAL_OUTCOME_EVALUATION_LEASE_MS (${leaseMs}ms) does not exceed the sweep duration budget (${maxDurationMs}ms). A sweep can outlive its lease and be taken over mid-run.`);
+}
+
+/**
  * Start background autonomous evaluation worker if signal outcome tracking is enabled.
  */
 function startWorker(options = {}) {
@@ -1177,6 +1775,8 @@ function startWorker(options = {}) {
 	}
 
 	activeIntervalMs = intervalMs;
+
+	warnIfLeaseDoesNotOutliveSweepBudget();
 
 	// Trigger initial sweep non-blockingly after server readiness
 	Promise.resolve().then(() => {
@@ -1249,6 +1849,7 @@ function getWorkerStatus() {
 		maxDurationMs,
 		maxRetryAttempts,
 		maxRetryAgeMs,
+		entryPriceSources: getEntryPriceSourceChains(),
 		isEvaluating,
 		lastRunAt,
 		lastRunDurationMs,
@@ -1257,6 +1858,9 @@ function getWorkerStatus() {
 		lastRunPendingCount,
 		lastRunErrorCount,
 		lastRunRegionBlockedCount,
+		lastRunLeaseHeld,
+		leaseHeldSkipCount,
+		leaseMs: getLeaseMs(),
 		timerId: workerTimer ? true : null,
 	};
 }
@@ -1402,7 +2006,9 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 
 	const retentionDays = getSignalOutcomeRetentionDays();
 	const retentionCutoffMs = Date.now() - (retentionDays * DAY_MS);
-	const effectiveFromMs = Math.max(parsedFrom.getTime(), retentionCutoffMs);
+	const effectiveFromMs = from
+		? parsedFrom.getTime()
+		: Math.max(parsedFrom.getTime(), retentionCutoffMs);
 	if (effectiveFromMs > parsedTo.getTime()) {
 		return createEmptyMetricsSummary();
 	}
@@ -1805,16 +2411,20 @@ function getDocTimestamp(data) {
 		return null;
 	}
 
-	if (data.receivedAt && typeof data.receivedAt.toDate === 'function') {
-		return data.receivedAt.toDate().toISOString();
+	return getTimestampIso(data.receivedAt);
+}
+
+function getTimestampIso(value) {
+	if (value && typeof value.toDate === 'function') {
+		return value.toDate().toISOString();
 	}
 
-	if (data.receivedAt instanceof Date) {
-		return data.receivedAt.toISOString();
+	if (value instanceof Date) {
+		return value.toISOString();
 	}
 
-	if (typeof data.receivedAt === 'string' && !Number.isNaN(Date.parse(data.receivedAt))) {
-		return new Date(data.receivedAt).toISOString();
+	if (typeof value === 'string' && !Number.isNaN(Date.parse(value))) {
+		return new Date(value).toISOString();
 	}
 
 	return null;
@@ -1845,7 +2455,7 @@ function formatOutcomeDocument(doc) {
 	const data = doc.data() || {};
 	const receivedAt = getDocTimestamp(data);
 
-	return {
+	const formatted = {
 		id: doc.id,
 		receivedAt,
 		requestId: typeof data.requestId === 'string' ? data.requestId : 'unknown',
@@ -1870,6 +2480,24 @@ function formatOutcomeDocument(doc) {
 		tokenUsage: summarizeTokenUsage(data.tokenUsage),
 		processingTimeMs: typeof data.processingTimeMs === 'number' && Number.isFinite(data.processingTimeMs) ? data.processingTimeMs : null,
 	};
+
+	if (Object.prototype.hasOwnProperty.call(data, 'sessionContext')) {
+		Object.assign(formatted, {
+			observedAt: getTimestampIso(data.observedAt),
+			decisionBarClosedAt: getTimestampIso(data.decisionBarClosedAt),
+			tradableAt: getTimestampIso(data.tradableAt),
+			anchorMode: typeof data.anchorMode === 'string' ? data.anchorMode : null,
+			anchorVersion: typeof data.anchorVersion === 'string' ? data.anchorVersion : null,
+			calendarId: typeof data.calendarId === 'string' ? data.calendarId : null,
+			calendarTimeZone: typeof data.calendarTimeZone === 'string' ? data.calendarTimeZone : null,
+			sessionContext: typeof data.sessionContext === 'string' ? data.sessionContext : null,
+			measurementCohort: typeof data.measurementCohort === 'string' ? data.measurementCohort : null,
+			observedPrice: typeof data.observedPrice === 'number' && Number.isFinite(data.observedPrice) ? data.observedPrice : null,
+			tradablePrice: typeof data.tradablePrice === 'number' && Number.isFinite(data.tradablePrice) ? data.tradablePrice : null,
+		});
+	}
+
+	return formatted;
 }
 
 function matchesOutcomeFilters(outcome, { symbol, exchange, status, window, from, to }) {
@@ -2045,8 +2673,316 @@ async function listOutcomes({
 	};
 }
 
+const CALIBRATION_DEFAULT_BUCKETS = [
+	{ range: '0.70-0.75', min: 0.70, max: 0.75 },
+	{ range: '0.75-0.80', min: 0.75, max: 0.80 },
+	{ range: '0.80-0.85', min: 0.80, max: 0.85 },
+	{ range: '0.85-0.90', min: 0.85, max: 0.90 },
+	{ range: '0.90-1.00', min: 0.90, max: 1.00 },
+];
+
+function getSignalConfidenceScore(doc) {
+	const conf = normalizeConfidenceScore(doc?.confidenceScore);
+	if (conf !== null) return conf;
+	const sc = normalizeConfidenceScore(doc?.score);
+	if (sc !== null) return sc;
+	return null;
+}
+
+/**
+ * Computes confidence calibration buckets, hit rates, and threshold suggestion from evaluated signal outcome docs.
+ */
+function computeCalibration(docs = [], options = {}) {
+	const targetWindow = (options.window && typeof options.window === 'string' ? options.window.toLowerCase() : '4h');
+	const targetWindowKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === targetWindow) || targetWindow;
+	const minOutcomes = options.minOutcomes !== undefined ? options.minOutcomes : 20;
+
+	const scoredDocs = [];
+	let hasSub70 = false;
+	for (const doc of docs) {
+		if (!doc) continue;
+		const targetOutcome = doc.outcomes && doc.outcomes[targetWindowKey];
+		if (!targetOutcome || targetOutcome.status !== 'evaluated') continue;
+		const score = getSignalConfidenceScore(doc);
+		if (score === null) continue;
+		if (score < 0.70) hasSub70 = true;
+		scoredDocs.push({ doc, score });
+	}
+
+	function isTargetHit(doc) {
+		const outcome = doc.outcomes && doc.outcomes[targetWindowKey];
+		if (!outcome) return false;
+		if (outcome.targetHit === true || outcome.firstHit === 'target') return true;
+		const hasTargetBarrier = typeof doc.target === 'number' && Number.isFinite(doc.target) && doc.target > 0;
+		if (!hasTargetBarrier && typeof outcome.return === 'number' && outcome.return > 0) return true;
+		return false;
+	}
+
+	const bucketDefs = hasSub70
+		? [{ range: '<0.70', min: 0.00, max: 0.70 }, ...CALIBRATION_DEFAULT_BUCKETS]
+		: CALIBRATION_DEFAULT_BUCKETS.map(b => ({ ...b }));
+
+	const buckets = bucketDefs.map(def => {
+		const matching = scoredDocs.filter(({ score }) => {
+			if (def.max === 1.00) {
+				return score >= def.min && score <= def.max;
+			}
+			return score >= def.min && score < def.max;
+		});
+
+		const bucketDocs = matching.map(m => m.doc);
+		const count = bucketDocs.length;
+
+		// 1h returns
+		const docs1h = bucketDocs.filter(d => d.outcomes && d.outcomes['1h'] && d.outcomes['1h'].status === 'evaluated' && typeof d.outcomes['1h'].return === 'number' && Number.isFinite(d.outcomes['1h'].return));
+		const avgReturn1h = docs1h.length > 0
+			? parseFloat((docs1h.reduce((acc, d) => acc + d.outcomes['1h'].return, 0) / docs1h.length).toFixed(2))
+			: null;
+
+		// 4h returns
+		const docs4h = bucketDocs.filter(d => d.outcomes && d.outcomes['4h'] && d.outcomes['4h'].status === 'evaluated' && typeof d.outcomes['4h'].return === 'number' && Number.isFinite(d.outcomes['4h'].return));
+		const avgReturn4h = docs4h.length > 0
+			? parseFloat((docs4h.reduce((acc, d) => acc + d.outcomes['4h'].return, 0) / docs4h.length).toFixed(2))
+			: null;
+
+		// Target hit rate for targetWindowKey
+		const targetHits = bucketDocs.filter(d => isTargetHit(d)).length;
+		const targetHitRate = bucketDocs.length > 0
+			? parseFloat((targetHits / bucketDocs.length).toFixed(2))
+			: 0;
+
+		return {
+			range: def.range,
+			count,
+			avgReturn1h,
+			avgReturn4h,
+			targetHitRate,
+			_min: def.min,
+			_max: def.max,
+		};
+	});
+
+	const totalScoredAlerts = scoredDocs.length;
+	const cleanBuckets = buckets.map(({ _min, _max, ...rest }) => rest);
+
+	if (totalScoredAlerts < minOutcomes) {
+		return {
+			available: false,
+			totalScoredAlerts,
+			buckets: cleanBuckets,
+			suggestedThreshold: null,
+			suggestedThresholdRationale: `Insufficient data: fewer than ${minOutcomes} evaluated outcomes with confidence scores (found ${totalScoredAlerts})`,
+		};
+	}
+
+	// Evaluate candidate thresholds (bucket minimums) based on cumulative population (score >= threshold)
+	const candidates = buckets.map(b => {
+		const cumulativeDocs = scoredDocs.filter(d => d.score >= b._min);
+		const cumulativeHits = cumulativeDocs.filter(d => isTargetHit(d.doc)).length;
+		const cumulativeHitRate = cumulativeDocs.length > 0
+			? parseFloat((cumulativeHits / cumulativeDocs.length).toFixed(4))
+			: 0;
+		return {
+			bucket: b,
+			threshold: b._min,
+			cumulativeCount: cumulativeDocs.length,
+			cumulativeHitRate,
+		};
+	});
+
+	const minCandidateSample = options.minCandidateSample !== undefined ? options.minCandidateSample : Math.min(minOutcomes, 5);
+
+	// Find the lowest candidate threshold where both the individual bucket and cumulative population achieve >= 50% hit rate with sufficient sample
+	const qualifyingIndex = candidates.findIndex(c =>
+		c.cumulativeCount >= minCandidateSample &&
+		c.cumulativeHitRate >= 0.50 &&
+		c.bucket.targetHitRate >= 0.50
+	);
+	if (qualifyingIndex === -1) {
+		return {
+			available: true,
+			totalScoredAlerts,
+			buckets: cleanBuckets,
+			suggestedThreshold: null,
+			suggestedThresholdRationale: `No confidence threshold achieved ≥50% cumulative target hit rate at ${targetWindowKey} window`,
+		};
+	}
+
+	const qualifyingCandidate = candidates[qualifyingIndex];
+	let suggestedThreshold = qualifyingCandidate.threshold;
+
+	// Linearly interpolate if a preceding bucket with data had < 50% hit rate
+	if (qualifyingIndex > 0) {
+		const prevCandidate = candidates[qualifyingIndex - 1];
+		if (prevCandidate && prevCandidate.bucket.count > 0 && prevCandidate.bucket.targetHitRate < 0.50 && qualifyingCandidate.bucket.targetHitRate > prevCandidate.bucket.targetHitRate) {
+			const interpolated = qualifyingCandidate.threshold +
+				((0.50 - prevCandidate.bucket.targetHitRate) / (qualifyingCandidate.bucket.targetHitRate - prevCandidate.bucket.targetHitRate)) *
+				(qualifyingCandidate.bucket._max - qualifyingCandidate.bucket._min);
+			const roundedInterpolated = parseFloat(interpolated.toFixed(2));
+
+			// Verify cumulative performance and sample size at the interpolated threshold
+			const atOrAboveDocs = scoredDocs.filter(d => d.score >= roundedInterpolated);
+			const atOrAboveHits = atOrAboveDocs.filter(d => isTargetHit(d.doc)).length;
+			const atOrAboveHitRate = atOrAboveDocs.length > 0 ? (atOrAboveHits / atOrAboveDocs.length) : 0;
+			if (atOrAboveDocs.length >= minCandidateSample && atOrAboveHitRate >= 0.50) {
+				suggestedThreshold = roundedInterpolated;
+			}
+		}
+	}
+
+	const finalAtOrAboveDocs = scoredDocs.filter(d => d.score >= suggestedThreshold);
+	if (finalAtOrAboveDocs.length < minCandidateSample) {
+		return {
+			available: true,
+			totalScoredAlerts,
+			buckets: cleanBuckets,
+			suggestedThreshold: null,
+			suggestedThresholdRationale: `No confidence threshold achieved ≥50% cumulative target hit rate at ${targetWindowKey} window`,
+		};
+	}
+	const finalAtOrAboveHits = finalAtOrAboveDocs.filter(d => isTargetHit(d.doc)).length;
+	const finalHitRate = finalAtOrAboveDocs.length > 0 ? (finalAtOrAboveHits / finalAtOrAboveDocs.length) : qualifyingCandidate.cumulativeHitRate;
+	const hitRatePct = Math.round(finalHitRate * 100);
+	const suggestedThresholdRationale = `Alerts at ${suggestedThreshold}+ show ${hitRatePct}%+ target hit rate at ${targetWindowKey} window`;
+
+	return {
+		available: true,
+		totalScoredAlerts,
+		buckets: cleanBuckets,
+		suggestedThreshold,
+		suggestedThresholdRationale,
+	};
+}
+
+/**
+ * Retrieve calibration data and threshold recommendation for evaluated signal outcomes.
+ */
+async function getOutcomesCalibration({
+	symbol,
+	exchange,
+	window,
+	from,
+	to,
+	limit,
+	signal,
+} = {}) {
+	if (!isEnabled()) {
+		const err = new Error('Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.');
+		err.code = 'FEATURE_DISABLED';
+		throw err;
+	}
+
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError(new Error('Firestore is unavailable'));
+	}
+
+	const parsedFrom = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+	const parsedTo = to ? new Date(to) : new Date();
+
+	const retentionDays = getSignalOutcomeRetentionDays();
+	const retentionCutoffMs = Date.now() - (retentionDays * DAY_MS);
+	const effectiveFromMs = from
+		? parsedFrom.getTime()
+		: Math.max(parsedFrom.getTime(), retentionCutoffMs);
+	if (effectiveFromMs > parsedTo.getTime()) {
+		return computeCalibration([], { window, minOutcomes: 20 });
+	}
+	const effectiveFrom = new Date(effectiveFromMs);
+
+	const targetWindow = (window && typeof window === 'string' ? window.toLowerCase() : '4h');
+	const targetWindowKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === targetWindow) || targetWindow;
+
+	const targetLimit = limit || 1000;
+	const batchSize = Math.min(targetLimit, 100);
+	const matchedDocs = [];
+	let lastDoc = null;
+
+	const hasFilters = Boolean(symbol || exchange);
+	const maxScannedDocs = Math.max(targetLimit * 5, 2000);
+	let totalScanned = 0;
+
+	while (matchedDocs.length < targetLimit) {
+		if (signal && signal.aborted) {
+			break;
+		}
+
+		let query = firestore
+			.collection(COLLECTION_NAME)
+			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))
+			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo))
+			.orderBy('receivedAt', 'desc')
+			.limit(batchSize);
+
+		if (lastDoc) {
+			query = query.startAfter(lastDoc);
+		}
+
+		let snapshot;
+		try {
+			snapshot = await query.get();
+		} catch (error) {
+			throw createStorageUnavailableError(error);
+		}
+
+		if (!snapshot || snapshot.empty) {
+			break;
+		}
+
+		totalScanned += snapshot.docs.length;
+
+		for (const doc of snapshot.docs) {
+			const docData = doc.data() || {};
+			if (isRetentionExpired(docData)) {
+				continue;
+			}
+			if (hasFilters) {
+				const formatted = {
+					...docData,
+					id: doc.id,
+					receivedAt: getDocTimestamp(docData),
+				};
+				if (!matchesOutcomeFilters(formatted, { symbol, exchange, from, to })) {
+					continue;
+				}
+			}
+
+			// Apply limit after selecting calibration-eligible outcomes:
+			// 1. Requested window outcome must be present and evaluated
+			const targetOutcome = docData.outcomes && docData.outcomes[targetWindowKey];
+			if (!targetOutcome || targetOutcome.status !== 'evaluated') {
+				continue;
+			}
+
+			// 2. Must possess a valid normalized confidence score in [0, 1]
+			if (getSignalConfidenceScore(docData) === null) {
+				continue;
+			}
+
+			matchedDocs.push(doc);
+			if (matchedDocs.length >= targetLimit) {
+				break;
+			}
+		}
+
+		if (snapshot.docs.length < batchSize || totalScanned >= maxScannedDocs) {
+			break;
+		}
+		lastDoc = snapshot.docs[snapshot.docs.length - 1];
+	}
+
+	const docs = matchedDocs.map(doc => ({
+		...doc.data(),
+		id: doc.id,
+		receivedAt: getDocTimestamp(doc.data()),
+	}));
+
+	return computeCalibration(docs, { window, minOutcomes: 20 });
+}
+
 function _resetForTesting() {
 	lastRetentionWarningValue = null;
+	lastEntryPriceSourcesWarningValue = null;
 	binanceClient = null;
 	lastEvaluatedDoc = null;
 	isEvaluating = false;
@@ -2059,23 +2995,36 @@ function _resetForTesting() {
 	lastRunPendingCount = 0;
 	lastRunErrorCount = 0;
 	lastRunRegionBlockedCount = 0;
+	lastRunLeaseHeld = false;
+	leaseHeldSkipCount = 0;
 }
 
 module.exports = {
 	isEnabled,
 	recordSignal,
+	getSessionContext,
 	evaluatePendingOutcomes,
 	getMetricsSummary,
 	summarizeOutcomes,
 	listOutcomes,
+	computeCalibration,
+	getOutcomesCalibration,
 	normalizeSide,
 	normalizeSymbolAndExchange,
 	startWorker,
 	stopWorker,
 	getWorkerStatus,
 	getWorkerRole,
+	getLeaseMs,
+	acquireSweepLease,
+	renewSweepLease,
+	releaseSweepLease,
+	LEASE_RENEWAL,
+	parseEntryPriceSources,
+	getEntryPriceSourceChains,
 	COLLECTION_NAME,
 	HEARTBEAT_COLLECTION_NAME,
+	LOCK_COLLECTION_NAME,
 	STORAGE_UNAVAILABLE_CODE,
 	INVALID_CURSOR_MESSAGE,
 	_resetForTesting,

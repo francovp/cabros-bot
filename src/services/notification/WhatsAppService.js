@@ -4,12 +4,61 @@
  */
 
 const NotificationChannel = require('./NotificationChannel');
-const { sendWithRetry } = require('../../lib/retryHelper');
 const { splitMessageIntoChunks } = require('../../lib/messageHelper');
 const WhatsAppMarkdownFormatter = require('./formatters/whatsappMarkdownFormatter');
 const { isPreviewEnvironment } = require('../../lib/deploymentEnvironment');
 
 const GREEN_API_MESSAGE_LIMIT = 20000;
+
+const WHATSAPP_MAX_RETRIES = 3;
+const WHATSAPP_FALLBACK_RETRY_DELAY_MS = 1000;
+const WHATSAPP_MAX_RETRY_DELAY_MS = 10000;
+const WHATSAPP_MAX_TOTAL_RETRY_WAIT_MS = 10000;
+
+const RETRYABLE_CATEGORIES = new Set(['RATE_LIMITED', 'TIMEOUT', 'PROVIDER_ERROR']);
+
+function parseRetryAfterHeader(value) {
+	if (typeof value !== 'string' || !value) {
+		return null;
+	}
+	const trimmed = value.trim();
+	if (!trimmed) {
+		return null;
+	}
+	// Honor decimal seconds and integer seconds, but ignore HTTP-date values.
+	if (/^\d+(\.\d+)?$/.test(trimmed)) {
+		const seconds = Number(trimmed);
+		if (Number.isFinite(seconds) && seconds >= 0) {
+			return Math.max(1, Math.round(seconds * 1000));
+		}
+	}
+	return null;
+}
+
+function isRetryableResult(result) {
+	if (!result) {
+		return true; // Treat thrown errors as retryable transport failures.
+	}
+	if (result.aborted) {
+		return false;
+	}
+	const category = result.category;
+	if (category === 'UNAUTHORIZED' || category === 'CLIENT_ERROR') {
+		return false;
+	}
+	if (category === 'AMBIGUOUS_OUTCOME' || category === 'INVALID_RESPONSE') {
+		return false;
+	}
+	return RETRYABLE_CATEGORIES.has(category);
+}
+
+function extractRetryAfterMs(result) {
+	if (!result) {
+		return null;
+	}
+	const headerValue = typeof result.retryAfterHeader === 'string' ? result.retryAfterHeader : null;
+	return parseRetryAfterHeader(headerValue);
+}
 
 // GreenAPI /sendTemplate 4xx error bodies that indicate the template is definitively broken.
 // On these, we fall back to freeform; other 4xx (auth, rate-limit) remain non-fallback failures.
@@ -94,6 +143,20 @@ class WhatsAppService extends NotificationChannel {
 	 */
 	isEnabled() {
 		return this.enabled;
+	}
+
+	/**
+	 * Check if WhatsApp is configured for alert delivery by operator intent.
+	 * Requires the ENABLE_WHATSAPP_ALERTS flag, API URL, API key, and chat ID.
+	 * @returns {boolean}
+	 */
+	isConfigured() {
+		return (
+			process.env.ENABLE_WHATSAPP_ALERTS === 'true' &&
+			Boolean(this.apiUrl || process.env.WHATSAPP_API_URL) &&
+			Boolean(this.apiKey || process.env.WHATSAPP_API_KEY) &&
+			Boolean(this.chatId || process.env.WHATSAPP_CHAT_ID || process.env.WHATSAPP_PREVIEW_CHAT_ID)
+		);
 	}
 
 	/**
@@ -355,6 +418,7 @@ class WhatsAppService extends NotificationChannel {
 					success: false,
 					channel: 'whatsapp',
 					error: options.signal.reason?.message || options.signal.reason || 'Operation aborted',
+					category: 'TIMEOUT',
 					aborted: true,
 				};
 			}
@@ -383,16 +447,10 @@ class WhatsAppService extends NotificationChannel {
 				return this._sendChunkedMessage(messageChunks, chatId, options);
 			}
 
-			return sendWithRetry(
-				({ signal } = {}) => this._sendMessageChunk(messageChunks[0], {
-					chatId,
-					includePreview: true,
-					signal,
-				}),
-				3,
-				this.logger,
-				{ signal: options.signal },
-			);
+			return this._sendChunkWithRetry(messageChunks[0], {
+				chatId,
+				includePreview: true,
+			}, options);
 		} catch (error) {
 			const errorMsg = this._sanitizeText((error && error.message) || String(error));
 			this.logger?.error?.(`Failed to send to WhatsApp: ${errorMsg}`);
@@ -406,6 +464,158 @@ class WhatsAppService extends NotificationChannel {
 	}
 
 	/**
+	 * Send a single WhatsApp chunk with a category-aware retry loop.
+	 * Only RATE_LIMITED, TIMEOUT, and 5xx PROVIDER_ERROR responses are retried;
+	 * UNAUTHORIZED, CLIENT_ERROR, AMBIGUOUS_OUTCOME, and INVALID_RESPONSE are
+	 * treated as terminal after the first attempt to prevent duplicate delivery
+	 * and wasted latency (parity with TelegramService / DiscordService).
+	 * @private
+	 * @param {string} message - Pre-formatted WhatsApp payload
+	 * @param {Object} chunkOptions - Chunk delivery options (chatId, includePreview)
+	 * @param {Object} options - Top-level delivery options (signal)
+	 * @returns {Promise<Object>} SendResult with attemptCount/statusCode/category telemetry
+	 */
+	async _sendChunkWithRetry(message, chunkOptions, options = {}) {
+		const startedAt = Date.now();
+		const signal = options.signal;
+		const sendChunk = ({ signal: innerSignal } = {}) => this._sendMessageChunk(message, {
+			...chunkOptions,
+			signal: innerSignal,
+		});
+
+		let lastResult = null;
+		let totalAttempts = 0;
+		let totalWaitMs = 0;
+
+		for (let attempt = 1; attempt <= WHATSAPP_MAX_RETRIES; attempt += 1) {
+			if (signal?.aborted) {
+				return this._finalizeAbortedResult(lastResult, totalAttempts, startedAt, signal);
+			}
+
+			let result;
+			try {
+				result = await sendChunk({ signal });
+			} catch (error) {
+				const isAbort = error?.name === 'AbortError'
+					|| error?.name === 'AbortSignalError'
+					|| (signal && signal.aborted);
+				if (isAbort) {
+					return {
+						success: false,
+						channel: 'whatsapp',
+						error: signal?.reason?.message || signal?.reason || error.message || 'Operation aborted',
+						category: 'TIMEOUT',
+						attemptCount: totalAttempts + 1,
+						durationMs: Date.now() - startedAt,
+						aborted: true,
+					};
+				}
+				// Transport-level throw — treat as retryable PROVIDER_ERROR.
+				result = {
+					success: false,
+					channel: 'whatsapp',
+					error: this._sanitizeText(error?.message || String(error)),
+					category: 'PROVIDER_ERROR',
+				};
+			}
+
+			totalAttempts += 1;
+			lastResult = result;
+
+			if (result.success) {
+				return {
+					...result,
+					attemptCount: totalAttempts,
+					durationMs: Date.now() - startedAt,
+				};
+			}
+
+			if (result.aborted) {
+				return {
+					...result,
+					attemptCount: totalAttempts,
+					durationMs: Date.now() - startedAt,
+				};
+			}
+
+			const isLastAttempt = attempt >= WHATSAPP_MAX_RETRIES;
+			if (!isRetryableResult(result) || isLastAttempt) {
+				return {
+					...result,
+					attemptCount: totalAttempts,
+					durationMs: Date.now() - startedAt,
+				};
+			}
+
+			const headerDelayMs = extractRetryAfterMs(result);
+			const delayMs = Math.min(
+				headerDelayMs ?? WHATSAPP_FALLBACK_RETRY_DELAY_MS * Math.pow(2, attempt - 1),
+				WHATSAPP_MAX_RETRY_DELAY_MS,
+			);
+			if (totalWaitMs + delayMs > WHATSAPP_MAX_TOTAL_RETRY_WAIT_MS) {
+				this.logger?.warn?.(`WhatsApp retry wait (${delayMs}ms) exceeds total budget; aborting retries`);
+				return {
+					...result,
+					attemptCount: totalAttempts,
+					durationMs: Date.now() - startedAt,
+				};
+			}
+
+			this.logger?.warn?.(
+				`WhatsApp send failed (${result.statusCode || result.category || 'transport error'}); retrying in ${delayMs}ms`,
+			);
+
+			try {
+				await this._sleep(delayMs, signal);
+			} catch (abortError) {
+				return this._finalizeAbortedResult(result, totalAttempts, startedAt, signal);
+			}
+			totalWaitMs += delayMs;
+		}
+
+		return {
+			...lastResult,
+			success: false,
+			channel: 'whatsapp',
+			attemptCount: totalAttempts,
+			durationMs: Date.now() - startedAt,
+		};
+	}
+
+	_finalizeAbortedResult(lastResult, attemptCount, startedAt, signal) {
+		return {
+			...lastResult,
+			success: false,
+			channel: 'whatsapp',
+			error: signal?.reason?.message || signal?.reason || lastResult?.error || 'Operation aborted',
+			category: lastResult?.category || 'TIMEOUT',
+			attemptCount,
+			durationMs: Date.now() - startedAt,
+			aborted: true,
+		};
+	}
+
+	_sleep(ms, signal) {
+		if (!ms || ms <= 0) {
+			return Promise.resolve();
+		}
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => {
+				signal?.removeEventListener('abort', onAbort);
+				resolve();
+			}, ms);
+			const onAbort = () => {
+				clearTimeout(timer);
+				const error = new Error(signal?.reason?.message || signal?.reason || 'Operation aborted');
+				error.name = 'AbortError';
+				reject(error);
+			};
+			signal?.addEventListener('abort', onAbort, { once: true });
+		});
+	}
+
+	/**
+
 	 * Format alert text for WhatsApp delivery
 	 * @private
 	 * @param {Object} alert - Alert object
@@ -414,12 +624,13 @@ class WhatsAppService extends NotificationChannel {
 	async _formatAlert(alert) {
 		// Format message for WhatsApp.
 		// If enriched is an object, use formatEnriched (async with URL shortening), otherwise format the text.
+		const signalClass = alert.signalClass || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.signalClass : undefined);
 		let formattedText;
 		if (alert.enriched && typeof alert.enriched === 'object') {
-			formattedText = await this.formatter.formatEnriched(alert.enriched);
+			formattedText = await this.formatter.formatEnriched(alert.enriched, { signalClass });
 			console.debug('Formatted enriched WhatsApp message length:', formattedText.length);
 		} else {
-			formattedText = this.formatter.format(alert.enriched || alert.text);
+			formattedText = this.formatter.format(alert.enriched || alert.text, { signalClass });
 			console.debug('Formatted WhatsApp message length:', formattedText.length);
 		}
 
@@ -469,12 +680,16 @@ class WhatsAppService extends NotificationChannel {
 					const rawText = await response.text().catch(() => '');
 					const { category, sanitizedMessage } = this._classifyAndSanitizeHttpError(response.status, rawText);
 					this.logger?.error?.(`GreenAPI error: ${response.status} ${category}`);
+					const retryAfterHeader = response.status === 429
+						? (response.headers?.get?.('Retry-After') ?? null)
+						: null;
 					return {
 						success: false,
 						channel: 'whatsapp',
 						error: sanitizedMessage,
 						category,
 						statusCode: response.status,
+						retryAfterHeader,
 					};
 				}
 
@@ -562,10 +777,13 @@ class WhatsAppService extends NotificationChannel {
 	}
 
 	/**
-	 * Send a WhatsApp message that has been split into multiple chunks.
-	 * Each chunk retries independently to avoid duplicating already delivered parts.
-	 * @private
-	 * @param {Array<string>} messageChunks - Ordered message chunks
+	* Send a WhatsApp message that has been split into multiple chunks.
+	* Each chunk retries independently to avoid duplicating already delivered parts,
+	* and only transient categories (RATE_LIMITED, TIMEOUT, 5xx PROVIDER_ERROR) are
+	* retried — terminal categories stop the chunk loop immediately to prevent
+	* duplicate delivery and waste GreenAPI quota.
+	* @private
+	* @param {Array<string>} messageChunks - Ordered message chunks
 	 * @param {string} chatId - Destination WhatsApp chat/group ID
 	 * @returns {Promise<{success: boolean, channel: string, messageId?: string, messageIds?: string[], messageCount?: number, error?: string, category?: string}>}
 	 */
@@ -573,19 +791,17 @@ class WhatsAppService extends NotificationChannel {
 		const messageIds = [];
 		const startedAt = Date.now();
 		let totalAttempts = 0;
+		const isChunked = messageChunks.length > 1;
+		const resumeFromChunk = Number.isInteger(options.startChunk) && options.startChunk > 0
+			? Math.min(options.startChunk, messageChunks.length - 1)
+			: 0;
 
-		for (let index = 0; index < messageChunks.length; index += 1) {
+		for (let index = resumeFromChunk; index < messageChunks.length; index += 1) {
 			const includePreview = index === 0;
-			const result = await sendWithRetry(
-				({ signal } = {}) => this._sendMessageChunk(messageChunks[index], {
-					chatId,
-					includePreview,
-					signal,
-				}),
-				3,
-				this.logger,
-				{ signal: options.signal },
-			);
+			const result = await this._sendChunkWithRetry(messageChunks[index], {
+				chatId,
+				includePreview,
+			}, options);
 			totalAttempts += result.attemptCount || 1;
 
 			if (!result.success) {
@@ -597,10 +813,15 @@ class WhatsAppService extends NotificationChannel {
 					messageCount: messageIds.length,
 					error: result.error,
 					category: result.category || 'PROVIDER_ERROR',
+					statusCode: result.statusCode,
 					attemptCount: totalAttempts,
 					durationMs: Date.now() - startedAt,
-					splitMessageCount: messageChunks.length,
-					failedPart: index + 1,
+					...(isChunked ? {
+						splitMessageCount: messageChunks.length,
+						failedPart: index + 1,
+						ambiguous: result.ambiguous === true,
+						resumedFromChunk: resumeFromChunk,
+					} : {}),
 				};
 			}
 
@@ -617,7 +838,10 @@ class WhatsAppService extends NotificationChannel {
 			messageCount: messageIds.length,
 			attemptCount: totalAttempts,
 			durationMs: Date.now() - startedAt,
-			splitMessageCount: messageChunks.length,
+			...(isChunked ? {
+				splitMessageCount: messageChunks.length,
+				resumedFromChunk: resumeFromChunk,
+			} : {}),
 		};
 	}
 }
