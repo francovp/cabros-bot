@@ -100,7 +100,7 @@ curl http://localhost/healthcheck
 
 ### Production Smoke Probe
 
-A scheduled GitHub Actions workflow (`.github/workflows/production-smoke-probe.yml`) probes the Render production deployment every 15 minutes and pages the Telegram admin chat on persistent failures. The probe runs `ops/production-smoke-probe.sh`, which:
+A scheduled GitHub Actions workflow (`.github/workflows/production-smoke-probe.yml`) probes the Render production deployment every 15 minutes. **A failing probe fails the scheduled job, and GitHub's own notification for a failed scheduled workflow is the alert channel — this workflow has no paging step.** (The separate external uptime monitor below *does* page, on a DOWN transition only.) The probe runs `ops/production-smoke-probe.sh`, which:
 
 - Hits `/healthcheck` (must return HTTP 200).
 - Hits `/api/status` with the `x-api-key` header from the `WEBHOOK_API_KEY` GitHub secret.
@@ -126,8 +126,8 @@ Configure the probe via GitHub repository secrets:
 | Secret | Purpose |
 | --- | --- |
 | `WEBHOOK_API_KEY` | Sent via the `x-api-key` header. Never appears in URLs, logs, or job summaries. |
-| `TELEGRAM_BOT_TOKEN` | (Optional) Enables admin paging on persistent failures. |
-| `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` | (Optional) Target chat id for admin paging. |
+
+There are no Telegram secrets for this workflow. An earlier revision documented `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` and `PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES` as optional paging controls, but no step read any of them, so all three were removed rather than left wired up to imply a page that never fires.
 
 Exit codes:
 
@@ -150,7 +150,7 @@ ops/production-smoke-probe.sh \
   --require-enabled-flags tradingViewConfluenceEnrichment,langfusePrompts
 ```
 
-**A flag absent from the deployed build counts as disabled.** The check reads `featureFlags.<name> // false`, so a stale build that predates the flag cannot satisfy the assertion. Treating absence as success would let an old deployment look compliant — the same shape-is-not-readiness trap this repository has hit repeatedly.
+**A flag absent from the deployed build counts as disabled.** The comparison demands the literal string `true`, so an absent key — which yields an empty value, not `true` — can never satisfy the assertion, and a stale build that predates the flag cannot pass. Treating absence as success would let an old deployment look compliant: the same shape-is-not-readiness trap this repository has hit repeatedly. Note that the jq default (`// false`) is *not* what enforces this; it only labels the diagnostic as `value=false` instead of blank. `tests/unit/production-smoke-probe.test.js` pins both halves — that an absent flag exits `7`, and that it is reported as `value=false`.
 
 Verified live verdicts against production when this check was added:
 

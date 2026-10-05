@@ -187,8 +187,11 @@ if [[ -n "$REQUIRE_ENABLED_FLAGS" ]]; then
 	for flag in $REQUIRE_ENABLED_FLAGS; do
 		flag_trimmed="${flag// /}"
 		[[ -z "$flag_trimmed" ]] && continue
-		# `// false` makes an absent key a failure: a flag the deployed build does not
-		# expose is not enabled, so absence must never satisfy a production-intent check.
+		# Absence is disabled because the comparison demands the literal string
+		# `true`, so an absent key (`null`, or an empty jq default) can never satisfy a
+		# production-intent check — a stale build that does not know the flag at all
+		# must not pass. `// false` only labels the diagnostic with `value=false`
+		# instead of a blank, so do not read it as the enforcement point.
 		value="$(jq -r ".featureFlags.\"$flag_trimmed\" // false" "$PROBE_TMPDIR/status.json")"
 		if [[ "$value" != "true" ]]; then
 			DISABLED_FLAGS="${DISABLED_FLAGS:+$DISABLED_FLAGS,}$flag_trimmed(value=$value)"

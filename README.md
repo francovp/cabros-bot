@@ -364,7 +364,7 @@ Verify the rollout on the deployed service rather than trusting the flag:
 
 ```bash
 curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
-  https://cabros-bot-telegram.onrender.com/api/capabilities \
+  https://cabros-crypto-bot-telegram.onrender.com/api/capabilities \
   | jq '{flag: .featureFlags.langfusePrompts,
          dep: .dependencies.langfuse | {status, ready, label, promptsSucceeded,
                                          localFallbackCount, lastErrorReason,
@@ -432,13 +432,13 @@ The secretless monitor above proves only that *something* answers `/healthcheck`
 
 The authenticated layer is `ops/production-smoke-probe.sh`, run every 15 minutes by `.github/workflows/production-smoke-probe.yml`. It asserts `service.commit` equals the latest `master` SHA (exit `5` on a stale deploy), that named dependencies are `ready` (exit `6`), and — with `PRODUCTION_REQUIRE_ENABLED_FLAGS` — that named `featureFlags` are `true` (exit `7`, `FLAG_DISABLED`).
 
-**A flag absent from the deployed build counts as disabled.** The check reads `featureFlags.<name> // false`, so a stale build cannot satisfy it; treating absence as success would let an old deployment look compliant. That distinction matters because a `render.yaml` `value: true` is a *declaration of intent* and production reality is a separate fact — which is how `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` was declared `true` in the Blueprint while production reported `false` (issue #1109).
+**A flag absent from the deployed build counts as disabled.** The comparison demands the literal string `true`, so an absent key cannot satisfy it and a stale build cannot look compliant — the same shape-is-not-readiness trap this repository has hit repeatedly. The jq default (`// false`) only labels the diagnostic `value=false`; it is not the enforcement point. That distinction matters because a `render.yaml` `value: true` is a *declaration of intent* and production reality is a separate fact — which is how `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` was declared `true` in the Blueprint while production reported `false` (issue #1109).
 
 Set the `PRODUCTION_REQUIRE_ENABLED_FLAGS` repository variable to a comma-separated flag list; it defaults to empty, so it adds no failure mode until you enable it. Every failure message ends with `(probed <base_url>)`, so a misconfigured target is never mistaken for a real outage. See [Observability & Monitoring](docs/monitoring.md#production-smoke-probe).
 
 ### TradingView Confluence Enrichment
 
-`ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true` are enabled in production on the **web service only** (previews off). Together they add an optional `combined_analysis` call to each enriched alert webhook followed by a `multi_timeframe_analysis` call. Both are fail-open: a failure never blocks alert delivery, and it is recorded as a `partial` enrichment rather than a dropped alert.
+`ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true` are declared `true` in `render.yaml` on the **web service only** (previews off) — and production is **not** yet running them: as of this writing `featureFlags.tradingViewConfluenceEnrichment` reports `false` live (issue #1109), because the enablement needs a Blueprint apply plus a redeploy onto a current build, and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` is inert while its parent gate is off. Treat the Blueprint entry as intent and `/api/status` as reality; the check above is how you tell them apart. Together the flags add an optional `combined_analysis` call to each enriched alert webhook followed by a `multi_timeframe_analysis` call. Both are fail-open: a failure never blocks alert delivery, and it is recorded as a `partial` enrichment rather than a dropped alert.
 
 `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` is nested **inside** the confluence gate, so it is inert until confluence enrichment is on — the two flags cannot disagree. Both keys need a web-service declaration in `render.yaml` even though they are only ever read on the web service, because the worker block mirrors them with `fromService` and a mirror whose source is never declared resolves to nothing.
 

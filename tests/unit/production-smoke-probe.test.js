@@ -423,6 +423,92 @@ esac
 		expect(result.stderr).toContain('tradingViewConfluenceEnrichment');
 	});
 
+	it('treats a flag ABSENT from the deployed build as disabled (exit 7)', () => {
+		// This is the invariant, asserted as behaviour rather than as a jq default.
+		// Mutating `// false` to `// empty` used to leave this whole suite green,
+		// because absence was never covered: the `!= "true"` comparison is what
+		// rejects it, not the jq alternative operator.
+		const curlStub = join(tempDir, 'curl');
+		const stubBody = `#!/usr/bin/env bash
+set -euo pipefail
+url=""
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --write-out) shift 2 ;;
+    --output) out="$2"; shift 2 ;;
+    -H) shift; shift ;;
+    -*) shift ;;
+    *) url="$1"; shift ;;
+  esac
+done
+case "$url" in
+  */healthcheck)
+    if [ -n "$out" ]; then printf 'OK' > "$out"; fi
+    printf '%s' "200" ;;
+  */api/status)
+    if [ -n "$out" ]; then
+      printf '{"service":{"commit":"abc"},"dependencies":{},"featureFlags":{"langfusePrompts":true}}' > "$out"
+    fi
+    printf '%s' "200" ;;
+esac
+`;
+		writeFileSync(curlStub, stubBody);
+		chmodSync(curlStub, 0o755);
+
+		const env = {
+			STUB_HEADERS_LOG: headersLog,
+			STUB_INVOCATION_LOG: invocationLog,
+			WEBHOOK_API_KEY: 'topsecret',
+			PATH: tempDir,
+		};
+		const result = runProbe({ ...env, _tempDir: tempDir }, [
+			'--require-enabled-flags',
+			'tradingViewConfluenceEnrichment',
+		]);
+		expect(result.status).toBe(7);
+		expect(result.stderr).toContain('FLAG_DISABLED');
+		expect(result.stderr).toContain('tradingViewConfluenceEnrichment');
+	});
+
+	it('reports an absent flag without claiming the deployed build is broken', () => {
+		// The diagnostic must name the flag and the probed target so an operator can
+		// tell "this build is old" apart from "this feature is deliberately off".
+		const curlStub = join(tempDir, 'curl');
+		const stubBody = `#!/usr/bin/env bash
+set -euo pipefail
+out=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --output) out="$2"; shift 2 ;;
+    -*) shift ;;
+    *) shift ;;
+  esac
+done
+if [ -n "$out" ]; then
+  printf '{"service":{"commit":"abc"},"dependencies":{},"featureFlags":{}}' > "$out"
+fi
+printf '%s' "200"
+`;
+		writeFileSync(curlStub, stubBody);
+		chmodSync(curlStub, 0o755);
+
+		const env = {
+			STUB_HEADERS_LOG: headersLog,
+			STUB_INVOCATION_LOG: invocationLog,
+			WEBHOOK_API_KEY: 'topsecret',
+			PATH: tempDir,
+		};
+		const result = runProbe({ ...env, _tempDir: tempDir }, [
+			'--base-url',
+			'https://example.test',
+			'--require-enabled-flags',
+			'someFlagTheBuildDoesNotHave',
+		]);
+		expect(result.stderr).toContain('someFlagTheBuildDoesNotHave(value=false)');
+		expect(result.stderr).toContain('https://example.test');
+	});
+
 	it('exits 0 when every required feature flag is enabled', () => {
 		const curlStub = join(tempDir, 'curl');
 		const stubBody = `#!/usr/bin/env bash
@@ -570,10 +656,30 @@ describe('Production Smoke Probe workflow YAML', () => {
 		expect(content).toContain('jq');
 	});
 
-	it('optionally pages Telegram on persistent failures', () => {
+	it('does not claim a Telegram page it does not implement', () => {
+		// This workflow has no paging step: a non-zero exit fails the scheduled job
+		// and GitHub's own notification is the alert channel. The header used to
+		// promise admin paging and the env block carried three variables nothing
+		// read, which reads as "paging is configured" to any operator scanning it.
 		const content = readFileSync(workflowPath, 'utf8');
-		expect(content).toContain('TELEGRAM_BOT_TOKEN');
-		expect(content).toContain('TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID');
+
+		// Scope to the job env block: prose may legitimately name a removed variable
+		// to explain why it was removed, but wiring one back in is the defect.
+		const envBlock = content.slice(content.indexOf('    env:\n'));
+		expect(envBlock).toBeDefined();
+		for (const dead of [
+			'TELEGRAM_BOT_TOKEN',
+			'TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID',
+			'PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES',
+		]) {
+			expect(envBlock).not.toContain(`${dead}:`);
+			expect(content).not.toMatch(new RegExp(`secrets\\.${dead}\\b`));
+			expect(content).not.toMatch(new RegExp(`vars\\.${dead}\\b`));
+		}
+
+		// The header must not promise paging, and must still name the real channel.
+		expect(content).not.toMatch(/pag(e|es|ing)\s+(the\s+)?operators/i);
+		expect(content).toMatch(/no paging step/i);
 	});
 
 	it('documents the configuration secrets in comments', () => {
