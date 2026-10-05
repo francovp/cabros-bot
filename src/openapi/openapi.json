@@ -268,7 +268,8 @@
                     {
                       "$ref": "#/components/schemas/ReadinessReport"
                     }
-                  ]
+                  ],
+                  "$ref": "#/components/schemas/BootstrapReadiness"
                 },
                 "examples": {
                   "dependenciesHealthy": {
@@ -358,7 +359,8 @@
                     {
                       "$ref": "#/components/schemas/ReadinessReport"
                     }
-                  ]
+                  ],
+                  "$ref": "#/components/schemas/BootstrapReadiness"
                 },
                 "examples": {
                   "bootstrapPending": {
@@ -4601,6 +4603,15 @@
                   "dryValidate": true
                 }
               }
+            },
+            "example": {
+              "message": "Deployment completed",
+              "channels": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ],
+              "idempotencyKey": "generic-message-demo-1"
             }
           }
         }
@@ -6373,7 +6384,6 @@
                   ],
                   "timeoutMs": 5000
                 },
- 
                 "langfuse": {
                   "enabled": true,
                   "configured": true,
@@ -6403,7 +6413,8 @@
                     }
                   },
                   "localFallbackByPrompt": {}
-                },               "idempotencyStorage": {
+                },
+                "idempotencyStorage": {
                   "enabled": true,
                   "configured": true,
                   "ready": false,
@@ -6419,7 +6430,7 @@
                   "consecutiveFailures": 0,
                   "lastSuccessAt": null,
                   "lastFailureAt": null,
-"lastErrorReason": null
+                  "lastErrorReason": null
                 },
                 "signalOutcomeWorker": {
                   "enabled": true,
@@ -6463,7 +6474,8 @@
                   "lastErrorCategory": null,
                   "consecutiveFailures": 0,
                   "refreshIntervalMs": 900000,
-                  "maxAgeMs": 3600000
+                  "maxAgeMs": 3600000,
+                  "ready": false
                 },
                 "notificationRedrive": {
                   "enabled": false,
@@ -6536,7 +6548,11 @@
         "description": "Request processing exceeded the global request-deadline ceiling",
         "headers": {
           "X-Request-Id": {
-            "$ref": "#/components/headers/XRequestIdResponseHeader"
+            "$ref": "#/components/headers/XRequestIdResponseHeader",
+            "description": "Unique identifier assigned to the request",
+            "schema": {
+              "type": "string"
+            }
           }
         },
         "content": {
@@ -7449,11 +7465,21 @@
       "SignalClassClassification": {
         "type": "object",
         "description": "In-memory counters for signal classification on the webhook ingest path. `featureFlags.signalClassMarker` only states that the badge marker is allowed to render; this block states whether alerts are actually being classified, so a silent regression back to 100% `unknown` is detectable instead of looking healthy. Counters reset on process restart, never block delivery or persistence, and the field is omitted entirely from /api/status when no alert has been classified yet. Contains only enum class names and counts — never alert text, symbols, or chat ids.",
-        "required": ["window", "totalAlerts", "classifiedAlerts", "unknownAlerts", "populationRate", "byClass"],
+        "required": [
+          "window",
+          "totalAlerts",
+          "classifiedAlerts",
+          "unknownAlerts",
+          "populationRate",
+          "byClass"
+        ],
         "properties": {
           "window": {
             "type": "object",
-            "required": ["startedAt", "durationMs"],
+            "required": [
+              "startedAt",
+              "durationMs"
+            ],
             "properties": {
               "startedAt": {
                 "type": "string",
@@ -9262,13 +9288,34 @@
           "totalCost"
         ],
         "properties": {
-          "alerts": { "type": "integer", "minimum": 0 },
-          "batches": { "type": "integer", "minimum": 0 },
-          "symbols": { "type": "integer", "minimum": 0 },
-          "inputTokens": { "type": "number", "minimum": 0 },
-          "outputTokens": { "type": "number", "minimum": 0 },
-          "totalTokens": { "type": "number", "minimum": 0 },
-          "totalCost": { "type": "number", "minimum": 0 }
+          "alerts": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "batches": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "symbols": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "inputTokens": {
+            "type": "number",
+            "minimum": 0
+          },
+          "outputTokens": {
+            "type": "number",
+            "minimum": 0
+          },
+          "totalTokens": {
+            "type": "number",
+            "minimum": 0
+          },
+          "totalCost": {
+            "type": "number",
+            "minimum": 0
+          }
         }
       },
       "AlertSummary": {
@@ -9298,15 +9345,25 @@
             "$ref": "#/components/schemas/JsonObject",
             "description": "Includes tradingViewData for requested MCP enrichment, tradingViewDataApplied for successfully applied MCP results, and withoutTradingViewData for requests that did not opt in."
           },
-"costByFeature": {
+          "costByFeature": {
             "type": "object",
             "description": "Token usage and cost attribution by feature. Records are attributed from their persisted tokenUsage.byFeature tags; legacy records without tags fall back to their alert source, and records with no real token usage are not attributed at all. totalCost is an estimate from published list pricing (unrecognized models use the default rate, never 0); alerts counts stored documents, batches counts distinct news-monitor requests grouped by requestId/batchId, and symbols counts distinct symbols across a batch including multi-symbol reports stored as a single document.",
             "properties": {
-              "grounding": { "$ref": "#/components/schemas/FeatureCostSummary" },
-              "news-analysis": { "$ref": "#/components/schemas/FeatureCostSummary" },
-              "expanded-analysis": { "$ref": "#/components/schemas/FeatureCostSummary" },
-              "scanner": { "$ref": "#/components/schemas/FeatureCostSummary" },
-              "enrichment": { "$ref": "#/components/schemas/FeatureCostSummary" }
+              "grounding": {
+                "$ref": "#/components/schemas/FeatureCostSummary"
+              },
+              "news-analysis": {
+                "$ref": "#/components/schemas/FeatureCostSummary"
+              },
+              "expanded-analysis": {
+                "$ref": "#/components/schemas/FeatureCostSummary"
+              },
+              "scanner": {
+                "$ref": "#/components/schemas/FeatureCostSummary"
+              },
+              "enrichment": {
+                "$ref": "#/components/schemas/FeatureCostSummary"
+              }
             },
             "additionalProperties": false
           },
@@ -9463,7 +9520,10 @@
             "description": "True when the distribution is judged unusable for ranking."
           },
           "reason": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "enum": [
               "spread_collapse",
               "top_band_concentration",
@@ -9474,37 +9534,55 @@
             "description": "Which rule produced the verdict. null means healthy. spread_collapse is p90 - p10 below the spread floor; top_band_concentration is at least 75% of samples at or above 0.75; insufficient_sample and no_samples mean no verdict was reached."
           },
           "min": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "Lowest magnitude in the window, or null when there are no samples."
           },
           "max": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "Highest magnitude in the window, or null when there are no samples."
           },
           "p10": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "Nearest-rank 10th percentile magnitude."
           },
           "p50": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "Nearest-rank median magnitude."
           },
           "p90": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "Nearest-rank 90th percentile magnitude."
           },
           "spread": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "p90 - p10. Compared against the spread floor to detect a collapsed distribution."
@@ -9524,7 +9602,11 @@
             "description": "Histogram of magnitudes in 0.1-wide bands, ascending. Only non-empty bands are listed.",
             "items": {
               "type": "object",
-              "required": ["lowerBound", "upperBound", "count"],
+              "required": [
+                "lowerBound",
+                "upperBound",
+                "count"
+              ],
               "properties": {
                 "lowerBound": {
                   "type": "number",
@@ -9549,7 +9631,10 @@
             "description": "Samples at or above the top-band floor (0.75)."
           },
           "topBandShare": {
-            "type": ["number", "null"],
+            "type": [
+              "number",
+              "null"
+            ],
             "minimum": 0,
             "maximum": 1,
             "description": "topBandCount divided by sampleCount, or null when there are no samples."
@@ -12094,7 +12179,8 @@
             "description": "Persisted replay attempt ID returned only on live replay; absent when dryRun=true."
           }
         }
-      },      "WebhookAlertDeliveryResult": {
+      },
+      "WebhookAlertDeliveryResult": {
         "description": "Response for POST /api/webhook/alert. Mirrors the shared DeliveryResult schema and adds endpoint-specific truncation metadata: when the shared alert validator clips submitted text above 4,000 characters the response carries truncated: true, originalLength, and deliveredLength. All three are absent when the text fits, and they never appear on alert replay responses.",
         "allOf": [
           {
@@ -12121,7 +12207,6 @@
           }
         ]
       },
-
       "Job": {
         "type": "object",
         "properties": {
@@ -12900,7 +12985,7 @@
               "selfTest": {
                 "$ref": "#/components/schemas/SelfTestStatus"
               },
-"firestoreReadMetrics": {
+              "firestoreReadMetrics": {
                 "$ref": "#/components/schemas/FirestoreReadMetrics"
               },
               "idempotencyStorage": {
@@ -12917,6 +13002,9 @@
               },
               "firestore": {
                 "$ref": "#/components/schemas/FirestoreDependency"
+              },
+              "langfusePrompts": {
+                "$ref": "#/components/schemas/LangfusePromptsDependency"
               }
             }
           }
@@ -13867,6 +13955,18 @@
               "ratePercent": {
                 "type": "number",
                 "description": "`noFollowupCount / totalEvaluated` as a percentage, rounded to two decimals. Zero when nothing was evaluated."
+              },
+              "totalHighConfidenceAlerts": {
+                "type": "integer"
+              },
+              "falsePositiveAlerts": {
+                "type": "integer"
+              },
+              "falsePositiveRatePercent": {
+                "type": "number"
+              },
+              "description": {
+                "type": "string"
               }
             }
           },
@@ -14139,16 +14239,25 @@
             "description": "BullMQ queue name. Never contains credentials."
           },
           "brokerReachable": {
-            "type": ["boolean", "null"],
+            "type": [
+              "boolean",
+              "null"
+            ],
             "description": "Result of the bounded broker readiness probe: true once a probe has proven connectivity, false when the last probe ran and the broker did not answer, and null when no probe has produced a verdict — which includes queue mode being disabled, a missing broker URL (misconfigured), and an enabled+configured queue whose probe has not settled yet. Unlike `configured`, this is evidence rather than configuration shape."
           },
           "lastBrokerProbeAt": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time",
             "description": "ISO-8601 timestamp of the most recent broker readiness probe, or null when no probe has run."
           },
           "lastBrokerProbeErrorCode": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "description": "Sanitized error code from the most recent failed broker readiness probe, or null after a successful probe. Never contains the broker URL."
           },
           "enqueued": {
@@ -14372,6 +14481,219 @@
           "bootstrapReady": {
             "type": "boolean",
             "description": "Bootstrap gate verdict, ANDed with the dependency verdict. Only present on the `/ready?depth=dependencies` variant."
+          }
+        }
+      },
+      "LangfusePromptsDependency": {
+        "type": "object",
+        "description": "Non-secret prompt-resolution telemetry that separates Langfuse CONFIGURATION readiness (dependencies.langfuse) from actual PROMPT SERVING. Configuration being ready says nothing about whether prompts are actually being served remotely, so a 100% local-fallback regression is reported here as servingStatus=local_fallback instead of looking healthy. Only counts, tiers, timestamps, per-prompt resolved source, and a closed error-category enum are returned; remote prompt content, prompt variables, and credential material are never included. Counters reset on process restart. Langfuse unavailability always fails open to the local fallback and never blocks alert delivery.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "servingStatus",
+          "servingPrompts",
+          "label",
+          "cacheTtlSeconds",
+          "totalResolutions",
+          "langfuseResolutions",
+          "localResolutions",
+          "localResolutionRatePercent",
+          "remoteFetchAttempts",
+          "remoteFetchSuccesses",
+          "remoteFetchFailures",
+          "remoteFetchSuccessRatePercent",
+          "lastSuccessfulFetchAt",
+          "lastFailedFetchAt",
+          "lastErrorCategory",
+          "consecutiveFailures",
+          "prompts"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether Langfuse prompt management is enabled via ENABLE_LANGFUSE_PROMPTS."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Whether LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are both present."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "Configuration readiness only, identical to dependencies.langfuse.ready. It does NOT mean prompts are being served from Langfuse; read servingStatus and servingPrompts for that."
+          },
+          "servingStatus": {
+            "type": "string",
+            "description": "Actual prompt serving state. no_traffic means configured and reachable but nothing has been resolved yet, so serving is genuinely unknown rather than healthy. local_fallback means remote is enabled and reachable but every fetch has failed, so no prompt has ever been served from Langfuse. degraded means at least one resolution came from Langfuse and at least one fell back. unknown is the fail-open value used when telemetry itself is unavailable.",
+            "enum": [
+              "disabled",
+              "unconfigured",
+              "no_traffic",
+              "serving",
+              "degraded",
+              "local_fallback",
+              "unknown"
+            ]
+          },
+          "servingPrompts": {
+            "type": "boolean",
+            "description": "True only when at least one prompt has actually been served from Langfuse in this process. This is the fact that makes a 100% local-fallback regression detectable."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Effective Langfuse prompt label, or null when prompt management is disabled."
+          },
+          "cacheTtlSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Effective SDK prompt cache TTL in seconds, or null when prompt management is disabled."
+          },
+          "totalResolutions": {
+            "type": "integer",
+            "description": "Total prompt resolutions in this process, from either source."
+          },
+          "langfuseResolutions": {
+            "type": "integer",
+            "description": "Resolutions actually served from Langfuse."
+          },
+          "localResolutions": {
+            "type": "integer",
+            "description": "Resolutions served from the local file-backed fallback."
+          },
+          "localResolutionRatePercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Percentage of resolutions served from the local fallback, or null when no resolution has been recorded. 100 means Langfuse served nothing."
+          },
+          "remoteFetchAttempts": {
+            "type": "integer",
+            "description": "Remote prompt fetch attempts, including client-unavailable paths."
+          },
+          "remoteFetchSuccesses": {
+            "type": "integer",
+            "description": "Remote prompt fetch successes."
+          },
+          "remoteFetchFailures": {
+            "type": "integer",
+            "description": "Remote prompt fetch failures."
+          },
+          "remoteFetchSuccessRatePercent": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Remote prompt fetch success rate, or null when no attempt has been recorded. 0 means every fetch failed."
+          },
+          "lastSuccessfulFetchAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Timestamp of the last successful remote prompt fetch, or null if none has ever succeeded. Null is the direct signal that Langfuse has never served a prompt.",
+            "format": "date-time"
+          },
+          "lastFailedFetchAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Timestamp of the last failed remote prompt fetch, or null.",
+            "format": "date-time"
+          },
+          "lastErrorCategory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Sanitized category of the last remote prompt failure, or null. Raw provider error text is never returned because it can embed request context or credential fragments.",
+            "enum": [
+              "client_unavailable",
+              "prompt_not_found",
+              "unauthorized",
+              "rate_limited",
+              "timeout",
+              "compile_failed",
+              "request_failed",
+              "unknown",
+              null
+            ]
+          },
+          "consecutiveFailures": {
+            "type": "integer",
+            "description": "Consecutive remote prompt fetch failures; reset to 0 on the first success."
+          },
+          "prompts": {
+            "type": "array",
+            "description": "Per-prompt resolution counters, present only for prompts resolved in this process.",
+            "items": {
+              "type": "object",
+              "description": "Per-registered-prompt resolution counters and last observed resolved source. Contains no prompt content, no prompt variables, and no key material.",
+              "required": [
+                "name",
+                "type",
+                "langfuseResolutions",
+                "localResolutions",
+                "lastSource",
+                "lastLangfuseVersion",
+                "lastResolvedAt"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Langfuse prompt name, for example alert-enrichment."
+                },
+                "type": {
+                  "type": "string",
+                  "description": "Registered prompt type: chat or text.",
+                  "enum": [
+                    "chat",
+                    "text"
+                  ]
+                },
+                "langfuseResolutions": {
+                  "type": "integer",
+                  "description": "Resolutions of this prompt served from Langfuse."
+                },
+                "localResolutions": {
+                  "type": "integer",
+                  "description": "Resolutions of this prompt served from the local file-backed fallback in src/services/prompts/defaults/."
+                },
+                "lastSource": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Resolved source of the most recent resolution: langfuse, local, or null when never resolved.",
+                  "enum": [
+                    "langfuse",
+                    "local",
+                    null
+                  ]
+                },
+                "lastLangfuseVersion": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "description": "Version of the last Langfuse prompt actually served for this prompt, or null when the last resolution used the local fallback."
+                },
+                "lastResolvedAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Timestamp of the most recent resolution for this prompt.",
+                  "format": "date-time"
+                }
+              }
+            }
           }
         }
       }

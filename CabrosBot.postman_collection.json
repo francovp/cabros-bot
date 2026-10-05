@@ -354,6 +354,56 @@
       ]
     },
     {
+      "name": "Get Status - langfuse prompt resolution",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request separating Langfuse CONFIGURATION readiness (dependencies.langfuse) from actual PROMPT SERVING (dependencies.langfusePrompts). dependencies.langfusePrompts.servingStatus is one of disabled, unconfigured, no_traffic, serving, degraded, local_fallback, or unknown. A 100% local-fallback regression is reported as servingStatus=local_fallback with localResolutionRatePercent=100 and remoteFetchSuccessRatePercent=0. Counters reset on process restart. Only counts, tiers, timestamps, per-prompt resolved source, and a closed error-category enum are returned; remote prompt content and credentials are never included."
+      },
+      "response": [
+        {
+          "name": "200 OK - local_fallback (100% local fallback regression)",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"featureFlags\":{\"langfusePrompts\":true},\"dependencies\":{\"langfuse\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"langfusePrompts\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"servingStatus\":\"local_fallback\",\"servingPrompts\":false,\"label\":\"production\",\"cacheTtlSeconds\":60,\"totalResolutions\":412,\"langfuseResolutions\":0,\"localResolutions\":412,\"localResolutionRatePercent\":100,\"remoteFetchAttempts\":412,\"remoteFetchSuccesses\":0,\"remoteFetchFailures\":412,\"remoteFetchSuccessRatePercent\":0,\"lastSuccessfulFetchAt\":null,\"lastFailedFetchAt\":\"2026-09-28T08:40:45.319Z\",\"lastErrorCategory\":\"prompt_not_found\",\"consecutiveFailures\":412,\"prompts\":[{\"name\":\"alert-enrichment\",\"type\":\"chat\",\"langfuseResolutions\":0,\"localResolutions\":412,\"lastSource\":\"local\",\"lastLangfuseVersion\":null,\"lastResolvedAt\":\"2026-09-28T08:40:45.319Z\"}]}}}"
+        },
+        {
+          "name": "200 OK - serving (prompts resolved from Langfuse)",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"featureFlags\":{\"langfusePrompts\":true},\"dependencies\":{\"langfuse\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"langfusePrompts\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"servingStatus\":\"serving\",\"servingPrompts\":true,\"label\":\"production\",\"cacheTtlSeconds\":60,\"totalResolutions\":412,\"langfuseResolutions\":410,\"localResolutions\":2,\"localResolutionRatePercent\":0.5,\"remoteFetchAttempts\":412,\"remoteFetchSuccesses\":410,\"remoteFetchFailures\":2,\"remoteFetchSuccessRatePercent\":99.5,\"lastSuccessfulFetchAt\":\"2026-09-28T08:40:44.902Z\",\"lastFailedFetchAt\":\"2026-09-28T08:12:07.114Z\",\"lastErrorCategory\":\"timeout\",\"consecutiveFailures\":0,\"prompts\":[{\"name\":\"alert-enrichment\",\"type\":\"chat\",\"langfuseResolutions\":410,\"localResolutions\":2,\"lastSource\":\"langfuse\",\"lastLangfuseVersion\":12,\"lastResolvedAt\":\"2026-09-28T08:40:44.902Z\"}]}}}"
+        },
+        {
+          "name": "200 OK - no_traffic (configured but nothing resolved yet)",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"featureFlags\":{\"langfusePrompts\":true},\"dependencies\":{\"langfuse\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"langfusePrompts\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"servingStatus\":\"no_traffic\",\"servingPrompts\":false,\"label\":\"production\",\"cacheTtlSeconds\":60,\"totalResolutions\":0,\"langfuseResolutions\":0,\"localResolutions\":0,\"localResolutionRatePercent\":null,\"remoteFetchAttempts\":0,\"remoteFetchSuccesses\":0,\"remoteFetchFailures\":0,\"remoteFetchSuccessRatePercent\":null,\"lastSuccessfulFetchAt\":null,\"lastFailedFetchAt\":null,\"lastErrorCategory\":null,\"consecutiveFailures\":0,\"prompts\":[]}}}"
+        },
+        {
+          "name": "401 Unauthorized (missing API key)",
+          "status": "Unauthorized",
+          "code": 401,
+          "body": "{\"error\":\"Unauthorized: Missing API key\"}"
+        }
+      ]
+    },
+    {
       "name": "Get Status - signal classification population",
       "request": {
         "method": "GET",
@@ -7119,12 +7169,27 @@
             ],
             "url": {
               "raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "alerts", "summary"],
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
               "query": [
-                { "key": "from", "value": "2026-06-06T00:00:00.000Z" },
-                { "key": "to", "value": "2026-06-07T00:00:00.000Z" },
-                { "key": "limit", "value": "500" }
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                }
               ]
             },
             "description": "Valid protected summary variant showing per-feature token counts/costs. The five feature keys are always present and legacy records are attributed from source."
