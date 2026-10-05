@@ -573,6 +573,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			firebaseRemoteConfig: remoteConfigStatus,
 			chatPreferences: chatPreferenceService.getStatus(),
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
+			newsAnalysisStorage: newsAnalysisStorageService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
 			userPriceAlertWorker: userPriceAlertService.getStatus(),
 			newsMonitorScheduler: newsMonitorSchedulerService.getStatus(),

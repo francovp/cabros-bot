@@ -10315,6 +10315,130 @@
           }
         }
       },
+      "NewsAnalysisStorage": {
+        "type": "object",
+        "description": "Durable news-monitor analysis records (issue #1180). Every Firestore error in this service is swallowed so news alert delivery is never blocked, which is why `ready` is proven from observed durable work rather than inferred from credential shape: a deployment whose credentials look valid but cannot reach Firestore reports `degraded`, and a process that has not yet recorded or read an analysis reports `unverified`. Counters are process-local and reset on restart, so `unverified` is the normal state right after every deploy.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "mode",
+          "backend",
+          "failOpen",
+          "readiness",
+          "collection",
+          "retentionDays"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "ENABLE_FIRESTORE_NEWS_ANALYSIS is true. Environment-only: it is deliberately absent from the Remote Config allow-list because a published template parameter's defaultValue is reported with source `remote` and would override this env var."
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "Firestore credential shape only. True does not mean persistence works."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "True only after an observed successful durable write or read, and false again from the first failure until the next success."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "misconfigured",
+              "unverified",
+              "ready",
+              "degraded"
+            ],
+            "description": "`unverified` is no evidence, not health. Gate state wins over observed provider health."
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "durable",
+              "ephemeral"
+            ],
+            "description": "Configured intent. It stays `durable` while the gate is on even after a failure, because `memory` would read as the flag being off."
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ]
+          },
+          "failOpen": {
+            "type": "boolean",
+            "description": "Always true. Firestore failures degrade to unrecorded analysis rather than failing the news monitor, so a `degraded` verdict still delivers alerts; it just stops recording an audit trail."
+          },
+          "readiness": {
+            "type": "string",
+            "enum": [
+              "unverified",
+              "verified",
+              "degraded"
+            ]
+          },
+          "collection": {
+            "type": "string",
+            "description": "Firestore collection holding persisted news analysis records."
+          },
+          "retentionDays": {
+            "type": "integer",
+            "description": "Effective NEWS_ANALYSIS_RETENTION_DAYS (1-365, default 30), applied as the document `expiresAt` field. Honoured only once the project's Firestore TTL policy exists."
+          },
+          "operationsAttempted": {
+            "type": "integer",
+            "description": "Durable use attempts, including attempts whose Firebase initialization was rejected. Never incremented by a status read."
+          },
+          "operationsSucceeded": {
+            "type": "integer"
+          },
+          "operationsFailed": {
+            "type": "integer"
+          },
+          "consecutiveFailures": {
+            "type": "integer",
+            "description": "Cleared by the next success, so a transient outage self-heals without a restart."
+          },
+          "lastSuccessAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastFailureAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastErrorReason": {
+            "type": "string",
+            "nullable": true,
+            "enum": [
+              "uninitialized",
+              "failed_precondition",
+              "permission_denied",
+              "unauthenticated",
+              "unavailable",
+              "deadline_exceeded",
+              "not_found",
+              "resource_exhausted",
+              "invalid_argument",
+              "aborted",
+              "internal",
+              "unknown_error",
+              null
+            ],
+            "description": "Closed enum so a Firestore error message — which embeds the fully-qualified project/database path — can never reach a status response."
+          },
+          "lastMissingIndex": {
+            "type": "boolean",
+            "description": "True when the most recent failure was a rejected query caused by an undeployed composite index. `news_analysis` reads filter on symbol/eventCategory and sort on createdAt, and Firestore does not merge single-field indexes, so the composites declared in firestore.indexes.json must be deployed with `firebase deploy --only firestore:indexes`."
+          }
+        }
+      },
       "LangfusePromptDependency": {
         "type": "object",
         "description": "Langfuse dynamic prompt management. `configured` is credential shape only: a typo'd, revoked or wrong-project key satisfies it and can still resolve zero prompts. `PromptService` fails open to the local file on any remote failure, so before this contract a deployment that fell back on every alert reported the same `ready` verdict as a working one and the enablement was unverifiable. `ready` is therefore proven from observed resolutions. This is the fifth instance of the repository's 'shape is not readiness' rule, after `firebaseRemoteConfig.ready` (#598), Firestore `readHealth` (#1285), `equityMarketData.ready` (#1116) and `idempotencyStorage.ready` (#1111).",
@@ -12473,6 +12597,9 @@
               },
               "idempotencyStorage": {
                 "$ref": "#/components/schemas/IdempotencyStorage"
+              },
+              "newsAnalysisStorage": {
+                "$ref": "#/components/schemas/NewsAnalysisStorage"
               },
               "langfuse": {
                 "$ref": "#/components/schemas/LangfusePromptDependency"

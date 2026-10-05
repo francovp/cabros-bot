@@ -16,6 +16,7 @@ const { deliveryMetricsService } = require('../../src/services/notification/Deli
 const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
 const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
+const newsAnalysisStorageService = require('../../src/services/storage/NewsAnalysisStorageService');
 const promptReadiness = require('../../src/services/prompts/promptReadiness');
 const { getRoutes } = require('../../src/routes');
 
@@ -871,7 +872,111 @@ describe('Status endpoints', () => {
 		}
 	});
 
-	// Issue #1111 enables durable idempotency in production. Every Firestore error in
+	// Issue #1180 enables durable news-monitor analysis records in production. Every
+	// Firestore error in `NewsAnalysisStorageService` is swallowed so alert delivery
+	// continues, so `featureFlags.firestoreNewsAnalysis` alone reports what was
+	// configured, not what executed: a deployment whose credentials look valid but
+	// cannot reach Firestore would have read as working.
+	it('reports news analysis storage as unverified while credentials only look valid', async () => {
+		process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
+		newsAnalysisStorageService.__resetFirestoreClient();
+		newsAnalysisStorageService.__resetReadinessForTesting();
+
+		try {
+			const response = await request(app)
+				.get('/api/capabilities')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.firestoreNewsAnalysis).toBe(true);
+			expect(response.body.dependencies.newsAnalysisStorage).toEqual({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'unverified',
+				mode: 'durable',
+				backend: 'firestore',
+				failOpen: true,
+				readiness: 'unverified',
+				collection: 'news_analysis',
+				retentionDays: 30,
+				operationsAttempted: 0,
+				operationsSucceeded: 0,
+				operationsFailed: 0,
+				consecutiveFailures: 0,
+				lastSuccessAt: null,
+				lastFailureAt: null,
+				lastErrorReason: null,
+				lastMissingIndex: false,
+			});
+		} finally {
+			newsAnalysisStorageService.__resetFirestoreClient();
+			newsAnalysisStorageService.__resetReadinessForTesting();
+		}
+	});
+
+	it('surfaces a durable news-analysis failure through /api/status as degraded', async () => {
+		process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
+		newsAnalysisStorageService.__resetFirestoreClient();
+		newsAnalysisStorageService.__resetReadinessForTesting();
+
+		try {
+			// `mockRejectedValue` (not `...Once`) because this suite never calls
+			// `clearAllMocks`, so a queued one-shot that went unconsumed would fire
+			// inside a later test. The implementation is restored in `finally`.
+			admin.__mockDocSet.mockRejectedValue(new Error('firestore unreachable'));
+			await newsAnalysisStorageService.recordAnalysis({ symbol: 'BTCUSDT', confidence: 0.9 });
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.dependencies.newsAnalysisStorage).toMatchObject({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'degraded',
+				readiness: 'degraded',
+				// Intent stays durable so an operator does not read `memory` and
+				// conclude the flag is off.
+				mode: 'durable',
+				backend: 'firestore',
+				failOpen: true,
+				operationsAttempted: 1,
+				operationsFailed: 1,
+				consecutiveFailures: 1,
+			});
+		} finally {
+			admin.__mockDocSet.mockReset();
+			newsAnalysisStorageService.__resetFirestoreClient();
+			newsAnalysisStorageService.__resetReadinessForTesting();
+		}
+	});
+
+	it('reports news analysis storage as disabled by default', async () => {
+		delete process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS;
+		newsAnalysisStorageService.__resetFirestoreClient();
+		newsAnalysisStorageService.__resetReadinessForTesting();
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firestoreNewsAnalysis).toBe(false);
+		expect(response.body.dependencies.newsAnalysisStorage).toMatchObject({
+			enabled: false,
+			status: 'disabled',
+			mode: 'ephemeral',
+			backend: 'memory',
+			ready: false,
+		});
+	});
+
+	// Issue #1180 enables durable idempotency in production. Every Firestore error in
 	// `IdempotencyStorageService` is swallowed into in-memory fallback, so before the
 	// proven-readiness change a deployment that could not reach Firestore reported the
 	// same `ready` verdict as a working one and the enablement was unverifiable.
