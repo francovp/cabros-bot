@@ -7,6 +7,7 @@
 
 const { analyzeNewsForSymbol } = require('../../../../services/grounding/gemini');
 const { getCacheInstance } = require('./cache');
+const classifierDevClient = require('../../../../services/classifierDevClient');
 const { getEnrichmentService } = require('../../../../services/inference/enrichmentService');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { AnalysisStatus, EventCategory } = require('./constants');
@@ -20,6 +21,7 @@ const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../.
 const geminiQuotaManager = require('../../../../services/grounding/geminiQuotaManager');
 const geminiPriceService = require('../../../../services/grounding/geminiPriceService');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
+const { smartEscapeMarkdownV2 } = require('../../../../services/notification/formatters/markdownV2Formatter');
 const { MainClient } = require('binance');
 const { createHash } = require('node:crypto');
 const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
@@ -30,7 +32,17 @@ const {
 } = require('../../../../services/notification/requestRouting');
 const MarkdownV2Formatter = require('../../../../services/notification/formatters/markdownV2Formatter');
 
+
 const promptService = getPromptService();
+const CLASSIFIER_EVENT_INSTRUCTIONS = [
+	'Classify whether this asset headline describes a specific, material financial event.',
+	'price_surge means an event credibly associated with a significant price increase; price_decline means a significant decrease.',
+	'public_figure means a market-moving statement or action by a public figure or company leader.',
+	'regulatory means a law, regulator, or policy action affecting the asset or market.',
+	'none means the headline does not describe a material financial event.',
+].join(' ');
+
+const markdownV2Formatter = new MarkdownV2Formatter();
 
 // Placeholder for NotificationManager - will be injected
 let notificationManager = null;
@@ -845,12 +857,18 @@ class NewsAnalyzer {
    */
 	async analyzeSymbolInternal(symbol, requestId, tokenUsage, routing = {}, options = {}) {
 		const { dryRun = false } = options;
+		const classifierDevEnabled = classifierDevClient.isEnabled();
+		let classifierDevChecked = false;
 
 		// Try cache first
 		if (!dryRun) {
 			for (const category of Object.values(EventCategory)) {
 				const cached = await this.cache.get(symbol, category);
 				if (cached) {
+					if (category === EventCategory.NONE && classifierDevEnabled && cached.classifierDevChecked !== true) {
+						console.debug('[Analyzer] Skipping cached no-event result without classifier.dev check:', symbol);
+						continue;
+					}
 					console.debug('[Analyzer] Returning cached result:', symbol, category);
 					let deliveryResults = cached.deliveryResults;
 					let redelivered = false;
@@ -1065,11 +1083,42 @@ class NewsAnalyzer {
 		// Adjust confidence score with volume expansion & RSI filters if marketContext contains them
 		geminiAnalysis.confidence = this.calculateAdjustedConfidence(geminiAnalysis.confidence, marketContext);
 
+		if (geminiAnalysis.event_category === EventCategory.NONE && classifierDevEnabled) {
+			const headline = typeof geminiAnalysis.headline === 'string' ? geminiAnalysis.headline.trim() : '';
+			classifierDevChecked = !headline;
+			if (headline) {
+				const classified = await classifierDevClient.classifyHeadline(`${symbol}: ${headline}`, {
+					labels: Object.values(EventCategory),
+					instructions: CLASSIFIER_EVENT_INSTRUCTIONS,
+					signal: options.signal,
+					deadline: options.analysisDeadline ?? options.deadline,
+				});
+				const recognizedLabel = classified && Object.values(EventCategory).includes(classified.label);
+				classifierDevChecked = Boolean(recognizedLabel);
+				if (recognizedLabel
+					&& classified.label !== EventCategory.NONE
+					&& classified.confidence >= this.alertThreshold) {
+					geminiAnalysis.event_category = classified.label;
+					geminiAnalysis.confidence = this.calculateAdjustedConfidence(classified.confidence, marketContext);
+					geminiAnalysis.confidence_reason = 'Confidence score from classifier.dev';
+					geminiAnalysis.confidence_source = 'classifier.dev';
+					delete geminiAnalysis.calibration;
+					if ([EventCategory.PRICE_SURGE, EventCategory.PRICE_DECLINE].includes(classified.label)
+						&& Number.isFinite(geminiAnalysis.sentiment_score)) {
+						geminiAnalysis.sentiment_score = Math.abs(geminiAnalysis.sentiment_score)
+							* (classified.label === EventCategory.PRICE_DECLINE ? -1 : 1);
+					}
+					console.info('[Analyzer] classifier.dev promoted a no-event result:', symbol, classified.label, classified.confidence);
+				}
+			}
+		}
+
 		// If no event detected, cache and return
 		if (geminiAnalysis.event_category === EventCategory.NONE) {
 			if (!dryRun) {
 				await this.cache.set(symbol, EventCategory.NONE, {
 					alert: null,
+					classifierDevChecked,
 					analysisResult: {
 						symbol,
 						status: AnalysisStatus.ANALYZED,
@@ -1742,6 +1791,17 @@ class NewsAnalyzer {
 			calibrationFields.grounding_calibration = geminiAnalysis.calibration;
 		}
 
+		// Issue #1230: surface the source-quality tier so an operator can audit
+		// WHY an alert cleared the threshold. Unresolved tier => omitted.
+		// NOTE: deliberately NOT written into `calibrationFields` — that object is
+		// never spread into the returned alert, so a write there is inert. The value
+		// is surfaced via the `sourceQualityTier` shorthand on the alert instead.
+		const sourceQualityTier = (geminiAnalysis.calibration
+			&& typeof geminiAnalysis.calibration.qualityTier === 'string'
+			&& geminiAnalysis.calibration.qualityTier.trim())
+			? geminiAnalysis.calibration.qualityTier.trim()
+			: undefined;
+
 		// Build the title/original text
 		const eventLabel = this.eventCategoryLabel(geminiAnalysis.event_category);
 		const headline = (geminiAnalysis.headline && geminiAnalysis.headline.trim())
@@ -1810,9 +1870,26 @@ class NewsAnalyzer {
 		}
 
 		// Build enriched object for formatEnriched methods
-		const enrichedExtraText = confidenceReason
-			? `_Model Confidence: ${confidense}%_\n_Reason: ${confidenceReason}_\n_Model used: ${GROUNDING_MODEL_NAME}_`
-			: `_Model Confidence: ${confidense}%_\n_Model used: ${GROUNDING_MODEL_NAME}_`;
+		const confidenceProvenance = geminiAnalysis.confidence_source
+			? `_Confidence source: ${geminiAnalysis.confidence_source}_`
+			: `_Model used: ${GROUNDING_MODEL_NAME}_`;
+		// Issue #1230: the tier is appended to `extraText` because that is what
+		// `formatEnriched()` actually renders to the trader. `formatAlertMessage()`
+		// has no production call site, so a line added only there would never be seen.
+		// `extraText` is emitted verbatim by MarkdownV2Formatter, so the penalty value
+		// must be escaped — `(` `)` and `.` are MarkdownV2-reserved and would make
+		// Telegram reject the entire message.
+		const qualityAuditLine = sourceQualityTier
+			? (typeof geminiAnalysis.calibration?.qualityPenalty === 'number'
+				? `_Source Quality: ${smartEscapeMarkdownV2(sourceQualityTier)} (x${smartEscapeMarkdownV2(String(geminiAnalysis.calibration.qualityPenalty))})_`
+				: `_Source Quality: ${smartEscapeMarkdownV2(sourceQualityTier)}_`)
+			: '';
+		const enrichedExtraText = [
+			confidenceReason
+				? `_Model Confidence: ${confidense}%_\n_Reason: ${confidenceReason}_\n${confidenceProvenance}`
+				: `_Model Confidence: ${confidense}%_\n${confidenceProvenance}`,
+			qualityAuditLine,
+		].filter(Boolean).join('\n');
 		const enriched = {
 			originalText: alertTitle,
 			summary: context,
@@ -1845,6 +1922,7 @@ class NewsAnalyzer {
 			uncertainty_reason: geminiAnalysis.uncertainty_reason,
 			invalidation_hint: geminiAnalysis.invalidation_hint,
 			calibration: geminiAnalysis.calibration || undefined,
+			sourceQualityTier,
 			promptVersion: geminiAnalysis.promptVersion || undefined,
 			timestamp: Date.now(),
 			marketContext: marketContext || undefined,
@@ -1890,6 +1968,23 @@ class NewsAnalyzer {
 			message += `Reason: ${reason}\n`;
 		}
 
+		// Issue #1230: make the source-quality tier auditable in the delivered
+		// message, not just in logs. Read from `calibration` rather than
+		// `sourceQualityTier`: this formatter is also called with analysis objects
+		// that were not produced by `buildAlert` (see tests/unit/news-alert-formatting.test.js),
+		// where the shorthand is absent but the calibration block is present.
+		const qualityTier = (analysis.calibration
+			&& typeof analysis.calibration.qualityTier === 'string'
+			&& analysis.calibration.qualityTier.trim())
+			? analysis.calibration.qualityTier.trim()
+			: '';
+		if (qualityTier) {
+			const qualityPenalty = typeof analysis.calibration.qualityPenalty === 'number'
+				? ` (x${analysis.calibration.qualityPenalty})`
+				: '';
+			message += `Source Quality: ${qualityTier}${qualityPenalty}\n`;
+		}
+
 		if (marketContext) {
 			if (marketContext.price) {
 				const change = marketContext.change24h ?? 0;
@@ -1911,7 +2006,7 @@ class NewsAnalyzer {
 		}
 
 		if (analysis.invalidation_hint && typeof analysis.invalidation_hint === 'string' && analysis.invalidation_hint.trim()) {
-			message += `Invalidación: ${analysis.invalidation_hint.trim()}\n`;
+			message += `Invalidación: ${markdownV2Formatter.format(analysis.invalidation_hint.trim())}\n`;
 		}
 
 		if (analysis.sources && Array.isArray(analysis.sources) && analysis.sources.length > 0) {

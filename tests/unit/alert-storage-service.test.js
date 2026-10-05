@@ -12,6 +12,9 @@
 // The moduleNameMapper in jest.config.js ensures this resolves to __mocks__/firebase-admin.js
 const admin = require('firebase-admin');
 const crypto = require('crypto');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const AlertStorageService = require('../../src/services/storage/AlertStorageService');
 const { parseAlertPaginationCursor } = require('../../src/services/storage/alertPaginationCursor');
 const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
@@ -172,6 +175,33 @@ describe('AlertStorageService', () => {
 			);
 		});
 
+		it('initializes durable storage from an authorized-user ADC file with FIREBASE_PROJECT_ID', () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.FIREBASE_PROJECT_ID = 'my-project';
+			const adcFile = path.join(os.tmpdir(), `cabros-adc-${process.pid}-${Date.now()}.json`);
+			fs.writeFileSync(adcFile, JSON.stringify({
+				type: 'authorized_user',
+				client_id: '123.apps.googleusercontent.com',
+				client_secret: 'not-a-real-secret',
+				refresh_token: 'not-a-real-refresh-token',
+			}));
+			process.env.GOOGLE_APPLICATION_CREDENTIALS = adcFile;
+
+			try {
+				const result = AlertStorageService.getFirestore();
+
+				expect(result).not.toBeNull();
+				expect(mockCert).not.toHaveBeenCalled();
+				expect(mockInitializeApp).toHaveBeenCalledWith({
+					credential: { type: 'application_default_credential' },
+					projectId: 'my-project',
+				});
+			} finally {
+				fs.unlinkSync(adcFile);
+				delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+			}
+		});
+
 		it('does not call initializeApp when admin.apps is already populated', () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			admin.__setApps([{ name: '[DEFAULT]' }]);
@@ -268,7 +298,7 @@ describe('AlertStorageService', () => {
 			mockAdd.mockResolvedValueOnce({ id: docId });
 
 			const params = buildParams({
-				text: 'ETH breakout',
+				text: 'BINANCE:ETHUSDT(4h) breakout',
 				enriched: true,
 				enrichmentData: { sentiment: 'bullish', insights: ['RSI > 70'] },
 				tokenUsage: { total: 500, formattedSummary: '500 tokens' },
@@ -287,7 +317,9 @@ describe('AlertStorageService', () => {
 			expect(mockAdd).toHaveBeenCalledWith({
 				receivedAt: expect.anything(), // serverTimestamp sentinel
 				expiresAt: expect.anything(),
-				text: 'ETH breakout',
+				text: 'BINANCE:ETHUSDT(4h) breakout',
+				symbol: 'ETHUSDT',
+				exchange: 'BINANCE',
 				signalClass: 'unknown',
 				enriched: true,
 				enrichmentData: { sentiment: 'bullish', insights: ['RSI > 70'] },
@@ -301,6 +333,86 @@ describe('AlertStorageService', () => {
 				useTradingViewData: true,
 				tradingViewEnrichmentApplied: false,
 			});
+		});
+
+		// Regression (issue #222): symbol must be captured at WRITE time so stored
+		// alerts are indexed by symbol instead of falling back to `unknown`.
+		it('captures the symbol at write time from plain alert text', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'doc-symbol-write' });
+
+			await AlertStorageService.saveAlert(buildParams({
+				text: 'BINANCE:ETHUSDT(D) cambió a señal de VENTA',
+			}));
+
+			expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({
+				symbol: 'ETHUSDT',
+				exchange: 'BINANCE',
+			}));
+		});
+
+		// Regression (issue #222): "53" reached bySymbol in production analytics.
+		it('rejects non-ASCII digits and astral characters as symbols', () => {
+		// `\d` is ASCII-only, so Arabic-Indic / fullwidth digits used to pass the
+		// numeric guard and become symbols - the exact bug class it exists to stop.
+		expect(AlertStorageService.extractSymbolAndExchange({ symbol: '٥٣' }).symbol).toBe('unknown');
+		expect(AlertStorageService.extractSymbolAndExchange({ symbol: '５３' }).symbol).toBe('unknown');
+		// A single astral character counts as 2 UTF-16 units, so a length check
+		// alone would admit it as a "2 character" symbol.
+		expect(AlertStorageService.extractSymbolAndExchange({ symbol: '𝔅' }).symbol).toBe('unknown');
+	});
+
+	it('does not extract uppercase prose words that merely end in a crypto suffix', () => {
+		// deriveAssetContext matches on crypto SUFFIXES. A plausible-looking fake
+		// ticker is worse than `unknown` because it silently corrupts bySymbol.
+		for (const text of [
+			'AEROSOL prices rose after the announcement',
+			'PARASOL broke out to new highs',
+			'CARETH broke resistance',
+			'CoinDesk says BTC dominance rising',
+		]) {
+			expect(AlertStorageService.extractSymbolAndExchange({ text }).symbol).toBe('unknown');
+		}
+	});
+
+	it('does not fabricate an exchange for alerts that named no venue', () => {
+		// deriveAssetContext synthesises "BINANCE" for any USDT pair; persisting that
+		// would attribute an alert to a venue that was never stated.
+		const parsed = AlertStorageService.extractSymbolAndExchange({ text: 'ETHUSDT(1h) BUY' });
+		expect(parsed.exchange).toBeNull();
+
+		// A real venue prefix is still captured.
+		const explicit = AlertStorageService.extractSymbolAndExchange({ text: 'BINANCE:ETHUSDT(4h)' });
+		expect(explicit).toEqual({ symbol: 'ETHUSDT', exchange: 'BINANCE' });
+	});
+
+	it('never persists a numeric-only or single-character symbol at write time', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'doc-numeric' });
+
+			await AlertStorageService.saveAlert(buildParams({
+				text: 'Momentum shifted after 53 candles on the higher timeframe',
+				symbol: '53',
+				exchange: 'NASDAQ',
+			}));
+
+			const document = mockAdd.mock.calls[0][0];
+			expect(document.symbol).toBeUndefined();
+			expect(document.exchange).toBeUndefined();
+		});
+
+		it('still persists the alert when extraction is not possible', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'doc-unknown' });
+
+			const result = await AlertStorageService.saveAlert(buildParams({
+				text: 'Alerta sin simbolo reconocible',
+			}));
+
+			expect(result).toBe('doc-unknown');
+			const document = mockAdd.mock.calls[0][0];
+			expect(document.text).toBe('Alerta sin simbolo reconocible');
+			expect(document.symbol).toBeUndefined();
 		});
 
 		it('persists news-monitor alert with source, eventCategory, confidence, and dedupStatus', async () => {
@@ -683,6 +795,236 @@ describe('AlertStorageService', () => {
 			const calledWith = mockAdd.mock.calls[0][0];
 			expect(calledWith.enriched).toBe(true);
 		});
+
+		describe('current_price, price_currency, and deterministic R:R (GH-599)', () => {
+			function captureSaveCall() {
+				return mockAdd.mock.calls[mockAdd.mock.calls.length - 1][0];
+			}
+
+			it('persists current_price and price_currency from enrichmentData', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-price' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					enrichmentData: {
+						current_price: 64863.03,
+						price_currency: 'USD',
+						sentiment: 'BULLISH',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData).toEqual(expect.objectContaining({
+					current_price: 64863.03,
+					price_currency: 'USD',
+				}));
+			});
+
+			it('strips invalid current_price values during sanitization', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-bad-price' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					enrichmentData: {
+						current_price: -100,
+						price_currency: 'USD',
+						sentiment: 'BULLISH',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData).not.toHaveProperty('current_price');
+				expect(doc.enrichmentData).not.toHaveProperty('price_currency');
+			});
+
+			it('strips an invalid price_currency without dropping the underlying price', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-bad-currency' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					enrichmentData: {
+						current_price: 50000,
+						price_currency: 'us dollars',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData.current_price).toBe(50000);
+				expect(doc.enrichmentData).not.toHaveProperty('price_currency');
+			});
+
+			it('computes risk_reward_ratio deterministically for a BUY signal when entry/invalidation/target are present', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-buy' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'BUY',
+					enrichmentData: {
+						current_price: 100,
+						invalidation_level: 90,
+						target_level: 130,
+						sentiment: 'BULLISH',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				// (target - entry) / (entry - invalidation) = (130 - 100) / (100 - 90) = 30 / 10 = 3.0
+				expect(doc.enrichmentData.risk_reward_ratio).toBe(3);
+				expect(doc.enrichmentData.risk_reward_ratio_source).toBe('computed');
+			});
+
+			it('computes risk_reward_ratio directionally for a SELL signal', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-sell' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'SELL',
+					enrichmentData: {
+						current_price: 100,
+						invalidation_level: 120,
+						target_level: 70,
+						sentiment: 'BEARISH',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				// (entry - target) / (invalidation - entry) = (100 - 70) / (120 - 100) = 30 / 20 = 1.5
+				expect(doc.enrichmentData.risk_reward_ratio).toBe(1.5);
+				expect(doc.enrichmentData.risk_reward_ratio_source).toBe('computed');
+			});
+
+			it.each([0, -2])('recomputes a non-positive numeric ratio %s', async (ratio) => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-invalid-ratio' });
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true, side: 'BUY',
+					enrichmentData: { current_price: 100, invalidation_level: 90, target_level: 130, risk_reward_ratio: ratio },
+				}));
+				expect(captureSaveCall().enrichmentData).toMatchObject({ risk_reward_ratio: 3, risk_reward_ratio_source: 'computed' });
+			});
+
+			// A real ratio below 5e-5 rounds to 0 at the 4-decimal readability limit. `0` fails the
+			// `existingIsValid` test, so persisting it would mean re-deriving on every read and
+			// counting a zero as populated coverage — indistinguishable from a genuine 0.0
+			// grade. Such a ratio is not actionable either, so it is dropped rather than stored.
+			it('does not persist a ratio that rounding would collapse to zero', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-subprecision' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true, side: 'BUY',
+					enrichmentData: { current_price: 100, invalidation_level: 50, target_level: 100.0001 },
+				}));
+
+				const doc = captureSaveCall().enrichmentData;
+				// True R:R = 0.0001 / 50 = 2e-6, which `toFixed(4)` renders as 0.
+				expect(doc.risk_reward_ratio).toBeUndefined();
+				expect(doc.risk_reward_ratio_source).toBeUndefined();
+				// The entry and levels the ratio was derived from are still preserved.
+				expect(doc.current_price).toBe(100);
+				expect(doc.invalidation_level).toBe(50);
+			});
+
+			it('does not overwrite an existing valid risk_reward_ratio from the model', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-preserve' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'BUY',
+					enrichmentData: {
+						current_price: 100,
+						invalidation_level: 90,
+						target_level: 130,
+						risk_reward_ratio: 2.5,
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData.risk_reward_ratio).toBe(2.5);
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio_source');
+			});
+
+			it('computes R:R from currency-formatted risk levels', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-formatted' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'BUY',
+					enrichmentData: {
+						current_price: 85000,
+						invalidation_level: '$80,000',
+						target_level: '$90,000',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData.risk_reward_ratio).toBe(1);
+				expect(doc.enrichmentData.risk_reward_ratio_source).toBe('computed');
+			});
+
+			it('preserves a non-empty string risk_reward_ratio from the model', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-string' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'BUY',
+					enrichmentData: {
+						current_price: 100,
+						invalidation_level: 90,
+						target_level: 130,
+						risk_reward_ratio: '2.5:1',
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData.risk_reward_ratio).toBe('2.5:1');
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio_source');
+			});
+
+			it('does not compute R:R when entry is missing', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-no-entry' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					side: 'BUY',
+					enrichmentData: {
+						invalidation_level: 90,
+						target_level: 130,
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio');
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio_source');
+			});
+
+			it('does not compute R:R when the side is missing for a valid BUY/SELL pair', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockAdd.mockResolvedValueOnce({ id: 'gh599-rr-no-side' });
+
+				await AlertStorageService.saveAlert(buildParams({
+					enriched: true,
+					enrichmentData: {
+						current_price: 100,
+						invalidation_level: 90,
+						target_level: 130,
+					},
+				}));
+
+				const doc = captureSaveCall();
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio');
+				expect(doc.enrichmentData).not.toHaveProperty('risk_reward_ratio_source');
+			});
+		});
 	});
 
 	describe('listAlerts()', () => {
@@ -722,7 +1064,7 @@ describe('AlertStorageService', () => {
 				docs: [
 					buildQueryDoc('alert-1', {
 						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
-						text: 'BTC alert',
+						text: 'BINANCE:BTCUSDT(1h) alert',
 						enriched: true,
 						enrichmentData: { sentiment: 'bullish' },
 						tokenUsage: { totalTokens: 42 },
@@ -755,7 +1097,9 @@ describe('AlertStorageService', () => {
 				{
 					id: 'alert-1',
 					receivedAt: '2026-06-06T12:00:00.000Z',
-					text: 'BTC alert',
+					text: 'BINANCE:BTCUSDT(1h) alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
 					signalClass: 'unknown',
 					enriched: true,
 					enrichmentData: { sentiment: 'bullish' },
@@ -1249,6 +1593,171 @@ describe('AlertStorageService', () => {
 
 			await expect(AlertStorageService.listAlerts({ limit: 10 })).rejects.toMatchObject({
 				code: 'STORAGE_UNAVAILABLE',
+			});
+		});
+
+		describe('current_price read fields (GH-599)', () => {
+			it('surfaces currentPrice and priceCurrency on stored enriched alerts', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: [buildQueryDoc('gh599-read', {
+						receivedAt: buildTimestamp('2026-08-25T12:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-11-23T12:00:00.000Z'),
+						text: 'ETHUSDT pasó a señal de COMPRA',
+						enriched: true,
+						enrichmentData: {
+							current_price: 3240.51,
+							price_currency: 'USDT',
+						},
+						tokenUsage: null,
+						deliveryResults: [],
+						source: 'webhook',
+						useTradingViewData: false,
+						tradingViewEnrichmentApplied: false,
+					})],
+				});
+
+				const result = await AlertStorageService.listAlerts({ limit: 1 });
+				expect(result.alerts[0].currentPrice).toBe(3240.51);
+				expect(result.alerts[0].priceCurrency).toBe('USDT');
+			});
+
+			it('omits the read fields when stored price is missing or invalid', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: [buildQueryDoc('gh599-read-bad', {
+						receivedAt: buildTimestamp('2026-08-25T12:00:00.000Z'),
+						expiresAt: buildTimestamp('2026-11-23T12:00:00.000Z'),
+						text: 'ETHUSDT pasó a señal de COMPRA',
+						enriched: true,
+						enrichmentData: {
+							current_price: -10,
+							price_currency: 'us dollars',
+						},
+						tokenUsage: null,
+						deliveryResults: [],
+						source: 'webhook',
+						useTradingViewData: false,
+						tradingViewEnrichmentApplied: false,
+					})],
+				});
+
+				const result = await AlertStorageService.listAlerts({ limit: 1 });
+				expect(result.alerts[0]).not.toHaveProperty('currentPrice');
+				expect(result.alerts[0]).not.toHaveProperty('priceCurrency');
+			});
+		});
+
+		// ── Issue #1285 ──────────────────────────────────────────────────────
+		// Production returned 503 on every read endpoint while writes succeeded
+		// 29/29. `listCollections()` and write/init success both reported the
+		// dependency healthy, and the response message blamed credentials that
+		// were demonstrably working. The suite below pins the four fixes.
+
+		it('declares the composite Firestore index required by the ordered alerts read', () => {
+			const fs = require('fs');
+			const path = require('path');
+			const indexes = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../firestore.indexes.json'), 'utf8'));
+			// Firestore applies a *free* final `__name__` ASC sort, so ordering by
+			// `__name__` DESC on top of `receivedAt` DESC needs this composite. The
+			// mock makes `orderBy` a no-op, so only this declaration can catch a
+			// missing index.
+			const alertIndex = indexes.indexes.find(index => index.collectionGroup === 'alerts'
+				&& index.fields.some(field => field.fieldPath === 'receivedAt' && field.order === 'DESCENDING')
+				&& index.fields.some(field => field.fieldPath === '__name__' && field.order === 'DESCENDING'));
+
+			expect(alertIndex).toBeDefined();
+		});
+
+		it('classifies a rejected query as failed_precondition and flags the missing index', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const missingIndexError = new Error(
+				'9 FAILED_PRECONDITION: The query requires an index. You can create an index here: '
+				+ 'https://console.firebase.google.com/project/cabros-bot/databases/(default)/indexes',
+			);
+			missingIndexError.code = 9;
+			mockGet.mockRejectedValueOnce(missingIndexError);
+
+			const error = await AlertStorageService.listAlerts({ limit: 10 }).catch(err => err);
+
+			expect(error).toMatchObject({
+				code: 'STORAGE_UNAVAILABLE',
+				category: 'failed_precondition',
+				missingIndex: true,
+			});
+		});
+
+		it('no longer blames credentials when the client initialized but the query was rejected', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const denied = new Error('7 PERMISSION_DENIED: Missing or insufficient permissions.');
+			denied.code = 7;
+			mockGet.mockRejectedValueOnce(denied);
+
+			const error = await AlertStorageService.listAlerts({ limit: 10 }).catch(err => err);
+
+			expect(error.message).not.toMatch(/Check Firestore credentials and project configuration/);
+			expect(error.message).toContain('permission denied');
+		});
+
+		it('still blames credentials when the client itself failed to initialize', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockInitializeApp.mockImplementationOnce(() => {
+				throw new Error('Bad credentials');
+			});
+
+			const error = await AlertStorageService.listAlerts({ limit: 10 }).catch(err => err);
+
+			expect(error).toMatchObject({ code: 'STORAGE_UNAVAILABLE', category: 'uninitialized' });
+			expect(error.message).toContain('Check Firestore credentials and project configuration');
+		});
+
+		it('records the read failure so status can report the read path as degraded', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const denied = new Error('7 PERMISSION_DENIED');
+			denied.code = 7;
+			mockGet.mockRejectedValueOnce(denied);
+
+			await expect(AlertStorageService.listAlerts({ limit: 10 })).rejects.toThrow();
+
+			const snapshot = firestoreWriteMetricsService.getReadSnapshot();
+			expect(snapshot).toMatchObject({
+				readsAttempted: 1,
+				readsFailed: 1,
+				readHealth: 'degraded',
+				lastErrorCategory: 'permission_denied',
+			});
+		});
+	});
+
+	describe('probeOrderedAlertRead()', () => {
+		it('returns null without querying when alert storage is disabled', async () => {
+			await expect(AlertStorageService.probeOrderedAlertRead()).resolves.toBeNull();
+			expect(mockGet).not.toHaveBeenCalled();
+		});
+
+		it('runs the same ordered shape listAlerts uses so a missing index surfaces', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({ empty: true, docs: [] });
+
+			await expect(AlertStorageService.probeOrderedAlertRead()).resolves.toBe(true);
+
+			expect(mockOrderBy).toHaveBeenCalledWith('receivedAt', 'desc');
+			expect(mockOrderBy).toHaveBeenCalledWith(mockDocumentId(), 'desc');
+			expect(mockLimit).toHaveBeenCalledWith(1);
+		});
+
+		it('surfaces the storage error when the indexed read is rejected', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const missingIndexError = new Error('9 FAILED_PRECONDITION: The query requires an index.');
+			missingIndexError.code = 9;
+			mockGet.mockRejectedValueOnce(missingIndexError);
+
+			await expect(AlertStorageService.probeOrderedAlertRead()).rejects.toMatchObject({
+				code: 'STORAGE_UNAVAILABLE',
+				missingIndex: true,
+
 			});
 		});
 	});
@@ -2382,6 +2891,24 @@ describe('AlertStorageService', () => {
 							},
 						],
 					},
+					sentimentCalibration: {
+						sampleCount: 0,
+						evaluated: false,
+						saturated: false,
+						reason: 'no_samples',
+						min: null,
+						max: null,
+						p10: null,
+						p50: null,
+						p90: null,
+						spread: null,
+						distinctValueCount: 0,
+						bucketCount: 0,
+						buckets: [],
+						topBandCount: 0,
+						topBandShare: null,
+						rawScoreCapCount: 0,
+					},
 					tokenUsage: {
 						inputTokens: 10,
 						outputTokens: 20,
@@ -2855,6 +3382,190 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		describe('sentimentCalibration', () => {
+			function scoreDoc(id, sentimentScore, extra = {}) {
+				return buildQueryDoc(id, {
+					receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+					enriched: true,
+					source: 'webhook',
+					enrichmentData: { symbol: 'BTCUSDT', sentiment_score: sentimentScore, ...extra },
+				});
+			}
+
+			it('reports no samples and an explicit reason for an empty window', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockGet.mockResolvedValueOnce({ empty: true, docs: [] });
+
+				const result = await AlertStorageService.summarizeAlerts({
+					from: '2026-06-06T00:00:00.000Z',
+					to: '2026-06-07T00:00:00.000Z',
+					limit: 200,
+				});
+
+				expect(result.enrichment.sentimentCalibration.sampleCount).toBe(0);
+				expect(result.enrichment.sentimentCalibration.evaluated).toBe(false);
+				expect(result.enrichment.sentimentCalibration.saturated).toBe(false);
+				expect(result.enrichment.sentimentCalibration.reason).toBe('no_samples');
+				expect(result.enrichment.sentimentCalibration.rawScoreCapCount).toBe(0);
+			});
+
+			it('flags the issue #1031 production shape as saturated', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				const saturated = [
+					...Array(42).fill(0.85),
+					...Array(33).fill(0.8),
+					...Array(10).fill(0.75),
+					...Array(3).fill(0.7),
+					...Array(4).fill(0.65),
+					...Array(4).fill(0.6),
+					...Array(1).fill(0.55),
+				];
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: saturated.map((value, index) => scoreDoc(`alert-${index}`, value)),
+				});
+
+				const result = await AlertStorageService.summarizeAlerts({
+					from: '2026-06-06T00:00:00.000Z',
+					to: '2026-06-07T00:00:00.000Z',
+					limit: 200,
+				});
+
+				const calibration = result.enrichment.sentimentCalibration;
+				expect(calibration.sampleCount).toBe(97);
+				expect(calibration.evaluated).toBe(true);
+				expect(calibration.saturated).toBe(true);
+				expect(calibration.reason).toBe('top_band_concentration');
+				expect(calibration.topBandCount).toBe(85);
+				expect(calibration.distinctValueCount).toBe(7);
+				expect(calibration.bucketCount).toBe(4);
+				expect(calibration.p10).toBeCloseTo(0.7, 6);
+				expect(calibration.p90).toBeCloseTo(0.85, 6);
+			});
+
+			it('reports a healthy window without warning', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				const scores = [];
+				for (let i = 0; i < 40; i += 1) {
+					scores.push((i % 10) / 10 + 0.05);
+				}
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: scores.map((value, index) => scoreDoc(`spread-${index}`, value)),
+				});
+
+				const result = await AlertStorageService.summarizeAlerts({
+					from: '2026-06-06T00:00:00.000Z',
+					to: '2026-06-07T00:00:00.000Z',
+					limit: 200,
+				});
+
+				const calibration = result.enrichment.sentimentCalibration;
+				expect(calibration.sampleCount).toBe(40);
+				expect(calibration.saturated).toBe(false);
+				expect(calibration.reason).toBeNull();
+				expect(calibration.bucketCount).toBeGreaterThanOrEqual(4);
+			});
+
+			it('uses the absolute value of a negative score', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: [
+						scoreDoc('bearish', -0.9),
+						scoreDoc('bullish', 0.2),
+						scoreDoc('neutral', 0),
+					],
+				});
+
+				const result = await AlertStorageService.summarizeAlerts({
+					from: '2026-06-06T00:00:00.000Z',
+					to: '2026-06-07T00:00:00.000Z',
+					limit: 200,
+				});
+
+				const calibration = result.enrichment.sentimentCalibration;
+				expect(calibration.sampleCount).toBe(3);
+				expect(calibration.min).toBe(0);
+				expect(calibration.max).toBeCloseTo(0.9, 6);
+				// Below the sample floor, so saturation is not declared.
+				expect(calibration.evaluated).toBe(false);
+				expect(calibration.reason).toBe('insufficient_sample');
+			});
+
+			it('counts how many alerts the CB-238 zero-source cap rewrote', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: [
+						scoreDoc('capped', 0.55, { sentiment_score_raw: 0.9 }),
+						scoreDoc('capped-two', -0.55, { sentiment_score_raw: -0.85 }),
+						scoreDoc('uncapped', 0.3),
+					],
+				});
+
+				const result = await AlertStorageService.summarizeAlerts({
+					from: '2026-06-06T00:00:00.000Z',
+					to: '2026-06-07T00:00:00.000Z',
+					limit: 200,
+				});
+
+				expect(result.enrichment.sentimentCalibration.rawScoreCapCount).toBe(2);
+			});
+
+			it('ignores plain alerts and malformed stored scores', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: [
+						buildQueryDoc('plain-alert', {
+							receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+							enriched: false,
+							source: 'webhook',
+							enrichmentData: { sentiment_score: 0.9 },
+						}),
+						scoreDoc('nan-score', 'not-a-number'),
+						scoreDoc('null-score', null),
+						scoreDoc('good-score', 0.3),
+					],
+				});
+
+				const result = await AlertStorageService.summarizeAlerts({
+					from: '2026-06-06T00:00:00.000Z',
+					to: '2026-06-07T00:00:00.000Z',
+					limit: 200,
+				});
+
+				expect(result.enrichment.sentimentCalibration.sampleCount).toBe(1);
+				expect(result.enrichment.sentimentCalibration.max).toBeCloseTo(0.3, 6);
+			});
+
+			it('never lets an unreadable score break the summary', async () => {
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+				mockGet.mockResolvedValueOnce({
+					empty: false,
+					docs: [
+						scoreDoc('weird', 0.4),
+						buildQueryDoc('bad-enrichment', {
+							receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+							enriched: true,
+							source: 'webhook',
+							enrichmentData: 'not-an-object',
+						}),
+					],
+				});
+
+				const result = await AlertStorageService.summarizeAlerts({
+					from: '2026-06-06T00:00:00.000Z',
+					to: '2026-06-07T00:00:00.000Z',
+					limit: 200,
+				});
+
+				expect(result.totalAlerts).toBe(2);
+				expect(result.enrichment.sentimentCalibration.sampleCount).toBe(1);
+			});
+		});
+
 		it('aggregates evidenceCoverage across zero-, low-, and high-source enriched alerts', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({
@@ -3103,6 +3814,48 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		// Regression (issue #222): production bySymbol contained a bare integer "53"
+		// and the parse artifact "MASTER", polluting the same analytics surface this
+		// work is meant to clean up.
+		it('does not index numeric-only or single-character symbols in bySymbol', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-numeric', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						text: 'Momentum shifted after 53 candles',
+						symbol: '53',
+						exchange: 'NASDAQ',
+						deliveryResults: [],
+						source: 'webhook',
+					}),
+					buildQueryDoc('alert-single', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						text: 'Signal on B',
+						symbol: 'B',
+						deliveryResults: [],
+						source: 'webhook',
+					}),
+					buildQueryDoc('alert-valid', {
+						receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+						text: 'BINANCE:ETHUSDT(D) alert triggered',
+						symbol: 'ETHUSDT',
+						exchange: 'BINANCE',
+						deliveryResults: [],
+						source: 'webhook',
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+			});
+
+			expect(result.bySymbol).toEqual({ ETHUSDT: 1, unknown: 2 });
+		});
+
 		it('aggregates per-channel delivery latency with average, p95, and sampleCount and omits zero-delivery channels', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({
@@ -3245,6 +3998,91 @@ describe('AlertStorageService', () => {
 				expect(AlertStorageService.parseSymbolFromText('')).toBeNull();
 				expect(AlertStorageService.parseSymbolFromText(null)).toBeNull();
 			});
+
+			// Regression (issue #222): the summary metric showed a bare integer "53"
+			// indexed as if it were a ticker. Integers and single characters are never
+			// valid symbols, even when they are syntactically well formed.
+			it('rejects bare integers instead of extracting them as tickers', () => {
+				expect(AlertStorageService.parseSymbolFromText('53')).toBeNull();
+				expect(AlertStorageService.parseSymbolFromText('53(1h)')).toBeNull();
+				expect(AlertStorageService.parseSymbolFromText('Price moved 53 points on 1h momentum shift')).toBeNull();
+				expect(AlertStorageService.parseSymbolFromText('RSI crossed 53 on the daily close')).toBeNull();
+			});
+
+			// The timeframe is not the symbol: "BTCUSDT(53)" is a legitimate
+			// extraction and must keep working.
+			it('treats a numeric token inside parentheses as the timeframe, not the symbol', () => {
+				expect(AlertStorageService.parseSymbolFromText('BTCUSDT(53)')).toEqual({
+					symbol: 'BTCUSDT',
+					exchange: null,
+				});
+			});
+
+			it('rejects single-character symbols', () => {
+				expect(AlertStorageService.parseSymbolFromText('B')).toBeNull();
+				expect(AlertStorageService.parseSymbolFromText('X(1h)')).toBeNull();
+				expect(AlertStorageService.parseSymbolFromText('A:1')).toBeNull();
+			});
+
+			it('rejects numeric-only and single-character exchange-qualified symbols', () => {
+				expect(AlertStorageService.parseSymbolFromText('NASDAQ:53')).toBeNull();
+				expect(AlertStorageService.parseSymbolFromText('NASDAQ:5')).toBeNull();
+			});
+
+			it('still accepts two-character real tickers', () => {
+				expect(AlertStorageService.parseSymbolFromText('FX_IDC:USDCLP(D)')).toEqual({
+					symbol: 'USDCLP',
+					exchange: 'FX_IDC',
+				});
+				expect(AlertStorageService.parseSymbolFromText('ON(1h)')).toEqual({
+					symbol: 'ON',
+					exchange: null,
+				});
+			});
+
+			it('reuses hardened asset-context normalization for crypto pairs and suffixes', () => {
+				expect(AlertStorageService.parseSymbolFromText('BTC/USDT breakout')).toEqual({
+					symbol: 'BTC/USDT',
+					exchange: null,
+				});
+				expect(AlertStorageService.parseSymbolFromText('aerosol prices rose after the announcement')).toBeNull();
+				expect(AlertStorageService.parseSymbolFromText('teeth broke resistance')).toBeNull();
+			});
+		});
+
+		describe('isValidExtractedSymbol()', () => {
+			it('rejects non-strings, blank, and unknown sentinels', () => {
+				expect(AlertStorageService.isValidExtractedSymbol(null)).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol(undefined)).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol(42)).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('')).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('   ')).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('unknown')).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('UNKNOWN')).toBe(false);
+			});
+
+			it('rejects numeric-only and single-character symbols', () => {
+				expect(AlertStorageService.isValidExtractedSymbol('53')).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('1')).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('007')).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('A')).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('/')).toBe(false);
+			});
+
+			it('rejects symbols containing whitespace or path separators', () => {
+				expect(AlertStorageService.isValidExtractedSymbol('BTC USDT')).toBe(false);
+				expect(AlertStorageService.isValidExtractedSymbol('A/B')).toBe(false);
+			});
+
+			it('accepts real tickers and a normalized slash pair', () => {
+				expect(AlertStorageService.isValidExtractedSymbol('BTCUSDT')).toBe(true);
+				expect(AlertStorageService.isValidExtractedSymbol('ETHUSD')).toBe(true);
+				expect(AlertStorageService.isValidExtractedSymbol('AAPL')).toBe(true);
+				expect(AlertStorageService.isValidExtractedSymbol('USDCLP')).toBe(true);
+				expect(AlertStorageService.isValidExtractedSymbol('BRK.B')).toBe(true);
+				expect(AlertStorageService.isValidExtractedSymbol('on')).toBe(true);
+				expect(AlertStorageService.isValidExtractedSymbol('BTC/USDT')).toBe(true);
+			});
 		});
 
 		describe('extractSymbolAndExchange()', () => {
@@ -3274,6 +4112,39 @@ describe('AlertStorageService', () => {
 				expect(AlertStorageService.extractSymbolAndExchange({ text: 'Not a symbol alert' })).toEqual({
 					symbol: 'unknown',
 					exchange: null,
+				});
+			});
+
+			it('rejects numeric-only and single-character values supplied as explicit properties', () => {
+				expect(AlertStorageService.extractSymbolAndExchange({ symbol: '53' })).toEqual({
+					symbol: 'unknown',
+					exchange: null,
+				});
+				expect(AlertStorageService.extractSymbolAndExchange({ ticker: '53' })).toEqual({
+					symbol: 'unknown',
+					exchange: null,
+				});
+				expect(AlertStorageService.extractSymbolAndExchange({ symbol: 'A' })).toEqual({
+					symbol: 'unknown',
+					exchange: null,
+				});
+				expect(AlertStorageService.extractSymbolAndExchange({ symbol: 'NASDAQ:53' })).toEqual({
+					symbol: 'unknown',
+					exchange: null,
+				});
+				expect(AlertStorageService.extractSymbolAndExchange({ enrichmentData: { symbol: '53' } })).toEqual({
+					symbol: 'unknown',
+					exchange: null,
+				});
+			});
+
+			it('falls back to raw text extraction when an explicit property is invalid', () => {
+				expect(AlertStorageService.extractSymbolAndExchange({
+					symbol: '53',
+					text: 'BINANCE:ETHUSDT(D) cambió a señal de VENTA',
+				})).toEqual({
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
 				});
 			});
 		});
@@ -3428,7 +4299,7 @@ describe('AlertStorageService', () => {
 				exists: true,
 				id: 'alert-1',
 				data: () => ({
-					text: 'BTC alert',
+					text: 'BINANCE:BTCUSDT(1h) alert',
 					receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
 					expiresAt: buildTimestamp('2026-12-31T00:00:00.000Z'),
 				}),
@@ -3545,6 +4416,54 @@ describe('AlertStorageService', () => {
 			]);
 			expect(result).toHaveLength(2);
 			expect(mockBatchSet).toHaveBeenCalledTimes(2);
+		});
+	});
+
+	// GH-599: `risk_reward_ratio_source` is added by `saveAlertInternal()` via
+	// `applyDeterministicRiskReward()`, so it exists ONLY on the persisted document. The
+	// dry-run branch returns `enrichedData` before persistence and never gains the field,
+	// so documenting it solely under the dry-run `DeliveryResult` payload published a
+	// provenance tag on a response that cannot contain it, while the stored-alert contract
+	// that CAN contain it stayed undocumented. Anchor the GH-599 fields on `StoredAlert`.
+	describe('GH-599 persisted entry-price contract', () => {
+		const openapi = require('../../src/openapi/openapi.json');
+		const storedAlertEnrichment = openapi.components.schemas.StoredAlert.properties.enrichmentData;
+
+		it('documents current_price and price_currency on stored alert enrichment data', () => {
+			expect(storedAlertEnrichment.properties).toHaveProperty('current_price');
+			expect(storedAlertEnrichment.properties).toHaveProperty('price_currency');
+			// The price is the model's reading of grounded context, not a snippet-level
+			// extraction, so the contract must not imply field-level citation.
+			expect(storedAlertEnrichment.properties.current_price.description).toMatch(/no field-level citation/i);
+		});
+
+		it('documents risk_reward_ratio_source provenance on stored alert enrichment data', () => {
+			expect(storedAlertEnrichment.properties).toHaveProperty('risk_reward_ratio_source');
+			expect(storedAlertEnrichment.properties.risk_reward_ratio_source.description).toMatch(/computed/i);
+			expect(storedAlertEnrichment.properties.risk_reward_ratio_source.description).toMatch(/persist|stored|Firestore/i);
+		});
+
+		it('enumerates every levelsSource and priceSource value the merge path can emit', () => {
+			// `selectRiskMetadata()` falls back to `mcp.levelsSource || 'tradingview-mcp'`,
+			// so `tradingview-mcp` is the value most MCP-sourced alerts actually persist.
+			// An enum missing it marks the commonest production shape invalid.
+			expect(storedAlertEnrichment.properties.levelsSource.enum).toEqual([
+				'tradingview-mcp',
+				'gemini-grounding',
+				'fallback-trade-plan',
+				'derived-quote',
+			]);
+			expect(storedAlertEnrichment.properties.priceSource.enum).toEqual([
+				'tradingview-mcp',
+				'gemini-grounding',
+				'derived-quote',
+			]);
+		});
+
+		it('does not advertise risk_reward_ratio_source as a dry-run response field', () => {
+			const dryRunEnrichment = openapi.components.schemas.DeliveryResult
+				.properties.payload.properties.enrichedData.properties;
+			expect(dryRunEnrichment).not.toHaveProperty('risk_reward_ratio_source');
 		});
 	});
 });

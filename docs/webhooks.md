@@ -189,6 +189,31 @@ When `ranked` is `true`, each successful scan also includes structured scores:
 }
 ```
 
+**Provider-outage fast-fail (502):**
+
+Before starting the sequential scans the handler reads the process-local TradingView MCP status. When the status is `degraded` with `lastErrorCategory` of `http_5xx`, `request_failed`, or `circuit_breaker_open` **and** the circuit breaker still reports `state: "open"`, no scanner call is attempted: the endpoint returns `502 TRADINGVIEW_MCP_UNAVAILABLE` with every requested scan reported as `status: "skipped"` plus a `reason`.
+
+```json
+{
+  "success": false,
+  "code": "TRADINGVIEW_MCP_UNAVAILABLE",
+  "error": "TradingView MCP is currently unavailable (circuit breaker: open, lastError: http_5xx). Scans skipped.",
+  "scanResults": [
+    { "scan": "top_gainers", "status": "skipped", "reason": "TradingView MCP is currently unavailable (circuit breaker: open, lastError: http_5xx). Scans skipped." }
+  ],
+  "timedOut": false
+}
+```
+
+This endpoint returns `502` in two distinct shapes:
+
+| `code` | Meaning |
+|---|---|
+| `TRADINGVIEW_MCP_UNAVAILABLE` | The readiness gate skipped every scan; **no** scanner call was attempted. |
+| `ALL_SCANS_FAILED` | The scans were attempted and every one failed at the provider. |
+
+**Self-recovery guarantee:** the gate is intentionally keyed on the circuit breaker's time-based state, not on the sticky `status: "degraded"` runtime flag. `getBreakerState()` moves `open` → `half-open` once `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses, so the first request after the cooldown is allowed through as a bounded recovery probe. A transient outage therefore always self-heals without a process restart, while a provider that is genuinely still down still fails fast instead of firing every scan at it. Degraded states outside the provider-outcome categories (for example `http_4xx`), a missing circuit-breaker state, and readiness-lookup errors all fail open and scan normally.
+
 ### POST /api/webhook/alert
 
 Send alert via webhook. Accepts either JSON or plain text.
@@ -233,3 +258,97 @@ BTC price is at $45,000 - breakout detected!
   "enriched": false
 }
 ```
+
+#### Per-symbol channel routing (`symbolRoutes`)
+
+`POST /api/webhook/alert` accepts an optional `symbolRoutes` object to send different
+symbols to different channels:
+
+```json
+{
+  "text": "BINANCE:BTCUSDT breakout confirmed",
+  "symbolRoutes": {
+    "BTCUSDT": { "channels": ["telegram"] },
+    "NASDAQ:NVDA": { "channels": ["discord"] }
+  }
+}
+```
+
+Keys are bare symbols (`BTCUSDT`) or exchange-qualified (`NASDAQ:NVDA`), matched
+case-insensitively against the alert text. Digit-initial symbols are supported
+(e.g. `1INCHUSDT`).
+
+A dispatch is produced **only** for a symbol that matches one of the configured keys.
+Text containing no configured route key is delivered normally through the request-level
+`channels` or the enabled-channel broadcast — indicator words and other uppercase
+tokens are not treated as symbols. Each delivery result includes the matched `symbol`
+(bare form, so a `NASDAQ:NVDA` route reports `NVDA`).
+
+When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` is enabled and it narrows the
+request-level channel set, every `symbolRoutes` entry is intersected with the same set,
+so a route cannot resurrect a channel that is still in its repeat-suppression cooldown.
+
+Omitting `symbolRoutes` preserves the existing broadcast and request-level routing
+behavior exactly.
+
+### POST /api/webhook/message
+
+Deliver a generic, non-alert message to the enabled notification channels. Use this when the payload is
+operator-authored automation output rather than a TradingView alert or scanner run.
+
+**Request (JSON):**
+```json
+{
+  "message": "Custom notification from automation",
+  "channels": ["telegram", "whatsapp"]
+}
+```
+
+- `message`: Required non-empty string. Values longer than `MAX_MESSAGE_LENGTH` (4,000 characters) are clipped
+  before delivery.
+- `channels`: Optional subset of `telegram`, `whatsapp`, `discord`. Omit it to broadcast to every enabled channel.
+- `telegramChatId` / `telegramThreadId` / `whatsappChatId` / `discordWebhookUrl`: Optional per-channel destination
+  overrides. `telegramThreadId` targets a forum topic (`0` = General).
+- `dryValidate`: Optional boolean. Validates and returns chunk estimates without sending anything.
+- Idempotency: send `idempotency-key` / `x-idempotency-key` (or `idempotencyKey` in the body or query) to replay a
+  prior response instead of re-delivering. Reusing a key with a different payload returns `409`.
+
+**Response (message within 4,000 characters):**
+```json
+{
+  "success": true,
+  "results": [
+    { "channel": "telegram", "success": true, "messageId": "tg-msg-123" }
+  ]
+}
+```
+
+**Response (message exceeded 4,000 characters):**
+```json
+{
+  "success": true,
+  "truncated": true,
+  "originalLength": 6000,
+  "deliveredLength": 4003,
+  "results": [
+    { "channel": "telegram", "success": true, "messageId": "tg-msg-123" }
+  ]
+}
+```
+
+**Truncation metadata (GH-602).** Inbound messages above `MAX_MESSAGE_LENGTH` are clipped to 4,000 characters plus a
+`'...'` suffix before delivery, so `deliveredLength` is 4,003 in the default configuration. When truncation occurs the
+response adds:
+
+- `truncated`: Always `true` when present. Callers can use it to detect silent content loss.
+- `originalLength`: Inbound character count before clipping (minimum 4,001).
+- `deliveredLength`: Character count of the text actually handed to the notification channels.
+
+These three fields are **strictly additive and appear only when truncation occurred** — a message that fits returns
+`{ success: true, results }` unchanged, so existing integrations are unaffected. Truncation is independent of chunk
+estimation: a long message that also exceeds a channel's single-message limit returns both the truncation fields and
+the `delivered` / `channelDetails` / `estimatedChunks` metadata.
+
+A `console.warn` line records the clip with numeric `originalLength`, `deliveredLength`, and `max` values only; message
+content is never logged. Delivery proceeds with the clipped text regardless — truncation never blocks a send.
+

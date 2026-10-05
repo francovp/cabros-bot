@@ -4,6 +4,7 @@ const {
 	normalizeSignalSide,
 	deriveAssetContext,
 	deriveCleanSearchQuery,
+	resolveMcpExchange,
 } = require('../../src/services/tradingview/parseTradingViewSignal');
 
 describe('TradingView signal parser', () => {
@@ -63,6 +64,20 @@ describe('TradingView signal parser', () => {
 	});
 
 	it('keeps known futures venues neutral', () => {
+		// The bare `EXCHANGE:SYMBOL(TF)` form takes a different code path inside
+		// deriveAssetContext than the side-word form. Both must apply the same
+		// neutrality rule: a crypto suffix on CME_MINI:ETH must NOT relabel the
+		// futures venue as crypto.
+		expect(deriveAssetContext('CME_MINI:ETH(D)')).toEqual(expect.objectContaining({
+			exchange: 'CME_MINI',
+			assetClass: null,
+		}));
+		expect(deriveCleanSearchQuery('CME_MINI:ETH(D)')).toBe('ETH market news analyst');
+		expect(deriveAssetContext('FX_IDC:USDCLP(D)')).toEqual(expect.objectContaining({
+			exchange: 'FX_IDC',
+			assetClass: null,
+		}));
+
 		for (const exchange of ['CME_MINI', 'CBOT_MINI']) {
 			expect(deriveAssetContext(`${exchange}:ESU2026(D) cambió a señal de COMPRA`)).toEqual(expect.objectContaining({
 				exchange,
@@ -243,6 +258,92 @@ describe('TradingView signal parser', () => {
 			assetClass: 'crypto',
 		}));
 		expect(deriveCleanSearchQuery(ambiguousQuoteText)).toBe('ETH/BTC crypto price news market analyst');
+	});
+
+	// #591: the TradingView MCP server advertises only a subset of venues
+	// (EGX, BIST, NASDAQ, NYSE, Bursa Malaysia, HKEX, SSE, SZSE, TWSE, TPEX +
+	// crypto). Prefixes outside that set are resolved by the server to KUCOIN
+	// and every call returns "No data found for <SYM> on KUCOIN".
+	it('maps BATS to a venue the MCP server actually resolves', () => {
+		const resolved = resolveMcpExchange('BATS');
+
+		expect(resolved.mapped).toBe(true);
+		expect(resolved.mappedExchange).toBe('NASDAQ');
+		expect(resolved.reason).toMatch(/BATS/);
+	});
+
+	it('maps NASDAQ_DLY to a venue the MCP server actually resolves', () => {
+		const resolved = resolveMcpExchange('NASDAQ_DLY');
+
+		expect(resolved.mapped).toBe(true);
+		expect(resolved.mappedExchange).toBe('NASDAQ');
+		expect(resolved.reason).toMatch(/NASDAQ_DLY/);
+	});
+
+	it('leaves FX_IDC and SPCFD unmapped because the server has no venue for them', () => {
+		// Verified live: USDCLP/FX_IDC and SPX/SPCFD both fall through to KUCOIN for
+		// every candidate venue tried (OANDA/FOREXCOM/CBOE/CAPITALCOM/SP/INDEX/FRED).
+		// Inventing an alias here would fabricate a venue, so they degrade instead.
+		for (const exchange of ['FX_IDC', 'SPCFD']) {
+			const resolved = resolveMcpExchange(exchange);
+
+			expect(resolved.mapped).toBe(false);
+			expect(resolved.mappedExchange).toBe(exchange);
+			expect(resolved.unsupported).toBe(true);
+			expect(resolved.reason).toMatch(new RegExp(exchange));
+		}
+	});
+
+	it('keeps MCP-supported exchanges untouched', () => {
+		for (const exchange of ['BINANCE', 'NASDAQ', 'NYSE', 'BIST', 'EGX', 'SSE', 'SZSE', 'TWSE', 'TPEX', 'HKEX', 'KUCOIN', 'BYBIT', 'MEXC']) {
+			const resolved = resolveMcpExchange(exchange);
+
+			expect(resolved.mapped).toBe(false);
+			expect(resolved.mappedExchange).toBe(exchange);
+			expect(resolved.unsupported).toBe(false);
+		}
+	});
+
+	it('accepts lowercase and padded exchange prefixes in alias resolution', () => {
+		expect(resolveMcpExchange(' bats ').mappedExchange).toBe('NASDAQ');
+		expect(resolveMcpExchange('nasdaq_dly').mappedExchange).toBe('NASDAQ');
+	});
+
+	it('degrades safely for missing or non-string exchange values', () => {
+		for (const value of [null, undefined, '', 42, {}]) {
+			const resolved = resolveMcpExchange(value);
+
+			expect(resolved.mappedExchange).toBeNull();
+			expect(resolved.mapped).toBe(false);
+			expect(resolved.unsupported).toBe(false);
+		}
+	});
+
+	it('does not rewrite the stored exchange when resolving aliases for outbound MCP calls', () => {
+		// The parser still reports the venue the screener actually sent, so stored
+		// alert metadata, asset classification and FX/futures neutrality are unchanged.
+		expect(parseTradingViewSignal('BATS:TSLA(D) cambió a señal de VENTA')).toEqual(expect.objectContaining({
+			exchange: 'BATS',
+		}));
+		expect(parseTradingViewSignal('FX_IDC:USDCLP(D) cambió a señal de VENTA')).toEqual(expect.objectContaining({
+			exchange: 'FX_IDC',
+		}));
+		expect(parseTradingViewSignal('SPCFD:SPX(D) cambió a señal de COMPRA')).toEqual(expect.objectContaining({
+			exchange: 'SPCFD',
+		}));
+
+		expect(deriveAssetContext('BATS:TSLA(D) cambió a señal de VENTA')).toEqual(expect.objectContaining({
+			exchange: 'BATS',
+			assetClass: 'stock',
+		}));
+		expect(deriveAssetContext('FX_IDC:USDCLP(D) cambió a señal de VENTA')).toEqual(expect.objectContaining({
+			exchange: 'FX_IDC',
+			assetClass: null,
+		}));
+		expect(deriveAssetContext('SPCFD:SPX(D) cambió a señal de COMPRA')).toEqual(expect.objectContaining({
+			exchange: 'SPCFD',
+			assetClass: 'stock',
+		}));
 	});
 
 	it('does not classify lowercase bare symbols used as prose words', () => {
