@@ -23,6 +23,8 @@ const DELETE_MAX_RETRY_DELAY_MS = 1500;
 const SEEN_RECEIPT_TTL_MS = 120000;
 const SEEN_RECEIPT_MAX_ENTRIES = 500;
 
+const ERROR_TEXT_MAX_LENGTH = 200;
+
 class WhatsAppCommandBridgeService {
 	/**
 	 * @param {Object} [options]
@@ -333,6 +335,37 @@ class WhatsAppCommandBridgeService {
 		}
 	}
 
+	/**
+ * `lastError` is published verbatim on `/api/status`, so no provider-authored
+ * text may reach it: the delete URL is `/deleteNotification/{apiKey}/{receiptId}`
+ * and a GreenAPI error body can echo that URL back, which would publish the api
+ * key on a status endpoint. Failures are therefore described by our own status
+ * code or a bounded classification, and `_sanitizeErrorText` only guards the
+ * transport error text we did not author. Do not re-add the response body.
+ */
+_sanitizeErrorText(text) {
+		let sanitized = typeof text === 'string' ? text.trim() : '';
+		const apiKey = this.apiKey;
+		if (apiKey && sanitized.includes(apiKey)) {
+			sanitized = sanitized.split(apiKey).join('[redacted]');
+		}
+		if (sanitized.length > ERROR_TEXT_MAX_LENGTH) {
+			sanitized = `${sanitized.slice(0, ERROR_TEXT_MAX_LENGTH)}…`;
+		}
+		return sanitized;
+	}
+
+	_describeDeleteFailure(deleteResult) {
+		if (deleteResult.timeout || deleteResult.aborted) {
+			return `acknowledgement step timed out after ${this.deleteTimeoutMs}ms`;
+		}
+		const statusCode = Number(deleteResult.statusCode);
+		if (Number.isFinite(statusCode) && statusCode > 0) {
+			return `HTTP ${statusCode}`;
+		}
+		return 'request failed';
+	}
+
 	async _deleteNotificationWithRetry(receiptId) {
 		const deleteUrl = this._getDeleteNotificationUrl(receiptId);
 		const pollSignal = this.abortController ? this.abortController.signal : undefined;
@@ -343,20 +376,19 @@ class WhatsAppCommandBridgeService {
 					if (response.ok) {
 						return { success: true, receiptId };
 					}
-					const rawText = await response.text().catch(() => '');
 					const retryable = response.status === 429 || response.status >= 500;
 					return {
 						success: false,
 						receiptId,
 						statusCode: response.status,
-						error: `HTTP ${response.status} ${rawText}`.trim(),
+						error: `HTTP ${response.status}`,
 						retryable,
 					};
 				} catch (error) {
 					return {
 						success: false,
 						receiptId,
-						error: error.message || String(error),
+						error: error.name === 'AbortError' ? 'aborted' : (error.message || String(error)),
 						timeout: error.name === 'AbortError',
 						retryable: true,
 					};
@@ -387,8 +419,7 @@ class WhatsAppCommandBridgeService {
 			}
 
 			if (!response.ok) {
-				const rawText = await response.text().catch(() => '');
-				const err = `GreenAPI receiveNotification failed: HTTP ${response.status} ${rawText}`;
+				const err = this._sanitizeErrorText(`GreenAPI receiveNotification failed: HTTP ${response.status}`);
 				this.lastError = err;
 				this.lastErrorAt = Date.now();
 				this.logger.warn(`[WhatsAppCommandBridge] ${err}`);
@@ -430,15 +461,18 @@ class WhatsAppCommandBridgeService {
 			}
 
 			const deleteResult = await this._deleteNotificationWithRetry(receiptId);
+			const deleteAttempts = Number.isFinite(deleteResult.attemptCount) ? deleteResult.attemptCount : 1;
+			if (deleteAttempts > 1) {
+				this.deleteRetryCount += deleteAttempts - 1;
+			}
 			if (!deleteResult.success) {
 				this.deleteFailureCount += 1;
-				if (deleteResult.attemptCount > 1) {
-					this.deleteRetryCount += deleteResult.attemptCount - 1;
-				}
-				if (deleteResult.timeout) {
+				if (deleteResult.timeout || deleteResult.aborted) {
 					this.deleteAbortedCount += 1;
 				}
-				const err = `Failed to delete notification ${receiptId}: ${deleteResult.error || 'unknown error'}`;
+				const err = this._sanitizeErrorText(
+					`Failed to delete notification ${receiptId}: ${this._describeDeleteFailure(deleteResult)}`,
+				);
 				this.lastError = err;
 				this.lastErrorAt = Date.now();
 				this.logger.warn(`[WhatsAppCommandBridge] ${err}`);
@@ -453,7 +487,7 @@ class WhatsAppCommandBridgeService {
 				this.logger.warn(`[WhatsAppCommandBridge] ${err}`);
 				return { processed: false, error: err, timeout: true };
 			}
-			const err = error.message || String(error);
+			const err = this._sanitizeErrorText(error.message || String(error));
 			this.lastError = err;
 			this.lastErrorAt = Date.now();
 			this.logger.warn(`[WhatsAppCommandBridge] Polling error: ${err}`);

@@ -13682,7 +13682,7 @@
               "string",
               "null"
             ],
-            "description": "Sanitized last poll or acknowledgement error. Never includes the api key, chat ids, or message text."
+            "description": "Sanitized last poll or acknowledgement error. Never includes the api key, chat ids, message text, or the provider response body: it is composed only from our own status code or a bounded classification (for example 'HTTP 500' or 'acknowledgement step timed out after 10000ms'), because the GreenAPI delete URL is /deleteNotification/{apiKey}/{receiptId} and an echoing error body would otherwise publish the api key here."
           },
           "lastErrorAt": {
             "type": [
@@ -13704,12 +13704,12 @@
           "deleteRetryCount": {
             "type": "integer",
             "minimum": 0,
-            "description": "Additional deleteNotification attempts spent on retries after the first attempt."
+            "description": "Additional deleteNotification attempts spent on retries after the first attempt, counted whether or not the retry recovered: a delete that failed once and succeeded on attempt 2 leaves deleteFailureCount at 0 and deleteRetryCount at 1."
           },
           "deleteAbortedCount": {
             "type": "integer",
             "minimum": 0,
-            "description": "Acknowledgement attempts that ended on their own bounded deadline."
+            "description": "Acknowledgement attempts that ended on their own bounded deadline, so the receipt may still be queued for redelivery."
           },
           "trackedReceiptCount": {
             "type": "integer",
