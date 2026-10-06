@@ -558,6 +558,12 @@ const isFieldValid = (field) => {
 
 const CREDENTIAL_FIELD_IDS = ['auth-email', 'auth-password'];
 
+// True only once initializeApp and setPersistence have resolved. The submit handler
+// is attached before the form is ever revealed, so this flag gates the Firebase call
+// rather than the listener — an unattached listener means a native GET that writes
+// the password into the URL.
+let firebaseAuthReady = false;
+
 // Both credential controls form one pair, so a rejected sign-in is described once
 // and associated with both of them. The message never carries the submitted values.
 const showCredentialError = (message) => {
@@ -578,6 +584,26 @@ const clearCredentialError = () => {
 	CREDENTIAL_FIELD_IDS.forEach((id) => getElement(id)?.removeAttribute('aria-invalid'));
 };
 
+const handleFirebaseCredentialSubmit = async (event) => {
+	event.preventDefault();
+	const emailField = getElement('auth-email');
+	const passwordField = getElement('auth-password');
+	if (!firebaseAuthReady || !authState.auth) {
+		showCredentialError('Sign-in is not available yet. Try again in a moment.');
+		return;
+	}
+	if (!isFieldValid(emailField) || !isFieldValid(passwordField)) {
+		showCredentialError('Enter an email address and password to sign in.');
+		return;
+	}
+	clearCredentialError();
+	try {
+		await authState.auth.signInWithEmailAndPassword(emailField.value, passwordField.value);
+	} catch (error) {
+		showCredentialError('Sign-in failed. Check the account and try again.');
+	}
+};
+
 const showSignedOutState = () => {
 	if (typeof detachActiveViewPoll === 'function') detachActiveViewPoll();
 	detachActiveViewPoll = null;
@@ -596,10 +622,12 @@ const showSignedInState = () => {
 };
 
 const setupFirebaseAuth = async (config) => {
+	firebaseAuthReady = false;
 	setHidden('legacy-connection', true);
 	setHidden('firebase-auth', false);
 	if (!config.configured) {
 		showAuthState('Firebase sign-in is unavailable. Ask an administrator to configure it.', true);
+		setHidden('auth-form', true);
 		return;
 	}
 
@@ -616,23 +644,8 @@ const setupFirebaseAuth = async (config) => {
 			&& window.firebase.auth.Auth.Persistence
 			&& window.firebase.auth.Auth.Persistence.NONE;
 		if (persistence && typeof auth.setPersistence === 'function') await auth.setPersistence(persistence);
+		firebaseAuthReady = true;
 
-		getElement('auth-form')?.addEventListener('submit', async (event) => {
-			event.preventDefault();
-			const emailField = getElement('auth-email');
-			const passwordField = getElement('auth-password');
-			if (!isFieldValid(emailField) || !isFieldValid(passwordField)) {
-				showCredentialError('Enter an email address and password to sign in.');
-				return;
-			}
-			clearCredentialError();
-			try {
-				await auth.signInWithEmailAndPassword(emailField.value, passwordField.value);
-			} catch (error) {
-				showCredentialError('Sign-in failed. Check the account and try again.');
-			}
-		});
-		CREDENTIAL_FIELD_IDS.forEach((id) => getElement(id)?.addEventListener('input', clearCredentialError));
 		getElement('sign-out')?.addEventListener('click', () => {
 			if (getElement('api-key')) getElement('api-key').value = '';
 			return auth.signOut();
@@ -666,7 +679,9 @@ const setupFirebaseAuth = async (config) => {
 			}
 		});
 	} catch (error) {
+		firebaseAuthReady = false;
 		showAuthState('Firebase sign-in is unavailable. Ask an administrator to configure it.', true);
+		setHidden('auth-form', true);
 	}
 };
 
@@ -7694,6 +7709,55 @@ const moveFocusToView = (name) => {
 	}
 };
 
+const setKeyFieldError = (message) => {
+	const apiKey = getElement('api-key');
+	const keyState = getElement('key-state');
+	if (!apiKey || !keyState) return;
+	keyState.className = 'response-error';
+	keyState.textContent = message;
+	apiKey.setAttribute('aria-invalid', 'true');
+};
+
+const clearKeyFieldError = () => {
+	const apiKey = getElement('api-key');
+	const keyState = getElement('key-state');
+	if (!apiKey || !keyState) return;
+	keyState.className = 'request-state';
+	apiKey.removeAttribute('aria-invalid');
+};
+
+// Session-only by contract: with Firebase admin auth on, the key stays in this tab's
+// memory for API-key-only webhook operations; otherwise it lives in sessionStorage.
+// Either way it is only ever sent as the x-api-key header, never in a URL.
+const saveLegacyApiKey = () => {
+	const apiKey = getElement('api-key');
+	const keyState = getElement('key-state');
+	if (!apiKey || !keyState) return false;
+	// The trim is an explicit precondition, not part of the fallback: native `required`
+	// accepts an all-whitespace value, and such a key is useless.
+	if (!isFieldValid(apiKey) || !String(apiKey.value == null ? '' : apiKey.value).trim()) {
+		setKeyFieldError('Enter an API key to use it for this session.');
+		return false;
+	}
+	clearKeyFieldError();
+	if (authState.enabled) {
+		keyState.textContent = 'API key kept only in memory for webhook operations.';
+		return true;
+	}
+	try {
+		sessionStorage.setItem('cabros-admin-api-key', apiKey.value);
+		keyState.textContent = 'API key saved for this browser session.';
+	} catch (error) {
+		keyState.textContent = `Could not save the API key: ${error.message}`;
+	}
+	return true;
+};
+
+const handleLegacyKeySubmit = (event) => {
+	event.preventDefault();
+	if (saveLegacyApiKey()) setupSseStream();
+};
+
 const setupLegacyConsole = ({ persist = true } = {}) => {
 	const apiKey = getElement('api-key');
 	const keyState = getElement('key-state');
@@ -7708,40 +7772,6 @@ const setupLegacyConsole = ({ persist = true } = {}) => {
 		keyState.textContent = 'API key is used only for webhook operations and is not stored.';
 	}
 
-	const setKeyFieldError = (message) => {
-		keyState.className = 'response-error';
-		keyState.textContent = message;
-		apiKey.setAttribute('aria-invalid', 'true');
-	};
-	const clearKeyFieldError = () => {
-		keyState.className = 'request-state';
-		apiKey.removeAttribute('aria-invalid');
-	};
-	// Session-only by contract: the key lives in sessionStorage (or in this tab's
-	// memory when persistence is off) and is only ever sent as the x-api-key header.
-	const saveKey = () => {
-		if (!isFieldValid(apiKey)) {
-			setKeyFieldError('Enter an API key to use it for this session.');
-			return false;
-		}
-		clearKeyFieldError();
-		if (!persist) {
-			keyState.textContent = 'API key kept only in memory for webhook operations.';
-			return true;
-		}
-		try {
-			sessionStorage.setItem('cabros-admin-api-key', apiKey.value);
-			keyState.textContent = 'API key saved for this browser session.';
-		} catch (error) {
-			keyState.textContent = `Could not save the API key: ${error.message}`;
-		}
-		return true;
-	};
-
-	getElement('connection-form')?.addEventListener('submit', (event) => {
-		event.preventDefault();
-		if (saveKey()) setupSseStream();
-	});
 	apiKey.addEventListener('input', clearKeyFieldError);
 
 	getElement('clear-key')?.addEventListener('click', () => {
@@ -7798,6 +7828,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 	}
 	canonicaliseConsoleUrl();
 
+	// Both credential forms are real <form> elements with no action, so this listener
+	// is what stops Enter from performing a native GET that would put the password or
+	// the API key in the URL. It must therefore exist before either card is revealed
+	// and before the first await below.
+	getElement('auth-form')?.addEventListener('submit', handleFirebaseCredentialSubmit);
+	CREDENTIAL_FIELD_IDS.forEach((id) => getElement(id)?.addEventListener('input', clearCredentialError));
+	getElement('connection-form')?.addEventListener('submit', handleLegacyKeySubmit);
 	getElement('clear-key')?.addEventListener('click', () => {
 		disconnectSse();
 	});

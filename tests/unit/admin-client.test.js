@@ -80,9 +80,18 @@ class FakeElement {
 		(this.listeners[type] ||= []).push(listener);
 	}
 
+	// Returns the dispatched event so a test can assert `defaultPrevented`. That flag
+	// is the only proxy for "the form did not navigate" here: the fake cannot perform
+	// a native GET, and an unhandled submit is exactly how a password would reach the
+	// URL.
 	async dispatch(type) {
-		const event = { preventDefault() {} };
+		const event = {
+			type,
+			defaultPrevented: false,
+			preventDefault() { this.defaultPrevented = true; },
+		};
 		for (const listener of this.listeners[type] || []) await listener(event);
+		return event;
 	}
 
 	setAttribute(name, value) {
@@ -107,8 +116,10 @@ class FakeElement {
 	// The credential forms lean on the browser's own constraints, and the fake
 	// dispatches `submit` directly rather than routing through a browser, so the
 	// double has to enforce them or every "invalid submit" assertion is vacuous.
+	// Values are NOT trimmed: a browser's `required` accepts '   ', and a double
+	// stricter than the browser would hide exactly that gap in production code.
 	checkValidity() {
-		const value = String(this.value == null ? '' : this.value).trim();
+		const value = String(this.value == null ? '' : this.value);
 		if (this.required && value === '') return false;
 		if (this.type === 'email' && value !== '' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return false;
 		return true;
@@ -1695,18 +1706,115 @@ describe('admin browser client', () => {
 			expect(browser.elementsById['api-key'].attributes['aria-invalid']).toBe('true');
 			expect(requests.map(([url]) => url)).not.toContain('/api/admin/events');
 
-			// An all-whitespace key is rejected too, which native `required` alone
-			// would accept.
+			// An all-whitespace key is refused by saveKey() itself. Native `required`
+			// accepts '   ', so this is production logic doing the work, not the double.
 			browser.elementsById['api-key'].value = '   ';
-			await browser.elementsById['connection-form'].dispatch('submit');
+			const whitespaceSubmit = await browser.elementsById['connection-form'].dispatch('submit');
 			await flush();
+			expect(whitespaceSubmit.defaultPrevented).toBe(true);
 			expect(browser.storage.has('cabros-admin-api-key')).toBe(false);
+			expect(browser.elementsById['key-state'].textContent).toContain('Enter an API key');
+			expect(requests.map(([url]) => url)).not.toContain('/api/admin/events');
 
 			browser.elementsById['api-key'].value = 'session-secret';
 			await browser.elementsById['api-key'].dispatch('input');
 			expect(browser.elementsById['api-key'].attributes['aria-invalid']).toBeUndefined();
 			await browser.elementsById['connection-form'].dispatch('submit');
 			await flush();
+			expect(browser.storage.get('cabros-admin-api-key')).toBe('session-secret');
+		});
+
+		// #951 round 1: both forms are real <form> elements with no action, so a submit
+		// that is not handled performs a native GET and writes the credentials into the
+		// URL, browser history and any upstream proxy access log. The listener must exist
+		// before the card is revealed, and readiness gates the SDK call rather than the
+		// listener — /admin/auth-config fails open to { enabled: true, configured: false }.
+		it('never lets a credential form navigate, before or without Firebase readiness', async () => {
+			let releasePersistence;
+			const persistencePending = new Promise((resolve) => { releasePersistence = resolve; });
+			let authStateChanged;
+			const auth = {
+				setPersistence: jest.fn(() => persistencePending),
+				onAuthStateChanged: jest.fn((listener) => {
+					authStateChanged = listener;
+					listener(null);
+					return jest.fn();
+				}),
+				signInWithEmailAndPassword: jest.fn(async () => {
+					await authStateChanged({
+						getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+						getIdTokenResult: jest.fn().mockResolvedValue({ claims: { roles: ['admin.operator'] } }),
+					});
+				}),
+				signOut: jest.fn().mockResolvedValue(undefined),
+			};
+			const browser = createBrowser({
+				firebase: {
+					initializeApp: jest.fn(),
+					// Auth.Persistence is what makes setupFirebaseAuth await setPersistence,
+					// which is the window this test submits inside.
+					auth: Object.assign(jest.fn(() => auth), { Auth: { Persistence: { NONE: 'none' } } }),
+				},
+				fetchImpl: async (url) => {
+					if (url === '/admin/auth-config') return response(AUTH_CONFIG);
+					if (url === '/openapi.json') return response(contract);
+					return response({});
+				},
+			});
+			await flush();
+
+			// The card is revealed while the SDK bootstrap is still in flight.
+			expect(browser.elementsById['auth-form'].hidden).toBe(false);
+			browser.elementsById['auth-email'].value = 'operator@example.com';
+			browser.elementsById['auth-password'].value = 'PlaintextSecret123!';
+			const duringLoad = await browser.elementsById['auth-form'].dispatch('submit');
+			await flush();
+			expect(duringLoad.defaultPrevented).toBe(true);
+			expect(auth.signInWithEmailAndPassword).not.toHaveBeenCalled();
+			expect(browser.elementsById['auth-credentials-error'].textContent).toContain('not available yet');
+
+			releasePersistence();
+			await flush();
+			const afterReady = await browser.elementsById['auth-form'].dispatch('submit');
+			await flush();
+			expect(afterReady.defaultPrevented).toBe(true);
+			expect(auth.signInWithEmailAndPassword).toHaveBeenCalledTimes(1);
+		});
+
+		it('withholds the credential form entirely when Firebase auth is unconfigured', async () => {
+			const auth = { auth: jest.fn() };
+			const browser = createBrowser({
+				firebase: { initializeApp: jest.fn(), auth: jest.fn(() => auth) },
+				fetchImpl: async (url) => {
+					// loadAuthConfig() falls back to this shape on any timeout or error.
+					if (url === '/admin/auth-config') return response({ enabled: true, configured: false });
+					return response({});
+				},
+			});
+			await flush();
+
+			expect(browser.elementsById['firebase-auth'].hidden).toBe(false);
+			expect(browser.elementsById['auth-form'].hidden).toBe(true);
+			expect(browser.elementsById['auth-state'].textContent).toContain('unavailable');
+
+			browser.elementsById['auth-email'].value = 'operator@example.com';
+			browser.elementsById['auth-password'].value = 'PlaintextSecret123!';
+			const submit = await browser.elementsById['auth-form'].dispatch('submit');
+			await flush();
+			expect(submit.defaultPrevented).toBe(true);
+			expect(auth.auth).not.toHaveBeenCalled();
+		});
+
+		it('never lets the legacy key form navigate', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => (url === '/openapi.json' ? response(contract) : response({})),
+			});
+			await flush();
+
+			browser.elementsById['api-key'].value = 'session-secret';
+			const submit = await browser.elementsById['connection-form'].dispatch('submit');
+			await flush();
+			expect(submit.defaultPrevented).toBe(true);
 			expect(browser.storage.get('cabros-admin-api-key')).toBe('session-secret');
 		});
 	});
@@ -5491,7 +5599,7 @@ describe('admin browser client', () => {
 
 		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
 		listForm.elements.symbol.value = 'BTCUSDT';
-		await expect(listForm.dispatch('submit')).resolves.toBeUndefined();
+		await listForm.dispatch('submit');
 		await flush();
 
 		expect(listForm.textContent).toContain('not-a-timestamp');
