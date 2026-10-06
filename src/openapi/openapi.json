@@ -8309,6 +8309,27 @@
             ],
             "example": 68000
           },
+          "invalidationLevel": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 63000
+          },
+          "targetLevel": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 68000
+          },
+          "riskRewardRatio": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 2.5
+          },
           "marketDataProvider": {
             "type": [
               "string",
@@ -8642,6 +8663,20 @@
               "null"
             ],
             "example": 0.85
+          },
+          "averageRiskRewardRatio": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 2.5
+          },
+          "avgRrr": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "example": 2.5
           },
           "averageReturnPercent": {
             "type": "number",

@@ -649,17 +649,30 @@ function postAlert(botOrGetter) {
 							? alert.enriched.price_data.current_price
 							: null;
 
-					const stopLevel = alert.enriched && typeof alert.enriched.invalidation_level === 'number' && Number.isFinite(alert.enriched.invalidation_level) && alert.enriched.invalidation_level > 0
-						? alert.enriched.invalidation_level
-						: (alert.enriched && typeof alert.enriched.invalidation_level === 'string' && Number.isFinite(Number(alert.enriched.invalidation_level)) && Number(alert.enriched.invalidation_level) > 0
-							? Number(alert.enriched.invalidation_level)
+					const riskMetadata = alert.enriched && typeof alert.enriched === 'object' ? {
+						invalidation_level: alert.enriched.invalidation_level !== undefined ? alert.enriched.invalidation_level : alert.enriched.invalidationLevel,
+						target_level: alert.enriched.target_level !== undefined ? alert.enriched.target_level : alert.enriched.targetLevel,
+						setup_type: alert.enriched.setup_type !== undefined ? alert.enriched.setup_type : alert.enriched.setupType,
+						risk_reward_ratio: alert.enriched.risk_reward_ratio !== undefined ? alert.enriched.risk_reward_ratio : alert.enriched.riskRewardRatio,
+					} : null;
+
+					const stopLevel = riskMetadata && typeof riskMetadata.invalidation_level === 'number' && Number.isFinite(riskMetadata.invalidation_level) && riskMetadata.invalidation_level > 0
+						? riskMetadata.invalidation_level
+						: (riskMetadata && typeof riskMetadata.invalidation_level === 'string' && Number.isFinite(Number(riskMetadata.invalidation_level)) && Number(riskMetadata.invalidation_level) > 0
+							? Number(riskMetadata.invalidation_level)
 							: null);
 
-					const targetLevel = alert.enriched && typeof alert.enriched.target_level === 'number' && Number.isFinite(alert.enriched.target_level) && alert.enriched.target_level > 0
-						? alert.enriched.target_level
-						: (alert.enriched && typeof alert.enriched.target_level === 'string' && Number.isFinite(Number(alert.enriched.target_level)) && Number(alert.enriched.target_level) > 0
-							? Number(alert.enriched.target_level)
+					const targetLevel = riskMetadata && typeof riskMetadata.target_level === 'number' && Number.isFinite(riskMetadata.target_level) && riskMetadata.target_level > 0
+						? riskMetadata.target_level
+						: (riskMetadata && typeof riskMetadata.target_level === 'string' && Number.isFinite(Number(riskMetadata.target_level)) && Number(riskMetadata.target_level) > 0
+							? Number(riskMetadata.target_level)
 							: null);
+
+					const setupType = (riskMetadata && typeof riskMetadata.setup_type === 'string' && riskMetadata.setup_type.trim())
+						? riskMetadata.setup_type.trim()
+						: 'tradingview-enrichment';
+
+					const riskRewardRatio = riskMetadata ? riskMetadata.risk_reward_ratio : null;
 
 					const priceSource = mcpPrice !== null
 						? resolveSignalOutcomePriceSource(alert.enriched, parsedSignal)
@@ -671,7 +684,7 @@ function postAlert(botOrGetter) {
 						symbol: parsedSignal.symbol,
 						exchange: parsedSignal.exchange || 'BINANCE',
 						timeframe: parsedSignal.timeframe,
-						setupType: (alert.enriched && alert.enriched.setup_type) || 'tradingview-enrichment',
+						setupType,
 						score: alert.enriched ? alert.enriched.sentiment_score : null,
 						confidenceScore: (typeof alert.enriched?.confidence === 'number' && Number.isFinite(alert.enriched.confidence) && alert.enriched.confidence >= 0 && alert.enriched.confidence <= 1)
 							? alert.enriched.confidence
@@ -682,6 +695,9 @@ function postAlert(botOrGetter) {
 						price: mcpPrice,
 						stop: stopLevel,
 						target: targetLevel,
+						invalidationLevel: stopLevel,
+						targetLevel,
+						riskRewardRatio,
 						priceSource,
 						sources: alert.enriched && Array.isArray(alert.enriched.sources) ? alert.enriched.sources : [],
 						tokenUsage: tokenUsageJSON,
