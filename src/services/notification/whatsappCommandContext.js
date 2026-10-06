@@ -23,12 +23,12 @@
  * so `parseCommandArgs()` consumes it exactly as it consumes `/analisis`.
  */
 const TELEGRAM_COMMAND_DELEGATES = Object.freeze({
-	analisis: { command: 'analisis', handlerName: 'expandedAnalysisCmd', description: '!analisis' },
-	scanner: { command: 'scanner', handlerName: 'marketScannerCmd', description: '!scanner' },
-	noticias: { command: 'noticias', handlerName: 'newsMonitorCmd', description: '!noticias' },
-	news: { command: 'noticias', handlerName: 'newsMonitorCmd', description: '!noticias' },
-	outcomes: { command: 'outcomes', handlerName: 'outcomesCommand', description: '!outcomes' },
-	rendimiento: { command: 'outcomes', handlerName: 'outcomesCommand', description: '!outcomes' },
+	analisis: { command: 'analisis', handlerName: 'expandedAnalysisCmd' },
+	scanner: { command: 'scanner', handlerName: 'marketScannerCmd' },
+	noticias: { command: 'noticias', handlerName: 'newsMonitorCmd' },
+	news: { command: 'noticias', handlerName: 'newsMonitorCmd' },
+	outcomes: { command: 'outcomes', handlerName: 'outcomesCommand' },
+	rendimiento: { command: 'outcomes', handlerName: 'outcomesCommand' },
 });
 
 /**

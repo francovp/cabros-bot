@@ -344,10 +344,14 @@ _isStopRequested() {
 				error,
 				extra: { command, chatId, type: 'command_handler_failure' },
 			});
-			await this.whatsAppService.send({
-				text: `No pude ejecutar !${command}: ${detail}`,
-				whatsappChatId: chatId,
-			});
+			await this.whatsAppService
+				.send({
+					text: `No pude ejecutar !${command}: ${detail}`,
+					whatsappChatId: chatId,
+				})
+				.catch((sendError) => {
+					this.logger.warn(`[WhatsAppCommandBridge] Failed to send !${command} error notice:`, sendError.message);
+				});
 			return detail;
 		};
 
@@ -386,7 +390,11 @@ _isStopRequested() {
 		let handlerError = null;
 		try {
 			handlerError = await Promise.race([
-				Promise.resolve(handler(context)).then(() => null, (error) => fail(error)),
+				// `Promise.resolve().then(...)` converts a synchronous throw from an
+				// injected handler into a rejection; calling `handler(context)` inside
+				// the array literal would instead throw past the race and leave the
+				// user with no reply at all.
+				Promise.resolve().then(() => handler(context)).then(() => null, (error) => fail(error)),
 				deadline,
 			]);
 		} finally {

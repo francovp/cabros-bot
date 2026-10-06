@@ -422,6 +422,70 @@ describe('WhatsAppCommandBridgeService', () => {
 			expect(service.getStatus().commandTimeouts).toBe(0);
 		});
 
+		test('a handler that throws synchronously still replies instead of vanishing', async () => {
+			const { service, mockWhatsApp } = buildService();
+			service._commandHandlers = {
+				analisis: () => {
+					throw new Error('sync boom');
+				},
+			};
+
+			const handled = await service.handleNotification(notification('!analisis BTCUSDT'));
+
+			expect(handled).toMatchObject({ action: 'executed', command: 'analisis', error: 'sync boom' });
+			expect(mockWhatsApp.send).toHaveBeenCalledWith({
+				text: expect.stringContaining('sync boom'),
+				whatsappChatId: CHAT_ID,
+			});
+		});
+
+		test('a handler that rejects after the deadline cannot raise an unhandled rejection', async () => {
+			jest.useFakeTimers();
+			const unhandled = jest.fn();
+			process.on('unhandledRejection', unhandled);
+			try {
+				const { service } = buildService({ commandTimeoutMs: 5000 });
+				let rejectLate;
+				service._commandHandlers = {
+					noticias: () => new Promise((_resolve, reject) => {
+						rejectLate = reject;
+					}),
+				};
+
+				const pending = service.handleNotification(notification('!noticias BTCUSDT'));
+				await jest.advanceTimersByTimeAsync(5001);
+				const handled = await pending;
+				expect(handled).toMatchObject({ timedOut: true });
+
+				rejectLate(new Error('rejected after the deadline'));
+				await jest.advanceTimersByTimeAsync(10);
+				await Promise.resolve();
+
+				expect(unhandled).not.toHaveBeenCalled();
+			} finally {
+				process.off('unhandledRejection', unhandled);
+				jest.useRealTimers();
+			}
+		});
+
+		test('a GreenAPI failure while reporting a handler error does not reject the command', async () => {
+			const whatsAppService = {
+				send: jest.fn(async () => {
+					throw new Error('greenapi down');
+				}),
+			};
+			const service = new WhatsAppCommandBridgeService({ whatsAppService });
+			service._commandHandlers = {
+				analisis: async () => {
+					throw new Error('job store exploded');
+				},
+			};
+
+			const handled = await service.handleNotification(notification('!analisis BTCUSDT'));
+
+			expect(handled).toMatchObject({ action: 'executed', command: 'analisis', error: 'job store exploded' });
+		});
+
 		test('unsupported commands still receive the cooldown-gated unknown-command hint', async () => {
 			const { service, mockWhatsApp } = buildService();
 
