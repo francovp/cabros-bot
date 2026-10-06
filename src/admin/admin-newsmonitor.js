@@ -98,7 +98,7 @@
 
 	const createNewsMonitorView = (deps) => {
 		const {
-			sendRequest, element, getElement, createMetricCard, createEmptyState, createTimestamp,
+			sendRequest, element, getElement, createMetricCard, createEmptyState, createResultTable, createTimestamp,
 			showError, addField, registerFilterScope, reportWindowDefaults, toIsoTimestamp,
 			canPerformMutation, charts, authState,
 		} = deps;
@@ -307,26 +307,9 @@
 
 		// Each header is [label, read], so callers pass records rather than projecting cells.
 		// `read` may return a node (an absolute+relative timestamp) instead of a string.
-		const breakdownTable = (caption, headers, records) => {
-			const scroll = element('div', { className: 'table-scroll', attributes: { tabindex: '0', role: 'region', 'aria-label': caption } });
-			const table = element('table', { className: 'data-table' });
-			const head = element('tr');
-			headers.forEach(([label]) => head.append(element('th', { text: label, attributes: { scope: 'col' } })));
-			table.append(head);
-			records.forEach((record) => {
-				const row = element('tr');
-				headers.forEach(([, read]) => {
-					const cell = element('td');
-					const value = read(record);
-					if (value !== null && typeof value === 'object') cell.append(value);
-					else cell.textContent = value === undefined || value === null ? '—' : String(value);
-					row.append(cell);
-				});
-				table.append(row);
-			});
-			scroll.append(table);
-			return scroll;
-		};
+		// The table itself comes from admin.js's shared renderer (#952), so this view cannot
+		// grow a second one that skips the caption, the header scope, or the scroll region.
+		const breakdownTable = (caption, headers, records) => createResultTable(caption, headers, records).scroll;
 
 		const renderBreakdown = (container, { title, rows, headers, valueKey, chartLabel, emptyText }) => {
 			container.replaceChildren();
