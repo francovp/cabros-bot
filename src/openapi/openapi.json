@@ -4048,7 +4048,7 @@
         "schema": {
           "type": "string"
         },
-        "description": "Pagination cursor returned as nextBefore from a previous response, or an ISO-8601 timestamp."
+        "description": "Pagination cursor returned by a previous response: `nextBefore` on /api/outcomes, or the `nextCursor` document id on /api/news-monitor/analyses. `/api/news-monitor/analyses` also accepts `beforeCursor` as a deprecated alias."
       },
       "OutcomeSymbol": {
         "name": "symbol",
@@ -14013,7 +14013,7 @@
         "required": [
           "id",
           "symbol",
-          "analyzedAt"
+          "createdAt"
         ],
         "properties": {
           "id": {
@@ -14024,19 +14024,16 @@
           },
           "eventCategory": {
             "type": "string",
-            "nullable": true
+            "description": "Detected event category, or `none` when no event cleared the threshold."
           },
           "sentiment": {
-            "type": "number",
-            "nullable": true
+            "type": "number"
           },
           "confidence": {
-            "type": "number",
-            "nullable": true
+            "type": "number"
           },
           "headline": {
-            "type": "string",
-            "nullable": true
+            "type": "string"
           },
           "alertSent": {
             "type": "boolean"
@@ -14046,16 +14043,17 @@
             "nullable": true
           },
           "tokens": {
-            "type": "object",
+            "type": "number",
             "nullable": true
-          },
-          "analyzedAt": {
-            "type": "string",
-            "format": "date-time"
           },
           "createdAt": {
             "type": "string",
             "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
           }
         }
       },
@@ -14065,7 +14063,6 @@
           "success",
           "totalAnalyses",
           "totalAlertsSent",
-          "alertRatePercent",
           "bySymbol",
           "byEventCategory",
           "falsePositiveProxy",
@@ -14081,25 +14078,26 @@
           "totalAlertsSent": {
             "type": "integer"
           },
-          "alertRatePercent": {
-            "type": "number"
-          },
           "bySymbol": {
             "type": "object",
+            "description": "Per-symbol analysis volume. The count key is `totalAnalyses` here and `total` in `byEventCategory`, and the service does not emit a per-row alert rate — derive it as `alertsSent / totalAnalyses`.",
             "additionalProperties": {
               "type": "object",
+              "required": [
+                "totalAnalyses",
+                "alertsSent",
+                "averageConfidence"
+              ],
               "properties": {
-                "count": {
+                "totalAnalyses": {
                   "type": "integer"
                 },
                 "alertsSent": {
                   "type": "integer"
                 },
-                "alertRatePercent": {
-                  "type": "number"
-                },
-                "avgConfidence": {
-                  "type": "number"
+                "averageConfidence": {
+                  "type": "number",
+                  "description": "Mean confidence across the symbol's analyses, rounded to two decimals."
                 }
               }
             }
@@ -14108,12 +14106,21 @@
             "type": "object",
             "additionalProperties": {
               "type": "object",
+              "required": [
+                "total",
+                "alertsSent",
+                "averageConfidence"
+              ],
               "properties": {
-                "count": {
+                "total": {
                   "type": "integer"
                 },
                 "alertsSent": {
                   "type": "integer"
+                },
+                "averageConfidence": {
+                  "type": "number",
+                  "description": "Mean confidence across the category's analyses, rounded to two decimals."
                 }
               }
             }
@@ -14130,7 +14137,7 @@
             "properties": {
               "threshold": {
                 "type": "number",
-                "description": "Confidence threshold applied to delivered alerts. Defaults to 0.7."
+                "description": "Confidence threshold applied to delivered alerts, as a 0-1 fraction (not a percentage). Defaults to 0.7."
               },
               "totalEvaluated": {
                 "type": "integer",
@@ -14171,13 +14178,6 @@
               },
               "limit": {
                 "type": "integer"
-              },
-              "threshold": {
-                "type": "number"
-              },
-              "symbol": {
-                "type": "string",
-                "nullable": true
               }
             }
           }
@@ -14187,9 +14187,7 @@
         "type": "object",
         "required": [
           "success",
-          "analyses",
-          "count",
-          "limit"
+          "analyses"
         ],
         "properties": {
           "success": {
@@ -14201,15 +14199,10 @@
               "$ref": "#/components/schemas/NewsAnalysisRecord"
             }
           },
-          "count": {
-            "type": "integer"
-          },
-          "limit": {
-            "type": "integer"
-          },
           "nextCursor": {
             "type": "string",
-            "nullable": true
+            "nullable": true,
+            "description": "Document id to send back as the `before` query parameter to read the next page. Null when the page is the last one. `beforeCursor` is still accepted as a deprecated alias."
           }
         }
       },

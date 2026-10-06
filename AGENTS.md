@@ -2556,6 +2556,28 @@ Every rejection is a **warning and `return 1`**, not an exit code: the check is 
 
 No endpoint, OpenAPI, Postman, environment variable, Remote Config key, or feature flag was added; `agents.md` and `AGENTS.md` are the same file. `VERIFY_PREVIEW_ALLOWED_HOSTS` is an operator-facing shell variable read by agent tooling, not an application environment variable, so `.env.example` / Remote Config parity does not apply.
 
+## Admin News Monitor Operations View (Issue #1290)
+
+The five news-monitor admin endpoints had no console UI, which left the pause kill switch reachable only by `curl` and gave no signal that the monitor was paused at all — the failure shape of #1177, where it ran for 90 days and sent zero alerts.
+
+`src/admin/admin-newsmonitor.js` adds a `newsMonitor` nav view. It attaches to `window` and receives admin.js's helpers through a `deps` object **instead of importing them**: `sendRequest` must stay the only owner of the operator-role gate and the confirm-before-mutation contract, or this view grows a private auth path. `renderView` dispatches to it before the generic `<h2>` append, so it renders its own hero like `overview` and `status` do.
+
+**The view owns four behaviours that are easy to get wrong:**
+
+- **Paused reads as a warning, and an unread state reads as neither running nor paused.** The state card is a `.dashboard-section` that gains `banner-error` plus a `status-danger` badge when `paused`, because a silent monitor is the single most important fact on this view. A failed status read renders an explicit `Unavailable` / `status-misconfigured` verdict — **never** the running one. An unknown pause state is not a healthy one, and #1177 is the proof.
+- **Both mutations re-read `/api/news-monitor/status` afterwards** instead of rendering their own response body, which merely echoes the request. `tests/unit/admin-client.test.js` asserts the *ordering* of the POST and the subsequent GET, and its fixture returns a status whose `reason` deliberately differs from the pause echo — otherwise the assertion would pass against an implementation that trusted the response.
+- **`NewsMonitorPausedError` is a state, not a fault.** Every request goes through a local `callApi` wrapper that captures the body via `captureResponseData` and, when `code === 'NEWS_MONITOR_PAUSED`, replaces the generic error block with "The news monitor is paused — resume to continue" plus the recorded reason and pause time. `sendRequest` returns `undefined` for every non-2xx, so the body has to be captured on the way through rather than read afterwards.
+- **A zero alert rate over a populated window is a measurement, not a gap.** `totalAnalyses > 0` with `alertRatePercent === 0` renders as `0% of analyses became alerts (0 of 120)`; an empty window renders "No analyses recorded in this window" instead, so the two are never confused.
+
+The summary uses `barChart` from #1288 for `bySymbol` / `byEventCategory` and `sparkline` on the KPI cards (only when a breakdown has ≥2 points). It passes a `formatResponse` to `sendRequest`: omitting one makes the response block re-render the entire breakdown as a raw result tree, duplicating the KPI cards and tables and tripling the page height. The analyses list is cursor-paged on `nextCursor`, and editing a filter clears the cursor chain — the old page boundaries were taken under the old filters and would skip rows.
+
+**The shared date-range control was reused, not duplicated.** The Analytics view this issue refers to has **not** landed, so there is no shared component to call. This view reuses the genuinely shared primitives — `reportWindowDefaults()` and `toDateTimeLocal()` — and registers its own `newsMonitor.summary` / `newsMonitor.analyses` scopes, which is the existing precedent for two forms with independent filter sets (`alerts.summary` vs `alerts.export`). The alerts-specific `addAlertReportFilters()` is not reused because it hard-codes `source`/`enriched` fields that mean nothing here.
+
+**`min-width: 0` is load-bearing on three dashboard rules.** A grid item defaults to `min-width: auto`, so with `.data-table th { white-space: nowrap }` a wide table's min-content propagates up through `.dashboard-hero` / `.dashboard-section` and the whole page scrolls sideways instead of the table scrolling inside its own `.table-scroll` box. `.dashboard`, `.dashboard-hero`, `.dashboard-section` and `.table-scroll` all carry `min-width: 0` for that reason — the same invariant #1288 records for `.chart-scroll`. **Do not remove them.** An unclassed wrapper `div` between a `.dashboard-section` and a chart or table reintroduces the bug, because it is a grid item too; that is why the breakdowns and the analyses results are their own `.dashboard-section` panels.
+
+**Coverage**: `tests/unit/admin-client.test.js` — `news monitor operations view` covers the running and paused state cards, the pause/resume confirm plus status refetch (including a declined confirmation, asserted against *dispatch* rather than request construction, since `sendRequest` builds the request before it opens the dialog), the blank-reason body, summary KPI mapping, the zero-rate-over-a-populated-window wording, the empty-analyses state, cursor paging and filter-change invalidation, the paused-error case, the unread-state case, and the deep link. The harness loads `admin-charts.js` and `admin-newsmonitor.js` with `vm.runInNewContext` rather than `require`, because their factories read the ambient `document` and would otherwise close over Node's undefined one; both publish onto the shared `window` object, which is how `admin.js` reaches them.
+
+No endpoint, OpenAPI schema, Postman request, environment variable, or Remote Config key was added: all five operations already existed and are unchanged. `pnpm run build:hosting` was run and `public/admin/` is committed in parity.
 ## Shared Alert Validation Truncation (Issue #637)
 
 `validateAlert()` keeps the existing 4,000-character cap but now returns `truncated`, `originalLength`, and `deliveredLength` when clipping input. `/api/webhook/alert` propagates those fields in its 200 response and emits a structured warning, allowing callers to detect content loss without changing delivery or enrichment gates. No environment variable, Linear issue, or Remote Config key was added.
@@ -2565,3 +2587,4 @@ The truncation fields are attached only to the `/api/webhook/alert` response. Th
 **Coverage**:
 - `tests/unit/validation.test.js` — Boundary, no-truncation, and truncation-with-signalClass metadata behavior.
 - `tests/unit/alert-webhook-request-id.test.js` and `tests/integration/alert-grounding.test.js` — Response propagation through dry-run and the mounted webhook.
+

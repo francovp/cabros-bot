@@ -262,7 +262,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		elementsById[id] = node;
 		body.append(node);
 	});
-	['overview', 'status', 'diagnostics', 'alerts', 'outcomes', 'presets', 'jobs', 'orders', 'analysis', 'playground', 'trading'].forEach((view) => {
+	['overview', 'status', 'diagnostics', 'alerts', 'outcomes', 'presets', 'jobs', 'orders', 'analysis', 'newsMonitor', 'trading', 'playground'].forEach((view) => {
 		const button = new FakeElement('button');
 		button.dataset.view = view;
 		body.append(button);
@@ -365,14 +365,18 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		},
 	};
 	context.window.fetch = context.fetch;
-	// admin-charts.js is evaluated in the browser context, not require()d into Node: it builds
-	// nodes through the ambient `document`, which only exists inside this vm.
+	// admin-charts.js, admin-diagnostics.js and admin-newsmonitor.js are evaluated in the
+	// browser context, not require()d into Node: they build nodes through the ambient
+	// `document`, which only exists inside this vm, and they publish their APIs onto the
+	// shared `window` object that admin.js reads. Order mirrors the deferred <script> order
+	// in index.html.
 	[
-		'../../src/admin/admin-charts.js',
-		'../../src/admin/admin-diagnostics.js',
-		'../../src/admin/admin.js',
+		'admin-charts.js',
+		'admin-diagnostics.js',
+		'admin-newsmonitor.js',
+		'admin.js',
 	].forEach((relative) => {
-		vm.runInNewContext(fs.readFileSync(path.join(__dirname, relative), 'utf8'), context);
+		vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../src/admin', relative), 'utf8'), context);
 	});
 	documentListeners.DOMContentLoaded();
 
@@ -5450,6 +5454,593 @@ describe('admin browser client', () => {
 		listForm.elements.symbol.value = 'ETHUSDT';
 		await listForm.elements.symbol.dispatch('input');
 		expect(listForm.textContent).toContain('Environment: —');
+	});
+});
+
+describe('news monitor operations view', () => {
+	const RUNNING = { paused: false, pausedAt: null, reason: null };
+	const PAUSED = {
+		paused: true,
+		pausedAt: '2026-09-04T06:00:00.000Z',
+		reason: 'Gemini quota exhausted',
+	};
+	// Shaped exactly like NewsAnalysisStorageService.summarizeAnalyses(): the bySymbol count
+	// key is `totalAnalyses`, the byEventCategory one is `total`, confidence arrives as
+	// `averageConfidence`, and there is no top-level alertRatePercent at all. A fixture
+	// invented from the old OpenAPI schema is what let this view ship rendering zeros.
+	const SUMMARY = {
+		success: true,
+		totalAnalyses: 4,
+		totalAlertsSent: 2,
+		bySymbol: {
+			BTCUSDT: { totalAnalyses: 2, alertsSent: 2, averageConfidence: 0.84 },
+			ETHUSDT: { totalAnalyses: 2, alertsSent: 0, averageConfidence: 0.52 },
+		},
+		byEventCategory: {
+			price_surge: { total: 3, alertsSent: 2, averageConfidence: 0.73 },
+			none: { total: 1, alertsSent: 0, averageConfidence: 0.41 },
+		},
+		falsePositiveProxy: { threshold: 0.7, totalEvaluated: 2, noFollowupCount: 1, ratePercent: 50 },
+		window: { from: '2026-09-03T00:00:00.000Z', to: '2026-09-05T00:00:00.000Z', limit: 500 },
+	};
+	const ANALYSES = {
+		success: true,
+		analyses: [
+			{
+				id: 'a1', createdAt: '2026-09-04T05:00:00.000Z', symbol: 'BTCUSDT', eventCategory: 'none',
+				sentiment: 0.12, confidence: 0.41, headline: 'Nothing moved', alertSent: false,
+				promptVersion: null, tokens: 120, expiresAt: '2026-10-04T05:00:00.000Z',
+			},
+		],
+		nextCursor: null,
+	};
+
+	const newsMonitorRoutes = (overrides = {}) => {
+		const calls = [];
+		const impl = async (url, options = {}) => {
+			const [path, search = ''] = String(url).split('?');
+			calls.push({ path, search, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : undefined });
+			if (path === '/openapi.json') return response(contract);
+			if (path === '/api/news-monitor/status') return response(RUNNING);
+			if (path === '/api/news-monitor/summary') return response(SUMMARY);
+			if (path === '/api/news-monitor/analyses') return response(ANALYSES);
+			return response({});
+		};
+		const { handler, ...rest } = overrides;
+		return { calls, fetchImpl: handler || impl, ...rest };
+	};
+
+	const openNewsMonitor = async (overrides = {}) => {
+		const setup = newsMonitorRoutes(overrides);
+		const browser = createBrowser(setup);
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'newsMonitor');
+		await flush();
+		return { browser, ...setup };
+	};
+
+	const stateSection = (browser) => find(browser.elementsById.view, (node) => node.className.includes('dashboard-section')
+		&& node.textContent.startsWith('Monitor state'));
+	const stateBadge = (browser) => find(stateSection(browser), (node) => node.className.includes('status-badge'));
+	// SVG nodes arrive from the chart kit through setAttribute('class'), so the class
+	// attribute has to be read alongside the className property.
+	const hasClass = (node, className) => Boolean(node.className && node.className.includes(className))
+		|| Boolean(node.attributes && node.attributes.class && node.attributes.class.includes(className));
+
+	it('renders a running state card that does not read as a warning', async () => {
+		const { browser } = await openNewsMonitor();
+		const view = browser.elementsById.view;
+		const section = stateSection(browser);
+
+		expect(stateBadge(browser).textContent).toBe('Running');
+		expect(stateBadge(browser).className).toContain('status-ready');
+		expect(section.className).not.toContain('banner-error');
+		expect(section.textContent).toContain('Running normally');
+		expect(view.textContent).not.toContain('No news alerts are being produced');
+		expect(section.textContent).toContain('—');
+	});
+
+	it('renders a paused state card as a warning with the reason and pause time', async () => {
+		const { browser } = await openNewsMonitor({
+			handler: async (url, options = {}) => {
+				if (url === '/openapi.json') return response(contract);
+				if (String(url).startsWith('/api/news-monitor/status')) return response(PAUSED);
+				if (String(url).startsWith('/api/news-monitor/summary')) return response(SUMMARY);
+				if (String(url).startsWith('/api/news-monitor/analyses')) return response(ANALYSES);
+				return response({}, options.status || 200);
+			},
+		});
+		const view = browser.elementsById.view;
+		const section = stateSection(browser);
+
+		expect(stateBadge(browser).textContent).toBe('Paused');
+		expect(stateBadge(browser).className).toContain('status-danger');
+		expect(section.className).toContain('banner-error');
+		expect(section.textContent).toContain('No news alerts are being produced');
+		expect(section.textContent).toContain('Background sweeps skip execution');
+		expect(section.textContent).toContain('Gemini quota exhausted');
+		const pausedAtValue = findAll(section, (node) => node.tagName === 'DD')[0];
+		expect(pausedAtValue.textContent).toContain('ago');
+		expect(findAll(pausedAtValue, (node) => node.className.includes('timestamp'))[0].attributes.title)
+			.toContain('2026');
+	});
+
+	// The pause response echoes the request reason back, so only a re-read whose reason
+	// differs can prove the card renders the monitor's own state.
+	it('pauses with the typed reason after confirming, then re-reads status instead of trusting the response', async () => {
+		const confirmations = [];
+		const seen = [];
+		const browser = createBrowser({
+			confirm: (message) => {
+				confirmations.push(message);
+				return true;
+			},
+			fetchImpl: async (url, options = {}) => {
+				const [path] = String(url).split('?');
+				seen.push(`${options.method || 'GET'} ${path}`);
+				if (path === '/openapi.json') return response(contract);
+				if (path === '/api/news-monitor/status') {
+					// The pause response echoes the request back; only the re-read proves the
+					// card is showing the monitor's own state.
+					return response(seen.filter((entry) => entry.endsWith('status')).length > 1 ? PAUSED : RUNNING);
+				}
+				if (path === '/api/news-monitor/pause') {
+					return response({ message: 'News monitor analysis paused', paused: true, pausedAt: '2026-09-04T05:00:00.000Z', reason: 'Gemini quota exhausted' });
+				}
+				if (path === '/api/news-monitor/summary') return response(SUMMARY);
+				if (path === '/api/news-monitor/analyses') return response(ANALYSES);
+				return response({}, options.status || 200);
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'newsMonitor');
+		await flush();
+		expect(stateBadge(browser).textContent).toBe('Running');
+
+		const reason = find(browser.elementsById.view, (node) => node.name === 'news-monitor-pause-reason');
+		reason.value = 'Gemini quota exhausted';
+		await findButton(browser.elementsById.view, 'Pause news monitor').dispatch('click');
+		await flush();
+
+		expect(confirmations).toHaveLength(1);
+		expect(confirmations[0]).toContain('Pause the news monitor?');
+		expect(seen).toContain('POST /api/news-monitor/pause');
+		const pauseCall = browser.helperCalls.find((call) => call.path === '/api/news-monitor/pause');
+		expect(pauseCall.body).toEqual({ reason: 'Gemini quota exhausted' });
+		// Ordering, not presence: a refetch that ran before the mutation would also match.
+		expect(seen.lastIndexOf('POST /api/news-monitor/pause')).toBeLessThan(seen.lastIndexOf('GET /api/news-monitor/status'));
+		expect(stateBadge(browser).textContent).toBe('Paused');
+		expect(stateSection(browser).textContent).toContain('Gemini quota exhausted');
+	});
+
+	it('sends no reason key when the pause reason is left blank, and resumes after confirming', async () => {
+		const confirmations = [];
+		const seen = [];
+		const { browser } = await openNewsMonitor({
+			confirm: (message) => {
+				confirmations.push(message);
+				return true;
+			},
+			handler: async (url, options = {}) => {
+				const [path] = String(url).split('?');
+				seen.push(`${options.method || 'GET'} ${path}`);
+				if (path === '/openapi.json') return response(contract);
+				if (path === '/api/news-monitor/status') {
+					return response(seen.filter((entry) => entry.endsWith('resume')).length > 0 ? RUNNING : PAUSED);
+				}
+				if (path === '/api/news-monitor/pause') return response({ message: 'paused', paused: true, pausedAt: '2026-09-04T05:00:00.000Z', reason: null });
+				if (path === '/api/news-monitor/resume') return response({ message: 'resumed', paused: false, resumedAt: '2026-09-04T07:00:00.000Z', wasPaused: true });
+				if (path === '/api/news-monitor/summary') return response(SUMMARY);
+				if (path === '/api/news-monitor/analyses') return response(ANALYSES);
+				return response({}, options.status || 200);
+			},
+		});
+		expect(stateBadge(browser).textContent).toBe('Paused');
+
+		await findButton(browser.elementsById.view, 'Pause news monitor').dispatch('click');
+		await flush();
+		const pauseCall = browser.helperCalls.find((call) => call.path === '/api/news-monitor/pause');
+		expect(pauseCall).toBeDefined();
+		expect(pauseCall.body).toEqual({});
+		confirmations.length = 0;
+
+		await findButton(browser.elementsById.view, 'Resume news monitor').dispatch('click');
+		await flush();
+		expect(confirmations).toHaveLength(1);
+		expect(confirmations[0]).toContain('Resume the news monitor?');
+		expect(seen).toContain('POST /api/news-monitor/resume');
+		expect(seen.lastIndexOf('POST /api/news-monitor/resume')).toBeLessThan(seen.lastIndexOf('GET /api/news-monitor/status'));
+		expect(stateBadge(browser).textContent).toBe('Running');
+	});
+
+	it('does not send pause or resume when the operator declines the confirmation', async () => {
+		const dispatched = [];
+		const { browser } = await openNewsMonitor({
+			confirm: () => false,
+			handler: async (url, options = {}) => {
+				dispatched.push(String(url).split('?')[0]);
+				if (url === '/openapi.json') return response(contract);
+				if (String(url).startsWith('/api/news-monitor/status')) return response(RUNNING);
+				if (String(url).startsWith('/api/news-monitor/summary')) return response(SUMMARY);
+				if (String(url).startsWith('/api/news-monitor/analyses')) return response(ANALYSES);
+				return response({}, options.status || 200);
+			},
+		});
+		await findButton(browser.elementsById.view, 'Pause news monitor').dispatch('click');
+		await flush();
+		await findButton(browser.elementsById.view, 'Resume news monitor').dispatch('click');
+		await flush();
+		// The request is built before the dialog opens, so only the dispatch proves nothing
+		// was sent.
+		expect(dispatched).not.toContain('/api/news-monitor/pause');
+		expect(dispatched).not.toContain('/api/news-monitor/resume');
+		expect(stateBadge(browser).textContent).toBe('Running');
+	});
+
+	it('maps the summary onto KPI cards and derives the alert rate from the counts it does carry', async () => {
+		const { browser } = await openNewsMonitor();
+		const view = browser.elementsById.view;
+		const cards = () => findAll(view, (node) => node.className.includes('metric-card'));
+
+		expect(cards()).toHaveLength(4);
+		expect(cards()[0].textContent).toContain('Analyses4');
+		expect(cards()[1].textContent).toContain('Alerts sent2');
+		// The payload has no alertRatePercent, so the KPI must be computed from the counts:
+		// 2 of 4 is 50%, not the fabricated 0% a missing field used to render.
+		expect(cards()[2].textContent).toContain('Alert rate50%');
+		expect(cards()[2].textContent).toContain('50% of analyses became alerts');
+		expect(cards()[2].textContent).toContain('(2 of 4)');
+		expect(cards()[3].textContent).toContain('False-positive proxy50%');
+		expect(cards()[3].textContent).toContain('1 of 2 delivered alerts had no follow-up within 24h');
+
+		expect(view.textContent).toContain('Analyses by symbol');
+		expect(view.textContent).toContain('BTCUSDT');
+		expect(view.textContent).toContain('ETHUSDT');
+		expect(view.textContent).toContain('Analyses by event category');
+		expect(view.textContent).toContain('price_surge');
+		// barChart from #1288 renders an accessible <svg>, not a bare table.
+		expect(findAll(view, (node) => node.tagName === 'SVG' && hasClass(node, 'chart-bar-svg')).length).toBeGreaterThan(0);
+		// Two symbols is enough for a sparkline on the KPI card.
+		expect(findAll(view, (node) => node.tagName === 'SVG' && hasClass(node, 'chart-sparkline-svg')).length).toBeGreaterThan(0);
+	});
+
+	it('reads the breakdown volumes the service actually returns, sorted by volume', async () => {
+		const { browser } = await openNewsMonitor();
+		const view = browser.elementsById.view;
+		const symbolRows = () => findAll(view, (node) => node.className.includes('table-scroll')
+			&& node.attributes['aria-label'] === 'Analyses by symbol');
+		const categoryRows = () => findAll(view, (node) => node.className.includes('table-scroll')
+			&& node.attributes['aria-label'] === 'Analyses by event category');
+
+		// `totalAnalyses` / `total` are the real count keys; reading a nonexistent `count`
+		// rendered every volume as 0 and made every bar width zero.
+		expect(symbolRows()[0].textContent).toContain('BTCUSDT');
+		expect(symbolRows()[0].textContent).toContain('2');
+		expect(symbolRows()[0].textContent).toContain('100%');
+		expect(symbolRows()[0].textContent).toContain('0.84');
+		expect(symbolRows()[0].textContent).not.toContain('0.00');
+		// price_surge has 3 analyses against none's 1, so it must lead despite sorting
+		// alphabetically later.
+		const categoryCells = findAll(categoryRows()[0], (node) => node.tagName === 'TD').map((node) => node.textContent);
+		expect(categoryCells.slice(0, 4)).toEqual(['price_surge', '3', '2', '66.67%']);
+
+		// A zero-width bar is what a 0 volume produced; the chart must now carry real values.
+		const barWidths = findAll(view, (node) => node.tagName === 'RECT').map((node) => node.attributes.width);
+		expect(barWidths.some((width) => Number(width) > 0)).toBe(true);
+		expect(find(view, (node) => node.tagName === 'SVG' && hasClass(node, 'chart-bar-svg')).attributes['aria-label'])
+			.toMatch(/Analyses by symbol.*high 2 at BTCUSDT/);
+	});
+
+	it('renders the false-positive threshold as a 0-1 confidence fraction, not a percentage', async () => {
+		const { browser } = await openNewsMonitor();
+		const view = browser.elementsById.view;
+		const proxy = find(view, (node) => node.textContent.startsWith('False-positive proxy') && node.className.includes('dashboard-section'));
+		const terms = findAll(proxy, (node) => node.tagName === 'DT').map((node) => node.textContent);
+		const values = findAll(proxy, (node) => node.tagName === 'DD').map((node) => node.textContent);
+
+		expect(values[terms.indexOf('Threshold')]).toBe('0.70');
+		expect(proxy.textContent).not.toContain('0.7%');
+		// ratePercent is genuinely a percentage and must keep its sign.
+		expect(values[terms.indexOf('Rate')]).toBe('50%');
+	});
+
+	it('names the window as empty rather than implying a zero alert rate', async () => {
+		const { browser } = await openNewsMonitor({
+			handler: async (url) => {
+				if (String(url).startsWith('/openapi.json')) return response(contract);
+				if (String(url).startsWith('/api/news-monitor/status')) return response(RUNNING);
+				if (String(url).startsWith('/api/news-monitor/summary')) {
+					return response({
+						success: true,
+						totalAnalyses: 0,
+						totalAlertsSent: 0,
+						bySymbol: {},
+						byEventCategory: {},
+						falsePositiveProxy: { threshold: 0.7, totalEvaluated: 0, noFollowupCount: 0, ratePercent: 0 },
+						window: {},
+					});
+				}
+				if (String(url).startsWith('/api/news-monitor/analyses')) return response(ANALYSES);
+				return response({});
+			},
+		});
+		const view = browser.elementsById.view;
+		const cards = () => findAll(view, (node) => node.className.includes('metric-card'));
+		expect(cards()[2].textContent).toContain('No analyses recorded in this window');
+		expect(cards()[2].textContent).not.toContain('0% of analyses became alerts');
+		expect(view.textContent).toContain('No analyses recorded in this window.');
+	});
+
+	it('formats an absent percentage as an em dash rather than as 0%', () => {
+		const { formatPercent } = require('../../src/admin/admin-newsmonitor');
+		// Number(null), Number(undefined) and Number('') are all 0, so an unguarded coercion
+		// printed a real-looking 0% for a measurement that was never taken.
+		expect(formatPercent(null)).toBe('—');
+		expect(formatPercent(undefined)).toBe('—');
+		expect(formatPercent('')).toBe('—');
+		// A reported zero is still a zero and must keep reading as one.
+		expect(formatPercent(0)).toBe('0%');
+		expect(formatPercent(50)).toBe('50%');
+	});
+
+	it('renders an explicit empty state when no analyses match the filters', async () => {
+		const { browser } = await openNewsMonitor({
+			handler: async (url) => {
+				if (String(url).startsWith('/openapi.json')) return response(contract);
+				if (String(url).startsWith('/api/news-monitor/status')) return response(RUNNING);
+				if (String(url).startsWith('/api/news-monitor/summary')) return response(SUMMARY);
+				if (String(url).startsWith('/api/news-monitor/analyses')) {
+					return response({ success: true, analyses: [], nextCursor: null });
+				}
+				return response({});
+			},
+		});
+		const view = browser.elementsById.view;
+		expect(view.textContent).not.toContain('No recorded analyses match these filters.');
+		await findForm(view, '/api/news-monitor/analyses').dispatch('submit');
+		await flush();
+		expect(view.textContent).toContain('No recorded analyses match these filters.');
+		expect(view.textContent).not.toContain('No analyses requested yet.');
+	});
+
+	it('renders recorded analyses and pages forward with the server cursor', async () => {
+		const requested = [];
+		const { browser } = await openNewsMonitor({
+			handler: async (url) => {
+				const [path, search = ''] = String(url).split('?');
+				if (path === '/openapi.json') return response(contract);
+				if (path === '/api/news-monitor/status') return response(RUNNING);
+				if (path === '/api/news-monitor/summary') return response(SUMMARY);
+				if (path === '/api/news-monitor/analyses') {
+					requested.push(search);
+					return search.includes('before=c2')
+						? response({ success: true, analyses: [{ ...ANALYSES.analyses[0], id: 'a2', symbol: 'ETHUSDT' }], nextCursor: null })
+						: response({ ...ANALYSES, nextCursor: 'c2' });
+				}
+				return response({});
+			},
+		});
+		const view = browser.elementsById.view;
+		const form = findForm(view, '/api/news-monitor/analyses');
+		await form.dispatch('submit');
+		await flush();
+
+		expect(view.textContent).toContain('BTCUSDT');
+		expect(find(view, (node) => node.tagName === 'DIV' && node.attributes['aria-label'] === 'Recorded news analyses (1)')).toBeDefined();
+		expect(requested[0]).toContain('limit=50');
+		expect(requested[0]).toContain('from=');
+		expect(requested[0]).toContain('to=');
+		expect(findButton(view, 'Previous page').disabled).toBe(true);
+		expect(findButton(view, 'Next page').disabled).toBe(false);
+
+		await findButton(view, 'Next page').dispatch('click');
+		await flush();
+		expect(requested.some((entry) => entry.includes('before=c2'))).toBe(true);
+		expect(view.textContent).toContain('ETHUSDT');
+		expect(findButton(view, 'Next page').disabled).toBe(true);
+		expect(findButton(view, 'Previous page').disabled).toBe(false);
+
+		await findButton(view, 'Previous page').dispatch('click');
+		await flush();
+		expect(view.textContent).toContain('BTCUSDT');
+		expect(findButton(view, 'Previous page').disabled).toBe(true);
+	});
+
+	it('renders the Analyzed column from createdAt as a timestamp, never as an em dash', async () => {
+		const { browser } = await openNewsMonitor();
+		const view = browser.elementsById.view;
+		const form = findForm(view, '/api/news-monitor/analyses');
+		await form.dispatch('submit');
+		await flush();
+
+		const table = find(view, (node) => node.tagName === 'DIV' && node.attributes['aria-label'] === 'Recorded news analyses (1)');
+		const headers = findAll(table, (node) => node.tagName === 'TH').map((node) => node.textContent);
+		expect(headers).toContain('Analyzed');
+		const cells = findAll(findAll(table, (node) => node.tagName === 'TR')[1], (node) => node.tagName === 'TD')
+			.map((node) => node.textContent);
+		// The record carries createdAt; reading analyzedAt rendered a permanent em dash.
+		expect(cells[5]).toContain('ago');
+		const analyzedCell = findAll(findAll(table, (node) => node.tagName === 'TR')[1], (node) => node.tagName === 'TD')[5];
+		expect(findAll(analyzedCell, (node) => node.className.includes('timestamp'))[0].attributes.title)
+			.toContain('2026');
+		// The category is a string, not a number: formatting it as a fraction blanked it to
+		// an em dash, which is the same "unreadable value" failure as the Analyzed column.
+		expect(cells[1]).toBe('none');
+	});
+
+	it('renders an analyses record with a populated event category', async () => {
+		const { browser } = await openNewsMonitor({
+			handler: async (url) => {
+				const [path] = String(url).split('?');
+				if (path === '/openapi.json') return response(contract);
+				if (path === '/api/news-monitor/status') return response(RUNNING);
+				if (path === '/api/news-monitor/summary') return response(SUMMARY);
+				if (path === '/api/news-monitor/analyses') {
+					return response({
+						success: true,
+						analyses: [{ ...ANALYSES.analyses[0], eventCategory: 'price_surge' }],
+						nextCursor: null,
+					});
+				}
+				return response({});
+			},
+		});
+		const view = browser.elementsById.view;
+		await findForm(view, '/api/news-monitor/analyses').dispatch('submit');
+		await flush();
+		const table = find(view, (node) => node.tagName === 'DIV' && node.attributes['aria-label'] === 'Recorded news analyses (1)');
+		const cells = findAll(findAll(table, (node) => node.tagName === 'TR')[1], (node) => node.tagName === 'TD')
+			.map((node) => node.textContent);
+		expect(cells[1]).toBe('price_surge');
+		expect(cells[3]).toBe('0.41');
+	});
+
+	it('clears the cursor chain when a filter changes so paging cannot skip rows', async () => {
+		const requested = [];
+		const { browser } = await openNewsMonitor({
+			handler: async (url) => {
+				const [path, search = ''] = String(url).split('?');
+				if (path === '/openapi.json') return response(contract);
+				if (path === '/api/news-monitor/status') return response(RUNNING);
+				if (path === '/api/news-monitor/summary') return response(SUMMARY);
+				if (path === '/api/news-monitor/analyses') {
+					requested.push(search);
+					return response({ ...ANALYSES, nextCursor: 'c2' });
+				}
+				return response({});
+			},
+		});
+		const view = browser.elementsById.view;
+		const form = findForm(view, '/api/news-monitor/analyses');
+		await form.dispatch('submit');
+		await flush();
+		expect(findButton(view, 'Next page').disabled).toBe(false);
+
+		const symbol = find(view, (node) => node.name === 'symbol');
+		symbol.value = 'BTCUSDT';
+		await symbol.dispatch('input');
+
+		expect(findButton(view, 'Next page').disabled).toBe(true);
+		expect(findButton(view, 'Previous page').disabled).toBe(true);
+		await form.dispatch('submit');
+		await flush();
+		const last = requested[requested.length - 1];
+		expect(last).toContain('symbol=BTCUSDT');
+		expect(last).not.toContain('before=');
+	});
+
+	it('reports the paused state as a named action instead of a generic failure', async () => {
+		const pausedBody = {
+			error: 'News monitor analysis is temporarily paused.',
+			code: 'NEWS_MONITOR_PAUSED',
+			paused: true,
+			pausedAt: '2026-09-04T06:00:00.000Z',
+			reason: 'Gemini quota exhausted',
+			requestId: 'req-1',
+		};
+		const { browser } = await openNewsMonitor({
+			handler: async (url) => {
+				if (String(url).startsWith('/openapi.json')) return response(contract);
+				if (String(url).startsWith('/api/news-monitor/status')) return response(RUNNING);
+				if (String(url).startsWith('/api/news-monitor/summary')) return response(pausedBody, 503);
+				if (String(url).startsWith('/api/news-monitor/analyses')) return response(ANALYSES);
+				return response({});
+			},
+		});
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('The news monitor is paused');
+		expect(view.textContent).toContain('resume to continue');
+		expect(view.textContent).toContain('Recorded reason: Gemini quota exhausted');
+	});
+
+	it('reports an unread pause state as unknown instead of as running', async () => {
+		const { browser } = await openNewsMonitor({
+			handler: async (url, options = {}) => {
+				if (url === '/openapi.json') return response(contract);
+				if (String(url).startsWith('/api/news-monitor/status')) return response({ error: 'Unauthorized', code: 'INVALID_API_KEY' }, 401);
+				if (String(url).startsWith('/api/news-monitor/summary')) return response({ error: 'Unauthorized' }, 401);
+				return response({}, options.status || 200);
+			},
+		});
+		const view = browser.elementsById.view;
+		expect(stateBadge(browser).textContent).toBe('Unavailable');
+		expect(stateBadge(browser).className).toContain('status-misconfigured');
+		expect(stateSection(browser).textContent).toContain('could not be read');
+		expect(view.textContent).toContain('Delivery analytics unavailable.');
+		expect(view.textContent).not.toContain('Running normally');
+		expect(view.textContent).not.toContain('Loading delivery analytics…');
+	});
+
+	it('clears the breakdowns when a summary read fails after a good one', async () => {
+		// The previous window's charts and tables are the dangerous part here: left in place
+		// they sit directly beside "Delivery analytics unavailable." and read as current.
+		let failSummary = false;
+		const { browser } = await openNewsMonitor({
+			handler: async (url) => {
+				if (String(url).startsWith('/openapi.json')) return response(contract);
+				if (String(url).startsWith('/api/news-monitor/status')) return response(RUNNING);
+				if (String(url).startsWith('/api/news-monitor/summary')) {
+					return failSummary ? response({ error: 'Unavailable' }, 503) : response(SUMMARY);
+				}
+				return response({});
+			},
+		});
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Analyses by symbol');
+		expect(view.textContent).toContain('BTCUSDT');
+
+		failSummary = true;
+		const summaryForm = find(view, (node) => node.tagName === 'FORM' && node.textContent.includes('Load analytics'));
+		await summaryForm.dispatch('submit');
+		await flush();
+
+		expect(view.textContent).toContain('Delivery analytics unavailable.');
+		expect(view.textContent).not.toContain('BTCUSDT');
+		expect(view.textContent).not.toContain('Analyses by event category');
+		expect(view.textContent).not.toContain('price_surge');
+		expect(view.textContent).toContain('Breakdown unavailable');
+	});
+
+	it('claims nothing about the monitor before any status read has happened', async () => {
+		// No API key and no Firebase session: the pause state was never read, so the card
+		// used to render the healthy branch — a green RUNNING badge on a monitor that might
+		// have been paused for months.
+		const dispatched = [];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				dispatched.push(String(url).split('?')[0]);
+				return url === '/openapi.json' ? response(contract) : response({});
+			},
+		});
+		await flush();
+		await browser.dispatchPopState();
+		browser.location.search = '?view=newsMonitor';
+		await browser.dispatchPopState();
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(dispatched).not.toContain('/api/news-monitor/status');
+		expect(stateBadge(browser).textContent).toBe('Unavailable');
+		expect(view.textContent).not.toContain('Running normally');
+		expect(view.textContent).not.toContain('Background sweeps and manual analysis requests are accepted');
+		expect(view.textContent).toContain('Enter an API key or sign in to load the news monitor state.');
+	});
+
+	it('deep-links the news monitor view and its filter scopes', async () => {
+		const browser = createBrowser({ fetchImpl: async (url) => (url === '/openapi.json' ? response(contract) : response(RUNNING)) });
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await browser.dispatchPopState();
+		browser.location.search = '?view=newsMonitor&newsMonitor.analyses.symbol=BTCUSDT';
+		await browser.dispatchPopState();
+		await flush();
+
+		expect(browser.titleHistory[browser.titleHistory.length - 1]).toContain('News monitor');
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Recorded analyses');
+		expect(find(view, (node) => node.name === 'symbol').value).toBe('BTCUSDT');
 	});
 });
 
