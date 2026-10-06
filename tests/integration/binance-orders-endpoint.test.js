@@ -1047,11 +1047,16 @@ describe('Binance orders API', () => {
 				.set('x-api-key', 'test-key')
 				.expect(403);
 
-			expect(response.body).toEqual({
+			expect(response.body).toEqual(expect.objectContaining({
 				success: false,
 				error: 'Binance order audit trail is disabled',
 				code: 'FEATURE_DISABLED',
-			});
+			}));
+			expect(response.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 
 			isEnabledSpy.mockRestore();
 		});
@@ -1065,11 +1070,16 @@ describe('Binance orders API', () => {
 				.set('x-api-key', 'test-key')
 				.expect(503);
 
-			expect(response.body).toEqual({
+			expect(response.body).toEqual(expect.objectContaining({
 				success: false,
 				error: 'Binance order audit trail is enabled but Firestore is not configured',
 				code: 'STORAGE_UNAVAILABLE',
-			});
+			}));
+			expect(response.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: true,
+				requestId: expect.any(String),
+			}));
 
 			isEnabledSpy.mockRestore();
 			isConfiguredSpy.mockRestore();
@@ -1147,11 +1157,16 @@ describe('Binance orders API', () => {
 				.set('x-api-key', 'test-key')
 				.expect(400);
 
-			expect(resTooHigh.body).toEqual({
+			expect(resTooHigh.body).toEqual(expect.objectContaining({
 				success: false,
 				error: 'limit must be an integer between 1 and 100',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(resTooHigh.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 
 			const resTooLow = await request(app)
 				.get('/api/trading/binance/orders/audit?limit=0')

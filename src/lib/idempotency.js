@@ -2,6 +2,7 @@
 
 const { idempotencyService } = require('../services/storage/IdempotencyService');
 const requestDeadline = require('./requestDeadline');
+const { sendErrorFrom } = require('./errorEnvelope');
 
 function getRequestPath(req) {
 	if (typeof req.path === 'string' && req.path.length > 0) {
@@ -122,7 +123,7 @@ function idempotencyMiddleware(req, res, next) {
 
 	// Reject non-string values instead of allowing object/array identity keys.
 	if (typeof key !== 'string' || !key.trim()) {
-		return res.status(400).json({
+		return sendErrorFrom(res, 400, {
 			error: 'Idempotency key must be a non-empty string',
 			code: 'INVALID_REQUEST',
 		});
@@ -152,7 +153,7 @@ function idempotencyMiddleware(req, res, next) {
 				.then((cachedRecord) => sendCachedResponse(req, res, cachedRecord))
 				.catch((error) => {
 					if (error && (error.code === 'IDEMPOTENCY_RELEASED' || error.code === 'IDEMPOTENCY_CONFLICT')) {
-						return res.status(409).json({
+						return sendErrorFrom(res, 409, {
 							error: error.message,
 							code: error.code || 'IDEMPOTENCY_CONFLICT',
 						});
@@ -277,14 +278,14 @@ function idempotencyMiddleware(req, res, next) {
 					}
 					if (error.code === 'IDEMPOTENCY_CONFLICT') {
 						console.warn('[Idempotency] Conflict detected');
-						return res.status(409).json({
+						return sendErrorFrom(res, 409, {
 							error: error.message,
 							code: error.code,
 						});
 					}
 					if (error.code === 'IDEMPOTENCY_LIMIT_EXCEEDED') {
 						console.warn('[Idempotency] Limit exceeded');
-						return res.status(429).json({
+						return sendErrorFrom(res, 429, {
 							error: error.message,
 							code: error.code,
 						});
@@ -299,14 +300,14 @@ function idempotencyMiddleware(req, res, next) {
 		}
 		if (error.code === 'IDEMPOTENCY_CONFLICT') {
 			console.warn('[Idempotency] Conflict detected');
-			return res.status(409).json({
+			return sendErrorFrom(res, 409, {
 				error: error.message,
 				code: error.code,
 			});
 		}
 		if (error.code === 'IDEMPOTENCY_LIMIT_EXCEEDED') {
 			console.warn('[Idempotency] Limit exceeded');
-			return res.status(429).json({
+			return sendErrorFrom(res, 429, {
 				error: error.message,
 				code: error.code,
 			});

@@ -4,6 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const { resolveRequestId } = require('../../lib/requestDeadline');
 const { createSelfTestService } = require('../../services/diagnostics/SelfTestService');
 const sentryService = require('../../services/monitoring/SentryService');
+const { sendErrorFrom, STANDARD_ERROR_CODES } = require('../../lib/errorEnvelope');
 
 let singleton = null;
 
@@ -80,9 +81,9 @@ function postSelfTestRun(botOrGetter) {
 					requestId,
 				},
 			});
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal error running self-test suite.',
-				code: 'INTERNAL_ERROR',
+				code: STANDARD_ERROR_CODES.INTERNAL_ERROR,
 				requestId,
 			});
 		}

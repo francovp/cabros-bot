@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const API_KEY_COMPARISON_LENGTH = 4096;
 const sentryService = require('../services/monitoring/SentryService');
 const { isProductionLikeEnvironment, isPreviewEnvironment } = require('./deploymentEnvironment');
+const { sendErrorFrom } = require('./errorEnvelope');
 
 const QUERY_DEPRECATION_FLAG_KEY = '__cabrosApiKeyQueryDeprecationWarned';
 
@@ -94,7 +95,7 @@ function validateApiKey(req, res, next) {
 			} catch (_) {
 				// Fail-safe
 			}
-			return res.status(503).json({
+			return sendErrorFrom(res, 503, {
 				error: 'Service Misconfigured: WEBHOOK_API_KEY is not set in production',
 				code: 'WEBHOOK_API_KEY_UNSET',
 			});
@@ -106,7 +107,7 @@ function validateApiKey(req, res, next) {
 
 	// Sunset has passed: query-parameter auth is no longer accepted.
 	if (isQueryApiKeyPresent(req) && isQueryAuthSunsetReached()) {
-		return res.status(401).json({
+		return sendErrorFrom(res, 401, {
 			error: 'The api-key query parameter support has been removed; use the x-api-key header instead.',
 			code: 'API_KEY_QUERY_REMOVED',
 		});
@@ -116,11 +117,11 @@ function validateApiKey(req, res, next) {
 	const apiKey = req.headers['x-api-key'] || req.query['api-key'];
 
 	if (!apiKey) {
-		return res.status(401).json({ error: 'Unauthorized: Missing API key' });
+		return sendErrorFrom(res, 401, { error: 'Unauthorized: Missing API key' });
 	}
 
 	if (!isValidApiKey(req)) {
-		return res.status(403).json({ error: 'Forbidden: Invalid API key' });
+		return sendErrorFrom(res, 403, { error: 'Forbidden: Invalid API key' });
 	}
 
 	if (isQueryApiKeyPresent(req)) {

@@ -1,6 +1,7 @@
 'use strict';
 
 const { adminSseService } = require('../../services/sse/AdminSseService');
+const { sendErrorFrom } = require('../../lib/errorEnvelope');
 
 function getAdminKey(req) {
 	const user = req.adminUser || req.user;
@@ -23,7 +24,7 @@ async function handleSseStream(req, res) {
 		if (result.status === 503) {
 			res.setHeader('Retry-After', '30');
 		}
-		return res.status(result.status).json({
+		return sendErrorFrom(res, result.status, {
 			error: result.message,
 			code: result.code,
 		});
