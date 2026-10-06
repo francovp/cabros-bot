@@ -579,10 +579,18 @@ function postAlert(botOrGetter) {
 					const defaultDestinationChannels = deliveredReservationChannels
 						.map((channel) => repeatCooldownOptions?.defaultChannelsByName?.[getChannelName(channel)])
 						.filter(Boolean);
-					if (defaultDestinationChannels.length > 0) {
+					// A pending dead letter on this repeat key is stale on every identity this
+					// delivery just satisfied, not only the synthetic default one: a
+					// redrive keyed to the very chat that just received the alert would
+					// otherwise fire after its backoff and deliver a duplicate (#918).
+					const deliveredCooldownChannels = [...new Set([
+						...deliveredReservationChannels,
+						...defaultDestinationChannels,
+					])];
+					if (deliveredCooldownChannels.length > 0) {
 						const cancellation = notificationRedriveService.cancelPendingRepeatCooldowns(
 							reservation.key,
-							defaultDestinationChannels,
+							deliveredCooldownChannels,
 						);
 						await Promise.race([
 							cancellation,
@@ -592,11 +600,7 @@ function postAlert(botOrGetter) {
 					}
 					const oppositeKey = oppositeKeyOf(reservation.key);
 					if (oppositeKey) {
-						const oppositeChannels = [...new Set([
-							...deliveredReservationChannels,
-							...defaultDestinationChannels,
-						])];
-						const cancellation = notificationRedriveService.cancelPendingRepeatCooldowns(oppositeKey, oppositeChannels);
+						const cancellation = notificationRedriveService.cancelPendingRepeatCooldowns(oppositeKey, deliveredCooldownChannels);
 						await Promise.race([
 							cancellation,
 							new Promise((resolve) => setTimeout(resolve, 500)),
