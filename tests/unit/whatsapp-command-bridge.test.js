@@ -928,5 +928,70 @@ describe('WhatsAppCommandBridgeService', () => {
 			expect(result.processed).toBe(true);
 			expect(mockWhatsApp.send).not.toHaveBeenCalled();
 		});
+
+		test('acknowledges a redelivered receipt and runs the command once when it outlasts the receive budget', async () => {
+			const CHAT_ID = '120363000000000000@g.us';
+			const RECEIPT_ID = 8686;
+			const commandText = '!analisis BINANCE:BTCUSDT';
+			const receipt = {
+				receiptId: RECEIPT_ID,
+				body: {
+					typeWebhook: 'incomingMessageReceived',
+					senderData: { chatId: CHAT_ID },
+					messageData: { textMessageData: { textMessage: commandText } },
+				},
+			};
+
+			let handlerRuns = 0;
+			let successfulAcks = 0;
+			let signalAbortedAtCallCount = 0;
+
+			// Stands in for a GreenAPI instance that keeps redelivering until the
+			// receipt is acknowledged, so the poll loop sees the same receiptId again.
+			const mockFetch = jest.fn().mockImplementation((url, options = {}) => {
+				if (url.includes('/receiveNotification/')) {
+					return Promise.resolve({ ok: true, status: 200, json: async () => receipt });
+				}
+				if (options.signal?.aborted) {
+					signalAbortedAtCallCount += 1;
+					return Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+				}
+				successfulAcks += 1;
+				return Promise.resolve({ ok: true, status: 200, json: async () => ({ result: true }) });
+			});
+
+			const slowHandler = jest.fn(async () => {
+				handlerRuns += 1;
+				await new Promise((resolve) => setTimeout(resolve, 60));
+			});
+
+			const service = new WhatsAppCommandBridgeService({
+				apiUrl: 'https://green.test',
+				apiKey: 'qaAcKey',
+				chatIds: [CHAT_ID],
+				whatsAppService: { send: jest.fn().mockResolvedValue({ success: true }) },
+				fetchFn: mockFetch,
+				receiveTimeoutMs: 20,
+				deleteTimeoutMs: 500,
+			});
+			service._commandHandlers = { analisis: slowHandler };
+
+			const results = [];
+			for (let poll = 0; poll < 3; poll += 1) {
+				results.push(await service.pollOnce());
+			}
+
+			expect(slowHandler).toHaveBeenCalledTimes(1);
+			expect(handlerRuns).toBe(1);
+			expect(successfulAcks).toBe(3);
+			expect(signalAbortedAtCallCount).toBe(0);
+			expect(results.map((result) => result.deleted)).toEqual([true, true, true]);
+			expect(results.map((result) => result.duplicate)).toEqual([false, true, true]);
+			expect(results[0].handlingResult).toMatchObject({ action: 'executed', command: 'analisis' });
+			expect(results[1].handlingResult).toMatchObject({ action: 'skipped_duplicate' });
+			expect(service.getStatus().duplicateSkippedCount).toBe(2);
+			expect(service.getStatus().deleteFailureCount).toBe(0);
+			expect(service.getStatus().lastError).toBeNull();
+		});
 	});
 });
