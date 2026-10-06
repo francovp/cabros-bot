@@ -42,7 +42,7 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 - `WHATSAPP_API_URL` - GreenAPI endpoint URL (e.g., `https://7107.api.green-api.com/waInstance7107356806/`)
 - `WHATSAPP_API_KEY` - GreenAPI API key for authentication
 - `WHATSAPP_CHAT_ID` - Destination WhatsApp chat/group ID (format: `120363xxxxx@g.us`)
-- `ENABLE_WHATSAPP_COMMANDS` - Enable WhatsApp inbound commands poller (`!precio`, `!help`) (`true` or `false`, default: `false`)
+- `ENABLE_WHATSAPP_COMMANDS` - Enable WhatsApp inbound commands poller (`!precio`, `!analisis`, `!scanner`, `!noticias`, `!outcomes`/`!rendimiento`, `!help`) (`true` or `false`, default: `false`)
 - `WHATSAPP_COMMAND_CHAT_IDS` - Comma-separated list of WhatsApp chat/group IDs permitted to run commands (e.g., `120363025492938@g.us`)
 - `WHATSAPP_COMMAND_POLL_INTERVAL_MS` - Inbound command polling interval in milliseconds (default: `3000`)
 

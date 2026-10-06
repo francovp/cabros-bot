@@ -173,6 +173,31 @@ See the [Telegram Commands Reference](docs/commands.md) for aliases, throttling 
 
 ---
 
+## WhatsApp Inbound Command Bridge
+
+When `ENABLE_WHATSAPP_COMMANDS=true`, the bridge polls GreenAPI `receiveNotification` and executes commands from chats listed in `WHATSAPP_COMMAND_CHAT_IDS`. It reuses the Telegram handlers verbatim through a synthesized command context, so a WhatsApp reply is identical to its Telegram counterpart and cannot drift.
+
+| Command | Arguments | Description |
+| :--- | :--- | :--- |
+| `!precio` | `<symbol>` | Real-time crypto (Binance) or equity (Twelve Data) price quote. |
+| `!analisis` | `[<symbols>]` | Queues a background TradingView technical analysis; replies with the `jobId`. Falls back to `EXPANDED_ANALYSIS_ALERT_SYMBOLS`. |
+| `!scanner` | `[options]` | Queues a market scanner sweep; replies with the `jobId`. |
+| `!noticias` | `[<symbols>]` | Runs news monitoring analysis and replies with the analyzed/cached/alert counts. Alias: `!news`. |
+| `!outcomes` | `<symbol>` | Recent evaluated-signal performance for one symbol. Alias: `!rendimiento`. |
+| `!help`, `!start` | None | Lists the supported commands. |
+
+A job created from WhatsApp is routed with `channels: ['whatsapp']` and the originating chat id, so the completion report comes back to the chat that asked — never to a Telegram chat id shaped like a GreenAPI one, and never broadcast to every enabled channel.
+
+**Guardrails.** A chat must be allowlisted; each chat is capped at 10 commands per minute; unknown commands get a cooldown-gated hint; a non-`!` message is ignored without a reply. Each command runs under a bounded 120s deadline so one slow command cannot stall receipt draining for other chats. On timeout the chat is told the command is still processing, `dependencies.whatsappCommandBridge.commandTimeouts` increments, and a Sentry `command_timeout` event is emitted — the underlying work is not cancelled, so a late reply may still arrive.
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `ENABLE_WHATSAPP_COMMANDS` | `false` | Master gate for the inbound command poller. Environment-only — a process-startup gate. |
+| `WHATSAPP_COMMAND_CHAT_IDS` | — | Comma-separated allowlist of chat/group IDs permitted to run commands. Security control; environment-only. |
+| `WHATSAPP_COMMAND_POLL_INTERVAL_MS` | `3000` | Idle poll interval for `receiveNotification`. |
+
+---
+
 ## Key Runtime Notes
 
 ### Multi-Channel Notification Dispatch

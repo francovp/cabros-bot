@@ -3,11 +3,11 @@
 const WhatsAppService = require('./WhatsAppService');
 const sentryService = require('../monitoring/SentryService');
 const retryHelper = require('../../lib/retryHelper');
+const { createWhatsAppCommandContext, TELEGRAM_COMMAND_DELEGATES } = require('./whatsappCommandContext');
 
 const DEFAULT_POLL_INTERVAL_MS = 3000;
 const DEFAULT_MAX_COMMANDS_PER_MINUTE = 10;
 const DEFAULT_UNKNOWN_HINT_COOLDOWN_MS = 60000;
-
 /**
  * Each GreenAPI step gets its own deadline. They are deliberately independent:
  * command handling (price resolve + outbound send + its own retries) routinely
@@ -25,6 +25,16 @@ const SEEN_RECEIPT_MAX_ENTRIES = 500;
 
 const ERROR_TEXT_MAX_LENGTH = 200;
 
+// `!noticias` is the first bridge command whose work outlives a poll cycle, so this
+// bound is what stops one slow command from stalling receipt draining for every chat.
+// A fixed safety boundary rather than a knob: the handlers own their provider deadlines.
+const COMMAND_TIMEOUT_MS = 120000;
+
+const OUTCOMES_USAGE_HINT = [
+	'Indica un símbolo para consultar el rendimiento.',
+	'Ejemplos: `!outcomes BTCUSDT` o `!outcomes BINANCE:BTCUSDT`',
+].join('\n');
+
 class WhatsAppCommandBridgeService {
 	/**
 	 * @param {Object} [options]
@@ -36,6 +46,9 @@ class WhatsAppCommandBridgeService {
 	 * @param {number} [options.unknownHintCooldownMs]
 	 * @param {Object} [options.whatsAppService]
 	 * @param {Function} [options.priceResolver]
+	 * @param {Object} [options.commandHandlers] - Per-command overrides for the
+	 *   Telegram-parity commands, keyed by WhatsApp command token (e.g. `analisis`)
+	 * @param {number} [options.commandTimeoutMs]
 	 * @param {Function} [options.fetchFn]
 	 * @param {Object} [options.logger]
 	 */
@@ -46,9 +59,11 @@ class WhatsAppCommandBridgeService {
 		this._pollIntervalMs = options.pollIntervalMs;
 		this.maxCommandsPerMinute = options.maxCommandsPerMinute || DEFAULT_MAX_COMMANDS_PER_MINUTE;
 		this.unknownHintCooldownMs = options.unknownHintCooldownMs || DEFAULT_UNKNOWN_HINT_COOLDOWN_MS;
+		this.commandTimeoutMs = options.commandTimeoutMs || COMMAND_TIMEOUT_MS;
 
 		this.whatsAppService = options.whatsAppService || new WhatsAppService();
 		this._priceResolver = options.priceResolver || null;
+		this._commandHandlers = options.commandHandlers || {};
 		this.fetchFn = options.fetchFn || globalThis.fetch;
 		this.logger = options.logger || console;
 
@@ -58,6 +73,8 @@ class WhatsAppCommandBridgeService {
 		this.lastPollAt = null;
 		this.lastError = null;
 		this.lastErrorAt = null;
+		this.commandTimeouts = 0;
+		this.lastCommandTimeoutAt = null;
 
 		this.receiveTimeoutMs = options.receiveTimeoutMs || RECEIVE_TIMEOUT_MS;
 		this.deleteTimeoutMs = options.deleteTimeoutMs || DELETE_TIMEOUT_MS;
@@ -214,6 +231,10 @@ class WhatsAppCommandBridgeService {
 			'*🤖 Comandos disponibles en WhatsApp*',
 			'',
 			'• `!precio <simbolo>` — Consulta el precio en Binance o Twelve Data (ej: `!precio BTCUSDT`, `!precio NVDA`)',
+			'• `!analisis <simbolos>` — Análisis técnico de TradingView en segundo plano (ej: `!analisis BINANCE:BTCUSDT`)',
+			'• `!scanner [opciones]` — Barrido de mercado (ej: `!scanner exchange=BINANCE timeframe=4h`)',
+			'• `!noticias [simbolos]` — Monitoreo de noticias (ej: `!noticias BTCUSDT,NVDA`)',
+			'• `!outcomes <simbolo>` — Rendimiento de señales evaluadas (alias: `!rendimiento`)',
 			'• `!help` — Muestra este mensaje de ayuda',
 		].join('\n');
 	}
@@ -268,7 +289,7 @@ class WhatsAppCommandBridgeService {
 		return fetchSymbolPrice(context);
 	}
 
-	_isStopRequested() {
+_isStopRequested() {
 		return this.stopRequested === true;
 	}
 
@@ -284,6 +305,108 @@ class WhatsAppCommandBridgeService {
 			}
 			throw error;
 		}
+	}
+
+	/**
+	 * Injected overrides are keyed by the canonical command so one override covers
+	 * its aliases: `outcomes` covers `rendimiento`, `noticias` covers `news`.
+	 */
+	_resolveCommandHandler(name) {
+		const entry = TELEGRAM_COMMAND_DELEGATES[name];
+		if (!entry) {
+			return null;
+		}
+		const injected = this._commandHandlers[name] || this._commandHandlers[entry.command];
+		if (typeof injected === 'function') {
+			return injected;
+		}
+		const handlers = require('../../controllers/commands');
+		return handlers[entry.handlerName] || null;
+	}
+
+	async _executeDelegatedCommand({ chatId, command, args }) {
+		const entry = TELEGRAM_COMMAND_DELEGATES[command];
+		if (!entry) {
+			return null;
+		}
+
+		if (entry.handlerName === 'outcomesCommand' && !args) {
+			await this.whatsAppService.send({ text: OUTCOMES_USAGE_HINT, whatsappChatId: chatId });
+			return { action: 'executed', command, chatId, promptUsage: true };
+		}
+
+		const handler = this._resolveCommandHandler(command);
+		const fail = async (error) => {
+			const detail = error && error.message ? error.message : 'Error desconocido';
+			this.logger.error(`[WhatsAppCommandBridge] !${command} failed:`, detail);
+			sentryService.captureRuntimeError({
+				channel: 'whatsapp',
+				error,
+				extra: { command, chatId, type: 'command_handler_failure' },
+			});
+			await this.whatsAppService.send({
+				text: `No pude ejecutar !${command}: ${detail}`,
+				whatsappChatId: chatId,
+			});
+			return detail;
+		};
+
+		if (!handler) {
+			const detail = await fail(new Error('comando no disponible'));
+			return { action: 'executed', command, chatId, error: detail };
+		}
+
+		const context = createWhatsAppCommandContext({
+			chatId,
+			command: entry.command,
+			args,
+			whatsAppService: this.whatsAppService,
+		});
+
+		let timer;
+		let timedOut = false;
+		const deadline = new Promise((resolve) => {
+			timer = setTimeout(() => {
+				timedOut = true;
+				this.commandTimeouts += 1;
+				this.lastCommandTimeoutAt = Date.now();
+				this.logger.warn(`[WhatsAppCommandBridge] !${command} exceeded ${this.commandTimeoutMs}ms for chat ${chatId}`);
+				sentryService.captureRuntimeError({
+					channel: 'whatsapp',
+					error: new Error(`whatsapp command timeout: ${command}`),
+					extra: { command, chatId, timeoutMs: this.commandTimeoutMs, type: 'command_timeout' },
+				});
+				resolve();
+			}, this.commandTimeoutMs);
+			if (typeof timer.unref === 'function') {
+				timer.unref();
+			}
+		});
+
+		let handlerError = null;
+		try {
+			handlerError = await Promise.race([
+				Promise.resolve(handler(context)).then(() => null, (error) => fail(error)),
+				deadline,
+			]);
+		} finally {
+			clearTimeout(timer);
+		}
+
+		if (timedOut) {
+			await this.whatsAppService
+				.send({
+					text: `!${command} sigue procesando y tardó más de ${Math.round(this.commandTimeoutMs / 1000)}s. El resultado puede llegar más tarde; si no llega, vuelve a intentarlo.`,
+					whatsappChatId: chatId,
+				})
+				.catch((error) => {
+					this.logger.warn(`[WhatsAppCommandBridge] Failed to send !${command} timeout notice:`, error.message);
+				});
+			return { action: 'executed', command, chatId, timedOut: true };
+		}
+		return handlerError
+			? { action: 'executed', command, chatId, error: handlerError }
+			: { action: 'executed', command, chatId };
 	}
 
 	async executeCommand({ chatId, command, args, rawMessage }) {
@@ -314,6 +437,11 @@ class WhatsAppCommandBridgeService {
 		if (command === 'help' || command === 'start') {
 			await this._sendReply(this.buildHelpMessage(), chatId);
 			return { action: 'executed', command: 'help', chatId };
+		}
+
+		const delegated = await this._executeDelegatedCommand({ chatId, command, args });
+		if (delegated) {
+			return delegated;
 		}
 
 		// Unknown command
@@ -578,11 +706,14 @@ _sanitizeErrorText(text) {
 			lastPollAt: this.lastPollAt,
 			lastError: this.lastError,
 			lastErrorAt: this.lastErrorAt,
-			duplicateSkippedCount: this.duplicateSkippedCount,
+duplicateSkippedCount: this.duplicateSkippedCount,
 			deleteFailureCount: this.deleteFailureCount,
 			deleteRetryCount: this.deleteRetryCount,
 			deleteAbortedCount: this.deleteAbortedCount,
 			trackedReceiptCount: this.seenReceiptMap.size,
+			commandTimeoutMs: this.commandTimeoutMs,
+			commandTimeouts: this.commandTimeouts,
+			lastCommandTimeoutAt: this.lastCommandTimeoutAt,
 		};
 	}
 }
