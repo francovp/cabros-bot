@@ -313,16 +313,16 @@ If the issue/PR carries `GLOBAL_BLOCKED` **caused by a bounded retry (`429`/`rat
    gh pr edit <PR_NUMBER> --add-label "need manual PR deploy" 2>/dev/null || true
    gh issue edit <ISSUE_NUMBER> --add-label "need manual PR deploy" 2>/dev/null || true
    ```
-Send a WhatsApp notification with issue and PR links to `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`):
-    ```bash
-    PR_URL="https://github.com/francovp/cabros-bot/pull/${PR_NUMBER}"
-    ISSUE_URL="https://github.com/francovp/cabros-bot/issues/${ISSUE_NUMBER}"
-    NOTIFY_MESSAGE="[need manual PR deploy] Railway deploy still stale/bounded-retry for ${PR_URL} (issue #${ISSUE_NUMBER}: ${ISSUE_URL}). Manual deploy required." \
-      curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
-      --header 'Content-Type: application/json' \
-      --header "x-api-key: ${NOTIFY_API_KEY}" \
-      --data-raw '{"message": "'"${NOTIFY_MESSAGE}"'","channels": ["whatsapp"],"whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"}'
-    ```
+   Send a WhatsApp notification with issue and PR links to `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`):
+   ```bash
+   PR_URL="https://github.com/francovp/cabros-bot/pull/${PR_NUMBER}"
+   ISSUE_URL="https://github.com/francovp/cabros-bot/issues/${ISSUE_NUMBER}"
+   NOTIFY_MESSAGE="[need manual PR deploy] Railway deploy still stale/bounded-retry for ${PR_URL} (issue #${ISSUE_NUMBER}: ${ISSUE_URL}). Manual deploy required." \
+     curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
+     --header 'Content-Type: application/json' \
+     --header "x-api-key: ${NOTIFY_API_KEY}" \
+     --data-raw '{"message": "'"${NOTIFY_MESSAGE}"'","channels": ["whatsapp"],"whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"}'
+   ```
    Append the issue number to `SKIPPED_ISSUES`, keep `GLOBAL_BLOCKED`, release `agent-working`, and advance to the next oldest issue.
 
 Before applying the skip branches below, if this session still owns the issue's claim, handle `NEEDS_USER` first—whether set as this iteration's outcome or indicated by an issue/PR label. Its terminal handoff takes precedence over `LOCAL_DEADLOCK`, `IN_REVIEW` with no writes, and `GLOBAL_BLOCKED`. If another session owns the claim, follow the no-touch `CLAIMED` branch.
@@ -366,20 +366,20 @@ If the primary issue ends with any other (non-skip) outcome, including `IN_REVIE
    ```
 5. Record the final outcome as `IN_REVIEW` according to `references/outcomes-and-deadlocks.md`.
 6. Send an `In review` notification to WhatsApp `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`) with issue and PR links:
-    ```bash
-    PR_URL="$(gh pr view --json url --jq .url 2>/dev/null || echo "N/A")"
-    ISSUE_NUM="$(gh issue view --json number --jq .number 2>/dev/null || echo "N/A")"
-    ISSUE_URL="https://github.com/francovp/cabros-bot/issues/${ISSUE_NUM}"
-    NOTIFY_MESSAGE="[IN_REVIEW] PR ready for review — Issue #${ISSUE_NUM}: ${ISSUE_URL}. Review at: ${PR_URL}" \
-      curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
-      --header 'Content-Type: application/json' \
-      --header "x-api-key: ${NOTIFY_API_KEY}" \
-      --data-raw '{
-        "message": "'"${NOTIFY_MESSAGE}"'",
-        "channels": ["whatsapp"],
-        "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
-      }'
-    ```
+   ```bash
+   PR_URL="$(gh pr view --json url --jq .url 2>/dev/null || echo "N/A")"
+   ISSUE_NUM="$(gh issue view --json number --jq .number 2>/dev/null || echo "N/A")"
+   ISSUE_URL="https://github.com/francovp/cabros-bot/issues/${ISSUE_NUM}"
+   NOTIFY_MESSAGE="[IN_REVIEW] PR ready for review — Issue #${ISSUE_NUM}: ${ISSUE_URL}. Review at: ${PR_URL}" \
+     curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
+     --header 'Content-Type: application/json' \
+     --header "x-api-key: ${NOTIFY_API_KEY}" \
+     --data-raw '{
+       "message": "'"${NOTIFY_MESSAGE}"'",
+       "channels": ["whatsapp"],
+       "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
+     }'
+   ```
 7. **Restore original GitHub user** after all `gh` commands are done:
    ```bash
    restore_gh_user
@@ -406,19 +406,19 @@ Refer to this section when encountering execution issues:
   - Verify the `francovp` account has valid credentials with `gh auth status`.
   - If the user switch itself fails, check if `GITHUB_TOKEN` env var is overriding the keyring-based auth.
   - If the CLI is unavailable, use GitHub MCP if available. If both access paths fail:
-- Send a WhatsApp global-deadlock notification to `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`) with the issue URL and a PR URL if one exists:
-     ```bash
-     ISSUE_URL="https://github.com/$repo/issues/$issue"
-     NOTIFY_MESSAGE="[GLOBAL_BLOCKED] Issue automator halted: GitHub CLI and MCP access both failed for $repo/$issue. Human intervention required. Issue: $ISSUE_URL. PR: ${PR_URL:-none}" \
-       curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
-       --header 'Content-Type: application/json' \
-       --header "x-api-key: ${NOTIFY_API_KEY}" \
-       --data-raw '{
-         "message": "'"${NOTIFY_MESSAGE}"'",
-         "channels": ["whatsapp"],
-         "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
-       }'
-     ```
+  - Send a WhatsApp global-deadlock notification to `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`) with the issue URL and a PR URL if one exists:
+    ```bash
+    ISSUE_URL="https://github.com/$repo/issues/$issue"
+    NOTIFY_MESSAGE="[GLOBAL_BLOCKED] Issue automator halted: GitHub CLI and MCP access both failed for $repo/$issue. Human intervention required. Issue: $ISSUE_URL. PR: ${PR_URL:-none}" \
+      curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
+      --header 'Content-Type: application/json' \
+      --header "x-api-key: ${NOTIFY_API_KEY}" \
+      --data-raw '{
+        "message": "'"${NOTIFY_MESSAGE}"'",
+        "channels": ["whatsapp"],
+        "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
+      }'
+    ```
   - Then end the run with outcome `GLOBAL_BLOCKED`. Do not attempt to advance: without authenticated `gh` or an available GitHub MCP path, there is no GitHub access to fetch the next issue — `get-oldest-issue.sh` fails its auth check. The Step 6 skip loop applies only to issue-specific `GLOBAL_BLOCKED` PRs where tooling remains functional.
 - **Merge Conflicts**: If branch checkout or pushes fail due to conflicts, pull from `master` and resolve conflicts locally. Re-run tests for code changes; docs-only changes keep the Hard Rule 23 exemption. If resolving conflicts introduces ambiguity, end with `AMBIGUOUS`.
 - **Preview deployment timeout / bounded retry**: If `scripts/verify-preview.sh` fails after 3 attempts, first re-resolve the host with `scripts/get-pr-deployment-url.sh <N>` — the failure may belong to a provider other than Railway.
