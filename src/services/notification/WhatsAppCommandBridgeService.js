@@ -714,7 +714,7 @@ _sanitizeErrorText(text) {
 			lastPollAt: this.lastPollAt,
 			lastError: this.lastError,
 			lastErrorAt: this.lastErrorAt,
-duplicateSkippedCount: this.duplicateSkippedCount,
+			duplicateSkippedCount: this.duplicateSkippedCount,
 			deleteFailureCount: this.deleteFailureCount,
 			deleteRetryCount: this.deleteRetryCount,
 			deleteAbortedCount: this.deleteAbortedCount,
