@@ -970,6 +970,73 @@
       ]
     },
     {
+      "name": "Get Status - whatsapp command bridge parity command deadlines (#886)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing the execution deadline that bounds the Telegram-parity WhatsApp commands (!analisis, !scanner, !noticias, !outcomes and their aliases) under dependencies.whatsappCommandBridge. commandTimeoutMs is the bound (120000 by default) and is a fixed application safety boundary rather than operator tuning: each GreenAPI receive and deleteNotification step keeps its own independent deadline, so this bound never consumes the acknowledgement budget and a command that runs longer can no longer prevent the receipt from being acknowledged. commandTimeouts counts the commands released because they exceeded the bound, and lastCommandTimeoutAt is when that last happened. The underlying work is not cancelled on timeout, so a late reply may still arrive. These counters are process-local and reset on restart. See the receipt-acknowledgement counters (duplicateSkippedCount, deleteFailureCount, deleteRetryCount, deleteAbortedCount, trackedReceiptCount) on the sibling #881 request for the delivery side."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "const bridge = pm.response.json().dependencies.whatsappCommandBridge;",
+              "pm.test('commandTimeoutMs is a positive integer', () => pm.expect(bridge.commandTimeoutMs).to.be.a('number').and.to.be.above(0));",
+              "pm.test('commandTimeouts is a non-negative integer', () => pm.expect(bridge.commandTimeouts).to.be.a('number').and.to.be.at.least(0));",
+              "pm.test('lastCommandTimeoutAt is an integer or null', () => pm.expect(bridge.lastCommandTimeoutAt === null || Number.isInteger(bridge.lastCommandTimeoutAt)).to.be.true);",
+              "pm.test('a timed-out command never blocks acknowledgement', () => pm.expect(bridge.deleteFailureCount + bridge.deleteAbortedCount).to.eql(0));",
+              "pm.test('no chat id, api key or message content is exposed', () => { const raw = JSON.stringify(bridge); pm.expect(raw).to.not.include('@g.us'); pm.expect(raw).to.not.include('whatsappChatId'); });"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "200 OK - parity commands inside the deadline",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\": {\"whatsappCommandBridge\": {\"enabled\": true, \"configured\": true, \"ready\": true, \"running\": true, \"status\": \"ready\", \"allowlistedChatsCount\": 2, \"lastPollAt\": 1767225600000, \"lastError\": null, \"lastErrorAt\": null, \"duplicateSkippedCount\": 0, \"deleteFailureCount\": 0, \"deleteRetryCount\": 0, \"deleteAbortedCount\": 0, \"trackedReceiptCount\": 3, \"commandTimeoutMs\": 120000, \"commandTimeouts\": 0, \"lastCommandTimeoutAt\": null}}}"
+        },
+        {
+          "name": "200 OK - a command exceeded the deadline but the receipt was still acknowledged",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\": {\"whatsappCommandBridge\": {\"enabled\": true, \"configured\": true, \"ready\": true, \"running\": true, \"status\": \"ready\", \"allowlistedChatsCount\": 2, \"lastPollAt\": 1767225603000, \"lastError\": null, \"lastErrorAt\": null, \"duplicateSkippedCount\": 0, \"deleteFailureCount\": 0, \"deleteRetryCount\": 0, \"deleteAbortedCount\": 0, \"trackedReceiptCount\": 5, \"commandTimeoutMs\": 120000, \"commandTimeouts\": 2, \"lastCommandTimeoutAt\": 1767225602800}}}"
+        },
+        {
+          "name": "200 OK - bridge disabled",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\": {\"whatsappCommandBridge\": {\"enabled\": false, \"configured\": false, \"ready\": false, \"running\": false, \"status\": \"disabled\", \"allowlistedChatsCount\": 0, \"lastPollAt\": null, \"lastError\": null, \"lastErrorAt\": null, \"duplicateSkippedCount\": 0, \"deleteFailureCount\": 0, \"deleteRetryCount\": 0, \"deleteAbortedCount\": 0, \"trackedReceiptCount\": 0, \"commandTimeoutMs\": 120000, \"commandTimeouts\": 0, \"lastCommandTimeoutAt\": null}}}"
+        },
+        {
+          "name": "401 Unauthorized - missing or invalid API key",
+          "status": "Unauthorized",
+          "code": 401,
+          "body": "{\"error\": \"Invalid or missing API key\", \"code\": \"UNAUTHORIZED\"}"
+        }
+      ]
+    },
+    {
       "name": "Get Status - firestore write metrics",
       "request": {
         "method": "GET",

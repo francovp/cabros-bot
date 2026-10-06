@@ -13715,6 +13715,20 @@
             "type": "integer",
             "minimum": 0,
             "description": "Receipt ids currently held in the bounded seen-receipt suppression window."
+          },
+          "commandTimeoutMs": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Per-command execution deadline in milliseconds (120000 by default) for the Telegram-parity commands. A fixed application safety boundary, not operator tuning: each GreenAPI receive/delete step keeps its own independent deadline, so this bound never consumes the acknowledgement budget."
+          },
+          "commandTimeouts": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Commands released because they exceeded commandTimeoutMs. The underlying work is not cancelled, so a late reply may still arrive; a rising count means delegated commands are too slow for the bridge."
+          },
+          "lastCommandTimeoutAt": {
+            "type": ["integer", "null"],
+            "description": "Epoch milliseconds of the most recent command timeout, or null before the first one."
           }
         }
       },
