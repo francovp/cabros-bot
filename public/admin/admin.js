@@ -3612,7 +3612,7 @@ const renderOutcomesSummaryBlocks = (data) => {
 		const percentOrDash = (value) => (value === undefined ? '—' : `${value}%`);
 		const signedPercentOrDash = (value) => (value === undefined ? '—' : `${value > 0 ? '+' : ''}${value}%`);
 		section.append(createResultTable('Performance by window', [
-			['Window', (row) => row.window],
+			['Window', (row) => row.windowKey],
 			['Evaluated', (row) => formatJobValue(row.stats.totalSignals ?? row.stats.evaluatedCount)],
 			['Hit rate', (row) => percentOrDash(row.stats.hitRatePercent)],
 			['Target hit', (row) => percentOrDash(row.stats.targetHitRatePercent)],
@@ -3623,7 +3623,7 @@ const renderOutcomesSummaryBlocks = (data) => {
 			['Avg return', (row) => signedPercentOrDash(row.stats.averageReturnPercent)],
 			['Avg MFE', (row) => (row.stats.averageMfePercent === undefined ? '—' : `+${row.stats.averageMfePercent}%`)],
 			['Avg MAE', (row) => percentOrDash(row.stats.averageMaePercent)],
-		], windowEntries.map(([window, stats]) => ({ window, stats: asObject(stats) }))).scroll);
+		], windowEntries.map(([windowKey, stats]) => ({ windowKey, stats: asObject(stats) }))).scroll);
 		wrap.append(section);
 	}
 
