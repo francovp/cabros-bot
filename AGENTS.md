@@ -337,6 +337,7 @@ This repo now contains **both** renewal conventions, so neither signature enforc
 - `async-integration-review` (`.agents/skills/async-integration-review/`): reviews deadlines, abortable external calls, retries, cooldowns, worker fairness, scheduling inputs, telemetry, and graceful shutdown for asynchronous integrations.
 - `contract-alignment-review` (`.agents/skills/contract-alignment-review/`): reviews runtime/API/config/deployment changes for alignment across OpenAPI, Postman, `.env.example`, README/specs, and repository agent skills.
 - `agent-cross-review` (`.agents/skills/agent-cross-review/`): discovers and cross-reviews pull requests created by other AI coding agents (Codex, GitHub Copilot, OpenCode, Claude) against Cabros Bot fail-open async, formatting, persistence, auth, and contract standards.
+- `issue-automator` (`.agents/skills/issue-automator/`): automates issue resolution and the `In review` / `GLOBAL_BLOCKED` / `NEEDS_USER` handoffs. **Every PR notification resolves its destination from `NOTIFY_WHATSAPP_CHAT_ID`, defaulting to `120363422033474991@g.us`** (issue #928). The knob is read in all five `--data-raw` payloads; a chat id typed directly into a payload overrides the operator's configuration and is exactly the drift that issue removed, so `tests/unit/issue-automator-notification-destination.test.js` fails on any such literal. `channels` stays a hardcoded `["whatsapp"]` — WhatsApp is an unconditional mandate, not a knob.
 
 ### When implementing a feature:
 
