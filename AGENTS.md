@@ -783,6 +783,22 @@ The system provides status and capability querying endpoints to verify service c
 
 No new environment variable, endpoint, Remote Config key, or notification contract was added; this is a non-secret operational status addition.
 
+## Redrive Supersession Ordering Reconciliation (Issue #919)
+
+`isRepeatCooldownSuperseded()` in `src/services/notification/NotificationRedriveService.js` decides whether a dead-lettered alert is still worth redriving. It is reached from three places that all treat `true` as "cancel this record": the webhook path (`alert.js`), the pre-dispatch sweep gate, and the post-dispatch gate. A wrong `true` is therefore a **missed alert**, not just a cancelled retry.
+
+**The trap this repo already paid for once.** A supersession "generation" is *process-derived*, not durable: `nextMonotonicGeneration()` returns `lastMonotonicGenerationTime * 1000 + counter`, where the time comes from the local replica's clock. Two replicas with any clock skew mint generations that order the opposite way from the durable creation order. The implementation therefore treats the local marker as a **fallback verdict, never a short-circuit** — `locallySuperseded` is computed and then only consulted on the paths where durable evidence is *unavailable*.
+
+Three rules must survive future edits:
+
+- **Durable commit order outranks any local generation.** When both Firestore snapshots are readable and carry timestamps, `supersessionNanos` vs `recordNanos` decides alone; a proven newer record returns `false` even if the local marker claims a higher generation. This is the fix, and `tests/unit/notification-redrive-service.test.js` fails if the early `return true` on `locallySuperseded` is restored.
+- **The local marker is still consulted when durable reads cannot answer** — no Firestore, an exhausted `deadline`, a timed-out `Promise.race`, a thrown read, or snapshots that carry no commit timestamps. This keeps the pre-existing local-only behavior (suppression still happens) instead of silently flipping every unresolvable case to "redeliver".
+- **A locally `cancelled` record is a different question from supersession ordering.** That check keys on `record.id`, which is unique per correlation id, so it stays an unconditional early `return true`. Do not merge it into the marker reconciliation.
+
+Reconciling costs two extra point reads per call on the paths that previously returned early. That is deliberate: the alternative trades a bounded read for a silently dropped alert, and the repo's stated priority is that delivery correctness outranks the read.
+
+**No contract changed.** No environment variable, Remote Config key, endpoint, OpenAPI schema, or Postman variant was added — `isRepeatCooldownSuperseded()` is internal and its result already surfaced only through the existing `cancelled` dead-letter status.
+
 ## Firestore Write Observability & Persistence Metrics (GH-695)
 
 `GET /api/status` and `/api/capabilities` now expose an optional `dependencies.firestoreWriteMetrics` section reporting in-memory write metrics (`window`, `writesAttempted`, `writesSucceeded`, `writesFailed`, `successRate`, and per-domain breakdowns under `byDomain`). The section is omitted entirely until at least one write has been attempted; counters reset on process restart.
