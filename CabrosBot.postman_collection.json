@@ -914,6 +914,62 @@
       ]
     },
     {
+      "name": "Get Status - whatsapp command bridge receipt handling (#881)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status request exposing dependencies.whatsappCommandBridge. GreenAPI redelivers any receiptId whose deleteNotification never landed, so an unacknowledged receipt re-executes the command on the next poll. Each GreenAPI step has its own bounded deadline and the delete is retried, so this block reports what acknowledgement actually cost: deleteRetryCount counts every additional deleteNotification attempt after the first, including retries that recovered (so a recovered acknowledgement leaves deleteFailureCount at 0 and deleteRetryCount above 0), deleteFailureCount counts acknowledgements that failed on every attempt, deleteAbortedCount counts acknowledgements that ended on their own deadline, and duplicateSkippedCount counts redeliveries the bounded seen-receipt window absorbed instead of re-running the command. deleteFailureCount climbing with duplicateSkippedCount flat is the signal that suppression is no longer covering redeliveries. lastError is composed only from our own status code or a bounded classification (for example 'HTTP 500' or 'acknowledgement step timed out after 10000ms'); the provider response body is never included, because the delete URL is /deleteNotification/{apiKey}/{receiptId} and an echoing GreenAPI body would otherwise publish the api key here. Counters are process-local; no api key, chat id, or message content is exposed."
+      },
+      "response": [
+        {
+          "name": "200 OK - receipts acknowledged cleanly, no redelivery absorbed",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\": {\"whatsappCommandBridge\": {\"enabled\": true, \"configured\": true, \"ready\": true, \"running\": true, \"status\": \"ready\", \"allowlistedChatsCount\": 2, \"lastPollAt\": 1767225600000, \"lastError\": null, \"lastErrorAt\": null, \"duplicateSkippedCount\": 0, \"deleteFailureCount\": 0, \"deleteRetryCount\": 0, \"deleteAbortedCount\": 0, \"trackedReceiptCount\": 3}}}"
+        },
+        {
+          "name": "200 OK - redelivered receipts suppressed, retry recovered the delete",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\": {\"whatsappCommandBridge\": {\"enabled\": true, \"configured\": true, \"ready\": true, \"running\": true, \"status\": \"ready\", \"allowlistedChatsCount\": 2, \"lastPollAt\": 1767225602000, \"lastError\": null, \"lastErrorAt\": null, \"duplicateSkippedCount\": 2, \"deleteFailureCount\": 0, \"deleteRetryCount\": 3, \"deleteAbortedCount\": 0, \"trackedReceiptCount\": 4}}}"
+        },
+        {
+          "name": "200 OK - acknowledgement keeps timing out, commands at risk of re-execution",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\": {\"whatsappCommandBridge\": {\"enabled\": true, \"configured\": true, \"ready\": true, \"running\": true, \"status\": \"degraded\", \"allowlistedChatsCount\": 2, \"lastPollAt\": 1767225605000, \"lastError\": \"Failed to delete notification 445566: acknowledgement step timed out after 10000ms\", \"lastErrorAt\": 1767225604900, \"duplicateSkippedCount\": 0, \"deleteFailureCount\": 4, \"deleteRetryCount\": 8, \"deleteAbortedCount\": 4, \"trackedReceiptCount\": 5}}}"
+        },
+        {
+          "name": "200 OK - bridge disabled",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\": {\"whatsappCommandBridge\": {\"enabled\": false, \"configured\": false, \"ready\": false, \"running\": false, \"status\": \"disabled\", \"allowlistedChatsCount\": 0, \"lastPollAt\": null, \"lastError\": null, \"lastErrorAt\": null, \"duplicateSkippedCount\": 0, \"deleteFailureCount\": 0, \"deleteRetryCount\": 0, \"deleteAbortedCount\": 0, \"trackedReceiptCount\": 0}}}"
+        },
+        {
+          "name": "401 Unauthorized - missing or invalid API key",
+          "status": "Unauthorized",
+          "code": 401,
+          "body": "{\"error\": \"Invalid or missing API key\", \"code\": \"UNAUTHORIZED\"}"
+        }
+      ]
+    },
+    {
       "name": "Get Status - firestore write metrics",
       "request": {
         "method": "GET",

@@ -341,4 +341,334 @@ describe('WhatsAppCommandBridgeService', () => {
 			expect(service.isRunning()).toBe(false);
 		});
 	});
+
+	describe('Bounded per-step deadlines and duplicate suppression', () => {
+		const notificationPayload = (receiptId, text = '!precio BTCUSDT') => ({
+			receiptId,
+			body: {
+				typeWebhook: 'incomingMessageReceived',
+				senderData: { chatId: '120363000000000000@g.us' },
+				messageData: { textMessageData: { textMessage: text } },
+			},
+		});
+
+		test('deletes the receipt with its own budget when handling outlasts the receive timeout', async () => {
+			const mockFetch = jest.fn().mockImplementation(async (url) => {
+				if (url.includes('/receiveNotification/')) {
+					return { ok: true, status: 200, json: async () => notificationPayload(4242) };
+				}
+				return { ok: true, status: 200, json: async () => ({ result: true }) };
+			});
+
+			const mockPriceResolver = jest.fn().mockImplementation(
+				() => new Promise((resolve) => setTimeout(() => resolve({ message: 'Precio de BTCUSDT es 65000' }), 120)),
+			);
+
+			const mockWhatsApp = { send: jest.fn().mockResolvedValue({ success: true }) };
+			const service = new WhatsAppCommandBridgeService({
+				whatsAppService: mockWhatsApp,
+				priceResolver: mockPriceResolver,
+				fetchFn: mockFetch,
+				receiveTimeoutMs: 20,
+				deleteTimeoutMs: 500,
+			});
+
+			const result = await service.pollOnce();
+
+			expect(result.processed).toBe(true);
+			expect(result.deleted).toBe(true);
+			expect(mockPriceResolver).toHaveBeenCalledTimes(1);
+			const deleteCalls = mockFetch.mock.calls.filter((c) => c[0].includes('/deleteNotification/'));
+			expect(deleteCalls).toHaveLength(1);
+			expect(deleteCalls[0][0]).toContain('/4242');
+		});
+
+		test('retries a failed delete and executes the command exactly once', async () => {
+			let deleteAttempts = 0;
+			const mockFetch = jest.fn().mockImplementation(async (url) => {
+				if (url.includes('/receiveNotification/')) {
+					return { ok: true, status: 200, json: async () => notificationPayload(5252) };
+				}
+				deleteAttempts += 1;
+				if (deleteAttempts === 1) {
+					return { ok: false, status: 500, text: async () => 'Internal Server Error' };
+				}
+				return { ok: true, status: 200, json: async () => ({ result: true }) };
+			});
+
+			const mockPriceResolver = jest.fn().mockResolvedValue({ message: 'Precio de BTCUSDT es 65000' });
+			const mockWhatsApp = { send: jest.fn().mockResolvedValue({ success: true }) };
+			const service = new WhatsAppCommandBridgeService({
+				whatsAppService: mockWhatsApp,
+				priceResolver: mockPriceResolver,
+				fetchFn: mockFetch,
+			});
+
+			const result = await service.pollOnce();
+
+			expect(result.processed).toBe(true);
+			expect(result.deleted).toBe(true);
+			expect(deleteAttempts).toBe(2);
+			expect(mockPriceResolver).toHaveBeenCalledTimes(1);
+			expect(mockWhatsApp.send).toHaveBeenCalledTimes(1);
+		});
+
+		test('counts a recovered delete retry in deleteRetryCount', async () => {
+			let deleteAttempts = 0;
+			const mockFetch = jest.fn().mockImplementation(async (url) => {
+				if (url.includes('/receiveNotification/')) {
+					return { ok: true, status: 200, json: async () => notificationPayload(5253) };
+				}
+				deleteAttempts += 1;
+				if (deleteAttempts === 1) {
+					return { ok: false, status: 500, text: async () => 'Internal Server Error' };
+				}
+				return { ok: true, status: 200, json: async () => ({ result: true }) };
+			});
+
+			const mockPriceResolver = jest.fn().mockResolvedValue({ message: 'Precio de BTCUSDT es 65000' });
+			const mockWhatsApp = { send: jest.fn().mockResolvedValue({ success: true }) };
+			const service = new WhatsAppCommandBridgeService({
+				whatsAppService: mockWhatsApp,
+				priceResolver: mockPriceResolver,
+				fetchFn: mockFetch,
+			});
+
+			const result = await service.pollOnce();
+			const status = service.getStatus();
+
+			expect(result.deleted).toBe(true);
+			expect(status.deleteRetryCount).toBe(1);
+			expect(status.deleteFailureCount).toBe(0);
+			expect(status.lastError).toBeNull();
+		});
+
+		test('never publishes the api key or the provider body through lastError', async () => {
+			const apiKey = 'qaFakeApiKey123';
+			const leakingBody = `{"error":"invalid token ${apiKey} for instance"}`;
+
+			const deleteFailingFetch = jest.fn().mockImplementation(async (url) => {
+				if (url.includes('/receiveNotification/')) {
+					return { ok: true, status: 200, json: async () => notificationPayload(1313) };
+				}
+				return { ok: false, status: 401, text: async () => leakingBody };
+			});
+
+			const deleteService = new WhatsAppCommandBridgeService({
+				apiUrl: 'https://green.test',
+				apiKey,
+				chatIds: ['120363000000000000@g.us'],
+				whatsAppService: { send: jest.fn().mockResolvedValue({ success: true }) },
+				priceResolver: jest.fn().mockResolvedValue({ message: 'ok' }),
+				fetchFn: deleteFailingFetch,
+			});
+
+			await deleteService.pollOnce();
+			const deleteStatus = deleteService.getStatus();
+			expect(deleteStatus.lastError).toContain('HTTP 401');
+			expect(deleteStatus.lastError).not.toContain(apiKey);
+			expect(deleteStatus.lastError).not.toContain('invalid token');
+			expect(deleteStatus.deleteFailureCount).toBe(1);
+
+			const receiveFailingFetch = jest
+				.fn()
+				.mockResolvedValue({ ok: false, status: 500, text: async () => leakingBody });
+			const receiveService = new WhatsAppCommandBridgeService({
+				apiUrl: 'https://green.test',
+				apiKey,
+				chatIds: ['120363000000000000@g.us'],
+				fetchFn: receiveFailingFetch,
+			});
+
+			await receiveService.pollOnce();
+			const receiveStatus = receiveService.getStatus();
+			expect(receiveStatus.lastError).toContain('HTTP 500');
+			expect(receiveStatus.lastError).not.toContain(apiKey);
+			expect(receiveStatus.lastError).not.toContain('invalid token');
+		});
+
+		test('redacts the api key from a transport error that echoes the poll URL', async () => {
+			const apiKey = 'qaTransportKey456';
+			const service = new WhatsAppCommandBridgeService({
+				apiUrl: 'https://green.test',
+				apiKey,
+				chatIds: ['120363000000000000@g.us'],
+				fetchFn: jest.fn().mockRejectedValue(
+					new Error(`connect ECONNREFUSED for https://green.test/receiveNotification/${apiKey}`),
+				),
+			});
+
+			await service.pollOnce();
+			const status = service.getStatus();
+
+			expect(status.lastError).not.toContain(apiKey);
+			expect(status.lastError).toContain('[redacted]');
+		});
+
+		test('describes a transport-only delete failure without the transport text', async () => {
+			const apiKey = 'qaTransportKey789';
+			const mockFetch = jest.fn().mockImplementation(async (url) => {
+				if (url.includes('/receiveNotification/')) {
+					return { ok: true, status: 200, json: async () => notificationPayload(1414) };
+				}
+				throw new Error(`connect ECONNREFUSED for ${url}`);
+			});
+
+			const service = new WhatsAppCommandBridgeService({
+				apiUrl: 'https://green.test',
+				apiKey,
+				chatIds: ['120363000000000000@g.us'],
+				whatsAppService: { send: jest.fn().mockResolvedValue({ success: true }) },
+				priceResolver: jest.fn().mockResolvedValue({ message: 'ok' }),
+				fetchFn: mockFetch,
+				deleteMaxAttempts: 1,
+			});
+
+			await service.pollOnce();
+			const status = service.getStatus();
+
+			expect(status.lastError).toBe('Failed to delete notification 1414: request failed');
+			expect(status.lastError).not.toContain(apiKey);
+			expect(status.deleteFailureCount).toBe(1);
+		});
+
+		test('does not retry a non-retryable delete failure', async () => {
+			let deleteAttempts = 0;
+			const mockFetch = jest.fn().mockImplementation(async (url) => {
+				if (url.includes('/receiveNotification/')) {
+					return { ok: true, status: 200, json: async () => notificationPayload(6161) };
+				}
+				deleteAttempts += 1;
+				return { ok: false, status: 400, text: async () => 'Bad Request' };
+			});
+
+			const mockWhatsApp = { send: jest.fn().mockResolvedValue({ success: true }) };
+			const service = new WhatsAppCommandBridgeService({ whatsAppService: mockWhatsApp, fetchFn: mockFetch });
+
+			const result = await service.pollOnce();
+
+			expect(result.processed).toBe(true);
+			expect(result.deleted).toBe(false);
+			expect(deleteAttempts).toBe(1);
+			expect(service.getStatus().deleteFailureCount).toBe(1);
+		});
+
+		test('skips a redelivered receiptId after both steps time out, without re-executing', async () => {
+			const receipt = notificationPayload(7070);
+			let deleteCalls = 0;
+
+			const mockFetch = jest.fn().mockImplementation((url, options = {}) => {
+				if (url.includes('/receiveNotification/')) {
+					return Promise.resolve({ ok: true, status: 200, json: async () => receipt });
+				}
+				deleteCalls += 1;
+				return new Promise((_resolve, reject) => {
+					options.signal?.addEventListener('abort', () => {
+						const err = new Error('aborted');
+						err.name = 'AbortError';
+						reject(err);
+					});
+				});
+			});
+
+			const mockPriceResolver = jest.fn().mockResolvedValue({ message: 'Precio de BTCUSDT es 65000' });
+			const mockWhatsApp = { send: jest.fn().mockResolvedValue({ success: true }) };
+			const service = new WhatsAppCommandBridgeService({
+				whatsAppService: mockWhatsApp,
+				priceResolver: mockPriceResolver,
+				fetchFn: mockFetch,
+				deleteTimeoutMs: 10,
+				deleteMaxAttempts: 1,
+			});
+
+			const first = await service.pollOnce();
+			expect(first.processed).toBe(true);
+			expect(first.deleted).toBe(false);
+			expect(mockPriceResolver).toHaveBeenCalledTimes(1);
+
+			const second = await service.pollOnce();
+			expect(second.processed).toBe(true);
+			expect(second.duplicate).toBe(true);
+			expect(second.handlingResult.action).toBe('skipped_duplicate');
+			expect(mockPriceResolver).toHaveBeenCalledTimes(1);
+			expect(mockWhatsApp.send).toHaveBeenCalledTimes(1);
+			expect(deleteCalls).toBeGreaterThanOrEqual(2);
+			expect(service.getStatus().duplicateSkippedCount).toBe(1);
+		});
+
+		test('expires seen receipts after the TTL window', () => {
+			const service = new WhatsAppCommandBridgeService({ seenReceiptTtlMs: 1 });
+			service._markReceiptSeen(8080);
+			expect(service._isSeenReceipt(8080)).toBe(true);
+			jest.spyOn(Date, 'now').mockReturnValue(Date.now() + 50);
+			expect(service._isSeenReceipt(8080)).toBe(false);
+		});
+
+		test('bounds the seen receipt map', () => {
+			const service = new WhatsAppCommandBridgeService({ seenReceiptMaxEntries: 3 });
+			[1, 2, 3, 4, 5].forEach((id) => service._markReceiptSeen(id));
+			expect(service.seenReceiptMap.size).toBe(3);
+			expect(service._isSeenReceipt(1)).toBe(false);
+			expect(service._isSeenReceipt(5)).toBe(true);
+		});
+
+		test('stop() aborts an in-flight poll fetch', async () => {
+			let aborted = false;
+			const mockFetch = jest.fn().mockImplementation((_url, options = {}) => {
+				return new Promise((_resolve, reject) => {
+					options.signal?.addEventListener('abort', () => {
+						aborted = true;
+						const err = new Error('aborted');
+						err.name = 'AbortError';
+						reject(err);
+					});
+				});
+			});
+
+			const service = new WhatsAppCommandBridgeService({
+				fetchFn: mockFetch,
+				receiveTimeoutMs: 100,
+			});
+			service.start();
+
+			const pollPromise = service.pollOnce();
+			await new Promise((resolve) => setImmediate(resolve));
+			await service.stop({ timeoutMs: 1000 });
+			const result = await pollPromise;
+			await service.activePollPromise;
+
+			expect(aborted).toBe(true);
+			expect(result.timeout).toBe(true);
+		});
+
+		test('suppresses a pending command reply once stop() was requested', async () => {
+			let releasePrice;
+			const mockPriceResolver = jest.fn().mockImplementation(
+				() => new Promise((resolve) => { releasePrice = () => resolve({ message: 'Precio de BTCUSDT es 65000' }); }),
+			);
+			const mockWhatsApp = { send: jest.fn().mockResolvedValue({ success: true }) };
+			const mockFetch = jest.fn().mockImplementation(async (url) => {
+				if (url.includes('/receiveNotification/')) {
+					return { ok: true, status: 200, json: async () => notificationPayload(9090) };
+				}
+				return { ok: true, status: 200, json: async () => ({ result: true }) };
+			});
+
+			const service = new WhatsAppCommandBridgeService({
+				whatsAppService: mockWhatsApp,
+				priceResolver: mockPriceResolver,
+				fetchFn: mockFetch,
+			});
+			service.start();
+
+			const pollPromise = service.pollOnce();
+			await new Promise((resolve) => setImmediate(resolve));
+			await service.stop({ timeoutMs: 50 });
+			releasePrice();
+
+			const result = await pollPromise;
+			expect(result.processed).toBe(true);
+			expect(mockWhatsApp.send).not.toHaveBeenCalled();
+		});
+	});
 });

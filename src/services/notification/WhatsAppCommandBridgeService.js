@@ -2,11 +2,28 @@
 
 const WhatsAppService = require('./WhatsAppService');
 const sentryService = require('../monitoring/SentryService');
+const retryHelper = require('../../lib/retryHelper');
 
 const DEFAULT_POLL_INTERVAL_MS = 3000;
 const DEFAULT_MAX_COMMANDS_PER_MINUTE = 10;
 const DEFAULT_UNKNOWN_HINT_COOLDOWN_MS = 60000;
-const REQUEST_TIMEOUT_MS = 10000;
+
+/**
+ * Each GreenAPI step gets its own deadline. They are deliberately independent:
+ * command handling (price resolve + outbound send + its own retries) routinely
+ * outlasts the receive budget, and a shared controller meant the post-handling
+ * `deleteNotification` was aborted by a timer that had already fired — leaving
+ * the receipt in the inbound queue so the next poll re-executed the command.
+ */
+const RECEIVE_TIMEOUT_MS = 10000;
+const DELETE_TIMEOUT_MS = 10000;
+const DELETE_MAX_ATTEMPTS = 3;
+const DELETE_MAX_RETRY_DELAY_MS = 1500;
+
+const SEEN_RECEIPT_TTL_MS = 120000;
+const SEEN_RECEIPT_MAX_ENTRIES = 500;
+
+const ERROR_TEXT_MAX_LENGTH = 200;
 
 class WhatsAppCommandBridgeService {
 	/**
@@ -42,8 +59,19 @@ class WhatsAppCommandBridgeService {
 		this.lastError = null;
 		this.lastErrorAt = null;
 
+		this.receiveTimeoutMs = options.receiveTimeoutMs || RECEIVE_TIMEOUT_MS;
+		this.deleteTimeoutMs = options.deleteTimeoutMs || DELETE_TIMEOUT_MS;
+		this.deleteMaxAttempts = options.deleteMaxAttempts || DELETE_MAX_ATTEMPTS;
+		this.seenReceiptTtlMs = options.seenReceiptTtlMs || SEEN_RECEIPT_TTL_MS;
+		this.seenReceiptMaxEntries = options.seenReceiptMaxEntries || SEEN_RECEIPT_MAX_ENTRIES;
+
 		this.rateLimitMap = new Map(); // chatId -> timestamp[]
 		this.unknownHintMap = new Map(); // chatId -> timestamp
+		this.seenReceiptMap = new Map(); // receiptId -> expiresAt
+		this.duplicateSkippedCount = 0;
+		this.deleteFailureCount = 0;
+		this.deleteRetryCount = 0;
+		this.deleteAbortedCount = 0;
 		this._sleepResolvers = new Set();
 	}
 
@@ -145,6 +173,32 @@ class WhatsAppCommandBridgeService {
 		return true;
 	}
 
+	_isSeenReceipt(receiptId) {
+		if (!receiptId) return false;
+		const key = String(receiptId);
+		const expiresAt = this.seenReceiptMap.get(key);
+		if (expiresAt === undefined) return false;
+		if (expiresAt <= Date.now()) {
+			this.seenReceiptMap.delete(key);
+			return false;
+		}
+		return true;
+	}
+
+	_markReceiptSeen(receiptId) {
+		if (!receiptId) return;
+		const now = Date.now();
+		for (const [key, expiresAt] of this.seenReceiptMap) {
+			if (expiresAt <= now) this.seenReceiptMap.delete(key);
+		}
+		while (this.seenReceiptMap.size >= this.seenReceiptMaxEntries) {
+			const oldest = this.seenReceiptMap.keys().next();
+			if (oldest.done) break;
+			this.seenReceiptMap.delete(oldest.value);
+		}
+		this.seenReceiptMap.set(String(receiptId), now + this.seenReceiptTtlMs);
+	}
+
 	_checkUnknownHintCooldown(chatId) {
 		const now = Date.now();
 		const lastSent = this.unknownHintMap.get(chatId) || 0;
@@ -214,15 +268,30 @@ class WhatsAppCommandBridgeService {
 		return fetchSymbolPrice(context);
 	}
 
+	_isStopRequested() {
+		return this.stopRequested === true;
+	}
+
+	async _sendReply(text, chatId) {
+		if (this._isStopRequested()) {
+			return { success: false, error: 'Bridge is shutting down; reply suppressed', suppressed: true };
+		}
+		try {
+			return await this.whatsAppService.send({ text, whatsappChatId: chatId });
+		} catch (error) {
+			if (this._isStopRequested()) {
+				return { success: false, error: 'Bridge is shutting down; reply suppressed', suppressed: true };
+			}
+			throw error;
+		}
+	}
+
 	async executeCommand({ chatId, command, args, rawMessage }) {
 		if (!chatId || !command) return { action: 'ignored' };
 
 		if (command === 'precio') {
 			if (!args) {
-				await this.whatsAppService.send({
-					text: 'Por favor indica un símbolo. Ejemplo: !precio BTCUSDT o !precio NVDA',
-					whatsappChatId: chatId,
-				});
+				await this._sendReply('Por favor indica un símbolo. Ejemplo: !precio BTCUSDT o !precio NVDA', chatId);
 				return { action: 'executed', command: 'precio', chatId, promptSymbol: true };
 			}
 
@@ -233,56 +302,124 @@ class WhatsAppCommandBridgeService {
 					? `Precio de ${result.symbol} es ${result.price}`
 					: `No pude obtener el precio de ${args}.`);
 
-				await this.whatsAppService.send({
-					text: replyText,
-					whatsappChatId: chatId,
-				});
+				await this._sendReply(replyText, chatId);
 				return { action: 'executed', command: 'precio', chatId, symbol: args };
 			} catch (error) {
 				const errorMessage = error.userMessage || error.message || `No pude obtener el precio de ${args}.`;
-				await this.whatsAppService.send({
-					text: errorMessage,
-					whatsappChatId: chatId,
-				});
+				await this._sendReply(errorMessage, chatId);
 				return { action: 'executed', command: 'precio', chatId, error: errorMessage };
 			}
 		}
 
 		if (command === 'help' || command === 'start') {
-			await this.whatsAppService.send({
-				text: this.buildHelpMessage(),
-				whatsappChatId: chatId,
-			});
+			await this._sendReply(this.buildHelpMessage(), chatId);
 			return { action: 'executed', command: 'help', chatId };
 		}
 
 		// Unknown command
 		if (this._checkUnknownHintCooldown(chatId)) {
-			await this.whatsAppService.send({
-				text: 'Comando no reconocido. Usa !help para ver los comandos disponibles.',
-				whatsappChatId: chatId,
-			});
+			await this._sendReply('Comando no reconocido. Usa !help para ver los comandos disponibles.', chatId);
 			return { action: 'unknown_command_hint', command, chatId };
 		}
 
 		return { action: 'unknown_command_throttled', command, chatId };
 	}
 
-	async pollOnce() {
+	async _fetchWithTimeout(url, method, timeoutMs) {
 		const controller = new AbortController();
-		const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+		const timer = setTimeout(() => controller.abort(), timeoutMs);
+		try {
+			return await this.fetchFn(url, { method, signal: controller.signal });
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
+	/**
+ * `lastError` is published verbatim on `/api/status`, so no provider-authored
+ * text may reach it: the delete URL is `/deleteNotification/{apiKey}/{receiptId}`
+ * and a GreenAPI error body can echo that URL back, which would publish the api
+ * key on a status endpoint. Failures are therefore described by our own status
+ * code or a bounded classification, and `_sanitizeErrorText` only guards the
+ * transport error text we did not author. Do not re-add the response body.
+ */
+_sanitizeErrorText(text) {
+		let sanitized = typeof text === 'string' ? text.trim() : '';
+		const apiKey = this.apiKey;
+		if (apiKey && sanitized.includes(apiKey)) {
+			sanitized = sanitized.split(apiKey).join('[redacted]');
+		}
+		if (sanitized.length > ERROR_TEXT_MAX_LENGTH) {
+			sanitized = `${sanitized.slice(0, ERROR_TEXT_MAX_LENGTH)}…`;
+		}
+		return sanitized;
+	}
+
+	_describeDeleteFailure(deleteResult) {
+		if (deleteResult.timeout || deleteResult.aborted) {
+			return `acknowledgement step timed out after ${this.deleteTimeoutMs}ms`;
+		}
+		const statusCode = Number(deleteResult.statusCode);
+		if (Number.isFinite(statusCode) && statusCode > 0) {
+			return `HTTP ${statusCode}`;
+		}
+		return 'request failed';
+	}
+
+	async _deleteNotificationWithRetry(receiptId) {
+		const deleteUrl = this._getDeleteNotificationUrl(receiptId);
+		const pollSignal = this.abortController ? this.abortController.signal : undefined;
+		return retryHelper.sendWithRetry(
+			async ({ signal }) => {
+				try {
+					const response = await this._fetchWithTimeout(deleteUrl, 'DELETE', this.deleteTimeoutMs);
+					if (response.ok) {
+						return { success: true, receiptId };
+					}
+					const retryable = response.status === 429 || response.status >= 500;
+					return {
+						success: false,
+						receiptId,
+						statusCode: response.status,
+						error: `HTTP ${response.status}`,
+						retryable,
+					};
+				} catch (error) {
+					return {
+						success: false,
+						receiptId,
+						error: error.name === 'AbortError' ? 'aborted' : (error.message || String(error)),
+						timeout: error.name === 'AbortError',
+						retryable: true,
+					};
+				}
+			},
+			this.deleteMaxAttempts,
+			null,
+			{ signal: pollSignal, maxRetryDelayMs: DELETE_MAX_RETRY_DELAY_MS },
+		);
+	}
+
+	async pollOnce() {
 		this.lastPollAt = Date.now();
+		let controller = new AbortController();
+		this.abortController = controller;
 
 		try {
 			const receiveUrl = this._getReceiveNotificationUrl();
-			const response = await this.fetchFn(receiveUrl, {
-				method: 'GET',
-				signal: controller.signal,
-			});
+			const timer = setTimeout(() => controller.abort(), this.receiveTimeoutMs);
+			let response;
+			try {
+				response = await this.fetchFn(receiveUrl, {
+					method: 'GET',
+					signal: controller.signal,
+				});
+			} finally {
+				clearTimeout(timer);
+			}
 
 			if (!response.ok) {
-				const rawText = await response.text().catch(() => '');
-				const err = `GreenAPI receiveNotification failed: HTTP ${response.status} ${rawText}`;
+				const err = this._sanitizeErrorText(`GreenAPI receiveNotification failed: HTTP ${response.status}`);
 				this.lastError = err;
 				this.lastErrorAt = Date.now();
 				this.logger.warn(`[WhatsAppCommandBridge] ${err}`);
@@ -302,45 +439,62 @@ class WhatsAppCommandBridgeService {
 			}
 
 			const receiptId = data.receiptId;
+			const isDuplicate = this._isSeenReceipt(receiptId);
+
 			let handlingResult;
-			try {
-				handlingResult = await this.handleNotification(data);
-			} catch (handlerErr) {
-				this.logger.error('[WhatsAppCommandBridge] Error handling notification:', handlerErr);
-				sentryService.captureRuntimeError({
-					channel: 'whatsapp',
-					error: handlerErr,
-					extra: { receiptId, type: 'command_handler_failure' },
-				});
+			if (isDuplicate) {
+				this.duplicateSkippedCount += 1;
+				this.logger.info(`[WhatsAppCommandBridge] Skipping duplicate receipt ${receiptId} (already processed)`);
+				handlingResult = { action: 'skipped_duplicate', receiptId };
+			} else {
+				this._markReceiptSeen(receiptId);
+				try {
+					handlingResult = await this.handleNotification(data);
+				} catch (handlerErr) {
+					this.logger.error('[WhatsAppCommandBridge] Error handling notification:', handlerErr);
+					sentryService.captureRuntimeError({
+						channel: 'whatsapp',
+						error: handlerErr,
+						extra: { receiptId, type: 'command_handler_failure' },
+					});
+				}
 			}
 
-			// Acknowledge notification
-			try {
-				const deleteUrl = this._getDeleteNotificationUrl(receiptId);
-				await this.fetchFn(deleteUrl, {
-					method: 'DELETE',
-					signal: controller.signal,
-				});
-			} catch (deleteErr) {
-				this.logger.warn(`[WhatsAppCommandBridge] Failed to delete notification ${receiptId}:`, deleteErr.message);
+			const deleteResult = await this._deleteNotificationWithRetry(receiptId);
+			const deleteAttempts = Number.isFinite(deleteResult.attemptCount) ? deleteResult.attemptCount : 1;
+			if (deleteAttempts > 1) {
+				this.deleteRetryCount += deleteAttempts - 1;
+			}
+			if (!deleteResult.success) {
+				this.deleteFailureCount += 1;
+				if (deleteResult.timeout || deleteResult.aborted) {
+					this.deleteAbortedCount += 1;
+				}
+				const err = this._sanitizeErrorText(
+					`Failed to delete notification ${receiptId}: ${this._describeDeleteFailure(deleteResult)}`,
+				);
+				this.lastError = err;
+				this.lastErrorAt = Date.now();
+				this.logger.warn(`[WhatsAppCommandBridge] ${err}`);
 			}
 
-			return { processed: true, receiptId, handlingResult };
+			return { processed: true, receiptId, handlingResult, deleted: deleteResult.success === true, duplicate: isDuplicate };
 		} catch (error) {
 			if (error.name === 'AbortError') {
-				const err = 'GreenAPI receiveNotification timeout (10s)';
+				const err = `GreenAPI receiveNotification timeout (${this.receiveTimeoutMs}ms)`;
 				this.lastError = err;
 				this.lastErrorAt = Date.now();
 				this.logger.warn(`[WhatsAppCommandBridge] ${err}`);
 				return { processed: false, error: err, timeout: true };
 			}
-			const err = error.message || String(error);
+			const err = this._sanitizeErrorText(error.message || String(error));
 			this.lastError = err;
 			this.lastErrorAt = Date.now();
 			this.logger.warn(`[WhatsAppCommandBridge] Polling error: ${err}`);
 			return { processed: false, error: err };
 		} finally {
-			clearTimeout(timeoutId);
+			this.abortController = null;
+			controller = null;
 		}
 	}
 
@@ -366,6 +520,8 @@ class WhatsAppCommandBridgeService {
 	start() {
 		if (this.running) return;
 		this.running = true;
+		this.stopRequested = false;
+		this.abortController = null;
 		this.activePollPromise = this._pollLoop();
 		this.logger.info('[WhatsAppCommandBridge] Started WhatsApp inbound command bridge poller');
 	}
@@ -373,9 +529,11 @@ class WhatsAppCommandBridgeService {
 	async stop(options = {}) {
 		if (!this.running) return;
 		this.running = false;
+		this.stopRequested = true;
 		if (this.abortController) {
 			this.abortController.abort();
 		}
+		this.abortController = null;
 		for (const cancel of this._sleepResolvers) {
 			cancel();
 		}
@@ -420,6 +578,11 @@ class WhatsAppCommandBridgeService {
 			lastPollAt: this.lastPollAt,
 			lastError: this.lastError,
 			lastErrorAt: this.lastErrorAt,
+			duplicateSkippedCount: this.duplicateSkippedCount,
+			deleteFailureCount: this.deleteFailureCount,
+			deleteRetryCount: this.deleteRetryCount,
+			deleteAbortedCount: this.deleteAbortedCount,
+			trackedReceiptCount: this.seenReceiptMap.size,
 		};
 	}
 }
