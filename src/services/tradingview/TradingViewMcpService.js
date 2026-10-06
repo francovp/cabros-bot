@@ -45,6 +45,17 @@ const ENRICHMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 // allowlisted set today, so this only guards against a future dynamic tool name
 // growing the map without limit. Least-recently-called entries are evicted.
 const MAX_TRACKED_MCP_TOOLS = 50;
+// #948: floor below which a base retry cannot complete `callCoinAnalysis`, which
+// is THREE sequential HTTP hops each bounded by `TRADINGVIEW_MCP_TIMEOUT_MS`.
+// A retry issued under it aborts on OUR deadline, and that abort used to charge
+// the circuit breaker until five of them suppressed enrichment for a full
+// cooldown against a host that was answering. Config-derived on purpose: the
+// observed production attempt window (~1.9s) is not hard-coded as a threshold.
+const MIN_VIABLE_RETRY_ATTEMPT_FRACTION = 0.25;
+// Upper bound on retained base-attempt durations backing the p50/p95 projection.
+// The counters above are cumulative and never trimmed by it; only the percentile
+// basis is bounded, so an applied-rate denominator cannot silently under-report.
+const MAX_TRACKED_BASE_ATTEMPTS = 200;
 const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
 const TRADINGVIEW_MCP_HEARTBEAT_DOCUMENT_ID = 'tradingview-mcp';
 const DEFAULT_HEARTBEAT_TIMEOUT_MS = 2000;
@@ -128,6 +139,16 @@ function createEmptyConfluenceEnrichmentStatus() {
 		budgetExhaustedCount: 0,
 		lastAppliedAt: null,
 		lastFailureCategory: null,
+	};
+}
+
+function createEmptyBaseAttemptStats() {
+	return {
+		attemptedCount: 0,
+		appliedCount: 0,
+		failedCount: 0,
+		skippedNonViableCount: 0,
+		lastAttemptMs: null,
 	};
 }
 
@@ -225,6 +246,8 @@ class TradingViewMcpService {
 		this.lastAdminPageSentAt = null;
 		this.hasActiveOutagePage = false;
 		this.enrichmentEvents = [];
+		this.baseAttemptStats = createEmptyBaseAttemptStats();
+		this.baseAttemptDurations = [];
 		this.notifyAdmin = config.notifyAdmin || null;
 		this.notificationManager = config.notificationManager || null;
 		this.toolMetrics = {};
@@ -240,6 +263,8 @@ class TradingViewMcpService {
 		this.lastAdminPageSentAt = null;
 		this.hasActiveOutagePage = false;
 		this.enrichmentEvents = [];
+		this.baseAttemptStats = createEmptyBaseAttemptStats();
+		this.baseAttemptDurations = [];
 		this.toolMetrics = {};
 	}
 
@@ -335,6 +360,7 @@ class TradingViewMcpService {
 			statusDetails.enrichment = {
 				...statusDetails.enrichment,
 				alertPath: this._getAlertPathEnrichmentStatus(),
+				baseAttempts: this._getBaseAttemptStats(),
 			};
 		}
 		if (enabled && runtimeStatus === this.runtimeStatus) {
@@ -576,6 +602,16 @@ class TradingViewMcpService {
 		}
 		const baseBudgetController = new AbortController();
 		const retryDelayCapMs = baseBudgetMs ? Math.max(1, Math.floor(baseBudgetMs / Math.max(1, cfg.maxRetries))) : null;
+		// #948: window below which a retry cannot complete the three-hop tool
+		// call. Capped at half the base sub-budget so an operator who deliberately
+		// configured a small budget keeps its retries instead of silently losing
+		// them. Zero (retry always allowed) when there is no budget to divide.
+		const minViableRetryAttemptMs = baseBudgetMs
+			? Math.max(1, Math.min(
+				Math.floor(cfg.timeoutMs * MIN_VIABLE_RETRY_ATTEMPT_FRACTION),
+				Math.floor(baseBudgetMs / 2),
+			))
+			: 0;
 		const baseBudgetTimer = baseDeadlineAt
 			? setTimeout(() => {
 				baseBudgetController.abort(createBudgetExhaustedError(`TradingView MCP base analysis budget exceeded (${baseBudgetMs}ms)`));
@@ -603,6 +639,7 @@ class TradingViewMcpService {
 					channel: 'tradingview-mcp',
 					error: 'TradingView MCP base analysis budget exhausted',
 					mcpBudgetExhausted: true,
+					retryable: false,
 				};
 			}
 			const attemptController = new AbortController();
@@ -630,7 +667,15 @@ class TradingViewMcpService {
 			// already aborts a pending backoff when the shared signal fires, and
 			// `remainingBaseMs` is measured against the same base deadline, so an
 			// attempt can never outlive the envelope regardless.
+			//
+			// #948 removes the remaining starvation mode. Handing the retry the whole
+			// remainder guaranteed a window too short to finish the tool call, and
+			// the resulting abort is our own deadline: it charged the circuit breaker
+			// against a healthy host and the generic budget-exhausted result replaced
+			// the real provider error, masking the cause. Retries are now issued only
+			// while the residual can still fund a viable attempt.
 			const attemptTimeoutMs = Math.min(cfg.timeoutMs, Math.max(1, remainingBaseMs));
+			const attemptStartedAt = Date.now();
 			const attemptTimeoutId = setTimeout(() => {
 				// A per-attempt deadline is the same class of event as a drained budget:
 				// a client-side time limit, not a provider fault.
@@ -641,11 +686,26 @@ class TradingViewMcpService {
 			try {
 				const combinedSignal = AbortSignal.any([retrySignal || baseSignal, attemptController.signal]);
 				const analysis = await this.callCoinAnalysis({ symbol, exchange, timeframe, signal: combinedSignal });
+				this._recordBaseAttempt({ durationMs: Date.now() - attemptStartedAt, applied: true });
 				return { success: true, channel: 'tradingview-mcp', analysis };
 			} catch (error) {
 				// A "no data for this symbol/venue" answer is deterministic, not
 				// transient (#591): retrying it only burns the enrichment budget.
 				const terminal = isDeterministicNoDataError(error);
+				// #948: decline the retry when the residual base budget can no longer
+				// fund a window that completes the tool call. Decided on THIS
+				// attempt's own result so `retryable: false` returns the real
+				// provider failure immediately instead of a generic budget message.
+				const residualMs = baseDeadlineAt ? baseDeadlineAt - Date.now() : cfg.timeoutMs;
+				const nonViableRetry = !terminal && residualMs < minViableRetryAttemptMs;
+				this._recordBaseAttempt({ durationMs: Date.now() - attemptStartedAt, nonViableRetry });
+				if (nonViableRetry) {
+					// Info level: the remedy is a budget change, and a declined retry is
+					// otherwise invisible until enrichment is missing from a whole batch.
+					this.logger?.info?.(
+						`[TradingViewMcpService] Declined non-viable base retry for ${exchange}:${symbol}; residual ${Math.max(0, Math.floor(residualMs))}ms is below the ${minViableRetryAttemptMs}ms viable-attempt floor`,
+					);
+				}
 				return {
 					success: false,
 					channel: 'tradingview-mcp',
@@ -653,10 +713,11 @@ class TradingViewMcpService {
 					// Carry the structural budget marker out of the abort reason so the
 					// retry/caller chain can still recognise our own deadline (GH-630).
 					...(error && error.mcpBudgetExhausted === true ? { mcpBudgetExhausted: true } : {}),
+					nonViableRetry,
 					// A deterministic "no data for this symbol/venue" answer will never
 					// succeed on a retry, so stop the chain here rather than adding a
 					// second stop mechanism - retryHelper already halts on retryable:false.
-					retryable: terminal ? false : error.category !== 'provider_unavailable',
+					retryable: (terminal || nonViableRetry) ? false : error.category !== 'provider_unavailable',
 				};
 			} finally {
 				clearTimeout(attemptTimeoutId);
@@ -1543,6 +1604,52 @@ class TradingViewMcpService {
 	_nextRequestId(prefix) {
 		this.requestCounter += 1;
 		return `${prefix}-${Date.now()}-${this.requestCounter}`;
+	}
+
+	_recordBaseAttempt({ durationMs, applied = false, nonViableRetry = false } = {}) {
+		try {
+			this.baseAttemptStats.attemptedCount += 1;
+			if (applied) {
+				this.baseAttemptStats.appliedCount += 1;
+			} else {
+				this.baseAttemptStats.failedCount += 1;
+			}
+			if (nonViableRetry) {
+				this.baseAttemptStats.skippedNonViableCount += 1;
+			}
+
+			const bounded = Number.isFinite(durationMs) && durationMs >= 0 ? Math.round(durationMs) : null;
+			this.baseAttemptStats.lastAttemptMs = bounded;
+			if (bounded !== null) {
+				this.baseAttemptDurations.push(bounded);
+				if (this.baseAttemptDurations.length > MAX_TRACKED_BASE_ATTEMPTS) {
+					this.baseAttemptDurations.splice(0, this.baseAttemptDurations.length - MAX_TRACKED_BASE_ATTEMPTS);
+				}
+			}
+		} catch (error) {
+			this.logger?.warn?.(`[TradingViewMcpService] Failed to record base attempt telemetry: ${error.message}`);
+		}
+	}
+
+	_getBaseAttemptStats() {
+		try {
+			const durations = [...this.baseAttemptDurations].sort((a, b) => a - b);
+			const percentile = fraction => (durations.length === 0
+				? null
+				: durations[Math.min(durations.length - 1, Math.max(0, Math.ceil(fraction * durations.length) - 1))]);
+
+			return {
+				...this.baseAttemptStats,
+				sampleLimit: MAX_TRACKED_BASE_ATTEMPTS,
+				sampledCount: durations.length,
+				p50Ms: percentile(0.5),
+				p95Ms: percentile(0.95),
+				maxMs: durations.length > 0 ? durations[durations.length - 1] : null,
+			};
+		} catch (error) {
+			this.logger?.warn?.(`[TradingViewMcpService] Failed to project base attempt telemetry: ${error.message}`);
+			return createEmptyBaseAttemptStats();
+		}
 	}
 
 	_recordEnrichmentStatus(status) {

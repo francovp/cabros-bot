@@ -6347,6 +6347,18 @@
                       "failedCount": 0,
                       "appliedRate24h": 0,
                       "failureRate24h": 0
+                    },
+                    "baseAttempts": {
+                      "sampleLimit": 200,
+                      "sampledCount": 4,
+                      "attemptedCount": 4,
+                      "appliedCount": 4,
+                      "failedCount": 0,
+                      "skippedNonViableCount": 0,
+                      "p50Ms": 312,
+                      "p95Ms": 358,
+                      "maxMs": 358,
+                      "lastAttemptMs": 358
                     }
                   },
                   "circuitBreaker": {
@@ -13207,7 +13219,7 @@
           },
           "enrichment": {
             "type": "object",
-            "description": "Alert-path enrichment telemetry. `alertPath` aggregates the whole webhook enrichment path (full/partial/failed), so it cannot attribute an outcome to the confluence call specifically; `confluence` reports the optional ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT calls on their own (issue #1109). Counters are process-local and reset on restart.",
+            "description": "Alert-path enrichment telemetry. `alertPath` aggregates the whole webhook enrichment path (full/partial/failed), so it cannot attribute an outcome to the confluence call specifically; `confluence` reports the optional ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT calls on their own (issue #1109); `baseAttempts` reports how the base `coin_analysis` budget was spent across attempts (issue #948). Counters are process-local and reset on restart.",
             "additionalProperties": true,
             "properties": {
               "confluence": {
@@ -13261,6 +13273,86 @@
                       "null"
                     ],
                     "description": "Closed-enum category of the last confluence failure, or null. Provider response bodies and error messages are never exposed."
+                  }
+                }
+              },
+              "baseAttempts": {
+                "type": "object",
+                "description": "Base `coin_analysis` attempt telemetry (issue #948). Counters are cumulative since process start and are never trimmed, so `appliedCount + failedCount` equals `attemptedCount` and the applied-rate denominator cannot under-report; only the percentile basis is bounded to the last `sampleLimit` observed durations, reported as `sampledCount`. `skippedNonViableCount` counts attempts whose failure declined the next retry because the residual base budget could no longer fund a window that completes the three-hop tool call; such a retry is never issued, so it is absent from `attemptedCount` and never charges the circuit breaker. `p50Ms`/`p95Ms`/`maxMs` are null until at least one attempt has been observed. All values are process-local and reset on restart.",
+                "required": [
+                  "sampleLimit",
+                  "sampledCount",
+                  "attemptedCount",
+                  "appliedCount",
+                  "failedCount",
+                  "skippedNonViableCount",
+                  "p50Ms",
+                  "p95Ms",
+                  "maxMs",
+                  "lastAttemptMs"
+                ],
+                "properties": {
+                  "sampleLimit": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Maximum number of retained base-attempt durations backing the percentiles; the oldest are discarded beyond it."
+                  },
+                  "sampledCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Observed durations currently backing `p50Ms`/`p95Ms`/`maxMs`. Equal to `sampleLimit` once more than that many attempts have been recorded."
+                  },
+                  "attemptedCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Base attempts issued since process start. A retry is only issued while the residual base budget can still fund a viable attempt, so this counts real tool calls rather than the configured retry allowance."
+                  },
+                  "appliedCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Base attempts that returned data and were applied to the alert. Every issued attempt records exactly one outcome, so `appliedCount + failedCount` equals `attemptedCount`."
+                  },
+                  "failedCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Base attempts that failed since process start, including the attempt whose non-viable residual declined the next retry. Fail-open: never blocks alert delivery."
+                  },
+                  "skippedNonViableCount": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Attempts that failed and then declined the next retry because the residual budget was too small to complete the tool call. The declined retry was never issued, so it is not counted in `attemptedCount` and does not charge the circuit breaker."
+                  },
+                  "p50Ms": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "description": "Median observed base-attempt duration in milliseconds, or null with no observed sample."
+                  },
+                  "p95Ms": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "description": "95th-percentile observed base-attempt duration in milliseconds, or null with no observed sample."
+                  },
+                  "maxMs": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "description": "Longest observed base-attempt duration in milliseconds, or null with no observed sample."
+                  },
+                  "lastAttemptMs": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0,
+                    "description": "Duration of the most recent base attempt in milliseconds, or null."
                   }
                 }
               }

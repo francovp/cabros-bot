@@ -2016,6 +2016,32 @@ Raw alert text remains disabled by default and requires an explicit checkbox. Th
 
 `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS`, `TRADINGVIEW_MCP_TIMEOUT_MS`, and `TRADINGVIEW_MCP_MAX_RETRIES` remain the existing environment/Remote Config controls; no new environment variable was added.
 
+## Deadline-Aware Base Attempt Allocation (Issue #948)
+
+`enrichFromSignal()` sizes the **primary** base attempt against the whole remaining base sub-budget, capped by `TRADINGVIEW_MCP_TIMEOUT_MS` — never a fraction of it, and never a share of the retry allowance. That part was GH-630. #948 removes the **remaining** starvation mode, which was the one that actually suppressed enrichment in production.
+
+**The mechanism that was still broken.** When attempt 1 failed after spending most of the sub-budget, attempt 2 was handed whatever was left (down to `Math.max(1, …)` = 1ms) and re-ran the whole three-hop call. Two consequences, both harmful:
+
+- **The breaker was charged for our own deadline.** Every issued attempt passes through `_withRuntimeStatus`, so each non-viable retry incremented `consecutiveFailures` and opened the circuit breaker at threshold — five of them suppressed all enrichment for `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` (600s) against a host that was answering.
+- **The real cause was masked.** The last result returned was the generic budget-exhausted stub, replacing the provider error (`HTTP 503`, `no data …`) with `base analysis budget exceeded (9000ms)`.
+
+**Four invariants to preserve:**
+
+- **The viability floor is `min(25% of the per-request MCP timeout, half the base sub-budget)`.** `callCoinAnalysis` is three sequential HTTP hops, each bounded by `TRADINGVIEW_MCP_TIMEOUT_MS`, so a window below that cannot complete an exchange. The `baseBudgetMs / 2` term is load-bearing: without it an operator who deliberately configures a small budget silently loses every retry. Do not hard-code an observed latency (the production window was ~1.9s) as the threshold.
+- **The decision belongs in the failing attempt's `catch`, not the next attempt's closure head.** Returning `retryable: false` from the attempt that actually failed is what preserves the real provider error and skips the backoff. Moving the check to the top of the closure reintroduces the masked-cause bug.
+- **A declined retry must never be issued, and so must never be charged.** It is absent from `baseAttempts.attemptedCount` and recorded in `skippedNonViableCount`. Every *issued* attempt still charges the breaker exactly once — including a primary attempt that burns its whole viable window, which is genuine provider evidence. Do not "simplify" the gate into `_recordFailure()`; that would blind the breaker to a hung provider (covered by a named test).
+- **Optional enrichment stays opportunistic.** A base result that survives a volume/confluence/multi-timeframe timeout is applied `partial`, never `failed`, and still counts as an applied base attempt.
+
+`dependencies.tradingViewMcp.enrichment.baseAttempts` reports `attemptedCount`, `appliedCount`, `failedCount` (so `applied + failed == attempted`), `skippedNonViableCount`, `p50Ms`, `p95Ms`, `maxMs` and `lastAttemptMs`. **The counters are cumulative and never trimmed; only the percentile basis is bounded** (`sampleLimit` = 200, `sampledCount` = how many observed durations back the percentiles). Deriving the counters from the capped sample was the first draft and was rejected: it made `attemptedCount` silently under-report once more than 200 attempts had run, which is precisely the denominator an operator compares the applied rate against. Percentiles are `null` until an attempt is observed, and a zero-length sample is kept rather than dropped. Recording and projection are both fail-open — telemetry can never reject an alert or a status read — and the fallback projection returns a zeroed block, never `null`, because the field is published as an object.
+
+**This does not fix MCP cold start.** francovp's 2026-09-19 telemetry measured a spun-down free-tier host exceeding 60s to answer `initialize` against a ~12s envelope. No allocator change makes that fit; it is a separate remediation (warm-up tick / pre-flight), tracked separately.
+
+**Coverage**: `tests/unit/tradingview-mcp-service.test.js` — four concurrent alerts with ~3s base latency under a 9s budget all apply on attempt 1; the primary-attempt allocation arithmetic; a non-viable residual declining the retry with no extra tool call, no backoff and the real provider error preserved; a fast failure still retrying; the declined retry not charging the breaker or paging an operator; a viable-window primary timeout still charging it; p50/p95 projection; and the applied-`partial` path.
+
+A declined retry is logged at info naming the symbol, residual and floor, because the operator remedy is a budget change and the event is otherwise invisible until enrichment is missing from a whole alert batch.
+
+No endpoint, environment variable, Remote Config key or feature gate was added; `enrichment.baseAttempts` is the only response change, documented in `src/openapi/openapi.json` and `CabrosBot.postman_collection.json`. The unit test pins the runtime's emitted key set against the OpenAPI schema's `required`/properties so the two cannot drift.
+
 ## News Monitor Cached No-Event Analyses (CB-146 / Issue #363)
 
 News monitor cache reads now include `EventCategory.NONE`, so a cached no-event analysis returns `AnalysisStatus.CACHED` during its existing TTL without repeating market-context or Gemini provider calls. Event-category cache keys remain independent and the existing dry-run, routing, delivery, TTL, and fail-open behavior is unchanged.

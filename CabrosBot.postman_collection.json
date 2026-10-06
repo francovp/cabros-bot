@@ -655,6 +655,107 @@
       ]
     },
     {
+      "name": "Get Status - base attempt budget telemetry",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Issue #948 makes the base `coin_analysis` budget spend observable. `enrichment.baseAttempts` counters are cumulative since process start and are never trimmed, so `attemptedCount` counts real ISSUED tool calls rather than the configured retry allowance and never under-reports; only the percentile basis is bounded, and `sampledCount` reports how many observed durations back `p50Ms`/`p95Ms`/`maxMs`. A retry is only issued while the residual base budget can still fund a window that completes the three-hop tool call (`initialize`, `notifications/initialized`, `tools/call`); when it cannot, the attempt declines the retry and that declines are counted in `skippedNonViableCount`. A declined retry is never issued, so it is deliberately absent from `attemptedCount` - that is what stops a client-side deadline from charging the circuit breaker against a healthy MCP host. `p50Ms`/`p95Ms`/`maxMs` are `null` until at least one attempt has been observed, and samples reset on restart, so an all-zero block right after a deploy is expected rather than a fault."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('base attempt telemetry is reported on the enrichment block', function () {",
+              "  const enrichment = pm.response.json().dependencies.tradingViewMcp.enrichment;",
+              "  pm.expect(pm.response.code).to.eql(200);",
+              "  pm.expect(enrichment).to.be.an('object');",
+              "  pm.expect(enrichment.baseAttempts).to.be.an('object');",
+              "});",
+              "pm.test('base attempt counters are non-negative integers', function () {",
+              "  const b = pm.response.json().dependencies.tradingViewMcp.enrichment.baseAttempts;",
+              "  ['sampleLimit', 'sampledCount', 'attemptedCount', 'appliedCount', 'failedCount', 'skippedNonViableCount'].forEach(function (key) {",
+              "    pm.expect(b[key]).to.be.a('number');",
+              "    pm.expect(Number.isInteger(b[key])).to.eql(true);",
+              "    pm.expect(b[key]).to.be.at.least(0);",
+              "  });",
+              "  ['p50Ms', 'p95Ms', 'maxMs', 'lastAttemptMs'].forEach(function (key) {",
+              "    pm.expect(b[key] === null || Number.isInteger(b[key])).to.eql(true);",
+              "    if (b[key] !== null) {",
+              "      pm.expect(b[key]).to.be.at.least(0);",
+              "    }",
+              "  });",
+              "});",
+              "pm.test('every issued attempt recorded exactly one outcome', function () {",
+              "  const b = pm.response.json().dependencies.tradingViewMcp.enrichment.baseAttempts;",
+              "  pm.expect(b.appliedCount + b.failedCount).to.eql(b.attemptedCount);",
+              "  // Counters are cumulative, so only the percentile sample is bounded.",
+              "  pm.expect(b.sampledCount).to.be.at.most(b.sampleLimit);",
+              "  pm.expect(b.sampledCount).to.be.at.most(b.attemptedCount);",
+              "  pm.expect(b.skippedNonViableCount).to.be.at.most(b.failedCount);",
+              "  // A declined retry was never issued, so it must not inflate attempts.",
+              "  pm.expect(b.skippedNonViableCount).to.be.at.most(b.attemptedCount);",
+              "});",
+              "pm.test('percentiles are ordered observations, not placeholders', function () {",
+              "  const b = pm.response.json().dependencies.tradingViewMcp.enrichment.baseAttempts;",
+              "  if (b.p95Ms !== null) {",
+              "    pm.expect(b.p50Ms).to.be.at.most(b.p95Ms);",
+              "    pm.expect(b.p95Ms).to.be.at.most(b.maxMs);",
+              "  }",
+              "  if (b.lastAttemptMs !== null) {",
+              "    pm.expect(b.lastAttemptMs).to.be.at.most(b.maxMs);",
+              "  }",
+              "  // Every recorded sample backs the percentiles; none is silently dropped.",
+              "  pm.expect(b.sampledCount).to.be.at.most(b.attemptedCount);",
+              "});",
+              "pm.test('telemetry leaks no provider error text', function () {",
+              "  const raw = pm.response.text();",
+              "  pm.expect(raw).to.not.include('base analysis attempt timeout');",
+              "  pm.expect(raw).to.not.include('projects/');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "200 OK - base attempt telemetry zeroed before the first alert",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"dependencies\": {\n    \"tradingViewMcp\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"status\": \"unknown\",\n      \"enrichment\": {\n        \"lastStatus\": null,\n        \"fullCount\": 0,\n        \"partialCount\": 0,\n        \"failedCount\": 0,\n        \"baseAttempts\": {\n          \"sampleLimit\": 200,\n          \"sampledCount\": 0,\n          \"attemptedCount\": 0,\n          \"appliedCount\": 0,\n          \"failedCount\": 0,\n          \"skippedNonViableCount\": 0,\n          \"p50Ms\": null,\n          \"p95Ms\": null,\n          \"maxMs\": null,\n          \"lastAttemptMs\": null\n        }\n      }\n    }\n  }\n}"
+        },
+        {
+          "name": "200 OK - four concurrent alerts applied, one retry declined as non-viable",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"status\":\"ready\",\"enrichment\":{\"lastStatus\":\"full\",\"fullCount\":4,\"partialCount\":0,\"failedCount\":0,\"baseAttempts\":{\"sampleLimit\":200,\"sampledCount\":5,\"attemptedCount\":5,\"appliedCount\":4,\"failedCount\":1,\"skippedNonViableCount\":1,\"p50Ms\":312,\"p95Ms\":6612,\"maxMs\":6612,\"lastAttemptMs\":288}}}}}"
+        },
+        {
+          "name": "401 Unauthorized - protected status requires the API key",
+          "status": "Unauthorized",
+          "code": 401,
+          "body": "{\"success\":false,\"error\":\"Invalid or missing API key\",\"code\":\"UNAUTHORIZED\",\"requestId\":\"3f1c6a2e-9b47-4d0e-8c31-7ad5b0e91f42\",\"retryable\":false}"
+        }
+      ]
+    },
+    {
       "name": "Get Status - grounding operational metrics",
       "request": {
         "method": "GET",
@@ -3858,7 +3959,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"BINANCE:BTCUSDT (1D) VENTA \u2014 send three same-direction alerts within ALERT_BURST_WINDOW_MS to see one regime message\"\n}"
+              "raw": "{\n  \"text\": \"BINANCE:BTCUSDT (1D) VENTA — send three same-direction alerts within ALERT_BURST_WINDOW_MS to see one regime message\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/alert",
@@ -3895,7 +3996,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) VENTA \u2014 burst constituent\"\n}"
+                  "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) VENTA — burst constituent\"\n}"
                 },
                 "url": {
                   "raw": "{{baseUrl}}/api/webhook/alert",
@@ -3931,7 +4032,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) VENTA \u2014 below ALERT_BURST_MIN_SIGNALS\"\n}"
+                  "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) VENTA — below ALERT_BURST_MIN_SIGNALS\"\n}"
                 },
                 "url": {
                   "raw": "{{baseUrl}}/api/webhook/alert",
