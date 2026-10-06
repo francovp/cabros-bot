@@ -545,11 +545,45 @@ const showAuthState = (message, isError = false) => {
 	}
 };
 
+// Native constraint validation is what keeps blank/malformed credential input away
+// from the Firebase SDK, so the guard reads the control's own validity rather than
+// re-implementing the rules. The shape fallback only exists for hosts without the
+// constraint-validation API; a real browser always takes the first branch.
+const isFieldValid = (field) => {
+	if (!field) return false;
+	if (typeof field.checkValidity === 'function') return field.checkValidity();
+	const value = String(field.value == null ? '' : field.value).trim();
+	return field.required !== true || value.length > 0;
+};
+
+const CREDENTIAL_FIELD_IDS = ['auth-email', 'auth-password'];
+
+// Both credential controls form one pair, so a rejected sign-in is described once
+// and associated with both of them. The message never carries the submitted values.
+const showCredentialError = (message) => {
+	const error = getElement('auth-credentials-error');
+	if (error) {
+		error.textContent = message;
+		error.hidden = false;
+	}
+	CREDENTIAL_FIELD_IDS.forEach((id) => getElement(id)?.setAttribute('aria-invalid', 'true'));
+};
+
+const clearCredentialError = () => {
+	const error = getElement('auth-credentials-error');
+	if (error) {
+		error.textContent = '';
+		error.hidden = true;
+	}
+	CREDENTIAL_FIELD_IDS.forEach((id) => getElement(id)?.removeAttribute('aria-invalid'));
+};
+
 const showSignedOutState = () => {
 	if (typeof detachActiveViewPoll === 'function') detachActiveViewPoll();
 	detachActiveViewPoll = null;
 	setHidden('auth-form', false);
 	setHidden('sign-out', true);
+	clearCredentialError();
 	showAuthState('Sign in to continue.');
 	const view = getElement('view');
 	if (view) view.replaceChildren(element('p', { className: 'request-state', text: 'Sign in required.' }));
@@ -583,16 +617,22 @@ const setupFirebaseAuth = async (config) => {
 			&& window.firebase.auth.Auth.Persistence.NONE;
 		if (persistence && typeof auth.setPersistence === 'function') await auth.setPersistence(persistence);
 
-		getElement('sign-in')?.addEventListener('click', async () => {
+		getElement('auth-form')?.addEventListener('submit', async (event) => {
+			event.preventDefault();
+			const emailField = getElement('auth-email');
+			const passwordField = getElement('auth-password');
+			if (!isFieldValid(emailField) || !isFieldValid(passwordField)) {
+				showCredentialError('Enter an email address and password to sign in.');
+				return;
+			}
+			clearCredentialError();
 			try {
-				await auth.signInWithEmailAndPassword(
-					getElement('auth-email')?.value || '',
-					getElement('auth-password')?.value || '',
-				);
+				await auth.signInWithEmailAndPassword(emailField.value, passwordField.value);
 			} catch (error) {
-				showAuthState('Sign-in failed. Check the account and try again.', true);
+				showCredentialError('Sign-in failed. Check the account and try again.');
 			}
 		});
+		CREDENTIAL_FIELD_IDS.forEach((id) => getElement(id)?.addEventListener('input', clearCredentialError));
 		getElement('sign-out')?.addEventListener('click', () => {
 			if (getElement('api-key')) getElement('api-key').value = '';
 			return auth.signOut();
@@ -7668,10 +7708,26 @@ const setupLegacyConsole = ({ persist = true } = {}) => {
 		keyState.textContent = 'API key is used only for webhook operations and is not stored.';
 	}
 
-	getElement('save-key')?.addEventListener('click', () => {
+	const setKeyFieldError = (message) => {
+		keyState.className = 'response-error';
+		keyState.textContent = message;
+		apiKey.setAttribute('aria-invalid', 'true');
+	};
+	const clearKeyFieldError = () => {
+		keyState.className = 'request-state';
+		apiKey.removeAttribute('aria-invalid');
+	};
+	// Session-only by contract: the key lives in sessionStorage (or in this tab's
+	// memory when persistence is off) and is only ever sent as the x-api-key header.
+	const saveKey = () => {
+		if (!isFieldValid(apiKey)) {
+			setKeyFieldError('Enter an API key to use it for this session.');
+			return false;
+		}
+		clearKeyFieldError();
 		if (!persist) {
 			keyState.textContent = 'API key kept only in memory for webhook operations.';
-			return;
+			return true;
 		}
 		try {
 			sessionStorage.setItem('cabros-admin-api-key', apiKey.value);
@@ -7679,7 +7735,14 @@ const setupLegacyConsole = ({ persist = true } = {}) => {
 		} catch (error) {
 			keyState.textContent = `Could not save the API key: ${error.message}`;
 		}
+		return true;
+	};
+
+	getElement('connection-form')?.addEventListener('submit', (event) => {
+		event.preventDefault();
+		if (saveKey()) setupSseStream();
 	});
+	apiKey.addEventListener('input', clearKeyFieldError);
 
 	getElement('clear-key')?.addEventListener('click', () => {
 		apiKey.value = '';
@@ -7734,15 +7797,6 @@ document.addEventListener('DOMContentLoaded', async () => {
 		window.addEventListener('popstate', handleConsolePopState);
 	}
 	canonicaliseConsoleUrl();
-
-	getElement('connection-form')?.addEventListener('submit', (event) => {
-		event.preventDefault();
-		getElement('save-key')?.click();
-	});
-
-	getElement('save-key')?.addEventListener('click', () => {
-		if (getElement('api-key')?.value) setupSseStream();
-	});
 
 	getElement('clear-key')?.addEventListener('click', () => {
 		disconnectSse();
