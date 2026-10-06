@@ -1251,25 +1251,59 @@ const createMeter = (fraction, labelText) => {
 	return wrap;
 };
 
+// Issue #952. One renderer for every operational result table, so each one carries its own
+// accessible name, real header sections and a scroll region that can contain an unbreakable
+// header row instead of widening the page. `headers` is [label, read] pairs; `read(record)`
+// returns a string, a DOM node, or null/undefined (rendered as an em dash).
+//
+// The caption is visually hidden because every table built here already sits under a visible
+// heading (an `h3`, an `h4`, or a panel title) — repeating that text on screen would be noise,
+// while the caption still names the table for a screen reader and satisfies axe's table-name
+// rule. `role="region"` plus `tabindex="0"` is what lets a keyboard user pan the box at all.
+const createResultTable = (caption, headers, records, className = 'data-table') => {
+	const table = element('table', { className });
+	table.append(element('caption', { className: 'visually-hidden', text: caption }));
+
+	const head = element('tr');
+	headers.forEach(([label]) => head.append(element('th', { text: label, attributes: { scope: 'col' } })));
+	const thead = element('thead');
+	thead.append(head);
+	table.append(thead);
+
+	const tbody = element('tbody');
+	records.forEach((record) => {
+		const row = element('tr');
+		headers.forEach(([, read]) => {
+			const value = read(record);
+			const cell = element('td');
+			if (value !== null && value !== undefined && typeof value === 'object') cell.append(value);
+			else cell.textContent = value === null || value === undefined ? '—' : String(value);
+			row.append(cell);
+		});
+		tbody.append(row);
+	});
+	table.append(tbody);
+
+	const scroll = element('div', {
+		className: 'table-scroll',
+		attributes: { tabindex: '0', role: 'region', 'aria-label': caption },
+	});
+	scroll.append(table);
+	return { scroll, table, rows: tbody.children.length };
+};
+
 const symbolResultsTable = (results) => {
 	if (!Array.isArray(results) || !results.length) return null;
-	const table = element('table', { className: 'data-table' });
-	const head = element('tr');
-	['Symbol', 'Status', 'Price', 'RSI'].forEach((label) => head.append(element('th', { text: label })));
-	table.append(head);
-	results.forEach((result) => {
+	const { scroll, rows } = createResultTable('Symbol results', [
+		['Symbol', (result) => formatJobValue(asObject(result).symbol)],
+		['Status', (result) => formatJobValue(asObject(result).status)],
+		['Price', (result) => formatJobValue(asObject(result).price)],
+		['RSI', (result) => formatJobValue(asObject(result).rsi)],
+	], results.filter((result) => {
 		const detail = asObject(result);
-		if (!detail.symbol && !detail.status) return;
-		const row = element('tr');
-		row.append(
-			element('td', { text: formatJobValue(detail.symbol) }),
-			element('td', { text: formatJobValue(detail.status) }),
-			element('td', { text: formatJobValue(detail.price) }),
-			element('td', { text: formatJobValue(detail.rsi) }),
-		);
-		table.append(row);
-	});
-	return table.children.length > 1 ? table : null;
+		return !!(detail.symbol || detail.status);
+	}));
+	return rows ? scroll : null;
 };
 
 const trendCell = (confluence) => {
@@ -1291,23 +1325,12 @@ const scanResultSections = (scanResults) => {
 		}));
 		const scores = Array.isArray(detail.scores) ? detail.scores : [];
 		if (scores.length) {
-			const table = element('table', { className: 'data-table' });
-			const head = element('tr');
-			['Symbol', 'Score', 'Reason', 'Trend'].forEach((label) => head.append(element('th', { text: label })));
-			table.append(head);
-			scores.forEach((entry) => {
-				const score = asObject(entry);
-				const confluence = asObject(score.trendConfluence);
-				const row = element('tr');
-				row.append(
-					element('td', { text: formatJobValue(score.symbol) }),
-					element('td', { text: formatJobValue(score.score) }),
-					element('td', { text: formatJobValue(score.reason) }),
-					element('td', { text: trendCell(confluence) }),
-				);
-				table.append(row);
-			});
-			section.append(table);
+			section.append(createResultTable(`${detail.scan || 'scan'} scores`, [
+				['Symbol', (entry) => formatJobValue(asObject(entry).symbol)],
+				['Score', (entry) => formatJobValue(asObject(entry).score)],
+				['Reason', (entry) => formatJobValue(asObject(entry).reason)],
+				['Trend', (entry) => trendCell(asObject(entry).trendConfluence)],
+			], scores).scroll);
 		} else if (detail.itemCount !== undefined) {
 			section.append(element('p', {
 				className: 'request-state',
@@ -2937,22 +2960,14 @@ const renderSentimentCalibration = (enrichment) => {
 
 	const buckets = Array.isArray(calibration.buckets) ? calibration.buckets : [];
 	if (buckets.length) {
-		const table = element('table', { className: 'data-table' });
-		const head = element('tr');
-		['Band', 'Count'].forEach((label) => head.append(element('th', { text: label })));
-		table.append(head);
-		buckets.forEach((bucket) => {
-			const row = element('tr');
-			const detail = asObject(bucket);
-			const lower = asFiniteNumber(detail.lowerBound);
-			const upper = asFiniteNumber(detail.upperBound);
-			row.append(
-				element('td', { text: lower === null || upper === null ? '—' : `${lower.toFixed(1)} – ${upper.toFixed(1)}` }),
-				element('td', { text: formatJobValue(detail.count) }),
-			);
-			table.append(row);
-		});
-		section.append(table);
+		section.append(createResultTable('Sentiment score buckets', [
+			['Band', (bucket) => {
+				const lower = asFiniteNumber(asObject(bucket).lowerBound);
+				const upper = asFiniteNumber(asObject(bucket).upperBound);
+				return lower === null || upper === null ? '—' : `${lower.toFixed(1)} – ${upper.toFixed(1)}`;
+			}],
+			['Count', (bucket) => formatJobValue(asObject(bucket).count)],
+		], buckets).scroll);
 	}
 
 	return section;
@@ -3002,22 +3017,12 @@ const renderAlertSummaryBlocks = (data) => {
 	if (channels.length) {
 		const section = element('section', { className: 'dashboard-section' });
 		section.append(element('h3', { text: 'Delivery by channel' }));
-		const table = element('table', { className: 'data-table' });
-		const head = element('tr');
-		['Channel', 'Total', 'Success', 'Failure'].forEach((label) => head.append(element('th', { text: label })));
-		table.append(head);
-		channels.forEach(([channel, stats]) => {
-			const detail = asObject(stats);
-			const row = element('tr');
-			row.append(
-				element('td', { text: displayLabel(channel) }),
-				element('td', { text: formatJobValue(detail.total) }),
-				element('td', { text: formatJobValue(detail.success) }),
-				element('td', { text: formatJobValue(detail.failure) }),
-			);
-			table.append(row);
-		});
-		section.append(table);
+		section.append(createResultTable('Delivery by channel', [
+			['Channel', ([channel]) => displayLabel(channel)],
+			['Total', ([, stats]) => formatJobValue(asObject(stats).total)],
+			['Success', ([, stats]) => formatJobValue(asObject(stats).success)],
+			['Failure', ([, stats]) => formatJobValue(asObject(stats).failure)],
+		], channels).scroll);
 		wrap.append(section);
 	}
 
@@ -3025,21 +3030,11 @@ const renderAlertSummaryBlocks = (data) => {
 	if (fields.length) {
 		const section = element('section', { className: 'dashboard-section' });
 		section.append(element('h3', { text: 'Risk metadata coverage' }));
-		const table = element('table', { className: 'data-table' });
-		const head = element('tr');
-		['Field', 'Populated', 'Coverage'].forEach((label) => head.append(element('th', { text: label })));
-		table.append(head);
-		fields.forEach(([field, info]) => {
-			const detail = asObject(info);
-			const row = element('tr');
-			row.append(
-				element('td', { text: displayLabel(field) }),
-				element('td', { text: `${formatJobValue(detail.populated)} / ${formatJobValue(coverage.denominator)}` }),
-				element('td', { text: `${formatJobValue(detail.percentage)}%` }),
-			);
-			table.append(row);
-		});
-		section.append(table);
+		section.append(createResultTable('Risk metadata coverage', [
+			['Field', ([field]) => displayLabel(field)],
+			['Populated', ([, info]) => `${formatJobValue(asObject(info).populated)} / ${formatJobValue(coverage.denominator)}`],
+			['Coverage', ([, info]) => `${formatJobValue(asObject(info).percentage)}%`],
+		], fields).scroll);
 		wrap.append(section);
 	}
 	return wrap;
@@ -3614,27 +3609,21 @@ const renderOutcomesSummaryBlocks = (data) => {
 	if (windowEntries.length) {
 		const section = element('section', { className: 'dashboard-section' });
 		section.append(element('h3', { text: 'Performance by window' }));
-		const table = element('table', { className: 'data-table' });
-		const head = element('tr');
-		['Window', 'Evaluated', 'Hit rate', 'Target hit', 'Stop hit', 'Exp (R)', 'Avg return', 'Avg MFE', 'Avg MAE'].forEach((label) => head.append(element('th', { text: label })));
-		table.append(head);
-		windowEntries.forEach(([winKey, stats]) => {
-			const detail = asObject(stats);
-			const row = element('tr');
-			row.append(
-				element('td', { text: winKey }),
-				element('td', { text: formatJobValue(detail.totalSignals ?? detail.evaluatedCount) }),
-				element('td', { text: detail.hitRatePercent !== undefined ? `${detail.hitRatePercent}%` : '—' }),
-				element('td', { text: detail.targetHitRatePercent !== undefined ? `${detail.targetHitRatePercent}%` : '—' }),
-				element('td', { text: detail.stopHitRatePercent !== undefined ? `${detail.stopHitRatePercent}%` : '—' }),
-				element('td', { text: detail.expectancyR !== undefined && detail.expectancyR !== null ? `${detail.expectancyR > 0 ? '+' : ''}${detail.expectancyR}R` : '—' }),
-				element('td', { text: detail.averageReturnPercent !== undefined ? `${detail.averageReturnPercent > 0 ? '+' : ''}${detail.averageReturnPercent}%` : '—' }),
-				element('td', { text: detail.averageMfePercent !== undefined ? `+${detail.averageMfePercent}%` : '—' }),
-				element('td', { text: detail.averageMaePercent !== undefined ? `${detail.averageMaePercent}%` : '—' }),
-			);
-			table.append(row);
-		});
-		section.append(table);
+		const percentOrDash = (value) => (value === undefined ? '—' : `${value}%`);
+		const signedPercentOrDash = (value) => (value === undefined ? '—' : `${value > 0 ? '+' : ''}${value}%`);
+		section.append(createResultTable('Performance by window', [
+			['Window', (row) => row.windowKey],
+			['Evaluated', (row) => formatJobValue(row.stats.totalSignals ?? row.stats.evaluatedCount)],
+			['Hit rate', (row) => percentOrDash(row.stats.hitRatePercent)],
+			['Target hit', (row) => percentOrDash(row.stats.targetHitRatePercent)],
+			['Stop hit', (row) => percentOrDash(row.stats.stopHitRatePercent)],
+			['Exp (R)', (row) => (row.stats.expectancyR === undefined || row.stats.expectancyR === null
+				? '—'
+				: `${row.stats.expectancyR > 0 ? '+' : ''}${row.stats.expectancyR}R`)],
+			['Avg return', (row) => signedPercentOrDash(row.stats.averageReturnPercent)],
+			['Avg MFE', (row) => (row.stats.averageMfePercent === undefined ? '—' : `+${row.stats.averageMfePercent}%`)],
+			['Avg MAE', (row) => percentOrDash(row.stats.averageMaePercent)],
+		], windowEntries.map(([windowKey, stats]) => ({ windowKey, stats: asObject(stats) }))).scroll);
 		wrap.append(section);
 	}
 
@@ -3777,32 +3766,16 @@ const renderOutcomesCalibrationBlocks = (data) => {
 	if (buckets.length) {
 		const section = element('section', { className: 'dashboard-section' });
 		section.append(element('h3', { text: 'Calibration buckets' }));
-		const table = element('table', { className: 'data-table' });
-		const head = element('tr');
-		['Confidence Range', 'Alerts', 'Avg Return (1h)', 'Avg Return (4h)', 'Target Hit Rate'].forEach((label) => head.append(element('th', { text: label })));
-		table.append(head);
-		buckets.forEach((b) => {
-			const detail = asObject(b);
-			const row = element('tr');
-			const hitRatePct = detail.targetHitRate !== undefined && detail.targetHitRate !== null
-				? `${Math.round(detail.targetHitRate * 100)}%`
-				: '—';
-			const ret1h = detail.avgReturn1h !== undefined && detail.avgReturn1h !== null
-				? `${detail.avgReturn1h > 0 ? '+' : ''}${detail.avgReturn1h}%`
-				: '—';
-			const ret4h = detail.avgReturn4h !== undefined && detail.avgReturn4h !== null
-				? `${detail.avgReturn4h > 0 ? '+' : ''}${detail.avgReturn4h}%`
-				: '—';
-			row.append(
-				element('td', { text: detail.range || '—' }),
-				element('td', { text: formatJobValue(detail.count ?? 0) }),
-				element('td', { text: ret1h }),
-				element('td', { text: ret4h }),
-				element('td', { text: hitRatePct }),
-			);
-			table.append(row);
-		});
-		section.append(table);
+		const signedPercentOrDash = (value) => (value === undefined || value === null ? '—' : `${value > 0 ? '+' : ''}${value}%`);
+		section.append(createResultTable('Calibration buckets', [
+			['Confidence Range', (bucket) => asObject(bucket).range || '—'],
+			['Alerts', (bucket) => formatJobValue(asObject(bucket).count ?? 0)],
+			['Avg Return (1h)', (bucket) => signedPercentOrDash(asObject(bucket).avgReturn1h)],
+			['Avg Return (4h)', (bucket) => signedPercentOrDash(asObject(bucket).avgReturn4h)],
+			['Target Hit Rate', (bucket) => (asObject(bucket).targetHitRate === undefined || asObject(bucket).targetHitRate === null
+				? '—'
+				: `${Math.round(asObject(bucket).targetHitRate * 100)}%`)],
+		], buckets).scroll);
 		wrap.append(section);
 	}
 
@@ -6758,6 +6731,7 @@ const createNewsMonitorView = () => {
 		getElement,
 		createMetricCard,
 		createEmptyState,
+		createResultTable,
 		createTimestamp,
 		showError,
 		addField,
@@ -7108,25 +7082,14 @@ const renderAttributionPanel = (className, title, note, rows, dimensionLabel) =>
 		panel.append(createEmptyState('No evaluated signals to attribute yet.'));
 		return panel;
 	}
-	const wrap = element('div', { className: 'table-wrap' });
-	const table = element('table', { className: 'data-table' });
-	const head = element('tr');
-	[dimensionLabel, 'Signals', 'Wins', 'Hit rate', 'Avg return', 'Total return'].forEach((label) => head.append(element('th', { text: label })));
-	table.append(head);
-	rows.forEach((row) => {
-		const tr = element('tr');
-		tr.append(
-			element('td', { text: row.name }),
-			element('td', { text: String(row.count) }),
-			element('td', { text: String(row.wins) }),
-			element('td', { text: row.hitRate === null ? '—' : `${row.hitRate.toFixed(1)}%` }),
-			element('td', { text: formatTradingPercent(row.meanReturn) }),
-			element('td', { text: formatTradingPercent(row.sum) }),
-		);
-		table.append(tr);
-	});
-	wrap.append(table);
-	panel.append(wrap);
+	panel.append(createResultTable(title, [
+		[dimensionLabel, (row) => row.name],
+		['Signals', (row) => String(row.count)],
+		['Wins', (row) => String(row.wins)],
+		['Hit rate', (row) => (row.hitRate === null ? '—' : `${row.hitRate.toFixed(1)}%`)],
+		['Avg return', (row) => formatTradingPercent(row.meanReturn)],
+		['Total return', (row) => formatTradingPercent(row.sum)],
+	], rows).scroll);
 	return panel;
 };
 
@@ -7181,24 +7144,14 @@ const renderOrderAudit = (list, data) => {
 	}
 	// The rail column is narrow, so the table keeps a floor width and the wrapper scrolls
 	// instead of `width: 100%` wrapping headers into unreadable fragments.
-	const table = element('table', { className: 'data-table data-table-scroll' });
-	const head = element('tr');
-	['When', 'Symbol', 'Action', 'Status', 'Env'].forEach((label) => head.append(element('th', { text: label })));
-	table.append(head);
-	records.slice(0, 20).forEach((record) => {
-		const tr = element('tr');
-		const when = element('td');
-		when.append(record && record.timestamp ? createTimestamp(record.timestamp) : element('span', { text: '—' }));
-		tr.append(
-			when,
-			element('td', { text: formatOrderValue(record && record.symbol) }),
-			element('td', { text: formatOrderValue(record && record.action) }),
-			element('td', { text: formatOrderValue(record && record.status) }),
-			element('td', { text: formatOrderValue(record && record.environment) }),
-		);
-		table.append(tr);
-	});
-	list.append(table);
+	const whenCell = (record) => (record && record.timestamp ? createTimestamp(record.timestamp) : '—');
+	list.replaceChildren(createResultTable('Recent order audit', [
+		['When', whenCell],
+		['Symbol', (record) => formatOrderValue(record && record.symbol)],
+		['Action', (record) => formatOrderValue(record && record.action)],
+		['Status', (record) => formatOrderValue(record && record.status)],
+		['Env', (record) => formatOrderValue(record && record.environment)],
+	], records.slice(0, 20), 'data-table data-table-scroll').scroll);
 };
 
 const createQuickControl = (label, definition, body) => {

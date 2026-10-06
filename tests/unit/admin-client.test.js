@@ -6379,6 +6379,207 @@ describe('news monitor operations view', () => {
 	});
 });
 
+// Issue #952. Every operational result table used to be a bare <table> with a header <tr>
+// appended straight onto it: no caption, no thead/tbody, no `scope`, and no scroll
+// container, so a nine-column outcomes table either compressed into wrapped fragments or
+// set the page's own min-content width. A screen reader got no table name and no header
+// relationship at all.
+describe('result table semantics and narrow-viewport layout (#952)', () => {
+	const hasClass = (node, name) => String(node.className || '').split(/\s+/).includes(name);
+	const dataTables = (root) => findAll(root, (node) => node.tagName === 'TABLE' && hasClass(node, 'data-table'));
+
+	// The contract every rendered table has to satisfy. Asserted per view rather than on a
+	// single fixture so a new call site cannot ship without it: the point of #952 is that
+	// this holds for *every* `.data-table`, not for the one table that was measured.
+	const expectAccessibleTables = (root) => {
+		const tables = dataTables(root);
+		expect(tables.length).toBeGreaterThan(0);
+
+		tables.forEach((table) => {
+			const captions = findAll(table, (node) => node.tagName === 'CAPTION');
+			expect(captions).toHaveLength(1);
+			expect(captions[0].textContent.trim().length).toBeGreaterThan(0);
+
+			const theads = findAll(table, (node) => node.tagName === 'THEAD');
+			const tbodies = findAll(table, (node) => node.tagName === 'TBODY');
+			expect(theads).toHaveLength(1);
+			expect(tbodies).toHaveLength(1);
+			// A <tr> that is a direct child of <table> is neither header nor body content,
+			// which is exactly the structure the bare renderer produced.
+			expect(findAll(table, (node) => node.tagName === 'TR' && node.parentNode === table)).toHaveLength(0);
+
+			const headers = findAll(theads[0], (node) => node.tagName === 'TH');
+			expect(headers.length).toBeGreaterThan(0);
+			headers.forEach((header) => expect(header.attributes.scope).toBe('col'));
+			// Column count is the invariant that catches a dropped or reordered column.
+			expect(headers).toHaveLength(findAll(tbodies[0], (node) => node.tagName === 'TD')[0]?.children.length || headers.length);
+
+			// The scroller is what keeps an unbreakable header from widening the page, so a
+			// table outside one is a regression even though every other assertion passes.
+			expect(hasClass(table.parentNode, 'table-scroll')).toBe(true);
+			expect(table.parentNode.attributes.role).toBe('region');
+			expect(table.parentNode.attributes.tabindex).toBe('0');
+			expect(table.parentNode.attributes['aria-label']).toBe(captions[0].textContent);
+		});
+
+		return tables;
+	};
+
+	const alertsSummaryPayload = (overrides = {}) => ({
+		success: true,
+		summary: {
+			totalAlerts: 4,
+			window: {},
+			delivery: { totalSuccess: 3, totalFailure: 1, byChannel: { telegram: { total: 3, success: 2, failure: 1 } } },
+			enrichment: {
+				enrichedAlerts: 4,
+				plainAlerts: 0,
+				riskMetadataCoverage: { denominator: 4, fields: { target_level: { populated: 2, percentage: 50 } } },
+				sentimentCalibration: {
+					sampleCount: 97, evaluated: true, saturated: false, reason: null,
+					min: 0.3, max: 0.9, p10: 0.4, p50: 0.5, p90: 0.6, spread: 0.2,
+					topBandCount: 1, topBandShare: 0.01, distinctValueCount: 40, bucketCount: 6,
+					rawScoreCapCount: 3,
+					buckets: [{ lowerBound: 0.3, upperBound: 0.5, count: 12 }, { lowerBound: 0.5, upperBound: 0.7, count: 85 }],
+				},
+				tokenUsage: {},
+			},
+		},
+		...overrides,
+	});
+
+	const outcomesSummaryPayload = () => ({
+		success: true,
+		summary: {
+			totalSignalsReceived: 40,
+			totalSignalsEvaluated: 30,
+			expectancyR: 0.42,
+			averageReturnPercent: 1.3,
+			averageMfePercent: 2.4,
+			averageMaePercent: -0.7,
+			windows: {
+				'1h': {
+					totalSignals: 40, hitRatePercent: 50, targetHitRatePercent: 40, stopHitRatePercent: 10,
+					expectancyR: 0.3, averageReturnPercent: 1.0, averageMfePercent: 2.0, averageMaePercent: -0.4,
+				},
+			},
+		},
+	});
+
+	it('gives the nine-column outcomes table a caption, scoped headers and a scroll region', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/outcomes/summary')) return response(outcomesSummaryPayload());
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'outcomes');
+		const form = findForm(browser.elementsById.view, 'GET /api/outcomes/summary');
+		await form.dispatch('submit');
+		await flush();
+
+		const tables = expectAccessibleTables(form);
+		const performance = tables.find((table) => findAll(table, (node) => node.tagName === 'CAPTION')[0].textContent === 'Performance by window');
+		expect(performance).toBeDefined();
+
+		// Column order and the header labels themselves are the operator-facing contract;
+		// only the surrounding structure may change.
+		expect(findAll(findAll(performance, (node) => node.tagName === 'THEAD')[0], (node) => node.tagName === 'TH').map((node) => node.textContent))
+			.toEqual(['Window', 'Evaluated', 'Hit rate', 'Target hit', 'Stop hit', 'Exp (R)', 'Avg return', 'Avg MFE', 'Avg MAE']);
+		expect(findAll(findAll(performance, (node) => node.tagName === 'TBODY')[0], (node) => node.tagName === 'TD').map((node) => node.textContent))
+			.toEqual(['1h', '40', '50%', '40%', '10%', '+0.3R', '+1%', '+2%', '-0.4%']);
+	});
+
+	it('gives every alert-analytics table a caption and scoped headers', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts/summary')) return response(alertsSummaryPayload());
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+		const form = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
+		await form.dispatch('submit');
+		await flush();
+
+		const captions = expectAccessibleTables(form).map((table) => findAll(table, (node) => node.tagName === 'CAPTION')[0].textContent);
+		// Delivery, risk coverage and the sentiment histogram are three separate renderers;
+		// leaving one out is the regression this sweep exists to catch.
+		expect(captions).toEqual(expect.arrayContaining(['Delivery by channel', 'Risk metadata coverage', 'Sentiment score buckets']));
+
+		const channelTable = dataTables(form).find((table) => findAll(table, (node) => node.tagName === 'CAPTION')[0].textContent === 'Delivery by channel');
+		expect(findAll(findAll(channelTable, (node) => node.tagName === 'THEAD')[0], (node) => node.tagName === 'TH').map((node) => node.textContent))
+			.toEqual(['Channel', 'Total', 'Success', 'Failure']);
+		expect(findAll(findAll(channelTable, (node) => node.tagName === 'TBODY')[0], (node) => node.tagName === 'TD').map((node) => node.textContent))
+			.toEqual(['Telegram', '3', '2', '1']);
+	});
+
+	it('gives the job symbol and scanner result tables a caption and scoped headers', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({
+					success: true,
+					jobId: 'job-tables',
+					status: 'completed',
+					results: [{ symbol: 'BTCUSDT', status: 'ok', price: 123.4, rsi: 55.2 }],
+					scanResults: [{
+						scan: 'top_gainers',
+						status: 'completed',
+						scores: [{ symbol: 'ETHUSDT', score: 88, reason: 'volume', trendConfluence: { status: 'aligned', direction: 'up', confidence: 70 } }],
+					}],
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+		const form = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		form.elements['path-jobId'].value = 'job-tables';
+		await form.dispatch('submit');
+		await flush();
+
+		const captions = expectAccessibleTables(form).map((table) => findAll(table, (node) => node.tagName === 'CAPTION')[0].textContent);
+		expect(captions).toEqual(expect.arrayContaining(['Symbol results', 'top_gainers scores']));
+
+		const symbolTable = dataTables(form).find((table) => findAll(table, (node) => node.tagName === 'CAPTION')[0].textContent === 'Symbol results');
+		expect(findAll(findAll(symbolTable, (node) => node.tagName === 'THEAD')[0], (node) => node.tagName === 'TH').map((node) => node.textContent))
+			.toEqual(['Symbol', 'Status', 'Price', 'RSI']);
+		expect(findAll(findAll(symbolTable, (node) => node.tagName === 'TBODY')[0], (node) => node.tagName === 'TD').map((node) => node.textContent))
+			.toEqual(['BTCUSDT', 'ok', '123.4', '55.2']);
+	});
+
+	it('keeps the empty symbol-result and error states intact', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({
+					success: true,
+					jobId: 'job-empty',
+					status: 'failed',
+					// Rows without a symbol and a status are the shape that made the bare
+					// renderer emit a header with no body; the section must still disappear.
+					results: [{ price: 1 }],
+					scanResults: [{ scan: 'top_losers', status: 'timeout' }],
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+		const form = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		form.elements['path-jobId'].value = 'job-empty';
+		await form.dispatch('submit');
+		await flush();
+
+		expect(form.textContent).not.toContain('Symbol results');
+		expect(form.textContent).toContain('This scan did not complete');
+		expect(dataTables(form)).toHaveLength(0);
+	});
+});
+
 
 describe('structured analysis forms', () => {
 	it('renders structured controls for analysis operations and provides raw JSON sync', async () => {
