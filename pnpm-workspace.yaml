@@ -2,3 +2,102 @@ allowBuilds:
   '@firebase/util': true
   protobufjs: true
   unrs-resolver: true
+
+# Transitive pins that keep `pnpm audit --audit-level=high` clean (issue #872).
+# pnpm 10 reads overrides only from this file; the `pnpm` field in package.json is
+# ignored with a warning, so an override declared there is silently inert.
+#
+# Reachable at runtime:
+#   protobufjs              Firestore wire decoder: arbitrary code execution
+#                           (GHSA-xq3m-2v4x-88gg, CRITICAL) plus the 7.5.6/7.6.x
+#                           prototype-pollution and unbounded-recursion batch
+#   express>path-to-regexp  ReDoS via multiple route params on the Express 4 line.
+#                           0.1.13 is the patched 0.1.x, so this keeps Express 4
+#                           instead of the Express 5 migration.
+#   express>body-parser     the 1.20.3 pin; 1.20.8 carries the fix
+#   axios                   binance REST client: SSRF, prototype-pollution
+#                           credential leak, header injection (30+ advisories)
+#   binance>{webpack,ts-loader,source-map-loader,webpack-cli}: '-'
+#                           binance's optional build toolchain is never used to
+#                           consume the published package. It carried
+#                           serialize-javascript's RCE gadget and the unpatchable
+#                           braces advisory via ts-loader>micromatch.
+#   binance>{ws,nanoid}     tiny-fragment memory-exhaustion DoS; generator loop
+#   @google/genai>ws        same DoS on the 8.x line
+#   @fastify/busboy         firebase-admin multipart parser DoS
+#   @protobufjs/utf8        overlong UTF-8 decoding
+#   proxy-addr / qs / uuid / source-map-js / follow-redirects
+#   telegraf>@tootallnate/once  incorrect control-flow scoping
+#
+# Dev tooling only:
+#   '@babel/plugin-transform-modules-systemjs', '@grpc/grpc-js',
+#   '@modelcontextprotocol/sdk', '@opentelemetry/core', ajv, basic-ftp,
+#   brace-expansion, browserslist, fast-uri, firebase-tools>{ajv,body-parser,
+#   chokidar,js-yaml,morgan}, flatted, hono, uuid,
+#   ip-address, js-yaml@<4, minimatch, morgan, node-gyp>undici, nodemon>{chokidar,
+#   semver}, picomatch, semver
+#
+#   chokidar is pinned to 4.x under firebase-tools and nodemon because chokidar 3
+#   pulls `braces`, which has NO patched release (GHSA-vfj7-8cjw-p6xm). chokidar 4
+#   drops the dependency, so the advisory leaves the tree instead of being ignored.
+#
+# The single ignore below is an unreachable code path, not a tolerated risk.
+# GHSA-86w9-cpqp-85rv (node-forge RSA PKCS#1 v1.5 verification accepts extra
+# nested structures) has NO patched release at any version. firebase-admin calls
+# exactly one node-forge function -- `forge.pki.privateKeyFromPem()` in
+# lib/app/credential-internal.js -- to parse a private key we supply ourselves via
+# FIREBASE_SERVICE_ACCOUNT_JSON. It never verifies a signature against a
+# certificate, so the advisory's vulnerable path is unreachable here.
+# Nothing else is suppressed: a new ignore needs the same reachability argument.
+#
+# Residual and accepted: sprintf-js GHSA-hp3w-g68c-fv3c (moderate), reached only
+# through jest's coverage reporter. No patched release exists (1.1.3 is latest).
+overrides:
+  '@babel/plugin-transform-modules-systemjs': ^7.29.4
+  '@fastify/busboy': ^3.2.2
+  '@google/genai>ws': ^8.21.0
+  '@grpc/grpc-js': ^1.14.5
+  '@modelcontextprotocol/sdk': ^1.31.0
+  '@opentelemetry/core': ^2.8.0
+  '@protobufjs/utf8': ^1.1.1
+  axios: ^1.20.0
+  basic-ftp: ^6.2.2
+  binance>nanoid: ^3.3.20
+  binance>source-map-loader: '-'
+  binance>ts-loader: '-'
+  binance>webpack: '-'
+  binance>webpack-cli: '-'
+  binance>ws: ^7.5.11
+  brace-expansion: ^5.0.12
+  browserslist: ^4.29.3
+  express>body-parser: ^1.20.8
+  express>path-to-regexp: 0.1.13
+  fast-uri: ^3.1.8
+  firebase-tools>ajv: ^8.18.0
+  firebase-tools>body-parser: ^1.20.8
+  firebase-tools>chokidar: ^4.0.3
+  firebase-tools>js-yaml: ^4.3.2
+  firebase-tools>morgan: ^1.12.1
+  flatted: ^3.4.4
+  follow-redirects: ^1.16.0
+  form-data: ^4.0.6
+  hono: ^4.13.13
+  ip-address: ^10.7.1
+  'js-yaml@<4': ^3.15.2
+  minimatch: ^10.2.6
+  node-gyp>undici: ^8.11.2
+  nodemon>chokidar: ^4.0.3
+  nodemon>semver: ^7.5.2
+  picomatch: ^4.0.7
+  protobufjs: ^7.6.6
+  proxy-addr: ^2.0.8
+  qs: ^6.16.0
+  semver: ^7.5.2
+  source-map-js: ^1.2.2
+  telegraf>@tootallnate/once: ^2.0.1
+  uuid: ^11.1.1
+
+auditConfig:
+  ignoreGhsas:
+    - GHSA-86w9-cpqp-85rv
+  ignoreCves: []
