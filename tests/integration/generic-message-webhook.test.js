@@ -1119,6 +1119,71 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
 		});
 
+		it('returns the shared error envelope on the dryRun 400 so code/retryable are matchable', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({ message: 'Intended as a preview', dryRun: 'yes', channels: ['telegram'] })
+				.expect(400);
+
+			// The published Error component promises code/retryable; match on them.
+			expect(res.body.code).toBe('INVALID_REQUEST');
+			expect(res.body.retryable).toBe(false);
+			expect(res.body.requestId).toEqual(expect.any(String));
+		});
+
+		// Guards the regression where a query typo fell through to a live delivery.
+		it.each([
+			['dryRun=yes', 'a non-boolean string'],
+			['dryRun=1', 'a numeric truthy string'],
+			['dryRun=0', 'a numeric falsy string'],
+			['dryRun=truthy', 'an arbitrary string'],
+			['dryRun=', 'an empty value with no boolean'],
+		])(
+			'rejects ?%s instead of silently delivering (%s)',
+			async (query) => {
+				const res = await request(app)
+					.post(`/api/webhook/message?${query}`)
+					.set('x-api-key', 'test-key')
+					.send({ message: 'Query preview intended', channels: ['telegram'] })
+					.expect(400);
+
+				expect(res.body.success).toBe(false);
+				expect(res.body.code).toBe('INVALID_REQUEST');
+				expect(res.body.retryable).toBe(false);
+				expect(res.body.details).toEqual({ field: 'dryRun' });
+				expect(res.body.dryRun).toBeUndefined();
+				expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+				expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
+			},
+		);
+
+		it.each([['dryRun=FALSE'], ['dryRun=True']])(
+			'rejects the case-variant query token %s rather than guessing the intent',
+			async (query) => {
+				const res = await request(app)
+					.post(`/api/webhook/message?${query}`)
+					.set('x-api-key', 'test-key')
+					.send({ message: 'Query preview intended', channels: ['telegram'] })
+					.expect(400);
+
+				expect(res.body.details).toEqual({ field: 'dryRun' });
+				expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+			},
+		);
+
+		it('delivers normally when the query flag is ?dryRun=false', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message?dryRun=false')
+				.set('x-api-key', 'test-key')
+				.send({ message: 'Live send via query flag', channels: ['telegram'] })
+				.expect(200);
+
+			expect(res.body.dryRun).toBeUndefined();
+			expect(res.body.results[0].success).toBe(true);
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+		});
+
 		it('still validates channel routing during a dry run', async () => {
 			const res = await request(app)
 				.post('/api/webhook/message?dryRun=true')

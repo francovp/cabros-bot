@@ -457,9 +457,11 @@ cached — so a dry run can be repeated freely and the same key is still free fo
 - Channel and destination overrides are **still validated**, so a dry run is a routing test: an unknown channel, a
   malformed `discordWebhookUrl`, a negative `telegramThreadId`, or a requested channel that is disabled or
   misconfigured returns the same `400` a live request would.
-- A `dryRun` body value that is neither a boolean nor the string `"true"` / `"false"` returns
-  `400 INVALID_REQUEST` (`details.field: "dryRun"`). It is **not** silently treated as a live request — a caller who
-  intended a preview must never get a real delivery instead.
+- A `dryRun` value — in the **query string or the body** — that is neither a boolean nor the string `"true"` / `"false"`
+  returns `400 INVALID_REQUEST` (`code: "INVALID_REQUEST"`, `retryable: false`, `details.field: "dryRun"`). It is **not**
+  silently treated as a live request — a caller who intended a preview must never get a real delivery instead. This
+  applies equally to `?dryRun=yes`, `?dryRun=1`, `?dryRun=FALSE`, and a bare `?dryRun` with no value, so the flag always
+  has to carry an explicit value.
 - When both `dryValidate` and `dryRun` are supplied, the narrower `dryValidate` response is returned.
 - A dry run never initializes the notification channel services (that validates them against their providers), so
   channel *availability* is only asserted when the channel registry already exists on the process.

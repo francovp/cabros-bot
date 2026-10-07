@@ -4008,7 +4008,7 @@
       "MessageDryRun": {
         "name": "dryRun",
         "in": "query",
-        "description": "When true (or with a boolean dryRun JSON body field), the request is validated and its resolved routing is returned as a preview: no notification is dispatched, no idempotency key is reserved or cached, and nothing is persisted. Channel and destination overrides are still validated, so a dry run can be used to verify routing. A body dryRun value that is not true/false (or the string \"true\"/\"false\") returns 400 INVALID_REQUEST rather than silently delivering.",
+        "description": "When true (or with a boolean dryRun JSON body field), the request is validated and its resolved routing is returned as a preview: no notification is dispatched, no idempotency key is reserved or cached, and nothing is persisted. Channel and destination overrides are still validated, so a dry run can be used to verify routing. In both this query parameter and the JSON body field, a dryRun value that is not a boolean or the string \"true\"/\"false\" returns 400 INVALID_REQUEST (details.field: dryRun) rather than silently delivering; this includes case variants such as \"TRUE\" and a bare `?dryRun` with no value.",
         "schema": {
           "type": "boolean",
           "default": false
@@ -10204,7 +10204,7 @@
           },
           "dryRun": {
             "type": "boolean",
-            "description": "Optional routing/audit preview; when true, validates the request and returns the resolved routing without sending notifications, reserving no idempotency key and persisting nothing. Takes precedence over nothing: when both dryValidate and dryRun are provided, the narrower dryValidate response is returned. Any value other than a boolean or the string \"true\"/\"false\" returns 400 INVALID_REQUEST instead of silently delivering."
+            "description": "Optional routing/audit preview; when true, validates the request and returns the resolved routing without sending notifications, reserving no idempotency key and persisting nothing. The narrower dryValidate response wins when both dryValidate and dryRun are provided. In both this body field and the dryRun query parameter, any value other than a boolean or the string \"true\"/\"false\" returns 400 INVALID_REQUEST (details.field: dryRun) instead of silently delivering."
           }
         }
       },

@@ -10,9 +10,22 @@
  * delivery as replayable. Sharing one definition removes that possibility.
  */
 const DRY_RUN_ENABLED_VALUES = new Set(['true', true]);
+const DRY_RUN_DISABLED_VALUES = new Set(['false', false]);
 
 function isDryRunValue(value) {
 	return DRY_RUN_ENABLED_VALUES.has(value);
+}
+
+/**
+ * True when `value` is one of the four documented spellings of the flag.
+ *
+ * `isDryRunValue()` answers "is this a probe?", which is what the idempotency
+ * bypass needs. This answers "did the caller spell it at all?", which is what a
+ * strict handler needs: a value outside the documented set is a typo, and must
+ * not be silently downgraded to a live request.
+ */
+function isRecognisedDryRunValue(value) {
+	return isDryRunValue(value) || DRY_RUN_DISABLED_VALUES.has(value);
 }
 
 function resolveDryRun(req) {
@@ -25,5 +38,6 @@ function resolveDryRun(req) {
 
 module.exports = {
 	isDryRunValue,
+	isRecognisedDryRunValue,
 	resolveDryRun,
 };

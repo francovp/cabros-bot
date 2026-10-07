@@ -2389,10 +2389,20 @@ Five invariants must survive future edits:
   `src/lib/dryRunRequest.js`. Two independent parsers are how a request ends up treated as a probe by the middleware (no
   reservation) and as a live request by the handler (a real delivery), or the reverse. `alert.js` and
   `newsMonitor.js` import the shared helper rather than keeping their own copies — do not reintroduce a local one.
-- **An unrecognised `dryRun` body value is a `400`, not a silent live send.** Only booleans and the strings
-  `"true"`/`"false"` are accepted (`details.field: "dryRun"`). This is a deliberate divergence from
+- **An unrecognised `dryRun` value is a `400` in both locations, not a silent live send.** Only booleans and the
+  strings `"true"`/`"false"` are accepted (`details.field: "dryRun"`). This is a deliberate divergence from
   `/api/webhook/alert`, whose lenient parse would silently downgrade `dryRun: "yes"` to a real delivery — the exact
-  "no silent fallback" failure the repository keeps fixing. A caller who asked for a preview must never get a send.
+  "no silent fallback" failure the repository keeps fixing. A caller who asked for a preview must never get a send. The
+  guard covers `req.query.dryRun` as well as the body field, because the query form is the documented one and a typo there
+  (`?dryRun=yes`, `?dryRun=1`, `?dryRun=FALSE`, or a bare `?dryRun`) would otherwise reach a real delivery while the body
+  form already returned `400`. `isRecognisedDryRunValue()` in `src/lib/dryRunRequest.js` is the single definition of the
+  accepted set, deliberately distinct from `isDryRunValue()` — the latter answers "is this a probe?" for the idempotency
+  bypass and must stay lenient, because the middleware runs *before* this validation and treats a typo as a live request.
+  Do not merge the two predicates.
+- **Validation failures carry the shared error envelope.** The `NotificationRoutingValidationError` branch emits
+  `code: "INVALID_REQUEST"` and `retryable` through `sendError()` from `src/lib/errorEnvelope.js`, matching the published
+  `Error` component this route's `400` already references. An integrator matching on `code === 'INVALID_REQUEST'` must
+  match; do not hand-roll this response body again.
 - **Validation still runs, so a dry run is a routing test.** Unknown channels, malformed `discordWebhookUrl`, negative
   `telegramThreadId`, and requested-but-disabled channels all return the same `400` a live request would. The disabled
   channel check (`assertChannelsAvailable`) only runs when the channel registry already exists, because a dry run must
@@ -2408,8 +2418,9 @@ testable without routing metadata. No new environment variable, Remote Config ke
 the change is additive to the existing `MessageDeliveryResult` body.
 
 **Coverage**: `tests/integration/generic-message-webhook.test.js` (`dry-run mode` — query and body flags, the string
-form, explicit `false`, invalid value, routing validation, destination overrides without credential leakage,
-idempotency non-mutation, truncation metadata, `dryValidate` precedence),
+form, explicit `false`, invalid value in either location including the query-string typo cases, the shared error envelope
+on the `400`, routing validation, destination overrides without credential leakage, idempotency non-mutation, truncation
+metadata, `dryValidate` precedence),
 `tests/unit/openapi-contract.test.js` and `tests/unit/postman-collection.test.js` (published contract).
 
 ## Generic Message Truncation Metadata (GH-602)

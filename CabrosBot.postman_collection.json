@@ -3742,7 +3742,7 @@
           "name": "POST Send Message (dry-run, query flag)",
           "request": {
             "method": "POST",
-            "description": "Issue #876 adds dryRun to the generic-message webhook for parity with /api/webhook/alert. ?dryRun=true validates the request, resolves the intended routing, and returns it as a preview: no notification is dispatched, no idempotency key is reserved or cached, and nothing is persisted, so the same key stays usable for a later live request. Channel and destination overrides are still validated, so an invalid channel or destination returns the usual 400. The response reports requestedChannels (the channels that would receive the message), broadcast: true when no channel subset was requested, an empty deliveredChannels array, and a routing preview of the resolved overrides. A Discord webhook URL is a credential, so only discordWebhookUrlProvided is echoed. The discordWebhookUrl override in this request body is a placeholder, not a real credential.",
+            "description": "Issue #876 adds dryRun to the generic-message webhook for parity with /api/webhook/alert. ?dryRun=true validates the request, resolves the intended routing, and returns it as a preview: no notification is dispatched, no idempotency key is reserved or cached, and nothing is persisted, so the same key stays usable for a later live request. Channel and destination overrides are still validated, so an invalid channel or destination returns the usual 400. The response reports requestedChannels (the channels that would receive the message), broadcast: true when no channel subset was requested, an empty deliveredChannels array, and a routing preview of the resolved overrides. A Discord webhook URL is a credential, so only discordWebhookUrlProvided is echoed. The discordWebhookUrl override in this request body is a placeholder, not a real credential. In both the query string and the JSON body, a dryRun value that is neither a boolean nor the string \"true\"/\"false\" returns 400 INVALID_REQUEST (details.field: dryRun) instead of silently delivering, so ?dryRun=yes, ?dryRun=1, ?dryRun=FALSE and a bare ?dryRun are all rejected.",
             "header": [
               {
                 "key": "Content-Type",
@@ -3841,28 +3841,30 @@
               ]
             },
             {
-              "name": "Error (400 invalid dryRun value)",
+              "name": "Error (400 invalid dryRun query value)",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryRun\\\" must be a boolean if provided\",\n  \"details\": {\n    \"field\": \"dryRun\"\n  },\n  \"requestId\": \"msg-dry-run-invalid\"\n}",
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryRun\\\" query must be a boolean if provided\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"msg-dry-run-invalid\",\n  \"retryable\": false,\n  \"details\": {\n    \"field\": \"dryRun\"\n  }\n}",
               "header": [
                 {
                   "key": "Content-Type",
                   "value": "application/json"
                 }
-              ]
+              ],
+              "description": "An unrecognised query-string dryRun value (for example ?dryRun=yes or ?dryRun=1) is rejected rather than silently delivered."
             },
             {
               "name": "Error (400 invalid routing override during a dry run)",
               "status": "Bad Request",
               "code": 400,
-              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"discordWebhookUrl\\\" must be a valid HTTPS Discord webhook URL\",\n  \"details\": {\n    \"field\": \"discordWebhookUrl\"\n  },\n  \"requestId\": \"msg-dry-run-bad-url\"\n}",
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"discordWebhookUrl\\\" must be a valid HTTPS Discord webhook URL\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"msg-dry-run-bad-url\",\n  \"retryable\": false,\n  \"details\": {\n    \"field\": \"discordWebhookUrl\"\n  }\n}",
               "header": [
                 {
                   "key": "Content-Type",
                   "value": "application/json"
                 }
-              ]
+              ],
+              "description": "Channel and destination overrides are still validated during a dry run, so the same 400 a live request would return is produced."
             }
           ]
         },

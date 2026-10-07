@@ -15,11 +15,24 @@ const {
 	assertChannelsAvailable,
 } = require('../../../../services/notification/requestRouting');
 const { estimateMessageChunks } = require('../../../../lib/messageHelper');
-const { isDryRunValue, resolveDryRun } = require('../../../../lib/dryRunRequest');
+const { isRecognisedDryRunValue, resolveDryRun } = require('../../../../lib/dryRunRequest');
+const { STANDARD_ERROR_CODES, sendError } = require('../../../../lib/errorEnvelope');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
 const MAX_MESSAGE_LENGTH = 4000;
 
-function validateMessageRequest(body) {
+function assertRecognisedDryRunFlag(value, source) {
+	if (value === undefined) {
+		return;
+	}
+	if (!isRecognisedDryRunValue(value)) {
+		throw new NotificationRoutingValidationError(
+			`"dryRun" ${source} must be a boolean if provided`,
+			{ field: 'dryRun' },
+		);
+	}
+}
+
+function validateMessageRequest(body, query) {
 	if (!body || typeof body !== 'object') {
 		throw new NotificationRoutingValidationError('Request body must be a JSON object');
 	}
@@ -38,13 +51,12 @@ function validateMessageRequest(body) {
 		});
 	}
 
-	// An unrecognised dryRun value must fail loudly: silently treating it as a
-	// live request would deliver the message a caller intended as a probe.
-	if (dryRun !== undefined && !isDryRunValue(dryRun) && dryRun !== false && dryRun !== 'false') {
-		throw new NotificationRoutingValidationError('"dryRun" must be a boolean if provided', {
-			field: 'dryRun',
-		});
-	}
+	// An unrecognised dryRun value must fail loudly in BOTH locations: silently
+	// treating it as a live request would deliver the message a caller intended
+	// as a probe. The query form carries the same risk as the body form, so it
+	// gets the same guard.
+	assertRecognisedDryRunFlag(dryRun, 'body');
+	assertRecognisedDryRunFlag(query && query.dryRun, 'query');
 
 	const routing = parseNotificationRouting(body);
 
@@ -116,7 +128,7 @@ function postMessage(botOrGetter) {
 		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 		try {
-			const routing = validateMessageRequest(req.body);
+			const routing = validateMessageRequest(req.body, req.query);
 
 			if (routing.dryValidate) {
 				const estimatedChunks = estimateMessageChunks(routing.originalMessage);
@@ -235,11 +247,11 @@ function postMessage(botOrGetter) {
 			}).catch(() => {});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
-				return res.status(error.statusCode).json({
-					success: false,
+				return sendError(res, error.statusCode, {
 					error: error.message,
-					details: error.details,
+					code: STANDARD_ERROR_CODES.INVALID_REQUEST,
 					requestId,
+					details: error.details,
 				});
 			}
 
