@@ -2375,13 +2375,18 @@ metadata when the message was clipped.
 Five invariants must survive future edits:
 
 - **A dry run mutates nothing.** No notification is dispatched, nothing is persisted to Firestore, and **no idempotency
-  key is reserved or cached**. The route wires `skipForDryRun(idempotencyMiddleware)` from `src/lib/idempotency.js`
-  rather than teaching the shared middleware about probes, because caching a probe's body would let a later *live*
+  key is reserved or cached**. `idempotencyMiddleware` skips itself for a dry run on the paths listed in
+  `DRY_RUN_IDEMPOTENCY_BYPASS_PATHS` (`src/lib/idempotency.js`), because caching a probe's body would let a later *live*
   request reusing the same key receive the preview instead of delivering. Keep the key usable: that is what proves the
   bypass works (`tests/integration/generic-message-webhook.test.js` sends a dry run and then a live request with the same
-  key and asserts the live one actually delivered).
+  key and asserts the live one actually delivered). The bypass is deliberately **path-scoped**, not global:
+  `/api/webhook/alert` keeps its existing idempotent dry-run behaviour unchanged. Two details are load-bearing — the
+  allowlist is matched against `req.baseUrl + req.path` because `req.path` is mount-relative inside a router (matching the
+  relative form alone silently never fires, which fail-opens *back* toward reserving keys), and adding the paths as route
+  arguments instead would edit the `/webhook/*` route registrations, which makes CodeQL re-attribute its long-standing
+  `js/missing-rate-limiting` false positive on those lines to any PR that touches them.
 - **The bypass and the handler must agree on what a probe is.** Both read `resolveDryRun()` from the single shared
-  `src/lib/dryRunRequest.js`. Two independent parsers are how a request ends up treated as a probe by the route (no
+  `src/lib/dryRunRequest.js`. Two independent parsers are how a request ends up treated as a probe by the middleware (no
   reservation) and as a live request by the handler (a real delivery), or the reverse. `alert.js` and
   `newsMonitor.js` import the shared helper rather than keeping their own copies — do not reintroduce a local one.
 - **An unrecognised `dryRun` body value is a `400`, not a silent live send.** Only booleans and the strings
