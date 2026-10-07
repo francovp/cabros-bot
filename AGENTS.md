@@ -79,6 +79,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 Use these exact commands when configuring or verifying the project locally:
 
 - **Install dependencies**: `pnpm install --frozen-lockfile`
+- **Check for dependency advisories**: `pnpm audit --audit-level=high` (must exit `0`; see [Dependency Advisory Remediation](#dependency-advisory-remediation-issue-872))
 - **Run production server**: `pnpm start`
 - **Run development server**: `pnpm run start-dev` (runs `nodemon index.js`)
 - **Verify healthcheck**: `GET /healthcheck` (provided by `app.js`)
@@ -120,6 +121,25 @@ Maintain these patterns and rules in all contributions:
 ### Commits and Cleanups
 - **Ignore linting mid-implementation**: Focus on features first. ESLint issues should be addressed in a dedicated cleanup pass.
 - **Git Commits**: Commit locally with `--no-verify` (e.g. `git commit --no-verify -m "message"`) to bypass pre-commit hooks during development.
+
+---
+
+## Dependency Advisory Remediation (Issue #872)
+
+`pnpm audit --audit-level=high` exits `0`. The locked tree went from 100 advisories (1 critical, 57 high) to one residual `moderate` (`sprintf-js` under jest's coverage reporter, no patched release exists).
+
+**Overrides and `auditConfig` live in `pnpm-workspace.yaml`, never in `package.json`.** pnpm 10 ignores the `pnpm` field in `package.json` with a warning, so an override declared there is silently inert while looking configured. That failure mode is invisible until an advisory comes back, so `tests/unit/dependency-advisory-remediation.test.js` fails if a `pnpm.overrides` block reappears in `package.json`.
+
+Four invariants to preserve:
+
+- **An advisory does not authorize a semver-major migration.** The critical `protobufjs` RCE (`GHSA-xq3m-2v4x-88gg`) is the Firestore wire decoder and is cleared by pinning `protobufjs` past `7.6.5`. `firebase-admin` stays on **12.x** on purpose: 14 relocates `admin.credential` to top-level `cert`/`applicationDefault` and drops `admin.firestore` as a property, which breaks every storage service at runtime while `jest.mock('firebase-admin')` keeps the suite green. A test asserts the real package still exposes `credential.cert`, `credential.applicationDefault`, `firestore`, `auth`, `remoteConfig` and `appCheck`.
+- **`express>path-to-regexp: 0.1.13` keeps Express 4.** That is the patched 0.1.x release and it clears `GHSA-37ch-88jc-xwx2`. Express 5 remains a first-party decision per `docs/runtime-sdk-major-drift-audit.md`, not an advisory remedy.
+- **`binance`'s optional build toolchain is removed, not pinned.** `webpack`, `ts-loader`, `source-map-loader` and `webpack-cli` are declared *optional* by `binance@2.15.22` — they build the published package and are never exercised by consuming it. Dropping them (`'-'`) deleted 44 packages including `braces`, whose stack-exhaustion advisory `GHSA-vfj7-8cjw-p6xm` has no patched release at any version. **The Binance order-execution contract is untouched**: the same `binance@2.15.22` runs, `beautifyResponses: false`, order-test validation and client-order reconciliation are unchanged.
+- **An `auditConfig` ignore requires a reachability proof, not a tolerated risk.** The only entry is `GHSA-86w9-cpqp-85rv` (node-forge RSA PKCS#1 v1.5 verification, unpatched at every version). `firebase-admin` calls exactly one node-forge function — `forge.pki.privateKeyFromPem()`, to parse a key from `FIREBASE_SERVICE_ACCOUNT_JSON` — and never verifies a signature. A test pins the call surface to `forge.pki`, so the justification cannot silently become false after an SDK bump. Re-adding any ignore needs the same argument written next to it in `pnpm-workspace.yaml`.
+
+Escalation order is documented in [`docs/runtime-sdk-major-drift-audit.md`](docs/runtime-sdk-major-drift-audit.md#41-advisory-remediation-without-a-major-migration-issue-872): patch/minor bump of the direct dependency first, then a scoped transitive override, then dropping an unused optional dependency, and `auditConfig` only as a last resort.
+
+Re-verify both suites after any dependency-tree change. `pnpm test` covers unit and integration; **`pnpm test:firebase` is the only thing that proves the pinned `protobufjs` still decodes Firestore responses**, because the unit suite mocks the Admin SDK. `pnpm run build:hosting` must leave the worktree clean afterwards.
 
 ---
 

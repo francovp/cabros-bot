@@ -645,6 +645,20 @@ pnpm run lint
 
 ---
 
+### Dependency advisory policy
+
+`pnpm audit --audit-level=high` exits `0`:
+
+```bash
+pnpm audit --audit-level=high
+```
+
+Transitive pins live in `pnpm-workspace.yaml` under `overrides`, **not** in a `pnpm` field in `package.json` — pnpm 10 ignores that field with a warning, so an override placed there is silently inert. `tests/unit/dependency-advisory-remediation.test.js` enforces both the placement and the resolved versions, and fails if a critical or high advisory returns.
+
+An advisory does not authorize a semver-major migration. `firebase-admin` stays on 12.x and `express` stays on 4.x because a pinned transitive version clears the advisory without an API break — see [SDK Major Drift Audit](docs/runtime-sdk-major-drift-audit.md#41-advisory-remediation-without-a-major-migration-issue-872) for the escalation order and the reasoning behind the single documented `auditConfig` ignore.
+
+---
+
 ### Updating SHA-pinned GitHub Actions
 
 All `uses:` references in `.github/workflows/*.yml` are pinned to full 40-character commit SHAs (with an inline `# v<major>` comment) for supply-chain hardening — see [issue #803](https://github.com/francovp/cabros-bot/issues/803). Mutable major-version tags can be force-moved by the action owner, so a tag pin is not a reproducible CI reference.
