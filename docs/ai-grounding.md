@@ -75,7 +75,7 @@ Behavior notes:
 - **Label-based rollout**: use `LANGFUSE_PROMPT_LABEL` (for example `latest`, `staging`, or `production`) to switch prompt versions without code changes.
 - **SDK caching**: prompt fetches use the Langfuse SDK cache and can be tuned with `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`.
 - **Current architecture contract**: prompts are compiled into the existing `systemPrompt` / `userPrompt` flow, so provider routing for Gemini, Azure, and OpenRouter remains unchanged.
-- **Alert enrichment schema**: Langfuse `alert-enrichment` versions should mirror the local fallback's optional `invalidation_level`, `target_level`, `setup_type`, and `risk_reward_ratio` fields. The prompt service inspects resolved remote prompts against `REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS`, records `schemaDriftDetected: true` and missing risk fields if any are omitted, and warns once per version without failing open delivery.
+- **Alert enrichment schema**: Langfuse `alert-enrichment` versions should mirror the local fallback's optional `invalidation_level`, `target_level`, `setup_type`, `setup_evidence`, and `risk_reward_ratio` fields. The prompt service inspects resolved remote prompts against `REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS`, records `schemaDriftDetected: true` and missing risk fields if any are omitted, and warns once per version without failing open delivery.
 
 #### Prompt-resolution telemetry (is Langfuse actually serving prompts?)
 
@@ -112,9 +112,9 @@ Before trusting any prompt-driven change:
 
 1. Deploy to preview and confirm `dependencies.langfusePrompts.servingStatus` reaches `serving` and `servingPrompts` is `true`. A `local_fallback` or `no_traffic` status means Langfuse is not actually serving anything yet.
 2. Confirm the `production` label exists in Langfuse and that `LANGFUSE_PROMPT_LABEL` resolves to it. A missing label makes the SDK fall back to its default version or fail, which surfaces as `prompt_not_found`.
-3. Align the remote `alert-enrichment` prompt with the local optional-risk schema (`invalidation_level`, `target_level`, `setup_type`, `risk_reward_ratio`, plus the evidence-calibration guidance). Otherwise `schemaDriftDetected` is `true` and `riskMetadataCoverage` in `GET /api/alerts/summary` will understate the schema the remote prompt can actually produce.
+3. Align the remote `alert-enrichment` prompt with the local optional-risk schema (`invalidation_level`, `target_level`, `setup_type`, `setup_evidence`, `risk_reward_ratio`, plus the evidence-calibration guidance and setup type rubric markers). Otherwise `schemaDriftDetected` is `true` and `riskMetadataCoverage` in `GET /api/alerts/summary` will understate the schema the remote prompt can actually produce.
 4. Only then promote the label and re-check `servingStatus` and `prompts[].lastLangfuseVersion` to confirm the new version is the one being served.
-- **Alert enrichment calibration**: the same inspection also checks the sentiment anchor markers (`sentiment_score_evidence`, `0.90`, `0.60`, `0.30`), reported separately as `missingCalibrationGuidance`. See [Sentiment score calibration](#sentiment-score-calibration).
+- **Alert enrichment calibration**: the same inspection also checks the sentiment anchor markers (`sentiment_score_evidence`, `0.90`, `0.60`, `0.30`) and market-structure setup type rubric markers (`'Setup type rubric'`, `'OMIT \`setup_type\` and \`setup_evidence\` entirely'`), reported separately as `missingCalibrationGuidance`. See [Sentiment score calibration](#sentiment-score-calibration).
 > **Adding or changing a prompt?** Use the `langfuse-prompt-sync` skill to publish the new version/label. The local fallback under `src/services/prompts/defaults/` and the remote Langfuse prompt must carry the same anchors, or `schemaDriftDetected` stays `true` for the remote copy.
 
 ### Persisted Gemini-Grounding Entry Price (GH-599)
