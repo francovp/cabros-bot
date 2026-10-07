@@ -314,6 +314,65 @@ describe('Postman collection contract', () => {
 		expect(marketBuyResp.order.newClientOrderId).toBeUndefined();
 	});
 
+	it('documents the generic-message dry-run preview variants (issue #876)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const queryItem = findItem(collection.item, 'POST Send Message (dry-run, query flag)');
+		const bodyItem = findItem(collection.item, 'POST Send Message (dry-run, body field)');
+
+		expect(queryItem).toBeDefined();
+		expect(bodyItem).toBeDefined();
+		expect(queryItem.request.url.raw).toContain('{{baseUrl}}/api/webhook/message?dryRun=true');
+		expect(bodyItem.request.url.raw).toBe('{{baseUrl}}/api/webhook/message');
+		expect(JSON.parse(bodyItem.request.body.raw).dryRun).toBe(true);
+		expect(findHeader(queryItem, 'idempotency-key')).toBeDefined();
+
+		for (const item of [queryItem, bodyItem]) {
+			const tests = (item.event || []).filter((event) => event.listen === 'test');
+			expect(tests.length).toBeGreaterThan(0);
+			const script = tests[0].script.exec.join('\n');
+			expect(script).toContain('pm.test');
+			expect(script).toContain('dryRun');
+			expect(script).toContain('deliveredChannels');
+
+			for (const example of item.response) {
+				if (example.code !== 200) continue;
+				const body = JSON.parse(example.body);
+				expect(body.success).toBe(true);
+				expect(body.dryRun).toBe(true);
+				expect(body.deliveredChannels).toEqual([]);
+				expect(body.requestId).toEqual(expect.any(String));
+				expect(body.payload.text).toEqual(expect.any(String));
+				expect(body.estimatedChunks).toEqual(expect.objectContaining({
+					telegram: expect.any(Number),
+					whatsapp: expect.any(Number),
+					discord: expect.any(Number),
+				}));
+				expect(body.results).toBeUndefined();
+				// The saved example must not leak the webhook credential it documents.
+				expect(example.body).not.toContain('abc-xyz-token');
+				expect(body.routing).not.toHaveProperty('discordWebhookUrl');
+			}
+		}
+
+		// Broadcast shape: an omitted channel subset is reported as a broadcast.
+		const broadcastExample = JSON.parse(bodyItem.response[0].body);
+		expect(broadcastExample.broadcast).toBe(true);
+
+		const invalidValue = queryItem.response.find((res) => res.code === 400 && res.name.includes('invalid dryRun'));
+		expect(invalidValue).toBeDefined();
+		expect(JSON.parse(invalidValue.body)).toMatchObject({
+			success: false,
+			details: { field: 'dryRun' },
+		});
+
+		const invalidRouting = queryItem.response.find((res) => res.code === 400 && res.name.includes('routing override'));
+		expect(invalidRouting).toBeDefined();
+		expect(JSON.parse(invalidRouting.body)).toMatchObject({
+			success: false,
+			details: { field: 'discordWebhookUrl' },
+		});
+	});
+
 	it('documents Request Timeout (408) response examples with required fields', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const endpointsWithTimeout = [

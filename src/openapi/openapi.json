@@ -577,6 +577,9 @@
         "operationId": "postMessage",
         "parameters": [
           {
+            "$ref": "#/components/parameters/MessageDryRun"
+          },
+          {
             "$ref": "#/components/parameters/IdempotencyKeyHeader"
           },
           {
@@ -4002,6 +4005,15 @@
           "default": false
         }
       },
+      "MessageDryRun": {
+        "name": "dryRun",
+        "in": "query",
+        "description": "When true (or with a boolean dryRun JSON body field), the request is validated and its resolved routing is returned as a preview: no notification is dispatched, no idempotency key is reserved or cached, and nothing is persisted. Channel and destination overrides are still validated, so a dry run can be used to verify routing. In both this query parameter and the JSON body field, a dryRun value that is not a boolean or the string \"true\"/\"false\" returns 400 INVALID_REQUEST (details.field: dryRun) rather than silently delivering; this includes case variants such as \"TRUE\" and a bare `?dryRun` with no value.",
+        "schema": {
+          "type": "boolean",
+          "default": false
+        }
+      },
       "UseTradingViewData": {
         "name": "useTradingViewData",
         "in": "query",
@@ -4601,6 +4613,17 @@
                 "value": {
                   "message": "Custom notification payload to estimate before dispatch",
                   "dryValidate": true
+                }
+              },
+              "dryRun": {
+                "value": {
+                  "message": "Deployment completed",
+                  "channels": [
+                    "telegram"
+                  ],
+                  "telegramChatId": "-1001234567890",
+                  "telegramThreadId": 101,
+                  "dryRun": true
                 }
               }
             },
@@ -5591,6 +5614,39 @@
                       "type": "boolean",
                       "description": "True when the request was executed in dry-run validation mode without sending notifications."
                     },
+                    "dryRun": {
+                      "type": "boolean",
+                      "description": "True when the request was executed as a routing preview: validated, but nothing was dispatched, reserved, or persisted."
+                    },
+                    "broadcast": {
+                      "type": "boolean",
+                      "description": "True only in a dry-run response when no channel subset was requested, so the message would fan out to every enabled channel. It disambiguates an empty requestedChannels list from a request that would deliver nothing."
+                    },
+                    "requestedChannels": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "telegram",
+                          "whatsapp",
+                          "discord"
+                        ]
+                      },
+                      "description": "Dry-run only. Channels that would receive the message. Resolved from the request's channel subset, or from the enabled channels when the request broadcasts."
+                    },
+                    "deliveredChannels": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Dry-run only. Always empty: a preview dispatches nothing."
+                    },
+                    "payload": {
+                      "$ref": "#/components/schemas/MessageDryRunPayload"
+                    },
+                    "routing": {
+                      "$ref": "#/components/schemas/MessageDryRunRouting"
+                    },
                     "delivered": {
                       "type": "array",
                       "items": {
@@ -5650,6 +5706,36 @@
                     "whatsapp": 3,
                     "discord": 25
                   }
+                }
+              },
+              "dryRun": {
+                "value": {
+                  "success": true,
+                  "dryRun": true,
+                  "estimatedChunks": {
+                    "telegram": 1,
+                    "whatsapp": 1,
+                    "discord": 1
+                  },
+                  "requestedChannels": [
+                    "telegram",
+                    "whatsapp"
+                  ],
+                  "deliveredChannels": [],
+                  "payload": {
+                    "text": "Deployment completed"
+                  },
+                  "routing": {
+                    "channels": [
+                      "telegram",
+                      "whatsapp"
+                    ],
+                    "telegramChatId": "-1001234567890",
+                    "telegramThreadId": 101,
+                    "whatsappChatId": "120363000000000000@g.us",
+                    "discordWebhookUrlProvided": true
+                  },
+                  "requestId": "msg-dry-run-001"
                 }
               },
               "chunked": {
@@ -10115,6 +10201,53 @@
           "dryValidate": {
             "type": "boolean",
             "description": "Optional validation mode; when true, validates the request and returns per-channel estimatedChunks without sending notifications."
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "Optional routing/audit preview; when true, validates the request and returns the resolved routing without sending notifications, reserving no idempotency key and persisting nothing. The narrower dryValidate response wins when both dryValidate and dryRun are provided. In both this body field and the dryRun query parameter, any value other than a boolean or the string \"true\"/\"false\" returns 400 INVALID_REQUEST (details.field: dryRun) instead of silently delivering."
+          }
+        }
+      },
+      "MessageDryRunPayload": {
+        "type": "object",
+        "description": "Dry-run preview of the exact text that would have been handed to the notification channels, after any inbound truncation.",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "MessageDryRunRouting": {
+        "type": "object",
+        "description": "Dry-run preview of the resolved per-channel destination overrides taken from the request. Every field is optional and absent when the request did not override that destination. The Discord webhook URL is itself the credential, so only its presence is reported.",
+        "properties": {
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            }
+          },
+          "telegramChatId": {
+            "type": "string"
+          },
+          "telegramThreadId": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "whatsappChatId": {
+            "type": "string"
+          },
+          "discordWebhookUrlProvided": {
+            "type": "boolean",
+            "description": "True when a discordWebhookUrl override was supplied. The URL itself is never echoed back."
           }
         }
       },

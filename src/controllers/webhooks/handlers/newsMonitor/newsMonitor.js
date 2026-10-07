@@ -23,12 +23,7 @@ const alertStorageService = require('../../../../services/storage/AlertStorageSe
 const newsAnalysisStorageService = require('../../../../services/storage/NewsAnalysisStorageService');
 const { isNewsMonitorPaused, getNewsMonitorPauseState } = require('./pauseState');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
-
-function resolveDryRun(req) {
-	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
-	const bodyFlag = req.body && typeof req.body === 'object' && (req.body.dryRun === true || req.body.dryRun === 'true');
-	return queryFlag || bodyFlag;
-}
+const { resolveDryRun } = require('../../../../lib/dryRunRequest');
 
 class NewsMonitorHandler {
 	constructor() {

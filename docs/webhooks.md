@@ -375,6 +375,7 @@ operator-authored automation output rather than a TradingView alert or scanner r
 - `telegramChatId` / `telegramThreadId` / `whatsappChatId` / `discordWebhookUrl`: Optional per-channel destination
   overrides. `telegramThreadId` targets a forum topic (`0` = General).
 - `dryValidate`: Optional boolean. Validates and returns chunk estimates without sending anything.
+- `dryRun`: Optional. See [Dry-run routing preview](#dry-run-routing-preview-issue-876) below.
 - Idempotency: send `idempotency-key` / `x-idempotency-key` (or `idempotencyKey` in the body or query) to replay a
   prior response instead of re-delivering. Reusing a key with a different payload returns `409`.
 
@@ -416,4 +417,54 @@ the `delivered` / `channelDetails` / `estimatedChunks` metadata.
 
 A `console.warn` line records the clip with numeric `originalLength`, `deliveredLength`, and `max` values only; message
 content is never logged. Delivery proceeds with the clipped text regardless — truncation never blocks a send.
+
+#### Dry-run routing preview (issue #876)
+
+`POST /api/webhook/message?dryRun=true`, or `{"message": "…", "dryRun": true}` in the body, validates the request and
+returns the routing it *would* have used. Nothing is sent, nothing is persisted, and no idempotency key is reserved or
+cached — so a dry run can be repeated freely and the same key is still free for the real request afterwards.
+
+**Response:**
+```json
+{
+  "success": true,
+  "dryRun": true,
+  "estimatedChunks": { "telegram": 1, "whatsapp": 1, "discord": 1 },
+  "requestedChannels": ["telegram", "whatsapp"],
+  "deliveredChannels": [],
+  "payload": { "text": "Deployment completed" },
+  "routing": {
+    "channels": ["telegram", "whatsapp"],
+    "telegramChatId": "-1001234567890",
+    "telegramThreadId": 101,
+    "whatsappChatId": "120363000000000000@g.us",
+    "discordWebhookUrlProvided": true
+  },
+  "requestId": "0d63f03b-d5a2-4a0b-928d-1959b8eb6a95"
+}
+```
+
+- `requestedChannels`: the channels that would receive the message — the request's `channels` subset, or every enabled
+  channel when the request broadcasts.
+- `broadcast: true`: added only when no `channels` subset was requested, so an empty `requestedChannels` list is not
+  mistaken for "nothing would be sent".
+- `deliveredChannels`: always `[]`. `results` is absent, because nothing was dispatched.
+- `payload.text`: the exact text that would have been handed to the channels, after any inbound truncation. The
+  `truncated` / `originalLength` / `deliveredLength` fields appear here under the same conditions as a live send.
+- `routing`: the resolved per-channel overrides from the request. Each key is absent when that destination was not
+  overridden. A Discord webhook URL is itself the credential, so only `discordWebhookUrlProvided` is echoed — the URL is
+  never returned (the same reason the persistence path does not store it).
+- Channel and destination overrides are **still validated**, so a dry run is a routing test: an unknown channel, a
+  malformed `discordWebhookUrl`, a negative `telegramThreadId`, or a requested channel that is disabled or
+  misconfigured returns the same `400` a live request would.
+- A `dryRun` value — in the **query string or the body** — that is neither a boolean nor the string `"true"` / `"false"`
+  returns `400 INVALID_REQUEST` (`code: "INVALID_REQUEST"`, `retryable: false`, `details.field: "dryRun"`). It is **not**
+  silently treated as a live request — a caller who intended a preview must never get a real delivery instead. This
+  applies equally to `?dryRun=yes`, `?dryRun=1`, `?dryRun=FALSE`, and a bare `?dryRun` with no value, so the flag always
+  has to carry an explicit value.
+- When both `dryValidate` and `dryRun` are supplied, the narrower `dryValidate` response is returned.
+- A dry run never initializes the notification channel services (that validates them against their providers), so
+  channel *availability* is only asserted when the channel registry already exists on the process.
+
+A dry run does not set the `Idempotency-Replay` header, because no reservation is taken.
 
