@@ -3739,6 +3739,209 @@
           ]
         },
         {
+          "name": "POST Send Message (dry-run, query flag)",
+          "request": {
+            "method": "POST",
+            "description": "Issue #876 adds dryRun to the generic-message webhook for parity with /api/webhook/alert. ?dryRun=true validates the request, resolves the intended routing, and returns it as a preview: no notification is dispatched, no idempotency key is reserved or cached, and nothing is persisted, so the same key stays usable for a later live request. Channel and destination overrides are still validated, so an invalid channel or destination returns the usual 400. The response reports requestedChannels (the channels that would receive the message), broadcast: true when no channel subset was requested, an empty deliveredChannels array, and a routing preview of the resolved overrides. A Discord webhook URL is a credential, so only discordWebhookUrlProvided is echoed. The discordWebhookUrl override in this request body is a placeholder, not a real credential.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "generic-message-dryrun-1",
+                "type": "text",
+                "description": "Ignored for a dry run: no reservation is taken, so this key is still free for a live request."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Deployment completed\",\n  \"channels\": [\n    \"telegram\",\n    \"whatsapp\"\n  ],\n  \"telegramChatId\": \"-1001234567890\",\n  \"telegramThreadId\": 101,\n  \"whatsappChatId\": \"120363000000000000@g.us\",\n  \"discordWebhookUrl\": \"https://discord.com/api/webhooks/123456789/abc-xyz-token\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/message?dryRun=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "message"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "true",
+                  "description": "Routing preview: validates and resolves routing without delivering, reserving an idempotency key, or persisting."
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('dry-run returns the resolved routing preview', function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(pm.response.code).to.eql(200);",
+                  "  pm.expect(body.success).to.eql(true);",
+                  "  pm.expect(body.dryRun).to.eql(true);",
+                  "});",
+                  "pm.test('a dry run reports no delivery and no results payload', function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.deliveredChannels).to.eql([]);",
+                  "  pm.expect(body.results).to.eql(undefined);",
+                  "});",
+                  "pm.test('a dry run reports the channels that would receive the message', function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.requestedChannels).to.be.an('array');",
+                  "  pm.expect(body.requestedChannels).to.include.members(['telegram', 'whatsapp']);",
+                  "  pm.expect(body.broadcast).to.eql(undefined);",
+                  "});",
+                  "pm.test('a dry run previews the payload and the resolved overrides', function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.payload.text).to.be.a('string');",
+                  "  pm.expect(body.estimatedChunks).to.be.an('object');",
+                  "  pm.expect(body.routing).to.be.an('object');",
+                  "  pm.expect(body.routing.telegramChatId).to.eql('-1001234567890');",
+                  "  pm.expect(body.routing.telegramThreadId).to.eql(101);",
+                  "  pm.expect(body.routing.whatsappChatId).to.eql('120363000000000000@g.us');",
+                  "  pm.expect(body.routing.discordWebhookUrlProvided).to.eql(true);",
+                  "});",
+                  "pm.test('a dry run never echoes the Discord webhook credential', function () {",
+                  "  pm.expect(pm.response.text).to.not.include('abc-xyz-token');",
+                  "});",
+                  "pm.test('a dry run reserves no idempotency key', function () {",
+                  "  pm.expect(pm.response.headers.has('Idempotency-Replay')).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Dry-run preview (200)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"estimatedChunks\": {\n    \"telegram\": 1,\n    \"whatsapp\": 1,\n    \"discord\": 1\n  },\n  \"requestedChannels\": [\n    \"telegram\",\n    \"whatsapp\"\n  ],\n  \"deliveredChannels\": [],\n  \"payload\": {\n    \"text\": \"Deployment completed\"\n  },\n  \"routing\": {\n    \"channels\": [\n      \"telegram\",\n      \"whatsapp\"\n    ],\n    \"telegramChatId\": \"-1001234567890\",\n    \"telegramThreadId\": 101,\n    \"whatsappChatId\": \"120363000000000000@g.us\",\n    \"discordWebhookUrlProvided\": true\n  },\n  \"requestId\": \"msg-dry-run-001\"\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ]
+            },
+            {
+              "name": "Error (400 invalid dryRun value)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryRun\\\" must be a boolean if provided\",\n  \"details\": {\n    \"field\": \"dryRun\"\n  },\n  \"requestId\": \"msg-dry-run-invalid\"\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ]
+            },
+            {
+              "name": "Error (400 invalid routing override during a dry run)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"discordWebhookUrl\\\" must be a valid HTTPS Discord webhook URL\",\n  \"details\": {\n    \"field\": \"discordWebhookUrl\"\n  },\n  \"requestId\": \"msg-dry-run-bad-url\"\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "POST Send Message (dry-run, body field)",
+          "request": {
+            "method": "POST",
+            "description": "The same preview via the JSON body field instead of the query flag. A body dryRun value that is neither a boolean nor the string \"true\"/\"false\" is rejected with 400 INVALID_REQUEST rather than silently treated as a live request, so a caller who intended a preview can never get a real delivery instead. When both dryValidate and dryRun are provided, the narrower dryValidate response is returned.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"Deployment completed\",\n  \"dryRun\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/message",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "message"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('body dryRun returns a preview that broadcasts to every enabled channel', function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(pm.response.code).to.eql(200);",
+                  "  pm.expect(body.success).to.eql(true);",
+                  "  pm.expect(body.dryRun).to.eql(true);",
+                  "  pm.expect(body.deliveredChannels).to.eql([]);",
+                  "});",
+                  "pm.test('an omitted channel subset is reported as a broadcast', function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.broadcast).to.eql(true);",
+                  "  pm.expect(body.requestedChannels).to.be.an('array');",
+                  "});",
+                  "pm.test('a body dry run never echoes routing credentials or delivery results', function () {",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.routing.discordWebhookUrl).to.eql(undefined);",
+                  "  pm.expect(body.results).to.eql(undefined);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Dry-run preview (200, broadcast)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"estimatedChunks\": {\n    \"telegram\": 1,\n    \"whatsapp\": 1,\n    \"discord\": 1\n  },\n  \"broadcast\": true,\n  \"requestedChannels\": [\n    \"telegram\",\n    \"whatsapp\",\n    \"discord\"\n  ],\n  \"deliveredChannels\": [],\n  \"payload\": {\n    \"text\": \"Deployment completed\"\n  },\n  \"routing\": {},\n  \"requestId\": \"msg-dry-run-002\"\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ]
+            }
+          ]
+        },
+        {
           "name": "POST Send Message (query idempotency key)",
           "request": {
             "method": "POST",

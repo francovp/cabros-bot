@@ -48,7 +48,7 @@ const {
 } = require('../controllers/trading/binanceOrders');
 const { postTestAlert } = require('../controllers/admin/testAlert');
 const { handleSseStream } = require('../controllers/admin/sseEvents');
-const { idempotencyMiddleware } = require('../lib/idempotency');
+const { idempotencyMiddleware, skipForDryRun } = require('../lib/idempotency');
 const {
 	ADMIN_OPERATOR,
 	ADMIN_VIEWER,
@@ -68,7 +68,7 @@ function getRoutes(botOrGetter) {
 	const binanceOrderRead = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_VIEWER)];
 	const binanceOrderWrite = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
 	router.post('/webhook/alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postAlert(botOrGetter));
-	router.post('/webhook/message', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postMessage(botOrGetter));
+	router.post('/webhook/message', validateApiKey, maintenanceModeMiddleware, skipForDryRun(idempotencyMiddleware), postMessage(botOrGetter));
 	router.post('/webhook/expanded-analysis-alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
 	router.post('/webhook/market-scanner-alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
 	// Rate limited by the app-wide src/lib/rateLimiter (app.use). These two webhook

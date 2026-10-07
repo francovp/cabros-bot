@@ -2364,6 +2364,49 @@ No environment variable, Remote Config key, endpoint, OpenAPI, or Postman contra
 - `tests/unit/message-helper.test.js` and `tests/integration/generic-message-webhook.test.js` cover chunk estimation, dry validation, invalid input, and additive response metadata.
 - `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` document `dryValidate` request/response schemas and examples.
 
+## Generic Message Dry-Run Routing Preview (Issue #876)
+
+`POST /api/webhook/message` accepts `dryRun` via query (`?dryRun=true`) or JSON body (`"dryRun": true`), closing the
+last gap in dry-run coverage across the alert-producing surfaces and matching the `/api/webhook/alert` contract. It
+returns `{ success: true, dryRun: true, estimatedChunks, requestedChannels, deliveredChannels: [], payload: { text },
+routing, requestId }` plus `broadcast: true` when no `channels` subset was requested, and the existing truncation
+metadata when the message was clipped.
+
+Five invariants must survive future edits:
+
+- **A dry run mutates nothing.** No notification is dispatched, nothing is persisted to Firestore, and **no idempotency
+  key is reserved or cached**. The route wires `skipForDryRun(idempotencyMiddleware)` from `src/lib/idempotency.js`
+  rather than teaching the shared middleware about probes, because caching a probe's body would let a later *live*
+  request reusing the same key receive the preview instead of delivering. Keep the key usable: that is what proves the
+  bypass works (`tests/integration/generic-message-webhook.test.js` sends a dry run and then a live request with the same
+  key and asserts the live one actually delivered).
+- **The bypass and the handler must agree on what a probe is.** Both read `resolveDryRun()` from the single shared
+  `src/lib/dryRunRequest.js`. Two independent parsers are how a request ends up treated as a probe by the route (no
+  reservation) and as a live request by the handler (a real delivery), or the reverse. `alert.js` and
+  `newsMonitor.js` import the shared helper rather than keeping their own copies — do not reintroduce a local one.
+- **An unrecognised `dryRun` body value is a `400`, not a silent live send.** Only booleans and the strings
+  `"true"`/`"false"` are accepted (`details.field: "dryRun"`). This is a deliberate divergence from
+  `/api/webhook/alert`, whose lenient parse would silently downgrade `dryRun: "yes"` to a real delivery — the exact
+  "no silent fallback" failure the repository keeps fixing. A caller who asked for a preview must never get a send.
+- **Validation still runs, so a dry run is a routing test.** Unknown channels, malformed `discordWebhookUrl`, negative
+  `telegramThreadId`, and requested-but-disabled channels all return the same `400` a live request would. The disabled
+  channel check (`assertChannelsAvailable`) only runs when the channel registry already exists, because a dry run must
+  not initialize the notification services (`initializeNotificationServices` validates every channel against its
+  provider). Do not add an eager init to make the check unconditional — that turns a preview into provider traffic.
+- **The Discord webhook URL is a credential and is never echoed.** The preview reports
+  `discordWebhookUrlProvided: true` instead, matching the existing decision not to persist the raw URL in the same
+  handler. `tests/unit/postman-collection.test.js` and `tests/unit/openapi-contract.test.js` assert the saved examples
+  never contain it.
+
+When both `dryValidate` and `dryRun` are supplied the narrower `dryValidate` response wins, so chunk estimation stays
+testable without routing metadata. No new environment variable, Remote Config key, or response status code was added;
+the change is additive to the existing `MessageDeliveryResult` body.
+
+**Coverage**: `tests/integration/generic-message-webhook.test.js` (`dry-run mode` — query and body flags, the string
+form, explicit `false`, invalid value, routing validation, destination overrides without credential leakage,
+idempotency non-mutation, truncation metadata, `dryValidate` precedence),
+`tests/unit/openapi-contract.test.js` and `tests/unit/postman-collection.test.js` (published contract).
+
 ## Generic Message Truncation Metadata (GH-602)
 
 `POST /api/webhook/message` reports inbound truncation so callers can detect silent content loss:

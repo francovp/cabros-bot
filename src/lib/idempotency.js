@@ -2,6 +2,7 @@
 
 const { idempotencyService } = require('../services/storage/IdempotencyService');
 const requestDeadline = require('./requestDeadline');
+const { resolveDryRun } = require('./dryRunRequest');
 
 function getRequestPath(req) {
 	if (typeof req.path === 'string' && req.path.length > 0) {
@@ -315,7 +316,28 @@ function idempotencyMiddleware(req, res, next) {
 	}
 }
 
+/**
+ * Wrap a middleware so dry-run requests pass straight through it.
+ *
+ * Caching a dry run's response would let a later live request reusing the same
+ * key receive the probe's body instead of delivering. The flag comes from the
+ * helper the handlers use, so the bypass and the handler cannot disagree about
+ * which request is a probe.
+ *
+ * @param {Function} middleware - Middleware to skip for dry-run requests.
+ * @returns {Function} Wrapped middleware.
+ */
+function skipForDryRun(middleware) {
+	return function dryRunAwareMiddleware(req, res, next) {
+		if (resolveDryRun(req)) {
+			return next();
+		}
+		return middleware(req, res, next);
+	};
+}
+
 module.exports = {
 	getIdempotencyKey,
 	idempotencyMiddleware,
+	skipForDryRun,
 };

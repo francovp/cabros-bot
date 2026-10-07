@@ -274,6 +274,44 @@ describe('OpenAPI contract', () => {
 		});
 	});
 
+	it('documents the generic-message dry-run preview contract (issue #876)', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const operation = contract.paths['/api/webhook/message'].post;
+
+		expect(operation.parameters).toEqual(expect.arrayContaining([
+			{ $ref: '#/components/parameters/MessageDryRun' },
+		]));
+		expect(contract.components.parameters.MessageDryRun.name).toBe('dryRun');
+		expect(contract.components.parameters.MessageDryRun.in).toBe('query');
+		expect(contract.components.parameters.MessageDryRun.schema.type).toBe('boolean');
+		expect(contract.components.parameters.MessageDryRun.description).toContain('no idempotency key is reserved');
+
+		expect(contract.components.schemas.MessageRequest.properties.dryRun.type).toBe('boolean');
+		expect(contract.components.schemas.MessageRequest.properties.dryRun.description).toContain('400 INVALID_REQUEST');
+
+		// A dry run must never advertise the Discord webhook credential, so the
+		// preview schema documents a presence flag rather than the URL.
+		const routingProperties = contract.components.schemas.MessageDryRunRouting.properties;
+		expect(routingProperties.discordWebhookUrlProvided.type).toBe('boolean');
+		expect(routingProperties.discordWebhookUrl).toBeUndefined();
+		expect(contract.components.schemas.MessageDryRunPayload.required).toEqual(['text']);
+
+		const responseProperties = contract.components.responses.MessageDeliveryResult
+			.content['application/json'].schema.allOf[1].properties;
+		for (const field of ['dryRun', 'broadcast', 'requestedChannels', 'deliveredChannels', 'payload', 'routing']) {
+			expect(responseProperties[field]).toBeDefined();
+		}
+
+		const dryRunExample = contract.components.responses.MessageDeliveryResult
+			.content['application/json'].examples.dryRun.value;
+		expect(dryRunExample).toMatchObject({ success: true, dryRun: true, deliveredChannels: [] });
+		expect(dryRunExample.requestId).toEqual(expect.any(String));
+		expect(dryRunExample.payload.text).toEqual(expect.any(String));
+		expect(dryRunExample.routing.discordWebhookUrlProvided).toBe(true);
+		expect(Object.keys(dryRunExample.routing)).not.toContain('discordWebhookUrl');
+	});
+
 	it('aligns symbol analysis schema with runtime normalization', () => {
 		if (!fs.existsSync(contractPath)) return;
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));

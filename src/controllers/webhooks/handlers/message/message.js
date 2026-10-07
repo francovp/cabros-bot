@@ -11,8 +11,11 @@ const {
 	parseNotificationRouting,
 	sendWithNotificationRouting,
 	getDeliveredChannels,
+	getRequestedChannels,
+	assertChannelsAvailable,
 } = require('../../../../services/notification/requestRouting');
 const { estimateMessageChunks } = require('../../../../lib/messageHelper');
+const { isDryRunValue, resolveDryRun } = require('../../../../lib/dryRunRequest');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
 const MAX_MESSAGE_LENGTH = 4000;
 
@@ -21,7 +24,7 @@ function validateMessageRequest(body) {
 		throw new NotificationRoutingValidationError('Request body must be a JSON object');
 	}
 
-	const { message, dryValidate } = body;
+	const { message, dryValidate, dryRun } = body;
 
 	if (!message || typeof message !== 'string') {
 		throw new NotificationRoutingValidationError('"message" is required and must be a non-empty string', {
@@ -32,6 +35,14 @@ function validateMessageRequest(body) {
 	if (dryValidate !== undefined && typeof dryValidate !== 'boolean') {
 		throw new NotificationRoutingValidationError('"dryValidate" must be a boolean if provided', {
 			field: 'dryValidate',
+		});
+	}
+
+	// An unrecognised dryRun value must fail loudly: silently treating it as a
+	// live request would deliver the message a caller intended as a probe.
+	if (dryRun !== undefined && !isDryRunValue(dryRun) && dryRun !== false && dryRun !== 'false') {
+		throw new NotificationRoutingValidationError('"dryRun" must be a boolean if provided', {
+			field: 'dryRun',
 		});
 	}
 
@@ -61,6 +72,45 @@ function validateMessageRequest(body) {
 	};
 }
 
+function buildDryRunRoutingPreview(routing) {
+	return {
+		...(routing.channels ? { channels: routing.channels } : {}),
+		...(routing.telegramChatId !== undefined ? { telegramChatId: routing.telegramChatId } : {}),
+		...(routing.telegramThreadId !== undefined ? { telegramThreadId: routing.telegramThreadId } : {}),
+		...(routing.whatsappChatId !== undefined ? { whatsappChatId: routing.whatsappChatId } : {}),
+		// The Discord webhook URL is itself the credential, so the preview reports
+		// only that one was supplied. Same reasoning as the persistence path below.
+		...(routing.discordWebhookUrl !== undefined ? { discordWebhookUrlProvided: true } : {}),
+	};
+}
+
+function buildDryRunResponse(routing, notificationManager, requestId) {
+	const responseBody = {
+		success: true,
+		dryRun: true,
+		estimatedChunks: estimateMessageChunks(routing.originalMessage),
+		requestedChannels: getRequestedChannels(notificationManager, routing, routing.text),
+		deliveredChannels: [],
+		payload: { text: routing.text },
+		routing: buildDryRunRoutingPreview(routing),
+		requestId,
+	};
+
+	// Without a channel subset the request fans out to every enabled channel, so
+	// an empty requestedChannels list must not read as "nothing would be sent".
+	if (!routing.channels) {
+		responseBody.broadcast = true;
+	}
+
+	if (routing.truncated) {
+		responseBody.truncated = true;
+		responseBody.originalLength = routing.originalLength;
+		responseBody.deliveredLength = routing.deliveredLength;
+	}
+
+	return responseBody;
+}
+
 function postMessage(botOrGetter) {
 	return async (req, res) => {
 		const requestId = resolveRequestId(req);
@@ -75,6 +125,18 @@ function postMessage(botOrGetter) {
 					dryValidate: true,
 					estimatedChunks,
 				});
+			}
+
+			if (resolveDryRun(req)) {
+				console.debug('[MessageWebhook] Dry-run mode: skipping delivery, idempotency and Firestore persistence');
+				// A preview must not initialize the channel services (that validates
+				// them against their providers), so availability is only asserted when
+				// the channel registry already exists on this process.
+				const notificationManager = getNotificationManager();
+				if (notificationManager) {
+					assertChannelsAvailable(notificationManager, routing);
+				}
+				return res.json(buildDryRunResponse(routing, notificationManager, requestId));
 			}
 
 			const alert = {
