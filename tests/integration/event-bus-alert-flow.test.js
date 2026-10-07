@@ -154,8 +154,24 @@ describe('event bus alert flow', () => {
 		});
 
 		it('a slow async subscriber does not delay the HTTP response', async () => {
+			// The invariant is an ordering fact, not a duration: `emit()` is
+			// synchronous, so the response must be written while the
+			// subscriber's async tail is still pending. Asserting that the
+			// subscriber had not settled pins the behaviour without depending on
+			// machine speed.
+			//
+			// A tight wall-clock bound cannot express the same thing and is
+			// flaky: the happy path takes ~2ms, but a loaded runner stalled this
+			// request to 360ms on #1380 with the subscriber still correctly
+			// non-blocking. Any bound tight enough to catch a genuinely blocking
+			// emit (~250ms, the subscriber's sleep) is indistinguishable from
+			// that stall, so the ceiling below is a loose sanity check and the
+			// ordering assertion is the real guard.
+			const SLOW_SUBSCRIBER_MS = 250;
+			let subscriberSettled = false;
 			const slow = jest.fn(async () => {
-				await new Promise((resolve) => setTimeout(resolve, 250));
+				await new Promise((resolve) => setTimeout(resolve, SLOW_SUBSCRIBER_MS));
+				subscriberSettled = true;
 			});
 			eventBus.on(EVENT_NAMES.ALERT_DELIVERED, slow);
 
@@ -168,9 +184,13 @@ describe('event bus alert flow', () => {
 			const elapsed = Date.now() - start;
 
 			expect(response.body.success).toBe(true);
-			// Synchronous emit path — even if the subscriber schedules an
-			// async tail, the response is sent before it resolves.
-			expect(elapsed).toBeLessThan(200);
+			// Prove the subscriber ran, so the next assertion cannot pass merely
+			// because nothing was subscribed.
+			expect(slow).toHaveBeenCalledTimes(1);
+			// An `await`ed emit (`emitAsync`, or a synchronous handler) would
+			// have resolved the subscriber before writing the response.
+			expect(subscriberSettled).toBe(false);
+			expect(elapsed).toBeLessThan(SLOW_SUBSCRIBER_MS * 8);
 		});
 	});
 });
