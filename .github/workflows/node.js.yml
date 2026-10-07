@@ -44,7 +44,9 @@ jobs:
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: ~/.cache/firebase/emulators
-        key: firebase-tools-15.25.1-${{ runner.os }}
+        # Keyed on the pinned firebase-tools version: the emulator binary is that
+        # version's, so bumping the dep must miss the cache (#872 bumped to 15.32.1).
+        key: firebase-tools-15.32.1-${{ runner.os }}
     # ESLint gate. Currently the tree has ~800 pre-existing findings from the
     # deferred-cleanup convention, so the step is non-blocking with a fast-follow
     # plan to flip `continue-on-error` once the codebase is lint-clean (#565).

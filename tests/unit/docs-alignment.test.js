@@ -255,6 +255,13 @@ describe('Node.js runtime contract', () => {
     expect(devcontainer).toContain(`FROM node:${nodeVersion}`);
   });
 
+  test('the CI emulator cache key tracks the pinned firebase-tools version', () => {
+    const workflow = fs.readFileSync(path.join(repoRoot, '.github/workflows/node.js.yml'), 'utf8');
+    const packageJson = require(path.join(repoRoot, 'package.json'));
+
+    expect(workflow).toContain(`key: firebase-tools-${packageJson.devDependencies['firebase-tools']}-`);
+  });
+
   test('maintained documentation does not advertise Node.js 20', () => {
     const maintainedFiles = [
       path.join(repoRoot, 'README.md'),
