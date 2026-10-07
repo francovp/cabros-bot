@@ -1531,6 +1531,105 @@ describe('TradingViewMcpService', () => {
 				expect(confluence.failedCount).toBe(2);
 				expect(confluence.appliedCount + confluence.failedCount).toBeLessThanOrEqual(confluence.attemptedCount);
 			});
+
+			it('gives the multi-timeframe call its own deadline and AbortSignal derived from remaining budget (#1337)', async () => {
+				const service = buildMtfService({ enrichmentBudgetMs: 12000 });
+				let combinedSignal = null;
+				let mtfSignal = null;
+
+				service.callCombinedAnalysis = jest.fn().mockImplementation(({ signal }) => {
+					combinedSignal = signal;
+					return Promise.resolve({
+						confluence: { recommendation: 'BUY', confidence: 77, signals_agree: true },
+					});
+				});
+
+				service.callMultiTimeframeAnalysis = jest.fn().mockImplementation(({ signal }) => {
+					mtfSignal = signal;
+					return Promise.resolve(mtfData);
+				});
+
+				const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+				expect(combinedSignal).toBeDefined();
+				expect(mtfSignal).toBeDefined();
+				expect(mtfSignal).not.toBe(combinedSignal);
+				expect(combinedSignal.aborted).toBe(false);
+				expect(mtfSignal.aborted).toBe(false);
+				expect(result.tradingViewEnrichmentStatus).toBe('full');
+				expect(result.confluenceData).toBeDefined();
+				expect(result.multiTimeframeData).toEqual(mtfData);
+				expect(readConfluence(service)).toMatchObject({
+					attemptedCount: 2,
+					appliedCount: 2,
+					failedCount: 0,
+					budgetExhaustedCount: 0,
+				});
+			});
+
+			it('does not allow combined_analysis timeout to abort multi_timeframe_analysis after combined finishes (#1337)', async () => {
+				const service = buildMtfService({ enrichmentBudgetMs: 12000 });
+
+				service.callCombinedAnalysis = jest.fn().mockImplementation(() => {
+					return new Promise(resolve => {
+						setTimeout(() => resolve({
+							confluence: { recommendation: 'BUY', confidence: 77, signals_agree: true },
+						}), 30);
+					});
+				});
+
+				service.callMultiTimeframeAnalysis = jest.fn().mockImplementation(({ signal }) => {
+					return new Promise((resolve, reject) => {
+						const timer = setTimeout(() => resolve(mtfData), 60);
+						if (signal) {
+							signal.addEventListener('abort', () => {
+								clearTimeout(timer);
+								reject(signal.reason || new Error('aborted'));
+							});
+						}
+					});
+				});
+
+				const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+				expect(result.tradingViewEnrichmentStatus).toBe('full');
+				expect(result.multiTimeframeData).toEqual(mtfData);
+				expect(readConfluence(service)).toMatchObject({
+					attemptedCount: 2,
+					appliedCount: 2,
+					failedCount: 0,
+					budgetExhaustedCount: 0,
+				});
+			});
+
+			it('aborts multi_timeframe_analysis when the total enrichment budget is exceeded during its execution (#1337)', async () => {
+				const service = buildMtfService({ enrichmentBudgetMs: 120 });
+
+				service.callCombinedAnalysis = jest.fn().mockResolvedValue({
+					confluence: { recommendation: 'BUY', confidence: 77, signals_agree: true },
+				});
+
+				service.callMultiTimeframeAnalysis = jest.fn().mockImplementation(({ signal }) => {
+					return new Promise((resolve, reject) => {
+						const timer = setTimeout(() => resolve(mtfData), 350);
+						if (signal) {
+							signal.addEventListener('abort', () => {
+								clearTimeout(timer);
+								reject(signal.reason || new Error('aborted'));
+							});
+						}
+					});
+				});
+
+				const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+				expect(result.tradingViewEnrichmentStatus).toBe('partial');
+				expect(result.confluenceData).not.toBeNull();
+				expect(result.multiTimeframeData).toBeNull();
+				const confluence = readConfluence(service);
+				expect(confluence.attemptedCount).toBe(2);
+				expect(confluence.appliedCount).toBe(1);
+				expect(confluence.failedCount).toBe(1);
+				expect(confluence.lastFailureCategory).toBe('timeout');
+			});
 		});
 	});
 
