@@ -68,9 +68,7 @@ function getRoutes(botOrGetter) {
 	const binanceOrderRead = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_VIEWER)];
 	const binanceOrderWrite = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
 	router.post('/webhook/alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postAlert(botOrGetter));
-	// Same app-level + WEBHOOK_INGEST_PATHS rate limiting as the routes below.
-	/* codeql[js/missing-rate-limiting] */
-	router.post('/webhook/message', validateApiKey, maintenanceModeMiddleware, skipForDryRun(idempotencyMiddleware), postMessage(botOrGetter));
+	router.post('/webhook/message', validateApiKey, maintenanceModeMiddleware, skipForDryRun(idempotencyMiddleware), postMessage(botOrGetter)); // codeql[js/missing-rate-limiting] app.use(rateLimiter) + WEBHOOK_INGEST_PATHS bucket
 	router.post('/webhook/expanded-analysis-alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
 	router.post('/webhook/market-scanner-alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
 	// Rate limited by the app-wide src/lib/rateLimiter (app.use). These two webhook
