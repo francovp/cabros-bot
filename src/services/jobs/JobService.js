@@ -488,6 +488,10 @@ class JobService {
 
 		if (job.type === 'expanded-analysis') {
 			formatted.results = this._compactResults(job.fullResults);
+			// requestMetadata already holds the deduplicated symbol list, so re-parsing
+			// it in queue/poller modes reports zero. The count captured at creation is
+			// the authoritative record of what the caller's list collapsed to.
+			formatted.duplicatesRemoved = job.requestMetadata?.duplicatesRemoved ?? 0;
 		} else if (job.type === 'market-scanner') {
 			formatted.scanResults = this._compactScanResults(
 				job.fullScanResults,
@@ -727,6 +731,7 @@ class JobService {
 				timeframe: parsed.timeframe,
 				includeMultiTimeframe: parsed.includeMultiTimeframe,
 				analysisMode: parsed.analysisMode,
+				duplicatesRemoved: parsed.duplicatesRemoved,
 			} : {
 				exchange: parsed.exchange,
 				timeframe: parsed.timeframe,

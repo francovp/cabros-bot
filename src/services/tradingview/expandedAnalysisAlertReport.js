@@ -1,5 +1,6 @@
 const {
 	normalizeTradingViewTimeframe,
+	resolveMcpExchange,
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('./parseTradingViewSignal');
 
@@ -35,24 +36,70 @@ class ExpandedAnalysisAlertRequestError extends Error {
 function parseExpandedAnalysisAlertRequest(req = {}) {
 	const body = getRequestBody(req);
 	const rawSymbols = getRequestSymbols(body);
-	const symbols = rawSymbols.map(parseSymbolIdentifier);
+	const parsedSymbols = rawSymbols.map(parseSymbolIdentifier);
 	validateTimeframeType(body);
 	const timeframe = parseTimeframe(body.timeframe);
 	const includeMultiTimeframe = parseIncludeMultiTimeframe(body);
 	const analysisMode = parseAnalysisMode(body);
 
-	if (symbols.length === 0) {
+	if (parsedSymbols.length === 0) {
 		throw new ExpandedAnalysisAlertRequestError(
 			'No expanded analysis symbols provided. Pass body.symbols or set EXPANDED_ANALYSIS_ALERT_SYMBOLS.',
 			'NO_SYMBOLS',
 		);
 	}
 
+	// Deduplicate BEFORE the cap: the budget is shared serially across symbols, so
+	// N copies of one symbol are one unit of work, not N. Capping the raw list would
+	// reject a request that only names a handful of distinct markets.
+	const { symbols, duplicatesRemoved } = dedupeSymbolIdentifiers(parsedSymbols);
+
 	if (symbols.length > MAX_SYMBOLS) {
 		throw new ExpandedAnalysisAlertRequestError(`Too many symbols requested (max: ${MAX_SYMBOLS})`);
 	}
 
-	return { symbols, timeframe, includeMultiTimeframe, analysisMode };
+	return { symbols, timeframe, includeMultiTimeframe, analysisMode, duplicatesRemoved };
+}
+
+/**
+ * Two identifiers that produce the same outbound MCP call are the same unit of work,
+ * so the later occurrence is collapsed instead of re-spending an MCP budget slot and
+ * shrinking the shared deadline left for the symbols that are not duplicates.
+ *
+ * The comparison key is the venue the MCP server would actually be asked for, so the
+ * probe-verified aliases in `MCP_EXCHANGE_ALIASES` (BATS/NASDAQ_DLY -> NASDAQ) collapse
+ * too. Only that closed table is consulted — never suffix-shape or fuzzy inference,
+ * which would merge venues the server keeps distinct (issue #591).
+ *
+ * The retained entry keeps the caller's own exchange: alias resolution stays
+ * outbound-only and never rewrites the symbol reported or stored. First occurrence
+ * wins, so report ordering is the request's first-occurrence order.
+ *
+ * @param {Array<{raw: string, exchange: string, symbol: string}>} parsedSymbols
+ * @returns {{symbols: Array<object>, duplicatesRemoved: number}}
+ */
+function dedupeSymbolIdentifiers(parsedSymbols = []) {
+	const seenKeys = new Set();
+	const symbols = [];
+	let duplicatesRemoved = 0;
+
+	for (const parsedSymbol of parsedSymbols) {
+		const key = buildSymbolDedupeKey(parsedSymbol);
+		if (seenKeys.has(key)) {
+			duplicatesRemoved += 1;
+			continue;
+		}
+
+		seenKeys.add(key);
+		symbols.push(parsedSymbol);
+	}
+
+	return { symbols, duplicatesRemoved };
+}
+
+function buildSymbolDedupeKey({ exchange, symbol } = {}) {
+	const { mappedExchange } = resolveMcpExchange(exchange);
+	return `${mappedExchange || exchange}:${symbol}`;
 }
 
 function parseIncludeMultiTimeframe(body = {}) {

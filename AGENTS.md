@@ -640,6 +640,17 @@ The system provides a `POST /api/webhook/expanded-analysis-alert` endpoint that 
 - If body symbols are missing or empty, the handler falls back to `EXPANDED_ANALYSIS_ALERT_SYMBOLS` (comma-separated). If neither exists, it returns `400 NO_SYMBOLS`.
 - Analysis has an endpoint-level deadline via `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` (default 60s, capped at 120s) and bounded concurrency via `EXPANDED_ANALYSIS_ALERT_CONCURRENCY` (default 3, range 1-10). Completed symbols retain their results while unfinished symbols are marked `timeout` when the shared deadline aborts.
 
+**Symbol deduplication (issue #874).** `dedupeSymbolIdentifiers()` in `src/services/tradingview/expandedAnalysisAlertReport.js` collapses duplicate `symbols` entries before any MCP call, and every consumer of the shared parser inherits it. This is not only wasted MCP spend: the per-symbol budget is shared, so a duplicate consumed a slot and shrank the deadline left for the symbols that were *not* duplicates — genuine symbols could be marked `timeout` while copies of another symbol had already spent their share. Four invariants must survive future edits:
+
+- **Deduplication runs BEFORE the `MAX_SYMBOLS` check.** Capping the raw list would reject a request that names a handful of distinct markets just because one of them was repeated. This ordering is the acceptance criterion, not a stylistic choice.
+- **The comparison key is the resolved MCP venue, from the closed `MCP_EXCHANGE_ALIASES` table only** — `BATS`/`NASDAQ_DLY` fold into `NASDAQ`. Do not widen it to suffix-shape or fuzzy inference, which would merge venues the server keeps distinct (the #591 rule). `FX_IDC`, `SPCFD` and any unlisted venue stay distinct, because aliasing them would fabricate a market.
+- **The retained entry keeps the caller's own exchange.** Alias resolution is outbound-only: a collapsed `BATS:AAPL` is still reported, stored and returned as `BATS:AAPL`. First occurrence wins, so report ordering is the request's first-occurrence order.
+- **`duplicatesRemoved` is reported, not silent.** Collapsing work is invisible in the report, so a request that analysed 2 of the 3 symbols it sent would otherwise look healthy. The counter is on the sync response and on `GET /api/jobs/{jobId}` for `expanded-analysis`. On the async path the authoritative value is the one captured into `requestMetadata` at creation, **not** a re-parse: `requestMetadata.symbols` is already the deduplicated list, so re-parsing it in queue/poller modes reports `0`.
+
+Coverage: `tests/unit/expanded-analysis-alert-report.test.js`, `tests/integration/expanded-analysis-alert-endpoint.test.js` (exact MCP call count and report-section count), `tests/integration/jobs-endpoint.test.js`, and `tests/unit/postman-collection.test.js`.
+
+No environment variable, Remote Config key, endpoint, or feature gate was added; `MAX_SYMBOLS` stays 50 and is still environment-independent.
+
 **Core Components**:
 - `src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert.js` — request handler, per-symbol MCP orchestration, notification dispatch, and response assembly.
 - `src/services/tradingview/TradingViewMcpService.js` — MCP JSON-RPC/Streamable HTTP client and `coin_analysis` wrapper.

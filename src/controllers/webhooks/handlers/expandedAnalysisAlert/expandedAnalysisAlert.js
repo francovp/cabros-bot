@@ -59,6 +59,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 			const requestSpan = sentryService.getActiveSpan();
 			const routing = parseNotificationRouting(req.body);
 			const parsed = parseExpandedAnalysisAlertRequest(req);
+			const duplicatesRemoved = parsed.duplicatesRemoved;
 			const timeoutMs = getAlertTimeoutMs();
 			const deadline = createAlertDeadline(timeoutMs, req.requestDeadlineSignal);
 			let results;
@@ -89,6 +90,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 						: 'TradingView MCP failed for all requested symbols.',
 					results: compactResults(results),
 					summary: buildSummary(results, []),
+					duplicatesRemoved,
 					timedOut,
 					timeoutMs,
 					requestId,
@@ -106,6 +108,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					payload: { alertText },
 					results: compactResults(results),
 					summary: buildSummary(results, []),
+					duplicatesRemoved,
 					timedOut,
 					timeoutMs,
 					requestId,
@@ -203,6 +206,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 				requestedChannels,
 				deliveredChannels,
 				summary,
+				duplicatesRemoved,
 				timedOut,
 				timeoutMs,
 				requestId,

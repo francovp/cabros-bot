@@ -147,6 +147,37 @@ describe('Postman collection contract', () => {
 
 	});
 
+	it('documents expanded-analysis symbol deduplication as an internally consistent variant (#874)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const variant = findItem(collection.item, 'POST Expanded Analysis Alert (duplicate symbols)');
+
+		expect(variant).toBeDefined();
+
+		const requested = JSON.parse(variant.request.body.raw).symbols;
+		expect(requested.length).toBeGreaterThan(2);
+
+		const [ok, tooMany] = variant.response;
+		expect(ok.code).toBe(200);
+		expect(tooMany.code).toBe(400);
+
+		const okBody = JSON.parse(ok.body);
+		expect(okBody.success).toBe(true);
+		expect(okBody.results.map((result) => result.symbol)).toEqual([
+			'BINANCE:BTCUSDT',
+			'BATS:AAPL',
+			'NASDAQ:NVDA',
+		]);
+		expect(okBody.results).toHaveLength(3);
+		expect(okBody.summary.total).toBe(okBody.results.length);
+
+		// The documented count must equal submitted minus analysed, so the example
+		// cannot drift away from the body it documents.
+		expect(okBody.duplicatesRemoved).toBe(requested.length - okBody.results.length);
+		expect(okBody.duplicatesRemoved).toBeGreaterThan(0);
+
+		expect(JSON.parse(tooMany.body).error).toContain('Too many symbols requested');
+	});
+
 	it('uses distinct demo keys for middleware-backed scanner requests', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const expandedAnalysis = findItem(collection.item, 'POST Expanded Analysis Alert');
