@@ -210,17 +210,23 @@ class NewsMonitorHandler {
 					const persistSymbol = result.alert.symbol || result.symbol;
 					const persistCategory = result.alert.eventCategory;
 					if (!isCachedRedelivery) {
-						// 'pending' closes the double-count window while the write is in
-						// flight; a failed outcome ('none') lets the next redelivery own it.
-						this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'pending')
-							.catch(err => console.warn('[NewsMonitor] Failed to record pending storage state:', err.message));
+					// 'pending' closes the double-count window while the write is in flight;
+					// a failed outcome ('none') lets the next redelivery own it. Awaited so
+					// the durable terminal state can never be buried by this write landing
+					// late, and guarded so it cannot overwrite a terminal state another
+					// replica already committed.
+						await this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'pending', {
+							allowedCurrentStates: ['none', 'pending'],
+						}).catch(err => console.warn('[NewsMonitor] Failed to record pending storage state:', err.message));
 					}
 					// Fallback redeliveries embed usage only when they win the ownership
 					// claim (process-local and cross-replica atomic), so concurrent
 					// channel expansions cannot duplicate it.
-					const usageClaimed = !isCachedRedelivery
-						|| await this.cache.claimUsageOwnership(persistSymbol, persistCategory);
-					const includeUsage = !isCachedRedelivery || usageClaimed;
+					const usageClaimToken = isCachedRedelivery
+						? await this.cache.claimUsageOwnership(persistSymbol, persistCategory)
+						: null;
+					const usageClaimed = !isCachedRedelivery || usageClaimToken !== null;
+					const includeUsage = usageClaimed;
 					alertStorageService.saveAlert({
 						text: result.alert.text || '',
 						symbol: result.alert.symbol || result.symbol,
@@ -246,25 +252,34 @@ class NewsMonitorHandler {
 						discordWebhookUrl: routing.discordWebhookUrl,
 						processingTimeMs: result.totalDurationMs,
 					}).then((savedId) => {
+						const terminalState = savedId ? 'owned' : 'none';
 						if (isCachedRedelivery) {
-							if (usageClaimed) {
-								return this.cache.markOriginalPersistState(
-									persistSymbol,
-									persistCategory,
-									savedId ? 'owned' : 'none',
-								);
+							if (!usageClaimed) {
+								return undefined;
 							}
-							return undefined;
+							return this.cache.markOriginalPersistState(
+								persistSymbol,
+								persistCategory,
+								terminalState,
+								{ allowedCurrentStates: ['claimed'], claimToken: usageClaimToken },
+							);
 						}
-						return this.cache.markOriginalPersistState(persistSymbol, persistCategory, savedId ? 'owned' : 'none');
+						return this.cache.markOriginalPersistState(
+							persistSymbol,
+							persistCategory,
+							terminalState,
+							{ allowedCurrentStates: ['pending', 'none'] },
+						);
 					}).catch((err) => {
 						if (isCachedRedelivery) {
 							if (usageClaimed) {
-								this.cache.releaseUsageOwnershipClaim(persistSymbol, persistCategory)
+								this.cache.releaseUsageOwnershipClaim(persistSymbol, persistCategory, usageClaimToken)
 									.catch(markErr => console.warn('[NewsMonitor] Failed to release usage claim:', markErr.message));
 							}
 						} else {
-							this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'none')
+							this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'none', {
+								allowedCurrentStates: ['pending', 'none'],
+							})
 								.catch(markErr => console.warn('[NewsMonitor] Failed to record failed storage state:', markErr.message));
 						}
 						console.warn('[NewsMonitor] Failed to persist alert to storage:', err.message);
