@@ -67,6 +67,7 @@ describe('Alert Grounding Integration', () => {
 				invalidation_level: '$48000',
 				target_level: '$55000',
 				setup_type: 'breakout',
+				setup_evidence: 'Volume confirms resistance breakout',
 				risk_reward_ratio: '2:1',
 			}),
 			citations: mockSearchResults,
@@ -103,6 +104,19 @@ describe('Alert Grounding Integration', () => {
 	});
 
 	describe('POST /api/webhook/alert', () => {
+		it('reports when the shared validator truncates alert text', async () => {
+			const response = await request(app)
+				.post('/api/webhook/alert?dryRun=true').set('x-api-key', 'test-key')
+				.send({ text: 'A'.repeat(4001) })
+				.expect(200);
+
+			expect(response.body).toEqual(expect.objectContaining({
+				truncated: true,
+				originalLength: 4001,
+				deliveredLength: 4003,
+			}));
+		});
+
 		it('should enrich alert with grounded context', async () => {
 			const alertText = 'Bitcoin breaks $50,000 mark';
 

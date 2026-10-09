@@ -7,6 +7,7 @@ const sentryService = require('../../services/monitoring/SentryService');
 const signalOutcomeService = require('../../services/storage/SignalOutcomeService');
 const { parseTelegramTopicRoutes, resolveTelegramThreadId } = require('../../services/notification/telegramTopicRouting');
 const { VALID_SIGNAL_CLASSES } = require('../../lib/validation');
+const { sendError } = require('../../lib/errorEnvelope');
 const { isFirestoreErrorCategory } = require('../../services/storage/firestoreErrorCategories');
 
 const DEFAULT_LIMIT = 50;
@@ -32,6 +33,7 @@ const EXPORT_FIELDS = [
 	'confidence',
 	'sentimentScore',
 	'dedupStatus',
+	'feature',
 	'channels',
 	'deliveryResults',
 	'suppressedRepeat',
@@ -348,6 +350,28 @@ function listAlerts(req, res) {
 	});
 }
 
+const VALID_SUMMARY_INTERVALS = ['hour', 'day'];
+
+function parseSummaryInterval(rawInterval) {
+	if (rawInterval === undefined) {
+		return { value: undefined };
+	}
+
+	// An empty value is a client that meant to send one, not a request for the
+	// aggregate-only response, so it is rejected rather than read as omitted.
+	const normalized = typeof rawInterval === 'string' ? rawInterval.trim().toLowerCase() : null;
+	if (!normalized || !VALID_SUMMARY_INTERVALS.includes(normalized)) {
+		return {
+			error: {
+				error: `Invalid interval parameter. Allowed values: ${VALID_SUMMARY_INTERVALS.join(', ')}.`,
+				code: 'INVALID_REQUEST',
+			},
+		};
+	}
+
+	return { value: normalized };
+}
+
 function summarizeAlerts(req, res) {
 	return handleAsync(req, res, '/api/alerts/summary', async () => {
 		if (!alertStorageService.isEnabled()) {
@@ -407,6 +431,22 @@ function summarizeAlerts(req, res) {
 			return res.status(400).json(signalClass.error);
 		}
 
+		const interval = parseSummaryInterval(req.query.interval);
+		if (interval.error) {
+			return sendError(res, 400, interval.error);
+		}
+
+		if (interval.value !== undefined) {
+			const maxDays = alertStorageService.getSummaryIntervalMaxWindowDays(interval.value);
+			const bounds = alertStorageService.resolveSummaryWindowBounds({ from: from.value, to: to.value });
+			if (bounds.to.getTime() - bounds.from.getTime() > maxDays * 24 * 60 * 60 * 1000) {
+				return sendError(res, 400, {
+					error: `Invalid summary window for interval "${interval.value}". Maximum window is ${maxDays} days.`,
+					code: 'INVALID_REQUEST',
+				});
+			}
+		}
+
 		const summaryParams = {
 			from: from.value,
 			limit,
@@ -425,6 +465,9 @@ function summarizeAlerts(req, res) {
 		}
 		if (signalClass.value !== undefined) {
 			summaryParams.signalClass = signalClass.value;
+		}
+		if (interval.value !== undefined) {
+			summaryParams.interval = interval.value;
 		}
 
 		const summary = await alertStorageService.summarizeAlerts(summaryParams);
@@ -1380,4 +1423,5 @@ module.exports = {
 	exportAlerts,
 	submitFeedback,
 	getFeedbackSummary,
+	VALID_SUMMARY_INTERVALS,
 };

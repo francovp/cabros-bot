@@ -134,6 +134,29 @@ describe('Render signal outcome worker blueprint', () => {
 		expect(workerBlueprint).not.toContain('ENABLE_FIRESTORE_IDEMPOTENCY');
 	});
 
+// Issue #1180 pins durable news-monitor analysis records. The gate was already
+	// true in the Render dashboard, so nothing in the repository said so — and
+	// `ENABLE_FIRESTORE_NEWS_ANALYSIS` was simultaneously listed in the Remote Config
+	// allow-list and published in the server template as `"false"`. Because a template
+	// parameter's defaultValue is reported with source `remote`, that template entry
+	// would have overridden this env var and silently re-disabled persistence the first
+	// time a Remote Config load succeeded.
+	it('enables durable news analysis on the web service with previews off', () => {
+		const blueprint = fs.readFileSync(path.join(__dirname, '../../render.yaml'), 'utf8');
+		const webBlueprint = blueprint.slice(0, blueprint.indexOf('- type: worker'));
+		const workerBlueprint = blueprint.slice(blueprint.indexOf('- type: worker'));
+
+		expect(webBlueprint).toContain(
+			'- key: ENABLE_FIRESTORE_NEWS_ANALYSIS\n    value: true\n    previewValue: false',
+		);
+		// Only the web service mounts /api/news-monitor. A worker declaration would be
+		// either a second writer or a `fromService` mirror of nothing.
+		expect(workerBlueprint).not.toContain('ENABLE_FIRESTORE_NEWS_ANALYSIS');
+		// The retention window stays Remote Config eligible, so it is declared for
+		// dashboard visibility only.
+		expect(webBlueprint).toContain('- key: NEWS_ANALYSIS_RETENTION_DAYS\n    value: 30');
+	});
+
 	// Issue #1109 enables confluence enrichment in production. Both flags were already
 	// present in the worker block as `fromService` mirrors of values the web service
 	// never set, so the Blueprint looked configured while the only service that reaches
@@ -175,6 +198,30 @@ describe('Render signal outcome worker blueprint', () => {
 			`- key: ${key}\n    fromService:\n      name: cabros-crypto-bot-telegram-iac\n      type: web\n      envVarKey: ${key}`,
 		);
 		expect(webBlueprint).toContain(`- key: ${key}\n    value: true`);
+	});
+
+	// Issue #1179 enables symbol-analysis persistence in production. Previews share the
+	// production Firestore project, so a preview that recorded analyses would write
+	// throwaway rows into the collection the operator reads in `/api/symbol-analyses`.
+	it('enables symbol analysis storage on the web service with previews off', () => {
+		const blueprint = fs.readFileSync(path.join(__dirname, '../../render.yaml'), 'utf8');
+		const webBlueprint = blueprint.slice(0, blueprint.indexOf('- type: worker'));
+		const workerBlueprint = blueprint.slice(blueprint.indexOf('- type: worker'));
+
+		expect(webBlueprint).toContain(
+			'- key: ENABLE_SYMBOL_ANALYSIS_STORAGE\n    value: true\n    previewValue: false',
+		);
+		// `recordAnalysis()` is reached only from the HTTP route layer in
+		// `src/controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis.js`; `worker.js`
+		// never mounts routes, so the worker stays off instead of becoming a second writer.
+		expect(workerBlueprint).not.toContain('ENABLE_SYMBOL_ANALYSIS_STORAGE');
+	});
+
+	it('declares the symbol analysis retention window so the TTL horizon is dashboard-visible', () => {
+		const blueprint = fs.readFileSync(path.join(__dirname, '../../render.yaml'), 'utf8');
+		const webBlueprint = blueprint.slice(0, blueprint.indexOf('- type: worker'));
+
+		expect(webBlueprint).toContain('- key: SYMBOL_ANALYSIS_RETENTION_DAYS\n    value: 7');
 	});
 });
 

@@ -3,11 +3,11 @@ const {
 	REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE,
 	inspectAlertEnrichmentRiskSchema,
 	PromptKeys,
+	PROMPT_DEFINITIONS,
 	PromptService,
 	getPromptService,
 	resetPromptServiceForTests,
 } = require('./PromptService');
-const { PROMPT_DEFINITIONS } = require('./promptRegistry');
 const { probePromptReadiness } = require('./promptReadiness');
 
 /**
@@ -45,6 +45,7 @@ module.exports = {
 	REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE,
 	inspectAlertEnrichmentRiskSchema,
 	PromptKeys,
+	PROMPT_DEFINITIONS,
 	PromptService,
 	getPromptService,
 	probeManagedPromptReadiness,

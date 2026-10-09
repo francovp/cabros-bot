@@ -1094,18 +1094,21 @@ class NotificationRedriveService {
 
 		const supersessionId = this.getSupersessionId(record.repeatCooldown.key, record.repeatCooldown.channel);
 		const localSupersession = this.supersessionStore.get(supersessionId);
-		if ((localSupersession && isSupersededByMarker(localSupersession, record))
-			|| this.inMemoryStore.get(record.id)?.status === 'cancelled') {
+		// A local marker is process/clock-derived, so its generation can disagree with
+		// the durable creation order across replicas. It is therefore only a fallback
+		// verdict here, never a short-circuit: a proven newer durable record wins.
+		const locallySuperseded = Boolean(localSupersession && isSupersededByMarker(localSupersession, record));
+		if (this.inMemoryStore.get(record.id)?.status === 'cancelled') {
 			return true;
 		}
 
 		const firestore = this.getFirestore();
 		if (!firestore) {
-			return false;
+			return locallySuperseded;
 		}
 		const remainingMs = Math.max(0, deadline - Date.now());
 		if (remainingMs === 0) {
-			return false;
+			return locallySuperseded;
 		}
 		let timer = null;
 		try {
@@ -1119,7 +1122,7 @@ class NotificationRedriveService {
 				}),
 			]);
 			if (!snapshots) {
-				return false;
+				return locallySuperseded;
 			}
 			const [recordSnapshot, supersessionSnapshot] = snapshots;
 			const supersession = supersessionSnapshot?.exists ? supersessionSnapshot.data() : null;
@@ -1139,11 +1142,12 @@ class NotificationRedriveService {
 						return false;
 					}
 				}
+				return isSupersededByMarker(supersession, record) || locallySuperseded;
 			}
-			return isSupersededByMarker(supersession, record);
+			return locallySuperseded;
 		} catch (error) {
 			console.warn('[NotificationRedriveService] Failed to check superseded redrive:', error.message);
-			return false;
+			return locallySuperseded;
 		} finally {
 			if (timer) {
 				clearTimeout(timer);
