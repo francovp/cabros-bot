@@ -2689,8 +2689,12 @@ const CALIBRATION_DEFAULT_BUCKETS = [
 function getSignalConfidenceScore(doc) {
 	const conf = normalizeConfidenceScore(doc?.confidenceScore);
 	if (doc?.source === 'market-scanner') {
-		// Pre-provenance rows may contain technical scores normalized as confidence.
-		return doc?.confidenceScoreOrigin === 'explicit' ? conf : null;
+		if (doc?.confidenceScoreOrigin === 'explicit') return conf;
+		if (doc?.confidenceScoreOrigin !== undefined && doc?.confidenceScoreOrigin !== null) return null;
+
+		// Legacy rows with a different or unusable score could only have an explicit confidence value.
+		const legacyScore = normalizeConfidenceScore(doc?.score);
+		return conf !== null && (legacyScore === null || legacyScore !== conf) ? conf : null;
 	}
 	if (conf !== null) return conf;
 	const sc = normalizeConfidenceScore(doc?.score);
