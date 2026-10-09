@@ -351,6 +351,22 @@ describe('AlertStorageService', () => {
 			}));
 		});
 
+		it('persists session tag when explicitly provided or derived from equity exchange', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'doc-session-equity' });
+
+			await AlertStorageService.saveAlert(buildParams({
+				text: 'NASDAQ:AAPL(60) COMPRA',
+				session: 'regular',
+			}));
+
+			expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({
+				symbol: 'AAPL',
+				exchange: 'NASDAQ',
+				session: 'regular',
+			}));
+		});
+
 		// Regression (issue #222): "53" reached bySymbol in production analytics.
 		it('rejects non-ASCII digits and astral characters as symbols', () => {
 		// `\d` is ASCII-only, so Arabic-Indic / fullwidth digits used to pass the

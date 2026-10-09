@@ -427,6 +427,13 @@
       "description": "Enable rendering signal classification marker prefix on alert notifications",
       "valueType": "BOOLEAN"
     },
+    "ENABLE_EQUITY_SESSION_TAG": {
+      "defaultValue": {
+        "value": "true"
+      },
+      "description": "Enable tagging equity webhook alerts with trading-session state (regular, pre, post, closed)",
+      "valueType": "BOOLEAN"
+    },
     "ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION": {
       "defaultValue": {
         "value": "false"

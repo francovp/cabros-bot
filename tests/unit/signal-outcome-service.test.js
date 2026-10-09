@@ -2507,6 +2507,7 @@ describe('SignalOutcomeService', () => {
 				providerBreakdown: {},
 				entryPriceSourceBreakdown: {},
 				eligibilityBreakdown: {},
+				bySession: {},
 				windows: {},
 				drawdownProxy: {
 					averageMaxAdverseExcursionPercent: 0,
@@ -2625,6 +2626,9 @@ describe('SignalOutcomeService', () => {
 			expect(allRes.totalSignalsEvaluated).toBe(2);
 			expect(allRes.windows['1h'].totalSignals).toBe(2);
 			expect(allRes.windows['1h'].hitRatePercent).toBe(50);
+			expect(allRes.bySession).toBeDefined();
+			expect(allRes.bySession.BTCUSDT).toEqual({ regular: 0, pre: 0, post: 0, closed: 0, total: 1 });
+			expect(allRes.bySession.ETHUSDT).toEqual({ regular: 0, pre: 0, post: 0, closed: 0, total: 1 });
 		});
 
 		it('collects matching records beyond the initial slice when filters are applied (GH-715)', async () => {

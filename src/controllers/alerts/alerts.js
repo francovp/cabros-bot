@@ -42,6 +42,7 @@ const EXPORT_FIELDS = [
 	'text',
 	'currentPrice',
 	'priceCurrency',
+	'session',
 ];
 
 function parseLimit(rawLimit) {

@@ -789,6 +789,7 @@ async function recordSignalInternal({
 	tokenUsage,
 	processingTimeMs,
 	assetClass,
+	session,
 } = {}) {
 	if (!isEnabled()) {
 		return null;
@@ -968,6 +969,11 @@ async function recordSignalInternal({
 			calendarId: sessionContext.calendarId,
 			calendarTimeZone: sessionContext.calendarTimeZone,
 			sessionContext: sessionContext.sessionContext,
+			session: typeof session === 'string' && session.trim()
+				? session.trim()
+				: (normSymbolInfo.exchange && require('./EquitySessionService').isEquityExchange(normSymbolInfo.exchange)
+					? require('./EquitySessionService').classifySession({ exchange: normSymbolInfo.exchange, symbol: normSymbolInfo.symbol, timestamp: now })
+					: '24/7'),
 			measurementCohort: sessionContext.measurementCohort,
 			expiresAt: buildRetentionExpiryTimestamp(now),
 			requestId: typeof requestId === 'string' ? requestId : 'unknown',
@@ -1893,6 +1899,7 @@ function createEmptyMetricsSummary() {
 		providerBreakdown: {},
 		entryPriceSourceBreakdown: {},
 		eligibilityBreakdown: {},
+		bySession: {},
 		windows: {},
 		drawdownProxy: {
 			averageMaxAdverseExcursionPercent: 0,
@@ -2093,6 +2100,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 	const providerBreakdown = {};
 	const entryPriceSourceBreakdown = {};
 	const eligibilityBreakdown = {};
+	const bySession = {};
 
 	const evaluatedSignals = [];
 
@@ -2101,6 +2109,34 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		const docSymbol = doc.symbol || 'UNKNOWN';
 		const marketDataProvider = doc.marketDataProvider || (docExchange === 'BINANCE' ? 'binance' : 'none');
 		const entryPriceSource = doc.entryPriceSource || (doc.price !== null && doc.price !== undefined ? (doc.marketDataProvider || 'unknown') : 'none');
+
+		let docSession = doc.session;
+		if (!docSession || typeof docSession !== 'string') {
+			if (doc.sessionContext) {
+				const map = {
+					regular: 'regular',
+					pre_open: 'pre',
+					after_hours: 'post',
+					market_holiday: 'closed',
+					crypto_24_7: '24/7',
+				};
+				docSession = map[doc.sessionContext] || 'unknown';
+			} else {
+				docSession = 'unknown';
+			}
+		} else {
+			docSession = docSession.toLowerCase();
+		}
+
+		if (docSymbol !== 'UNKNOWN') {
+			if (!bySession[docSymbol]) {
+				bySession[docSymbol] = { regular: 0, pre: 0, post: 0, closed: 0, total: 0 };
+			}
+			if (Object.prototype.hasOwnProperty.call(bySession[docSymbol], docSession)) {
+				bySession[docSymbol][docSession]++;
+			}
+			bySession[docSymbol].total++;
+		}
 
 		let eligibilityState = doc.eligibilityState;
 		if (!eligibilityState) {
@@ -2337,6 +2373,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		providerBreakdown,
 		entryPriceSourceBreakdown,
 		eligibilityBreakdown,
+		bySession,
 		windows: windowStats,
 		drawdownProxy: {
 			averageMaxAdverseExcursionPercent: averageWorstMae,
