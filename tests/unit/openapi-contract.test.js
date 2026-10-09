@@ -274,6 +274,44 @@ describe('OpenAPI contract', () => {
 		});
 	});
 
+	it('documents the generic-message dry-run preview contract (issue #876)', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const operation = contract.paths['/api/webhook/message'].post;
+
+		expect(operation.parameters).toEqual(expect.arrayContaining([
+			{ $ref: '#/components/parameters/MessageDryRun' },
+		]));
+		expect(contract.components.parameters.MessageDryRun.name).toBe('dryRun');
+		expect(contract.components.parameters.MessageDryRun.in).toBe('query');
+		expect(contract.components.parameters.MessageDryRun.schema.type).toBe('boolean');
+		expect(contract.components.parameters.MessageDryRun.description).toContain('no idempotency key is reserved');
+
+		expect(contract.components.schemas.MessageRequest.properties.dryRun.type).toBe('boolean');
+		expect(contract.components.schemas.MessageRequest.properties.dryRun.description).toContain('400 INVALID_REQUEST');
+
+		// A dry run must never advertise the Discord webhook credential, so the
+		// preview schema documents a presence flag rather than the URL.
+		const routingProperties = contract.components.schemas.MessageDryRunRouting.properties;
+		expect(routingProperties.discordWebhookUrlProvided.type).toBe('boolean');
+		expect(routingProperties.discordWebhookUrl).toBeUndefined();
+		expect(contract.components.schemas.MessageDryRunPayload.required).toEqual(['text']);
+
+		const responseProperties = contract.components.responses.MessageDeliveryResult
+			.content['application/json'].schema.allOf[1].properties;
+		for (const field of ['dryRun', 'broadcast', 'requestedChannels', 'deliveredChannels', 'payload', 'routing']) {
+			expect(responseProperties[field]).toBeDefined();
+		}
+
+		const dryRunExample = contract.components.responses.MessageDeliveryResult
+			.content['application/json'].examples.dryRun.value;
+		expect(dryRunExample).toMatchObject({ success: true, dryRun: true, deliveredChannels: [] });
+		expect(dryRunExample.requestId).toEqual(expect.any(String));
+		expect(dryRunExample.payload.text).toEqual(expect.any(String));
+		expect(dryRunExample.routing.discordWebhookUrlProvided).toBe(true);
+		expect(Object.keys(dryRunExample.routing)).not.toContain('discordWebhookUrl');
+	});
+
 	it('aligns symbol analysis schema with runtime normalization', () => {
 		if (!fs.existsSync(contractPath)) return;
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
@@ -768,6 +806,31 @@ describe('status dependency contract drift', () => {
 		const missing = documentedDependencyKeys().filter((key) => !seen.has(key));
 		expect(missing).toEqual([]);
 	});
+	// GH-637: the alert truncation fields are endpoint-specific. `DeliveryResult` is
+	// shared with POST /api/alerts/{alertId}/replay, whose runtime response
+	// (src/controllers/alerts/alerts.js) returns only success/alertId/replayId/results.
+	// Documenting truncation there would promise replay callers fields that never appear.
+	it('documents alert truncation metadata on /api/webhook/alert only', () => {
+		const spec = require('../../src/openapi/openapi.json');
+
+		const alert200 = spec.paths['/api/webhook/alert'].post.responses['200'];
+		expect(alert200.$ref).toBe('#/components/responses/WebhookAlertDeliveryResult');
+
+		const alertResponse = spec.components.responses.WebhookAlertDeliveryResult;
+		expect(alertResponse.content['application/json'].schema.$ref)
+			.toBe('#/components/schemas/WebhookAlertDeliveryResult');
+		expect(alertResponse.content['application/json'].example.truncated).toBe(true);
+
+		// The replay contract must stay free of the endpoint-specific fields.
+		const shared = spec.components.schemas.DeliveryResult.properties;
+		for (const field of ['truncated', 'originalLength', 'deliveredLength']) {
+			expect(shared[field]).toBeUndefined();
+		}
+		expect(
+			spec.paths['/api/alerts/{alertId}/replay'].post.responses['200'].$ref,
+		).toBe('#/components/responses/DeliveryResult');
+	});
+
 	it('documents every lastErrorCategory the remote-config service can emit', () => {
 		// The service emits `invalid_value` on a SUCCESSFUL load whose values failed
 		// schema validation. A client validating responses against the published spec

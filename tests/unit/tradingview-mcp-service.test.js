@@ -16,8 +16,12 @@ const http = require('http');
  *
  * `perHopDelayMs` simulates per-hop provider latency so bounded-budget
  * regressions reproduce deterministically instead of depending on a live host.
+ *
+ * #948 adds two more fault knobs on the SAME tool call, so a slow failure can be
+ * produced without a three-hop handshake delay: `toolsDelayMs` delays the
+ * `tools/call` response, and `failToolsCalls` answers it with HTTP 503.
  */
-function startFakeMcpServer({ perHopDelayMs = 0 } = {}) {
+function startFakeMcpServer({ perHopDelayMs = 0, toolsDelayMs = 0, failToolsCalls = false } = {}) {
 	const calls = { initialize: 0, initialized: 0, tools: [] };
 	const sessions = new Set();
 
@@ -86,6 +90,14 @@ function startFakeMcpServer({ perHopDelayMs = 0 } = {}) {
 
 		if (message.method === 'tools/call') {
 			calls.tools.push({ name: message.params && message.params.name, args: message.params && message.params.arguments });
+			if (toolsDelayMs > 0) {
+				await new Promise(resolve => setTimeout(resolve, toolsDelayMs));
+			}
+			if (failToolsCalls) {
+				res.writeHead(503, { 'Content-Type': 'text/plain', 'mcp-session-id': sessionId });
+				res.end('Service Unavailable');
+				return;
+			}
 			const payload = {
 				price_data: { current_price: 70000 },
 				technical_indicators: { atr: 900 },
@@ -1551,6 +1563,105 @@ describe('TradingViewMcpService', () => {
 				expect(confluence.failedCount).toBe(2);
 				expect(confluence.appliedCount + confluence.failedCount).toBeLessThanOrEqual(confluence.attemptedCount);
 			});
+
+			it('gives the multi-timeframe call its own deadline and AbortSignal derived from remaining budget (#1337)', async () => {
+				const service = buildMtfService({ enrichmentBudgetMs: 12000 });
+				let combinedSignal = null;
+				let mtfSignal = null;
+
+				service.callCombinedAnalysis = jest.fn().mockImplementation(({ signal }) => {
+					combinedSignal = signal;
+					return Promise.resolve({
+						confluence: { recommendation: 'BUY', confidence: 77, signals_agree: true },
+					});
+				});
+
+				service.callMultiTimeframeAnalysis = jest.fn().mockImplementation(({ signal }) => {
+					mtfSignal = signal;
+					return Promise.resolve(mtfData);
+				});
+
+				const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+				expect(combinedSignal).toBeDefined();
+				expect(mtfSignal).toBeDefined();
+				expect(mtfSignal).not.toBe(combinedSignal);
+				expect(combinedSignal.aborted).toBe(false);
+				expect(mtfSignal.aborted).toBe(false);
+				expect(result.tradingViewEnrichmentStatus).toBe('full');
+				expect(result.confluenceData).toBeDefined();
+				expect(result.multiTimeframeData).toEqual(mtfData);
+				expect(readConfluence(service)).toMatchObject({
+					attemptedCount: 2,
+					appliedCount: 2,
+					failedCount: 0,
+					budgetExhaustedCount: 0,
+				});
+			});
+
+			it('does not allow combined_analysis timeout to abort multi_timeframe_analysis after combined finishes (#1337)', async () => {
+				const service = buildMtfService({ enrichmentBudgetMs: 12000 });
+
+				service.callCombinedAnalysis = jest.fn().mockImplementation(() => {
+					return new Promise(resolve => {
+						setTimeout(() => resolve({
+							confluence: { recommendation: 'BUY', confidence: 77, signals_agree: true },
+						}), 30);
+					});
+				});
+
+				service.callMultiTimeframeAnalysis = jest.fn().mockImplementation(({ signal }) => {
+					return new Promise((resolve, reject) => {
+						const timer = setTimeout(() => resolve(mtfData), 60);
+						if (signal) {
+							signal.addEventListener('abort', () => {
+								clearTimeout(timer);
+								reject(signal.reason || new Error('aborted'));
+							});
+						}
+					});
+				});
+
+				const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+				expect(result.tradingViewEnrichmentStatus).toBe('full');
+				expect(result.multiTimeframeData).toEqual(mtfData);
+				expect(readConfluence(service)).toMatchObject({
+					attemptedCount: 2,
+					appliedCount: 2,
+					failedCount: 0,
+					budgetExhaustedCount: 0,
+				});
+			});
+
+			it('aborts multi_timeframe_analysis when the total enrichment budget is exceeded during its execution (#1337)', async () => {
+				const service = buildMtfService({ enrichmentBudgetMs: 120 });
+
+				service.callCombinedAnalysis = jest.fn().mockResolvedValue({
+					confluence: { recommendation: 'BUY', confidence: 77, signals_agree: true },
+				});
+
+				service.callMultiTimeframeAnalysis = jest.fn().mockImplementation(({ signal }) => {
+					return new Promise((resolve, reject) => {
+						const timer = setTimeout(() => resolve(mtfData), 350);
+						if (signal) {
+							signal.addEventListener('abort', () => {
+								clearTimeout(timer);
+								reject(signal.reason || new Error('aborted'));
+							});
+						}
+					});
+				});
+
+				const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+				expect(result.tradingViewEnrichmentStatus).toBe('partial');
+				expect(result.confluenceData).not.toBeNull();
+				expect(result.multiTimeframeData).toBeNull();
+				const confluence = readConfluence(service);
+				expect(confluence.attemptedCount).toBe(2);
+				expect(confluence.appliedCount).toBe(1);
+				expect(confluence.failedCount).toBe(1);
+				expect(confluence.lastFailureCategory).toBe('timeout');
+			});
 		});
 	});
 
@@ -2038,6 +2149,309 @@ describe('TradingViewMcpService', () => {
 			expect(service._getErrorCategory(new Error('TradingView MCP HTTP 503: suspended'))).toBe('http_5xx');
 			expect(service._getErrorCategory(new Error('TradingView MCP circuit breaker is OPEN'))).toBe('circuit_breaker_open');
 			expect(service._getErrorCategory(new Error('TradingView MCP did not return mcp-session-id header'))).toBe('invalid_response');
+		});
+	});
+
+	// #948: the budget allocator handed every retry whatever happened to be left
+	// in the base sub-budget. A retry could therefore be issued with a window
+	// far too short to complete the three-hop tool call, and because that abort
+	// is a CLIENT deadline rather than provider evidence it still charged the
+	// circuit breaker: five of them opened the breaker against a healthy MCP host
+	// and suppressed enrichment for the whole 10-minute breaker cooldown.
+	describe('deadline-aware base attempt allocation (#948)', () => {
+		const alertText = symbol => `${symbol}(240) pasó a señal de COMPRA`;
+		const quietLogger = () => ({ warn: jest.fn(), error: jest.fn(), log: jest.fn() });
+
+		it('applies enrichment to four concurrent alerts with 3s base latency under a 9s budget', async () => {
+			// Acceptance fixture. Real alert bursts arrive concurrently, and a
+			// three-hop tool call carries ~3s of unavoidable provider latency.
+			// Under the sliced allocator each attempt was aborted at ~1.9s, so
+			// every request in the burst failed. All four must now complete on
+			// their first attempt, with total MCP work inside the budget.
+			process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION = 'true';
+			const server = await startFakeMcpServer({ perHopDelayMs: 1000 });
+			try {
+				const service = new TradingViewMcpService({
+					url: server.url,
+					maxRetries: 3,
+					timeoutMs: 12000,
+					enrichmentBudgetMs: 9000,
+					logger: quietLogger(),
+				});
+
+				const startedAt = Date.now();
+				const results = await Promise.all([
+					service.enrichFromAlertText(alertText('BTCUSDT')),
+					service.enrichFromAlertText(alertText('ETHUSDT')),
+					service.enrichFromAlertText(alertText('SOLUSDT')),
+					service.enrichFromAlertText(alertText('XRPUSDT')),
+				]);
+				const elapsed = Date.now() - startedAt;
+
+				for (const result of results) {
+					expect(result).toEqual(expect.objectContaining({
+						tradingViewEnrichmentApplied: true,
+						tradingViewEnrichmentStatus: 'full',
+						current_price: 70000,
+					}));
+				}
+				expect(server.calls.tools.filter(call => call.name === 'coin_analysis')).toHaveLength(4);
+				expect(elapsed).toBeLessThan(9000 + 1500);
+				expect(service.getCircuitBreakerStatus().state).toBe('closed');
+				expect(service.getCircuitBreakerStatus().consecutiveFailures).toBe(0);
+			} finally {
+				await server.close();
+			}
+		});
+
+		it('gives the first base attempt the majority of the base budget, capped by the MCP request timeout', () => {
+			// Guard on the allocation arithmetic itself. The primary attempt is
+			// sized against the whole remaining base sub-budget, never a fraction
+			// of it and never more than one per-request MCP timeout.
+			const primaryAttemptMs = ({ timeoutMs, baseBudgetMs }) => Math.min(timeoutMs, baseBudgetMs);
+
+			expect(primaryAttemptMs({ timeoutMs: 12000, baseBudgetMs: 9000 })).toBe(9000);
+			expect(primaryAttemptMs({ timeoutMs: 12000, baseBudgetMs: 4000 })).toBe(4000);
+			expect(primaryAttemptMs({ timeoutMs: 3000, baseBudgetMs: 9000 })).toBe(3000);
+		});
+
+		it('skips a retry whose residual window cannot complete the tool call', async () => {
+			// Attempt 1 spends 6.5s of the 9s base sub-budget and fails. The 2.5s
+			// left is below the viability floor, so no retry is issued rather
+			// than issuing one that cannot finish three sequential hops - and
+			// the last real failure is what the caller sees.
+			const server = await startFakeMcpServer({ toolsDelayMs: 6500, failToolsCalls: true });
+			try {
+				const service = new TradingViewMcpService({
+					url: server.url,
+					maxRetries: 3,
+					timeoutMs: 12000,
+					enrichmentBudgetMs: 9000,
+					logger: quietLogger(),
+				});
+
+				const startedAt = Date.now();
+				await expect(service.enrichFromAlertText(alertText('BTCUSDT')))
+					.rejects.toThrow('HTTP 503');
+				const elapsed = Date.now() - startedAt;
+
+				expect(server.calls.tools).toHaveLength(1);
+				expect(elapsed).toBeLessThan(8000);
+				expect(service.getStatus().enrichment.baseAttempts).toEqual(expect.objectContaining({
+					attemptedCount: 1,
+					appliedCount: 0,
+					failedCount: 1,
+					skippedNonViableCount: 1,
+				}));
+			} finally {
+				await server.close();
+			}
+		});
+
+		it('still retries when the residual budget can still fund a viable attempt', async () => {
+			// The floor must not disable retries the operator's budget can afford:
+			// a fast failure leaves nearly the whole base sub-budget available.
+			const server = await startFakeMcpServer();
+			try {
+				const service = new TradingViewMcpService({
+					url: server.url,
+					maxRetries: 3,
+					timeoutMs: 12000,
+					enrichmentBudgetMs: 12000,
+					logger: quietLogger(),
+				});
+
+				let attempts = 0;
+				const realExecute = service._executeCallTool.bind(service);
+				service._executeCallTool = async (toolName, args, options) => {
+					attempts += 1;
+					if (attempts === 1) {
+						throw new Error('TradingView MCP HTTP 503: provider restarting');
+					}
+					return realExecute(toolName, args, options);
+				};
+
+				const result = await service.enrichFromAlertText(alertText('BTCUSDT'));
+
+				expect(result).toEqual(expect.objectContaining({
+					tradingViewEnrichmentApplied: true,
+					current_price: 70000,
+				}));
+				expect(attempts).toBe(2);
+				expect(service.getStatus().enrichment.baseAttempts).toEqual(expect.objectContaining({
+					attemptedCount: 2,
+					appliedCount: 1,
+					skippedNonViableCount: 0,
+				}));
+			} finally {
+				await server.close();
+			}
+		});
+
+		it('does not charge the circuit breaker for a retry it declined to issue', async () => {
+			// The production mechanism, end to end through the real handshake: a
+			// healthy host whose slow 503 left no viable retry must not be charged
+			// once per self-inflicted deadline. Before this fix two such alerts
+			// reached the breaker threshold against a provider that answered.
+			const notifyAdmin = jest.fn().mockResolvedValue(undefined);
+			const server = await startFakeMcpServer({ toolsDelayMs: 6500, failToolsCalls: true });
+			try {
+				const service = new TradingViewMcpService({
+					url: server.url,
+					maxRetries: 3,
+					timeoutMs: 12000,
+					enrichmentBudgetMs: 9000,
+					breakerThreshold: 3,
+					breakerCooldownMs: 600000,
+					pageCooldownMs: 300000,
+					notifyAdmin,
+					logger: quietLogger(),
+				});
+
+				await expect(service.enrichFromAlertText(alertText('BTCUSDT'))).rejects.toThrow('HTTP 503');
+				await expect(service.enrichFromAlertText(alertText('ETHUSDT'))).rejects.toThrow('HTTP 503');
+
+				expect(service.consecutiveFailures).toBe(2);
+				expect(service.getBreakerState()).toBe('closed');
+				expect(service.isBreakerOpen()).toBe(false);
+				expect(notifyAdmin).not.toHaveBeenCalled();
+				expect(server.calls.tools).toHaveLength(2);
+			} finally {
+				await server.close();
+			}
+		});
+
+		it('keeps a viable-window provider timeout charged to the breaker', async () => {
+			// The flip side: skipping non-viable retries must not blind the breaker
+			// to a genuinely slow or hung provider. A primary attempt that spends
+			// its whole viable window IS provider evidence.
+			const notifyAdmin = jest.fn().mockResolvedValue(undefined);
+			const server = await startFakeMcpServer({ toolsDelayMs: 3500 });
+			try {
+				const service = new TradingViewMcpService({
+					url: server.url,
+					maxRetries: 3,
+					timeoutMs: 12000,
+					enrichmentBudgetMs: 3000,
+					breakerThreshold: 2,
+					breakerCooldownMs: 60000,
+					pageCooldownMs: 300000,
+					notifyAdmin,
+					logger: quietLogger(),
+				});
+
+				await expect(service.enrichFromAlertText(alertText('BTCUSDT'))).rejects.toThrow('TradingView MCP call failed');
+				await expect(service.enrichFromAlertText(alertText('ETHUSDT'))).rejects.toThrow('TradingView MCP call failed');
+
+				expect(service.getBreakerState()).toBe('open');
+				expect(notifyAdmin).toHaveBeenCalledTimes(1);
+				expect(notifyAdmin).toHaveBeenCalledWith(expect.objectContaining({ type: 'degradation' }));
+			} finally {
+				await server.close();
+			}
+		});
+
+		it('reports p50/p95 base-attempt duration so a starved budget is visible in status', async () => {
+			const server = await startFakeMcpServer({ perHopDelayMs: 20 });
+			try {
+				const service = new TradingViewMcpService({
+					url: server.url,
+					maxRetries: 1,
+					timeoutMs: 12000,
+					enrichmentBudgetMs: 9000,
+					logger: quietLogger(),
+				});
+
+				for (const symbol of ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT']) {
+					await service.enrichFromAlertText(alertText(symbol));
+				}
+
+				const baseAttempts = service.getStatus().enrichment.baseAttempts;
+				expect(baseAttempts).toEqual(expect.objectContaining({
+					sampleLimit: expect.any(Number),
+					sampledCount: 4,
+					attemptedCount: 4,
+					appliedCount: 4,
+					failedCount: 0,
+					skippedNonViableCount: 0,
+				}));
+				expect(baseAttempts.p50Ms).toBeGreaterThan(0);
+				expect(baseAttempts.p95Ms).toBeGreaterThanOrEqual(baseAttempts.p50Ms);
+				expect(baseAttempts.maxMs).toBeGreaterThanOrEqual(baseAttempts.p95Ms);
+				expect(baseAttempts.lastAttemptMs).toBeGreaterThan(0);
+
+				// Pins runtime output to the OpenAPI schema so the two cannot drift.
+				const openapi = require('../../src/openapi/openapi.json');
+				const schema = openapi.components.schemas.TradingViewMcpRuntimeStatus
+					.properties.enrichment.properties.baseAttempts;
+				expect(Object.keys(baseAttempts).sort()).toEqual(Object.keys(schema.properties).sort());
+				schema.required.forEach(key => expect(baseAttempts).toHaveProperty(key));
+			} finally {
+				await server.close();
+			}
+		});
+
+		it('keeps base attempt counters cumulative past the percentile sample cap', async () => {
+			// The percentile basis is bounded, but the counters are the applied-rate
+			// denominator an operator compares against, so a capped sample must never
+			// make them under-report.
+			const service = new TradingViewMcpService({
+				maxRetries: 1,
+				timeoutMs: 12000,
+				enrichmentBudgetMs: 9000,
+				logger: quietLogger(),
+			});
+			service.callCoinAnalysis = jest.fn().mockResolvedValue({ price_data: { current_price: 100 } });
+
+			const overflow = service.getStatus().enrichment.baseAttempts.sampleLimit + 25;
+			for (let i = 0; i < overflow; i += 1) {
+				await service.enrichFromAlertText(alertText('BTCUSDT'));
+			}
+
+			const baseAttempts = service.getStatus().enrichment.baseAttempts;
+			expect(baseAttempts.attemptedCount).toBe(overflow);
+			expect(baseAttempts.appliedCount).toBe(overflow);
+			expect(baseAttempts.sampledCount).toBe(baseAttempts.sampleLimit);
+			// A zero-duration sample is a real observation, not a dropped one, so
+			// the percentiles stay projected instead of collapsing to null.
+			expect(Number.isInteger(baseAttempts.p50Ms)).toBe(true);
+			expect(baseAttempts.p50Ms).toBeGreaterThanOrEqual(0);
+			expect(baseAttempts.p95Ms).toBeGreaterThanOrEqual(baseAttempts.p50Ms);
+		});
+
+		it('records a base success as applied partial when optional enrichment cannot fit', async () => {
+			// Acceptance: a surviving base result must be reported as applied
+			// `partial`, never as `failed`, when the optional stage runs out of
+			// budget - and it must still be counted as an applied base attempt.
+			process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION = 'true';
+			const service = new TradingViewMcpService({
+				maxRetries: 1,
+				timeoutMs: 12000,
+				enrichmentBudgetMs: 9000,
+				logger: quietLogger(),
+			});
+			service.callCoinAnalysis = jest.fn().mockResolvedValue({ price_data: { current_price: 100 } });
+			service.callVolumeConfirmation = jest.fn().mockImplementation(({ signal } = {}) => new Promise((resolve, reject) => {
+				signal.addEventListener('abort', () => reject(new Error('volume timeout')), { once: true });
+			}));
+
+			const result = await service.enrichFromAlertText(alertText('BTCUSDT'));
+
+			expect(result).toEqual(expect.objectContaining({
+				tradingViewEnrichmentApplied: true,
+				tradingViewEnrichmentStatus: 'partial',
+				current_price: 100,
+			}));
+			expect(service.getStatus().enrichment.baseAttempts).toEqual(expect.objectContaining({
+				attemptedCount: 1,
+				appliedCount: 1,
+				failedCount: 0,
+			}));
+			expect(service.getStatus().enrichment.alertPath).toEqual(expect.objectContaining({
+				totalCount: 1,
+				appliedCount: 1,
+				failedCount: 0,
+			}));
 		});
 	});
 

@@ -227,7 +227,17 @@ The Remote Config workflow publishes the server-side template consumed by Fireba
 - Stored alert read, export, analytics, and replay routes (`GET /api/alerts`, `GET /api/alerts/export`, `GET /api/alerts/summary`, `GET /api/alerts/:alertId`, `POST /api/alerts/:alertId/replay`) are also mounted under `/api`; they require `WEBHOOK_API_KEY` when configured, return `403 FEATURE_DISABLED` unless `ENABLE_FIRESTORE_ALERT_STORAGE=true`, and return `503 STORAGE_UNAVAILABLE` when Firestore is enabled but unreadable.
 - Trader alert feedback (👍/👎 verdicts from inline keyboard callbacks) is persisted in the `alertFeedback` Firestore collection when `ENABLE_FIRESTORE_ALERT_FEEDBACK=true`, with an in-memory fallback otherwise. `POST /api/alerts/feedback` records one verdict per `(alertId, chatId)` tuple (re-clicks update rather than append); `GET /api/alerts/feedback/summary` aggregates verdicts per source/symbol/exchange; the `/api/alerts/summary` response always includes a `feedback` block alongside `enrichment`, `delivery`, and `latency`. Raw chat ids are never returned — only their SHA-256 hashes are stored on documents. `/api/status` exposes `featureFlags.alertFeedback` and `dependencies.alertFeedback` (with `mode: durable|ephemeral`, `backend: firestore|memory`, `enabled`, `configured`, `inMemoryEntryCount`).
 - Both `ENABLE_FIRESTORE_ALERT_FEEDBACK` and `ALERT_FEEDBACK_RETENTION_DAYS` are documented in `.env.example` and follow the same fail-open semantics as the existing alert storage surface.
+- **The optional summary time series (issue #1287) is additive and opt-in.** `GET /api/alerts/summary` accepts `interval=hour|day`, which adds `summary.buckets` (`{ bucketStart, total, success, failure, byChannel }`) and makes `summary.window` report `interval` plus an interval-specific `maxDays` (31 for `hour`, 366 for `day`). Three invariants must survive future edits:
+  - **Omitting `interval` must be byte-for-byte inert.** `buildSummaryWindow()` without an interval keeps the pre-existing silent narrowing to 31 days and returns exactly `{ from, to, limit, maxDays }` in that key order, and `summary.buckets` must be absent entirely. The controller must not pass `interval: undefined` into `summarizeAlerts()` — the strict `toHaveBeenCalledWith` assertion in `tests/integration/alerts-endpoint.test.js` is the guard.
+  - **An unrecognised or empty `interval` returns `400`, never the aggregate-only response.** This is the repo's "no silent fallback" rule: a silent downgrade is exactly how a flag reports itself enabled while resolving to something else. Interval failures go through `sendError()` from `src/lib/errorEnvelope.js`, so they carry `success`/`requestId`/`retryable` — unlike this endpoint's older `{ error, code }` timestamp/filter failures, which were deliberately left alone to avoid changing an existing documented contract.
+  - **The series comes from the same bounded scan as the aggregates.** `buildSummaryBuckets()` runs over the already-materialized `docs` array, never a second query, which is what makes `sum(bucket.total) === totalAlerts` and `bucket.success === sum(byChannel[*].success)` hold by construction rather than by coincidence. Empty buckets are zero-filled rather than omitted so the array length is predictable; do not "optimize" them away.
+  - Bucket alignment is UTC (`hour` → UTC hour, `day` → UTC midnight) because the epoch divides evenly by both widths. Coverage: `tests/unit/alert-storage-service.test.js`, `tests/integration/alerts-endpoint.test.js`, `tests/unit/postman-collection.test.js` (which asserts the documented examples are internally consistent rather than hand-written), and `tests/unit/openapi-contract.test.js`. `GET /api/outcomes/summary` has the same gap and is tracked separately — do not widen this change to it.
 - Signal classification (`signalClass` enum: `breakout`, `mean_reversion`, `trend_continuation`, `reversal`, `volume_spike`, `news_event`, `manual`, `unknown`) classifies alerts across webhook ingestion, Firestore storage, alert querying/filtering, export, and analytics summary. Notification formatters display emoji badge markers (`🎯 breakout`, `🔄 mean_reversion`, etc.) for active classes when `ENABLE_SIGNAL_CLASS_MARKER` is enabled (`true` by default, Remote Config supported); `/api/status` exposes `featureFlags.signalClassMarker`.
+- The `signalClass` value is now **populated on the ingest path** (issue #858). `POST /api/webhook/alert` calls `classifySignal(text, { explicit: rawSignalClass })` from `src/services/alerts/signalClassifier.js`: when a caller omits `signalClass`, the class is derived deterministically from the alert text; a valid caller-supplied class stays authoritative, and an explicit `'unknown'` is still honored. The **raw** caller value is passed, not the one returned by `validateAlert()` — validation collapses "absent" into the string `'unknown'`, which would otherwise always beat derivation and silently reintroduce the original bug. The classifier is ordered-rule based (manual → news_event → volume_spike → mean_reversion → breakout → reversal → trend_continuation) and substring-matches on a lowercased, whitespace-collapsed copy of the text, so competing signals resolve by specificity rather than by match order. It is deterministic, channel-neutral business logic, and must never be implemented in a formatter.
+- `unknown` stays honest: text with no setup semantics (a bare `BTCUSDT`, a raw `BINANCE:ETHUSDT (4h) COMPRA`) is **not** forced into a class. Under-classification is preferred over a misleading badge. Generic volume modifiers ("strong volume", "huge volume") are intentionally excluded from the `volume_spike` vocabulary: in "broke resistance with strong volume" the volume only *confirms* a breakout, so that alert classifies as `breakout`, not `volume_spike`.
+- Classification fails open. `classifySignal()` and `SignalClassMetrics.record()/getSnapshot()` never throw into the caller; an unexpected fault degrades to `'unknown'` and cannot affect delivery or persistence.
+- `/api/status` and `/api/capabilities` expose the optional `dependencies.signalClassClassification` block (`totalAlerts`, `classifiedAlerts`, `unknownAlerts`, `populationRate`, `byClass`, `window`). It is omitted until the first alert is classified and resets on process restart. This exists because `featureFlags.signalClassMarker: true` only states the badge marker is *allowed* to render — it says nothing about whether alerts are actually classified, which is exactly how a 10/10-`unknown` regression previously looked healthy. A sustained `populationRate: 0` is the detection signal. Only enum class names and counts are exposed — never alert text, symbols, or chat IDs. **No backfill of historical records** is performed; the counters describe the current process window only.
+- **Coverage**: `tests/unit/signal-classifier.test.js` (deterministic classification from realistic production payloads, honest `unknown`, precedence, fail-open metrics), `tests/integration/alert-signal-classification.test.js` (end-to-end ingest persists a derived class, renders the badge, honors explicit classes, delivers when classification bookkeeping throws), and `tests/integration/status-endpoint.test.js` (population-rate honesty including the all-`unknown` case).
 - Webhook idempotency (`IdempotencyService`) stores reservations and cached responses in Cloud Firestore `idempotency_keys` collection when `ENABLE_FIRESTORE_IDEMPOTENCY=true`. All storage interactions fail open to in-memory caching upon Firestore errors, ensuring webhooks remain responsive across process restarts and horizontal scaling. `/api/status` exposes `featureFlags.firestoreIdempotency` and `dependencies.idempotencyStorage`.
 
 **Production enablement and proven readiness (Issue #1111).** `render.yaml` declares `ENABLE_FIRESTORE_IDEMPOTENCY: true` with `previewValue: false` on the **web service only**. Two deliberate boundaries:
@@ -251,6 +261,33 @@ Four invariants to preserve:
 No composite index is required: every durable query is a point read (`firestore.collection('idempotency_keys').doc(docId)`) inside `runTransaction`, so Firestore's automatic indexes cover it. The flag remains environment-only for Remote Config parity — it is a process-startup gate that decides where a collection lives, not a runtime tuning knob.
 
 **Coverage**: `tests/unit/idempotency-storage-service.test.js` (unverified → verified → degraded, self-heal, cold-start `isReady()`, rejected initialization, error-message non-leakage, status reads recording nothing, gate precedence, reset), `tests/integration/status-endpoint.test.js` (status projection in all three states plus the disabled default), `tests/unit/render-blueprint.test.js` (blueprint declares it for web with previews off and not for the worker), `tests/unit/postman-collection.test.js` and `src/openapi/openapi.json` (`IdempotencyStorage` schema, four documented response variants).
+
+**Production enablement and proven readiness (Issue #1179).** `render.yaml` declares `ENABLE_SYMBOL_ANALYSIS_STORAGE: true` with `previewValue: false`, plus `SYMBOL_ANALYSIS_RETENTION_DAYS: 7` at the code default, on the **web service only**. Two deliberate boundaries:
+
+- **Web service only.** `recordAnalysis()` is reached exclusively from the HTTP route layer in `src/controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis.js` (guarded by `isEnabled()` after the response is already sent); `worker.js` never mounts routes, so the worker stays off rather than becoming a second writer on `symbolAnalyses`.
+- **Previews stay off**, matching `ENABLE_FIRESTORE_IDEMPOTENCY` and `ENABLE_FIRESTORE_SCANNER_PRESETS`. Previews share the production Firestore project, so a preview that recorded analyses would write throwaway rows into the collection operators read in `/api/symbol-analyses`.
+
+**Both keys are excluded from Remote Config, and that exclusion is load-bearing.** Neither `ENABLE_SYMBOL_ANALYSIS_STORAGE` nor `SYMBOL_ANALYSIS_RETENTION_DAYS` may be added back to `PARAMETER_SCHEMA` or to `firebase-remote-config-template.json`. `getRemoteValue()` accepts any published template parameter whose `getSource()` is `remote`, *including a plain `defaultValue`*, and a published template outranks `render.yaml` for every allow-listed key. So an allow-listed gate here would keep the enablement permanently inert whenever the `firebase-server` template carried a `false` the blueprint had moved past — while `/api/capabilities` reported the blueprint's value and nothing looked wrong. The gate and its TTL horizon are process-startup decisions about where a collection lives, exactly like `ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_FIRESTORE_SCANNER_PRESETS` and `ENABLE_SIGNAL_OUTCOME_TRACKING`, all of which are absent from the template for the same reason. `tests/unit/remote-config-service.test.js` now fails if `render.yaml` and the template ever disagree for a shared key, and `isEnabled()`/`getRetentionDays()` read `process.env` directly rather than `getRuntimeConfig()`, so the invariant is enforced in code and not only by absence from a list.
+
+This is the **fifth** instance of the repo's "shape is not readiness" rule, after `firebaseRemoteConfig.ready` (#598), `equityMarketData.ready` (#1116), durable idempotency (#1111) and Firestore `readHealth` (#1285); do not fold `readiness` back into `configured`. Before this change `getStatus()` computed `ready = enabled && configured`, so flipping the flag immediately painted a green checkmark on a deployment that had never persisted a single analysis — and because every Firestore error here is swallowed into a dropped record, the operator had no signal that the enablement was not taking effect.
+
+Five invariants to preserve:
+
+- **Only a successful WRITE sets `ready`.** Persistence is the feature; reachability is not. Read and write counters are separate (`writesAttempted`/`writesSucceeded`/`writesFailed` vs `readsAttempted`/`readsSucceeded`/`readsFailed`), and a successful read proves Firestore reachability only. Collapsing them would let an operator reading `/api/symbol-analyses` conclude analyses are being stored when no write has ever landed.
+- **A rejected initialization is charged to the operation that triggered it.** `getFirestore()` is shared by `recordAnalysis()` and both read paths, so it takes an `intent` and `_recordInitializationFailure()` charges a read rejection to the read counters. Do not revert this to a write-only increment: an operator who only browsed the collection would then read `writesFailed: 1` with no analysis ever submitted, which points triage at persistence when the failure was in the read path. Both per-operation invariants (`writesFailed <= writesAttempted`, `readsFailed <= readsAttempted`) hold independently, `consecutiveFailures` still increments either way so the verdict stays `degraded`, and no read path can set `ready`.
+- **`getStatus()` must never call `getFirestore()`.** A status poll is not evidence of Firestore health, and recording one would let an operator manufacture `ready` by watching `/api/status` instead of sending an analysis. (Same rule as `IdempotencyStorageService.getStorageStatus()`.)
+- **A durable-use attempt is counted even when Firebase initialization is rejected**, because asking for durable storage and not getting it is the event an operator needs to see; `writesFailed <= writesAttempted` therefore always holds.
+- **Gate state wins over observed health.** `disabled` and `misconfigured` take precedence over the readiness window, and the observed counters survive so an operator can still see what happened after a rollback.
+- **`lastErrorReason` is a closed enum** (`firestore_not_initialized`, `firestore_unavailable`) because a Firestore error message embeds the fully-qualified project/database path. `failOpen: true` is reported rather than implied: a `degraded` verdict still answers symbol analysis, it just silently stops building decision history. `consecutiveFailures` clears on the next successful Firestore operation, so a transient outage self-heals without a restart and never latches degraded.
+
+`getFirestore()` now delegates to the shared hardened loader `initializeFirebaseAdminApp()` instead of building its own `admin.initializeApp(appOptions)`. Under issue #1128 a configured-but-invalid credential must **not** fall through to `initializeApp({})`: that enters the SDK default-auth path, which authenticates with a *different* credential than the operator configured (the documented `FIREBASE_CREDENTIALS_UNSUPPORTED_TYPE` case) and pays for discovery on the first read or write. `AlertStorageService.canInitializeFirestore()` also permits initialization when `ENABLE_SYMBOL_ANALYSIS_STORAGE === 'true'`, matching the other independent storage gates.
+
+**Deployment prerequisite, not a code step.** Every document already carries `expiresAt`, but Firestore only honours it once a TTL policy exists and TTL deletion is eventually consistent (~24 h). `ops/configure-operational-collection-retention.sh` already covers the `symbolAnalyses` collection group, so no script change was needed, but it must be run once per project or the collection grows without bound. Rollback is `false` plus a redeploy; already-stored documents are left for TTL deletion.
+
+**Coverage**: `tests/unit/symbol-analysis-storage.test.js` (unverified → verified → degraded, self-heal, closed error enum and message non-leakage, rejected initialization never calling `initializeApp`, status reads recording nothing, gate precedence, read-does-not-imply-write), `tests/integration/status-endpoint.test.js` (status projection for the unverified and disabled states), `tests/unit/render-blueprint.test.js` (blueprint declares it for web with previews off and not for the worker, plus the retention horizon), `tests/unit/postman-collection.test.js` and `src/openapi/openapi.json` (`SymbolAnalysisStorage` schema, four documented response variants).
+
+No new environment variable, Remote Config key, endpoint or response schema was added; only the reported readiness fields on the existing `dependencies.symbolAnalysisStorage` object gained fields and a wider `status` enum.
+
 **Production enablement and proven confluence counters (Issue #1109).** `render.yaml` declares `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT: true` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME: true`, both with `previewValue: false`, on the **web service only**.
 
 **The Blueprint gap was the actual bug, and it applied to *both* flags.** Each key was already present in the worker block as a `fromService` mirror of a value the web service never set, so the Blueprint *looked* configured while the only service that can reach the flags kept the `false` default. Only `/api/webhook/alert` reaches them (`TradingViewMcpService.enrichFromSignal`), and that route is mounted on the web service; the BullMQ worker never serves it. Do not "fix" this by moving the declaration to the worker — `tests/unit/render-blueprint.test.js` asserts the web block for **both** keys. A `fromService` mirror whose `envVarKey` source is never declared upstream is a silent no-op, so any future key added to a worker mirror must be declared on the web service too or it resolves to nothing. Previews stay off because a preview alert spends shared MCP budget and delivers to the production Telegram/WhatsApp destinations.
@@ -300,6 +337,8 @@ This repo now contains **both** renewal conventions, so neither signature enforc
 - `async-integration-review` (`.agents/skills/async-integration-review/`): reviews deadlines, abortable external calls, retries, cooldowns, worker fairness, scheduling inputs, telemetry, and graceful shutdown for asynchronous integrations.
 - `contract-alignment-review` (`.agents/skills/contract-alignment-review/`): reviews runtime/API/config/deployment changes for alignment across OpenAPI, Postman, `.env.example`, README/specs, and repository agent skills.
 - `agent-cross-review` (`.agents/skills/agent-cross-review/`): discovers and cross-reviews pull requests created by other AI coding agents (Codex, GitHub Copilot, OpenCode, Claude) against Cabros Bot fail-open async, formatting, persistence, auth, and contract standards.
+- `issue-automator` (`.agents/skills/issue-automator/`): automates issue resolution and the `In review` / `GLOBAL_BLOCKED` / `NEEDS_USER` handoffs. **Every notification this repository sends resolves its WhatsApp destination from `NOTIFY_WHATSAPP_CHAT_ID`, defaulting to `120363422033474991@g.us`** (issue #928). The knob is read in all five `--data-raw` payloads in the skill and in the `.github/workflows/firestore-backup.yml` failure notifier (a repository variable there, defaulted with `${{ vars.NOTIFY_WHATSAPP_CHAT_ID || '…' }}`); a chat id typed directly into a payload overrides the operator's configuration and is exactly the drift that issue removed. `tests/unit/issue-automator-notification-destination.test.js` fails on any such literal in the skill. `channels` stays a hardcoded `["whatsapp"]` — WhatsApp is an unconditional mandate, not a knob.
+- **Editing a payload must not move a leading whitespace byte.** That skill is a markdown document whose payload regions sit inside ordered- and nested-bulleted list items, and CommonMark decides both list nesting and whether a fence is a fence at all purely from indentation. Reindenting a `Send a WhatsApp …` step by one space demotes its shell block to indented code (rendered as a run-on inline `<code>` blob prefixed with a literal `bash`) or promotes the step out of its parent list, and neither shows up in the payload assertions. `tests/unit/issue-automator-notification-destination.test.js` therefore pins each region's introducer indent, list marker and fence indent, scans the whole document for structural defects, and carries the two shipped regression fixtures so the guard itself cannot go stale — re-run it after any edit to the skill.
 
 ### When implementing a feature:
 
@@ -424,7 +463,7 @@ The system provides optional enrichment of webhook alerts using Google Gemini AP
 2. If `ENABLE_GEMINI_GROUNDING=true`, call grounding service to fetch context
 3. Grounding service queries Gemini with alert text + system prompt + GoogleSearch results
 4. Gemini returns structured insights (sentiment, key insights, technical levels, and optional risk parameters) plus extracted sources (URLs + titles)
-5. Enriched alert stored as `alert.enriched` object with structure: `{ original_text, sentiment, sentiment_score, insights, technical_levels, invalidation_level, target_level, setup_type, risk_reward_ratio, prompt_provenance, sources, truncated }`
+5. Enriched alert stored as `alert.enriched` object with structure: `{ original_text, sentiment, sentiment_score, insights, technical_levels, invalidation_level, target_level, setup_type, setup_evidence, risk_reward_ratio, prompt_provenance, sources, truncated }` (note: `setup_type` and `setup_evidence` are strictly paired; uncorroborated classifications lacking evidence omit both fields)
 6. Original `alert.text` preserved for fallback
 7. Enhanced alert sent to all enabled notification channels
 8. Webhook response includes `enriched: true/false`, per-channel delivery `results`, and a `tokenUsage` object (with a formatted summary) when grounding runs
@@ -509,6 +548,36 @@ Why this matters more here than elsewhere: **prompt resolution fails open** to `
 - news analysis
 - confidence enrichment
 - Gemini market price fetch query
+
+## Langfuse Prompt-Resolution Telemetry (Issue #1030)
+
+Langfuse configuration readiness and actual prompt serving are **two separate facts** and `/api/status` reports them separately. Previously only configuration readiness was exposed, so a 100% local-fallback regression was invisible: readiness stayed green, `/api/status` looked healthy, and a prompt improvement published to Langfuse would appear to succeed while changing nothing in production.
+
+- `dependencies.langfuse` — **unchanged**. Configuration/reachability only (`ENABLE_LANGFUSE_PROMPTS` plus both key variables).
+- `dependencies.langfusePrompts` — **new** non-secret prompt-resolution telemetry: `servingStatus`, `servingPrompts`, `label`, `cacheTtlSeconds`, `totalResolutions`, `langfuseResolutions`, `localResolutions`, `localResolutionRatePercent`, `remoteFetchAttempts`/`Successes`/`Failures`, `remoteFetchSuccessRatePercent`, `lastSuccessfulFetchAt`, `lastFailedFetchAt`, `lastErrorCategory`, `consecutiveFailures`, and per-prompt `prompts[]` (`name`, `type`, `lastSource`, `lastLangfuseVersion`).
+
+`servingStatus` enum:
+- `disabled` — prompt management off; local fallbacks expected.
+- `unconfigured` — enabled without both credentials.
+- `no_traffic` — configured/reachable but nothing resolved yet, so serving is **unknown**, not healthy.
+- `serving` — every resolution came from Langfuse.
+- `degraded` — at least one from Langfuse and at least one fell back.
+- `local_fallback` — reachable but **every** fetch failed; no prompt has ever been served remotely.
+- `unknown` — fail-open value when telemetry itself is unavailable.
+
+`lastErrorCategory` is a closed enum: `client_unavailable`, `prompt_not_found`, `unauthorized`, `rate_limited`, `timeout`, `compile_failed`, `request_failed`, `unknown`. Raw provider error text is never surfaced because it can embed request context or credential fragments.
+
+**Core components**:
+- `src/services/prompts/PromptService.js` — in-process telemetry, `classifyPromptFetchError`, `_recordResolutionFailOpen` wrapper so a telemetry defect can never fail a live alert, and `resetTelemetryForTesting`.
+- `src/services/prompts/index.js` — barrel re-exports.
+- `src/controllers/status.js` — `dependencies.langfusePrompts` with a fail-open `unknown` fallback.
+- `src/openapi/openapi.json` (`LangfusePromptsDependency`) and `CabrosBot.postman_collection.json` ("Get Status - langfuse prompt resolution").
+
+**Coverage**: `tests/unit/prompt-service.test.js` (telemetry, fail-open, error-category enum, no-leak) and `tests/integration/status-endpoint.test.js` (configuration vs. serving separation, degraded and 100%-local-fallback reporting, secret redaction).
+
+**Rollout check**: verify in preview that `servingStatus` reaches `serving` and `servingPrompts` is `true`, confirm the `production` label exists, and align the remote `alert-enrichment` prompt with the local optional-risk schema **before** trusting any prompt-driven change. See `docs/ai-grounding.md`.
+
+No new environment variable or Remote Config key was added; the existing `schemaDriftDetected` provenance contract and `/api/alerts/summary` `riskMetadataCoverage` shape are unchanged. Fail-open everywhere: Langfuse unavailability keeps falling back to `src/services/prompts/defaults/*.txt` and never blocks alert delivery.
 
 
 ## Enriched Webhook Alert Output (004-enrich-alert-output)
@@ -714,6 +783,22 @@ The system provides status and capability querying endpoints to verify service c
 
 No new environment variable, endpoint, Remote Config key, or notification contract was added; this is a non-secret operational status addition.
 
+## Redrive Supersession Ordering Reconciliation (Issue #919)
+
+`isRepeatCooldownSuperseded()` in `src/services/notification/NotificationRedriveService.js` decides whether a dead-lettered alert is still worth redriving. It is reached from three places that all treat `true` as "cancel this record": the webhook path (`alert.js`), the pre-dispatch sweep gate, and the post-dispatch gate. A wrong `true` is therefore a **missed alert**, not just a cancelled retry.
+
+**The trap this repo already paid for once.** A supersession "generation" is *process-derived*, not durable: `nextMonotonicGeneration()` returns `lastMonotonicGenerationTime * 1000 + counter`, where the time comes from the local replica's clock. Two replicas with any clock skew mint generations that order the opposite way from the durable creation order. The implementation therefore treats the local marker as a **fallback verdict, never a short-circuit** — `locallySuperseded` is computed and then only consulted on the paths where durable evidence is *unavailable*.
+
+Three rules must survive future edits:
+
+- **Durable commit order outranks any local generation.** When both Firestore snapshots are readable and carry timestamps, `supersessionNanos` vs `recordNanos` decides alone; a proven newer record returns `false` even if the local marker claims a higher generation. This is the fix, and `tests/unit/notification-redrive-service.test.js` fails if the early `return true` on `locallySuperseded` is restored.
+- **The local marker is still consulted when durable reads cannot answer** — no Firestore, an exhausted `deadline`, a timed-out `Promise.race`, a thrown read, or snapshots that carry no commit timestamps. This keeps the pre-existing local-only behavior (suppression still happens) instead of silently flipping every unresolvable case to "redeliver".
+- **A locally `cancelled` record is a different question from supersession ordering.** That check keys on `record.id`, which is unique per correlation id, so it stays an unconditional early `return true`. Do not merge it into the marker reconciliation.
+
+Reconciling costs two extra point reads per call on the paths that previously returned early. That is deliberate: the alternative trades a bounded read for a silently dropped alert, and the repo's stated priority is that delivery correctness outranks the read.
+
+**No contract changed.** No environment variable, Remote Config key, endpoint, OpenAPI schema, or Postman variant was added — `isRepeatCooldownSuperseded()` is internal and its result already surfaced only through the existing `cancelled` dead-letter status.
+
 ## Firestore Write Observability & Persistence Metrics (GH-695)
 
 `GET /api/status` and `/api/capabilities` now expose an optional `dependencies.firestoreWriteMetrics` section reporting in-memory write metrics (`window`, `writesAttempted`, `writesSucceeded`, `writesFailed`, `successRate`, and per-domain breakdowns under `byDomain`). The section is omitted entirely until at least one write has been attempted; counters reset on process restart.
@@ -744,6 +829,27 @@ Production liveness is detected from **outside** the deployment. On 2026-08-31 t
 - **Not an application-owned environment variable.** `UPTIME_MONITOR_BASE_URL`, `UPTIME_MONITOR_CHECK_DOCS`, `UPTIME_MONITOR_TIMEOUT_MS` and `UPTIME_WATCHDOG_MAX_AGE_MINUTES` are GitHub **repository variables**, and the two Telegram values are repository **secrets**. Nothing was added to `.env.example`, `RemoteConfigService`, `firebase-remote-config-template.json`, `src/openapi/openapi.json` or `CabrosBot.postman_collection.json`: no application runtime, endpoint, flag, or response shape changed, and no secret is committed.
 - **Coverage**: `tests/unit/external-uptime-monitor.test.js` (exit-code enum, body-contract honesty, timeout, base-URL sanitization, `shouldPage` truth table, fail-open secret-free paging, plus process-level CLI tests that would have caught an entrypoint ignoring `argv`) and `tests/unit/external-uptime-workflows.test.js` (pinned `actions/checkout` + `persist-credentials: false`, no `continue-on-error` / `|| true` on the probe step, no `WEBHOOK_API_KEY`, watchdog cron phase distinct from the monitor's, exit codes and variables documented).
 - **Platform changes are a checklist, not a code change.** Updating `UPTIME_MONITOR_BASE_URL`, the third-party provider monitor, and the documented origins is a required step of any migration — see the re-activation checklist in `docs/monitoring.md`.
+
+## Production Enablement Verification (Issue #1109)
+
+The secretless uptime monitor proves only that *something* answers `/healthcheck`. A build months behind `master` answers 200 perfectly, so liveness cannot show that production is running current code, nor that a feature declared enabled in `render.yaml` is enabled in the deployed service. The authenticated layer that closes that gap is `ops/production-smoke-probe.sh`, driven by `.github/workflows/production-smoke-probe.yml` every 15 minutes.
+
+**The probe's default target is load-bearing and must match the live platform.** It previously defaulted to `https://cabros-bot-production.up.railway.app`, which answers 404 since Railway was retired. No `PRODUCTION_BASE_URL` repository variable exists, so the *in-repo fallback is what actually executes* — the scheduled job probed a host that no longer exists and failed on every run. A genuinely stale deploy was then indistinguishable from a misconfigured target, and both got ignored. The default is now the Render web service `cabros-crypto-bot-telegram-iac`. This is the same failure class as #971 and #1107: a check that is structurally blind is worse than no check, because it looks like coverage.
+
+Every failure message ends with `(probed <base_url>)`. A 404 from a decommissioned host and a 404 from a broken service are indistinguishable in a log unless the message names what was probed, so a wrong target is obvious at a glance and never confused with a real outage.
+
+**Exit codes** (closed enum; `7` is new): `0` ok, `2` `AUTH_BLOCKED`/`SECRET_LEAK`, `3` `HEALTHCHECK_FAILED`, `4` `STATUS_UNREACHABLE`, `5` `COMMIT_MISMATCH`, `6` `DEGRADED_DEPENDENCY`, `7` `FLAG_DISABLED`.
+
+**`PRODUCTION_REQUIRE_ENABLED_FLAGS` is what makes "enable X in production" verifiable.** It is a comma-separated list of `/api/status` `featureFlags` that must be exactly `true`, wired from `vars.PRODUCTION_REQUIRE_ENABLED_FLAGS`. It defaults to **empty**, so it introduces no failure mode until deliberately enabled — do not turn it on repository-wide without first establishing the current live values.
+
+Two invariants to preserve:
+
+- **An absent flag is disabled, not compliant.** The comparison demands the literal string `true`, so an absent key (an empty value, not `true`) can never satisfy the assertion and a stale build that predates the flag cannot pass. Treating absence as success would let an old deployment look compliant — the same shape-is-not-readiness trap this repo has already fixed for `firebaseRemoteConfig.ready` (#598), Firestore `readHealth` (#1285), `equityMarketData.ready` (#1116) and `idempotencyStorage.ready` (#1111). **The enforcement is the `!= "true"` comparison, not the jq alternative operator:** changing `// false` to `// empty` (or to a truthy default) does *not* make an absent flag pass, it only changes the diagnostic from `value=false` to a blank. Do not "fix" the `// empty` direction believing it is the load-bearing part, and do not introduce a truthy default — that *would* let absence pass.
+- **The Blueprint is intent, production is reality.** `render.yaml` declaring `value: true` changes nothing until the Blueprint is applied *and* the service is redeployed onto a build that knows the flag. A Blueprint entry can therefore be correct, reviewed and merged while production reports `false` indefinitely.
+
+**Coverage**: `tests/unit/production-smoke-probe.test.js` — default target is Render and not the retired Railway host, failure messages carry the probed target, exit `7` `FLAG_DISABLED` naming the disabled flag while satisfied flags are not reported, **an absent flag fails with exit `7` and is reported as `value=false`** (both halves of the invariant above, added after mutation testing showed the `// false` → `// empty` mutation left the whole suite green), exit `0` when all flags are enabled, the workflow's env fallback plus `vars.PRODUCTION_REQUIRE_ENABLED_FLAGS` wiring, and the absence of the never-implemented Telegram paging step and its three unread variables.
+
+**Not an application-owned environment variable.** `PRODUCTION_BASE_URL`, `PRODUCTION_REQUIRE_READY_DEPS`, `PRODUCTION_REQUIRE_ENABLED_FLAGS` and `PRODUCTION_PROBE_TIMEOUT` are GitHub **repository variables** read by agent tooling, not the application runtime. Nothing was added to `.env.example`, `RemoteConfigService`, `firebase-remote-config-template.json`, `src/openapi/openapi.json` or `CabrosBot.postman_collection.json`: no endpoint, application env var, Remote Config key, response shape or feature gate changed, and no secret is committed.
 
 ## Multi-Channel Notification Architecture (002-whatsapp-alerts)
 
@@ -1110,6 +1216,7 @@ See `/specs/TERMINOLOGY_GUIDE.md` for extended discussion and examples.
 - GH-319 / CB-131: added a static parity guard for application-owned environment reads and documented the audited controls in `.env.example`, README, and `agents.md`. Platform-injected, test-only, and deprecated aliases are explicitly classified; runtime defaults remain unchanged.
 - GH-314 / CB-129: added idempotent HTTP/process shutdown coordination with a bounded `SHUTDOWN_TIMEOUT_MS` deadline, news-monitor startup/cache cleanup ownership, active `JobService` and callback drain, Telegram polling/handler drain, final Sentry flush, and forced connection close fallback. Existing feature gates and notification behavior remain unchanged.
 - GH-329 / CB-133: webhook alert persistence now records a bounded non-negative `processingTimeMs` before the response, preserves legacy latency fields in summary aggregation, and keeps Firestore storage fail-open; no public API or notification contract changed.
+- GH-605: alert token usage now carries validated `grounding`, `news-analysis`, `expanded-analysis`, `scanner`, and `enrichment` buckets; `/api/alerts/summary` exposes exact per-feature alert/batch/symbol/token/cost totals without double-counting, and CSV exports include the feature tag. Legacy stored records use source-based attribution, while existing env defaults and delivery behavior remain unchanged.
 - 001-gemini-grounding-alert (improvements with PR #21, #20, #19): Added Gemini GoogleSearch grounding integration for alert enrichment; added Brave Search fallback/override; introduced provider routing (Gemini/Azure/OpenRouter); added token usage + cost estimation surfaced in notifications; graceful degradation on API failure; single grounding call reused across channels.
 - 002-whatsapp-alerts: Added multi-channel notification system with TelegramService, WhatsAppService, NotificationManager; exponential backoff retry logic; MarkdownV2 and WhatsApp markdown formatters; comprehensive integration tests for parallel delivery, config validation, graceful degradation.
 - issue #91 / branch `codex/fix-91-whatsapp-truncation`: WhatsApp delivery now splits GreenAPI payloads above the provider limit into sequential chunks instead of silently truncating with an ellipsis; regression coverage added for long alert payloads.
@@ -1315,6 +1422,22 @@ A zero-channel broadcast is a silent total loss of alerting: no channel is reach
 
 No new environment variable, Remote Config key, feature flag, or route was added; the behavior is unconditional and fail-open.
 
+### Admin paging fallback across channels (Issue #1168)
+
+Single-channel admin paging is an observability blackout at the moment it matters most: when the admin Telegram destination breaks, the operator is paged exclusively over that broken channel. Live production evidence (72h window): `telegram { total: 3, success: 0, failure: 3 }` while `whatsapp { total: 10, success: 10, failure: 0 }` — a healthy channel was carrying 10 of 14 deliveries and went unused for paging.
+
+- `NotificationManager._dispatchAdminPage({ message, pageType })` — the single non-recursive admin send path shared by `notifyAdminOfFailures()` (pageType `delivery-failure`) and `notifyAdminOfZeroChannels()` (pageType `zero-channel`). It tries the Telegram admin chat first, then walks the fallback chain, and records a `ADMIN_PAGING_UNDELIVERABLE` Sentry external failure only when every operator channel fails. It never throws and never re-enters `sendToAll`/`sendToChannels`, so admin paging cannot recurse and cannot inflate broadcast delivery metrics or dead-letter counters.
+- **Prefer healthy over merely configured.** `NotificationManager.getAdminPagingFallbackChannels()` keeps only channels that pass the existing `isChannelConfigured()` predicate (enable flag AND credentials), **excludes any channel whose observed health is `failing`**, and orders the rest by `DeliveryMetricsService.getChannelHealth()`: `healthy` (0) → `unknown` (1) → `degraded` (2), with the deterministic `['discord', 'whatsapp']` order as the tie-break. Excluding a failing channel rather than ranking it last is deliberate: paging a destination with zero successful deliveries can only reproduce the failure it is reporting. A never-configured channel is never tried either, so there are no phantom pages.
+- `/api/status` and `/api/capabilities` expose a top-level `adminPaging` block (schema `AdminPagingStatus`) with `status` (`unknown` | `ready` | `degraded`), `attempts`/`successes`/`failures`, `consecutiveFailures`, `lastSuccessAt`/`lastFailureAt`, `lastSuccessChannel`, `lastErrorCategory`, `lastError` (truncated, sanitized), `fallbackEnabled`, and `fallbackChannels` (names only). This is what makes a 0/3 blackout distinguishable from a channel whose readiness block says `ready`; channel readiness reflects configuration, not live outcome. The block is omitted until a `NotificationManager` exists, and is resolved through `src/services/notification/adminPagingStatus.js` so `status.js` does not import the notification stack.
+- No tokens, webhook URLs, or chat ids appear in the page, in `adminPaging`, or in the fallback payload — the fallback `channel.send()` receives only `{ text }`, never the Telegram admin chat id.
+- `notificationChannelIntent` is unchanged and still derives from `isConfigured()`, so the new fallback never reclassifies a never-configured channel as configured.
+
+**Core components**: `src/services/notification/NotificationManager.js`, `src/services/notification/adminPagingStatus.js`, `src/services/notification/DeliveryMetricsService.js`, `src/controllers/status.js`.
+
+**Coverage**: `tests/unit/notification-manager.test.js` (fallback on `chat not found`, health-preferred ordering, no phantom page, total-failure Sentry + degraded status, zero-channel fallback, real `attemptCount`, no delivery-metric inflation), `tests/unit/delivery-metrics-service.test.js` (`getChannelHealth` states), and `tests/integration/status-endpoint.test.js` (`adminPaging` present, no destination leakage, omitted with no manager).
+
+No new environment variable, Remote Config key, feature flag, or route was added; fallback reuses the existing operator channel configuration and the behavior is unconditional and fail-open.
+
 **To extend**:
 1. **Discord integration**: Add in `src/services/notification/DiscordService.js`
 2. **Error aggregation**: Track error rates in memory for metrics
@@ -1416,7 +1539,7 @@ Spread collapse is evaluated first and reported first because it is the more sev
 
 **Observe the effective score, not the raw one.** The rolling window records the post-cap value. Recording `sentiment_score_raw` would make a burst of zero-source alerts look saturated at 0.9 while storage holds 0.55, and would contradict `enrichment.sentimentCalibration`.
 
-**Prompt contract.** `src/services/prompts/defaults/alert-enrichment.user.txt` scores against five reference anchors (`0.90` multi-source major catalyst, `0.75` corroborated, `0.60` partial, `0.45` routine, `0.30` negligible) and requires a `sentiment_score_evidence` line naming the anchor and its observation. That replaced the old `0.9+ / 0.6-0.8 / corroborating sources` marker triple in `REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE`. **Consequence:** a Langfuse prompt not republished after #1031 reports `schemaDriftDetected: true` with the new markers in `missingCalibrationGuidance`. That is the intended rollout signal, not a regression — `resolveLocalPrompt` runs the same inspection, so the two surfaces stay in lockstep. Use the `langfuse-prompt-sync` skill to publish.
+**Prompt contract.** `src/services/prompts/defaults/alert-enrichment.user.txt` scores against five reference anchors (`0.90` multi-source major catalyst, `0.75` corroborated, `0.60` partial, `0.45` routine, `0.30` negligible) and requires a `sentiment_score_evidence` line naming the anchor and its observation. That replaced the old `0.9+ / 0.6-0.8 / corroborating sources` marker triple in `REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE`. Similarly, `REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS` includes `setup_evidence` and `REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE` includes the market-structure rubric markers (`'Setup type rubric'`, `'OMIT \`setup_type\` and \`setup_evidence\` entirely'`) from #1254 to ensure remote prompts enforce pairwise setup corroboration. **Consequence:** a Langfuse prompt not republished reports `schemaDriftDetected: true` with the new markers in `missingCalibrationGuidance` or `missingRiskFields`. That is the intended rollout signal, not a regression — `resolveLocalPrompt` runs the same inspection, so the two surfaces stay in lockstep. Use the `langfuse-prompt-sync` skill to publish.
 
 **Read the cap's liveness from the summary.** `enrichment.sentimentCalibration.rawScoreCapCount` counts alerts that also stored `sentiment_score_raw`, i.e. alerts the CB-238 zero-source cap rewrote. Non-zero proves the cap is live in the queried deployment; zero means either no capped alerts in the window or a stale build. This is the verification path for #970's Railway cutover.
 
@@ -1525,6 +1648,31 @@ describe('news-monitor', () => {
 - Implement retry with retryHelper
 - Add timeout handling
 - Example: `src/services/inference/azureAiClient.js`
+
+## Durable News-Monitor Analysis Storage (Issue #1180)
+
+`ENABLE_FIRESTORE_NEWS_ANALYSIS=true` is pinned in `render.yaml` on the **web service only**, `previewValue: false`, so `NewsAnalysisStorageService` records each analyzed symbol into the `news_analysis` collection and `GET /api/news-monitor/analyses` / `GET /api/news-monitor/summary` have an audit trail. Previews stay off because a PR preview shares the production Firestore project, matching `ENABLE_FIRESTORE_JOB_STORAGE` and `ENABLE_FIRESTORE_SCANNER_PRESETS`. The worker never mounts routes, so a worker declaration would be a `fromService` mirror of a value the web service never set.
+
+**The gate was environment-only but published in the Remote Config template — the trap that made this issue non-trivial.** It was listed in `PARAMETER_SCHEMA` and shipped in `firebase-remote-config-template.json` as `"false"`. A template parameter's `defaultValue` is reported by the Admin SDK with **source `remote`**, so `getRemoteValue()` accepts it as an override that beats `process.env`: setting the variable in `render.yaml` alone would have been **silently reverted to `false` the first time a Remote Config load succeeded**. The key is now removed from both `PARAMETER_SCHEMA` and the template, and `isEnabled()` reads `process.env` directly. `NEWS_ANALYSIS_RETENTION_DAYS` is the genuine runtime knob and stays remote-config eligible. Do not "restore" the gate to the allow-list.
+
+The service also had its own inline credential bootstrap (`JSON.parse(FIREBASE_SERVICE_ACCOUNT_JSON)` + `admin.credential.cert` + `initializeApp`), which is exactly what issue #1128 removed from every other storage service. It is now routed through `initializeFirebaseAdminApp({ admin })`, so an inline `authorized_user` / `external_account` document is refused instead of authenticating with a *different* credential than the operator configured, and an ADC-only deployment works instead of paying default-auth discovery on the first read.
+
+**Three composite indexes are required, and nothing in the test suite can catch a missing one.** Both reads filter on `symbol` / `eventCategory` and sort on `createdAt`, and Firestore never merges single-field indexes, so `firestore.indexes.json` must declare `{symbol, createdAt}`, `{eventCategory, createdAt}` and `{symbol, eventCategory, createdAt}`. The unit Firestore double makes `orderBy` a no-op and the emulator auto-creates indexes, so the only guard is the source-level declaration assertion in `tests/unit/news-analysis-storage.test.js`. **A declaration is not a deployment:** `firebase deploy --only firestore:indexes` must be run, and the query is rejected until the build reaches `READY`. A rejected read maps to `503 STORAGE_UNAVAILABLE`, not `500`, and `lastMissingIndex: true` names the cause.
+
+Six invariants to preserve:
+
+- **`mode` and `backend` are intent-derived** (`enabled && credentials present`) and must not flip to `memory` while the gate is on. An operator reading `memory` concludes the flag is off, which is the opposite of the truth.
+- **`ready` is proven, not inferred.** It is true only after an observed successful durable write or read, and `unverified` means *no evidence yet*. This is the seventh instance of the repo's "shape is not readiness" rule, after `firebaseRemoteConfig.ready` (#598), Firestore `readHealth` (#1285), `equityMarketData.ready` (#1116), `idempotencyStorage.ready` (#1111), `scannerPresetStorage` (#1342), `promptReadiness` (#1178) and `jobExecutionQueue.brokerReachable` (#1117).
+- **Gate state wins over observed health.** Credentials absent or refused report `misconfigured`, which is the only verdict that means "fix the credentials".
+- **`lastErrorReason` is the repository-wide closed `FIRESTORE_ERROR_CATEGORIES` enum**, because every Firestore error here is swallowed and this is the operator's only evidence — and a provider message embeds the fully-qualified project/database path. `missingIndex` is reported separately as a boolean for the same reason.
+- **`operationsAttempted` counts an attempt even when Firebase initialization was rejected**, so `operationsFailed <= operationsAttempted`. `getStorageStatus()` performs no I/O, so reading status never registers an attempt.
+- **Telemetry can never reject a write or an admin read.** Every readiness mutation runs through `recordReadinessSafely()`; reads and writes also record through `FirestoreWriteMetricsService` under the `newsAnalysis` domain, so the shared `firestoreReadMetrics` / `readHealth` surfaces see this path too.
+
+**TTL is a deployment prerequisite, not a code step.** `expiresAt` is only honoured once `news_analysis` is in the TTL list of `ops/configure-operational-collection-retention.sh`, and TTL deletion is eventually consistent and only removes already-expired documents. The legacy backfill was deliberately *not* extended to this collection: `news_analysis` has always written `expiresAt`, so there is no pre-TTL document to repair.
+
+**Coverage**: `tests/unit/news-analysis-storage.test.js` (readiness lifecycle `unverified → ready → degraded`, self-heal without restart, cold start, invalid-credential skip with `initializeApp` never called, `operationsFailed <= operationsAttempted`, read-failure classification with `lastMissingIndex`, provider-message non-leakage, intent preservation after failure, source-level index + render.yaml + Remote Config assertions), `tests/integration/status-endpoint.test.js` (status projection in disabled / unverified / degraded states), `tests/unit/render-blueprint.test.js` (web declares the gate with previews off, worker does not), `tests/unit/postman-collection.test.js` and `src/openapi/openapi.json` (`NewsAnalysisStorage` schema plus the two read endpoints' success and failure variants).
+
+No new environment variable, endpoint, or feature gate was added; `GET /api/news-monitor/analyses` and `GET /api/news-monitor/summary` already existed and now return data.
 
 ## Persistent News Monitor Deduplication (CB-38 / Issue #120)
 
@@ -1849,6 +1997,28 @@ The `/admin` console keeps its active view and its report filters in the URL, so
 
 No new endpoint, environment variable, Remote Config key, OpenAPI schema, or Postman variant was added: the OpenAPI contract origin and both allowed backend origins are unaffected because only browser-side navigation state changed.
 
+## Native Credential Forms in the Admin Console (Issue #951)
+
+Both `/admin` credential paths are real `<form>` elements with a `submit` handler, so Enter submits them and the browser owns constraint validation. The Firebase sign-in card was a `div` + `type="button"` and the legacy key card was a `novalidate` form whose `submit` listener delegated to `button.click()`; neither was keyboard-submittable and blank input reached the Firebase SDK.
+
+Invariants to preserve:
+- **The credential form must never navigate, so its listener must exist before the card is visible.** Both forms have no `action`, so an unhandled submit performs a native `GET` and writes `email`, `password` or `apiKey` into the URL, browser history and any upstream proxy access log. This is not hypothetical: round 1 of this issue shipped exactly that leak because the listeners were attached *inside* `setupFirebaseAuth` / `setupLegacyConsole`, i.e. after two awaits and never at all on the `configured: false` branch that `loadAuthConfig()` fails open to. Both listeners are now attached at `DOMContentLoaded` top level, before the first await and before any `setHidden(...)` reveal. **Do not move them into a setup function, and do not gate attachment on readiness** — readiness gates the *call* (`firebaseAuthReady`), not the listener.
+- **Readiness is what gates the Firebase call.** `firebaseAuthReady` is set `true` only after `initializeApp` and `setPersistence` resolve, so a submit during the SDK race window shows `Sign-in is not available yet. Try again in a moment.` instead of calling the SDK. The handler is the single `preventDefault()` gate, not a second throwaway listener — two listeners would weaken the one-submit-path invariant.
+- **A form that cannot work is not shown.** The `!config.configured` branch and the bootstrap `catch` both `setHidden('auth-form', true)`, so the operator never sees a live credential form next to "Firebase sign-in is unavailable".
+- **One submit path per form, and it is `submit`.** `#auth-form` and `#connection-form` each have exactly one `submit` listener. Do not add a `click` listener on `#sign-in` / `#save-key` to "also support clicks" — in a browser a `type="submit"` button fires both, so a click handler *and* a submit handler means two attempts. Implicit submission (Enter) is the browser's job; nothing intercepts it, so there must be no `keydown` handler on the credential inputs either.
+- **Validity is read from the control, never re-implemented.** `isFieldValid()` calls the input's own `checkValidity()`, so `required` and `type="email"` stay the single source of truth. The `required`-only fallback branch is for hosts without the constraint-validation API; a real browser always takes the first branch. Do not inline local regexes for the email — that is how the browser rules and the guard drift apart.
+- **A whitespace-only key is refused by `saveKey()`, not by the browser.** Native `required` accepts `'   '` (measured: `validity.valid === true`), so the explicit trim in `saveLegacyApiKey()` is the only thing standing between a useless key and `sessionStorage`. Do not fold it into `isFieldValid()` as a fallback — that is what made the round-1 test pass against a double stricter than the browser.
+- **One rejected pair, one message, associated with both controls.** A Firebase sign-in failure cannot be attributed to one field (Firebase returns `auth/invalid-credential`/`wrong-password`/`user-not-found` for the pair), so `showCredentialError()` writes the message once to `#auth-credentials-error` — which both inputs reference through `aria-describedby` — and marks both `aria-invalid="true"`. `clearCredentialError()` runs at the start of every attempt and on any `input`, so `aria-invalid` cannot survive a fix.
+- **Credentials never appear in an error, a log, or a URL.** Every message is a fixed string. `#key-state` is the legacy control's `aria-describedby` target and its existing `aria-live="polite"` is what announces a rejected key. The URL half of that claim rests entirely on the first two invariants.
+- **Session-only storage is unchanged.** `saveLegacyApiKey()` still writes `cabros-admin-api-key` to `sessionStorage` — or keeps the key in memory when `authState.enabled` (the Firebase path) — and `sendRequest` still sends it as the `x-api-key` header. Nothing about `validateApiKey` or the Firebase role checks (`admin.viewer` / `admin.operator`) changed.
+- **Label/input pairing is explicit, but the field wrappers are load-bearing for layout.** Each control sits in a `.field` / `.key-field` wrapper because `.auth-form` and `.connection-row` are two-column grids with `align-items: end`: dropping the wrapper puts `label` and `input` in separate grid cells. The global `label { display: grid }` rule used to supply the stacking and no longer applies once the label no longer wraps the input.
+
+**Coverage**: `tests/unit/admin-client.test.js` (`credential entry forms`) — shell markup assertions for both forms, submits-exactly-once with no `keydown` interceptor, blank/malformed email rejected before `signInWithEmailAndPassword`, a rejected sign-in associated with both controls without echoing the values, error cleared on edit, legacy key saved on submit and never placed in a URL, and an empty or whitespace-only key refused. Three tests pin the no-navigation guarantee by asserting `event.defaultPrevented === true` (the fake cannot perform a native GET, so `defaultPrevented` is the only available proxy): a submit inside the SDK race window with `setPersistence` pending, a submit while `config.configured` is false, and a legacy submit. The harness `FakeElement` gained `checkValidity()` **without trimming**, so the double is no stricter than the browser, and `dispatch()` returns the event so those assertions can read `defaultPrevented`.
+
+**Verified in a real browser** (local server on both auth paths): a malformed email produces `validity.typeMismatch`, moves focus to the field and issues zero requests; Enter in either credential field issues exactly one Firebase request and shows `Sign-in failed. Check the account and try again.` with `aria-invalid="true"` on both inputs and no credential value in the message. Round 2 (after the QA-found regression): with `/admin/auth-config` answering `{ enabled: true, configured: false }` the form is hidden and a forced `requestSubmit()` leaves `location.search === ""`; with the card revealed while the SDK scripts are still in flight, a submit leaves `location.search === ""` and shows `Sign-in is not available yet. Try again in a moment.`; a whitespace-only key is refused with `validity.valid === true`, proving production logic did it; a valid key saves to `sessionStorage` only and never appears in the URL. Layout is unchanged at 1280px and 375px with no horizontal overflow.
+
+No new endpoint, environment variable, Remote Config key, OpenAPI schema, or Postman variant was added: only client-side form semantics changed, and `src/admin/` remains the source of truth for `public/admin/` via `pnpm run build:hosting`.
+
 ## Admin Alert Analytics and Export Workflows (CB-120 / Issue #288)
 
 The in-app `/admin` Alerts view now consumes the existing protected `GET /api/alerts/summary` and `GET /api/alerts/export` operations through dedicated bounded report forms. Summary windows default to the latest 24 hours and render returned aggregate data readably; exports require `from`/`to`, support JSONL and CSV, and download the response blob using its content type. Source/enriched filters are applied before bounded summary aggregation with raw Firestore cursors; filtered reports omit shadow-mode metrics because that service has no matching filters.
@@ -1885,6 +2055,32 @@ Raw alert text remains disabled by default and requires an explicit checkbox. Th
 - `src/services/storage/AlertStorageService.js` — Persists only the allow-listed enrichment outcome status.
 
 `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS`, `TRADINGVIEW_MCP_TIMEOUT_MS`, and `TRADINGVIEW_MCP_MAX_RETRIES` remain the existing environment/Remote Config controls; no new environment variable was added.
+
+## Deadline-Aware Base Attempt Allocation (Issue #948)
+
+`enrichFromSignal()` sizes the **primary** base attempt against the whole remaining base sub-budget, capped by `TRADINGVIEW_MCP_TIMEOUT_MS` — never a fraction of it, and never a share of the retry allowance. That part was GH-630. #948 removes the **remaining** starvation mode, which was the one that actually suppressed enrichment in production.
+
+**The mechanism that was still broken.** When attempt 1 failed after spending most of the sub-budget, attempt 2 was handed whatever was left (down to `Math.max(1, …)` = 1ms) and re-ran the whole three-hop call. Two consequences, both harmful:
+
+- **The breaker was charged for our own deadline.** Every issued attempt passes through `_withRuntimeStatus`, so each non-viable retry incremented `consecutiveFailures` and opened the circuit breaker at threshold — five of them suppressed all enrichment for `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` (600s) against a host that was answering.
+- **The real cause was masked.** The last result returned was the generic budget-exhausted stub, replacing the provider error (`HTTP 503`, `no data …`) with `base analysis budget exceeded (9000ms)`.
+
+**Four invariants to preserve:**
+
+- **The viability floor is `min(25% of the per-request MCP timeout, half the base sub-budget)`.** `callCoinAnalysis` is three sequential HTTP hops, each bounded by `TRADINGVIEW_MCP_TIMEOUT_MS`, so a window below that cannot complete an exchange. The `baseBudgetMs / 2` term is load-bearing: without it an operator who deliberately configures a small budget silently loses every retry. Do not hard-code an observed latency (the production window was ~1.9s) as the threshold.
+- **The decision belongs in the failing attempt's `catch`, not the next attempt's closure head.** Returning `retryable: false` from the attempt that actually failed is what preserves the real provider error and skips the backoff. Moving the check to the top of the closure reintroduces the masked-cause bug.
+- **A declined retry must never be issued, and so must never be charged.** It is absent from `baseAttempts.attemptedCount` and recorded in `skippedNonViableCount`. Every *issued* attempt still charges the breaker exactly once — including a primary attempt that burns its whole viable window, which is genuine provider evidence. Do not "simplify" the gate into `_recordFailure()`; that would blind the breaker to a hung provider (covered by a named test).
+- **Optional enrichment stays opportunistic.** A base result that survives a volume/confluence/multi-timeframe timeout is applied `partial`, never `failed`, and still counts as an applied base attempt.
+
+`dependencies.tradingViewMcp.enrichment.baseAttempts` reports `attemptedCount`, `appliedCount`, `failedCount` (so `applied + failed == attempted`), `skippedNonViableCount`, `p50Ms`, `p95Ms`, `maxMs` and `lastAttemptMs`. **The counters are cumulative and never trimmed; only the percentile basis is bounded** (`sampleLimit` = 200, `sampledCount` = how many observed durations back the percentiles). Deriving the counters from the capped sample was the first draft and was rejected: it made `attemptedCount` silently under-report once more than 200 attempts had run, which is precisely the denominator an operator compares the applied rate against. Percentiles are `null` until an attempt is observed, and a zero-length sample is kept rather than dropped. Recording and projection are both fail-open — telemetry can never reject an alert or a status read — and the fallback projection returns a zeroed block, never `null`, because the field is published as an object.
+
+**This does not fix MCP cold start.** francovp's 2026-09-19 telemetry measured a spun-down free-tier host exceeding 60s to answer `initialize` against a ~12s envelope. No allocator change makes that fit; it is a separate remediation (warm-up tick / pre-flight), tracked separately.
+
+**Coverage**: `tests/unit/tradingview-mcp-service.test.js` — four concurrent alerts with ~3s base latency under a 9s budget all apply on attempt 1; the primary-attempt allocation arithmetic; a non-viable residual declining the retry with no extra tool call, no backoff and the real provider error preserved; a fast failure still retrying; the declined retry not charging the breaker or paging an operator; a viable-window primary timeout still charging it; p50/p95 projection; and the applied-`partial` path.
+
+A declined retry is logged at info naming the symbol, residual and floor, because the operator remedy is a budget change and the event is otherwise invisible until enrichment is missing from a whole alert batch.
+
+No endpoint, environment variable, Remote Config key or feature gate was added; `enrichment.baseAttempts` is the only response change, documented in `src/openapi/openapi.json` and `CabrosBot.postman_collection.json`. The unit test pins the runtime's emitted key set against the OpenAPI schema's `required`/properties so the two cannot drift.
 
 ## News Monitor Cached No-Event Analyses (CB-146 / Issue #363)
 
@@ -2016,6 +2212,13 @@ No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract c
 - `tests/unit/signal-repeat-cooldown.test.js`, `tests/integration/alert-repeat-suppression.test.js`, `tests/integration/status-endpoint.test.js` — Window/flip/fail-open coverage, endpoint double-post behavior, and status exposure.
 
 Disabled by default preserves existing webhook behavior byte-for-byte.
+
+**A fresh delivery cancels stale redrives on every identity it satisfied, not just the default one (issue #918).** After a successful delivery, the handler cancels pending/in-flight dead letters for the same repeat key under the **unique union** of the concrete delivered channel identities and the synthetic default-destination identities, and repeats the same cancellation for the opposite-side key. The concrete half is what makes the guarantee hold: a redrive recorded against the very chat that just received the alert is a duplicate waiting for its backoff, and passing only `defaultDestinationChannels` left it live. Two invariants must survive future edits:
+
+- **The union is built once and used for both keys.** `deliveredCooldownChannels` is a `Set` union of `deliveredReservationChannels` and `defaultDestinationChannels`; the same-key and opposite-key calls receive the identical array. The opposite-key cancellation already had the union, so widening the same-key one is the entire fix — computing two separately-shaped arrays is how the two drifted apart in the first place.
+- **The widening must not escape destination scope.** A redrive keyed to a *different* concrete destination on the same key has a different channel fingerprint and stays pending; that destination never received this delivery, so its dead letter is still owed. A test seeds three records on one key (concrete `chat-a`, synthetic default, concrete `chat-b`) and asserts the first two are `cancelled` and the third is `pending`. Do not "simplify" the cancellation to the key alone.
+
+`cancelPendingRepeatCooldowns()` keeps the generation fence: it calls `markRepeatSupersession(key, channels)` for each `(key, channel)` pair and only cancels a record whose `repeatCooldown.generation` is not newer than the supersession generation, so a dead letter reserved *after* this delivery is never cancelled. Adding channels to the set widens which identities are compared; it does not weaken the fence. Coverage: `tests/integration/alert-repeat-suppression.test.js` — the same-key concrete cancellation, the destination-scope and synthetic-default preservation, and a due-now record proven `cancelled` with `attemptCount: 0` after a real `sweep()` (i.e. cancelled *before* its next retry, not redelivered).
 
 ## CI Secret Scanning and Least-Privilege Workflows (CB-257 / Issue #556)
 
@@ -2171,6 +2374,65 @@ No environment variable, Remote Config key, endpoint, OpenAPI, or Postman contra
 - `tests/unit/message-helper.test.js` and `tests/integration/generic-message-webhook.test.js` cover chunk estimation, dry validation, invalid input, and additive response metadata.
 - `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` document `dryValidate` request/response schemas and examples.
 
+## Generic Message Dry-Run Routing Preview (Issue #876)
+
+`POST /api/webhook/message` accepts `dryRun` via query (`?dryRun=true`) or JSON body (`"dryRun": true`), closing the
+last gap in dry-run coverage across the alert-producing surfaces and matching the `/api/webhook/alert` contract. It
+returns `{ success: true, dryRun: true, estimatedChunks, requestedChannels, deliveredChannels: [], payload: { text },
+routing, requestId }` plus `broadcast: true` when no `channels` subset was requested, and the existing truncation
+metadata when the message was clipped.
+
+Five invariants must survive future edits:
+
+- **A dry run mutates nothing.** No notification is dispatched, nothing is persisted to Firestore, and **no idempotency
+  key is reserved or cached**. `idempotencyMiddleware` skips itself for a dry run on the paths listed in
+  `DRY_RUN_IDEMPOTENCY_BYPASS_PATHS` (`src/lib/idempotency.js`), because caching a probe's body would let a later *live*
+  request reusing the same key receive the preview instead of delivering. Keep the key usable: that is what proves the
+  bypass works (`tests/integration/generic-message-webhook.test.js` sends a dry run and then a live request with the same
+  key and asserts the live one actually delivered). The bypass is deliberately **path-scoped**, not global:
+  `/api/webhook/alert` keeps its existing idempotent dry-run behaviour unchanged. Two details are load-bearing — the
+  allowlist is matched against `req.baseUrl + req.path` because `req.path` is mount-relative inside a router (matching the
+  relative form alone silently never fires, which fail-opens *back* toward reserving keys), and adding the paths as route
+  arguments instead would edit the `/webhook/*` route registrations, which makes CodeQL re-attribute its long-standing
+  `js/missing-rate-limiting` false positive on those lines to any PR that touches them.
+- **The bypass and the handler must agree on what a probe is.** Both read `resolveDryRun()` from the single shared
+  `src/lib/dryRunRequest.js`. Two independent parsers are how a request ends up treated as a probe by the middleware (no
+  reservation) and as a live request by the handler (a real delivery), or the reverse. `alert.js` and
+  `newsMonitor.js` import the shared helper rather than keeping their own copies — do not reintroduce a local one.
+- **An unrecognised `dryRun` value is a `400` in both locations, not a silent live send.** Only booleans and the
+  strings `"true"`/`"false"` are accepted (`details.field: "dryRun"`). This is a deliberate divergence from
+  `/api/webhook/alert`, whose lenient parse would silently downgrade `dryRun: "yes"` to a real delivery — the exact
+  "no silent fallback" failure the repository keeps fixing. A caller who asked for a preview must never get a send. The
+  guard covers `req.query.dryRun` as well as the body field, because the query form is the documented one and a typo there
+  (`?dryRun=yes`, `?dryRun=1`, `?dryRun=FALSE`, or a bare `?dryRun`) would otherwise reach a real delivery while the body
+  form already returned `400`. `isRecognisedDryRunValue()` in `src/lib/dryRunRequest.js` is the single definition of the
+  accepted set, deliberately distinct from `isDryRunValue()` — the latter answers "is this a probe?" for the idempotency
+  bypass and must stay lenient, because the middleware runs *before* this validation and treats a typo as a live request.
+  Do not merge the two predicates.
+- **Validation failures carry the shared error envelope.** The `NotificationRoutingValidationError` branch emits
+  `code: "INVALID_REQUEST"` and `retryable` through `sendError()` from `src/lib/errorEnvelope.js`, matching the published
+  `Error` component this route's `400` already references. An integrator matching on `code === 'INVALID_REQUEST'` must
+  match; do not hand-roll this response body again.
+- **Validation still runs, so a dry run is a routing test.** Unknown channels, malformed `discordWebhookUrl`, negative
+  `telegramThreadId`, and requested-but-disabled channels all return the same `400` a live request would. The disabled
+  channel check (`assertChannelsAvailable`) only runs when the channel registry already exists, because a dry run must
+  not initialize the notification services (`initializeNotificationServices` validates every channel against its
+  provider). Do not add an eager init to make the check unconditional — that turns a preview into provider traffic.
+- **The Discord webhook URL is a credential and is never echoed.** The preview reports
+  `discordWebhookUrlProvided: true` instead, matching the existing decision not to persist the raw URL in the same
+  handler. `tests/unit/postman-collection.test.js` and `tests/unit/openapi-contract.test.js` assert the saved examples
+  never contain it.
+
+When both `dryValidate` and `dryRun` are supplied the narrower `dryValidate` response wins, so chunk estimation stays
+testable without routing metadata. No new environment variable, Remote Config key, or response status code was added;
+the change is additive to the existing `MessageDeliveryResult` body.
+
+**Coverage**: `tests/integration/generic-message-webhook.test.js` (`dry-run mode` — query and body flags, the string
+form, explicit `false`, invalid value in either location including the query-string typo cases, the shared error envelope
+on the `400`, routing validation, destination overrides without credential leakage, idempotency non-mutation, truncation
+metadata, `dryValidate` precedence),
+`tests/unit/openapi-contract.test.js` and `tests/unit/postman-collection.test.js` (published contract).
+
 ## Generic Message Truncation Metadata (GH-602)
 
 `POST /api/webhook/message` reports inbound truncation so callers can detect silent content loss:
@@ -2180,6 +2442,44 @@ No environment variable, Remote Config key, endpoint, OpenAPI, or Postman contra
 - `tests/integration/generic-message-webhook.test.js` covers both branches: metadata omitted when the message fits, metadata present when it does not, and the matching `console.warn` behavior.
 - `src/openapi/openapi.json` and `CabrosBot.postman_collection.json` document the conditional fields and both response shapes.
 
+
+## Same-Direction Alert Burst Aggregation (Issue #1104)
+
+`ENABLE_ALERT_SYNTH_BURST_AGGREGATION=true` (default `false`) buffers a parsed TradingView signal for `ALERT_BURST_WINDOW_MS` and collapses alerts sharing a direction **and** identical notification routing into one "regime" message per channel. Production evidence: 4 SELLs in 2.3s on 2026-08-31 became 12 channel messages for one macro risk-off moment.
+
+`src/services/alerts/burstAggregator.js` owns the window; `alert.js` only supplies `parsedSignal`, the effective routing, and a `deliver` closure.
+
+**Five invariants to preserve:**
+
+- **Grouping is by direction, not by exchange.** A regime event spans asset classes at the same instant (the 2026-08-27 burst was 6 BATS equities + 1 BINANCE crypto, all BUY). Exchange and timeframe are *displayed* per symbol; using venue as a grouping dimension would leave one message per asset class. Grouping by `(side, routingIdentity)` is deliberate.
+- **Routing identity is part of the bucket key**, and `symbolRoutes` bypasses the buffer entirely. One synthetic message can only have one destination, so merging alerts with different `channels`/`telegramChatId`/`telegramThreadId`/`whatsappChatId`/`discordWebhookUrl` would misdeliver, and per-symbol channel routing cannot be expressed by one message at all.
+- **The window is leading-edge, not debounced.** `openedAt` is fixed by the first signal and later joiners do not extend it, so the added latency is *exactly* `ALERT_BURST_WINDOW_MS` and can never grow under an alert storm. A trailing-edge window would let a sustained firehose hold alerts indefinitely. The cost is that a burst wider than the window splits — measured in `Historical replay` below.
+- **Nothing may leave a held request unresolved.** `dispatch()` returns a promise that keeps the HTTP response open until the window closes, so any path that drops a member hangs that request until `REQUEST_TIMEOUT_MS` fires a 408. Window eviction therefore *closes* the oldest window rather than deleting it, `closeWindow` has a last-resort release net, and every member is settled exactly once via `settle()`/`settleWithError()`.
+- **Fail-open everywhere.** A store error, an aggregate dispatch that throws, a malformed parse, and shutdown mid-window all release the held alert to its own delivery. Per-channel delivery failures come back as `{ success: false }` results rather than throws, so the aggregate-failover path is reached only for validation or programming errors. The only thing this feature can lose is noise reduction, never an alert.
+
+Two smaller consequences of holding the alert: a deferred dispatch **drops its Sentry `parentSpan`** (the request span has already ended, so claiming it would report a duration longer than its own span), and inline keyboards are **skipped for aggregated bursts** because N constituents would race on one shared Telegram message id.
+
+`featureFlags`/`dependencies` report `featureFlags.alertBurstAggregation` plus `dependencies.alertBurstAggregation` (`openWindows`, `windowMs`, `minSignals`, `aggregatedBurstCount`, `aggregatedSignalCount`, `aggregatedFailoverCount`, `releasedSignalCount`, `lastAggregatedAt`, `lastWindowClosedAt`). Counters are process-local, so `enabled: true` with every counter at `0` is the normal state right after a deploy. `aggregatedFailoverCount` climbing means aggregation is not reducing noise. `burstAggregator.flushAll('shutdown')` is wired into `processLifecycle` **before** the bot is torn down.
+
+**MarkdownV2 safety is inherited, not re-implemented.** `smartEscapeMarkdownV2` deliberately leaves `_` and `*` unescaped, so the aggregate's safety rests on `parseTradingViewSignal`'s symbol charset `[A-Z0-9._-]{3,20}`, which cannot contain either. `tests/unit/burst-aggregator.test.js` pins that charset against the real parser; if the regex widens, the aggregate can start producing a Telegram parse failure raw alerts never had.
+
+### Historical replay (issue validation)
+
+The production export could not be re-fetched (`GET /api/alerts/export` returned `503 STORAGE_UNAVAILABLE` — Firestore reads are down, see #1285), so this replays the two bursts transcribed from the issue's Problem section with the 7-signal spread assumed evenly across the documented ~10s. `ALERT_BURST_MIN_SIGNALS=3`, three channels:
+
+| `ALERT_BURST_WINDOW_MS` | 2.3s risk-off burst | 10s risk-on burst | burst traffic | 36-alert window |
+| :--- | :--- | :--- | :--- | :--- |
+| `3000` (default) | 4 → 1 msg/channel | 7 → **2 aggregates + 1 individual** | **33 → 12** | 108 → 87 |
+| `5000` | 4 → 1 | 7 → 2 aggregates | 33 → 9 | 108 → 84 |
+| `15000` (max) | 4 → 1 | 7 → 1 | 33 → **6** | 108 → 81 |
+
+The issue's expected `33 → 6` is **only reachable at the top of the range**, because the 10s burst does not fit a 3s leading-edge window. The default is deliberately left at 3000 — 15s of added latency on every parsed alert is a worse trade than splitting one wide burst — and `ALERT_BURST_WINDOW_MS` exists so an operator who measures wider bursts can raise it. A future extension window (grow while signals keep arriving, capped by a second maximum-hold deadline) would reach 33 → 6 at a 3s window without unbounded latency; that is deliberately not in this change.
+
+Residual risks, as documented in the issue: up to `ALERT_BURST_WINDOW_MS` added latency for parsed alerts (unparsed text is never buffered), a held alert is lost only on a hard process kill mid-window, and the buffer is in-process so multi-replica deployments aggregate partially.
+
+**Coverage**: `tests/unit/burst-aggregator.test.js` (window machine, direction grouping, routing-equality, minimum count, member and window caps, MarkdownV2 charset, fail-open store and dispatch failures, shutdown flush, defence-in-depth bounds when runtime config is unbounded or throws), `tests/integration/alert-burst-aggregation.test.js` (endpoint-level burst collapse, cross-asset burst, mixed direction, routing mismatch, `symbolRoutes`, unparsed text, dry-run, flag off, aggregate failover, per-channel failure, status counters, shutdown flush), `tests/unit/postman-collection.test.js` and `src/openapi/openapi.json` (`AlertBurstAggregationDependency` schema plus the aggregated response fields and two documented variants).
+
+No secret, destination or startup-only gate was added: the flag and both tuning values follow the `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` precedent and are Remote Config eligible.
 
 ## Telegram Command Rate Limiting (Issue #658)
 
@@ -2397,3 +2697,55 @@ Every rejection is a **warning and `return 1`**, not an exit code: the check is 
 **Coverage**: `tests/unit/verify-preview-deployment-binding.test.js` drives both scripts against fake `gh`/`curl` binaries. It reproduces the reported scenario (newest `pending` + previous `success`) and asserts exit `2` when the selected URL is not serving `EXPECTED_SHA`, plus the served-build mismatch, the short-SHA prefix match, every unprovable-evidence warning, the Railway fallback, and API-key non-leakage. The `gh` stub answers three distinct `--jq` projections so the legacy code path is reproduced faithfully rather than accidentally passing. A dedicated block drives a hostile `environment_url` — plain HTTP, a non-allowlisted HTTPS host, prefix/suffix-confusable hosts, userinfo smuggling, and glob metacharacters — asserting exit `0` with `served-commit check skipped`, `/api/status` never requested, and **no `x-api-key` in the curl invocation log**; it also asserts the operator override works and that the three real platform hosts still receive the key. Each case also returns a *matching* `service.commit`, so a regression that leaked the key would still print `Served-build match` and could only be caught by the invocation-log assertion.
 
 No endpoint, OpenAPI, Postman, environment variable, Remote Config key, or feature flag was added; `agents.md` and `AGENTS.md` are the same file. `VERIFY_PREVIEW_ALLOWED_HOSTS` is an operator-facing shell variable read by agent tooling, not an application environment variable, so `.env.example` / Remote Config parity does not apply.
+
+## Admin News Monitor Operations View (Issue #1290)
+
+The five news-monitor admin endpoints had no console UI, which left the pause kill switch reachable only by `curl` and gave no signal that the monitor was paused at all — the failure shape of #1177, where it ran for 90 days and sent zero alerts.
+
+`src/admin/admin-newsmonitor.js` adds a `newsMonitor` nav view. It attaches to `window` and receives admin.js's helpers through a `deps` object **instead of importing them**: `sendRequest` must stay the only owner of the operator-role gate and the confirm-before-mutation contract, or this view grows a private auth path. `renderView` dispatches to it before the generic `<h2>` append, so it renders its own hero like `overview` and `status` do.
+
+**The view owns four behaviours that are easy to get wrong:**
+
+- **Paused reads as a warning, and an unread state reads as neither running nor paused.** The state card is a `.dashboard-section` that gains `banner-error` plus a `status-danger` badge when `paused`, because a silent monitor is the single most important fact on this view. A failed status read renders an explicit `Unavailable` / `status-misconfigured` verdict — **never** the running one. An unknown pause state is not a healthy one, and #1177 is the proof.
+- **Both mutations re-read `/api/news-monitor/status` afterwards** instead of rendering their own response body, which merely echoes the request. `tests/unit/admin-client.test.js` asserts the *ordering* of the POST and the subsequent GET, and its fixture returns a status whose `reason` deliberately differs from the pause echo — otherwise the assertion would pass against an implementation that trusted the response.
+- **`NewsMonitorPausedError` is a state, not a fault.** Every request goes through a local `callApi` wrapper that captures the body via `captureResponseData` and, when `code === 'NEWS_MONITOR_PAUSED`, replaces the generic error block with "The news monitor is paused — resume to continue" plus the recorded reason and pause time. `sendRequest` returns `undefined` for every non-2xx, so the body has to be captured on the way through rather than read afterwards.
+- **A zero alert rate over a populated window is a measurement, not a gap.** `totalAnalyses > 0` with `alertRatePercent === 0` renders as `0% of analyses became alerts (0 of 120)`; an empty window renders "No analyses recorded in this window" instead, so the two are never confused.
+
+The summary uses `barChart` from #1288 for `bySymbol` / `byEventCategory` and `sparkline` on the KPI cards (only when a breakdown has ≥2 points). It passes a `formatResponse` to `sendRequest`: omitting one makes the response block re-render the entire breakdown as a raw result tree, duplicating the KPI cards and tables and tripling the page height. The analyses list is cursor-paged on `nextCursor`, and editing a filter clears the cursor chain — the old page boundaries were taken under the old filters and would skip rows.
+
+**The shared date-range control was reused, not duplicated.** The Analytics view this issue refers to has **not** landed, so there is no shared component to call. This view reuses the genuinely shared primitives — `reportWindowDefaults()` and `toDateTimeLocal()` — and registers its own `newsMonitor.summary` / `newsMonitor.analyses` scopes, which is the existing precedent for two forms with independent filter sets (`alerts.summary` vs `alerts.export`). The alerts-specific `addAlertReportFilters()` is not reused because it hard-codes `source`/`enriched` fields that mean nothing here.
+
+**`min-width: 0` is load-bearing on three dashboard rules.** A grid item defaults to `min-width: auto`, so with `.data-table th { white-space: nowrap }` a wide table's min-content propagates up through `.dashboard-hero` / `.dashboard-section` and the whole page scrolls sideways instead of the table scrolling inside its own `.table-scroll` box. `.dashboard`, `.dashboard-hero`, `.dashboard-section` and `.table-scroll` all carry `min-width: 0` for that reason — the same invariant #1288 records for `.chart-scroll`. **Do not remove them.** An unclassed wrapper `div` between a `.dashboard-section` and a chart or table reintroduces the bug, because it is a grid item too; that is why the breakdowns and the analyses results are their own `.dashboard-section` panels.
+
+**Coverage**: `tests/unit/admin-client.test.js` — `news monitor operations view` covers the running and paused state cards, the pause/resume confirm plus status refetch (including a declined confirmation, asserted against *dispatch* rather than request construction, since `sendRequest` builds the request before it opens the dialog), the blank-reason body, summary KPI mapping, the zero-rate-over-a-populated-window wording, the empty-analyses state, cursor paging and filter-change invalidation, the paused-error case, the unread-state case, and the deep link. The harness loads `admin-charts.js` and `admin-newsmonitor.js` with `vm.runInNewContext` rather than `require`, because their factories read the ambient `document` and would otherwise close over Node's undefined one; both publish onto the shared `window` object, which is how `admin.js` reaches them.
+
+No endpoint, OpenAPI schema, Postman request, environment variable, or Remote Config key was added: all five operations already existed and are unchanged. `pnpm run build:hosting` was run and `public/admin/` is committed in parity.
+## Shared Alert Validation Truncation (Issue #637)
+
+`validateAlert()` keeps the existing 4,000-character cap but now returns `truncated`, `originalLength`, and `deliveredLength` when clipping input. `/api/webhook/alert` propagates those fields in its 200 response and emits a structured warning, allowing callers to detect content loss without changing delivery or enrichment gates. No environment variable, Linear issue, or Remote Config key was added.
+
+The truncation fields are attached only to the `/api/webhook/alert` response. They are **not** part of the shared `DeliveryResult` schema, because `DeliveryResult` is also referenced by `POST /api/alerts/{alertId}/replay`, whose `replayAlert` response never includes them; `/api/webhook/alert` therefore documents an endpoint-specific schema and example.
+
+**Coverage**:
+- `tests/unit/validation.test.js` — Boundary, no-truncation, and truncation-with-signalClass metadata behavior.
+- `tests/unit/alert-webhook-request-id.test.js` and `tests/integration/alert-grounding.test.js` — Response propagation through dry-run and the mounted webhook.
+
+
+## WhatsApp Inbound Command Bridge: Receipt Acknowledgement (Issue #881)
+
+`WhatsAppCommandBridgeService` polls GreenAPI's inbound queue and executes allowlisted commands (`!precio`, `!analisis`, `!scanner`, `!noticias`, `!outcomes`, `!help`). The invariant the whole design hangs on: **a receipt is only safely forgotten once `deleteNotification` succeeded.** GreenAPI redelivers any receiptId whose delete never landed, and redelivery re-enters `handleNotification`, so an unacknowledged receipt executes the command again and sends a duplicate reply. Four properties must survive future edits:
+
+- **Each GreenAPI step gets its own bounded deadline.** `receiveNotification` and `deleteNotification` use independent `AbortController`s (`receiveTimeoutMs`, `deleteTimeoutMs`, default 10s each) instead of one shared 10s budget. A shared budget is what caused the reported defect: command handling (price resolve plus an outbound `sendMessage` with its own 10s + retries) routinely outlasted 10s, the shared timer had already fired, and the post-handling delete was aborted by a timer for a step that finished long ago. Do not "simplify" these back into one controller.
+- **Acknowledgement is checked and retried.** The delete validates `response.ok` (it previously never looked at the status, so a 500 was treated as success) and retries through `retryHelper.sendWithRetry` with a capped backoff (`DELETE_MAX_ATTEMPTS=3`, `DELETE_MAX_RETRY_DELAY_MS=1500`). 429 and 5xx are retryable; 4xx is not retried, because a client error will not become correct on a second identical call.
+- **Redelivery is suppressed locally, bounded.** Processed receiptIds go into `seenReceiptMap` with a 120s TTL and a 500-entry ceiling. A receiptId already in the window is skipped (`handlingResult.action: 'skipped_duplicate'`) while still being deleted — the delete is what actually clears the queue, so skipping must not skip acknowledgement. The ceiling is why this is bounded: an unbounded set is a memory leak on a long-lived process. The TTL is a backstop, not the primary defence — the delete retry is.
+- **`stop()` really aborts, and no reply starts after the drain deadline.** `pollOnce` registers its controller on `this.abortController` (it was previously initialized to `null` and never assigned, making `stop()`'s abort dead code) and `stop()` clears it plus sets `stopRequested`. Every outbound reply goes through `_sendReply()`, which refuses to send once `stopRequested` is set and converts an in-flight send that throws during drain into a suppressed result rather than propagating. This is why graceful drain (`processLifecycle` → `stopWhatsAppCommandBridge({ drain: true })`) can no longer emit a command reply past the deadline.
+
+`dependencies.whatsappCommandBridge` reports the acknowledgement outcome so an operator can see the failure instead of inferring it from a duplicate reply: `duplicateSkippedCount` (redeliveries the window absorbed — non-zero is the suppression working), `deleteFailureCount` (acknowledgements that failed on **every** attempt), `deleteRetryCount` (**every** additional `deleteNotification` attempt after the first, counted whether or not the retry recovered — so a delete that 500'd once and succeeded on attempt 2 leaves `deleteFailureCount: 0` with `deleteRetryCount: 1`), `deleteAbortedCount` (acknowledgements that hit their own deadline), and `trackedReceiptCount`. **A rising `deleteFailureCount` with flat `duplicateSkippedCount` is the signal that suppression is no longer covering redeliveries** — receipts are escaping the TTL window and re-executing. Counters are process-local and reset on restart; no api key, chat id, or message content is exposed.
+
+**`lastError` is composed only from our own status code or a bounded classification, never the provider response body.** The delete URL is `/deleteNotification/{apiKey}/{receiptId}`, and a GreenAPI error body can echo that URL back, so interpolating `response.text()` into the error string would publish the api key on `/api/status` — the very key that protects the endpoint. Failures render as `HTTP 500`, `acknowledgement step timed out after <deleteTimeoutMs>ms`, or `request failed`, and `_sanitizeErrorText()` is the last-resort pass for transport error text we did not author (it redacts the api key occurrence and bounds the length). The receive path applies the same rule. This is the repo's usual closed-enum-instead-of-provider-text rule, in string form: `src/openapi/openapi.json` (`WhatsAppCommandBridgeDependency.lastError`) promises the sanitization, so code and contract must agree. Covered by `tests/unit/whatsapp-command-bridge.test.js` ('never publishes the api key or the provider body through lastError').
+
+**The 120s command deadline (`COMMAND_TIMEOUT_MS`, issue #886) is a *different* bound and must never be merged with the two GreenAPI deadlines.** `_executeDelegatedCommand()` races the delegated handler against its own 120s timer; `pollOnce()`'s receive/delete deadlines stay at 10s each. Before #886 a command outliving the receive budget was a rare edge case reachable through a slow `!precio`; with `!analisis`, `!scanner` and `!noticias` delegating to handlers that queue TradingView jobs or run news analysis, it is the routine path. Because the delete owns its controller, a 120s command no longer costs the receipt its acknowledgement. Do not raise `RECEIVE_TIMEOUT_MS`/`DELETE_TIMEOUT_MS` to cover a slow command — that reintroduces the shared-budget defect in a slower form, and it would hold the poll loop open rather than acknowledging.
+
+**Coverage**: `tests/unit/whatsapp-command-bridge.test.js` (handling outlasts the receive budget yet the receipt is still deleted; a 500 delete retries and the command still executes exactly once; a 4xx delete is not retried; a redelivered receiptId after both steps time out is skipped without re-execution; **one receiptId served across three `pollOnce()` calls by a provider that redelivers regardless, with a command that outlasts the receive budget — the handler runs exactly once, all three acknowledgements succeed, and no delete is ever issued on an already-aborted signal**; TTL expiry and map bounding; `stop()` aborts an in-flight poll fetch; a pending reply is suppressed after `stop()`), `tests/integration/whatsapp-command-bridge.test.js` (counter fields on `/api/status`, retry-then-redelivery end to end), `tests/unit/openapi-contract.test.js` and `tests/unit/postman-collection.test.js`.
+
+No new environment variable, Remote Config key, endpoint, or feature flag was added: the deadlines, retry count, TTL, and ceiling are code-level constants (constructor-overridable for tests), not operator tuning.

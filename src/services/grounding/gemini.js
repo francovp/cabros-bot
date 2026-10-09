@@ -1067,10 +1067,11 @@ function parseEnrichedAlertResponse(response, sources) {
 			? Math.sign(sentimentScore) * ZERO_SOURCE_SENTIMENT_SCORE_CAP
 			: sentimentScore;
 
-		const parsedSetupType = parseOptionalSetupType(parsed.setup_type);
-		const parsedSetupEvidence = parsedSetupType && typeof parsed.setup_evidence === 'string' && parsed.setup_evidence.trim()
+		const rawSetupType = parseOptionalSetupType(parsed.setup_type);
+		const parsedSetupEvidence = rawSetupType && typeof parsed.setup_evidence === 'string' && parsed.setup_evidence.trim()
 			? parsed.setup_evidence.trim()
 			: undefined;
+		const parsedSetupType = parsedSetupEvidence ? rawSetupType : undefined;
 
 		const parsedSentimentScoreEvidence = typeof parsed.sentiment_score_evidence === 'string' && parsed.sentiment_score_evidence.trim()
 			? parsed.sentiment_score_evidence.trim().substring(0, MAX_SENTIMENT_SCORE_EVIDENCE_LENGTH)
