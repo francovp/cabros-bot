@@ -1,18 +1,36 @@
 name: Production Smoke Probe
 
-# Scheduled GitHub Actions workflow that smoke-probes Railway production after
-# each deployment so silent bad deployments page operators via Telegram.
+# Scheduled GitHub Actions workflow that smoke-probes production after each
+# deployment so a silently bad deployment fails the job instead of passing
+# unnoticed.
+#
+# Alerting: this workflow has no paging step, and does not need one. A non-zero
+# probe exit fails the scheduled run, and GitHub's own notification for a failed
+# scheduled workflow is the alert channel. Telegram paging belongs to the
+# secretless uptime monitor (external-uptime-monitor.yml), which pages only on a
+# DOWN transition. Do not re-add admin-notification env vars here without adding
+# the step that reads them — a declared-but-unused secret reads as "paging is
+# configured" to any operator scanning this file.
+#
+# The default target is the Render production web service
+# (cabros-crypto-bot-telegram-iac). It must match the live platform: an earlier
+# default pointed at the retired Railway host, which answers 404, so this job
+# stayed red for every run while probing a host that no longer existed and a
+# genuinely stale deploy was indistinguishable from a misconfigured target.
 #
 # Configuration:
-#   1. Add GitHub repository variable PRODUCTION_BASE_URL with the canonical
-#      deployment URL (default: https://cabros-bot-production.up.railway.app).
+#   1. (Normally unnecessary) Add GitHub repository variable
+#      PRODUCTION_BASE_URL to override the default deployment URL.
 #   2. Add GitHub secret WEBHOOK_API_KEY (matches the server's validateApiKey).
-#   3. (Optional) Add GitHub secret TELEGRAM_BOT_TOKEN (admin-notifications
-#      bot) and TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID (target chat id) to
-#      enable admin paging on persistent failures.
-#   4. (Optional) Override PRODUCTION_EXPECTED_COMMIT, PRODUCTION_REQUIRE_READY_DEPS,
-#      PRODUCTION_PROBE_TIMEOUT, and PRODUCTION_PROBE_FAILURE_COOLDOWN_MINUTES
-#      via repository variables.
+#   3. (Optional) Override PRODUCTION_EXPECTED_COMMIT,
+#      PRODUCTION_REQUIRE_READY_DEPS, PRODUCTION_REQUIRE_ENABLED_FLAGS and
+#      PRODUCTION_PROBE_TIMEOUT via repository variables.
+#
+# PRODUCTION_REQUIRE_ENABLED_FLAGS is a comma-separated list of /api/status
+# featureFlags that must be true on the deployed service. Use it to assert that
+# an enablement declared in render.yaml actually landed in production rather
+# than only being declared; a flag absent from the deployed build counts as
+# disabled, so a stale deploy cannot satisfy the assertion.
 #
 # Security: WEBHOOK_API_KEY is sent via the `x-api-key` header (never in URLs
 # or query parameters) by piping it into curl through stdin. Job summaries and
@@ -42,11 +60,10 @@ jobs:
     timeout-minutes: 4
 
     env:
-      PRODUCTION_BASE_URL: ${{ vars.PRODUCTION_BASE_URL || 'https://cabros-bot-production.up.railway.app' }}
+      PRODUCTION_BASE_URL: ${{ vars.PRODUCTION_BASE_URL || 'https://cabros-crypto-bot-telegram.onrender.com' }}
       PRODUCTION_REQUIRE_READY_DEPS: ${{ vars.PRODUCTION_REQUIRE_READY_DEPS || '' }}
+      PRODUCTION_REQUIRE_ENABLED_FLAGS: ${{ vars.PRODUCTION_REQUIRE_ENABLED_FLAGS || '' }}
       PRODUCTION_PROBE_TIMEOUT: ${{ vars.PRODUCTION_PROBE_TIMEOUT || '15' }}
-      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID: ${{ secrets.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID }}
 
     steps:
       - name: Install jq (used by the probe script)

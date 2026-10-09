@@ -95,3 +95,33 @@ Query recent evaluated signal outcomes for a symbol in chat (hits `GET /api/outc
 ```
 /outcomes BINANCE:BTCUSDT
 ```
+
+---
+
+## WhatsApp Inbound Command Bridge
+
+`ENABLE_WHATSAPP_COMMANDS=true` enables a bridge that polls GreenAPI `receiveNotification` and executes commands typed with a `!` prefix from chats allowlisted in `WHATSAPP_COMMAND_CHAT_IDS`.
+
+The bridge does **not** reimplement the handlers above. It synthesizes a Telegraf-shaped command context and delegates to the same `expandedAnalysisCmd`, `marketScannerCmd`, `newsMonitorCmd` and `outcomesCommand` functions Telegram uses, so the reply body and every internal timeout are identical on both channels.
+
+**Mapping:**
+
+| WhatsApp | Telegram command | Aliases |
+| :--- | :--- | :--- |
+| `!precio <symbol>` | `/precio` | — |
+| `!analisis [symbols]` | `/analisis` | — |
+| `!scanner [options]` | `/scanner` | — |
+| `!noticias [symbols]` | `/noticias` | `!news` |
+| `!outcomes <symbol>` | `/outcomes` | `!rendimiento` |
+| `!help` | `/help` | `!start` |
+
+**Delivery routing.** A job created from WhatsApp carries `channels: ['whatsapp']` and the originating chat id, so its completion report returns to the chat that requested it. Telegram callers are unaffected and keep their existing `telegramChatId` routing.
+
+**Differences from Telegram, and why:**
+
+- **Replies are formatted for WhatsApp.** Telegram bodies arrive as MarkdownV2; `WhatsAppMarkdownFormatter` strips the escape sequences, so `*bold*` and `_italic_` render natively and `\(...\)` becomes `(...)`.
+- **No `parse_mode` is forwarded.** `parse_mode` is a Telegram concept; the shim ignores it and lets the WhatsApp channel's own formatter handle the body.
+- **`!outcomes` without a symbol replies with usage** rather than delegating, because the shared Telegram usage string references a `/outcomes` verb that does not exist on WhatsApp.
+- **`!analisis` with no symbols is accepted**, exactly as Telegram is, and falls back to `EXPANDED_ANALYSIS_ALERT_SYMBOLS`.
+
+**Guardrails.** Allowlisted chats only; 10 commands per chat per minute; an unrecognized command gets a hint at most once per chat per 60s cooldown; non-`!` messages are ignored silently. Each command runs under a bounded 120s deadline: on expiry the chat is told the command is still processing, `dependencies.whatsappCommandBridge.commandTimeouts` increments, and a Sentry `command_timeout` event is captured. The underlying handler is not cancelled, so a late reply may still arrive.

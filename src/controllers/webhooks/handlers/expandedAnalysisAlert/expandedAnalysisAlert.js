@@ -141,6 +141,12 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					requestId,
 					text: alertText,
 					symbol: firstSymbol,
+					// One document covers the whole report; persist the full symbol set
+					// so summary symbol counts are not limited to the first symbol.
+					symbols: analyzedItems
+						.map((item) => (item.input && (item.input.symbol || item.input.raw)) || item.symbol)
+						.filter(Boolean),
+					batchId: requestId,
 					exchange: firstExchange,
 					enriched: false,
 					enrichmentData: null,

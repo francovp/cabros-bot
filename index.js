@@ -48,6 +48,7 @@ const { notificationRedriveService } = require('./src/services/notification/Noti
 const { whatsAppCommandBridgeService } = require('./src/services/notification/WhatsAppCommandBridgeService');
 const { scannerPresetSchedulerService } = require('./src/services/scannerPresets');
 const { userPriceAlertService } = require('./src/services/alerts/UserPriceAlertService');
+const { burstAggregator } = require('./src/services/alerts/burstAggregator');
 const { newsMonitorSchedulerService } = require('./src/services/newsMonitorScheduler');
 const { alertSchedulerService } = require('./src/services/scheduler');
 const { adminSseService } = require('./src/services/sse/AdminSseService');
@@ -108,6 +109,7 @@ const lifecycle = createProcessLifecycle({
 	closeAllSseConnections: () => adminSseService.closeAll(),
 	stopTelegramHealthProbe: () => stopTelegramHealthProbe(),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
+	flushAlertBurstWindows: () => burstAggregator.flushAll('shutdown'),
 	flushSentry: (timeout) => sentryService.flush(timeout),
 	timeoutMs: process.env.SHUTDOWN_TIMEOUT_MS,
 });

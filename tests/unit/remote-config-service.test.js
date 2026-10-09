@@ -723,6 +723,35 @@ describe('RemoteConfigService', () => {
 			}));
 		});
 
+		// A published template outranks render.yaml for every allow-listed key, so a
+		// blueprint value that disagrees with the template is a flag that reports one
+		// thing while doing another (issue #1179). Storage gates that decide where a
+		// collection lives are excluded from the template entirely instead.
+		it('never lets render.yaml and the published template disagree on an allow-listed key', () => {
+			const fs = require('fs');
+			const path = require('path');
+			const root = path.join(__dirname, '../..');
+			const template = JSON.parse(fs.readFileSync(path.join(root, 'firebase-remote-config-template.json'), 'utf8'));
+			const blueprint = fs.readFileSync(path.join(root, 'render.yaml'), 'utf8');
+
+			const blueprintValues = new Map(
+				[...blueprint.matchAll(/- key: ([A-Z0-9_]+)\n\s+value: (\S+)/g)].map((match) => [match[1], match[2]]),
+			);
+
+			for (const [key, parameter] of Object.entries(template.parameters)) {
+				const blueprintValue = blueprintValues.get(key);
+				if (blueprintValue === undefined) {
+					continue;
+				}
+				expect({ [key]: parameter.defaultValue.value }).toEqual({ [key]: blueprintValue });
+			}
+		});
+
+		it('keeps symbol-analysis storage out of Remote Config so the blueprint is authoritative', () => {
+			expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('ENABLE_SYMBOL_ANALYSIS_STORAGE');
+			expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('SYMBOL_ANALYSIS_RETENTION_DAYS');
+		});
+
 		it('notifies registered change listeners when remote overrides change', () => {
 			const listener = jest.fn();
 			const unsubscribe = remoteConfigService.addChangeListener(listener);
