@@ -937,6 +937,8 @@ async function recordSignalInternal({
 
 		const eligibility = determineEligibility(normSymbolInfo, normAssetClass, entryPrice, equityProviderName, entryPriceReason);
 		const isEligible = eligibility.state === 'supported_provider' || eligibility.state === 'pending_entry_price';
+		const normalizedConfidenceScore = normalizeConfidenceScore(confidenceScore);
+		const confidenceScoreFromLegacyScore = source === 'market-scanner' ? null : normalizeConfidenceScore(score);
 
 		const outcomes = {};
 		for (const [winKey, config] of Object.entries(WINDOW_CONFIGS)) {
@@ -978,7 +980,10 @@ async function recordSignalInternal({
 			timeframe: timeframe ? String(timeframe).toLowerCase() : null,
 			setupType: setupType ? String(setupType).toLowerCase() : null,
 			score: typeof score === 'number' && Number.isFinite(score) ? score : null,
-			confidenceScore: normalizeConfidenceScore(confidenceScore) ?? normalizeConfidenceScore(score),
+			confidenceScore: normalizedConfidenceScore ?? confidenceScoreFromLegacyScore,
+			...(source === 'market-scanner' && normalizedConfidenceScore !== null
+				? { confidenceScoreOrigin: 'explicit' }
+				: {}),
 			side: normSide,
 			price: entryPrice,
 			observedPrice: entryPrice,
@@ -2683,6 +2688,10 @@ const CALIBRATION_DEFAULT_BUCKETS = [
 
 function getSignalConfidenceScore(doc) {
 	const conf = normalizeConfidenceScore(doc?.confidenceScore);
+	if (doc?.source === 'market-scanner') {
+		// Pre-provenance rows may contain technical scores normalized as confidence.
+		return doc?.confidenceScoreOrigin === 'explicit' ? conf : null;
+	}
 	if (conf !== null) return conf;
 	const sc = normalizeConfidenceScore(doc?.score);
 	if (sc !== null) return sc;
