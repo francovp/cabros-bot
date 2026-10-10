@@ -56,11 +56,18 @@ class WhatsAppMarkdownFormatter {
 
 		const signalClass = options.signalClass;
 		const marker = formatSignalClassMarker(signalClass, { markdownV2: false });
-		if (marker) {
-			return `${marker}\n\n${result}`;
+		let finalResult = marker ? `${marker}\n\n${result}` : result;
+
+		const sessionVal = options.session;
+		if (sessionVal) {
+			const { formatSessionLine } = require('../../storage/EquitySessionService');
+			const sessionLine = formatSessionLine(sessionVal, { markdownV2: false });
+			if (sessionLine) {
+				finalResult += `\n${sessionLine}`;
+			}
 		}
 
-		return result;
+		return finalResult;
 	}
 
 	/**
@@ -230,6 +237,15 @@ class WhatsAppMarkdownFormatter {
 		const htfLine = formatHtfAlignment(enriched);
 		if (htfLine) {
 			message += `\n${htfLine}`;
+		}
+
+		const sessionVal = options.session || enriched.session;
+		if (sessionVal) {
+			const { formatSessionLine } = require('../../storage/EquitySessionService');
+			const sessionLine = formatSessionLine(sessionVal, { markdownV2: false });
+			if (sessionLine) {
+				message += `\n${sessionLine}`;
+			}
 		}
 
 		// Technical Levels

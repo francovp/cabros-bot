@@ -1703,6 +1703,22 @@ const sentimentBadge = (enrichment) => {
 	});
 };
 
+const sessionBadge = (session) => {
+	if (!session || typeof session !== 'string') return null;
+	const norm = session.trim().toLowerCase();
+	if (norm === 'unknown' || norm === '24/7') return null;
+	const tones = {
+		regular: 'status-ready',
+		pre: 'status-active',
+		post: 'status-disabled',
+		closed: 'status-danger',
+	};
+	return element('span', {
+		className: `status-badge ${tones[norm] || 'status-unknown'}`,
+		text: `Sesión: ${norm}`,
+	});
+};
+
 const deliveryChips = (results) => {
 	const wrap = element('div', { className: 'chip-grid delivery-chips' });
 	(Array.isArray(results) ? results : []).forEach((result) => {
@@ -1770,6 +1786,8 @@ const createAlertDetailPanel = (alert) => {
 	const data = asObject(alert && alert.enrichmentData);
 	const sentimentNode = sentimentBadge(data);
 	if (sentimentNode) badges.append(sentimentNode);
+	const sessionNode = sessionBadge(alert && alert.session);
+	if (sessionNode) badges.append(sessionNode);
 	const head = element('div', { className: 'section-heading' });
 	head.append(headCopy, badges);
 	panel.append(head);
@@ -1879,6 +1897,8 @@ const createAlertCard = (alert, { onSelect, isSelected = false, registerCheckbox
 		: element('span', { className: 'status-badge status-disabled', text: 'Plain' }));
 	const sentimentNode = sentimentBadge(asObject(alert && alert.enrichmentData));
 	if (sentimentNode) badges.append(sentimentNode);
+	const sessionNode = sessionBadge(alert && alert.session);
+	if (sessionNode) badges.append(sessionNode);
 	const head = element('div', { className: 'section-heading' });
 	head.append(headCopy, badges);
 	card.append(head);

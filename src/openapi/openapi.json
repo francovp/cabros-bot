@@ -8648,6 +8648,30 @@
               "type": "integer"
             }
           },
+          "bySession": {
+            "type": "object",
+            "description": "Symbol-level breakdown of signal counts across trading sessions (regular, pre, post, closed, total).",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "regular": {
+                  "type": "integer"
+                },
+                "pre": {
+                  "type": "integer"
+                },
+                "post": {
+                  "type": "integer"
+                },
+                "closed": {
+                  "type": "integer"
+                },
+                "total": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
           "windows": {
             "type": "object",
             "additionalProperties": {
@@ -9167,6 +9191,18 @@
               "null"
             ],
             "description": "Top-level mirror of enrichmentData.price_currency when currentPrice is present (GH-599 / CB-XXX)."
+          },
+          "session": {
+            "type": "string",
+            "enum": [
+              "regular",
+              "pre",
+              "post",
+              "closed",
+              "24/7",
+              "unknown"
+            ],
+            "description": "Trading-session state at alert ingest time. For US equity venues, classified into regular, pre, post, or closed. For crypto, reports 24/7. Defaults to unknown for legacy unclassified alerts."
           }
         }
       },

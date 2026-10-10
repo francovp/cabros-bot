@@ -346,6 +346,9 @@ function formatAlertDocument(doc, options = {}) {
 	if (typeof data.dedupStatus === 'string') {
 		docObj.dedupStatus = data.dedupStatus;
 	}
+	if (typeof data.session === 'string' && data.session.trim()) {
+		docObj.session = data.session.trim();
+	}
 	if (data.truncated === true) {
 		docObj.truncated = true;
 		if (typeof data.originalLength === 'number' && Number.isFinite(data.originalLength)) {
@@ -2058,6 +2061,7 @@ async function saveAlertInternal(params = {}) {
 		discordWebhookUrl,
 		routing,
 		side,
+		session,
 		alertId: providedAlertId,
 	} = params;
 	if (!isEnabled()) {
@@ -2142,6 +2146,15 @@ async function saveAlertInternal(params = {}) {
 		}
 		if (extracted.exchange) {
 			document.exchange = extracted.exchange;
+		}
+
+		if (typeof session === 'string' && session.trim()) {
+			document.session = session.trim();
+		} else if (extracted.exchange) {
+			const { isEquityExchange, classifySession } = require('./EquitySessionService');
+			if (isEquityExchange(extracted.exchange)) {
+				document.session = classifySession({ exchange: extracted.exchange, symbol: extracted.symbol });
+			}
 		}
 
 		document.enrichmentData = applyDeterministicRiskReward(document.enrichmentData, side);
