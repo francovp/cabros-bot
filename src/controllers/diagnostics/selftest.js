@@ -10,6 +10,8 @@ let singleton = null;
 function getSelfTestService({ botOrGetter, getBinanceOrderService } = {}) {
 	if (!singleton) {
 		singleton = createSelfTestService({ botOrGetter, getBinanceOrderService });
+	} else if (botOrGetter !== undefined || getBinanceOrderService !== undefined) {
+		singleton.updateDependencies({ botOrGetter, getBinanceOrderService });
 	}
 	return singleton;
 }

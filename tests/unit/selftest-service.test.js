@@ -192,4 +192,26 @@ describe('SelfTestService', () => {
 			Date.now = clock;
 		}
 	});
+
+	it('updates dependencies when updateDependencies is called', async () => {
+		process.env.BOT_TOKEN = 't';
+		process.env.TELEGRAM_CHAT_ID = 'c';
+		process.env.WEBHOOK_API_KEY = 'k';
+		process.env.RATE_LIMIT_MAX = '1';
+		process.env.RATE_LIMIT_WINDOW_MS = '1';
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+
+		// Initially uninitialized / null bot
+		const svc = createSelfTestService();
+		const initialResult = await svc.run({ only: 'telegram.bot_info' });
+		expect(initialResult.checks[0].status).toBe('skipped');
+
+		// Update with live bot
+		const fakeBot = { botInfo: { id: 1, username: 'updated_bot' } };
+		svc.updateDependencies({ botOrGetter: () => fakeBot });
+
+		const updatedResult = await svc.run({ only: 'telegram.bot_info' });
+		expect(updatedResult.checks[0].status).toBe('pass');
+		expect(updatedResult.checks[0].message).toContain('updated_bot');
+	});
 });
