@@ -15,6 +15,7 @@
 
 const packageJson = require('../../../package.json');
 const { getDeploymentCommit } = require('../../lib/deploymentEnvironment');
+const { getValidApiKeys } = require('../../lib/auth');
 
 const DEFAULT_PER_CHECK_TIMEOUT_MS = 5000;
 const DEFAULT_SUITE_TIMEOUT_MS = 30000;
@@ -155,10 +156,10 @@ function buildChecks({ botOrGetter, getBinanceOrderService }) {
 	checks.push({
 		id: 'auth.api_key',
 		run: () => {
-			const apiKey = hasValue(process.env.WEBHOOK_API_KEY);
+			const apiKey = getValidApiKeys().length > 0;
 			const firebaseAuth = toBoolean(process.env.ENABLE_FIREBASE_ADMIN_AUTH);
 			if (!apiKey && !firebaseAuth) {
-				return makeResult('fail', 'Neither WEBHOOK_API_KEY nor ENABLE_FIREBASE_ADMIN_AUTH is configured', null);
+				return makeResult('fail', 'Neither WEBHOOK_API_KEY/WEBHOOK_API_KEYS nor ENABLE_FIREBASE_ADMIN_AUTH is configured', null);
 			}
 			if (apiKey && firebaseAuth) {
 				return makeResult('warn', 'Both API key and Firebase admin auth are enabled; legacy API key takes precedence for header auth', null);

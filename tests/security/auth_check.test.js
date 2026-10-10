@@ -1,7 +1,61 @@
+const crypto = require('crypto');
 const request = require('supertest');
 const express = require('express');
-const crypto = require('crypto');
-const { isValidApiKey, validateApiKey } = require('../../src/lib/auth');
+const { isValidApiKey, validateApiKey, matchesAnyApiKey } = require('../../src/lib/auth');
+const { requireConfiguredAdminAccess } = require('../../src/lib/adminAuth');
+
+// A length-based skip made the comparison count depend on the presented key's
+// length, which leaked the configured key-length set. Counting comparisons is a
+// non-flaky proxy for that: the old code called timingSafeEqual only for
+// same-length candidates.
+describe('Security: matchesAnyApiKey has no length-dependent comparison count', () => {
+	const crypto = require('crypto');
+
+	afterEach(() => {
+		jest.restoreAllMocks();
+	});
+
+	it('compares every candidate even when none share the presented key length', () => {
+		const candidates = ['a', 'bb', 'ccc', 'dddd'];
+		const equalSpy = jest.spyOn(crypto, 'timingSafeEqual');
+
+		const result = matchesAnyApiKey('zzzzzzz', candidates);
+
+		expect(result).toBe(false);
+		expect(equalSpy).toHaveBeenCalledTimes(candidates.length);
+	});
+
+	it('still matches a key of a different length than its neighbours', () => {
+		const equalSpy = jest.spyOn(crypto, 'timingSafeEqual');
+
+		const result = matchesAnyApiKey('longer-key-value', ['short', 'medium', 'longer-key-value']);
+
+		expect(result).toBe(true);
+		expect(equalSpy).toHaveBeenCalledTimes(3);
+	});
+
+	it('keeps the comparison count stable across presented key lengths', () => {
+		const candidates = ['k1', 'k22', 'k333'];
+
+		const shortCount = (() => {
+			const spy = jest.spyOn(crypto, 'timingSafeEqual');
+			matchesAnyApiKey('x', candidates);
+			const n = spy.mock.calls.length;
+			spy.mockRestore();
+			return n;
+		})();
+		const longCount = (() => {
+			const spy = jest.spyOn(crypto, 'timingSafeEqual');
+			matchesAnyApiKey('x'.repeat(64), candidates);
+			const n = spy.mock.calls.length;
+			spy.mockRestore();
+			return n;
+		})();
+
+		expect(shortCount).toBe(longCount);
+		expect(shortCount).toBe(candidates.length);
+	});
+});
 
 describe('Security: API Key Validation', () => {
 	let app;
@@ -150,5 +204,178 @@ describe('Security: API Key Validation', () => {
 
 		spy.mockRestore();
 		console.error = originalConsoleError;
+	});
+
+	describe('WEBHOOK_API_KEYS multi-key support (GH-692 follow-up)', () => {
+		beforeEach(() => {
+			process.env.WEBHOOK_API_KEY = 'primary-key';
+			process.env.WEBHOOK_API_KEYS = 'secondary-key,tertiary-key';
+		});
+
+		it('should accept requests that match any key in WEBHOOK_API_KEYS', async () => {
+			const res = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'secondary-key')
+				.send({});
+
+			expect(res.status).toBe(200);
+			expect(res.body.success).toBe(true);
+		});
+
+		it('should still accept the primary WEBHOOK_API_KEY when WEBHOOK_API_KEYS is set', async () => {
+			const res = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'primary-key')
+				.send({});
+
+			expect(res.status).toBe(200);
+			expect(res.body.success).toBe(true);
+		});
+
+		it('should accept the third key from WEBHOOK_API_KEYS', async () => {
+			const res = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'tertiary-key')
+				.send({});
+
+			expect(res.status).toBe(200);
+			expect(res.body.success).toBe(true);
+		});
+
+		it('should reject requests with an unknown key', async () => {
+			const res = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'not-a-real-key')
+				.send({});
+
+			expect(res.status).toBe(403);
+			expect(res.body.error).toBe('Forbidden: Invalid API key');
+		});
+
+		it('should accept WEBHOOK_API_KEYS alone when WEBHOOK_API_KEY is unset', async () => {
+			delete process.env.WEBHOOK_API_KEY;
+			process.env.WEBHOOK_API_KEYS = 'only-secondary';
+
+			const res = await request(app)
+				.post('/protected')
+				.set('x-api-key', 'only-secondary')
+				.send({});
+
+			expect(res.status).toBe(200);
+			expect(res.body.success).toBe(true);
+		});
+	});
+});
+
+describe('Security: list-only WEBHOOK_API_KEYS configuration (issue #692 review)', () => {
+	let app;
+	let savedEnv;
+
+	const setProdLike = () => {
+		process.env.NODE_ENV = 'production';
+		delete process.env.RENDER;
+		delete process.env.IS_PULL_REQUEST;
+		delete process.env.VERCEL_ENV;
+		delete process.env.RAILWAY_ENVIRONMENT_NAME;
+	};
+
+	beforeEach(() => {
+		savedEnv = saveEnv();
+		app = express();
+		app.use(express.json());
+		app.post('/protected', validateApiKey, (req, res) => {
+			res.status(200).json({ success: true });
+		});
+	});
+
+	afterEach(() => {
+		restoreEnv(savedEnv);
+	});
+
+	// A production deployment may configure only WEBHOOK_API_KEYS. Deciding
+	// "is auth configured" from process.env.WEBHOOK_API_KEY alone would answer no
+	// and 503 every protected route before isValidApiKey could consult the list.
+	// This runs the real production branch: NODE_ENV=production is neither
+	// preview nor dev/test, so the insecure-mode bypass does not apply.
+	it('accepts a listed key when only WEBHOOK_API_KEYS is set in production', async () => {
+		setProdLike();
+		delete process.env.WEBHOOK_API_KEY;
+		process.env.WEBHOOK_API_KEYS = 'key-one,key-two';
+
+		const accepted = await request(app).post('/protected').set('x-api-key', 'key-two').send({});
+		expect(accepted.status).toBe(200);
+		expect(accepted.body.success).toBe(true);
+	});
+
+	it('still rejects an unlisted key when only WEBHOOK_API_KEYS is set', async () => {
+		setProdLike();
+		delete process.env.WEBHOOK_API_KEY;
+		process.env.WEBHOOK_API_KEYS = 'key-one,key-two';
+
+		const rejected = await request(app).post('/protected').set('x-api-key', 'not-a-key').send({});
+		expect(rejected.status).toBe(403);
+	});
+
+	it('still reports 503 when neither WEBHOOK_API_KEY nor WEBHOOK_API_KEYS is set', async () => {
+		setProdLike();
+		delete process.env.WEBHOOK_API_KEY;
+		delete process.env.WEBHOOK_API_KEYS;
+
+		const res = await request(app).post('/protected').set('x-api-key', 'anything').send({});
+		expect(res.status).toBe(503);
+		expect(res.body.code).toBe('WEBHOOK_API_KEY_UNSET');
+	});
+
+	// The tests above post to a validateApiKey route, so they cannot exercise the
+	// admin config gate: requireConfiguredAdminAccess is a separate middleware and
+	// emits its own ADMIN_AUTH_UNAVAILABLE code. These mount it directly.
+	describe('requireConfiguredAdminAccess config gate', () => {
+		let adminApp;
+		let adminSavedEnv;
+
+		beforeEach(() => {
+			adminSavedEnv = saveEnv();
+			adminApp = express();
+			adminApp.use(express.json());
+			adminApp.post('/admin', requireConfiguredAdminAccess, (req, res) => {
+				res.status(200).json({ success: true });
+			});
+		});
+
+		afterEach(() => {
+			restoreEnv(adminSavedEnv);
+		});
+
+		it('admits a listed key when only WEBHOOK_API_KEYS is set', async () => {
+			setProdLike();
+			delete process.env.WEBHOOK_API_KEY;
+			delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
+			process.env.WEBHOOK_API_KEYS = 'key-one,key-two';
+
+			const res = await request(adminApp).post('/admin').set('x-api-key', 'key-one').send({});
+			expect(res.status).toBe(200);
+			expect(res.body.code).toBeUndefined();
+		});
+
+		it('reports ADMIN_AUTH_UNAVAILABLE when no API key source is configured', async () => {
+			setProdLike();
+			delete process.env.WEBHOOK_API_KEY;
+			delete process.env.WEBHOOK_API_KEYS;
+			delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
+
+			const res = await request(adminApp).post('/admin').set('x-api-key', 'anything').send({});
+			expect(res.status).toBe(503);
+			expect(res.body.code).toBe('ADMIN_AUTH_UNAVAILABLE');
+		});
+
+		it('still rejects an unlisted key when only WEBHOOK_API_KEYS is set', async () => {
+			setProdLike();
+			delete process.env.WEBHOOK_API_KEY;
+			delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
+			process.env.WEBHOOK_API_KEYS = 'key-one,key-two';
+
+			const res = await request(adminApp).post('/admin').set('x-api-key', 'not-a-key').send({});
+			expect(res.status).toBe(403);
+		});
 	});
 });

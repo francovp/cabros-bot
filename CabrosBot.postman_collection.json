@@ -5157,6 +5157,131 @@
               "cookie": []
             }
           ]
+        },
+        {
+          "name": "POST Send Alert (secondary WEBHOOK_API_KEYS key)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{secondaryApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "alert-key-1",
+                "type": "text",
+                "description": "Canonical idempotency header",
+                "disabled": true
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "alert-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
+              },
+              {
+                "key": "x-request-id",
+                "value": "req-12345",
+                "type": "text",
+                "description": "Optional request correlation ID",
+                "disabled": true
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\",\n  \"signalClass\": \"breakout\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"telegramThreadId\": 101\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success (secondary key accepted)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"results\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"12345\"}],\"enriched\":false}"
+            },
+            {
+              "name": "Forbidden (key not in WEBHOOK_API_KEYS)",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{unlistedApiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "idempotency-key",
+                    "value": "alert-key-1",
+                    "type": "text",
+                    "description": "Canonical idempotency header",
+                    "disabled": true
+                  },
+                  {
+                    "key": "x-idempotency-key",
+                    "value": "alert-key-1",
+                    "type": "text",
+                    "description": "Alternative x-prefixed idempotency header variant",
+                    "disabled": true
+                  },
+                  {
+                    "key": "x-request-id",
+                    "value": "req-12345",
+                    "type": "text",
+                    "description": "Optional request correlation ID",
+                    "disabled": true
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\",\n  \"signalClass\": \"breakout\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"telegramThreadId\": 101\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "alert"
+                  ]
+                }
+              },
+              "status": "Forbidden",
+              "code": 403,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Forbidden: Invalid API key\"\n}"
+            }
+          ]
         }
       ]
     },

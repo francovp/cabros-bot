@@ -3,7 +3,7 @@
 const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const { loadFirebaseAdminCredentials } = require('../services/storage/firebaseAdminCredentials');
-const { isValidApiKey, validateApiKey } = require('./auth');
+const { isValidApiKey, validateApiKey, getValidApiKeys } = require('./auth');
 const requestDeadline = require('./requestDeadline');
 
 const ADMIN_VIEWER = 'admin.viewer';
@@ -134,7 +134,7 @@ async function validateAdminAccess(req, res, next) {
 }
 
 function requireConfiguredAdminAccess(req, res, next) {
-	if (!isFirebaseAdminAuthEnabled() && !String(process.env.WEBHOOK_API_KEY || '').trim()) {
+	if (!isFirebaseAdminAuthEnabled() && getValidApiKeys().length === 0) {
 		return res.status(503).json({
 			error: 'Admin authentication is not configured',
 			code: 'ADMIN_AUTH_UNAVAILABLE',
