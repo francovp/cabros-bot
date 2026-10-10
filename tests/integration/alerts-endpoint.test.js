@@ -1435,8 +1435,11 @@ describe('Alerts API Integration Tests', () => {
 			.expect(400);
 
 		expect(res.body).toEqual({
+			success: false,
 			error: '"dryRun" body must be a boolean if provided',
 			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
 		});
 		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
@@ -1451,8 +1454,11 @@ describe('Alerts API Integration Tests', () => {
 			.expect(400);
 
 		expect(res.body).toEqual({
+			success: false,
 			error: '"dryRun" query must be a boolean if provided',
 			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
 		});
 		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
@@ -1467,8 +1473,11 @@ describe('Alerts API Integration Tests', () => {
 			.expect(400);
 
 		expect(res.body).toEqual({
+			success: false,
 			error: '"dryRun" query must be a boolean if provided',
 			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
 		});
 		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
@@ -1950,8 +1959,11 @@ describe('Alerts API Integration Tests', () => {
 				.expect(400);
 
 			expect(res.body).toEqual({
+				success: false,
 				error: '"dryRun" body must be a boolean if provided',
 				code: 'INVALID_REQUEST',
+				requestId: expect.any(String),
+				retryable: false,
 			});
 			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
@@ -1965,8 +1977,11 @@ describe('Alerts API Integration Tests', () => {
 				.expect(400);
 
 			expect(res.body).toEqual({
+				success: false,
 				error: '"dryRun" query must be a boolean if provided',
 				code: 'INVALID_REQUEST',
+				requestId: expect.any(String),
+				retryable: false,
 			});
 			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();

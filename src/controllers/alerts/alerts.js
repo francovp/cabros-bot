@@ -899,7 +899,7 @@ function replayAlert(botOrGetter) {
 
 			const dryRunError = validateDryRun(req);
 			if (dryRunError) {
-				return res.status(400).json(dryRunError);
+				return sendError(res, 400, dryRunError);
 			}
 
 			const dryRun = resolveDryRun(req);
@@ -1032,7 +1032,7 @@ function batchReplayAlerts(botOrGetter) {
 
 			const dryRunError = validateDryRun(req);
 			if (dryRunError) {
-				return res.status(400).json(dryRunError);
+				return sendError(res, 400, dryRunError);
 			}
 
 			const dryRun = resolveDryRun(req);
