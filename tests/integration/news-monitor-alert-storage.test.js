@@ -5,6 +5,7 @@ const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { getCacheInstance } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
+const { waitForBackgroundTasks } = require('../../src/lib/backgroundTaskTracker');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 
 jest.mock('../../src/services/grounding/gemini');
@@ -335,6 +336,40 @@ describe('News Monitor - Alert Storage Integration', () => {
 		expect(saveAlertSpy.mock.calls[1][0].tokenUsage).toBeNull();
 
 		resolveFirstSave('original-doc-id');
+	});
+
+	it('commits the pending state durably before starting the alert write', async () => {
+		const cache = getCacheInstance();
+		const sequence = [];
+		let durableState = 'unset';
+		const markSpy = jest.spyOn(cache, 'markOriginalPersistState').mockImplementation(async (...args) => {
+			await new Promise((resolve) => setImmediate(resolve));
+			durableState = args[2];
+			sequence.push(`state:${args[2]}`);
+		});
+		saveAlertSpy.mockImplementation(async () => {
+			sequence.push(`saveAlert(observed=${durableState})`);
+			return 'mock-alert-doc-id';
+		});
+
+		try {
+			await request(app)
+				.post('/api/news-monitor')
+				.set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+				.expect(200);
+
+			await waitForBackgroundTasks();
+			await new Promise((resolve) => setImmediate(resolve));
+
+			expect(sequence).toEqual([
+				'state:pending',
+				'saveAlert(observed=pending)',
+				'state:owned',
+			]);
+		} finally {
+			markSpy.mockRestore();
+		}
 	});
 
 	it('does not persist when ENABLE_FIRESTORE_ALERT_STORAGE is false', async () => {

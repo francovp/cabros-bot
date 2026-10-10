@@ -2190,7 +2190,25 @@ Cached news-monitor retries now distinguish active delivery ownership from durab
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
 
+## News Dedup Persistence-State Race Safety (Issue #871)
+
+Persistent news-monitor dedup tracks **who owns the usage** of one analysis behind `data.originalPersistedState`, so a cached redelivery never double-counts (or silently loses) token usage in `/api/alerts/summary`. Three races could corrupt that field; all three are now guarded.
+
+**A full-payload write must not erase another replica's channel deltas.** `setEntry()` used to shallow-merge (`{ ...base, ...data }`), so a replica retrying an analysis with a payload predating another replica's delivery wiped that success. It now runs the same channel-scoped `mergeDeliveryData()` used by `updateEntry()`, with the scope derived from `collectScopedChannels()` — the channels the payload carries results for **plus** the channels its `routing.channels` targeted. Without that second source a payload whose results are all failures would merge zero routing destinations and erase the other's chat identity. An empty scope falls through to the plain payload write, so the single-writer fresh-key path is byte-identical to before.
+
+**A terminal state must not be overwritten by a stale `pending`.** The `pending` write used to be fire-and-forget while `saveAlert()` and its terminal `owned`/`none` write raced it; a late landing buried the terminal state and, because `claimUsageOwnership()` refuses `pending`, permanently blocked later usage ownership. Two fixes, both required: the `pending` write is now **awaited** before `saveAlert()` starts (removing the `await` looks like a free optimization and reintroduces exactly this), and **every** transition is expected-state guarded through `markOriginalPersistState(symbol, category, state, { allowedCurrentStates, claimToken })`. `pending` allows only `['none', 'pending']`; the fresh terminal state allows `['pending', 'none']`; a promoted redelivery allows only `['claimed']` **and** must present its own claim token. A refused write is a no-op on the durable value; the local mirror self-corrects on the next `get()`, which refreshes from Firestore.
+
+**A crashed `claimed` record is reclaimed in bounded time.** `claimed` had no lease, so a process dying between the claim and its terminal write stranded usage ownership until the dedup TTL — 6 hours by default — and every later redelivery was silently denied ownership. `claimUsageOwnership()` now stamps `usageClaimToken` + `usageClaimExpiresAt` (`USAGE_CLAIM_LEASE_MS`, `120000`, a code-level constant like `DELIVERY_LOCK_TTL_MS`) and returns **the token instead of a boolean**. `reclaimStale` lets a guarded write take over a `claimed` state once that deadline passes. A **missing or non-numeric deadline counts as reclaimable**: records written before the lease existed carry none, and treating them as live would strand them forever. `expectedTokenField` pins terminal writes and releases to the current owner, so a slow replica releasing an expired claim cannot clobber the replica that took over. Released claims clear both fields to `null`, which is what makes the record reclaimable again.
+
+Everything stays fail-open: every guard returns `false` rather than throwing, and a storage error still rolls the local claim back and lets the alert deliver.
+
+**Coverage**: `tests/unit/news-dedup-persistence-race.test.js` (concurrent `setEntry` preserving both channels and both routing destinations, the same through a Firestore transaction retry, guarded pending/terminal/owner-token transitions, expired-claim reclaim, pre-lease record reclaim, live-lease refusal, bounded deadline, and fail-open on a storage fault) and `tests/integration/news-monitor-alert-storage.test.js` (the `pending` state is durably committed before `saveAlert()` observes it).
+
+No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed: `USAGE_CLAIM_LEASE_MS` is a code-level safety bound, not operator tuning.
+
 ## Webhook Alert Repeat Suppression (CB-230 / Issue #522)
+
+
 
 `/api/webhook/alert` supports opt-in same-signal repeat suppression. When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true`, a signal whose `(exchange, symbol, timeframe, side)` key already fired within a cooldown window of `ALERT_SIGNAL_COOLDOWN_BARS` bars (default `1`, bounded `1`-`10`) skips channel delivery but still returns 200 with `suppressedRepeat: true` and remains persisted with the marker so replay and audit stay complete. Opposite-side flips always deliver because they produce a different key; unknown timeframes never suppress; dry-run requests bypass the cooldown entirely. The in-process store fails open on read/write errors, and both Remote Config keys (`ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION`, `ALERT_SIGNAL_COOLDOWN_BARS`) follow the parity workflow with template entries.
 

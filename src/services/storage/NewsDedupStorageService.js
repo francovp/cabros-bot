@@ -45,6 +45,29 @@ function mergeRoutingData(existingRouting = {}, updatedRouting = {}, channels) {
 	return mergedRouting;
 }
 
+/**
+ * Channels a payload is authoritative for: the ones it carries delivery results
+ * for plus the ones its routing targeted. Scopes a merge so an incoming write
+ * cannot erase another replica's per-channel destination metadata (#871).
+ *
+ * @param {Object} data - Cache payload
+ * @returns {string[]}
+ */
+function collectScopedChannels(data) {
+	const channels = new Set();
+	for (const result of Array.isArray(data?.deliveryResults) ? data.deliveryResults : []) {
+		if (result && typeof result.channel === 'string') {
+			channels.add(result.channel);
+		}
+	}
+	for (const channel of Array.isArray(data?.routing?.channels) ? data.routing.channels : []) {
+		if (typeof channel === 'string') {
+			channels.add(channel);
+		}
+	}
+	return Array.from(channels);
+}
+
 function mergeDeliveryData(existingData = {}, updatedData = {}, options = {}) {
 	const deliveryChannels = Array.isArray(options.deliveryChannels) ? options.deliveryChannels : null;
 	if (!deliveryChannels
@@ -105,7 +128,7 @@ function getFirestore() {
 		const initialization = initializeFirebaseAdminApp({ admin });
 		if (!initialization.ok) {
 			console.warn(
-				`[NewsDedupStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`
+				`[NewsDedupStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`,
 			);
 			db = null;
 			return null;
@@ -244,6 +267,10 @@ async function claimEntry(key, ttlMs, claimToken) {
 /**
  * Write a dedup entry to Firestore.
  *
+ * Concurrent writers are merged channel-scoped rather than replaced wholesale:
+ * a replica retrying an analysis carries a full payload that may predate
+ * another replica's delivery result, and a shallow spread would drop it.
+ *
  * Fail-open: errors are logged and swallowed; alert delivery is not affected.
  *
  * @param {string} key - Dedup key
@@ -266,13 +293,15 @@ async function setEntry(key, ttlMs, data) {
 			const docRef = firestore.collection(COLLECTION_NAME).doc(key);
 			const existing = await transaction.get(docRef);
 			const existingData = existing.exists ? existing.data() : null;
-			// Merge over the current durable payload so concurrent field-scoped
-			// writes (e.g. originalPersistedState committed after this write
-			// started) are not erased by this replacement.
 			const baseData = existingData?.data && typeof existingData.data === 'object'
 				? existingData.data
 				: {};
-			const nextData = { ...baseData, ...(data || {}) };
+			const scopedChannels = collectScopedChannels(data);
+			const nextData = mergeDeliveryData(
+				baseData,
+				data || {},
+				scopedChannels.length > 0 ? { deliveryChannels: scopedChannels } : {},
+			);
 			transaction.set(docRef, {
 				key,
 				createdAt: existingData?.createdAt ?? now,
@@ -287,11 +316,45 @@ async function setEntry(key, ttlMs, data) {
 }
 
 /**
+ * Whether a guarded state transition may reclaim a lease-like state.
+ *
+ * A state named by `reclaimStale.states` is only writable once the deadline in
+ * `reclaimStale.expiresField` has passed, so a crashed owner is recovered in a
+ * bounded interval instead of stranding the field until the dedup TTL. A missing
+ * or non-numeric deadline counts as reclaimable: records written before the
+ * lease existed carry no deadline and would otherwise be stranded forever.
+ *
+ * @param {Object} currentData - Durable payload snapshot
+ * @param {*} currentValue - Value currently stored in options.expectedField
+ * @param {Object} options - updateEntry options
+ * @param {number} nowMs - Current epoch milliseconds
+ * @returns {boolean}
+ */
+function isStaleClaimReclaimable(currentData, currentValue, options, nowMs) {
+	const reclaim = options.reclaimStale;
+	if (!reclaim || !Array.isArray(reclaim.states) || !reclaim.states.includes(currentValue)) {
+		return false;
+	}
+	const deadline = currentData ? currentData[reclaim.expiresField] : undefined;
+	if (typeof deadline !== 'number' || !Number.isFinite(deadline)) {
+		return true;
+	}
+	return deadline <= nowMs;
+}
+
+/**
  * Update an existing dedup entry without extending its original TTL.
  *
  * @param {string} key - Dedup key
  * @param {Object} data - Updated cache payload
- * @param {{deliveryChannels?: string[]}} options - Optional claimed-channel delta scope
+ * @param {Object} [options] - Guard and merge scope
+ * @param {string[]} [options.mergeFields] - Field-scoped merge instead of a payload merge
+ * @param {string} [options.expectedField] - Field whose current value gates the write
+ * @param {Array} [options.expectedValues] - Values that permit the write; undefined always passes
+ * @param {{states: Array, expiresField: string}} [options.reclaimStale] - Bounded reclaim for lease-like states
+ * @param {string} [options.expectedTokenField] - Owner-token field that must match when present
+ * @param {string} [options.expectedToken] - Owner token required by expectedTokenField
+ * @param {string[]} [options.deliveryChannels] - Claimed-channel delta scope for payload merges
  * @returns {Promise<boolean>} true when an active entry was updated
  */
 async function updateEntry(key, data, options = {}) {
@@ -321,8 +384,18 @@ async function updateEntry(key, data, options = {}) {
 					const allowed = Array.isArray(options.expectedValues)
 						? options.expectedValues
 						: [];
-					if (currentValue !== undefined && !allowed.includes(currentValue)) {
+					if (currentValue !== undefined
+						&& !allowed.includes(currentValue)
+						&& !isStaleClaimReclaimable(existingData.data, currentValue, options, now.toMillis())) {
 						return false;
+					}
+					if (options.expectedTokenField !== undefined) {
+						const currentToken = existingData.data
+							? existingData.data[options.expectedTokenField]
+							: undefined;
+						if (currentToken != null && currentToken !== options.expectedToken) {
+							return false;
+						}
 					}
 				}
 				nextData = { ...(existingData.data || {}) };
