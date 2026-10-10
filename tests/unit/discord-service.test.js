@@ -13,11 +13,13 @@ describe('DiscordService', () => {
 		};
 		delete process.env.ENABLE_DISCORD_ALERTS;
 		delete process.env.DISCORD_WEBHOOK_URL;
+		delete process.env.DISCORD_WEBHOOK_URLS;
 		global.fetch = jest.fn();
 		service = new DiscordService({ logger: mockLogger });
 	});
 
 	afterEach(() => {
+		delete process.env.DISCORD_WEBHOOK_URLS;
 		jest.clearAllMocks();
 	});
 
@@ -47,7 +49,8 @@ describe('DiscordService', () => {
 
 			const result = await service.validate();
 
-			expect(result).toEqual({ valid: true, message: 'Discord configured' });
+			expect(result.valid).toBe(true);
+			expect(result.message).toBe('Discord configured');
 			expect(service.isEnabled()).toBe(true);
 		});
 	});
@@ -56,6 +59,11 @@ describe('DiscordService', () => {
 		beforeEach(async () => {
 			process.env.ENABLE_DISCORD_ALERTS = 'true';
 			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => ({ id: 'discord-probe' }),
+			});
 			service = new DiscordService({ logger: mockLogger });
 			await service.validate();
 		});
@@ -118,6 +126,7 @@ describe('DiscordService', () => {
 		});
 
 		it('returns a failed result when the webhook responds with a non-429 error', async () => {
+			global.fetch.mockReset();
 			global.fetch.mockResolvedValue({
 				ok: false,
 				status: 400,
@@ -407,7 +416,7 @@ describe('DiscordService', () => {
 			const longMessage = `${'A'.repeat(1995)} ${'B'.repeat(1995)}`;
 			const result = await service.send({ text: longMessage });
 
-			expect(result).toEqual({
+			expect(result).toMatchObject({
 				success: true,
 				channel: 'discord',
 				messageId: 'discord-msg-1,discord-msg-2',
@@ -415,12 +424,334 @@ describe('DiscordService', () => {
 				messageCount: 2,
 				durationMs: expect.any(Number),
 			});
+			expect(result.splitMessageCount).toBeGreaterThanOrEqual(2);
+			expect(result.resumedFromChunk).toBe(0);
 			expect(result.durationMs).toBeGreaterThanOrEqual(0);
 			expect(global.fetch).toHaveBeenCalledTimes(2);
 			global.fetch.mock.calls.forEach((call) => {
 				const payload = JSON.parse(call[1].body);
 				expect(payload.content.length).toBeLessThanOrEqual(2000);
 			});
+		});
+	});
+
+	describe('multi-webhook failover', () => {
+		const PRIMARY = 'https://discord.com/api/webhooks/111/primary';
+		const SECONDARY = 'https://discord.com/api/webhooks/222/secondary';
+		const TERTIARY = 'https://discord.com/api/webhooks/333/tertiary';
+
+		beforeEach(() => {
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			delete process.env.DISCORD_WEBHOOK_URL;
+			process.env.DISCORD_WEBHOOK_URLS = `${PRIMARY},${SECONDARY},${TERTIARY}`;
+		});
+
+		afterEach(() => {
+			delete process.env.DISCORD_WEBHOOK_URLS;
+		});
+
+		it('parses DISCORD_WEBHOOK_URLS into webhookUrls and rotates round-robin across calls', async () => {
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => ({ id: 'msg' }),
+			});
+
+			service = new DiscordService({ logger: mockLogger });
+			await service.validate();
+
+			expect(service.webhookUrls).toEqual([PRIMARY, SECONDARY, TERTIARY]);
+
+			global.fetch.mockClear();
+			await service.send({ text: 'first' });
+			await service.send({ text: 'second' });
+			await service.send({ text: 'third' });
+
+			const sendUrls = global.fetch.mock.calls
+				.filter((call) => call[1] && call[1].method === 'POST')
+				.map((call) => call[0].split('?')[0]);
+			expect(sendUrls).toEqual([PRIMARY, SECONDARY, TERTIARY]);
+		});
+
+		it('skips a failing URL and succeeds on the next healthy one', async () => {
+			service = new DiscordService({
+				logger: mockLogger,
+				maxUnhealthyDurationMs: 60000,
+			});
+			await service.validate();
+			global.fetch.mockReset();
+			global.fetch = jest.fn().mockImplementation(async (url) => {
+				if (url.startsWith(PRIMARY)) {
+					return {
+						ok: false,
+						status: 503,
+						text: async () => 'service unavailable',
+					};
+				}
+				return {
+					ok: true,
+					status: 200,
+					json: async () => ({ id: 'msg-secondary' }),
+				};
+			});
+
+			const result = await service.send({ text: 'failover me' });
+
+			expect(result.success).toBe(true);
+			expect(result.messageId).toBe('msg-secondary');
+			const calledUrls = global.fetch.mock.calls.map((call) => call[0].split('?')[0]);
+			expect(calledUrls).toContain(PRIMARY);
+			expect(calledUrls).toContain(SECONDARY);
+		});
+
+		it('marks a failing webhook unhealthy and avoids it on the next attempt', async () => {
+			service = new DiscordService({
+				logger: mockLogger,
+				maxUnhealthyDurationMs: 60000,
+			});
+			await service.validate();
+			global.fetch.mockReset();
+			let primaryCalls = 0;
+			global.fetch = jest.fn().mockImplementation(async (url) => {
+				if (url.startsWith(PRIMARY)) {
+					primaryCalls += 1;
+					return {
+						ok: false,
+						status: 503,
+						text: async () => 'service unavailable',
+					};
+				}
+				return {
+					ok: true,
+					status: 200,
+					json: async () => ({ id: 'msg-secondary' }),
+				};
+			});
+
+			await service.send({ text: 'failover me once' });
+			const firstAttemptCount = primaryCalls;
+			expect(firstAttemptCount).toBeGreaterThanOrEqual(1);
+
+			await service.send({ text: 'failover me twice' });
+
+			expect(primaryCalls).toBe(firstAttemptCount);
+
+			const status = service.getStatus();
+			const primaryEntry = status.webhooks.find((entry) => entry.url === PRIMARY);
+			expect(primaryEntry.healthy).toBe(false);
+			expect(primaryEntry.lastError).toContain('503');
+		});
+
+		it('returns the last failure when every webhook fails', async () => {
+			service = new DiscordService({ logger: mockLogger });
+			await service.validate();
+			global.fetch.mockReset();
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: false,
+				status: 500,
+				text: async () => 'broken',
+			});
+
+			const result = await service.send({ text: 'all broken' });
+
+			expect(result.success).toBe(false);
+			expect(result.statusCode).toBe(500);
+			expect(global.fetch).toHaveBeenCalled();
+		});
+
+		it('does not try a second webhook on HTTP 429 (definitive rate-limit response)', async () => {
+			service = new DiscordService({
+				logger: mockLogger,
+				maxRetries: 0,
+				maxRetryDelayMs: 1000,
+				maxTotalRetryWaitMs: 2000,
+			});
+			await service.validate();
+			global.fetch.mockReset();
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: false,
+				status: 429,
+				headers: new Map([['retry-after', '0.001']]),
+				text: async () => 'rate limited',
+			});
+
+			const result = await service.send({ text: 'rate limited' });
+
+			expect(result.success).toBe(false);
+			expect(result.statusCode).toBe(429);
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+		});
+
+		it('rejects invalid alert override URLs', async () => {
+			service = new DiscordService({ logger: mockLogger });
+			await service.validate();
+			global.fetch.mockReset();
+
+			const result = await service.send({ text: 'test', discordWebhookUrl: 'http://example.com/webhook' });
+
+			expect(result.success).toBe(false);
+			expect(result.error).toContain('Invalid');
+			expect(global.fetch).not.toHaveBeenCalled();
+		});
+
+		it('treats invalid DISCORD_WEBHOOK_URLS entries as disabled without breaking the service', async () => {
+			process.env.DISCORD_WEBHOOK_URLS = 'not-a-url, https://discord.com/api/webhooks/444/legit';
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => ({ id: 'legit-msg' }),
+			});
+
+			service = new DiscordService({ logger: mockLogger });
+			await service.validate();
+
+			expect(service.webhookUrls).toEqual(['https://discord.com/api/webhooks/444/legit']);
+
+			const result = await service.send({ text: 'test' });
+			expect(result.success).toBe(true);
+		});
+	});
+
+	describe('validate health probe', () => {
+		beforeEach(() => {
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+		});
+
+		afterEach(() => {
+			delete process.env.DISCORD_WEBHOOK_URLS;
+		});
+
+		it('keeps the service enabled when only some webhooks respond to the probe', async () => {
+			global.fetch = jest.fn().mockResolvedValueOnce({
+				ok: false,
+				status: 404,
+				text: async () => 'not found',
+			});
+			service = new DiscordService({ logger: mockLogger });
+
+			const result = await service.validate();
+
+			expect(result.valid).toBe(true);
+			expect(result.message).toBe('Discord configured');
+			expect(result.webhooks).toBeDefined();
+			expect(result.webhooks[0].healthy).toBe(false);
+			expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining('health probe'));
+		});
+
+		it('exposes per-webhook health via getStatus()', async () => {
+			process.env.DISCORD_WEBHOOK_URLS = 'https://discord.com/api/webhooks/1/a, https://discord.com/api/webhooks/2/b';
+			delete process.env.DISCORD_WEBHOOK_URL;
+			global.fetch = jest.fn().mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				json: async () => ({}),
+			}).mockResolvedValueOnce({
+				ok: false,
+				status: 401,
+				text: async () => 'unauthorized',
+			});
+
+			service = new DiscordService({ logger: mockLogger });
+			await service.validate();
+
+			const status = service.getStatus();
+			expect(status.enabled).toBe(true);
+			expect(status.rotationStrategy).toBe('round-robin');
+			expect(status.webhookCount).toBe(2);
+			expect(status.webhooks[0].healthy).toBe(true);
+			expect(status.webhooks[1].healthy).toBe(false);
+			expect(status.webhooks[1].lastError).toContain('401');
+		});
+	});
+
+	describe('chunk resume and parity', () => {
+		const buildService = async () => {
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+			const svc = new DiscordService({ logger: mockLogger });
+			await svc.validate();
+			return svc;
+		};
+
+		it('returns failedPart + splitMessageCount when a non-429 chunk fails', async () => {
+			const svc = await buildService();
+			// Three Discord chunks (each ~1995 chars over the 2000-char limit)
+			const longMessage = `${'A'.repeat(1995)} ${'B'.repeat(1995)} ${'C'.repeat(1995)}`;
+			global.fetch = jest.fn()
+				.mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'discord-msg-1' }) })
+				.mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'discord-msg-2' }) })
+				.mockResolvedValueOnce({ ok: false, status: 500, text: async () => 'boom' });
+
+			const result = await svc.send({ text: longMessage });
+
+			expect(result.success).toBe(false);
+			expect(result.messageIds).toEqual(['discord-msg-1', 'discord-msg-2']);
+			expect(result.messageCount).toBe(2);
+			expect(result.splitMessageCount).toBeGreaterThanOrEqual(2);
+			expect(result.failedPart).toBe(3);
+		});
+
+		it('returns failedPart on a 429 mid-sequence failure so dead-letter metadata is complete', async () => {
+			const svc = await buildService();
+			global.fetch = jest.fn()
+				.mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'discord-first' }) })
+				.mockResolvedValue({
+					ok: false,
+					status: 429,
+					headers: new Map([['retry-after', '0.01']]),
+					text: async () => 'rate limited',
+				});
+
+			const result = await svc.send({ text: `${'A'.repeat(1995)} ${'B'.repeat(1995)} ${'C'.repeat(1995)}` });
+
+			expect(result.success).toBe(false);
+			expect(result.statusCode).toBe(429);
+			expect(result.failedPart).toBe(2);
+			expect(result.messageIds).toEqual(['discord-first']);
+			expect(result.splitMessageCount).toBeGreaterThanOrEqual(2);
+		});
+
+		it('resumes from startChunk and skips already-delivered chunks', async () => {
+			const svc = await buildService();
+			// Three chunks: chunks 1 and 2 already delivered, start at chunk 3 (index 2)
+			const longMessage = `${'A'.repeat(1995)} ${'B'.repeat(1995)} ${'C'.repeat(1995)}`;
+			global.fetch = jest
+				.fn()
+				.mockResolvedValueOnce({ ok: true, json: async () => ({ id: 'discord-msg-3' }) });
+
+			const result = await svc.send({ text: longMessage }, { startChunk: 2 });
+
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+			expect(result.messageIds).toEqual(['discord-msg-3']);
+			expect(result.messageCount).toBe(1);
+			expect(result.splitMessageCount).toBeGreaterThanOrEqual(2);
+			expect(result.resumedFromChunk).toBe(2);
+			expect(result.success).toBe(true);
+		});
+	});
+
+	describe('isConfigured', () => {
+		const originalEnv = { ...process.env };
+
+		afterEach(() => {
+			process.env = { ...originalEnv };
+		});
+
+		it('returns true only when ENABLE_DISCORD_ALERTS and webhookUrl are present', () => {
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/abc';
+
+			const service = new DiscordService();
+			expect(service.isConfigured()).toBe(true);
+
+			process.env.ENABLE_DISCORD_ALERTS = 'false';
+			expect(service.isConfigured()).toBe(false);
+
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			delete process.env.DISCORD_WEBHOOK_URL;
+			const missingUrlService = new DiscordService();
+			expect(missingUrlService.isConfigured()).toBe(false);
 		});
 	});
 });

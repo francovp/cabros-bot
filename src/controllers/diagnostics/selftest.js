@@ -1,6 +1,7 @@
 'use strict';
 
 const { v4: uuidv4 } = require('uuid');
+const { resolveRequestId } = require('../../lib/requestDeadline');
 const { createSelfTestService } = require('../../services/diagnostics/SelfTestService');
 const sentryService = require('../../services/monitoring/SentryService');
 
@@ -19,7 +20,11 @@ function resetSelfTestService() {
 
 function getSelfTest(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		// Reuse the id the request deadline already stamped. Minting a fresh UUID
+		// here made the response body disagree with both the X-Request-Id header
+		// and the structured access log for the same request. The uuidv4() fallback
+		// keeps direct handler invocation working, as in the other handlers.
+		const requestId = req.requestId || resolveRequestId(req) || uuidv4();
 		const service = getSelfTestService({
 			botOrGetter,
 			getBinanceOrderService: () => {
@@ -45,7 +50,7 @@ function getSelfTest(botOrGetter) {
 
 function postSelfTestRun(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = req.requestId || resolveRequestId(req) || uuidv4();
 		const only = typeof req.query.only === 'string'
 			? req.query.only
 			: (req.body && typeof req.body.only === 'string' ? req.body.only : null);

@@ -4,10 +4,15 @@ const { GROUNDING_MODEL_NAME } = require('../../../../services/grounding/config'
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
 const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
+const { hasConfluenceEvidence } = require('../../../../services/tradingview/confluenceEvidence');
 const {
 	deriveFallbackTradePlan,
 	calculateFallbackRiskLevels,
 } = require('../../../../services/tradingview/fallbackTradePlan');
+const {
+	toPositiveFiniteNumber,
+	computeDeterministicRiskReward,
+} = require('../../../../services/tradingview/riskRewardMath');
 const { tokenCostBudgetService } = require('../../../../lib/tokenUsage');
 
 function mergeUnique(first = [], second = [], maxItems = 6) {
@@ -62,13 +67,84 @@ function pickSetupType(...values) {
 	));
 }
 
+// GH-599: a provider block counts as complete when it carries both directional levels and
+// a usable risk/reward ratio. The ratio requirement stays deliberately strict because an MCP
+// ATR block legitimately omits `current_price` (its levels come from the analysis, not from a
+// quoted entry), and relaxing it here would let a timeframe heuristic displace real ATR levels.
+// Repairing a grounded block that is missing only the ratio is `completeGroundedRiskMetadata`'s job.
 function hasCompleteRiskMetadata(value = {}) {
 	return ['invalidation_level', 'target_level', 'risk_reward_ratio']
 		.every(field => isOptionalRiskValue(value[field]));
 }
 
+// GH-599: complete a grounded block that has both levels and an entry price but is missing
+// the optional ratio, so real provider levels are preserved instead of being overwritten by
+// a derived-quote heuristic plan.
+//
+// A returned `side: null` means the block is NOT salvageable and the caller must fall back
+// to a derived plan: the entry price is missing/non-positive, or the levels sit on the wrong
+// side of entry (a BUY whose stop is above entry has no R:R to express).
+// `computeDeterministicRiskReward` already encodes exactly those rejections.
+//
+// Accepts either a provider block (carrying `current_price`) or the internal selection
+// record from `selectRiskMetadata()` (carrying `riskLevelsEntryPrice`). The caller's parse is
+// reused so the adapter and `applyDeterministicRiskReward` cannot disagree on `side`: the
+// adapter's ratio is trusted as already-valid at persist time and is never re-checked.
+function completeGroundedRiskMetadata(value = {}, parsedSignal) {
+	const side = parsedSignal && parsedSignal.side ? parsedSignal.side : null;
+	if (!side) {
+		return { side: null };
+	}
+
+	const riskRewardRatio = computeDeterministicRiskReward({
+		entry: value.riskLevelsEntryPrice ?? value.current_price,
+		invalidation: value.invalidation_level,
+		target: value.target_level,
+		side,
+	});
+	if (riskRewardRatio === null || !(riskRewardRatio > 0)) {
+		return { side: null };
+	}
+
+	return {
+		side,
+		invalidation_level: value.invalidation_level,
+		target_level: value.target_level,
+		risk_reward_ratio: riskRewardRatio,
+	};
+}
+
+// GH-1229: a heuristic per-timeframe percentage plan is NOT a provider-derived level.
+// It is numerically complete, so it must not outrank a real support/resistance level
+// just by virtue of filling all three fields. `levelsSource` is the provenance signal
+// that lets the merge weigh it below a genuine provider block.
+//
+// Precedence, highest first:
+//   1. ATR/MCP levels  - real provider data
+//   2. Gemini levels   - real provider data (support/resistance parsed from grounding)
+//   3. heuristic MCP   - per-timeframe percentage guess, used only as a last resort
+function isHeuristicRiskBlock(value = {}) {
+	return value.levelsSource === 'fallback-trade-plan';
+}
+
+// GH-599: a block that has both directional levels plus an entry price is a real provider
+// block even when the optional ratio is absent. Selection must still consider it, otherwise
+// the merge path finds no source at all and the grounded levels never reach the repair branch.
+function isUsableRiskBlock(value = {}) {
+	return hasCompleteRiskMetadata(value)
+		|| (toPositiveFiniteNumber(value.current_price) !== null
+			&& isOptionalRiskValue(value.invalidation_level)
+			&& isOptionalRiskValue(value.target_level));
+}
+
 function selectRiskMetadata(gemini, mcp) {
-	const source = hasCompleteRiskMetadata(mcp) ? mcp : hasCompleteRiskMetadata(gemini) ? gemini : null;
+	const mcpComplete = hasCompleteRiskMetadata(mcp);
+	const heuristicMcp = mcpComplete && isHeuristicRiskBlock(mcp);
+	const source = [
+		!heuristicMcp && isUsableRiskBlock(mcp) ? mcp : null,
+		isUsableRiskBlock(gemini) ? gemini : null,
+		heuristicMcp ? mcp : null,
+	].find(Boolean) || null;
 	const setupType = pickSetupType(gemini.setup_type, mcp.setup_type);
 	const setupEvidence = setupType && (setupType === gemini.setup_type ? gemini.setup_evidence : mcp.setup_evidence);
 	if (!source) {
@@ -78,10 +154,20 @@ function selectRiskMetadata(gemini, mcp) {
 		};
 	}
 
+	const entryPrice = toPositiveFiniteNumber(source.current_price);
 	return {
 		invalidation_level: source.invalidation_level,
 		target_level: source.target_level,
 		risk_reward_ratio: source.risk_reward_ratio,
+		// INTERNAL key, deliberately not named `current_price`: this record is spread into the
+		// emitted payload after `current_price` has been resolved (MCP price wins over Gemini),
+		// so the obvious name would silently overwrite the winning entry price with the losing
+		// block's. It exists only so the caller can complete a missing ratio from the same
+		// levels it selected (GH-599).
+		...(entryPrice !== null ? { riskLevelsEntryPrice: entryPrice } : {}),
+		// Reports WHICH block actually supplied the risk levels, so a caller cannot
+		// describe a rejected heuristic block as the origin of the emitted levels.
+		riskLevelsSource: source === mcp ? (mcp.levelsSource || 'tradingview-mcp') : 'gemini-grounding',
 		...(setupType ? { setup_type: setupType } : {}),
 		...(setupEvidence ? { setup_evidence: setupEvidence } : {}),
 	};
@@ -126,18 +212,21 @@ function buildMergedTechnicalLevels(gemini = {}, mcp = {}) {
 }
 
 function extractPriorityMcpInsights(mcp = {}) {
-	if (!mcp.confluenceData || !Array.isArray(mcp.insights)) {
+	if (!mcp.confluenceData || !hasConfluenceEvidence(mcp.confluenceData) || !Array.isArray(mcp.insights)) {
 		return [];
 	}
 
-	return mcp.insights.filter(insight => (
-		typeof insight === 'string'
-		&& (insight.startsWith('Confluencia:') || insight.startsWith('Confluencia contradictoria:'))
-	));
+	return mcp.insights.filter(isConfluenceInsight);
+}
+
+function isConfluenceInsight(insight) {
+	return typeof insight === 'string'
+		&& (insight.startsWith('Confluencia:') || insight.startsWith('Confluencia contradictoria:'));
 }
 
 function hasContradictoryConfluence(mcp = {}) {
 	if (mcp && mcp.confluenceData) {
+		if (!hasConfluenceEvidence(mcp.confluenceData)) return false;
 		const conf = mcp.confluenceData.confluence || mcp.confluenceData;
 		if (conf) {
 			const signalsAgree = conf.signals_agree;
@@ -247,10 +336,14 @@ function isMessageFooterMetadataEnabled() {
 	return getRuntimeConfig().ENABLE_MESSAGE_FOOTER_METADATA;
 }
 
-function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
+function mergeEnrichmentData(text, geminiEnriched, mcpEnriched, parsedSignal = null) {
 	try {
 		const gemini = geminiEnriched || {};
 		const mcp = mcpEnriched || {};
+		// Provenance of the entry price actually emitted below. MCP wins by precedence, so
+		// it is the default — but a repaired risk block must be described honestly (see
+		// the GH-599 consistency guard below).
+		let priceSource;
 
 		const { levels: technicalLevels, levelsSource: technicalLevelsSource } = buildMergedTechnicalLevels(gemini, mcp);
 
@@ -264,8 +357,10 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 			? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${groundingProviders.join('`, `')}` + '`'
 			: '';
 		const priorityMcpInsights = extractPriorityMcpInsights(mcp);
+		const emptyConfluence = mcp.confluenceData && !hasConfluenceEvidence(mcp.confluenceData);
 		const remainingMcpInsights = Array.isArray(mcp.insights)
-			? mcp.insights.filter(insight => !priorityMcpInsights.includes(insight))
+			? mcp.insights.filter(insight => !priorityMcpInsights.includes(insight)
+				&& !(emptyConfluence && isConfluenceInsight(insight)))
 			: [];
 		const insights = mergeUnique(
 			priorityMcpInsights,
@@ -278,12 +373,52 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 			: (mcp.price_data && typeof mcp.price_data.current_price === 'number' && Number.isFinite(mcp.price_data.current_price) && mcp.price_data.current_price > 0
 				? mcp.price_data.current_price
 				: null);
+		// The price actually emitted. Starts as the MCP-preferred price and may be replaced
+		// by the entry a repaired risk block was derived from, so that the stored
+		// (entry, stop, target, ratio) tuple stays internally consistent.
+		let mcpCurrentPriceForOutput = mcpCurrentPrice;
 
-		let levelsSource = technicalLevelsSource;
+		// GH-1229: `levelsSource` describes where the emitted risk levels actually came
+		// from. When MCP supplied only a heuristic block and Gemini won the precedence
+		// fight, tagging the result `fallback-trade-plan` would describe a block that was
+		// rejected. Prefer the chosen risk block's own provenance, falling back to the
+		// technical_levels tag only when no risk block was selected.
+		let levelsSource = optionalRiskMetadata.riskLevelsSource
+			|| technicalLevelsSource
+			|| mcp.levelsSource
+			|| undefined;
 
-		if (!hasCompleteRiskMetadata(optionalRiskMetadata) && mcpCurrentPrice) {
-			const parsed = parseTradingViewSignal(text);
-			if (parsed && parsed.side) {
+		// The ratio is the only optional-risk field a provider may omit, so it is the only
+		// gap worth repairing here. Gate on the ratio itself rather than on overall
+		// completeness: a block that already carries every field must not be disturbed, and
+		// a block missing the ratio should first be *completed*, not replaced.
+		if (!isOptionalRiskValue(optionalRiskMetadata.risk_reward_ratio)) {
+			const parsed = parsedSignal || parseTradingViewSignal(text);
+			const grounded = completeGroundedRiskMetadata(optionalRiskMetadata, parsed);
+			if (grounded.side) {
+				optionalRiskMetadata = {
+					...optionalRiskMetadata,
+					risk_reward_ratio: grounded.risk_reward_ratio,
+				};
+				// GH-599 consistency guard: the ratio above was derived from the entry that
+				// supplied the LEVELS. Emitting the MCP price alongside it would store a
+				// triple whose ratio is not the ratio of its own fields — e.g. levels from a
+				// grounded 100 and an MCP 110 store ratio 2, while anyone recomputing from the
+				// stored entry gets 0.5. `applyDeterministicRiskReward` short-circuits on an
+				// already-valid ratio, so nothing downstream would catch it.
+				//
+				// The prompt reads `current_price` from grounding snippets, which can be
+				// stale, so this is systematic rather than incidental: the ratio is
+				// systematically computed against the older quote while the document records
+				// the newer one. Prefer the entry the ratio actually used, so the stored
+				// `(entry, stop, target, ratio)` tuple is self-consistent and recomputable.
+				// The grounded levels are the thing this issue exists to preserve, and they
+				// were derived from this same price.
+				if (optionalRiskMetadata.riskLevelsEntryPrice !== null) {
+					mcpCurrentPriceForOutput = optionalRiskMetadata.riskLevelsEntryPrice;
+					priceSource = 'gemini-grounding';
+				}
+			} else if (!hasCompleteRiskMetadata(optionalRiskMetadata) && mcpCurrentPrice && parsed && parsed.side) {
 				const fallback = calculateFallbackRiskLevels(mcpCurrentPrice, parsed.timeframe, parsed.side);
 				if (fallback) {
 					optionalRiskMetadata = {
@@ -292,9 +427,15 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 						risk_reward_ratio: fallback.risk_reward_ratio,
 						setup_type: optionalRiskMetadata.setup_type || fallback.setup_type,
 					};
-					if (!levelsSource) {
-						levelsSource = 'derived-quote';
-					}
+					// Unconditional, not `if (!levelsSource)`. This branch REPLACED the
+					// selected block's levels with levels derived from the MCP quote, so the
+					// stamp must describe what was actually emitted. The guard could never be
+					// true anyway: reaching here requires a selected block, and every selected
+					// block sets `riskLevelsSource`. The result was that rejected wrong-side
+					// grounded levels were replaced by heuristic levels still tagged
+					// `gemini-grounding`, which `resolveSignalOutcomePriceSource` then reads as
+					// provider-grounded rather than derived.
+					levelsSource = 'derived-quote';
 				}
 			}
 		}
@@ -303,13 +444,23 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 			original_text: text,
 			tradingViewEnrichmentApplied: mcp.tradingViewEnrichmentApplied === true,
 			...(mcp.tradingViewEnrichmentStatus ? { tradingViewEnrichmentStatus: mcp.tradingViewEnrichmentStatus } : {}),
-				sentiment,
-				sentiment_score,
-				...(typeof gemini.sentiment_score_raw === 'number' && Number.isFinite(gemini.sentiment_score_raw)
-					? { sentiment_score_raw: gemini.sentiment_score_raw }
-					: {}),
-				...(sentimentConflict ? { sentimentConflict: true } : {}),
-			current_price: mcpCurrentPrice,
+			sentiment,
+			sentiment_score,
+			...(typeof gemini.sentiment_score_raw === 'number' && Number.isFinite(gemini.sentiment_score_raw)
+				? { sentiment_score_raw: gemini.sentiment_score_raw }
+				: {}),
+			...(sentimentConflict ? { sentimentConflict: true } : {}),
+			current_price: mcpCurrentPriceForOutput ?? gemini.current_price ?? null,
+			...(mcpCurrentPriceForOutput !== null
+				? {
+					priceSource: priceSource || mcp.priceSource || (mcp.levelsSource === 'derived-quote' ? 'derived-quote' : 'tradingview-mcp'),
+					// A quote currency from MCP describes the MCP price, which is no longer the
+					// emitted one once a repaired block took over the entry. Dropping it is
+					// correct: labelling the grounded entry with the MCP quote asset would
+					// misreport what was stored.
+					...(mcp.price_currency && priceSource === undefined ? { price_currency: mcp.price_currency } : {}),
+				}
+				: (gemini.current_price ? { priceSource: 'gemini-grounding', ...(gemini.price_currency ? { price_currency: gemini.price_currency } : {}) } : {})),
 			...(mcp.price_data ? { price_data: mcp.price_data } : {}),
 			insights,
 			...(technicalLevels ? { technical_levels: technicalLevels } : {}),
@@ -321,7 +472,13 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched) {
 			multiTimeframeData: mcp.multiTimeframeData || null,
 			...(gemini.promptProvenance ? { promptProvenance: gemini.promptProvenance } : {}),
 			...Object.fromEntries(
-				Object.entries(optionalRiskMetadata).filter(([, value]) => value !== undefined),
+				Object.entries(optionalRiskMetadata)
+					// Both keys are internal bookkeeping for the ratio-repair branch and must
+					// never reach the emitted payload: `current_price` is resolved separately
+					// above and must stay MCP-preferred.
+					.filter(([key, value]) => key !== 'riskLevelsSource'
+						&& key !== 'riskLevelsEntryPrice'
+						&& value !== undefined),
 			),
 		};
 	} catch (error) {
@@ -353,6 +510,8 @@ async function enrichWithGemini(text, tokenUsage) {
 		setup_type,
 		setup_evidence,
 		risk_reward_ratio,
+		current_price,
+		price_currency,
 	} = await groundAlert({
 		text,
 		options: {
@@ -383,8 +542,9 @@ async function enrichWithGemini(text, tokenUsage) {
 		extraText,
 		...(promptProvenance ? { promptProvenance } : {}),
 		...(technical_levels ? { technical_levels } : {}),
+		...(current_price ? { priceSource: 'gemini-grounding' } : {}),
 		...Object.fromEntries(
-			Object.entries({ invalidation_level, target_level, setup_type, setup_evidence, risk_reward_ratio })
+			Object.entries({ invalidation_level, target_level, setup_type, setup_evidence, risk_reward_ratio, current_price, price_currency })
 				.filter(([, value]) => value !== undefined),
 		),
 	};
@@ -444,6 +604,11 @@ async function enrichAlert(alert, options = {}) {
 	const inputText = (typeof alert === 'string') ? alert : (alert && typeof alert.text === 'string' ? alert.text : alert);
 	const metadata = (alert && alert.metadata) ? alert.metadata : null;
 	const tokenUsage = options.tokenUsage;
+	// GH-599: the caller already parsed this exact text for persistence and outcome
+	// eligibility. Accepting its parse keeps the side used for deterministic risk/reward
+	// identical in the adapter and at persist time, instead of each re-deriving it and
+	// risking a disagreement that persists an unchallenged wrong-direction ratio.
+	const sharedParsedSignal = options.parsedSignal || null;
 
 	const validated = validateAlert(inputText, metadata);
 	// validateAlert may return either a string (when mocked in tests) or an object { text, metadata }
@@ -512,7 +677,7 @@ async function enrichAlert(alert, options = {}) {
 		const geminiEnrichedAlert = await enrichWithGemini(text, tokenUsage);
 
 		if (mcpEnrichedAlert) {
-			return mergeEnrichmentData(text, geminiEnrichedAlert, mcpEnrichedAlert);
+			return mergeEnrichmentData(text, geminiEnrichedAlert, mcpEnrichedAlert, sharedParsedSignal);
 		}
 
 		if (geminiEnrichedAlert) {
@@ -526,19 +691,35 @@ async function enrichAlert(alert, options = {}) {
 				...(geminiEnrichedAlert.technical_levels ? { levelsSource: 'gemini-grounding' } : {}),
 			};
 
-			if (!hasCompleteRiskMetadata(geminiEnrichedAlert)) {
-				const fallbackPlan = await deriveFallbackTradePlan(text).catch(() => null);
-				if (fallbackPlan) {
-					result = {
-						...result,
-						current_price: result.current_price ?? fallbackPlan.current_price,
-						price_data: result.price_data ?? fallbackPlan.price_data,
-						invalidation_level: result.invalidation_level ?? fallbackPlan.invalidation_level,
-						target_level: result.target_level ?? fallbackPlan.target_level,
-						risk_reward_ratio: result.risk_reward_ratio ?? fallbackPlan.risk_reward_ratio,
-						setup_type: result.setup_type || fallbackPlan.setup_type,
-						levelsSource: result.levelsSource || 'derived-quote',
-					};
+			// Only the missing ratio is worth repairing, so gate on that. A block that already
+			// carries the ratio must not be disturbed, and a block missing it should first be
+			// *completed* from its own levels rather than replaced.
+			if (!isOptionalRiskValue(geminiEnrichedAlert.risk_reward_ratio)) {
+				// A grounded block missing ONLY the optional ratio is completed arithmetically
+				// so the grounded entry price and levels survive (GH-599). Only a block that
+				// is genuinely unusable (no usable entry, or levels on the wrong side of it)
+				// falls through to the derived-quote heuristic plan below.
+				const grounded = completeGroundedRiskMetadata(geminiEnrichedAlert, sharedParsedSignal || parseTradingViewSignal(text));
+				if (grounded.side) {
+					// Only the ratio is new here: the levels came from the same object
+					// `result` was spread from, so they are already in place.
+					result = { ...result, risk_reward_ratio: grounded.risk_reward_ratio };
+				} else {
+					const fallbackPlan = await deriveFallbackTradePlan(text).catch(() => null);
+					if (fallbackPlan) {
+						result = {
+							...result,
+							current_price: fallbackPlan.current_price,
+							priceSource: 'derived-quote',
+							price_data: fallbackPlan.price_data,
+							invalidation_level: fallbackPlan.invalidation_level,
+							target_level: fallbackPlan.target_level,
+							risk_reward_ratio: fallbackPlan.risk_reward_ratio,
+							setup_type: result.setup_type || fallbackPlan.setup_type,
+							levelsSource: 'derived-quote',
+						};
+						delete result.price_currency;
+					}
 				}
 			}
 

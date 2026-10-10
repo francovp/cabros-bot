@@ -84,11 +84,14 @@ function createProcessLifecycle(options = {}) {
 		stopNotificationRedriveWorker = () => undefined,
 		stopWhatsAppCommandBridge = () => undefined,
 		stopScannerPresetScheduler = () => undefined,
+		stopJobBacklogMonitor = () => undefined,
+		stopUserPriceAlertWorker = () => undefined,
 		stopNewsMonitorScheduler = () => undefined,
 		stopAlertScheduler = () => undefined,
 		stopRemoteConfig = () => undefined,
 		stopTelegramHealthProbe = () => undefined,
 		shutdownNewsMonitor = () => undefined,
+		flushAlertBurstWindows = () => undefined,
 		closeAllSseConnections = () => undefined,
 		flushSentry = () => undefined,
 		timeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
@@ -176,10 +179,23 @@ function createProcessLifecycle(options = {}) {
 
 			const cleanup = async () => {
 				const sseCleanup = safelyRun(logger, 'admin SSE streams', closeAllSseConnections);
+				// Stop the backlog monitor's timer before anything awaits: it pages
+				// through Telegram, so a probe armed during the shutdown window would
+				// read Firestore/Redis and try to notify an operator through a bot
+				// that is already stopping. Clearing the timer first stops new work
+				// from starting; the drain below still waits for a probe already in
+				// flight, and now runs before the bot itself is torn down.
+				const backlogMonitorCleanup = safelyRun(logger, 'job backlog monitor', () => stopJobBacklogMonitor({ drain: true }));
+				// Alert burst windows hold webhook requests open for up to
+				// ALERT_BURST_WINDOW_MS, so a shutdown landing mid-window would
+				// otherwise strand held alerts with no timer left to release them.
+				// Flush while the bot and channels are still up.
+				await safelyRun(logger, 'alert burst windows', () => flushAlertBurstWindows());
 				const telegramCleanup = safelyRun(logger, 'Telegram bot', stopBot);
 				const bootstrapCleanup = safelyRun(logger, 'application bootstrap', getBootstrapPromise);
 				await closeServer(server, logger);
 				await sseCleanup;
+				await backlogMonitorCleanup;
 				await telegramCleanup;
 				await bootstrapCleanup;
 				await safelyRun(logger, 'background jobs', waitForBackgroundJobs);
@@ -189,6 +205,7 @@ function createProcessLifecycle(options = {}) {
 					safelyRun(logger, 'notification redrive worker', () => stopNotificationRedriveWorker({ drain: true })),
 					safelyRun(logger, 'whatsapp command bridge', () => stopWhatsAppCommandBridge({ drain: true })),
 					safelyRun(logger, 'scanner preset scheduler', () => stopScannerPresetScheduler({ drain: true })),
+					safelyRun(logger, 'user price alert worker', () => stopUserPriceAlertWorker({ drain: true })),
 					safelyRun(logger, 'news monitor scheduler', () => stopNewsMonitorScheduler({ drain: true })),
 					safelyRun(logger, 'alert scheduler', () => stopAlertScheduler({ drain: true })),
 					safelyRun(logger, 'remote config service', stopRemoteConfig),

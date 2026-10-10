@@ -88,19 +88,40 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ZERO_CHANNEL_ALERT_COOLDOWN_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1000, max: 86400000 },
 	ENABLE_API_ONLY_MODE: { type: 'boolean', defaultValue: false },
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
+	ENABLE_SIGNAL_CLASS_MARKER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	ENABLE_ALERT_SYNTH_BURST_AGGREGATION: { type: 'boolean', defaultValue: false },
+	ALERT_BURST_WINDOW_MS: { type: 'number', defaultValue: 3000, integer: true, min: 1000, max: 15000 },
+	ALERT_BURST_MIN_SIGNALS: { type: 'number', defaultValue: 3, integer: true, min: 2, max: 20 },
+	JOB_BACKLOG_ALERT_THRESHOLD_MS: { type: 'number', defaultValue: 900000, integer: true, min: 1000, max: 86400000 },
+	JOB_BACKLOG_PAGE_COOLDOWN_MS: { type: 'number', defaultValue: 900000, integer: true, min: 1000, max: 86400000 },
+	JOB_BACKLOG_PROBE_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
+	ENABLE_USER_PRICE_ALERTS: { type: 'boolean', defaultValue: false },
+	USER_PRICE_ALERT_EVALUATION_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
+	USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
+	USER_PRICE_ALERT_MAX_PER_CHAT: { type: 'number', defaultValue: 20, integer: true, min: 1, max: 100 },
 	REQUEST_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1000, max: 120000 },
 	ENABLE_BINANCE_ORDER_AUDIT: { type: 'boolean', defaultValue: false },
 	BINANCE_ORDER_AUDIT_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
-	ENABLE_SYMBOL_ANALYSIS_STORAGE: { type: 'boolean', defaultValue: false },
-	SYMBOL_ANALYSIS_RETENTION_DAYS: { type: 'number', defaultValue: 7, integer: true, min: 1, max: 365 },
+	// ENABLE_SYMBOL_ANALYSIS_STORAGE, SYMBOL_ANALYSIS_RETENTION_DAYS excluded:
+	// a process-startup gate that decides where a collection lives and its TTL
+	// horizon are deployment-controlled, matching ENABLE_FIRESTORE_IDEMPOTENCY,
+	// ENABLE_FIRESTORE_SCANNER_PRESETS and ENABLE_SIGNAL_OUTCOME_TRACKING. A
+	// published template outranks render.yaml, so an allow-listed gate here
+	// would silently override the blueprint's enablement (issue #1179).
 	ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT: { type: 'boolean', defaultValue: false },
-	ENABLE_FIRESTORE_NEWS_ANALYSIS: { type: 'boolean', defaultValue: false },
+	// ENABLE_FIRESTORE_NEWS_ANALYSIS excluded (issue #1180): it is a process-startup
+	// gate that decides where the news_analysis collection lives, like every other
+	// ENABLE_FIRESTORE_* storage gate. A published template parameter reports its
+	// defaultValue with source `remote`, so leaving the gate here would let the
+	// template silently override render.yaml and re-disable persistence the moment
+	// a template load recovered. NEWS_ANALYSIS_RETENTION_DAYS stays eligible.
 	NEWS_ANALYSIS_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
 	ENABLE_FIRESTORE_CHAT_PREFERENCES: { type: 'boolean', defaultValue: false },
 	CHAT_PREFERENCES_RETENTION_DAYS: { type: 'number', defaultValue: 90, integer: true, min: 1, max: 365 },
 	CHAT_PREFERENCES_CACHE_TTL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
+	GENERIC_MESSAGE_MAX_LENGTH: { type: 'number', defaultValue: 4000, integer: true, min: 1, max: 20000 },
 	// WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_NAMESPACE excluded:
 	// notification destinations — must remain deployment-controlled.
 	WHATSAPP_TEMPLATE_PARAM_ORDER: { type: 'string', defaultValue: 'symbol,price,action,setup,timeframe,source' },
@@ -306,7 +327,11 @@ function getStatus() {
 	const configured = isFirestoreConfigured();
 	const stale = remoteLoadedAt !== null && !hasFreshRemoteConfig();
 	const effectiveErrorCategory = stale ? 'stale' : lastErrorCategory;
-	const isReady = enabled && configured && lastSuccessfulLoad !== null && hasFreshRemoteConfig() && !stale;
+	// Readiness requires a proven, successful, still-fresh template load. A
+	// feature that is merely `enabled` + `configured` has loaded nothing, so it
+	// must never be reported as serving remote values (issue #598).
+	const hasSuccessfulLoad = typeof lastSuccessfulLoad === 'string' && lastSuccessfulLoad.length > 0;
+	const isReady = Boolean(enabled && configured && hasSuccessfulLoad && hasFreshRemoteConfig() && !stale);
 
 	let status;
 	if (!enabled) {
@@ -326,6 +351,14 @@ function getStatus() {
 		configured,
 		ready: isReady,
 		status,
+		// True once a server template has actually been fetched at least once. Lets an
+		// operator tell "wired up" (enabled+configured) apart from "actually serving
+		// remote values" without inspecting error counters.
+		//
+		// This is deliberately exactly `hasSuccessfulLoad`: an earlier version added
+		// `(enabled && configured && !neverLoaded)`, but `neverLoaded` is `!hasSuccessfulLoad`,
+		// so the second operand was always `hasSuccessfulLoad` and reduced to a no-op.
+		templatePublished: hasSuccessfulLoad,
 		source: getSource(),
 		templateVersion,
 		lastSuccessfulLoad,
@@ -349,7 +382,18 @@ function getRemoteValue(config, key, schema) {
 		if (typeof value.asString !== 'function') {
 			return { present: false };
 		}
-		const parsed = parseValue(value.asString(), schema, undefined);
+		const raw = value.asString();
+		// A blank remote value carries no tuning, so it is an absent override
+		// rather than a malformed one. The published template ships
+		// `SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES` as an intentional empty string,
+		// which is that parameter's own schema default; reporting it as invalid
+		// would pin `lastErrorCategory: "invalid_value"` on every load and mask a
+		// genuinely malformed value. `buildDefaultConfig()` already supplies the
+		// default for any parameter the template leaves blank.
+		if (typeof raw === 'string' && raw.trim() === '') {
+			return { present: false };
+		}
+		const parsed = parseValue(raw, schema, undefined);
 		return parsed === undefined ? { present: true, valid: false } : { present: true, value: parsed };
 	} catch (error) {
 		return { present: true, valid: false };
@@ -387,6 +431,48 @@ function withTimeout(promise, timeoutMs) {
 	});
 }
 
+/**
+ * Maps firebase-admin Remote Config SDK errors (`remote-config/<code>`, a
+ * `PrefixedFirebaseError`) onto the sanitized status categories exposed by
+ * `/api/status`. Without this, an unpublished server namespace and a genuine
+ * network fault both collapsed into the opaque `load_failed`, which hid the
+ * fact that the template had simply never been published.
+ */
+const SDK_ERROR_CATEGORIES = {
+	'not-found': 'template_not_published',
+	'permission-denied': 'permission_denied',
+	'unauthenticated': 'unauthenticated',
+	'failed-precondition': 'failed_precondition',
+	'internal-error': 'internal_error',
+	'aborted': 'aborted',
+	'resource-exhausted': 'resource_exhausted',
+	'invalid-argument': 'invalid_argument',
+	'unknown-error': 'unknown_error',
+};
+
+function getSdkErrorCode(error) {
+	if (!error) {
+		return null;
+	}
+	// firebase-admin builds codes as `remote-config/<code>` and also exposes
+	// `hasCode()` on PrefixedFirebaseError; support both shapes.
+	const code = typeof error.code === 'string' ? error.code : null;
+	if (code && code.startsWith('remote-config/')) {
+		return code.slice('remote-config/'.length);
+	}
+	// Fallback for SDK-shaped errors that carry `hasCode()` but a non-prefixed `.code`.
+	// `PrefixedFirebaseError.hasCode()` is a pure string comparison and cannot throw,
+	// so this is a single probe rather than a defensive loop over every category.
+	if (typeof error.hasCode === 'function') {
+		for (const candidate of Object.keys(SDK_ERROR_CATEGORIES)) {
+			if (error.hasCode(candidate)) {
+				return candidate;
+			}
+		}
+	}
+	return null;
+}
+
 function getErrorCategory(error) {
 	if (error && error.code === 'REMOTE_CONFIG_TIMEOUT') {
 		return 'timeout';
@@ -397,7 +483,7 @@ function getErrorCategory(error) {
 	if (error && error.code === 'REMOTE_CONFIG_UNSUPPORTED') {
 		return 'unsupported_sdk';
 	}
-	return 'load_failed';
+	return SDK_ERROR_CATEGORIES[getSdkErrorCode(error)] || 'load_failed';
 }
 
 async function loadNow(options = {}) {

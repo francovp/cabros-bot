@@ -83,12 +83,16 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		const res = await request(app)
 			.post('/api/webhook/expanded-analysis-alert')
 			.set('x-api-key', 'test-key')
+			.set('x-request-id', 'expanded-trace-42')
 			.send({ symbols: ['NASDAQ:NVDA'], timeframe: '1D' })
 			.expect(200);
 
 		expect(res.body.success).toBe(true);
+		expect(res.body.requestId).toBe('expanded-trace-42');
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.alertText).toContain('*🟡 NEUTROS*');
 		expect(res.body.summary).toEqual({
@@ -231,6 +235,8 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		}));
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.results).toEqual([
 			expect.objectContaining({
@@ -616,7 +622,46 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		expect(res.body.dryRun).toBe(true);
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
+	it('ignores evidence-empty confluence when deriving item side for signal outcome recording', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			symbol: 'NASDAQ:NVDA',
+			price_data: {
+				current_price: 219.51,
+				change_percent: 1.5,
+				volume: 70213090,
+			},
+			technical_indicators: {
+				rsi: 57.8,
+				sma20: 214.1,
+				macd: 6.1,
+				macd_signal: 7.2,
+				atr: 7.69,
+			},
+			confluence: {
+				recommendation: 'STRONG_SELL',
+				confidence: 'HIGH',
+			},
+			news: { count: 0 },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/expanded-analysis-alert')
+			.set('x-api-key', 'test-key')
+			.send({ symbols: ['NASDAQ:NVDA'], timeframe: '1D' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(signalOutcomeService.recordSignal).toHaveBeenCalledWith(
+			expect.objectContaining({
+				symbol: 'NVDA',
+				side: 'BUY',
+			})
+		);
 	});
 });

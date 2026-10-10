@@ -44,6 +44,7 @@ const {
 	getBinanceOrders,
 	deleteBinanceOrder,
 	getBinanceOrderAudit,
+	postBinanceOrderPreview,
 } = require('../controllers/trading/binanceOrders');
 const { postTestAlert } = require('../controllers/admin/testAlert');
 const { handleSseStream } = require('../controllers/admin/sseEvents');
@@ -70,8 +71,14 @@ function getRoutes(botOrGetter) {
 	router.post('/webhook/message', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postMessage(botOrGetter));
 	router.post('/webhook/expanded-analysis-alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
 	router.post('/webhook/market-scanner-alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
-	router.post('/webhook/volume-confirmation', validateApiKey, maintenanceModeMiddleware, postVolumeConfirmation());
-	router.post('/webhook/symbol-analysis', validateApiKey, maintenanceModeMiddleware, postSymbolAnalysis());
+	// Rate limited by the app-wide src/lib/rateLimiter (app.use). These two webhook
+	// ingest paths additionally have their own dedicated 1,000-request bucket via
+	// WEBHOOK_INGEST_PATHS, so they are more restricted than the global default.
+	// CodeQL's js/missing-rate-limiting cannot see the app-level middleware.
+	/* codeql[js/missing-rate-limiting] */
+	router.post('/webhook/volume-confirmation', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postVolumeConfirmation());
+	/* codeql[js/missing-rate-limiting] */
+	router.post('/webhook/symbol-analysis', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postSymbolAnalysis());
 	router.get('/alerts', ...adminRead, listAlerts);
 	router.get('/alerts/replays', ...adminRead, listReplays);
 	router.get('/alerts/summary', ...adminRead, summarizeAlerts);
@@ -111,6 +118,7 @@ function getRoutes(botOrGetter) {
 	router.post('/jobs/:jobId/retry-failed', ...adminWrite, idempotencyMiddleware, postRetryFailedJob(botOrGetter));
 	router.get('/trading/binance/orders', ...binanceOrderRead, getBinanceOrders);
 	router.get('/trading/binance/orders/audit', ...binanceOrderRead, getBinanceOrderAudit);
+	router.post('/trading/binance/orders/preview', ...binanceOrderRead, postBinanceOrderPreview);
 	router.post('/trading/binance/orders', ...binanceOrderWrite, idempotencyMiddleware, postBinanceOrder);
 	router.delete('/trading/binance/orders', ...binanceOrderWrite, deleteBinanceOrder);
 

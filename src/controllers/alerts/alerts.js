@@ -6,6 +6,10 @@ const alertFeedbackStorageService = require('../../services/storage/AlertFeedbac
 const sentryService = require('../../services/monitoring/SentryService');
 const signalOutcomeService = require('../../services/storage/SignalOutcomeService');
 const { parseTelegramTopicRoutes, resolveTelegramThreadId } = require('../../services/notification/telegramTopicRouting');
+const { VALID_SIGNAL_CLASSES } = require('../../lib/validation');
+const { sendError } = require('../../lib/errorEnvelope');
+const { isFirestoreErrorCategory } = require('../../services/storage/firestoreErrorCategories');
+const { isRecognisedDryRunValue, resolveDryRun } = require('../../lib/dryRunRequest');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -21,6 +25,7 @@ const EXPORT_FIELDS = [
 	'requestId',
 	'receivedAt',
 	'source',
+	'signalClass',
 	'enriched',
 	'useTradingViewData',
 	'tradingViewEnrichmentApplied',
@@ -29,12 +34,15 @@ const EXPORT_FIELDS = [
 	'confidence',
 	'sentimentScore',
 	'dedupStatus',
+	'feature',
 	'channels',
 	'deliveryResults',
 	'suppressedRepeat',
 	'tokenUsage',
 	'enrichmentData',
 	'text',
+	'currentPrice',
+	'priceCurrency',
 ];
 
 function parseLimit(rawLimit) {
@@ -184,6 +192,61 @@ function parseStringFilter(rawValue, filterName, maxLength = 64) {
 	return { value: rawValue.trim() };
 }
 
+function parseSignalClassFilter(rawValue) {
+	if (rawValue === undefined) {
+		return { value: undefined };
+	}
+
+	const tokens = Array.isArray(rawValue)
+		? rawValue
+		: typeof rawValue === 'string'
+			? rawValue.split(',')
+			: null;
+
+	if (!tokens || tokens.length === 0) {
+		return {
+			error: {
+				error: 'Invalid signalClass filter. Use a non-empty string.',
+				code: 'INVALID_REQUEST',
+			},
+		};
+	}
+
+	const parts = [];
+	for (const token of tokens) {
+		if (typeof token !== 'string') {
+			return {
+				error: {
+					error: 'Invalid signalClass filter. Must be a string.',
+					code: 'INVALID_REQUEST',
+				},
+			};
+		}
+		const subParts = token.split(',').map((p) => p.trim().toLowerCase());
+		for (const subPart of subParts) {
+			if (!subPart) {
+				return {
+					error: {
+						error: 'Invalid signalClass filter. Contains empty value.',
+						code: 'INVALID_REQUEST',
+					},
+				};
+			}
+			if (!VALID_SIGNAL_CLASSES.has(subPart)) {
+				return {
+					error: {
+						error: `Invalid signalClass filter: "${subPart}". Allowed values: ${Array.from(VALID_SIGNAL_CLASSES).join(', ')}.`,
+						code: 'INVALID_REQUEST',
+					},
+				};
+			}
+			parts.push(subPart);
+		}
+	}
+
+	return { value: parts.join(',') };
+}
+
 function listAlerts(req, res) {
 	return handleAsync(req, res, '/api/alerts', async () => {
 		if (!alertStorageService.isEnabled()) {
@@ -238,6 +301,11 @@ function listAlerts(req, res) {
 			return res.status(400).json(exchange.error);
 		}
 
+		const signalClass = parseSignalClassFilter(req.query.signalClass);
+		if (signalClass.error) {
+			return res.status(400).json(signalClass.error);
+		}
+
 		const parsedInclude = parseInclude(req.query.include);
 		if (!parsedInclude.success) {
 			return res.status(400).json({
@@ -261,6 +329,9 @@ function listAlerts(req, res) {
 		if (exchange.value !== undefined) {
 			listParams.exchange = exchange.value;
 		}
+		if (signalClass.value !== undefined) {
+			listParams.signalClass = signalClass.value;
+		}
 		if (parsedInclude.values.length > 0) {
 			listParams.include = parsedInclude.values;
 			listParams.includeEnrichmentSummary = parsedInclude.values.includes('enrichment_summary');
@@ -278,6 +349,28 @@ function listAlerts(req, res) {
 			},
 		});
 	});
+}
+
+const VALID_SUMMARY_INTERVALS = ['hour', 'day'];
+
+function parseSummaryInterval(rawInterval) {
+	if (rawInterval === undefined) {
+		return { value: undefined };
+	}
+
+	// An empty value is a client that meant to send one, not a request for the
+	// aggregate-only response, so it is rejected rather than read as omitted.
+	const normalized = typeof rawInterval === 'string' ? rawInterval.trim().toLowerCase() : null;
+	if (!normalized || !VALID_SUMMARY_INTERVALS.includes(normalized)) {
+		return {
+			error: {
+				error: `Invalid interval parameter. Allowed values: ${VALID_SUMMARY_INTERVALS.join(', ')}.`,
+				code: 'INVALID_REQUEST',
+			},
+		};
+	}
+
+	return { value: normalized };
 }
 
 function summarizeAlerts(req, res) {
@@ -334,6 +427,27 @@ function summarizeAlerts(req, res) {
 			return res.status(400).json(exchange.error);
 		}
 
+		const signalClass = parseSignalClassFilter(req.query.signalClass);
+		if (signalClass.error) {
+			return res.status(400).json(signalClass.error);
+		}
+
+		const interval = parseSummaryInterval(req.query.interval);
+		if (interval.error) {
+			return sendError(res, 400, interval.error);
+		}
+
+		if (interval.value !== undefined) {
+			const maxDays = alertStorageService.getSummaryIntervalMaxWindowDays(interval.value);
+			const bounds = alertStorageService.resolveSummaryWindowBounds({ from: from.value, to: to.value });
+			if (bounds.to.getTime() - bounds.from.getTime() > maxDays * 24 * 60 * 60 * 1000) {
+				return sendError(res, 400, {
+					error: `Invalid summary window for interval "${interval.value}". Maximum window is ${maxDays} days.`,
+					code: 'INVALID_REQUEST',
+				});
+			}
+		}
+
 		const summaryParams = {
 			from: from.value,
 			limit,
@@ -350,6 +464,12 @@ function summarizeAlerts(req, res) {
 		if (exchange.value !== undefined) {
 			summaryParams.exchange = exchange.value;
 		}
+		if (signalClass.value !== undefined) {
+			summaryParams.signalClass = signalClass.value;
+		}
+		if (interval.value !== undefined) {
+			summaryParams.interval = interval.value;
+		}
 
 		const summary = await alertStorageService.summarizeAlerts(summaryParams);
 
@@ -357,7 +477,8 @@ function summarizeAlerts(req, res) {
 			|| typeof enriched === 'boolean'
 			|| symbol.value !== undefined
 			|| eventCategory.value !== undefined
-			|| exchange.value !== undefined;
+			|| exchange.value !== undefined
+			|| signalClass.value !== undefined;
 		if (!hasReportFilters) {
 			let shadowModeMetrics = 'No measurements found';
 			if (signalOutcomeService.isEnabled()) {
@@ -502,17 +623,23 @@ function exportAlerts(req, res) {
 			? req.query.source.trim()
 			: undefined;
 
+		const signalClass = parseSignalClassFilter(req.query.signalClass);
+		if (signalClass.error) {
+			return res.status(400).json(signalClass.error);
+		}
+
 		const result = await alertStorageService.exportAlerts({
 			from: from.value,
 			to: to.value,
 			limit,
 			source,
 			enriched,
+			signalClass: signalClass.value,
 			includeText,
 			includeEnrichment,
 		});
 
-		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean';
+		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean' || signalClass.value !== undefined;
 		if (!hasReportFilters) {
 			let shadowModeMetrics = 'No measurements found';
 			if (signalOutcomeService.isEnabled()) {
@@ -660,11 +787,20 @@ function getIdempotencyKey(req) {
 		|| (req.query && (req.query.idempotencyKey || req.query.idempotency_key));
 }
 
-function resolveDryRun(req) {
-	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
-	const bodyFlag = req.body && typeof req.body === 'object'
-		&& (req.body.dryRun === true || req.body.dryRun === 'true');
-	return Boolean(queryFlag || bodyFlag);
+function validateDryRun(req) {
+	if (req.body && typeof req.body === 'object' && req.body.dryRun !== undefined && !isRecognisedDryRunValue(req.body.dryRun)) {
+		return {
+			error: '"dryRun" body must be a boolean if provided',
+			code: 'INVALID_REQUEST',
+		};
+	}
+	if (req.query && req.query.dryRun !== undefined && !isRecognisedDryRunValue(req.query.dryRun)) {
+		return {
+			error: '"dryRun" query must be a boolean if provided',
+			code: 'INVALID_REQUEST',
+		};
+	}
+	return null;
 }
 
 function buildStoredChannelRouting(storedAlert, storedTelegramThreadId) {
@@ -690,12 +826,12 @@ function buildDryRunChannelRouting(storedAlert, storedTelegramThreadId, channels
 				const isCustomChat = Boolean(
 					routing.telegramChatId
 					&& process.env.TELEGRAM_CHAT_ID
-					&& String(routing.telegramChatId) !== String(process.env.TELEGRAM_CHAT_ID)
+					&& String(routing.telegramChatId) !== String(process.env.TELEGRAM_CHAT_ID),
 				);
 				const topicRoutes = isCustomChat ? {} : parseTelegramTopicRoutes(process.env.TELEGRAM_TOPIC_ROUTES);
 				const resolvedThread = resolveTelegramThreadId(
 					{ ...storedAlert, source: storedAlert.source || 'alert-replay' },
-					topicRoutes
+					topicRoutes,
 				);
 				if (resolvedThread !== null && resolvedThread !== undefined) {
 					routing.telegramThreadId = resolvedThread;
@@ -761,6 +897,11 @@ function replayAlert(botOrGetter) {
 				});
 			}
 
+			const dryRunError = validateDryRun(req);
+			if (dryRunError) {
+				return sendError(res, 400, dryRunError);
+			}
+
 			const dryRun = resolveDryRun(req);
 
 			const storedAlert = await alertStorageService.getAlertById(alertId);
@@ -807,17 +948,63 @@ function replayAlert(botOrGetter) {
 				});
 			}
 
-			const { getNotificationManager, initializeNotificationServices } = require('../webhooks/handlers/alert/alert');
-			let notificationManager = getNotificationManager();
+			const alertHandler = require('../webhooks/handlers/alert/alert');
+			let notificationManager = alertHandler.getNotificationManager();
 			if (!notificationManager) {
 				const bot = typeof botOrGetter === 'function' ? botOrGetter() : botOrGetter || null;
-				notificationManager = await initializeNotificationServices(bot);
+				notificationManager = await alertHandler.initializeNotificationServices(bot);
+			}
+
+			const reEnrichRequested = (req.query && (req.query.reEnrich === 'true' || req.query.reEnrich === true))
+				|| (req.body && typeof req.body === 'object' && (req.body.reEnrich === 'true' || req.body.reEnrich === true));
+
+			let reEnriched = false;
+			let newEnrichmentData = null;
+
+			if (reEnrichRequested) {
+				const isGeminiEnabled = process.env.ENABLE_GEMINI_GROUNDING === 'true';
+				const isTradingViewMcpEnabled = process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT === 'true';
+
+				if (!isGeminiEnabled && !isTradingViewMcpEnabled) {
+					console.warn('[AlertReplay] reEnrich requested but enrichment is disabled');
+				} else {
+					let useTradingViewData = Boolean(storedAlert.useTradingViewData);
+					if (req.query && req.query.useTradingViewData !== undefined) {
+						useTradingViewData = req.query.useTradingViewData === 'true' || req.query.useTradingViewData === true;
+					} else if (req.body && typeof req.body === 'object' && req.body.useTradingViewData !== undefined) {
+						useTradingViewData = req.body.useTradingViewData === 'true' || req.body.useTradingViewData === true;
+					}
+
+					try {
+						const candidateAlert = {
+							text: storedAlert.text,
+							source: storedAlert.source || 'webhook',
+							...(storedAlert.signalClass ? { signalClass: storedAlert.signalClass } : {}),
+						};
+
+						const { TokenUsageTracker } = require('../../lib/tokenUsage');
+						const tokenUsage = new TokenUsageTracker('grounding');
+
+						await alertHandler.processEnrichment(candidateAlert, {
+							tokenUsage,
+							useTradingViewData,
+						});
+
+						if (candidateAlert.enriched && typeof candidateAlert.enriched === 'object') {
+							newEnrichmentData = candidateAlert.enriched;
+							reEnriched = true;
+						}
+					} catch (enrichmentErr) {
+						console.warn('[AlertReplay] Enrichment failed:', enrichmentErr.message);
+					}
+				}
 			}
 
 			const replayPayload = {
 				text: storedAlert.text,
-				enriched: storedAlert.enrichmentData || undefined,
+				enriched: (reEnriched ? newEnrichmentData : storedAlert.enrichmentData) || undefined,
 				source: storedAlert.source || 'alert-replay',
+				signalClass: storedAlert.signalClass || undefined,
 				replay: {
 					originalAlertId: alertId,
 					idempotencyKey: idempotencyKey.trim(),
@@ -832,6 +1019,10 @@ function replayAlert(botOrGetter) {
 					idempotencyKey: idempotencyKey.trim(),
 					channels,
 					deliveryResults: results,
+					...(reEnrichRequested ? {
+						reEnriched: Boolean(reEnriched),
+						...(reEnriched && newEnrichmentData ? { enrichmentData: newEnrichmentData } : {}),
+					} : {}),
 				});
 			} catch (storageErr) {
 				console.warn('[AlertsController] Failed to record replay attempt in Firestore for alert:', alertId, storageErr.message);
@@ -842,6 +1033,7 @@ function replayAlert(botOrGetter) {
 				alertId,
 				replayId,
 				results,
+				...(reEnriched ? { reEnriched: true } : {}),
 			});
 		});
 	};
@@ -886,6 +1078,11 @@ function batchReplayAlerts(botOrGetter) {
 					error: 'Replay requests require an idempotency-key or x-idempotency-key header or idempotencyKey body field.',
 					code: 'INVALID_REQUEST',
 				});
+			}
+
+			const dryRunError = validateDryRun(req);
+			if (dryRunError) {
+				return sendError(res, 400, dryRunError);
 			}
 
 			const dryRun = resolveDryRun(req);
@@ -983,6 +1180,7 @@ function batchReplayAlerts(botOrGetter) {
 						text: storedAlert.text,
 						enriched: storedAlert.enrichmentData || undefined,
 						source: storedAlert.source || 'alert-replay',
+						signalClass: storedAlert.signalClass || undefined,
 						replay: {
 							originalAlertId: alertId,
 							idempotencyKey: alertIdempotencyKey,
@@ -1154,13 +1352,30 @@ function handleAsync(req, res, endpoint, handler) {
 				method: req.method,
 				statusCode,
 			},
+			// `extra.category` is what SentryService maps onto a Sentry tag, so this
+			// is the supported way to make a read-path outage alertable by category
+			// instead of by message text (#1285).
+			...(isFirestoreErrorCategory(error.category)
+				? { extra: { category: error.category, missingIndex: error.missingIndex === true } }
+				: {}),
 		});
 
 		if (statusCode === 503) {
-			return res.status(503).json({
+			// `category` is the sanitized Firestore enum from the storage layer, so
+			// an operator can tell a rejected query from a credential/init failure
+			// without a Cloud Logging session (#1285). It is never the provider
+			// message, which embeds the project/database path and index definition.
+			const body = {
 				error: error.message,
 				code: alertStorageService.STORAGE_UNAVAILABLE_CODE,
-			});
+			};
+			if (isFirestoreErrorCategory(error.category)) {
+				body.category = error.category;
+			}
+			if (error.missingIndex === true) {
+				body.missingIndex = true;
+			}
+			return res.status(503).json(body);
 		}
 
 		if (statusCode === 400) {
@@ -1277,4 +1492,5 @@ module.exports = {
 	exportAlerts,
 	submitFeedback,
 	getFeedbackSummary,
+	VALID_SUMMARY_INTERVALS,
 };

@@ -232,6 +232,75 @@ function isPendingRedriveStatus(status) {
 	return status === 'pending' || status === 'in_flight';
 }
 
+/**
+ * Build the channel-level redrive options that resume chunked delivery from
+ * the first undelivered chunk when the dead-letter record carries chunk
+ * metadata. Channels without chunked metadata fall back to the documented
+ * full-replay path (legacy records) and emit a single warning so the
+ * operator can clean them up manually.
+ */
+function buildChunkResumeOptions(claimed, channel) {
+	if (!claimed || !channel) {
+		return {};
+	}
+	if (channel !== 'whatsapp' && channel !== 'discord') {
+		return {};
+	}
+	const resume = claimed.chunkResume;
+	if (!resume || !Number.isInteger(resume.resumeFromChunk)) {
+		if (claimed.chunkResume === undefined) {
+			console.warn(`[NotificationRedriveService] Legacy dead-letter ${claimed.id} has no chunk metadata; replaying the full message`);
+		}
+		return {};
+	}
+	if (!Number.isInteger(resume.splitMessageCount) || resume.splitMessageCount <= 1) {
+		return {};
+	}
+	if (resume.resumeFromChunk >= resume.splitMessageCount) {
+		// No chunks left to retry — record already failed beyond the last chunk.
+		return {};
+	}
+	return { startChunk: resume.resumeFromChunk };
+}
+
+/**
+ * Extract chunk-resume context from a failed chunked delivery result so a
+ * later redrive can skip already-delivered chunks instead of replaying the
+ * full payload from chunk 1.
+ *
+ * Returns `null` when the failure is not chunked (single message or no
+ * `splitMessageCount`/`failedPart` metadata). Legacy records lacking these
+ * fields will fall back to the documented full-replay path.
+ */
+function extractChunkResumeContext(failure) {
+	if (!failure || typeof failure !== 'object') {
+		return null;
+	}
+	const splitMessageCount = Number.isInteger(failure.splitMessageCount) && failure.splitMessageCount > 1
+		? failure.splitMessageCount
+		: null;
+	const failedPart = Number.isInteger(failure.failedPart) && failure.failedPart > 0
+		? Math.min(failure.failedPart, splitMessageCount || failure.failedPart)
+		: null;
+	const messageCount = Number.isInteger(failure.messageCount) && failure.messageCount >= 0
+		? Math.min(failure.messageCount, splitMessageCount || failure.messageCount)
+		: null;
+	if (!splitMessageCount || !failedPart) {
+		return null;
+	}
+	const resumeFromChunk = Math.max(0, failedPart - 1);
+	const messageIds = Array.isArray(failure.messageIds)
+		? failure.messageIds.slice(0, messageCount ?? undefined).filter((id) => typeof id === 'string' && id.length > 0)
+		: [];
+	return {
+		splitMessageCount,
+		failedPart,
+		messageCount,
+		resumeFromChunk,
+		deliveredMessageIds: messageIds,
+	};
+}
+
 class NotificationRedriveService {
 	constructor(options = {}) {
 		this.inMemoryStore = new Map();
@@ -487,6 +556,7 @@ class NotificationRedriveService {
 		for (const failure of failures) {
 			const channel = failure.channel;
 			const recordId = `${alertId}_${channel}`;
+			const chunkResume = extractChunkResumeContext(failure);
 			const record = {
 				id: recordId,
 				alertId: String(alertId),
@@ -507,13 +577,14 @@ class NotificationRedriveService {
 				attemptCount: 0,
 				lastError: failure.error ? String(failure.error) : 'Unknown delivery failure',
 				lastStatusCode: typeof failure.statusCode === 'number' ? failure.statusCode : null,
-					repeatCooldown: options.repeatCooldown && options.repeatCooldown.key
-						? {
-							key: String(options.repeatCooldown.key),
-							channel: options.repeatCooldown.channelsByName?.[channel] || null,
-							reservedAt: options.repeatCooldown.reservedAt,
-							generation: options.repeatCooldown.generation ?? null,
-						}
+				chunkResume,
+				repeatCooldown: options.repeatCooldown && options.repeatCooldown.key
+					? {
+						key: String(options.repeatCooldown.key),
+						channel: options.repeatCooldown.channelsByName?.[channel] || null,
+						reservedAt: options.repeatCooldown.reservedAt,
+						generation: options.repeatCooldown.generation ?? null,
+					}
 					: null,
 				createdAt: toTimestamp(nowDate),
 				updatedAt: toTimestamp(nowDate),
@@ -598,36 +669,73 @@ class NotificationRedriveService {
 	async getEligibleRecords(batchLimit, maxAgeMs) {
 		const nowMs = Date.now();
 		const records = [];
+		const seenIds = new Set();
 		const firestore = this.getFirestore();
 
 		if (firestore) {
 			try {
-				const snapshot = await firestore.collection(COLLECTION_NAME)
-					.where('status', 'in', ['pending', 'in_flight'])
-					.limit(batchLimit * 2)
+				// Push `nextAttemptAt <= now` and `leaseUntil <= now` into the
+				// Firestore query so the sweep never fetches not-yet-due or
+				// actively-claimed rows. Three indexed queries replace the previous
+				// `where('status', 'in', ...).limit(batchLimit * 2)` over-fetch:
+				// (1) due pending rows, (2) expired pending rows that need a terminal
+				// transition, (3) in_flight rows whose lease has expired.
+				const duePendingSnapshot = await firestore.collection(COLLECTION_NAME)
+					.where('status', '==', 'pending')
+					.where('nextAttemptAt', '<=', toTimestamp(new Date(nowMs)))
+					.limit(batchLimit)
 					.get();
 
-				if (snapshot && !snapshot.empty) {
-					for (const doc of snapshot.docs) {
+				if (duePendingSnapshot && !duePendingSnapshot.empty) {
+					for (const doc of duePendingSnapshot.docs) {
+						if (records.length >= batchLimit) break;
 						const data = doc.data();
-						const nextAttemptMs = toMillis(data.nextAttemptAt);
 						const expiresAtMs = toMillis(data.expiresAt);
-						const leaseUntilMs = toMillis(data.leaseUntil);
+						const expired = Boolean(expiresAtMs) && nowMs >= expiresAtMs;
+						records.push({ ...data, id: doc.id, expired });
+						seenIds.add(doc.id);
+					}
+				}
 
-						if (expiresAtMs && nowMs >= expiresAtMs) {
-							// Record has expired window
+				if (records.length < batchLimit) {
+					const expiredPendingSnapshot = await firestore.collection(COLLECTION_NAME)
+						.where('status', '==', 'pending')
+						.where('expiresAt', '<=', toTimestamp(new Date(nowMs)))
+						.limit(batchLimit)
+						.get();
+
+					if (expiredPendingSnapshot && !expiredPendingSnapshot.empty) {
+						for (const doc of expiredPendingSnapshot.docs) {
+							if (records.length >= batchLimit) break;
+							if (seenIds.has(doc.id)) continue;
+							const data = doc.data();
 							records.push({ ...data, id: doc.id, expired: true });
-						} else if (data.status === 'in_flight' && leaseUntilMs && leaseUntilMs > nowMs) {
-							// Active unexpired claim, skip
-							continue;
-						} else if (nextAttemptMs <= nowMs) {
-							records.push({ ...data, id: doc.id, expired: false });
-						}
-
-						if (records.length >= batchLimit) {
-							break;
+							seenIds.add(doc.id);
 						}
 					}
+				}
+
+				if (records.length < batchLimit) {
+					const inFlightSnapshot = await firestore.collection(COLLECTION_NAME)
+						.where('status', '==', 'in_flight')
+						.where('leaseUntil', '<=', toTimestamp(new Date(nowMs)))
+						.limit(batchLimit)
+						.get();
+
+					if (inFlightSnapshot && !inFlightSnapshot.empty) {
+						for (const doc of inFlightSnapshot.docs) {
+							if (records.length >= batchLimit) break;
+							if (seenIds.has(doc.id)) continue;
+							const data = doc.data();
+							const expiresAtMs = toMillis(data.expiresAt);
+							const expired = Boolean(expiresAtMs) && nowMs >= expiresAtMs;
+							records.push({ ...data, id: doc.id, expired });
+							seenIds.add(doc.id);
+						}
+					}
+				}
+
+				if (records.length > 0) {
 					return records;
 				}
 			} catch (error) {
@@ -635,9 +743,12 @@ class NotificationRedriveService {
 			}
 		}
 
-		// Fallback to inMemoryStore
+		// Fallback to inMemoryStore with the same eligibility split (mirrors the
+		// Firestore query so a Firestore outage cannot regress the cost savings).
+		const pending = [];
+		const expiredInFlight = [];
 		for (const [id, data] of this.inMemoryStore.entries()) {
-			if (data.status !== 'pending' && data.status !== 'in_flight') {
+			if (!data || (data.status !== 'pending' && data.status !== 'in_flight')) {
 				continue;
 			}
 
@@ -645,17 +756,33 @@ class NotificationRedriveService {
 			const expiresAtMs = toMillis(data.expiresAt);
 			const leaseUntilMs = toMillis(data.leaseUntil);
 
-			if (expiresAtMs && nowMs >= expiresAtMs) {
-				records.push({ ...data, id, expired: true });
-			} else if (data.status === 'in_flight' && leaseUntilMs && leaseUntilMs > nowMs) {
-				continue;
-			} else if (nextAttemptMs <= nowMs) {
-				records.push({ ...data, id, expired: false });
+			if (data.status === 'pending') {
+				// Expired rows must be returned (with `expired: true`) so the sweep
+				// can mark them terminal, even when `nextAttemptAt` is in the future.
+				if (expiresAtMs && nowMs >= expiresAtMs) {
+					pending.push({ ...data, id, expired: true });
+				} else if (nextAttemptMs <= nowMs) {
+					pending.push({ ...data, id, expired: false });
+				}
+			} else if (data.status === 'in_flight') {
+				// Only reclaim rows whose lease has already expired (or was never claimed)
+				if (leaseUntilMs > nowMs) continue;
+				const expired = Boolean(expiresAtMs) && nowMs >= expiresAtMs;
+				expiredInFlight.push({ ...data, id, expired });
 			}
+		}
 
-			if (records.length >= batchLimit) {
-				break;
-			}
+		for (const record of pending) {
+			if (records.length >= batchLimit) break;
+			if (seenIds.has(record.id)) continue;
+			records.push(record);
+			seenIds.add(record.id);
+		}
+		for (const record of expiredInFlight) {
+			if (records.length >= batchLimit) break;
+			if (seenIds.has(record.id)) continue;
+			records.push(record);
+			seenIds.add(record.id);
 		}
 
 		return records;
@@ -781,7 +908,7 @@ class NotificationRedriveService {
 		return true;
 	}
 
-	async markRetry(recordId, attemptCount, lastError, lastStatusCode) {
+	async markRetry(recordId, attemptCount, lastError, lastStatusCode, chunkResume) {
 		const nowMs = Date.now();
 		const nowDate = new Date(nowMs);
 		const backoffMs = calculateBackoffMs(attemptCount);
@@ -796,6 +923,7 @@ class NotificationRedriveService {
 			updatedAt: toTimestamp(nowDate),
 			workerId: null,
 			leaseUntil: null,
+			...(chunkResume !== undefined ? { chunkResume } : {}),
 		};
 
 		const sanitized = stripUndefinedFieldsDeep(updateData);
@@ -966,18 +1094,21 @@ class NotificationRedriveService {
 
 		const supersessionId = this.getSupersessionId(record.repeatCooldown.key, record.repeatCooldown.channel);
 		const localSupersession = this.supersessionStore.get(supersessionId);
-		if ((localSupersession && isSupersededByMarker(localSupersession, record))
-			|| this.inMemoryStore.get(record.id)?.status === 'cancelled') {
+		// A local marker is process/clock-derived, so its generation can disagree with
+		// the durable creation order across replicas. It is therefore only a fallback
+		// verdict here, never a short-circuit: a proven newer durable record wins.
+		const locallySuperseded = Boolean(localSupersession && isSupersededByMarker(localSupersession, record));
+		if (this.inMemoryStore.get(record.id)?.status === 'cancelled') {
 			return true;
 		}
 
 		const firestore = this.getFirestore();
 		if (!firestore) {
-			return false;
+			return locallySuperseded;
 		}
 		const remainingMs = Math.max(0, deadline - Date.now());
 		if (remainingMs === 0) {
-			return false;
+			return locallySuperseded;
 		}
 		let timer = null;
 		try {
@@ -991,7 +1122,7 @@ class NotificationRedriveService {
 				}),
 			]);
 			if (!snapshots) {
-				return false;
+				return locallySuperseded;
 			}
 			const [recordSnapshot, supersessionSnapshot] = snapshots;
 			const supersession = supersessionSnapshot?.exists ? supersessionSnapshot.data() : null;
@@ -1011,11 +1142,12 @@ class NotificationRedriveService {
 						return false;
 					}
 				}
+				return isSupersededByMarker(supersession, record) || locallySuperseded;
 			}
-			return isSupersededByMarker(supersession, record);
+			return locallySuperseded;
 		} catch (error) {
 			console.warn('[NotificationRedriveService] Failed to check superseded redrive:', error.message);
-			return false;
+			return locallySuperseded;
 		} finally {
 			if (timer) {
 				clearTimeout(timer);
@@ -1150,7 +1282,10 @@ class NotificationRedriveService {
 		}
 
 		const telegramService = notificationManager.channels?.get?.('telegram');
-		if (!telegramService || !telegramService.isEnabled()) {
+		const canSendAdmin = notificationManager.isTelegramAdminDeliveryEligible
+			? notificationManager.isTelegramAdminDeliveryEligible(telegramService)
+			: Boolean(telegramService && (telegramService.isEnabled?.() || telegramService.isAdminDeliveryEligible?.()));
+		if (!canSendAdmin) {
 			return;
 		}
 
@@ -1290,6 +1425,7 @@ class NotificationRedriveService {
 						...(claimed.alert || {}),
 						...(claimed.destinationOverride || {}),
 					};
+					const chunkResumeOptions = buildChunkResumeOptions(claimed, claimed.channel);
 
 					let results;
 					try {
@@ -1298,6 +1434,7 @@ class NotificationRedriveService {
 							[claimed.channel],
 							{
 								...options,
+								...chunkResumeOptions,
 								isRedrive: true,
 								parentSpan: options.parentSpan,
 								signal: dispatchSignal,
@@ -1337,6 +1474,7 @@ class NotificationRedriveService {
 						const nextAttempts = (claimed.attemptCount || 0) + 1;
 						const lastErr = channelResult?.error || 'Redrive attempt failed';
 						const lastCode = channelResult?.statusCode || null;
+						const chunkResume = extractChunkResumeContext(channelResult) || claimed.chunkResume;
 
 						if (nextAttempts >= maxAttempts) {
 							releaseRepeatCooldown(claimed);
@@ -1344,6 +1482,7 @@ class NotificationRedriveService {
 								lastError: String(lastErr),
 								lastStatusCode: lastCode,
 								attemptCount: nextAttempts,
+								chunkResume,
 							});
 							if (marked) {
 								this.totalExhaustedCount += 1;
@@ -1357,7 +1496,7 @@ class NotificationRedriveService {
 							}
 							errorCount += 1;
 						} else {
-							await this.markRetry(claimed.id, nextAttempts, lastErr, lastCode);
+							await this.markRetry(claimed.id, nextAttempts, lastErr, lastCode, chunkResume);
 							errorCount += 1;
 						}
 					}

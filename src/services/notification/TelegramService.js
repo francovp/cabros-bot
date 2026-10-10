@@ -171,6 +171,36 @@ class TelegramService extends NotificationChannel {
 	}
 
 	/**
+	 * Check if Telegram is configured for alert delivery by operator intent.
+	 * Requires the ENABLE_TELEGRAM_BOT flag, bot token, and a default chat ID.
+	 * @returns {boolean}
+	 */
+	isConfigured() {
+		return (
+			process.env.ENABLE_TELEGRAM_BOT === 'true' &&
+			Boolean(this.chatId || process.env.TELEGRAM_CHAT_ID) &&
+			Boolean(this.botToken || process.env.BOT_TOKEN)
+		);
+	}
+
+	/**
+	 * Check if Telegram service is capable of delivering admin notifications.
+	 * Does not require this.chatId (the default broadcast destination),
+	 * enabling admin alerts to be sent to TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID
+	 * during zero-channel outages or when default broadcasts are disabled.
+	 * @returns {boolean}
+	 */
+	isAdminDeliveryEligible() {
+		return Boolean(
+			this.bot &&
+			(
+				(this.bot.telegram && typeof this.bot.telegram.sendMessage === 'function') ||
+				typeof this.bot.sendMessage === 'function'
+			),
+		);
+	}
+
+	/**
    * Resolve topic thread ID for an alert
    * @param {Object} alert
    * @returns {number|null}
@@ -226,12 +256,13 @@ class TelegramService extends NotificationChannel {
 
 			// Format message for Telegram MarkdownV2
 			// If enriched is an object, use formatEnriched, otherwise format the text
+			const signalClass = alert.signalClass || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.signalClass : undefined);
 			let formattedText;
 			if (alert.enriched && typeof alert.enriched === 'object') {
-				formattedText = this.formatter.formatEnriched(alert.enriched);
+				formattedText = this.formatter.formatEnriched(alert.enriched, { signalClass });
 				console.debug('Formatted enriched content for Telegram:', formattedText);
 			} else {
-				formattedText = this.formatter.format(alert.enriched || alert.text);
+				formattedText = this.formatter.format(alert.enriched || alert.text, { signalClass });
 				console.debug('Formatted text for Telegram:', formattedText);
 			}
 

@@ -29,6 +29,7 @@ description: >-
 
 21. **Consider all participant feedback, not only `francovp`**: When analyzing an issue or PR, gather and weigh comments from every participant — not only the repository owner `francovp`. Explicitly incorporate actionable feedback from `gigachad-senior-dev` and `virgin-trainee-dev` per the **Multi-User Feedback Consideration** section. When the automator acts on feedback from either persona, it MUST post a confirmation reply addressing both personas (when both contributed) on the issue/PR, as defined in that section.
 22. Follow applicable repository instructions, including `AGENTS.md`. Use Spec Kit to spec and plan new features before implementation. Check for the repository/session's Spec Kit workflow; if it is unavailable, report the missing prerequisite and ask before substituting another process. Bug fixes do not require Spec Kit unless they expand into feature work.
+23. **Documentation-only issues and PRs**: Apply the docs-only path when changes contain no source-code behavior, tests, script behavior, dependencies, API/schema contracts, or build/CI/deployment configuration changes. Do not start the app, run code tests or lint, manually trigger or wait for code checks, or manually trigger or verify a preview deployment. Opening or updating a PR may start an automatic preview; do not wait for or verify it. A `GLOBAL_BLOCKED` label caused only by preview or code-check status is N/A for a docs-only PR: after confirming ownership, clear that stale label and continue review without retrying those gates. This exception overrides Step 1 preview routing, Step 5 verification, Step 6 blocker retries, and Step 6.5 recovery. Keep review gates, issue linkage, and applicable Codex review requirements. Mixed changes use the full code workflow.
 
 ## Before Starting
 
@@ -66,48 +67,49 @@ The automator must not treat `francovp`'s comments as the only signal. Issues an
 The skill sends notifications for alert-worthy events via the production webhook. The endpoint expects a JSON payload with `x-api-key` auth header.
 
 **Configuration** — set these environment variables before running the skill:
-- `NOTIFY_WEBHOOK_URL` — defaults to `https://cabros-bot-production.up.railway.app/api/webhook/message` (Railway production; Render `onrender.com` is deprecated)
+- `NOTIFY_WEBHOOK_URL` — defaults to `https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message`
 - `NOTIFY_API_KEY` — the `x-api-key` header value (required)
 - `NOTIFY_CHANNELS` — comma-separated, defaults to `whatsapp` (operator requires WhatsApp)
 - `NOTIFY_TELEGRAM_CHAT_ID` — defaults to `-1001234567890` (optional when `whatsapp` only)
 - `NOTIFY_WHATSAPP_CHAT_ID` — defaults to `120363422033474991@g.us` — ALWAYS use this value for every notification
 
-**ALWAYS send to WhatsApp** — every notification in this skill (global deadlock, manual-deploy needed, `NEEDS_USER`/`HUMAN NEEDED`, and `In review` handoff) MUST include `channels: ["whatsapp"]` and `whatsappChatId: "120363422033474991@g.us"`. Include direct links to the open PR (`https://github.com/francovp/cabros-bot/pull/<number>`) and issue in the message body so operators can act immediately.
+**ALWAYS send to WhatsApp** — every notification in this skill (global deadlock, manual PR deploy / missing deployment variable, `NEEDS_USER`/`HUMAN NEEDED`, PR-ready or `In review` handoff, and shipped outcome) MUST include `channels: ["whatsapp"]` and a `whatsappChatId` resolved from `NOTIFY_WHATSAPP_CHAT_ID`, which defaults to `120363422033474991@g.us`. To move PR notifications to a different group, change that variable — never type a chat id straight into a payload, because a hardcoded destination silently overrides the operator's configuration. Include the issue URL in every message and the PR URL (`https://github.com/francovp/cabros-bot/pull/<number>`) when a PR exists.
 
 **Notification helper** — use this curl template whenever a notification is required:
 
 ```bash
-curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-bot-production.up.railway.app/api/webhook/message}" \
+curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
   --header 'Content-Type: application/json' \
   --header "x-api-key: ${NOTIFY_API_KEY}" \
   --data-raw '{
     "message": "'"${NOTIFY_MESSAGE}"'",
     "channels": ["whatsapp"],
-    "whatsappChatId": "120363422033474991@g.us"
+    "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
   }'
 ```
 
-For backward compatibility you may send `["telegram","whatsapp"]` with both chat IDs, but `whatsapp` to `120363422033474991@g.us` is mandatory. Example with both channels and PR link:
+For backward compatibility you may send `["telegram","whatsapp"]` with both chat IDs, but `whatsapp` to `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`) is mandatory. Example with both channels and PR link:
 
 ```bash
 PR_URL="https://github.com/francovp/cabros-bot/pull/${PR_NUMBER}"
-NOTIFY_MESSAGE="[GLOBAL_BLOCKED] Issue #${ISSUE_NUM} blocked on ${PR_URL} — Railway bounded retry. Needs manual deploy." \
-  curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-bot-production.up.railway.app/api/webhook/message}" \
+ISSUE_URL="https://github.com/francovp/cabros-bot/issues/${ISSUE_NUM}"
+NOTIFY_MESSAGE="[GLOBAL_BLOCKED] Issue #${ISSUE_NUM} (${ISSUE_URL}) blocked on ${PR_URL} — Railway bounded retry. Needs manual deploy." \
+  curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
   --header 'Content-Type: application/json' \
   --header "x-api-key: ${NOTIFY_API_KEY}" \
   --data-raw '{
     "message": "'"${NOTIFY_MESSAGE}"'",
     "channels": ["whatsapp"],
-    "whatsappChatId": "120363422033474991@g.us"
+    "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
   }'
 ```
 
-**Events that trigger a notification (all to WhatsApp `120363422033474991@g.us` with PR links):**
+**Events that trigger a notification (all to WhatsApp `NOTIFY_WHATSAPP_CHAT_ID`, default `120363422033474991@g.us`, with an issue link and a PR link when available):**
 1. **Global deadlock** — when a PR/issue is `GLOBAL_BLOCKED` and still cannot be unblocked after the unblock attempt, alerting humans that tooling/auth/infra prevents safe work on that item. The run then continues with the next oldest issue (see Step 6), unless the blocker is a total tooling/access failure, in which case the run stops with `GLOBAL_BLOCKED`.
-2. **Manual deploy needed** — when recovery fails or a missing environment variable requires operator action (Step 6.5).
-3. **`NEEDS_USER` / `HUMAN NEEDED`** — when an issue requires human input (`NEEDS_USER`, `HUMAN NEEDED`, `NEEDS USER`). Notify and advance to the next oldest issue until no such label remains.
-4. **PR ready/in review** — notify when ready, including automatic-merge candidates, and when handed off in Step 7. Verify the identity label remains.
-5. **Shipped** — notify after merge with PR link and actual tag/master E2E result.
+2. **Manual PR deploy / missing deployment variable** — when a deployment requires a missing environment variable or other operator action and the `need manual PR deploy` label is present or added (see Step 6.5). Send the variable name, affected environment, required operator action, and PR link; never include secret values.
+3. **`NEEDS_USER` / `HUMAN NEEDED`** — when an issue requires human input (`NEEDS_USER`, `HUMAN NEEDED`, `NEEDS USER`). Notify with the issue URL and a PR URL only if one exists, release this session's claim, and stop the run. Do not append the issue to `SKIPPED_ISSUES` or advance.
+4. **PR ready / in review** — when a PR is ready for review, including automatic-merge candidates, and when it is intentionally handed off for human review in Step 7. Verify the identity label remains and include the PR link.
+5. **Shipped** — after merge, send the PR link and the actual release-tag and master E2E results.
 
 ## Concurrent Agent Coordination (Issue Claiming)
 
@@ -176,8 +178,9 @@ Follow these steps in strict chronological order to automate issue resolution:
    - Review all comments and related context on the GitHub issue.
    - Check all open, closed, merged, and draft PRs that reference the issue.
    - Check unresolved review threads and CI status if a PR exists.
-   - **Check if any linked PR is already merged**: If already merged into `master`/`main`, use Session Finalization for tag/master E2E, notifications, ownership cleanup, and `SHIPPED` archival.
-   - **Check for a pre-existing `GLOBAL_BLOCKED` label (pre-flight)**: if the issue or any linked PR already carries `GLOBAL_BLOCKED`, do NOT proceed to issue-scope confirmation (Step 3), implementation (Step 4), or verification (Step 5). Route directly to Step 6.5: attempt inactive/suspended/stale deployment recovery first if applicable; otherwise the generic bounded unblock. If it still cannot be unblocked and this iteration is zero-work, write the blocker summary, keep the `GLOBAL_BLOCKED` label, remove `agent-working` (issue + PR), send the WhatsApp global-deadlock notification with PR link, append the issue number to `SKIPPED_ISSUES`, and advance via `get-oldest-issue.sh`. This pre-flight prevents the automator from producing code writes for an issue that was already known-blocked — which would otherwise trip the write-producing stop instead of the intended unblock-and-skip.
+   - **Check if any linked PR is already merged**: If a PR that references this issue was already merged into `master`/`main`, clean up stale `agent-working` labels (issue + PR) and end with outcome `SHIPPED`.
+   - If the issue or linked PR carries `NEEDS_USER`/`HUMAN NEEDED`/`need user`, do not implement; route through Step 6's post-claim terminal handoff before handling any `GLOBAL_BLOCKED` label.
+   - **Check for a pre-existing `GLOBAL_BLOCKED` label (pre-flight)**: classify the cause before routing. For a docs-only linked PR blocked only by preview or code-check status, apply Hard Rule 23 and continue issue/PR review without recovery. For any other issue or PR blocker, do NOT proceed to issue-scope confirmation (Step 3), implementation (Step 4), or verification (Step 5); route to Step 6.5 when deployment recovery applies, otherwise use the generic bounded unblock. If it still cannot be unblocked and this iteration is zero-work, write the blocker summary, keep the `GLOBAL_BLOCKED` label, remove `agent-working` (issue + PR), send the WhatsApp global-deadlock notification with issue URL and PR URL when available, append the issue number to `SKIPPED_ISSUES`, and advance via `get-oldest-issue.sh`. This pre-flight prevents the automator from producing code writes for an issue that was already known-blocked — which would otherwise trip the write-producing stop instead of the intended unblock-and-skip.
 
 ### Step 2: Ownership & Takeover Check
 1. **Re-run `scripts/claim-issue.sh <ISSUE_NUMBER>`** to re-verify ownership before any real work (this catches claim races that happened between Step 1 and now):
@@ -194,18 +197,19 @@ Follow these steps in strict chronological order to automate issue resolution:
 ### Step 4: Action Plan & Implementation
 1. Check out a clean branch locally.
 2. Implement the changes matching the issue acceptance criteria.
+2a. Classify the diff using Hard Rule 23. For docs-only changes, record code tests, lint, code checks, and preview verification as `N/A (documentation-only)`; do not start code checks or wait for automatic checks or previews. Continue with the required reviewer sessions and PR feedback workflow. Use `[skip ci]` in the commit message to suppress supported GitHub Actions workflows.
 2b. **Reconcile multi-user feedback**: Per the **Multi-User Feedback Consideration** section, evaluate all participant comments gathered in Step 1 — explicitly `gigachad-senior-dev` and `virgin-trainee-dev` — against the implementation. Record adopted vs. set-aside points and the reason. If any persona feedback is adopted, the PR discussion loop (Step 5) must post the mandatory confirmation reply to both personas (or post it on the issue now if no PR exists yet).
-3. Start the app locally and smoke-test the changed behavior before any PR create/update. Use `pnpm dev`; this checkout currently defines `pnpm run start-dev`, so use that command unless a `dev` script has been added. Verify `/healthcheck` and the changed path with safe local configuration.
-4. Run the repository-required tests:
+3. For changes that are not documentation-only, start the app locally and smoke-test the changed behavior before any PR create/update. Use `pnpm dev`; this checkout currently defines `pnpm run start-dev`, so use that command unless a `dev` script has been added. Verify `/healthcheck` and the changed path with safe local configuration.
+4. For changes that are not documentation-only, run the repository-required tests:
    ```bash
    pnpm test
    ```
 5. Before creating or updating a PR, run these reviews in order, each in its own nested session, and wait for each result:
-   1. Use `review-agent` for a read-only defect-first review.
-   2. Then use `ponytail-review` for a read-only over-engineering review.
+   1. Use `superpowers:requesting-code-review` to dispatch a read-only, defect-first review.
+   2. Then use `ponytail:ponytail-review` in a separate session for a read-only quality and over-engineering review.
    3. Verify every finding; fix applicable findings and document a concise technical reason for any finding that does not apply. Repeat the reviews after fixes until neither has unresolved applicable feedback.
-   - If either required reviewer or nested-session support is unavailable, stop before PR creation and report the blocker; do not substitute a same-session review.
-6. If an open PR exists, reuse it. Do not create a parallel PR. Before pushing code changes, repeat the local smoke test, tests, and both review gates above; metadata-only PR edits do not require another code review.
+   - If a named review skill or nested-session support is unavailable, record exactly what could not run, complete the available review, and continue to PR creation; do not claim an unavailable review passed. The required post-PR Codex review and feedback workflow still apply.
+6. If an open PR exists, reuse it. Do not create a parallel PR. Before pushing code changes, repeat the applicable local smoke test, tests, and available review gates above; metadata-only PR edits do not require another code review.
    - **If reusing an existing PR**, confirm its title describes the change and its body references the GitHub issue; update it through `create-pr` if needed.
 7. **Create the context file** `context/<git-branch-name>.md` with the branch summary:
    - **First line (title)**: Use a concise, descriptive title without an unrelated ticket suffix.
@@ -222,23 +226,27 @@ Follow these steps in strict chronological order to automate issue resolution:
 10. Verify the PR title describes the change and the PR body references the source GitHub issue; use `create-pr` to correct either if needed.
 
 ### Step 5: Verification & Deploy Check
-1. Ensure the PR meets all criteria in `references/readiness-and-verification.md`.
-2. Verify the active OpenClaw preview and head SHA under Deployment & Preview; test changed endpoints and E2E there. If unavailable, apply the documented shipping exception and report missing evidence. Route inactive/suspended/stale deployments to Step 6.5.
-3. **Publish UI evidence before requesting review**: For user-visible UI changes, use the `playwright` skill to capture the relevant states for the current head SHA. Check `gh pr edit --help` / `gh pr comment --help` for `--attach` before using it:
-   - If supported, use `gh pr edit <N> --attach <file>#<alt-text>` or `gh pr comment <N> --attach <file>#<alt-text>`.
-   - Otherwise, upload screenshots through GitHub's authenticated web attachment interface or an existing configured evidence-upload workflow. Put the resulting accessible image URLs in Markdown and publish via `gh pr edit <N> --body-file <file>` or `gh pr comment <N> --body-file <file>`. Preserve the existing PR description when updating it; local file paths are not uploaded evidence. If no supported uploader is available, report that exact evidence-publication prerequisite rather than repeatedly invoking an unsupported flag.
-   - Verify the images render on GitHub. If UI code changes again, capture fresh evidence for the latest head SHA and update the description or comment accordingly. Skip screenshots when the change has no user-visible UI.
+1. Ensure the PR meets all applicable criteria in `references/readiness-and-verification.md`. For documentation-only PRs, code checks and preview gates are not applicable; do not trigger or wait for them.
+2. For changes that are not documentation-only, retrieve the PR number and run `scripts/verify-preview.sh <PR_NUMBER>` to verify the preview deployment is live and healthy. The script resolves the live URL via `scripts/get-pr-deployment-url.sh --details` (GitHub Deployments API, Railway fallback), so the URL and the commit it is checked against always come from the same deployment record. Capture the expected SHA for staleness detection and pass it as a third argument. For PRs that add new endpoints, verify them explicitly:
+   ```bash
+   EXPECTED_SHA="$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)"
+   scripts/verify-preview.sh "$PR_NUMBER" "/healthcheck,/openapi.json,/api/your-new-endpoint" "$EXPECTED_SHA"
+   # production:
+   scripts/verify-preview.sh production "/healthcheck,/openapi.json"
+   ```
+   A `401/403` on auth-gated endpoints counts as live (service is up, auth is required). Exit code `2` from `verify-preview.sh` signals a stale deploy — either the selected deployment record is not the PR head, or the probed URL reports a different `service.commit` — and routes to Step 6.5 recovery.
+3. **Publish UI evidence before requesting review**: For user-visible UI changes, use the `playwright` skill to capture the relevant states and attach the screenshots to the PR description or a single PR comment using `gh pr edit <N> --attach <file>#<alt-text>` or `gh pr comment <N> --attach <file>#<alt-text>`. If UI code changes again, capture a fresh set for the latest head SHA and update the description or add a comment identifying the new evidence. Skip screenshots when the change has no user-visible UI.
 4. **Run the Codex review loop after PR creation and each code/head update**, with at most three Codex review requests per PR, including the first; failed requests count toward the cap. Metadata-only edits, labels, screenshot attachments, and comment replies do not consume a review session:
    - Request/re-trigger the repository's Codex review, then wait for its result and inspect all Codex and Copilot feedback against the recorded head SHA.
-   - For every Codex review that requests changes, use `superpowers:receiving-code-review` before implementing feedback. Check every Copilot comment for applicability; implement applicable items and reply in-thread when resolved, or give a concise technical reason for non-applicable feedback before resolving it. If feedback is unclear, stop and ask for clarification.
-   - Before pushing fixes, repeat Step 4's tests, local smoke test, and both nested reviews; use `create-pr` to update the PR. For UI fixes, also refresh the screenshots as described above.
+   - For every Codex review that requests changes, use `superpowers:receiving-code-review` before implementing feedback. Use `gh-address-comments` (`github:gh-address-comments`) to process GitHub review comments and their replies/resolutions. Check every Copilot comment for applicability; implement applicable items and reply in-thread when resolved, or give a concise technical reason for non-applicable feedback before resolving it. If feedback is unclear, stop and ask for clarification.
+   - Before pushing fixes to code, repeat Step 4's tests, local smoke test, and both nested reviews; use `create-pr` to update the PR. For documentation-only fixes, skip code tests and preview verification but repeat both nested reviews. For UI fixes, also refresh the screenshots as described above.
    - After each code/head update, request a new Codex review and continue within the three-request cap. If the third Codex review still requests changes, stop and hand the PR to the human for revision through Step 7; do not merge.
    - A Codex 👍 reaction on the PR description is the explicit approval signal; verify it came from Codex. No new actionable feedback after the complete quiet window also satisfies the review condition. A rate-limit response is not approval; use the documented self-review fallback. Any other review error blocks merge—do not treat it as silence.
 5. **Run the PR discussion loop after every PR creation or update**:
    - Take a baseline snapshot of paginated GraphQL `reviewThreads` (thread ID, creation time, author, resolved/outdated state, and each thread comment ID plus `createdAt`/`updatedAt`) and paginated top-level PR conversation comments (comment ID, creation time, author, and body), then record the current head SHA. Paginate thread comments as well as threads; flat comments alone are not sufficient for inline thread state, but top-level conversation comments must also be tracked.
    - Before starting the quiet window, triage every unresolved thread in the baseline snapshot, including threads already present on an existing PR. Baseline status never exempts a thread from being addressed.
    - Wait using the quiet-window policy in `references/readiness-and-verification.md`, checking both `reviewThreads` and paginated top-level PR conversation comments around the midpoint and at the end. Do not merge while this loop is active; hand off only through the explicit human-input exception below.
-   - When a new or baseline inline thread or top-level conversation comment appears, triage and address every actionable unresolved item before continuing. Use `superpowers:receiving-code-review` to evaluate external review feedback; implement applicable changes, reply when an explanation is sufficient, and resolve only when the discussion is actually handled.
+   - When a new or baseline inline thread or top-level conversation comment appears, triage and address every actionable unresolved item before continuing. Use `superpowers:receiving-code-review` to evaluate external review feedback and `gh-address-comments` (`github:gh-address-comments`) to handle GitHub comment discovery, replies, and resolution; implement applicable changes, reply when an explanation is sufficient, and resolve only when the discussion is actually handled.
      - **Persona confirmation replies**: If feedback from `gigachad-senior-dev` or `virgin-trainee-dev` was adopted into the implementation or into the resolution of a thread, post the mandatory confirmation reply (per the **Multi-User Feedback Consideration** section) tagging only the contributing persona(s) once the relevant change or resolution lands (tag both only when both actually contributed). Never leave adopted persona feedback without its confirmation reply.
    - If a discussion requires product authority, missing requirements, or other human clarification, do not force a resolution or keep polling. Record the exact question and continue to Step 7 for `IN_REVIEW` handoff, leaving that thread open for the human reviewer.
    - Re-run the relevant tests and verification after code changes, push/update the PR, record the new head SHA, and restart the quiet window from that change or discussion.
@@ -293,7 +301,7 @@ If `GLOBAL_BLOCKED` is caused by the last deployment being inactive, suspended, 
 1. Reconfirm ownership. Update the PR branch against its actual base (`master` by default) with a merge commit or rebase, push, and wait for a new active deployment serving the updated head. If already current, use the configured deployment workflow's existing rerun/redeploy action; do not invent deployment commands or rewrite commits just to trigger CD.
 2. Railway is unavailable: trigger and verify OpenClaw instead. Wait boundedly (up to five minutes, 30-second checks) for the new active deployment; verify its SHA, health, changed endpoints, and E2E. Queued/building status is not readiness.
 3. On verified recovery, remove deployment-only `GLOBAL_BLOCKED` / `need manual PR deploy` labels and resume review/merge. Keep unrelated blockers.
-4. If a deployment environment variable is missing, inspect/keep/add `need manual PR deploy` and send WhatsApp to `120363422033474991@g.us` with the variable name, environment, operator action, and PR link; never include its secret value.
+4. If a deployment environment variable is missing, inspect/keep/add `need manual PR deploy` and send WhatsApp to the configured `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`) with the variable name, environment, operator action, and PR link; never include its secret value.
 5. If OpenClaw is also unavailable and all other gates pass, use the shipping exception. Otherwise record the exact blocker and notification; release only owned claims. Branch/PR writes during recovery count toward the write budget.
 6. Archive sessions ending with `GLOBAL_BLOCKED` after recording the blocker, notification, and ownership cleanup. In a parallel batch, archive the blocked item's session when supported; archive the coordinator after all assigned items finish. A single-item skip loop may advance before final session archival.
 
@@ -309,14 +317,14 @@ If `GLOBAL_BLOCKED` is caused by the last deployment being inactive, suspended, 
    - **If the PR still cannot be unblocked**: compare a stable blocker fingerprint (issue/PR, blocker class, expected PR head, and observed preview commit or missing capability) with the latest blocker summary on the issue or PR. If it is unchanged, do not add another comment or send a duplicate notification; keep the `GLOBAL_BLOCKED` label, remove the `agent-working` label from the issue and PR (work on this item has ended — see Hard Rule 9), and append the issue number to `SKIPPED_ISSUES`. If it changed, write a concise summary stating the exact missing capability and smallest human action needed, keep the label, release the claim, and send one WhatsApp notification with PR link. Notify again only after the blocker clears and later reappears.
    - **Do not halt the run**: continue with the next oldest open issue until an unblockable PR is `SHIPPED` or `IN_REVIEW`, or no open issues remain — **except** when `GLOBAL_BLOCKED` is from a total tooling/access failure or `NEEDS_USER`/`HUMAN NEEDED` is present (see below).
    - **Total tooling/access failure**: advancing requires authenticated GitHub access. If the blocker is a total tooling/access failure (e.g., `gh` auth fails and no GitHub MCP path is available), stop the run with `GLOBAL_BLOCKED` instead — `get-oldest-issue.sh` cannot run without authenticated `gh` (see Error Handling).
-6. **If the issue or its linked PR is `NEEDS_USER` / `HUMAN NEEDED` / `need user`**: Send a WhatsApp notification with PR link to `120363422033474991@g.us`, append the issue number to `SKIPPED_ISSUES`, release `agent-working` if owned, and advance to the next oldest issue. Keep advancing until no `NEEDS_USER`/`HUMAN NEEDED` or `GLOBAL_BLOCKED` remains, or no issues remain. Do not attempt implementation on these issues.
+6. **If the issue or its linked PR is `NEEDS_USER` / `HUMAN NEEDED` / `need user`**: Send a WhatsApp notification with the issue link and PR link when available, release this session's `agent-working` claim after reconfirming ownership, and stop the run. Do not append the issue to `SKIPPED_ISSUES`, advance to another issue, or attempt implementation.
 7. Re-run `scripts/get-oldest-issue.sh "$SKIPPED_ISSUES"` (pass the accumulated comma-separated skip list) to fetch the next oldest open issue not yet processed in this run.
 8. If no more open issues exist, stop execution.
 9. Process this next issue from Steps 1–5 (treat it as the new primary).
-10. If it again ends with a skip outcome (`CLAIMED`, `IN_REVIEW` no-writes, `LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` still blocked, or `NEEDS_USER`/`HUMAN NEEDED`), repeat from step 1.
+10. If it again ends with a skip outcome (`CLAIMED`, `IN_REVIEW` no-writes, `LOCAL_DEADLOCK`, or `GLOBAL_BLOCKED` still blocked), repeat from step 1.
 11. If it ends with any other outcome, proceed to Step 7 with that outcome.
 
-Skip outcomes (`CLAIMED`, `LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` no-writes, `IN_REVIEW` no-writes, `NEEDS_USER`/`HUMAN NEEDED`) do not count toward the max-2 issues-that-require-writes limit (Hard Rule #4) and never count toward any session-level issue budget (e.g., 3 issues per session).
+Skip outcomes (`CLAIMED`, `LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` no-writes, and `IN_REVIEW` no-writes) do not count toward the max-2 issues-that-require-writes limit (Hard Rule #4) and never count toward any session-level issue budget (e.g., 3 issues per session). `NEEDS_USER` is a terminal handoff and stops the run.
 
 If the primary issue ends with any other (non-skip) outcome, including `IN_REVIEW` with agent writes, stop execution immediately.
 
@@ -335,18 +343,19 @@ If the primary issue ends with any other (non-skip) outcome, including `IN_REVIE
    gh pr edit "$PR_NUMBER" --add-label "In review"
    ```
 5. Record the final outcome as `IN_REVIEW` according to `references/outcomes-and-deadlocks.md`.
-6. Send an `In review` notification to WhatsApp `120363422033474991@g.us` with PR link:
+6. Send an `In review` notification to WhatsApp `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`) with issue and PR links:
    ```bash
    PR_URL="$(gh pr view --json url --jq .url 2>/dev/null || echo "N/A")"
    ISSUE_NUM="$(gh issue view --json number --jq .number 2>/dev/null || echo "N/A")"
-   NOTIFY_MESSAGE="[IN_REVIEW] PR ready for review — Issue #${ISSUE_NUM}. Review at: ${PR_URL}" \
-     curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-bot-production.up.railway.app/api/webhook/message}" \
+   ISSUE_URL="https://github.com/francovp/cabros-bot/issues/${ISSUE_NUM}"
+   NOTIFY_MESSAGE="[IN_REVIEW] PR ready for review — Issue #${ISSUE_NUM}: ${ISSUE_URL}. Review at: ${PR_URL}" \
+     curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
      --header 'Content-Type: application/json' \
      --header "x-api-key: ${NOTIFY_API_KEY}" \
      --data-raw '{
        "message": "'"${NOTIFY_MESSAGE}"'",
        "channels": ["whatsapp"],
-       "whatsappChatId": "120363422033474991@g.us"
+       "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
      }'
    ```
 7. **Restore original GitHub user** after all `gh` commands are done:
@@ -366,10 +375,10 @@ Apply this to every terminal path, including already-merged PRs and tooling fail
 
 Always include a final summary of execution containing:
 1. Primary issue processed and its outcome.
-2. Outcome of the first non-skip issue, if any (issues with skip outcomes `CLAIMED`, `LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` with no agent writes, `NEEDS_USER`/`HUMAN NEEDED`, or `IN_REVIEW` no-writes are counted as skipped and listed). Write-producing `GLOBAL_BLOCKED` issues are non-skip outcomes and are listed as such.
+2. Outcome of the first non-skip issue, if any (issues with skip outcomes `CLAIMED`, `LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` with no agent writes, or `IN_REVIEW` no-writes are counted as skipped and listed). Write-producing `GLOBAL_BLOCKED` issues are non-skip outcomes and are listed as such. A `NEEDS_USER` outcome is a terminal handoff, not a skip.
 3. Tools utilized (`gh`, GitHub MCP, or scripts).
-4. Details of any global blockers, including each `GLOBAL_BLOCKED` issue skipped, the unblock attempt made, and the next issue advanced to. Include inactive/suspended/stale deployment recovery attempts and `need manual PR deploy` label actions.
-5. Performed verification steps (CI, reviews, OpenClaw preview, and master E2E). Record actual URLs, deployed SHA, new release tag, unavailable checks, identity label, and archive status.
+4. Details of any global blockers, including each `GLOBAL_BLOCKED` issue skipped, the unblock attempt made, and the next issue advanced to. Include stale-deploy recovery attempts (with the resolved preview host and whether it was Railway) and `need manual PR deploy` label actions.
+5. Performed verification steps (CI, reviews, preview ping, and E2E). Note the URLs verified as resolved by `scripts/get-pr-deployment-url.sh` — the PR preview URL and, when applicable, the production URL (`https://cabros-crypto-bot-telegram.onrender.com`). Never report a host you did not resolve; if the resolver warned that it fell back to the Railway pattern, say so.
    - Record both nested pre-PR reviews, the Codex review-request count/result, and screenshot evidence for UI changes.
 6. GitHub issue and PR status after processing, including whether the issue was closed or handed off for review.
 7. **`agent-working` lifecycle confirmation**: For each issue confirm: the claim was acquired at start via `scripts/claim-issue.sh` (label + claim comment with agent/session/timestamp), and released at end (merged or `In review`).
@@ -383,21 +392,31 @@ Refer to this section when encountering execution issues:
   - Verify the `francovp` account has valid credentials with `gh auth status`.
   - If the user switch itself fails, check if `GITHUB_TOKEN` env var is overriding the keyring-based auth.
   - If the CLI is unavailable, use GitHub MCP if available. If both access paths fail:
-  - Send a WhatsApp global-deadlock notification to `120363422033474991@g.us` with PR link:
+  - Send a WhatsApp global-deadlock notification to `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`) with the issue URL and a PR URL if one exists:
     ```bash
-    NOTIFY_MESSAGE="[GLOBAL_BLOCKED] Issue automator halted: GitHub CLI and MCP access both failed for $repo/$issue. Human intervention required. PR: $PR_URL" \
-      curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-bot-production.up.railway.app/api/webhook/message}" \
+    ISSUE_URL="https://github.com/$repo/issues/$issue"
+    NOTIFY_MESSAGE="[GLOBAL_BLOCKED] Issue automator halted: GitHub CLI and MCP access both failed for $repo/$issue. Human intervention required. Issue: $ISSUE_URL. PR: ${PR_URL:-none}" \
+      curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
       --header 'Content-Type: application/json' \
       --header "x-api-key: ${NOTIFY_API_KEY}" \
       --data-raw '{
         "message": "'"${NOTIFY_MESSAGE}"'",
         "channels": ["whatsapp"],
-        "whatsappChatId": "120363422033474991@g.us"
+        "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
       }'
     ```
   - Then end the run with outcome `GLOBAL_BLOCKED`. Do not attempt to advance: without authenticated `gh` or an available GitHub MCP path, there is no GitHub access to fetch the next issue — `get-oldest-issue.sh` fails its auth check. The Step 6 skip loop applies only to issue-specific `GLOBAL_BLOCKED` PRs where tooling remains functional.
-- **Merge Conflicts**: If branch checkout or pushes fail due to conflicts, pull from `master`, resolve conflicts locally, and re-run tests. If resolving conflicts introduces ambiguity, end with `AMBIGUOUS`.
-- **Inactive/suspended/stale deployment**: Follow Step 6.5 with OpenClaw. Railway unavailability alone is not a blocker. An application crash at the current head must be fixed; it is not the infrastructure-unavailable exception.
-- **Firebase Hosting preview `RESOURCE_EXHAUSTED`**: Ignore quota errors; do not add `GLOBAL_BLOCKED` or `need manual PR deploy` for them.
+- **Merge Conflicts**: If branch checkout or pushes fail due to conflicts, pull from `master` and resolve conflicts locally. Re-run tests for code changes; docs-only changes keep the Hard Rule 23 exemption. If resolving conflicts introduces ambiguity, end with `AMBIGUOUS`.
+- **Preview deployment timeout / bounded retry**: If `scripts/verify-preview.sh` fails after 3 attempts, first re-resolve the host with `scripts/get-pr-deployment-url.sh <N>` — the failure may belong to a provider other than Railway.
+  - Check if the PR preview commit matches the head: `gh pr view <N> --json headRefOid` vs. the SHA reported by `verify-preview.sh`'s `EXPECTED_SHA` comparison, or the deployed commit visible via `curl "$(scripts/get-pr-deployment-url.sh <N>)/healthcheck"`.
+  - If the resolved host is Railway and the failure is a Railway `429` bounded retry or stale deployment (previous commit, not the HEAD), follow Step 6.5: update branch with `master` or trigger `railway up`/`railway redeploy` (requires `RAILWAY_TOKEN`), wait up to 5 minutes, re-run `scripts/verify-preview.sh`. On success, remove `GLOBAL_BLOCKED` / `need manual PR deploy` labels. On failure, add `need manual PR deploy`, notify WhatsApp `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`) with PR link, and skip to next issue.
+  - If the resolved host is not Railway, do not run `railway up`/`railway redeploy` — that deploys a host the PR is not served from. Wait for the provider's deployment to settle, re-resolve, and re-run `scripts/verify-preview.sh`; escalate to `need manual PR deploy` only if the resolved host still does not serve the PR head.
+  - If it is an application error/crash (5xx with current commit), treat it as a `LOCAL_DEADLOCK`.
+- **Firebase Hosting preview `RESOURCE_EXHAUSTED`**: This is NOT a blocker. When `firebase hosting:channel:deploy` or PR checks report `RESOURCE_EXHAUSTED` / `channel quota reached`:
+  ```bash
+  node scripts/cleanup-preview-channels.js --apply
+  # or: pnpm run cleanup:preview-channels -- --apply
+  ```
+  The script lists and deletes expired Firebase preview channels (default: older than 3 days) to free quota. Re-run the preview deploy after cleanup. Do not mark the PR `GLOBAL_BLOCKED` for this reason and do not add `need manual PR deploy`.
 - **Claim script errors** (`RESULT=ERROR`, exit `1`): verify `gh` is authenticated as `francovp` and that you run the script from the repo root (it resolves the repo via `gh repo view`). Retry once; if it keeps failing, treat it as a tooling failure — stop the run with `GLOBAL_BLOCKED` (see CLI Authentication Failures).
 - **Takeover Conflict**: Do not force-remove the `agent-working` label of an active run. A claim is active while its newest claim comment (or legacy labeled event) is younger than `CLAIM_TTL_MINUTES`. Wait for the claim to expire, or exit with `CLAIMED` (zero-work skip) / `NEEDS_USER` to allow coordination. Only stale claims may be taken over — `scripts/claim-issue.sh` handles this automatically.

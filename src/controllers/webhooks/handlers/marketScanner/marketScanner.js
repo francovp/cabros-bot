@@ -7,9 +7,7 @@ const {
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
-	getRiskLevelsForSide,
-	getScanItemSide,
-	pickLevel,
+	recordMarketScannerOutcomes,
 } = require('../../../../services/tradingview/marketScannerReport');
 const {
 	getNotificationManager,
@@ -35,7 +33,8 @@ const {
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
 
-function resolveBot(botOrGetter) {	if (typeof botOrGetter === 'function') {
+function resolveBot(botOrGetter) {
+	if (typeof botOrGetter === 'function') {
 		return botOrGetter();
 	}
 
@@ -65,6 +64,24 @@ function postMarketScannerAlert(botOrGetter) {
 			const routing = parseNotificationRouting(req.body);
 			const parsed = parseMarketScannerRequest(req);
 			const timeoutMs = getMarketScannerTimeoutMs();
+			const mcpUnavailable = getMcpUnavailableReason();
+			if (mcpUnavailable) {
+				const scanResults = buildSkippedScanResults(parsed.scans, mcpUnavailable);
+				console.debug(`[MarketScanner] ${mcpUnavailable}`);
+				return res.status(502).json({
+					success: false,
+					ranked: parsed.ranked === true,
+					includeMultiTimeframe: parsed.includeMultiTimeframe === true,
+					code: 'TRADINGVIEW_MCP_UNAVAILABLE',
+					error: mcpUnavailable,
+					scanResults: compactScanResults(scanResults),
+					summary: buildSummary(scanResults, []),
+					timedOut: false,
+					timeoutMs,
+					requestId,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
+				});
+			}
 			const deadline = createScannerDeadline(timeoutMs, req.requestDeadlineSignal);
 			let scanResults;
 
@@ -154,6 +171,10 @@ function postMarketScannerAlert(botOrGetter) {
 					requestId,
 					text: alertText,
 					symbol: scannerSymbols[0] || null,
+					// A scanner run covers many symbols but persists one report document,
+					// so record the complete scanned symbol set.
+					symbols: scannerSymbols,
+					batchId: requestId,
 					exchange: parsed.exchange || null,
 					enriched: false,
 					enrichmentData: null,
@@ -170,76 +191,11 @@ function postMarketScannerAlert(botOrGetter) {
 				}).catch(() => {});
 			}
 
-			const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
-			if (signalOutcomeService.isEnabled()) {
-				for (const scanResult of scanResults) {
-					if (scanResult.status === 'success' && Array.isArray(scanResult.items) && scanResult.items.length > 0) {
-						// Resolve sides from the same prepared (rank-normalized) item set the
-						// report rendered, so persisted sides match delivered levels
-						const preparedItems = prepareMarketScannerItems(scanResult, parsed.ranked === true);
-						for (const item of preparedItems) {
-							const closePrice = item.indicators?.close ?? null;
-							// Persisted side must match the rendered report side
-							const itemSide = getScanItemSide(scanResult.scan, item);
-							const itemScore = item.changePercent ?? item.indicators?.RSI ?? item.volume_ratio ?? null;
-
-							const atr = pickLevel([item.indicators?.atr, item.indicators?.ATR, item.atr]);
-							const bbLower = pickLevel([item.indicators?.bb_lower, item.indicators?.bollinger_lower, item.indicators?.lower, item.bollinger?.lower, item.bollinger_lower]);
-							const bbUpper = pickLevel([item.indicators?.bb_upper, item.indicators?.bollinger_upper, item.indicators?.upper, item.bollinger?.upper, item.bollinger_upper]);
-							const support = pickLevel([
-								item.indicators?.support,
-								item.indicators?.nearest_support,
-								item.support,
-								item.support_resistance?.nearest_support,
-								item.support_resistance?.support_1,
-							]);
-							const resistance = pickLevel([
-								item.indicators?.resistance,
-								item.indicators?.nearest_resistance,
-								item.resistance,
-								item.support_resistance?.nearest_resistance,
-								item.support_resistance?.resistance_1,
-							]);
-
-							const validPrice = typeof closePrice === 'number' && Number.isFinite(closePrice) && closePrice > 0 ? closePrice : null;
-							let stopLoss = null;
-							let takeProfit = null;
-							if (validPrice !== null) {
-								const riskLevels = getRiskLevelsForSide({
-									side: itemSide,
-									price: validPrice,
-									atr: typeof atr === 'number' && Number.isFinite(atr) && atr > 0 ? atr : null,
-									bbLower: typeof bbLower === 'number' && Number.isFinite(bbLower) && bbLower > 0 ? bbLower : null,
-									bbUpper: typeof bbUpper === 'number' && Number.isFinite(bbUpper) && bbUpper > 0 ? bbUpper : null,
-									support: typeof support === 'number' && Number.isFinite(support) && support > 0 ? support : null,
-									resistance: typeof resistance === 'number' && Number.isFinite(resistance) && resistance > 0 ? resistance : null,
-								});
-								stopLoss = riskLevels.stopLoss;
-								takeProfit = riskLevels.takeProfit;
-							}
-
-							signalOutcomeService.recordSignal({
-								requestId,
-								source: 'market-scanner',
-								symbol: item.symbol,
-								exchange: parsed.exchange,
-								timeframe: parsed.timeframe,
-								setupType: scanResult.scan,
-								score: itemScore,
-								confidenceScore: typeof item.confidence === 'number' && Number.isFinite(item.confidence) && item.confidence >= 0 && item.confidence <= 1 ? item.confidence : null,
-								side: itemSide,
-								price: validPrice,
-								priceSource: validPrice !== null ? 'tradingview-mcp' : null,
-								stop: stopLoss,
-								target: takeProfit,
-								sources: [],
-								tokenUsage: null,
-								processingTimeMs: Date.now() - startTime,
-							}).catch(() => {});
-						}
-					}
-				}
-			}
+			recordMarketScannerOutcomes(scanResults, parsed, {
+				requestId,
+				startTime,
+				source: 'market-scanner',
+			});
 
 			return res.status(200).json({
 				success: true,
@@ -404,6 +360,13 @@ function compactScanResults(results, includeScores = false) {
 				errorCategory: result.errorCategory || null,
 			};
 		}
+		if (result.status === 'skipped') {
+			return {
+				scan: result.scan,
+				status: result.status,
+				reason: result.reason,
+			};
+		}
 
 		const compact = {
 			scan: result.scan,
@@ -473,6 +436,57 @@ function appendTimeoutResults(results, scans, error) {
 			error,
 		});
 	});
+}
+
+// Fast-fail gate for a provider that is known-down, gated on the circuit breaker's
+// *recoverable* state rather than the sticky runtime status.
+//
+// `runtimeStatus.status === 'degraded'` alone is NOT a valid gate: it is only cleared
+// by a later *successful* MCP call, so gating on it skips the very calls that could
+// clear it -- a self-locking outage that never self-heals in a scanner-only process.
+// `getCircuitBreakerStatus()` is time-based: `getBreakerState()` moves open -> half-open
+// once the cooldown expires, which is exactly the "is a bounded probe allowed right now?"
+// signal we need. So fail fast only while the breaker is *still* open, and let the first
+// request after the cooldown act as the recovery probe.
+const FAIL_FAST_ERROR_CATEGORIES = ['http_5xx', 'request_failed', 'circuit_breaker_open'];
+
+function getMcpUnavailableReason() {
+	let mcpStatus = null;
+	try {
+		mcpStatus = typeof tradingViewMcpService?.getStatus === 'function'
+			? tradingViewMcpService.getStatus({ enabled: true })
+			: null;
+	} catch (error) {
+		// Fail open: an unavailable readiness lookup must not block the scanner.
+		console.debug('[MarketScanner] MCP readiness lookup failed; continuing scan:', error.message);
+		return null;
+	}
+
+	if (!mcpStatus || mcpStatus.status !== 'degraded') {
+		return null;
+	}
+	if (!FAIL_FAST_ERROR_CATEGORIES.includes(mcpStatus.lastErrorCategory)) {
+		return null;
+	}
+
+	const breakerState = mcpStatus.circuitBreaker && mcpStatus.circuitBreaker.state;
+	// No reported breaker state (e.g. a degraded status from an older/alternate
+	// implementation) means "unknown", and unknown is treated as probeable so the gate
+	// can never permanently lock the scanner out.
+	if (breakerState !== 'open') {
+		return null;
+	}
+
+	return `TradingView MCP is currently unavailable (circuit breaker: open, lastError: ${mcpStatus.lastErrorCategory}). Scans skipped.`;
+}
+
+function buildSkippedScanResults(scans, reason) {
+	return scans.map((scan) => ({
+		scan,
+		status: 'skipped',
+		reason,
+		items: [],
+	}));
 }
 
 function hasTimedOut(results) {

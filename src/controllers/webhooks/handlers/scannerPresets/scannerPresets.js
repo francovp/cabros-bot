@@ -11,6 +11,7 @@ const { runScans } = require('../marketScanner/marketScanner');
 const {
 	MarketScannerRequestError,
 	buildMarketScannerReport,
+	recordMarketScannerOutcomes,
 	SUPPORTED_SCAN_TYPES,
 } = require('../../../../services/tradingview/marketScannerReport');
 const {
@@ -569,7 +570,7 @@ function postRunPreset(botOrGetter) {
 					timedOut,
 					timeoutMs,
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 
@@ -596,6 +597,12 @@ function postRunPreset(botOrGetter) {
 			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(scanResults, deliveryResults);
 
+			// Preset reports currently render unranked; persist the same item directions.
+			recordMarketScannerOutcomes(scanResults, { ...preset, ranked: false }, {
+				requestId,
+				startTime,
+				source: 'scanner-preset',
+			});
 			try {
 				adminSseService.broadcast('scanner-result', {
 					presetId: preset.id,
@@ -622,7 +629,7 @@ function postRunPreset(botOrGetter) {
 				timedOut,
 				timeoutMs,
 				requestId,
-				totalDurationMs: Date.now() - startTime,
+				processingTimeMs: Math.max(0, Date.now() - startTime),
 			});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
