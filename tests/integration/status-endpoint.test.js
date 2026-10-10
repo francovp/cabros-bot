@@ -717,6 +717,28 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.alertCrossTimeframeSuppression.windowMs).toBe(60000);
 	});
 
+	it('reports alert HTF render feature flag as true by default', async () => {
+		delete process.env.ENABLE_ALERT_HTF_RENDER;
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.alertHtfRender).toBe(true);
+	});
+
+	it('reports alert HTF render feature flag as false when disabled', async () => {
+		process.env.ENABLE_ALERT_HTF_RENDER = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.alertHtfRender).toBe(false);
+	});
+
 	it('reports safe Firebase Remote Config load metadata without values and honest readiness', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 
