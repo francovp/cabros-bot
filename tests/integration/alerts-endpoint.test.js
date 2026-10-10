@@ -1601,6 +1601,90 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
+	it('returns 400 when replay dryRun in body is not a boolean', async () => {
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-invalid-dryrun-body')
+			.send({ channels: ['telegram'], dryRun: 'garbage' })
+			.expect(400);
+
+		expect(res.body).toEqual({
+			success: false,
+			error: '"dryRun" body must be a boolean if provided',
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		});
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+	});
+
+	it('returns 400 when replay dryRun in query string is not a boolean', async () => {
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay?dryRun=invalid')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-invalid-dryrun-query')
+			.send({ channels: ['telegram'] })
+			.expect(400);
+
+		expect(res.body).toEqual({
+			success: false,
+			error: '"dryRun" query must be a boolean if provided',
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		});
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+	});
+
+	it('returns 400 when valid body dryRun is combined with invalid query dryRun', async () => {
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay?dryRun=invalid')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-conflict-dryrun')
+			.send({ channels: ['telegram'], dryRun: true })
+			.expect(400);
+
+		expect(res.body).toEqual({
+			success: false,
+			error: '"dryRun" query must be a boolean if provided',
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		});
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+	});
+
+	it('replays alert live when dryRun=false is explicitly provided via query string', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-789-q',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Explicit false in query',
+			enriched: false,
+			enrichmentData: null,
+			deliveryResults: [],
+			source: 'webhook',
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-789-q/replay?dryRun=false')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-explicit-false-query')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body.dryRun).toBeUndefined();
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(1);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith(
+			expect.objectContaining({
+				alertId: 'alert-789-q',
+			}),
+		);
+	});
+
 	it('returns payload preview and skips delivery/persistence on dryRun=true via body', async () => {
 		alertStorageService.getAlertById.mockResolvedValue({
 			id: 'alert-123',
@@ -1773,7 +1857,7 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
-	it('still returns payload preview when dryRun=false is explicitly provided', async () => {
+	it('replays alert live when dryRun=false is explicitly provided', async () => {
 		alertStorageService.getAlertById.mockResolvedValue({
 			id: 'alert-789',
 			receivedAt: '2026-06-06T12:34:56.000Z',
@@ -2042,6 +2126,42 @@ describe('Alerts API Integration Tests', () => {
 			expect(res.body.code).toBe('INVALID_REQUEST');
 		});
 
+		it('returns 400 when batch replay dryRun in body is not a boolean', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], idempotencyKey: 'batch-k-invalid-dryrun', dryRun: 'garbage' })
+				.expect(400);
+
+			expect(res.body).toEqual({
+				success: false,
+				error: '"dryRun" body must be a boolean if provided',
+				code: 'INVALID_REQUEST',
+				requestId: expect.any(String),
+				retryable: false,
+			});
+			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+		});
+
+		it('returns 400 when batch replay dryRun in query string is not a boolean', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/replay?dryRun=invalid')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], idempotencyKey: 'batch-k-invalid-dryrun-q' })
+				.expect(400);
+
+			expect(res.body).toEqual({
+				success: false,
+				error: '"dryRun" query must be a boolean if provided',
+				code: 'INVALID_REQUEST',
+				requestId: expect.any(String),
+				retryable: false,
+			});
+			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+		});
+
 		it('replays alerts live to selected channels and records attempts', async () => {
 			alertStorageService.getAlertById
 				.mockResolvedValueOnce({
@@ -2118,6 +2238,28 @@ describe('Alerts API Integration Tests', () => {
 			expect(res.body.dryRun).toBe(true);
 			expect(res.body.results[0].dryRun).toBe(true);
 			expect(res.body.results[0].payloadPreview.text).toBe('Dry run alert');
+			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+		});
+
+		it('supports dryRun preview via query string on batch replay', async () => {
+			alertStorageService.getAlertById.mockResolvedValueOnce({
+				id: 'alert-batch-q',
+				text: 'Batch query dry run',
+				source: 'webhook',
+			});
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'batch-dry-q-1')
+				.send({ alertIds: ['alert-batch-q'] })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.dryRun).toBe(true);
+			expect(res.body.results[0].dryRun).toBe(true);
+			expect(res.body.results[0].payloadPreview.text).toBe('Batch query dry run');
 			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
 		});
