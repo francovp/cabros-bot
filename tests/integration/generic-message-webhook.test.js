@@ -124,7 +124,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 	it('does not persist raw discordWebhookUrl to AlertStorageService to prevent credential leakage', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
-		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
 		global.fetch = jest.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({ id: 'discord-msg-789' }),
@@ -168,7 +168,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 	it('sends a message to discord using per-request discordWebhookUrl override', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
-		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
 		global.fetch = jest.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({ id: 'discord-msg-789' }),
@@ -198,7 +198,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 	it('returns 400 when discordWebhookUrl is invalid (non-HTTPS or non-Discord)', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
-		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
 		await initializeNotificationServices(mockBot);
 
 		const res = await request(app)
@@ -236,7 +236,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 	it('returns 409 IDEMPOTENCY_CONFLICT when reusing key with different discordWebhookUrl', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
-		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
 		global.fetch = jest.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({ id: 'discord-msg-1' }),
@@ -279,6 +279,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			json: async () => ({ idMessage: 'provider-message-123', id: 'provider-message-123' }),
 		});
 		await initializeNotificationServices(mockBot);
+		global.fetch.mockClear();
 
 		const payload = {
 			message: 'Replay this notification once',
@@ -489,6 +490,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		});
 
 		await initializeNotificationServices(mockBot);
+		global.fetch.mockClear();
 
 		const res = await request(app)
 			.post('/api/webhook/message')
