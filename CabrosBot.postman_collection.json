@@ -10782,6 +10782,127 @@
               "body": "{\n  \"error\": \"Server has reached maximum SSE connection capacity. Please retry shortly.\",\n  \"code\": \"SSE_CONNECTION_LIMIT_EXCEEDED\"\n}"
             }
           ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (outcome breakdowns)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Adds bounded symbol and setup breakdowns to shadowModeMetrics when outcome data is available.",
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?breakdown=symbol,setup",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "breakdown",
+                  "value": "symbol,setup"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK - Shadow mode breakdowns",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"shadowModeMetrics\": {\n      \"available\": true,\n      \"totalSignalsReceived\": 10,\n      \"symbolBreakdown\": [\n        {\n          \"symbol\": \"BTCUSDT\",\n          \"exchange\": \"BINANCE\",\n          \"received\": 10,\n          \"eligible\": 9,\n          \"evaluated\": 8,\n          \"pending\": 1,\n          \"unavailable\": 1,\n          \"targetEligibleWindows\": 7,\n          \"stopEligibleWindows\": 7,\n          \"targetHitRate\": 0.5714,\n          \"stopHitRate\": 0.1429,\n          \"windows\": {}\n        }\n      ],\n      \"setupBreakdown\": [\n        {\n          \"setupType\": \"breakout\",\n          \"exchange\": \"BINANCE\",\n          \"received\": 10,\n          \"eligible\": 9,\n          \"evaluated\": 8,\n          \"pending\": 1,\n          \"unavailable\": 1,\n          \"targetEligibleWindows\": 7,\n          \"stopEligibleWindows\": 7,\n          \"targetHitRate\": 0.5714,\n          \"stopHitRate\": 0.1429,\n          \"windows\": {}\n        }\n      ],\n      \"truncated\": false\n    }\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (invalid outcome breakdown)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST when shadowModeMetrics breakdown contains an unsupported value.",
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?breakdown=symbol,invalid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "breakdown",
+                  "value": "symbol,invalid"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Breakdown",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid breakdown parameter. Allowed values: symbol, setup.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (repeated outcome breakdown)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST when breakdown is supplied in repeated query parameters.",
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?breakdown=symbol&breakdown=setup",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "breakdown",
+                  "value": "symbol"
+                },
+                {
+                  "key": "breakdown",
+                  "value": "setup"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Query",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid breakdown parameter. Allowed values: symbol, setup.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
         }
       ]
     },
@@ -11045,9 +11166,9 @@
                 "type": "text"
               }
             ],
-            "description": "Summarizes signal outcomes metrics filtered by symbol, exchange, status, window, and time range.",
+            "description": "Summarizes signal outcomes filtered by symbol, exchange, setupType, status, window, and time range. setupType filtering is applied before the summary limit.",
             "url": {
-              "raw": "{{baseUrl}}/api/outcomes/summary?symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=1h&limit=10&from=2026-08-23T00:00:00.000Z&to=2026-08-23T23:59:59.000Z",
+              "raw": "{{baseUrl}}/api/outcomes/summary?symbol=BTCUSDT&exchange=BINANCE&setupType=breakout&status=evaluated&window=1h&limit=10&from=2026-08-23T00:00:00.000Z&to=2026-08-23T23:59:59.000Z",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -11064,6 +11185,10 @@
                 {
                   "key": "exchange",
                   "value": "BINANCE"
+                },
+                {
+                  "key": "setupType",
+                  "value": "breakout"
                 },
                 {
                   "key": "status",
@@ -11905,6 +12030,209 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (breakdowns)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Returns optional per-symbol and per-setup coverage, barrier-aware hit rates, and per-window MFE/MAE. Each requested grouping is capped at 100 buckets.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?breakdown=symbol,setup",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "breakdown",
+                  "value": "symbol,setup"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success (breakdowns)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"available\": true,\n    \"symbolBreakdown\": [\n      {\n        \"symbol\": \"BTCUSDT\",\n        \"exchange\": \"BINANCE\",\n        \"received\": 10,\n        \"eligible\": 9,\n        \"evaluated\": 8,\n        \"pending\": 1,\n        \"unavailable\": 1,\n        \"targetEligibleWindows\": 7,\n        \"stopEligibleWindows\": 7,\n        \"targetHitRate\": 0.5714,\n        \"stopHitRate\": 0.1429,\n        \"windows\": {\n          \"1h\": {\n            \"evaluatedWindows\": 8,\n            \"targetEligibleWindows\": 7,\n            \"stopEligibleWindows\": 7,\n            \"targetHitRate\": 0.5714,\n            \"stopHitRate\": 0.1429,\n            \"barrierEligibleWindows\": 7,\n            \"averageMfePercent\": 2.15,\n            \"averageMaePercent\": -0.8\n          }\n        }\n      }\n    ],\n    \"setupBreakdown\": [\n      {\n        \"setupType\": \"breakout\",\n        \"exchange\": \"BINANCE\",\n        \"received\": 10,\n        \"eligible\": 9,\n        \"evaluated\": 8,\n        \"pending\": 1,\n        \"unavailable\": 1,\n        \"targetEligibleWindows\": 7,\n        \"stopEligibleWindows\": 7,\n        \"targetHitRate\": 0.5714,\n        \"stopHitRate\": 0.1429,\n        \"windows\": {\n          \"1h\": {\n            \"evaluatedWindows\": 8,\n            \"targetEligibleWindows\": 7,\n            \"stopEligibleWindows\": 7,\n            \"targetHitRate\": 0.5714,\n            \"stopHitRate\": 0.1429,\n            \"barrierEligibleWindows\": 7,\n            \"averageMfePercent\": 2.15,\n            \"averageMaePercent\": -0.8\n          }\n        }\n      }\n    ],\n    \"truncated\": false\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (invalid breakdown)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST when breakdown contains an unsupported value.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?breakdown=symbol,unknown",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "breakdown",
+                  "value": "symbol,unknown"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Breakdown",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid breakdown parameter. Allowed values: symbol, setup.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (repeated breakdown)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST when breakdown is supplied in repeated query parameters.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?breakdown=symbol&breakdown=setup",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "breakdown",
+                  "value": "symbol"
+                },
+                {
+                  "key": "breakdown",
+                  "value": "setup"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Query",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid breakdown parameter. Allowed values: symbol, setup.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (repeated setupType)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST when setupType is supplied in repeated query parameters.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?setupType=breakout&setupType=mean-reversion",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "setupType",
+                  "value": "breakout"
+                },
+                {
+                  "key": "setupType",
+                  "value": "mean-reversion"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Query",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid setupType parameter. Use a single non-empty value.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (empty setupType)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST when setupType is explicitly empty.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?setupType=",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "setupType",
+                  "value": ""
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Query",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid setupType parameter. Use a single non-empty value.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         }

@@ -148,7 +148,7 @@ All webhook and mutation endpoints require the `x-api-key` header (configured vi
 | `GET` | `/api/alerts/summary` | Analytics & delivery success rate metrics | [Stored Alerts](docs/alerts.md#get-apialertssummary) |
 | `POST` | `/api/alerts/:alertId/replay` | Dry-run or live replay of stored alert | [Stored Alerts](docs/alerts.md#post-apialertsalertidreplay) |
 | `GET` | `/api/outcomes` | Query signal outcomes with multi-window returns | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomes) |
-| `GET` | `/api/outcomes/summary` | Expectancy, win rate, and performance summary | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomessummary) |
+| `GET` | `/api/outcomes/summary` | Expectancy, win rate, filters, and optional bounded symbol/setup breakdowns | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomessummary) |
 
 Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`.
 

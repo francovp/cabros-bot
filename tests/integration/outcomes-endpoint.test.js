@@ -330,6 +330,30 @@ describe('Signal Outcomes API Integration Tests', () => {
 				.set('x-api-key', 'test-key')
 				.expect(400);
 			expect(res.body.code).toBe('INVALID_REQUEST');
+
+			res = await request(app)
+				.get('/api/outcomes/summary?breakdown=unknown')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+
+			res = await request(app)
+				.get('/api/outcomes/summary?breakdown=symbol&breakdown=setup')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+
+			res = await request(app)
+				.get('/api/outcomes/summary?setupType=breakout&setupType=mean-reversion')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+
+			res = await request(app)
+				.get('/api/outcomes/summary?setupType=')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
 		});
 
 		it('returns 200 with summary for valid query with filters', async () => {
@@ -379,7 +403,7 @@ describe('Signal Outcomes API Integration Tests', () => {
 			signalOutcomeService.summarizeOutcomes.mockResolvedValue(mockSummary);
 
 			const res = await request(app)
-				.get('/api/outcomes/summary?symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=1h&limit=10')
+				.get('/api/outcomes/summary?symbol=BTCUSDT&exchange=BINANCE&setupType=breakout&status=evaluated&window=1h&limit=10&breakdown=symbol,setup')
 				.set('x-api-key', 'test-key')
 				.expect(200);
 
@@ -387,6 +411,8 @@ describe('Signal Outcomes API Integration Tests', () => {
 				limit: 10,
 				symbol: 'BTCUSDT',
 				exchange: 'BINANCE',
+				setupType: 'breakout',
+				breakdown: ['symbol', 'setup'],
 				status: 'evaluated',
 				window: '1h',
 				from: undefined,

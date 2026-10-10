@@ -610,6 +610,54 @@ describe('Alerts API Integration Tests', () => {
 		expect(res.body.summary.shadowModeMetrics).toBe('No measurements found');
 	});
 
+	it('passes requested outcome breakdowns through shadowModeMetrics', async () => {
+		signalOutcomeService.isEnabled.mockReturnValue(true);
+		const shadowModeMetrics = {
+			symbolBreakdown: [{ symbol: 'BTCUSDT', exchange: 'BINANCE', received: 1 }],
+			setupBreakdown: [{ setupType: 'breakout', exchange: 'BINANCE', received: 1 }],
+			truncated: false,
+		};
+		signalOutcomeService.getMetricsSummary.mockResolvedValue(shadowModeMetrics);
+		alertStorageService.summarizeAlerts.mockResolvedValue({ totalAlerts: 1 });
+
+		const res = await request(app)
+			.get('/api/alerts/summary?breakdown=Symbol,setup')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(signalOutcomeService.getMetricsSummary).toHaveBeenCalledWith(expect.objectContaining({
+			breakdown: ['symbol', 'setup'],
+		}));
+		expect(res.body.summary.shadowModeMetrics).toEqual(shadowModeMetrics);
+	});
+
+	it('rejects unsupported outcome breakdown values', async () => {
+		const res = await request(app)
+			.get('/api/alerts/summary?breakdown=symbol,unknown')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual({
+			error: 'Invalid breakdown parameter. Allowed values: symbol, setup.',
+			code: 'INVALID_REQUEST',
+		});
+		expect(alertStorageService.summarizeAlerts).not.toHaveBeenCalled();
+	});
+
+	it('rejects repeated outcome breakdown query parameters', async () => {
+		const res = await request(app)
+			.get('/api/alerts/summary?breakdown=symbol&breakdown=setup')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual({
+			error: 'Invalid breakdown parameter. Allowed values: symbol, setup.',
+			code: 'INVALID_REQUEST',
+		});
+		expect(signalOutcomeService.getMetricsSummary).not.toHaveBeenCalled();
+		expect(alertStorageService.summarizeAlerts).not.toHaveBeenCalled();
+	});
+
 	it('returns evidence coverage from the protected summary endpoint', async () => {
 		const evidenceCoverage = {
 			denominator: 2,

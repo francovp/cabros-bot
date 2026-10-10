@@ -2859,6 +2859,163 @@ describe('SignalOutcomeService', () => {
 			expect(res.totalSignalsEvaluated).toBe(0);
 			// Without window scoping, the 4h evaluated outcome on doc-1 would have marked it as evaluated
 		});
+
+		it('returns empty arrays and a false truncation flag for requested breakdowns with no measurements', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const res = await SignalOutcomeService.summarizeOutcomes({ breakdown: ['symbol', 'setup'] });
+
+			expect(res.symbolBreakdown).toEqual([]);
+			expect(res.setupBreakdown).toEqual([]);
+			expect(res.truncated).toBe(false);
+		});
+
+		it('groups requested breakdowns and excludes barrierless outcomes from hit-rate denominators', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const receivedAt = admin.firestore.Timestamp.fromDate(new Date());
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				['btc-breakout', {
+					receivedAt,
+					symbol: 'btcusdt',
+					exchange: 'binance',
+					setupType: 'Breakout',
+					eligibilityState: 'supported_provider',
+					price: 50000,
+					target: 52000,
+					stop: 49000,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', targetHit: true, stopHit: false, maxFavorableExcursion: 1.5, maxAdverseExcursion: -0.4 },
+						'4h': { status: 'evaluated', targetHit: false, stopHit: true, maxFavorableExcursion: 2.5, maxAdverseExcursion: -1.0 },
+					},
+				}],
+				['btc-barrierless', {
+					receivedAt,
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					setupType: 'breakout',
+					eligibilityState: 'supported_provider',
+					price: 50000,
+					target: null,
+					stop: 0,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', targetHit: true, stopHit: true, maxFavorableExcursion: 8, maxAdverseExcursion: -2 },
+					},
+				}],
+				['eth-pending', {
+					receivedAt,
+					symbol: 'ETHUSDT',
+					exchange: 'NASDAQ',
+					setupType: 'mean-reversion',
+					eligibilityState: 'supported_provider',
+					price: 3000,
+					target: 3200,
+					stop: 2900,
+					outcomeEvaluated: false,
+					outcomes: { '1h': { status: 'pending' } },
+				}],
+				['unknown-symbol', {
+					receivedAt,
+					eligibilityState: 'missing_entry_price',
+					outcomeEvaluated: false,
+					outcomes: {},
+				}],
+			]));
+
+			const res = await SignalOutcomeService.summarizeOutcomes({ breakdown: ['symbol', 'setup'] });
+			const btc = res.symbolBreakdown.find((item) => item.symbol === 'BTCUSDT' && item.exchange === 'BINANCE');
+			const breakout = res.setupBreakdown.find((item) => item.setupType === 'breakout' && item.exchange === 'BINANCE');
+
+			expect(res.totalSignalsReceived).toBe(4);
+			expect(btc).toMatchObject({ received: 2, eligible: 2, evaluated: 2, pending: 0, unavailable: 0 });
+			expect(breakout).toMatchObject({ received: 2, eligible: 2, evaluated: 2, pending: 0, unavailable: 0 });
+			expect(btc.targetEligibleWindows).toBe(2);
+			expect(btc.stopEligibleWindows).toBe(2);
+			expect(btc.targetHitRate).toBe(0.5);
+			expect(btc.stopHitRate).toBe(0.5);
+			expect(btc.windows['1h']).toMatchObject({
+				targetEligibleWindows: 1,
+				stopEligibleWindows: 1,
+				targetHitRate: 1,
+				stopHitRate: 0,
+				averageMfePercent: 1.5,
+				averageMaePercent: -0.4,
+			});
+			expect(res.symbolBreakdown.map((item) => item.symbol)).toEqual(['BTCUSDT', 'ETHUSDT', 'UNKNOWN']);
+			expect(res.setupBreakdown.map((item) => item.setupType)).toEqual(['breakout', 'mean-reversion', 'UNKNOWN']);
+			expect(res.truncated).toBe(false);
+		});
+
+		it('trims stored setupType values before the summary limit and breakdown', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const receivedAt = admin.firestore.Timestamp.fromDate(new Date());
+			const records = new Map();
+			for (let index = 0; index < 100; index += 1) {
+				records.set(`noise-${index}`, {
+					receivedAt,
+					symbol: `NOISE${index}`,
+					exchange: 'BINANCE',
+					setupType: 'noise',
+					eligibilityState: 'supported_provider',
+					price: 10,
+					outcomeEvaluated: false,
+					outcomes: { '1h': { status: 'pending' } },
+				});
+			}
+			records.set('breakout-padded-match', {
+				receivedAt,
+				symbol: 'ETHUSDT',
+				exchange: 'BINANCE',
+				setupType: ' Breakout ',
+				eligibilityState: 'supported_provider',
+				price: 3000,
+				outcomeEvaluated: true,
+				outcomes: { '1h': { status: 'evaluated', targetHit: true, maxFavorableExcursion: 1.5, maxAdverseExcursion: -0.3 } },
+			});
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, records);
+
+			const res = await SignalOutcomeService.summarizeOutcomes({ setupType: 'BREAKOUT', breakdown: ['setup'], limit: 1 });
+
+			expect(res.totalSignalsReceived).toBe(1);
+			expect(res.setupBreakdown).toHaveLength(1);
+			expect(res.setupBreakdown[0]).toMatchObject({ setupType: 'breakout', received: 1 });
+			expect(res.symbolBreakdown).toBeUndefined();
+		});
+
+		it('caps setup buckets and reports truncation in worker status', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			SignalOutcomeService._resetForTesting();
+			const receivedAt = admin.firestore.Timestamp.fromDate(new Date());
+			const records = new Map();
+			for (let index = 0; index < 101; index += 1) {
+				records.set(`setup-${index}`, {
+					receivedAt,
+					symbol: `COIN${index}`,
+					exchange: 'BINANCE',
+					setupType: `setup-${index}`,
+					eligibilityState: 'supported_provider',
+					price: 10,
+					outcomeEvaluated: false,
+					outcomes: { '1h': { status: 'pending' } },
+				});
+			}
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, records);
+
+			const res = await SignalOutcomeService.summarizeOutcomes({ breakdown: ['setup'] });
+			const status = SignalOutcomeService.getWorkerStatus();
+
+			expect(res.setupBreakdown).toHaveLength(100);
+			expect(res.truncated).toBe(true);
+			expect(status.breakdownBucketCap).toBe(100);
+			expect(status.lastBreakdownBucketCount).toBe(100);
+			expect(status.lastBreakdownTruncated).toBe(true);
+			expect(status.breakdownTruncationCount).toBe(1);
+		});
 	});
 
 	describe('worker lifecycle and scheduling', () => {

@@ -435,6 +435,82 @@ describe('Outcomes Controller Unit Tests', () => {
 			});
 		});
 
+		it('returns 400 when breakdown contains an unsupported value', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/summary',
+				query: { breakdown: 'symbol,exchange' },
+			});
+			const res = httpMocks.createResponse();
+
+			await summarizeOutcomes(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData()).toEqual({
+				error: 'Invalid breakdown parameter. Allowed values: symbol, setup.',
+				code: 'INVALID_REQUEST',
+			});
+			expect(signalOutcomeService.summarizeOutcomes).not.toHaveBeenCalled();
+		});
+
+		it('returns 400 when setupType is repeated', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/summary',
+				query: { setupType: ['breakout', 'mean-reversion'] },
+			});
+			const res = httpMocks.createResponse();
+
+			await summarizeOutcomes(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData()).toEqual({
+				error: 'Invalid setupType parameter. Use a single non-empty value.',
+				code: 'INVALID_REQUEST',
+			});
+			expect(signalOutcomeService.summarizeOutcomes).not.toHaveBeenCalled();
+		});
+
+		it('returns 400 when setupType is blank', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/summary',
+				query: { setupType: '  ' },
+			});
+			const res = httpMocks.createResponse();
+
+			await summarizeOutcomes(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData()).toEqual({
+				error: 'Invalid setupType parameter. Use a single non-empty value.',
+				code: 'INVALID_REQUEST',
+			});
+			expect(signalOutcomeService.summarizeOutcomes).not.toHaveBeenCalled();
+		});
+
+		it('normalizes breakdown and setupType filters before calling the service', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.summarizeOutcomes.mockResolvedValue({ available: true, symbolBreakdown: [], setupBreakdown: [] });
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/summary',
+				query: { breakdown: ' Symbol, SETUP,symbol ', setupType: ' Breakout ' },
+			});
+			const res = httpMocks.createResponse();
+
+			await summarizeOutcomes(req, res);
+
+			expect(res.statusCode).toBe(200);
+			expect(signalOutcomeService.summarizeOutcomes).toHaveBeenCalledWith(expect.objectContaining({
+				setupType: 'Breakout',
+				breakdown: ['symbol', 'setup'],
+			}));
+		});
+
 		it('returns 200 with aggregate summary on success', async () => {
 			signalOutcomeService.isEnabled.mockReturnValue(true);
 			const mockSummary = {

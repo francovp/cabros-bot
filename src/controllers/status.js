@@ -627,6 +627,10 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
 				...signalOutcomeWorkerDependency,
+				breakdownBucketCap: signalOutcomeWorkerStatus.breakdownBucketCap,
+				lastBreakdownBucketCount: signalOutcomeWorkerStatus.lastBreakdownBucketCount,
+				lastBreakdownTruncated: signalOutcomeWorkerStatus.lastBreakdownTruncated,
+				breakdownTruncationCount: signalOutcomeWorkerStatus.breakdownTruncationCount,
 				entryPriceSources: signalOutcomeWorkerStatus.entryPriceSources,
 				role: signalOutcomeWorkerStatus.role,
 				running: signalOutcomeWorkerStatus.running,
