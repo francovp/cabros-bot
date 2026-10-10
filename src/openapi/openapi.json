@@ -554,6 +554,9 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "$ref": "#/components/responses/ExpressFallthroughError"
+          },
           "503": {
             "$ref": "#/components/responses/MaintenanceMode"
           }
@@ -5727,6 +5730,44 @@
           }
         }
       },
+      "ExpressFallthroughError": {
+        "description": "Structured response from the final Express error handler for unexpected errors. Client error statuses are preserved; sentryEventId is included only when Sentry provides an event ID.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ExpressErrorEnvelope"
+            },
+            "examples": {
+              "sentryUnavailable": {
+                "summary": "Internal error without a Sentry event ID",
+                "value": {
+                  "success": false,
+                  "error": "Internal server error",
+                  "code": "INTERNAL_ERROR",
+                  "requestId": "req-123",
+                  "retryable": true
+                }
+              },
+              "sentryEvent": {
+                "summary": "Internal error with a Sentry event ID",
+                "value": {
+                  "success": false,
+                  "error": "Internal server error",
+                  "code": "INTERNAL_ERROR",
+                  "requestId": "req-124",
+                  "retryable": true,
+                  "sentryEventId": "a1b2c3d4e5f6473890123456789abcde"
+                }
+              }
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
+      },
       "PayloadTooLarge": {
         "description": "The webhook or news-monitor request body exceeded the configured WEBHOOK_MAX_BODY_SIZE limit (default 256kb). JSON, text/plain, and application/x-www-form-urlencoded body types share the same effective limit.",
         "content": {
@@ -8793,7 +8834,7 @@
       },
       "Error": {
         "type": "object",
-        "description": "Standardized error envelope returned by every /api/* endpoint. Endpoint-specific fields (jobId, storage, message, details, scanResults, ...) are preserved alongside these fields.",
+        "description": "Standardized error envelope returned by every /api/* endpoint. Express-level fallthrough errors also include sentryEventId when a Sentry event ID is available. Endpoint-specific fields (jobId, storage, message, details, scanResults, ...) are preserved alongside these fields.",
         "required": [
           "success",
           "error",
@@ -8855,6 +8896,64 @@
           "missingIndex": {
             "type": "boolean",
             "description": "Present and true when the failure was a Firestore missing-composite-index rejection. Resolved by deploying the composite indexes declared in firestore.indexes.json."
+          },
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ],
+            "description": "Present and false on Express-level fallthrough errors."
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Request correlation ID, matching the X-Request-Id response header."
+          },
+          "retryable": {
+            "type": "boolean",
+            "description": "Present on Express-level fallthrough errors; true for retryable HTTP statuses."
+          },
+          "sentryEventId": {
+            "type": "string",
+            "description": "Present on Express-level 5xx responses only when Sentry provides an event ID."
+          }
+        }
+      },
+      "ExpressErrorEnvelope": {
+        "type": "object",
+        "description": "Final Express error response. Known client errors preserve their 4xx status and receive a safe message; unexpected failures return INTERNAL_ERROR. Sentry event IDs are omitted when unavailable.",
+        "required": [
+          "success",
+          "error",
+          "code",
+          "requestId",
+          "retryable"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "INVALID_REQUEST",
+              "INTERNAL_ERROR",
+              "PAYLOAD_TOO_LARGE"
+            ]
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "sentryEventId": {
+            "type": "string"
           }
         }
       },

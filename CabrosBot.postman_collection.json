@@ -2181,6 +2181,95 @@
               "status": "Service Unavailable",
               "code": 503,
               "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
+            },
+            {
+              "name": "Malformed JSON - 400 Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-alert-malformed-001"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Malformed JSON request body\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-alert-malformed-001\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Internal Server Error (Sentry unavailable)",
+              "status": "Internal Server Error",
+              "code": 500,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-alert-error-001"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Internal server error\",\n  \"code\": \"INTERNAL_ERROR\",\n  \"requestId\": \"req-alert-error-001\",\n  \"retryable\": true\n}"
+            },
+            {
+              "name": "Internal Server Error (Sentry event ID)",
+              "status": "Internal Server Error",
+              "code": 500,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-alert-error-002"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Internal server error\",\n  \"code\": \"INTERNAL_ERROR\",\n  \"requestId\": \"req-alert-error-002\",\n  \"retryable\": true,\n  \"sentryEventId\": \"a1b2c3d4e5f6473890123456789abcde\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Send Alert (malformed JSON - 400 Bad Request)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "x-request-id",
+                "value": "req-alert-malformed-001",
+                "type": "text",
+                "description": "Optional request correlation ID"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"text\":"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Malformed JSON - 400 Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-alert-malformed-001"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Malformed JSON request body\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-alert-malformed-001\",\n  \"retryable\": false\n}"
             }
           ]
         },
