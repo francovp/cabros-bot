@@ -11,6 +11,12 @@ const CSS = fs.readFileSync(path.join(__dirname, '../../src/admin/admin.css'), '
 const SHELL = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
 const FORBIDDEN_SINKS = ['innerHTML', 'outerHTML', 'insertAdjacentHTML'];
 
+const ADMIN_DIR = path.join(__dirname, '../../src/admin');
+const CONSOL_SOURCES = fs.readdirSync(ADMIN_DIR)
+	.filter((file) => file.endsWith('.js') && file !== 'vue.runtime.global.prod.js')
+	.map((file) => ({ file, source: fs.readFileSync(path.join(ADMIN_DIR, file), 'utf8') }));
+const CONSOLE_SOURCE = CONSOL_SOURCES.find(({ file }) => file === 'admin.js').source;
+
 class FakeNode {
 	constructor(tagName, namespaceURI = null) {
 		this.tagName = String(tagName).toUpperCase();
@@ -718,6 +724,74 @@ describe('admin chart primitives', () => {
 
 			expect(floor * 16 / viewBoxWidth * 11).toBeGreaterThanOrEqual(8);
 			expect(rule).toMatch(/max-width: none/);
+		});
+
+		// #952 turned the ten hand-rolled `.data-table` builders into one shared renderer,
+		// because the gap was structural rather than per-view: every one of them appended a
+		// bare header <tr> to a <table>, with no caption, no thead/tbody, no `scope`, and no
+		// scroll container to contain the header's min-content width. Keeping this count at
+		// one is what makes "every table is accessible" a property of the console instead of
+		// a promise repeated at each call site — a new bespoke table fails here.
+		it('builds data tables in exactly one shared renderer', () => {
+			const builders = CONSOL_SOURCES.flatMap(({ file, source }) => (source
+				.match(/element\('table', \{ className(?:: 'data-table[^']*')? \}\)/g) || [])
+				.map((line) => `${file}: ${line}`));
+
+			expect(builders).toHaveLength(1);
+			expect(builders[0]).toContain('admin.js');
+
+			// The renderer is only as good as its caption and header scope, so both are
+			// asserted here rather than trusted to a behavioural test on one fixture.
+			expect(CONSOLE_SOURCE).toMatch(/element\('caption', \{[^}]*text: caption/);
+			expect(CONSOLE_SOURCE).toMatch(/element\('th', \{[^}]*attributes: \{ scope: 'col' \} \}\)/);
+			expect(CONSOLE_SOURCE).toMatch(/element\('thead'/);
+			expect(CONSOLE_SOURCE).toMatch(/element\('tbody'/);
+		});
+
+		it('styles the shared table caption without making it visible twice', () => {
+			// Every table the renderer produces already sits under a visible heading, so the
+			// caption carries the accessible name without repeating that text on screen.
+			const caption = CSS.match(/^\.data-table caption \{([^}]*)\}/m);
+
+			expect(caption).not.toBeNull();
+			expect(CONSOLE_SOURCE).toMatch(/element\('caption', \{ className: 'visually-hidden'/);
+		});
+
+		it('makes every scrollable chart region keyboard reachable', () => {
+			const { charts } = loadCharts();
+			const chart = charts.lineChart([{ label: 'P&L', points: [{ x: 1, y: 2 }, { x: 2, y: 3 }] }], { xKey: 'x', yKey: 'y' });
+			const scroller = chart.children.find((child) => classesOf(child).includes('chart-scroll'));
+
+			// axe reports `scrollable-region-focusable` for a scrollable box whose content
+			// cannot be reached with the keyboard, and a 36rem chart at a 320px viewport is
+			// exactly that. The region also has to be named, which is why the label is carried
+			// over from the graphic's own label instead of being left empty.
+			expect(scroller.getAttribute('tabindex')).toBe('0');
+			expect(scroller.getAttribute('role')).toBe('region');
+			expect(scroller.getAttribute('aria-label')).toBe('Series over time');
+		});
+
+		// A grid item defaults to `min-width: auto`, so an unbreakable header on a table that is
+		// not inside a `.table-scroll` sets the page's min-content width instead of panning in
+		// a box: on the Outcomes "Performance by window" table, a global nowrap took
+		// page-level horizontal overflow from 0px to 468px at 375px. The harness has no layout
+		// engine, so this pins the structural contract that keeps it unreachable instead of
+		// the rendered width.
+		it('never puts an unbreakable header on a table that may render without a scroller', () => {
+			const globalHeaderRule = CSS.match(/^\.data-table th \{([^}]*)\}/m)[1];
+
+			expect(globalHeaderRule).not.toMatch(/white-space:\s*nowrap/);
+		});
+
+		it('scopes any nowrap data-table header to the scroller that can contain it', () => {
+			const scoped = CSS.match(/^\.table-scroll \.data-table th \{([^}]*)\}/m);
+
+			expect(scoped).not.toBeNull();
+			expect(scoped[1]).toMatch(/white-space:\s*nowrap/);
+			// The scroller is what makes the nowrap safe, so its own containment contract is
+			// part of the same guarantee rather than a separate nicety.
+			expect(CSS).toMatch(/\.table-scroll \{[^}]*min-width: 0/);
+			expect(CSS).toMatch(/\.table-scroll \{[^}]*overflow(?:-x)?:\s*auto/);
 		});
 	});
 

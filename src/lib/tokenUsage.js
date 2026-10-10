@@ -42,6 +42,18 @@ const PRICING_PER_1M = {
 	'default': { input: 0.15, output: 0.60 },
 };
 
+const VALID_FEATURES = new Set([
+	'grounding',
+	'news-analysis',
+	'expanded-analysis',
+	'scanner',
+	'enrichment',
+]);
+
+function normalizeFeature(feature) {
+	return VALID_FEATURES.has(feature) ? feature : null;
+}
+
 /**
  * Resolve pricing configuration for a given model string.
  * Strips provider prefixes (e.g. google/, google-ai-studio/, azure/, openai/)
@@ -126,11 +138,13 @@ function normalizeUsageMetadata(usageMetadata) {
 }
 
 class TokenUsageTracker {
-	constructor() {
+	constructor(defaultFeature = null) {
 		this.inputTokens = 0;
 		this.outputTokens = 0;
 		this.inputCost = 0;
 		this.outputCost = 0;
+		this.defaultFeature = normalizeFeature(defaultFeature);
+		this.byFeature = {};
 	}
 
 	/**
@@ -152,7 +166,15 @@ class TokenUsageTracker {
 	 * @param {Object|null|undefined} usage
 	 * @param {string} [model] - Model name for pricing calculation
 	 */
-	addUsage(usage, model, options = {}) {
+	addUsage(usage, model, featureOrOptions = this.defaultFeature) {
+		// Accept either a feature name (per-call attribution) or an options object
+		// ({ recordGlobal }) for backward compatibility with existing call sites.
+		const options = (featureOrOptions && typeof featureOrOptions === 'object')
+			? featureOrOptions
+			: {};
+		const feature = (featureOrOptions && typeof featureOrOptions === 'object')
+			? featureOrOptions.feature
+			: featureOrOptions;
 		const normalized = normalizeUsageMetadata(usage);
 		if (!normalized) return;
 
@@ -187,15 +209,49 @@ class TokenUsageTracker {
 				model,
 			});
 		}
+
+		const featureName = normalizeFeature(feature);
+		if (featureName) {
+			const bucket = this.byFeature[featureName] || (this.byFeature[featureName] = {
+				calls: 0,
+				inputTokens: 0,
+				outputTokens: 0,
+				totalTokens: 0,
+				inputCost: 0,
+				outputCost: 0,
+				totalCost: 0,
+			});
+			bucket.calls += 1;
+			bucket.inputTokens += currentInput;
+			bucket.outputTokens += currentOutput;
+			bucket.totalTokens += currentInput + currentOutput;
+			bucket.inputCost += iCost;
+			bucket.outputCost += oCost;
+			bucket.totalCost += iCost + oCost;
+		}
 	}
 
 	merge(otherTracker) {
 		if (!otherTracker) return;
-		const { inputTokens, outputTokens, inputCost, outputCost } = otherTracker.toJSON();
+		const { inputTokens, outputTokens, inputCost, outputCost, byFeature } = otherTracker.toJSON();
 		this.inputTokens += inputTokens;
 		this.outputTokens += outputTokens;
 		this.inputCost += (inputCost || 0);
 		this.outputCost += (outputCost || 0);
+		for (const [feature, usage] of Object.entries(byFeature || {})) {
+			const bucket = this.byFeature[feature] || (this.byFeature[feature] = {
+				calls: 0,
+				inputTokens: 0,
+				outputTokens: 0,
+				totalTokens: 0,
+				inputCost: 0,
+				outputCost: 0,
+				totalCost: 0,
+			});
+			for (const field of Object.keys(bucket)) {
+				bucket[field] += Number(usage[field]) || 0;
+			}
+		}
 	}
 
 	getTotalUsage() {
@@ -209,7 +265,7 @@ class TokenUsageTracker {
 	toJSON() {
 		const totalTokens = this.inputTokens + this.outputTokens;
 		const totalCost = this.inputCost + this.outputCost;
-		return {
+		const result = {
 			inputTokens: this.inputTokens,
 			outputTokens: this.outputTokens,
 			totalTokens,
@@ -217,6 +273,10 @@ class TokenUsageTracker {
 			outputCost: this.outputCost,
 			totalCost,
 		};
+		if (Object.keys(this.byFeature).length > 0) {
+			result.byFeature = this.byFeature;
+		}
+		return result;
 	}
 
 	/**

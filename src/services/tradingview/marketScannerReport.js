@@ -799,6 +799,102 @@ function pickLevel(candidates) {
 	return null;
 }
 
+/**
+ * Records signal outcomes for completed market scanner results in a fail-open manner.
+ * @param {Array<Object>} scanResults
+ * @param {Object} [parsed] - { exchange, timeframe, ranked }
+ * @param {Object} [options] - { requestId, startTime, receivedAt, source, jobId, idempotencyKeyPrefix }
+ * @returns {void}
+ */
+function recordMarketScannerOutcomes(scanResults, parsed = {}, options = {}) {
+	try {
+		const signalOutcomeService = require('../storage/SignalOutcomeService');
+		if (!signalOutcomeService.isEnabled() || !Array.isArray(scanResults)) {
+			return;
+		}
+
+		const requestId = options.requestId || null;
+		const source = options.source || 'market-scanner';
+		const endTime = options.receivedAt ? new Date(options.receivedAt).getTime() : Date.now();
+		const processingTimeMs = Number.isFinite(options.startTime) && Number.isFinite(endTime) && endTime >= options.startTime
+			? endTime - options.startTime : null;
+		const ranked = parsed?.ranked === true;
+		const exchange = parsed?.exchange || null;
+		const timeframe = parsed?.timeframe || null;
+
+		for (const [scanIndex, scanResult] of scanResults.entries()) {
+			if (scanResult && scanResult.status === 'success' && Array.isArray(scanResult.items) && scanResult.items.length > 0) {
+				const preparedItems = prepareMarketScannerItems(scanResult, ranked);
+				for (const [itemIndex, item] of preparedItems.entries()) {
+					const closePrice = item.indicators?.close ?? null;
+					const itemSide = getScanItemSide(scanResult.scan, item);
+					const itemScore = item.changePercent ?? item.indicators?.RSI ?? item.volume_ratio ?? null;
+
+					const atr = pickLevel([item.indicators?.atr, item.indicators?.ATR, item.atr]);
+					const bbLower = pickLevel([item.indicators?.bb_lower, item.indicators?.bollinger_lower, item.indicators?.lower, item.bollinger?.lower, item.bollinger_lower]);
+					const bbUpper = pickLevel([item.indicators?.bb_upper, item.indicators?.bollinger_upper, item.indicators?.upper, item.bollinger?.upper, item.bollinger_upper]);
+					const support = pickLevel([
+						item.indicators?.support,
+						item.indicators?.nearest_support,
+						item.support,
+						item.support_resistance?.nearest_support,
+						item.support_resistance?.support_1,
+					]);
+					const resistance = pickLevel([
+						item.indicators?.resistance,
+						item.indicators?.nearest_resistance,
+						item.resistance,
+						item.support_resistance?.nearest_resistance,
+						item.support_resistance?.resistance_1,
+					]);
+
+					const validPrice = typeof closePrice === 'number' && Number.isFinite(closePrice) && closePrice > 0 ? closePrice : null;
+					let stopLoss = null;
+					let takeProfit = null;
+					if (validPrice !== null) {
+						const riskLevels = getRiskLevelsForSide({
+							side: itemSide,
+							price: validPrice,
+							atr: typeof atr === 'number' && Number.isFinite(atr) && atr > 0 ? atr : null,
+							bbLower: typeof bbLower === 'number' && Number.isFinite(bbLower) && bbLower > 0 ? bbLower : null,
+							bbUpper: typeof bbUpper === 'number' && Number.isFinite(bbUpper) && bbUpper > 0 ? bbUpper : null,
+							support: typeof support === 'number' && Number.isFinite(support) && support > 0 ? support : null,
+							resistance: typeof resistance === 'number' && Number.isFinite(resistance) && resistance > 0 ? resistance : null,
+						});
+						stopLoss = riskLevels.stopLoss;
+						takeProfit = riskLevels.takeProfit;
+					}
+
+					signalOutcomeService.recordSignal({
+						idempotencyKey: options.idempotencyKeyPrefix
+							? JSON.stringify([options.idempotencyKeyPrefix, scanResult.scan, item.symbol])
+							: options.jobId ? `job:${options.jobId}:market-scanner:${scanIndex}:${itemIndex}` : null,
+						requestId,
+						receivedAt: options.receivedAt,
+						source,
+						symbol: item.symbol,
+						exchange,
+						timeframe,
+						setupType: scanResult.scan,
+						score: itemScore,
+						confidenceScore: typeof item.confidence === 'number' && Number.isFinite(item.confidence) && item.confidence >= 0 && item.confidence <= 1 ? item.confidence : null,
+						side: itemSide,
+						price: validPrice,
+						priceSource: validPrice !== null ? 'tradingview-mcp' : null,
+						stop: stopLoss,
+						target: takeProfit,
+						sources: [],
+						tokenUsage: null,
+						processingTimeMs,
+					}).catch(() => {});
+				}
+			}
+		}
+	} catch (err) {
+		// Fail-open: signal-outcome tracking failure must never block callers or throw
+	}
+}
+
 module.exports = {
 	MarketScannerRequestError,
 	parseMarketScannerRequest,
@@ -807,5 +903,6 @@ module.exports = {
 	getRiskLevelsForSide,
 	getScanItemSide,
 	pickLevel,
+	recordMarketScannerOutcomes,
 	SUPPORTED_SCAN_TYPES,
 };

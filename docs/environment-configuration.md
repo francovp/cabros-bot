@@ -36,13 +36,17 @@
 
 To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project documents a private disclosure channel, scope, and safe-harbor guidance. Do not file security issues as public GitHub issues.
 
+#### Generic Message Webhook
+
+- `GENERIC_MESSAGE_MAX_LENGTH` - Maximum inbound characters for `POST /api/webhook/message` before truncation (integer `1`-`20000`, default `4000`). Invalid environment values use `4000`; invalid Remote Config values are ignored, leaving the environment value (or `4000` when unset/invalid) effective. A fresh valid Remote Config value takes precedence over the environment setting.
+
 #### WhatsApp Alerts & Commands (GreenAPI)
 
 - `ENABLE_WHATSAPP_ALERTS` - Enable WhatsApp alerts (`true` or `false`, default: `false`)
 - `WHATSAPP_API_URL` - GreenAPI endpoint URL (e.g., `https://7107.api.green-api.com/waInstance7107356806/`)
 - `WHATSAPP_API_KEY` - GreenAPI API key for authentication
 - `WHATSAPP_CHAT_ID` - Destination WhatsApp chat/group ID (format: `120363xxxxx@g.us`)
-- `ENABLE_WHATSAPP_COMMANDS` - Enable WhatsApp inbound commands poller (`!precio`, `!help`) (`true` or `false`, default: `false`)
+- `ENABLE_WHATSAPP_COMMANDS` - Enable WhatsApp inbound commands poller (`!precio`, `!analisis`, `!scanner`, `!noticias`, `!outcomes`/`!rendimiento`, `!help`) (`true` or `false`, default: `false`)
 - `WHATSAPP_COMMAND_CHAT_IDS` - Comma-separated list of WhatsApp chat/group IDs permitted to run commands (e.g., `120363025492938@g.us`)
 - `WHATSAPP_COMMAND_POLL_INTERVAL_MS` - Inbound command polling interval in milliseconds (default: `3000`)
 
@@ -103,13 +107,44 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 
 #### Langfuse Prompt Management
 
-- `ENABLE_LANGFUSE_PROMPTS` - Fetch runtime prompts from Langfuse (`true` or `false`, default: `false`)
-- `LANGFUSE_PUBLIC_KEY` - Langfuse public key (required when Langfuse prompt management is enabled)
-- `LANGFUSE_SECRET_KEY` - Langfuse secret key (required when Langfuse prompt management is enabled)
-- `LANGFUSE_BASE_URL` - Langfuse base URL (default: `https://cloud.langfuse.com`)
-- `LANGFUSE_PROMPT_LABEL` - Prompt label to fetch (default: `latest` in local/dev/test, `production` in production-like environments)
-- `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` - Prompt cache TTL in seconds (default: `0` for `latest`, `60` for `production`)
+Enabled in production (`render.yaml`: `value: true`, `previewValue: false` on the web service and the jobs worker; credentials are `sync: false` and live in the Render dashboard). Previews stay off so a throwaway PR deploy cannot publish traces against the production Langfuse project.
+
+- `ENABLE_LANGFUSE_PROMPTS` - Fetch runtime prompts from Langfuse (`true` or `false`, default: `false`). Environment-only for Remote Config parity: a process-startup gate.
+- `LANGFUSE_PUBLIC_KEY` - Langfuse public key (required when Langfuse prompt management is enabled). **Secret**: platform secret store only.
+- `LANGFUSE_SECRET_KEY` - Langfuse secret key (required when Langfuse prompt management is enabled). **Secret**: platform secret store only.
+- `LANGFUSE_BASE_URL` - Langfuse base URL (default: `https://cloud.langfuse.com`). Must be an HTTP(S) URL; only its host is reported by `/api/status`. Environment-only: an external destination.
+- `LANGFUSE_PROMPT_LABEL` - Prompt label to fetch (default: `latest` in local/dev/test, `production` in production-like environments; `render.yaml` pins `production`). Environment-only.
+- `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` - Prompt cache TTL in seconds (default: `0` for `latest`, `60` for `production`; `render.yaml` pins `300`). Must be a non-negative integer. Environment-only.
 - Optional local prompt overrides: `SEARCH_QUERY_PROMPT`, `GEMINI_SYSTEM_PROMPT`, `ALERT_ENRICHMENT_SYSTEM_PROMPT`, `NEWS_ANALYSIS_SYSTEM_PROMPT`, and `CONFIDENCE_ENRICHMENT_SYSTEM_PROMPT`. Unset values use the versioned local fallback files.
+
+##### Verifying Langfuse prompts are actually resolving
+
+Setting the flag is **necessary but not sufficient**. Prompt resolution fails **open** to the local prompt file, which is what keeps alert delivery alive — and which also makes a deployment where every alert silently resolves locally indistinguishable from a healthy one. `dependencies.langfuse.configured` is credential *shape* only, so a typo'd, revoked, or wrong-project key satisfies it. `ready` is therefore proven from observed resolutions (issue #1178):
+
+| `status` | Meaning | Operator action |
+|---|---|---|
+| `disabled` | The gate is not `true`. | Nothing; local prompts are the configured intent. |
+| `misconfigured` | Enabled, but a credential is missing or blank. | Set it in the Render dashboard. |
+| `unverified` | Configured, but nothing has resolved yet. **No evidence, not health.** | Wait for the startup probe, then re-check. |
+| `ready` | A managed prompt actually resolved. | Nothing. |
+| `degraded` | A resolution failed; the local file was used. | Read `lastErrorReason`. |
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
+  "$BASE_URL/api/capabilities" \
+  | jq '{flag: .featureFlags.langfusePrompts,
+         dep: .dependencies.langfuse | {status, ready, promptsSucceeded,
+                                         localFallbackCount, lastErrorReason,
+                                         fallingBack: .localFallbackByPrompt}}'
+```
+
+Read `localFallbackCount`, not the flag: it counts resolutions that used the local file *while the gate was on*, and is the number that proves the enablement is doing something. `status: "ready"` with a non-zero `promptsSucceeded` and an empty `fallingBack` map is the evidence the managed prompts are live.
+
+`lastErrorReason` is a closed enum — `langfuse_not_configured`, `langfuse_client_unavailable`, `langfuse_auth_failed`, `langfuse_prompt_not_found`, `langfuse_timeout`, `langfuse_invalid_response`, `langfuse_unavailable` — because a Langfuse error body can embed the project id, base URL, and API key.
+
+**`langfuse_prompt_not_found` is the expected first-deploy failure**: prompts published under `latest` but never under a `production` label make every fetch 404, every alert fall back to the local file, and the deployment still *look* healthy. Publish the label with the [`langfuse-prompt-sync`](../../.agents/skills/langfuse-prompt-sync/SKILL.md) skill. `consecutiveFailures` clears on the next success, so publishing the label self-heals the verdict without a restart.
+
+Unlike equity market data, this feature **does** run a bounded startup probe (5s, `unref`'d, fail-open, non-blocking) that resolves every registered prompt once, precisely so an idle deployment gets a proven verdict instead of `unverified` forever.
 
 #### TradingView MCP Analysis
 
@@ -130,6 +165,9 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 - `ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT` - Enable multi-agent consensus analysis fallback for `/api/webhook/symbol-analysis` (`true` or `false`, default: `false`)
 - `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` - Suppress duplicate channel delivery for the same `exchange|symbol|timeframe|side` signal within its cooldown window; suppressed alerts are still persisted with a `suppressedRepeat: true` marker and opposite-side flips always deliver (`true` or `false`, default: `false`)
 - `ALERT_SIGNAL_COOLDOWN_BARS` - Cooldown length in alert-timeframe bars for repeat suppression (`1`-`10`, default: `1`)
+- `ENABLE_ALERT_SYNTH_BURST_AGGREGATION` - Collapse same-direction multi-symbol alert bursts into one regime message per channel (`true` or `false`, default: `false`)
+- `ALERT_BURST_WINDOW_MS` - Buffered window in milliseconds before a burst is evaluated; also the maximum latency added to a parsed alert (`1000`-`15000`, default: `3000`)
+- `ALERT_BURST_MIN_SIGNALS` - Minimum same-direction signals inside the window required to send one aggregate message; below it every alert is delivered individually (`2`-`20`, default: `3`)
 - Runtime gate: TradingView MCP data is only used when webhook requests include `?useTradingViewData=true`
 
 #### Firestore Alert Storage
@@ -211,6 +249,57 @@ bash ops/configure-operational-collection-retention.sh   # covers idempotency_ke
 Until that runs, the collection grows without bound. This is the same eventual deletion the other operational collections depend on, and it is a deployment step — it is not something this repository can apply for you.
 
 **Rollback.** Set the variable back to `false` and redeploy; the service falls back to in-memory idempotency on the next request and no code change is needed. Nothing is lost that matters — unexpired reservations simply stop being shared, so a duplicate is possible again, which is the pre-#1111 behaviour.
+
+#### Symbol Analysis Persistence
+
+- `ENABLE_SYMBOL_ANALYSIS_STORAGE` - Store `/api/webhook/symbol-analysis` results in the Firestore `symbolAnalyses` collection so they are readable from `/api/symbol-analyses` (`true` or `false`, default: `false`). **Enabled in production** via `render.yaml` on the web service only, with previews off (issue #1179). Read [`dependencies.symbolAnalysisStorage`](#verifying-symbol-analysis-persistence-is-actually-working) before treating it as working. **Environment-only** — excluded from Remote Config (see the note below).
+- `SYMBOL_ANALYSIS_RETENTION_DAYS` - Retention for stored symbol analyses in days (`1`-`365`, default: `7`). New records write `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` once per Firebase project to enable native Firestore TTL deletion on `expiresAt`. **Environment-only** — excluded from Remote Config.
+
+The flag is declared on the **web service only**. The single writer is the HTTP route layer in `src/controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis.js`, and `worker.js` never mounts routes, so the worker stays off rather than becoming a second writer on the collection. Previews stay off because previews share the production Firestore project: a preview would write throwaway rows into the collection operators read.
+
+**Both keys are excluded from Remote Config on purpose.** A gate that decides where a collection lives is a process-startup decision, not a runtime tuning knob, so neither key is in `RemoteConfigService.js` `PARAMETER_SCHEMA` nor in `firebase-remote-config-template.json`. This is not cosmetic: `getRemoteValue()` accepts a published template parameter with a plain `defaultValue`, and a published template outranks `render.yaml` for every allow-listed key. An allow-listed gate whose template value disagrees with the blueprint therefore reports the blueprint's value in `/api/capabilities` while the template keeps the feature silently off. `tests/unit/remote-config-service.test.js` fails if the blueprint and the template ever disagree for a shared key.
+
+#### Verifying symbol analysis persistence is actually working
+
+`ENABLE_SYMBOL_ANALYSIS_STORAGE=true` is **enabled in production** (issue #1179, declared on the web service in `render.yaml`), but the gate alone is not proof that analyses are being stored. `SymbolAnalysisStorageService` is fail-open by design: every Firestore error is logged and swallowed, the record is dropped, and the symbol analysis still returns `200`. A deployment whose credentials look valid but cannot reach Firestore behaves exactly as it did before the flag existed, so the reported state is derived from an observed **write** instead:
+
+| Field | Meaning |
+| :--- | :--- |
+| `featureFlags.symbolAnalysisStorage` | The `ENABLE_SYMBOL_ANALYSIS_STORAGE` gate only. |
+| `dependencies.symbolAnalysisStorage.configured` | Credential **shape** only. Not proof that writes land. |
+| `dependencies.symbolAnalysisStorage.status` | `disabled`, `misconfigured`, `unverified`, `ready`, or `degraded`. |
+| `dependencies.symbolAnalysisStorage.ready` | `true` only after an observed **successful write**. |
+| `dependencies.symbolAnalysisStorage.readiness` | `unverified` / `verified` / `degraded` from the observed-write window. |
+| `dependencies.symbolAnalysisStorage.failOpen` | Always `true`: a degraded verdict still answers symbol analysis, it just silently stops building decision history. |
+| `dependencies.symbolAnalysisStorage.lastErrorReason` | Closed enum: `firestore_not_initialized` or `firestore_unavailable`. Never provider text. |
+
+Read and write counters are reported separately (`writesAttempted`, `writesSucceeded`, `writesFailed`, `readsAttempted`, `readsSucceeded`, `readsFailed`). **A successful read is not evidence of persistence** — it proves Firestore reachability only, and never sets `ready`. Persistence is the feature, so only a write proves the enablement took effect.
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
+  | jq '{flag: .featureFlags.symbolAnalysisStorage, dep: .dependencies.symbolAnalysisStorage,
+         templatePublished: .dependencies.firebaseRemoteConfig.templatePublished,
+         configSource: .dependencies.firebaseRemoteConfig.source}'
+```
+
+- `flag: false` in production although `render.yaml` says `true` — check `templatePublished` and `configSource` first. Because both keys are excluded from Remote Config, a `true` template here can no longer be the cause; a published template that disagrees with `render.yaml` on *any* allow-listed key means `render.yaml` itself has not been applied to the running deployment, so redeploy from the blueprint.
+
+- `status: "unverified"` — the normal state right after a deploy. `configured` is already `true` here; nothing has been proven yet. Persist one analysis and re-check.
+- `status: "ready"` — proven: `writesSucceeded` is at least `1`.
+- `status: "degraded"` — a durable write failed while the analysis still returned. `firestore_unavailable` points at the Firestore SDK or network path; `firestore_not_initialized` points at the credential loader, and is the signal to check `FIREBASE_SERVICE_ACCOUNT_JSON` / `GOOGLE_APPLICATION_CREDENTIALS`. `consecutiveFailures` clears on the next successful Firestore operation, so a transient outage self-heals without a restart.
+- `status: "misconfigured"` — enabled without usable Firestore credentials.
+
+Counters and timestamps are process-local and reset on restart. A status read never counts as a durable attempt, so polling `/api/status` cannot manufacture a `ready` verdict.
+
+**Prerequisite — TTL on `symbolAnalyses`.** Every document carries `expiresAt`, but Firestore only deletes on it once the TTL policy exists, and Firestore TTL deletion is eventually consistent (up to ~24 h) and only removes documents that are *already* expired. Run once per Firebase project:
+
+```bash
+bash ops/configure-operational-collection-retention.sh   # covers symbolAnalyses
+```
+
+Until that runs, the collection grows without bound. This is a deployment step — it is not something this repository can apply for you.
+
+**Rollback.** Set the variable back to `false` and redeploy; symbol analysis keeps working and simply stops persisting, which is the pre-#1179 behaviour. Already-stored documents are left in place for TTL deletion.
 - `SIGNAL_OUTCOME_WORKER_ROLE` - Scheduler role: `web` preserves the local/web timer, `worker` enables only the dedicated worker entrypoint, and `disabled` prevents scheduler startup (default: `web`)
 - `SIGNAL_OUTCOME_EVALUATION_LEASE_MS` - Distributed sweep lease duration in milliseconds (`10000`-`600000`, integer, default: `120000`). The sweep is claimed in the Firestore `signalOutcomeLocks` collection so exactly one process evaluates a pending signal when more than one has tracking enabled; a replica that loses the claim skips with `reason: "lease-held"` and makes no market-data calls. Fails open to single-process behaviour when Firestore or the lease write is unavailable, so it can never disable evaluation. Reported as `dependencies.signalOutcomeWorker.leaseMs`.
 - `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access. Service accounts only; an ADC document supplied inline is rejected with an actionable error because ADC is resolved from a file or the managed runtime, never from an inline value.
@@ -271,7 +360,7 @@ When signal-outcome tracking is disabled, or when no measurements exist in the r
 - `FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS` - Maximum template-load wait (default: `10000`, maximum: `30000`)
 - `FIREBASE_REMOTE_CONFIG_MAX_AGE_MS` - Maximum age of a successful template before environment/default fallback (default: `3600000`, maximum: `604800000`)
 
-The allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_MAINTENANCE_MODE` (an operational incident-response kill switch), and per-chat user preferences (`ENABLE_FIRESTORE_CHAT_PREFERENCES`, `CHAT_PREFERENCES_RETENTION_DAYS` between `1` and `365`, `CHAT_PREFERENCES_CACHE_TTL_MS` between `1000` and `3600000`). Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, permanent security controls, route/security gates, and Telegram destinations are never read from Remote Config.
+The allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `GENERIC_MESSAGE_MAX_LENGTH` (integer `1`-`20000`, default `4000`), `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_MAINTENANCE_MODE` (an operational incident-response kill switch), and per-chat user preferences (`ENABLE_FIRESTORE_CHAT_PREFERENCES`, `CHAT_PREFERENCES_RETENTION_DAYS` between `1` and `365`, `CHAT_PREFERENCES_CACHE_TTL_MS` between `1000` and `3600000`). Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, permanent security controls, route/security gates, and Telegram destinations are never read from Remote Config.
 
 The service loads once at startup and refreshes on the bounded cadence; it does not fetch Remote Config per alert. `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS` remains environment-only because the worker timer is created during process startup and is not a request-time setting. Disabled, unavailable, timed-out, stale, malformed, or invalid values fail open to the current environment/default behavior. The server-side Remote Config API is currently a Firebase Preview feature, so monitor its quota and error rate before enabling it in production. `firebase-admin` is upgraded to the Node 24-compatible 12.x line (`^12.1.0`, lockfile resolution `12.7.0`).
 
@@ -420,9 +509,21 @@ The response and audit logs include only sanitized order metadata. API credentia
 #### Scanner Preset Storage
 
 - `ENABLE_FIRESTORE_SCANNER_PRESETS` - Enable the scanner-preset Firestore persistence gate independently from alert storage, job storage, and outcome tracking (default: `false`)
-- When Firestore is initialized and writes succeed, scanner-preset responses and `/api/status` report `storage.mode: "durable"` with `backend: "firestore"`.
-- When the flag is disabled, or Firestore initialization/write fails, the service reports `storage.mode: "ephemeral"` with `backend: "memory"`; presets in this mode can be lost on restart or redeploy.
-- `dependencies.scannerPresetStorage` in `/api/status` and `/api/capabilities` exposes `enabled`, `configured`, `ready`, `status`, `mode`, and `backend` without secrets. A `misconfigured` status means a Firestore gate is enabled but the client is unavailable.
+- `storage.mode` and `storage.backend` are **intent-derived**: they report the configured target and stay `durable`/`firestore` whenever the flag is on and credentials are present. They only report `ephemeral`/`memory` when the flag is off or credentials are unusable — the two cases where presets really are lost on restart or redeploy. Do not read `memory` as "the flag is off": that confusion is what made a transient Firestore error look like a disabled feature in [#1342](https://github.com/francovp/cabros-bot/issues/1342).
+- `dependencies.scannerPresetStorage` reports `status` so the three causes an operator must act on differently stay distinguishable, and `configured`/`ready` are not the same question:
+
+| `status` | Meaning | Operator action |
+| :--- | :--- | :--- |
+| `disabled` | `ENABLE_FIRESTORE_SCANNER_PRESETS` is not `true`. | Nothing; presets are ephemeral by choice. |
+| `misconfigured` | The gate is on but credentials are genuinely absent or rejected. | Fix Firebase credentials. This is the only status that means "check your credentials". |
+| `unverified` | No durable operation has been observed yet. Not a failure, and not health — the normal state immediately after a restart. | None. |
+| `ready` | A durable read or write has actually succeeded. | None. |
+| `degraded` | A durable operation failed and nothing has answered since. `lastErrorReason` names the class. | Investigate Firestore reachability; `consecutiveFailures` clears on the next success. |
+
+- `configured` is credential **shape** only. `ready` is the proof question and is true only after an observed durable read or write, so a deployment whose key looks valid but cannot reach Firestore reports `degraded` instead of `ready`. `GET /api/status` and `GET /api/capabilities` prove it with a bounded, single-flight durable read (rate-limited to one probe per 5s so polling cannot amplify Firestore reads), so **no prior write is required**.
+- Alongside the verdict: `readiness`, `failOpen` (always `true` — preset CRUD keeps serving from the in-memory mirror), `collection`, the `operationsAttempted`/`operationsSucceeded`/`operationsFailed`/`consecutiveFailures` counters, `lastSuccessAt`/`lastFailureAt`, and a closed-enum `lastErrorReason` (`firestore_not_initialized`, `firestore_unavailable`, `firestore_probe_timeout`) that never contains a provider message.
+- `pendingWrites`, `inFlightWrites`, `pendingDeletes`, `oldestPendingWriteAt`, and `lastReadFellBack` report local unsynced workload. They are deliberately **not** part of the verdict: an unsynced record is a pending-sync fact, not a store fault, so a record left behind by a failed write can never pin the process to `ephemeral`. Watch `pendingWrites > 0` with a rising `oldestPendingWriteAt` as the signal that records are at risk of being lost on restart.
+- The readiness counters are process-local and reset on restart. The probe issues the same indexed `orderBy('createdAt','desc')` query `listPresets()` uses, bounded to one document, so it needs no composite index beyond the single-field sort the list already requires.
 
 #### Scanner Preset Optimistic Concurrency
 
