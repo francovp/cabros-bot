@@ -959,6 +959,32 @@ describe('SignalOutcomeService', () => {
 
 			checkNoUndefined(saved);
 		});
+
+		it('persists invalidationLevel, targetLevel, riskRewardRatio, and clean setupType from risk metadata (GH-832)', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'test-req-risk-meta',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 65000,
+				side: 'BUY',
+				invalidationLevel: 63000,
+				targetLevel: 68000,
+				riskRewardRatio: 2.5,
+				setupType: 'BREAKOUT',
+			});
+
+			expect(resId).not.toBeNull();
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.invalidationLevel).toBe(63000);
+			expect(saved.targetLevel).toBe(68000);
+			expect(saved.stop).toBe(63000);
+			expect(saved.target).toBe(68000);
+			expect(saved.riskRewardRatio).toBe(2.5);
+			expect(saved.setupType).toBe('breakout');
+		});
 	});
 
 	describe('evaluatePendingOutcomes()', () => {
@@ -2458,6 +2484,82 @@ describe('SignalOutcomeService', () => {
 			expect(win.maxAdverseExcursionPercent).toBeDefined();
 		});
 
+		it('computes win rate, avg RRR, and avg return in bySetupType when riskRewardRatio is present (GH-832)', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				['breakout-win', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-bo-win',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					setupType: 'breakout',
+					riskRewardRatio: 2.0,
+					price: 50000,
+					stop: 48000,
+					target: 54000,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 54000,
+							return: 8.0,
+							rMultiple: 2.0,
+							firstHit: 'target',
+							targetHit: true,
+							stopHit: false,
+							maxFavorableExcursion: 8.0,
+							maxAdverseExcursion: -1.0,
+						},
+					},
+				}],
+				['breakout-loss', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-bo-loss',
+					source: 'alert',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					setupType: 'breakout',
+					riskRewardRatio: 3.0,
+					price: 3000,
+					stop: 2900,
+					target: 3300,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 2900,
+							return: -3.3333,
+							rMultiple: -1.0,
+							firstHit: 'stop',
+							targetHit: false,
+							stopHit: true,
+							maxFavorableExcursion: 1.0,
+							maxAdverseExcursion: -3.3333,
+						},
+					},
+				}],
+			]));
+
+			const res = await SignalOutcomeService.getMetricsSummary();
+			const boStats = res.windows['1h'].bySetupType.breakout;
+			expect(boStats).toBeDefined();
+			expect(boStats.totalSignals).toBe(2);
+			expect(boStats.hitRatePercent).toBe(50);
+			expect(boStats.averageRiskRewardRatio).toBe(2.5);
+			expect(boStats.avgRrr).toBe(2.5);
+			expect(boStats.averageReturnPercent).toBe(2.3334);
+		});
+
 		it('omits empty bySide and bySetupType buckets when only one side or one setupType has signals', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
@@ -3192,6 +3294,9 @@ describe('SignalOutcomeService', () => {
 				entryPriceSource: 'tradingview-mcp',
 				stop: 63000,
 				target: 68000,
+				invalidationLevel: 63000,
+				targetLevel: 68000,
+				riskRewardRatio: null,
 				marketDataProvider: 'binance',
 				eligibilityState: 'supported_provider',
 				eligibilityReason: null,
