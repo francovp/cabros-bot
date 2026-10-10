@@ -154,23 +154,39 @@ describe('event bus alert flow', () => {
 		});
 
 		it('a slow async subscriber does not delay the HTTP response', async () => {
+			let markSubscriberSettled;
+			const subscriberSettled = new Promise((resolve) => {
+				markSubscriberSettled = resolve;
+			});
 			const slow = jest.fn(async () => {
-				await new Promise((resolve) => setTimeout(resolve, 250));
+				await new Promise((resolve) => setTimeout(resolve, 2000));
+				markSubscriberSettled();
 			});
 			eventBus.on(EVENT_NAMES.ALERT_DELIVERED, slow);
 
-			const start = Date.now();
-			const response = await request(app)
-				.post('/api/stub-alert')
-				.set('x-api-key', 'integration-test-key')
-				.send({ alertId: 'e2e-3', text: 'third alert' })
-				.expect(200);
-			const elapsed = Date.now() - start;
+			// The invariant is which settles first, not how long either takes:
+			// a synchronous emit cannot resolve a subscriber before responding,
+			// so an emit path that awaited its subscribers necessarily loses
+			// this race. The subscriber's delay is orders of magnitude larger
+			// than any real response time, so this is not a latency budget and
+			// is unaffected by runner load. Do not reintroduce an absolute
+			// `elapsed < Nms` assertion here: that is what failed on a loaded CI
+			// runner at 222ms while the property under test actually held.
+			const outcome = await Promise.race([
+				request(app)
+					.post('/api/stub-alert')
+					.set('x-api-key', 'integration-test-key')
+					.send({ alertId: 'e2e-3', text: 'third alert' })
+					.then((response) => ({ winner: 'response', response })),
+				subscriberSettled.then(() => ({ winner: 'subscriber' })),
+			]);
 
-			expect(response.body.success).toBe(true);
-			// Synchronous emit path — even if the subscriber schedules an
-			// async tail, the response is sent before it resolves.
-			expect(elapsed).toBeLessThan(200);
+			expect(outcome.winner).toBe('response');
+			expect(outcome.response.status).toBe(200);
+			expect(outcome.response.body.success).toBe(true);
+			expect(slow).toHaveBeenCalledTimes(1);
+
+			await slow.mock.results[0].value;
 		});
 	});
 });

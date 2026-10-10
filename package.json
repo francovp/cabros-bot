@@ -10,6 +10,7 @@
   "scripts": {
     "build:hosting": "node scripts/build-hosting.js",
     "deploy:firebase-remote-config:server": "node scripts/deploy-server-remote-config.js",
+    "deploy:firestore:indexes": "node scripts/deploy-firestore-indexes.js",
     "sync:production-env": "node scripts/sync-production-env.js",
     "cleanup:preview-channels": "node scripts/cleanup-preview-channels.js",
     "uptime:monitor": "node ops/external-uptime-monitor.js",
