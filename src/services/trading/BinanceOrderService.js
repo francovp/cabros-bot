@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { MainClient } = require('binance');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const TESTNET_BASE_URL = 'https://testnet.binance.vision';
 const DEMO_BASE_URL = 'https://demo-api.binance.com';
@@ -14,6 +15,10 @@ const PREVIEW_DEPTH_TIMEOUT_MS = 4000;
 const PREVIEW_DEFAULT_MAKER_BPS = 10;
 const PREVIEW_DEFAULT_TAKER_BPS = 10;
 const PREVIEW_DEPTH_NOTIONAL_FRACTION = 0.0005;
+const DEFAULT_BALANCE_CACHE_MS = 3000;
+const MIN_BALANCE_CACHE_MS = 1000;
+const MAX_BALANCE_CACHE_MS = 60000;
+const CRYPTO_QUOTE_SUFFIXES = ['USDT', 'USDC', 'BUSD', 'FDUSD', 'TUSD', 'BTC', 'ETH', 'BNB', 'EUR', 'TRY'];
 const ALLOWED_ORDER_TYPES = new Set(['MARKET', 'LIMIT']);
 const ALLOWED_SIDES = new Set(['BUY', 'SELL']);
 const ALLOWED_TIME_IN_FORCE = new Set(['GTC', 'IOC', 'FOK']);
@@ -391,6 +396,246 @@ function roundDownToStep(value, stepSize) {
 	const stepped = (valueInteger / stepInteger) * stepInteger;
 	const resultParts = { integer: stepped, scale };
 	return formatDecimalParts(resultParts);
+}
+
+function parseBalanceCacheTtl(value) {
+	const parsed = Number.parseInt(value || `${DEFAULT_BALANCE_CACHE_MS}`, 10);
+	if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_BALANCE_CACHE_MS;
+	return Math.min(Math.max(parsed, MIN_BALANCE_CACHE_MS), MAX_BALANCE_CACHE_MS);
+}
+
+function deriveSymbolAssets(symbol, symbolInfo = null) {
+	if (symbolInfo?.baseAsset && symbolInfo?.quoteAsset) {
+		return {
+			baseAsset: String(symbolInfo.baseAsset).toUpperCase(),
+			quoteAsset: String(symbolInfo.quoteAsset).toUpperCase(),
+		};
+	}
+	const normalized = String(symbol || '').trim().toUpperCase();
+	const quote = CRYPTO_QUOTE_SUFFIXES.find((s) => normalized.endsWith(s));
+	if (quote && normalized.length > quote.length) {
+		return {
+			baseAsset: normalized.slice(0, -quote.length),
+			quoteAsset: quote,
+		};
+	}
+	return {
+		baseAsset: normalized,
+		quoteAsset: null,
+	};
+}
+
+function deriveAllowedAssets(allowedSymbols = [], exchangeInfo = null) {
+	const symbolList = typeof allowedSymbols === 'string'
+		? allowedSymbols.split(',').map((s) => s.trim()).filter(Boolean)
+		: (Array.isArray(allowedSymbols) ? allowedSymbols : []);
+	const assets = new Set();
+	for (const symbol of symbolList) {
+		const symbolInfo = getSymbolInfo(exchangeInfo, symbol);
+		const { baseAsset, quoteAsset } = deriveSymbolAssets(symbol, symbolInfo);
+		if (baseAsset) assets.add(baseAsset);
+		if (quoteAsset) assets.add(quoteAsset);
+	}
+	return Array.from(assets).sort();
+}
+
+function sellableQuantity(symbolOrParams, requestedQtyArg, optionsArg = {}) {
+	let params;
+	if (typeof symbolOrParams === 'object' && symbolOrParams !== null) {
+		params = symbolOrParams;
+	} else {
+		params = {
+			symbol: symbolOrParams,
+			requestedQuantity: requestedQtyArg,
+			...optionsArg,
+		};
+	}
+
+	const symbol = params.symbol ? String(params.symbol).trim().toUpperCase() : null;
+	const { baseAsset } = symbol ? deriveSymbolAssets(symbol, params.symbolInfo) : { baseAsset: null };
+
+	let free = null;
+	let locked = null;
+
+	if (params.freeBalance !== undefined && params.freeBalance !== null) {
+		free = String(params.freeBalance).trim();
+	} else if (params.free !== undefined && params.free !== null) {
+		free = String(params.free).trim();
+	} else if (Array.isArray(params.balances)) {
+		const match = params.balances.find((b) => b && (
+			(baseAsset && String(b.asset).toUpperCase() === baseAsset)
+			|| (!baseAsset && symbol && String(b.asset).toUpperCase() === symbol)
+		));
+		if (match) {
+			free = String(match.free ?? '0').trim();
+			locked = String(match.locked ?? '0').trim();
+		} else {
+			free = '0';
+			locked = '0';
+		}
+	} else {
+		free = '0';
+	}
+
+	if (locked === null) {
+		if (params.lockedBalance !== undefined && params.lockedBalance !== null) {
+			locked = String(params.lockedBalance).trim();
+		} else if (params.locked !== undefined && params.locked !== null) {
+			locked = String(params.locked).trim();
+		} else {
+			locked = '0';
+		}
+	}
+
+	let filtersMap = params.filters instanceof Map ? params.filters : null;
+	if (!filtersMap && params.symbolInfo) {
+		filtersMap = getFilters(params.symbolInfo, params.exchangeInfo);
+	}
+
+	const lotSizeFilter = filtersMap?.get('LOT_SIZE') || {};
+	const notionalFilter = filtersMap?.get('NOTIONAL') || filtersMap?.get('MIN_NOTIONAL') || {};
+
+	const stepSize = params.stepSize ?? lotSizeFilter.stepSize ?? null;
+	const minQty = params.minQty ?? lotSizeFilter.minQty ?? null;
+	const maxQty = params.maxQty ?? lotSizeFilter.maxQty ?? null;
+	const minNotional = params.minNotional ?? notionalFilter.minNotional ?? null;
+	const price = params.price ?? params.currentPrice ?? params.effectivePrice ?? null;
+
+	const rawRequested = params.requestedQuantity ?? params.quantity;
+	const requestedStr = (rawRequested !== undefined && rawRequested !== null && rawRequested !== '' && rawRequested !== 'ALL')
+		? String(rawRequested).trim()
+		: null;
+
+	const freeParts = decimalParts(free);
+	const hasFreeBalance = freeParts && compareDecimals(free, '0') > 0;
+
+	if (!hasFreeBalance) {
+		const result = {
+			symbol,
+			sellable: false,
+			quantity: '0',
+			requestedQuantity: requestedStr,
+			freeBalance: free,
+			lockedBalance: locked,
+			stepSize,
+			minQty,
+			maxQty,
+			minNotional,
+			effectivePrice: price ? String(price).trim() : null,
+			estimatedNotional: '0',
+			adjusted: requestedStr !== null && requestedStr !== '0',
+			clampedToBalance: requestedStr !== null && compareDecimals(requestedStr, '0') > 0,
+			belowMinQty: false,
+			belowMinNotional: false,
+			exceedsMaxQty: false,
+			reason: 'ZERO_BALANCE',
+		};
+		Object.defineProperty(result, 'toString', { value: () => result.quantity });
+		return result;
+	}
+
+	let available = free;
+	let clampedToBalance = false;
+	if (requestedStr) {
+		const reqParts = decimalParts(requestedStr);
+		if (reqParts && compareDecimals(requestedStr, '0') > 0) {
+			if (compareDecimals(requestedStr, free) > 0) {
+				available = free;
+				clampedToBalance = true;
+			} else {
+				available = requestedStr;
+			}
+		}
+	}
+
+	let stepped = available;
+	if (stepSize && decimalParts(String(stepSize).trim())) {
+		stepped = roundDownToStep(available, String(stepSize).trim());
+	}
+
+	const steppedParts = decimalParts(stepped);
+	if (!steppedParts || compareDecimals(stepped, '0') <= 0) {
+		const result = {
+			symbol,
+			sellable: false,
+			quantity: '0',
+			requestedQuantity: requestedStr,
+			freeBalance: free,
+			lockedBalance: locked,
+			stepSize,
+			minQty,
+			maxQty,
+			minNotional,
+			effectivePrice: price ? String(price).trim() : null,
+			estimatedNotional: '0',
+			adjusted: requestedStr !== null ? requestedStr !== '0' : false,
+			clampedToBalance,
+			belowMinQty: false,
+			belowMinNotional: false,
+			exceedsMaxQty: false,
+			reason: 'BELOW_STEP_SIZE',
+		};
+		Object.defineProperty(result, 'toString', { value: () => result.quantity });
+		return result;
+	}
+
+	let exceedsMaxQty = false;
+	if (maxQty && decimalParts(String(maxQty).trim())) {
+		if (compareDecimals(stepped, String(maxQty).trim()) > 0) {
+			exceedsMaxQty = true;
+			stepped = stepSize ? roundDownToStep(String(maxQty).trim(), String(stepSize).trim()) : String(maxQty).trim();
+		}
+	}
+
+	const belowMinQty = Boolean(minQty && decimalParts(String(minQty).trim()) && compareDecimals(stepped, String(minQty).trim()) < 0);
+
+	let estimatedNotional = null;
+	let belowMinNotional = false;
+	if (price && decimalParts(String(price).trim())) {
+		const priceStr = String(price).trim();
+		const notionalParts = multiplyDecimals(stepped, priceStr);
+		if (notionalParts) {
+			estimatedNotional = formatDecimalParts(notionalParts);
+			if (minNotional && decimalParts(String(minNotional).trim())) {
+				belowMinNotional = compareDecimals(estimatedNotional, String(minNotional).trim()) < 0;
+			}
+		}
+	}
+
+	let sellable = true;
+	let reason = null;
+	if (belowMinQty) {
+		sellable = false;
+		reason = 'BELOW_MIN_QTY';
+	} else if (belowMinNotional) {
+		sellable = false;
+		reason = 'BELOW_MIN_NOTIONAL';
+	}
+
+	const adjusted = requestedStr !== null ? stepped !== requestedStr : false;
+
+	const result = {
+		symbol,
+		sellable,
+		quantity: stepped,
+		requestedQuantity: requestedStr,
+		freeBalance: free,
+		lockedBalance: locked,
+		stepSize,
+		minQty,
+		maxQty,
+		minNotional,
+		effectivePrice: price ? String(price).trim() : null,
+		estimatedNotional,
+		adjusted,
+		clampedToBalance,
+		belowMinQty,
+		belowMinNotional,
+		exceedsMaxQty,
+		reason,
+	};
+	Object.defineProperty(result, 'toString', { value: () => result.quantity });
+	return result;
 }
 
 function readBps(source, ...keys) {
@@ -791,7 +1036,13 @@ function normalizeCancelRequest(body = {}) {
 }
 
 function createBinanceOrderService({ createClient = createBinanceClient } = {}) {
-	return {
+	let balancesCache = {
+		timestamp: 0,
+		environment: null,
+		rawBalances: null,
+	};
+
+	const service = {
 		getStatus() {
 			const config = getConfig();
 			return {
@@ -1363,7 +1614,185 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 
 			return result;
 		},
+
+		async getBalances(query = {}) {
+			const config = getConfig();
+			if (!config.enabled) {
+				throw new BinanceOrderRequestError('Binance trading is disabled', 'FEATURE_DISABLED', 403);
+			}
+			if (!config.configured) {
+				throw new BinanceOrderRequestError(
+					'Binance trading is enabled but not configured',
+					'BINANCE_TRADING_UNAVAILABLE',
+					503,
+				);
+			}
+
+			const allowedAssetsList = deriveAllowedAssets(config.allowedSymbols);
+			const allowedAssetsSet = new Set(allowedAssetsList);
+
+			const targetAsset = query.asset && typeof query.asset === 'string' && query.asset.trim()
+				? query.asset.trim().toUpperCase()
+				: null;
+			const targetSymbol = query.symbol && typeof query.symbol === 'string' && query.symbol.trim()
+				? query.symbol.trim().toUpperCase()
+				: null;
+
+			if (targetAsset && !allowedAssetsSet.has(targetAsset)) {
+				throw new BinanceOrderRequestError('asset is not allowed for Binance trading', 'INVALID_ORDER_REQUEST', 400);
+			}
+
+			if (targetSymbol && !config.allowedSymbols.includes(targetSymbol)) {
+				throw new BinanceOrderRequestError('symbol is not allowed for Binance trading', 'INVALID_ORDER_REQUEST', 400);
+			}
+
+			const now = Date.now();
+			const cacheTtlMs = parseBalanceCacheTtl(getRuntimeConfig().BINANCE_BALANCE_CACHE_MS);
+			const forceRefresh = query.refresh === true || query.refresh === 'true';
+
+			let rawBalances;
+			let fromCache = false;
+
+			if (!forceRefresh
+				&& balancesCache.rawBalances
+				&& balancesCache.environment === config.environment
+				&& (now - balancesCache.timestamp) < cacheTtlMs) {
+				rawBalances = balancesCache.rawBalances;
+				fromCache = true;
+			} else {
+				let client;
+				try {
+					client = createClient(config);
+				} catch (error) {
+					throw new BinanceOrderServiceError('Binance client could not be initialized', 'BINANCE_CLIENT_UNAVAILABLE', 503);
+				}
+
+				if (typeof client.getAccountInformation !== 'function') {
+					throw new BinanceOrderServiceError('Binance account information method unavailable', 'BINANCE_CLIENT_UNAVAILABLE', 503);
+				}
+
+				let accountInfo;
+				try {
+					accountInfo = await withTimeout(client.getAccountInformation(), config.timeoutMs);
+				} catch (error) {
+					if (isDefinitiveBinanceRejection(error)) {
+						throw new BinanceOrderRequestError('Binance rejected the request', 'BINANCE_REQUEST_REJECTED', 400);
+					}
+					throw new BinanceOrderServiceError('Binance balance query failed', 'BINANCE_BALANCE_QUERY_FAILED', 502);
+				}
+
+				rawBalances = Array.isArray(accountInfo?.balances) ? accountInfo.balances : [];
+				balancesCache = {
+					timestamp: now,
+					environment: config.environment,
+					rawBalances,
+				};
+			}
+
+			let filtered = rawBalances
+				.filter((b) => b && typeof b.asset === 'string' && allowedAssetsSet.has(b.asset.toUpperCase()))
+				.map((b) => ({
+					asset: String(b.asset).toUpperCase(),
+					free: String(b.free ?? '0'),
+					locked: String(b.locked ?? '0'),
+				}));
+
+			const presentAssets = new Set(filtered.map((b) => b.asset));
+			for (const asset of allowedAssetsList) {
+				if (!presentAssets.has(asset)) {
+					filtered.push({
+						asset,
+						free: '0.00000000',
+						locked: '0.00000000',
+					});
+				}
+			}
+
+			filtered.sort((a, b) => a.asset.localeCompare(b.asset));
+
+			if (targetAsset) {
+				filtered = filtered.filter((b) => b.asset === targetAsset);
+			} else if (targetSymbol) {
+				const { baseAsset, quoteAsset } = deriveSymbolAssets(targetSymbol);
+				filtered = filtered.filter((b) => b.asset === baseAsset || b.asset === quoteAsset);
+			}
+
+			return {
+				success: true,
+				environment: config.environment,
+				balances: filtered,
+				cached: fromCache,
+			};
+		},
+
+		async getSellableQuantity(symbol, requestedQuantity, options = {}) {
+			const config = getConfig();
+			if (!config.enabled) {
+				throw new BinanceOrderRequestError('Binance trading is disabled', 'FEATURE_DISABLED', 403);
+			}
+			if (!config.configured) {
+				throw new BinanceOrderRequestError(
+					'Binance trading is enabled but not configured',
+					'BINANCE_TRADING_UNAVAILABLE',
+					503,
+				);
+			}
+
+			const normalizedSymbol = String(symbol || '').trim().toUpperCase();
+			if (!config.allowedSymbols.includes(normalizedSymbol)) {
+				throw new BinanceOrderRequestError(
+					`symbol ${normalizedSymbol} is not allowed for Binance trading`,
+					'INVALID_ORDER_REQUEST',
+					400,
+				);
+			}
+
+			let balances = options.balances;
+			if (!balances) {
+				const balanceRes = await this.getBalances({ symbol: normalizedSymbol });
+				balances = balanceRes.balances;
+			}
+
+			let symbolInfo = options.symbolInfo;
+			let filters = options.filters;
+			if (!symbolInfo && !filters) {
+				try {
+					const client = createClient(config);
+					const exchangeInfo = await client.getExchangeInfo({ symbol: normalizedSymbol });
+					symbolInfo = getSymbolInfo(exchangeInfo, normalizedSymbol);
+					if (symbolInfo) {
+						filters = getFilters(symbolInfo, exchangeInfo);
+					}
+				} catch {
+					// Fallback to suffix matching / basic lot size if exchangeInfo call fails
+				}
+			}
+
+			let price = options.price;
+			if (!price) {
+				try {
+					const client = createClient(config);
+					const avg = await client.getAvgPrice({ symbol: normalizedSymbol });
+					if (avg?.price) price = String(avg.price);
+				} catch {
+					// Ignore price fetch error if not available
+				}
+			}
+
+			return sellableQuantity({
+				...options,
+				symbol: normalizedSymbol,
+				requestedQuantity,
+				balances,
+				symbolInfo,
+				filters,
+				price,
+			});
+		},
 	};
+
+	service.sellableQuantity = service.getSellableQuantity.bind(service);
+	return service;
 }
 
 const binanceOrderService = createBinanceOrderService();
@@ -1377,4 +1806,7 @@ module.exports = {
 	binanceOrderService,
 	getConfig,
 	deriveClientOrderId,
+	sellableQuantity,
+	deriveAllowedAssets,
+	deriveSymbolAssets,
 };

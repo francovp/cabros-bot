@@ -38,6 +38,7 @@ const EXPORT_FIELDS = [
 	'channels',
 	'deliveryResults',
 	'suppressedRepeat',
+	'suppressionReason',
 	'tokenUsage',
 	'enrichmentData',
 	'text',

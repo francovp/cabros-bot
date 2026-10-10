@@ -38,7 +38,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/routes/index.js` — Registers HTTP API routes (mounted under `/api`; endpoints are feature-gated at runtime).
 - `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — Price lookup resolver routing crypto to Binance and equities/stocks to Twelve Data (`EquityMarketDataService`); crypto replies optionally include bounded Binance 24h ticker context and retain the bare-price fallback.
 - `src/controllers/commands.js` — Telegram command handlers wired in `index.js` (`/precio`, `/cryptobot`, `/jobs`) plus per-chat throttling for expensive commands.
-- `src/controllers/trading/binanceOrders.js` — Operator-only `POST /api/trading/binance/orders`, `GET /api/trading/binance/orders`, and `DELETE /api/trading/binance/orders` controllers.
+- `src/controllers/trading/binanceOrders.js` — Operator-only `POST /api/trading/binance/orders`, `GET /api/trading/binance/orders`, `DELETE /api/trading/binance/orders`, and read-only `GET /api/trading/binance/account/balances` controllers. The balances controller returns only allow-listed asset/`free`/`locked` decimal strings (never float-converted, never the raw Binance account payload) behind the `admin.viewer`/API-key gate, and maps Binance failures to `502 BINANCE_BALANCE_QUERY_FAILED`.
 - `src/controllers/webhooks/handlers/alert/alert.js` — Webhook handler that forwards alert text to a Telegram chat.
 - `src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert.js` — `POST /api/webhook/expanded-analysis-alert` handler that builds TradingView MCP analysis reports and sends them through notification channels.
 - `src/controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation.js` — `POST /api/webhook/volume-confirmation` handler that returns structured TradingView MCP volume-confirmation data.
@@ -838,7 +838,13 @@ The secretless uptime monitor proves only that *something* answers `/healthcheck
 
 Every failure message ends with `(probed <base_url>)`. A 404 from a decommissioned host and a 404 from a broken service are indistinguishable in a log unless the message names what was probed, so a wrong target is obvious at a glance and never confused with a real outage.
 
-**Exit codes** (closed enum; `7` is new): `0` ok, `2` `AUTH_BLOCKED`/`SECRET_LEAK`, `3` `HEALTHCHECK_FAILED`, `4` `STATUS_UNREACHABLE`, `5` `COMMIT_MISMATCH`, `6` `DEGRADED_DEPENDENCY`, `7` `FLAG_DISABLED`.
+**Exit codes** (closed enum): `0` ok, `2` `AUTH_BLOCKED`/`SECRET_LEAK`, `3` `HEALTHCHECK_FAILED`, `4` `STATUS_UNREACHABLE`, `5` `COMMIT_MISMATCH`, `6` `DEGRADED_DEPENDENCY`, `7` `FLAG_DISABLED`, `8` `AUTH_REJECTED`.
+
+**The workflow must check out the repository before invoking the script (issue #971).** `ops/production-smoke-probe.sh` lives in this repository, so without a SHA-pinned `actions/checkout` (`persist-credentials: false`) every run died at exit `127` before a single HTTP request — the only automated production availability gate was a no-op that *looked* like a real failing gate. A preflight step now reports `script_missing` explicitly so a broken CI setup is never read as a production outage.
+
+**Exit `8` is `AUTH_REJECTED`, and it deliberately is not `7`.** A `401`/`403` from `/api/status` proves production is up and serving while CI's credential is wrong, so it must not share exit `4` with real reachability failures — an operator reading `down` would conclude alerts are undelivered while they are being delivered. Issue #1360 had already shipped `7` as `FLAG_DISABLED`, so this code takes the next free slot rather than renumbering a published enum. Do not "tidy" it back onto `7`.
+
+**The probe has no paging step, and that is a decision, not an omission.** Telegram paging belongs to the secretless external uptime monitor, which pages once on a DOWN transition and once on recovery. A second pager here would duplicate the DOWN page for a single outage and drop the recovery signal — the exact alert fatigue #1107 and #971 were filed about. The consequence is that a stale deploy or a rotated secret has **no** pager at all: only the failed scheduled job reports it. That is the accepted trade, and `tests/unit/production-smoke-probe.test.js` asserts the absence of the Telegram secrets, the cooldown latch and the paging helper so the next agent to find a "missing" pager reads why.
 
 **`PRODUCTION_REQUIRE_ENABLED_FLAGS` is what makes "enable X in production" verifiable.** It is a comma-separated list of `/api/status` `featureFlags` that must be exactly `true`, wired from `vars.PRODUCTION_REQUIRE_ENABLED_FLAGS`. It defaults to **empty**, so it introduces no failure mode until deliberately enabled — do not turn it on repository-wide without first establishing the current live values.
 
@@ -1929,6 +1935,23 @@ The in-app `/admin` Jobs view consumes the existing protected `GET /api/jobs` en
 Job-list, status, and cancel/retry responses use monotonic request versions and pass activity guards into `sendRequest`, so responses from obsolete filters or job IDs cannot overwrite current state, hold shared forms disabled, or render stale actions.
 
 This is a UI-only consumer change: job persistence, lifecycle semantics, OpenAPI, and Postman contracts remain unchanged.
+
+## Admin Job Builder Same-Key Retry Gate (Issue #1144)
+
+The `/admin` job builder only offers **Retry submission** — the control that re-sends the identical request with the **same idempotency key** — when the last attempt could still succeed. `canRetryWithSameIdempotencyKey(responseStatus)` in `src/admin/admin.js` is the single decision point:
+
+- **No observed HTTP status** → same-key retry stays. The request never reached the server (network error, client deadline, or a blocked pre-flight such as a failed role check or an unbuilt request), so the key was never spent server-side.
+- **4xx that is not retryable** → the control is hidden and the server's message stays visible. The idempotency middleware caches every response below 500 (`src/lib/idempotency.js`), so replaying the key only returns the cached rejection, and correcting the payload first turns the retry into a `409 IDEMPOTENCY_CONFLICT`. Recovery is a fresh submission, which mints a new key.
+- **408 / 425 / 429 / 5xx** → same-key retry stays, mirroring `RETRYABLE_HTTP_STATUSES` in `src/lib/errorEnvelope.js`. A `503 JOB_QUEUE_ACCEPTANCE_UNKNOWN` keeps both the existing job-status auto-handoff and the retry.
+
+The click handler re-checks the same flag (`sameKeyRetryAllowed`) instead of relying on the button's `hidden` state alone, so the invariant holds for keyboard activation and for any future programmatic activation. `retryButton.hidden` is reset to `true` at the start of every submission.
+
+**Core components**:
+- `src/admin/admin.js` and the generated `public/admin/admin.js` — retryable-status set, classifier, and the retry click guard.
+- `tests/unit/admin-client.test.js` — definitive 400/401/409 hide the control and never re-send the key, a fresh submission mints a new key, and 429 keeps it.
+- `tests/integration/openapi-docs.test.js` — the hosting asset parity guard now covers every console asset served from `src/admin` (`admin.js`, `admin.css`, `admin-request.js`, `admin-components.js`, `index.html`), so a source-only edit can no longer be reverted by the next deploy.
+
+No new environment variable, endpoint, OpenAPI, Postman, or Remote Config change; no API contract change. The 4 pre-existing lint errors in `tests/integration/openapi-docs.test.js` (lines 8, 14, 63, 66) are unrelated to this change.
 
 ## Admin Console Fetch Deadlines (CB-164 / Issue #402)
 

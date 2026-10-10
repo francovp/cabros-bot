@@ -28,6 +28,7 @@ const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { resolveDryRun } = require('../../../../lib/dryRunRequest');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
+const { crossTimeframeCooldown } = require('../../../../services/alerts/crossTimeframeCooldown');
 const { burstAggregator, buildBurstGroupKey } = require('../../../../services/alerts/burstAggregator');
 const { alertModeration } = require('../../../../services/alerts/alertModeration');
 const { classifySignal } = require('../../../../services/alerts/signalClassifier');
@@ -248,6 +249,31 @@ function getChannelName(identity) {
 	return String(identity).split(':', 1)[0];
 }
 
+/**
+ * Restricts a routing decision to `allowedChannelNames`, intersecting any
+ * `symbolRoutes` entry with the same set. A route's own channel list must not
+ * resurrect a channel that a cooldown gate is still holding.
+ */
+function narrowDeliveryRouting(baseRouting, allowedChannelNames) {
+	return {
+		...baseRouting,
+		channels: allowedChannelNames,
+		symbolRoutes: baseRouting.symbolRoutes
+			? Object.fromEntries(
+				Object.entries(baseRouting.symbolRoutes).map(([symbol, route]) => [
+					symbol,
+					{
+						...route,
+						channels: (route.channels || []).filter((channel) =>
+							allowedChannelNames.includes(channel),
+						),
+					},
+				]),
+			)
+			: undefined,
+	};
+}
+
 function resolveSignalOutcomePriceSource(enriched, parsed) {
 	const explicitSource = typeof enriched?.priceSource === 'string'
 		? enriched.priceSource.trim().toLowerCase()
@@ -402,25 +428,31 @@ function postAlert(botOrGetter) {
 			// reservation is made before delivery so overlapping requests cannot
 			// both send; failed channels remain retryable.
 			let suppressedRepeat = false;
+			let suppressionReason = null;
 			let reservation = null;
+			let crossReservation = null;
 			let deliveryRouting = routing;
 			let repeatCooldownOptions;
+			const crossTimeframeSuppressionEnabled = crossTimeframeCooldown.isEnabled();
+			const anyRepeatSuppressionEnabled = signalRepeatCooldown.isEnabled() || crossTimeframeSuppressionEnabled;
+			// Both cooldown gates key per (channel, destination), so a reservation for
+			// one chat/thread/webhook never suppresses a signal routed elsewhere.
+			const cooldownChannelNames = anyRepeatSuppressionEnabled
+				? (requestedChannels.length > 0 ? requestedChannels : ['telegram', 'whatsapp', 'discord'])
+				: [];
+			const cooldownChannels = cooldownChannelNames.map((channel) => getCooldownChannelIdentity(channel, routing));
+			// Unsupported timeframes normalize to the default timeframe, so
+			// they must never enter either cooldown store: a raw token like
+			// "3M" collapses to "1h" and stays unsuppressed, while "4H"
+			// legitimately maps to the 4h bar via the TIMEFRAME_MAP.
+			const hasUsableTimeframe = Boolean(
+				parsedSignal
+			&& parsedSignal.rawTimeframe
+			&& Object.prototype.hasOwnProperty.call(TIMEFRAME_MAP, parsedSignal.rawTimeframe)
+			&& TIMEFRAME_MAP[parsedSignal.rawTimeframe] === parsedSignal.timeframe,
+			);
 			if (signalRepeatCooldown.isEnabled()) {
-				// Unsupported timeframes normalize to the default timeframe, so
-				// they must never enter the cooldown store: a raw token like
-				// "3M" collapses to "1h" and stays unsuppressed, while "4H"
-				// legitimately maps to the 4h bar via the TIMEFRAME_MAP.
-				const hasUsableTimeframe = Boolean(
-					parsedSignal
-					&& parsedSignal.rawTimeframe
-					&& Object.prototype.hasOwnProperty.call(TIMEFRAME_MAP, parsedSignal.rawTimeframe)
-					&& TIMEFRAME_MAP[parsedSignal.rawTimeframe] === parsedSignal.timeframe,
-				);
-				const cooldownChannelNames = requestedChannels.length > 0
-					? requestedChannels
-					: ['telegram', 'whatsapp', 'discord'];
 				if (parsedSignal && hasUsableTimeframe) {
-					const cooldownChannels = cooldownChannelNames.map((channel) => getCooldownChannelIdentity(channel, routing));
 					await notificationRedriveService.reconcileRepeatCooldown(buildSignalKey(parsedSignal), cooldownChannels);
 					const verdict = signalRepeatCooldown.reserve(
 						{ ...parsedSignal, timeframe: parsedSignal.timeframe },
@@ -449,29 +481,35 @@ function postAlert(botOrGetter) {
 							})),
 						};
 						if (verdict.channels.length < requestedChannels.length) {
-							const narrowedChannelNames = verdict.channels.map(getChannelName);
-							deliveryRouting = {
-								...routing,
-								channels: narrowedChannelNames,
-								// Repeat suppression is per (channel, destination). When it narrows
-								// the request-level channels, every symbol route must be narrowed to the
-								// same subset; otherwise a route's own channel list resurrects a channel
-								// that is still cooling down and defeats the channel-specific guarantee.
-								symbolRoutes: routing.symbolRoutes
-									? Object.fromEntries(
-										Object.entries(routing.symbolRoutes).map(([symbol, route]) => [
-											symbol,
-											{
-												...route,
-												channels: (route.channels || []).filter((channel) =>
-													narrowedChannelNames.includes(channel),
-												),
-											},
-										]),
-									)
-									: undefined,
-							};
+							deliveryRouting = narrowDeliveryRouting(routing, verdict.channels.map(getChannelName));
 						}
+					}
+				}
+			}
+
+			// Issue #1103: same symbol + same direction on two timeframes seconds apart
+			// (BINANCE:BTCUSDT(D) VENTA then BINANCE:BTCUSDT(240) VENTA) is one trading
+			// idea; CB-230 cannot catch it because its key includes timeframe. Runs after
+			// the CB-230 gate so an already-suppressed request is not double-booked.
+			if (crossTimeframeSuppressionEnabled && !suppressedRepeat && parsedSignal && hasUsableTimeframe) {
+				const crossVerdict = crossTimeframeCooldown.reserve(parsedSignal, cooldownChannels);
+				if (crossVerdict.suppressed) {
+					suppressedRepeat = true;
+					suppressionReason = crossVerdict.reason;
+					crossTimeframeCooldown.recordSuppression();
+					console.log(
+						`[Alert] Cross-timeframe duplicate suppressed for ${crossVerdict.key} `
+					+ `(${crossVerdict.suppressedTimeframe} collapsed against ${crossVerdict.conflictingTimeframe} inside the window, `
+					+ `${Math.round(crossVerdict.elapsedMs / 1000)}s elapsed)`,
+					);
+				} else if (crossVerdict.key) {
+					crossReservation = crossVerdict;
+					const availableChannelNames = [...new Set(crossVerdict.channels.map(getChannelName))];
+					const effectiveChannelNames = deliveryRouting.channels && deliveryRouting.channels.length > 0
+						? deliveryRouting.channels
+						: requestedChannels;
+					if (availableChannelNames.length < effectiveChannelNames.length) {
+						deliveryRouting = narrowDeliveryRouting(deliveryRouting, availableChannelNames);
 					}
 				}
 			}
@@ -543,9 +581,28 @@ function postAlert(botOrGetter) {
 				if (reservation) {
 					signalRepeatCooldown.finalize(reservation.key, reservation.channels, [], [], reservation.generation);
 				}
+				if (crossReservation) {
+					crossTimeframeCooldown.release(crossReservation.key, crossReservation.reservedAt);
+				}
 				throw error;
 			}
 			const deliveredChannels = suppressedRepeat ? [] : getDeliveredChannels(results);
+			const zeroChannelRedriveExpected = requestedChannels.length === 0
+			&& !notificationManager.isIntentionalApiOnly();
+			const keepFailedForRedrive = notificationRedriveService.isEnabled()
+			&& notificationRedriveService.getWorkerRole() !== 'disabled'
+			&& (notificationRedriveService.getWorkerRole() === 'web' || notificationRedriveService.hasDurableStore())
+			&& (results.some((result) => result && !result.success) || zeroChannelRedriveExpected);
+			// A reservation that notified nobody must not swallow the next real signal
+			// on another timeframe, unless the redrive queue owns the retry.
+			if (crossReservation && !keepFailedForRedrive) {
+				const undeliveredChannels = crossReservation.channels.filter((channel) => (
+					!deliveredChannels.includes(getChannelName(channel))
+				));
+				if (undeliveredChannels.length > 0) {
+					crossTimeframeCooldown.release(crossReservation.key, crossReservation.reservedAt, undeliveredChannels);
+				}
+			}
 			if (reservation) {
 				const failedChannelNames = new Set(
 					results.filter((result) => result && !result.success).map((result) => result.channel),
@@ -569,15 +626,9 @@ function postAlert(botOrGetter) {
 							}
 						}));
 				}
-				const zeroChannelRedriveExpected = requestedChannels.length === 0
-					&& !notificationManager.isIntentionalApiOnly();
 				const deliveredReservationChannels = reservation.channels.filter((channel) => (
 					deliveredChannels.includes(getChannelName(channel))
 				));
-				const keepFailedForRedrive = notificationRedriveService.isEnabled()
-					&& notificationRedriveService.getWorkerRole() !== 'disabled'
-					&& (notificationRedriveService.getWorkerRole() === 'web' || notificationRedriveService.hasDurableStore())
-					&& (results.some((result) => result && !result.success) || zeroChannelRedriveExpected);
 				const redriveReservationChannels = reservation.channels.filter((channel) => (
 					!supersededReservationChannels.has(channel)
 				));
@@ -634,6 +685,7 @@ function postAlert(botOrGetter) {
 				...truncation,
 				enriched,
 				suppressedRepeat: suppressedRepeat || undefined,
+				suppressionReason: suppressionReason || undefined,
 				aggregated: aggregated || undefined,
 				burstAggregateId,
 				burstSignalCount,
@@ -674,6 +726,7 @@ function postAlert(botOrGetter) {
 				tradingViewEnrichmentApplied: Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true),
 				tradingViewEnrichmentStatus: alert.tradingViewEnrichmentStatus,
 				suppressedRepeat,
+				suppressionReason,
 				signalClass: alert.signalClass,
 				source: body.source || 'webhook-alert',
 				telegramChatId: routing.telegramChatId,

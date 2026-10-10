@@ -38,6 +38,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	URL_SHORTENER_CACHE_MAX_ENTRIES: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 100000 },
 	URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES: { type: 'number', defaultValue: 32, integer: true, min: 1, max: 1024 },
 	BINANCE_FETCH_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
+	BINANCE_BALANCE_CACHE_MS: { type: 'number', defaultValue: 3000, integer: true, min: 1000, max: 60000 },
 	TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: {
 		type: 'string',
 		defaultValue: '1h',
@@ -91,6 +92,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_SIGNAL_CLASS_MARKER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	ENABLE_ALERT_CROSS_TF_SUPPRESSION: { type: 'boolean', defaultValue: false },
+	ALERT_CROSS_TF_WINDOW_MS: { type: 'number', defaultValue: 60000, integer: true, min: 0, max: 600000 },
 	ENABLE_ALERT_SYNTH_BURST_AGGREGATION: { type: 'boolean', defaultValue: false },
 	ALERT_BURST_WINDOW_MS: { type: 'number', defaultValue: 3000, integer: true, min: 1000, max: 15000 },
 	ALERT_BURST_MIN_SIGNALS: { type: 'number', defaultValue: 3, integer: true, min: 2, max: 20 },

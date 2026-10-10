@@ -82,7 +82,7 @@ describe('public OpenAPI documentation', () => {
 		// Compares the source asset with its generated copy in memory. It must
 		// NOT call buildHosting(): the copier writes into the worktree, and the
 		// clean-worktree invariant forbids a test from mutating tracked files.
-		const ASSETS = ['admin.js', 'admin.css'];
+		const ASSETS = ['admin.js', 'admin.css', 'admin-request.js', 'admin-components.js', 'index.html'];
 
 		it.each(ASSETS)('public/admin/%s matches its src/admin source byte for byte', (file) => {
 			const source = fs.readFileSync(path.join(__dirname, '../../src/admin', file));
