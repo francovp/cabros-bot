@@ -1,3 +1,6 @@
+const fs = require('fs');
+const path = require('path');
+
 const admin = require('firebase-admin');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const { isFirestoreConfigured } = require('../../src/services/storage/firestoreConfig');
@@ -59,6 +62,44 @@ describe('RemoteConfigService', () => {
 		expect(remoteConfigService.getRuntimeConfig().NEWS_ALERT_THRESHOLD).toBe(0.7);
 		expect(remoteConfigService.getRuntimeConfig().TRADINGVIEW_MCP_TIMEOUT_MS).toBe(12000);
 		expect(admin.remoteConfig).not.toHaveBeenCalled();
+	});
+
+	it('resolves the generic message limit to the bounded environment value or safe default', () => {
+		expect(remoteConfigService.getRuntimeConfig().GENERIC_MESSAGE_MAX_LENGTH).toBe(4000);
+
+		process.env.GENERIC_MESSAGE_MAX_LENGTH = '1';
+		expect(remoteConfigService.getRuntimeConfig().GENERIC_MESSAGE_MAX_LENGTH).toBe(1);
+
+		process.env.GENERIC_MESSAGE_MAX_LENGTH = '20000';
+		expect(remoteConfigService.getRuntimeConfig().GENERIC_MESSAGE_MAX_LENGTH).toBe(20000);
+
+		['not-a-number', '0', '20001', '1.5', '-1'].forEach((value) => {
+			process.env.GENERIC_MESSAGE_MAX_LENGTH = value;
+			expect(remoteConfigService.getRuntimeConfig().GENERIC_MESSAGE_MAX_LENGTH).toBe(4000);
+		});
+	});
+
+	it('uses a fresh Remote Config generic message limit over the environment fallback', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.GENERIC_MESSAGE_MAX_LENGTH = '5000';
+		mockTemplate({ GENERIC_MESSAGE_MAX_LENGTH: 7500 });
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.getRuntimeConfig().GENERIC_MESSAGE_MAX_LENGTH).toBe(7500);
+	});
+
+	it('ignores an invalid Remote Config generic message limit and preserves the environment value', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.GENERIC_MESSAGE_MAX_LENGTH = '5000';
+		mockTemplate({ GENERIC_MESSAGE_MAX_LENGTH: 20001 });
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.getRuntimeConfig().GENERIC_MESSAGE_MAX_LENGTH).toBe(5000);
+		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
 	});
 
 	it('falls back to bounded defaults for invalid TradingView MCP environment values', () => {
@@ -155,6 +196,37 @@ describe('RemoteConfigService', () => {
 
 		expect(remoteConfigService.getRuntimeConfig().SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES).toBe('binance');
 		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
+	});
+
+	/**
+	 * `firebase-remote-config-template.json` publishes
+	 * `SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES` with an intentional empty default,
+	 * which is exactly that parameter's schema default. A blank remote value
+	 * carries no tuning, so it must not be reported as a misconfiguration: once
+	 * the production template is published this would otherwise pin
+	 * `lastErrorCategory: "invalid_value"` on every load and make a genuinely
+	 * malformed value indistinguishable from the shipped default.
+	 */
+	it('treats a blank remote value as no override instead of an invalid value', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = '';
+		const template = JSON.parse(fs.readFileSync(
+			path.join(__dirname, '../../firebase-remote-config-template.json'),
+			'utf8',
+		));
+		mockTemplate({
+			SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES: '',
+			NEWS_ALERT_THRESHOLD: 0.75,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		expect(template.parameters.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES.defaultValue.value).toBe('');
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.getStatus().lastErrorCategory).toBeNull();
+		expect(remoteConfigService.getStatus().ready).toBe(true);
+		expect(remoteConfigService.getStatus().source).toBe('remote');
+		expect(remoteConfigService.getRuntimeConfig().NEWS_ALERT_THRESHOLD).toBe(0.75);
 	});
 
 	it('applies validated allow-listed values and records safe template metadata', async () => {
@@ -687,6 +759,35 @@ describe('RemoteConfigService', () => {
 				defaultValue: { value: '30000' },
 				valueType: 'NUMBER',
 			}));
+		});
+
+		// A published template outranks render.yaml for every allow-listed key, so a
+		// blueprint value that disagrees with the template is a flag that reports one
+		// thing while doing another (issue #1179). Storage gates that decide where a
+		// collection lives are excluded from the template entirely instead.
+		it('never lets render.yaml and the published template disagree on an allow-listed key', () => {
+			const fs = require('fs');
+			const path = require('path');
+			const root = path.join(__dirname, '../..');
+			const template = JSON.parse(fs.readFileSync(path.join(root, 'firebase-remote-config-template.json'), 'utf8'));
+			const blueprint = fs.readFileSync(path.join(root, 'render.yaml'), 'utf8');
+
+			const blueprintValues = new Map(
+				[...blueprint.matchAll(/- key: ([A-Z0-9_]+)\n\s+value: (\S+)/g)].map((match) => [match[1], match[2]]),
+			);
+
+			for (const [key, parameter] of Object.entries(template.parameters)) {
+				const blueprintValue = blueprintValues.get(key);
+				if (blueprintValue === undefined) {
+					continue;
+				}
+				expect({ [key]: parameter.defaultValue.value }).toEqual({ [key]: blueprintValue });
+			}
+		});
+
+		it('keeps symbol-analysis storage out of Remote Config so the blueprint is authoritative', () => {
+			expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('ENABLE_SYMBOL_ANALYSIS_STORAGE');
+			expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('SYMBOL_ANALYSIS_RETENTION_DAYS');
 		});
 
 		it('notifies registered change listeners when remote overrides change', () => {

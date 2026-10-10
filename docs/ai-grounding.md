@@ -54,7 +54,9 @@ To confirm the cap is live in the deployment you are querying, read `enrichment.
 
 ### How Langfuse Prompt Management Works
 
-When `ENABLE_LANGFUSE_PROMPTS=true`, runtime prompts are fetched from Langfuse through the centralized prompt service in `src/services/prompts/`.
+When `ENABLE_LANGFUSE_PROMPTS=true`, runtime prompts are fetched from Langfuse through the centralized prompt service in `src/services/prompts/`. The flag is enabled in production on the web service and the jobs worker (`render.yaml`), with previews off.
+
+Because resolution fails open, the flag is not evidence that prompts resolve. `dependencies.langfuse` on `/api/status` reports a **proven** verdict — `unverified` until the first successful resolution, then `ready`, or `degraded` with a closed-enum `lastErrorReason` — plus `localFallbackCount`, `byPrompt`, and `localFallbackByPrompt` so a partial rollout is visible. A bounded startup probe resolves every registered prompt once so an idle deployment is not stuck at `unverified`. See [Environment Configuration](environment-configuration.md#verifying-langfuse-prompts-are-actually-resolving).
 
 The local fallback prompts now live as editable text templates under `src/services/prompts/defaults/`, which makes them much easier to review, diff, and version independently from the prompt registry code.
 
@@ -73,7 +75,55 @@ Behavior notes:
 - **Label-based rollout**: use `LANGFUSE_PROMPT_LABEL` (for example `latest`, `staging`, or `production`) to switch prompt versions without code changes.
 - **SDK caching**: prompt fetches use the Langfuse SDK cache and can be tuned with `LANGFUSE_PROMPT_CACHE_TTL_SECONDS`.
 - **Current architecture contract**: prompts are compiled into the existing `systemPrompt` / `userPrompt` flow, so provider routing for Gemini, Azure, and OpenRouter remains unchanged.
-- **Alert enrichment schema**: Langfuse `alert-enrichment` versions should mirror the local fallback's optional `invalidation_level`, `target_level`, `setup_type`, and `risk_reward_ratio` fields. The prompt service inspects resolved remote prompts against `REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS`, records `schemaDriftDetected: true` and missing risk fields if any are omitted, and warns once per version without failing open delivery.
-- **Alert enrichment calibration**: the same inspection also checks the sentiment anchor markers (`sentiment_score_evidence`, `0.90`, `0.60`, `0.30`), reported separately as `missingCalibrationGuidance`. See [Sentiment score calibration](#sentiment-score-calibration).
+- **Alert enrichment schema**: Langfuse `alert-enrichment` versions should mirror the local fallback's optional `invalidation_level`, `target_level`, `setup_type`, `setup_evidence`, and `risk_reward_ratio` fields. The prompt service inspects resolved remote prompts against `REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS`, records `schemaDriftDetected: true` and missing risk fields if any are omitted, and warns once per version without failing open delivery.
 
+#### Prompt-resolution telemetry (is Langfuse actually serving prompts?)
+
+"Langfuse is configured and reachable" and "prompts are actually being served from Langfuse" are **two different facts**, and `/api/status` now reports them separately. Configuration readiness alone is not enough: if every prompt fetch silently falls back to the local files, readiness stays green, `/api/status` looks healthy, and a prompt improvement published to Langfuse would appear to succeed while changing nothing in production.
+
+| Field | Meaning |
+|---|---|
+| `dependencies.langfuse` | Configuration/reachability only — `ENABLE_LANGFUSE_PROMPTS` plus the presence of both keys. Unchanged by design. |
+| `dependencies.langfusePrompts.servingStatus` | Actual serving state. See the table below. |
+| `dependencies.langfusePrompts.servingPrompts` | `true` only when at least one prompt has actually been served from Langfuse in this process. |
+| `dependencies.langfusePrompts.localResolutionRatePercent` | Share of resolutions served from the local fallback. `100` means Langfuse served nothing. |
+| `dependencies.langfusePrompts.remoteFetchSuccessRatePercent` | Remote fetch success rate, or `null` when no attempt has been recorded. |
+| `dependencies.langfusePrompts.lastSuccessfulFetchAt` | `null` is the direct signal that Langfuse has never served a prompt. |
+| `dependencies.langfusePrompts.lastErrorCategory` | Sanitized failure category from a closed enum — never raw provider error text. |
+| `dependencies.langfusePrompts.prompts[]` | Per-prompt resolved source and the last Langfuse version actually served. |
+
+`servingStatus` values:
+
+| Value | Meaning |
+|---|---|
+| `disabled` | `ENABLE_LANGFUSE_PROMPTS` is not `true`; local fallbacks are expected. |
+| `unconfigured` | Enabled, but `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY` are missing. |
+| `no_traffic` | Configured and reachable, but no prompt has been resolved yet — serving is genuinely **unknown**, not healthy. |
+| `serving` | Every resolution came from Langfuse. |
+| `degraded` | At least one resolution came from Langfuse and at least one fell back. |
+| `local_fallback` | Remote is enabled and reachable but **every fetch has failed**, so no prompt has ever been served from Langfuse. |
+| `unknown` | Fail-open value used when telemetry itself is unavailable. |
+
+The payload contains counts, tiers, timestamps, and error categories only — remote prompt content, prompt variables, and credential material are never returned. Counters reset on process restart, and Langfuse unavailability still fails open to `src/services/prompts/defaults/` without ever blocking alert delivery.
+
+#### Rollout check for prompt changes
+
+Before trusting any prompt-driven change:
+
+1. Deploy to preview and confirm `dependencies.langfusePrompts.servingStatus` reaches `serving` and `servingPrompts` is `true`. A `local_fallback` or `no_traffic` status means Langfuse is not actually serving anything yet.
+2. Confirm the `production` label exists in Langfuse and that `LANGFUSE_PROMPT_LABEL` resolves to it. A missing label makes the SDK fall back to its default version or fail, which surfaces as `prompt_not_found`.
+3. Align the remote `alert-enrichment` prompt with the local optional-risk schema (`invalidation_level`, `target_level`, `setup_type`, `setup_evidence`, `risk_reward_ratio`, plus the evidence-calibration guidance and setup type rubric markers). Otherwise `schemaDriftDetected` is `true` and `riskMetadataCoverage` in `GET /api/alerts/summary` will understate the schema the remote prompt can actually produce.
+4. Only then promote the label and re-check `servingStatus` and `prompts[].lastLangfuseVersion` to confirm the new version is the one being served.
+- **Alert enrichment calibration**: the same inspection also checks the sentiment anchor markers (`sentiment_score_evidence`, `0.90`, `0.60`, `0.30`) and market-structure setup type rubric markers (`'Setup type rubric'`, `'OMIT \`setup_type\` and \`setup_evidence\` entirely'`), reported separately as `missingCalibrationGuidance`. See [Sentiment score calibration](#sentiment-score-calibration).
 > **Adding or changing a prompt?** Use the `langfuse-prompt-sync` skill to publish the new version/label. The local fallback under `src/services/prompts/defaults/` and the remote Langfuse prompt must carry the same anchors, or `schemaDriftDetected` stays `true` for the remote copy.
+
+### Persisted Gemini-Grounding Entry Price (GH-599)
+The alert-enrichment prompt can now extract an optional `current_price` (with optional `price_currency`) from grounded snippets. Values are validated to be finite positive numbers; any malformed entry is silently dropped (fail-open). When the field is present it propagates through `alert.enriched` and the stored alert document, and is mirrored as top-level `currentPrice` / `priceCurrency` on `GET /api/alerts` and the JSONL/CSV export records.
+Outcomes-tracking benefits from this in two ways:
+- `signalOutcomeService.recordSignal()` now treats a Gemini-grounding-sourced `current_price` as a valid entry-price fallback when TradingView MCP is absent — `priceSource` is set to `'gemini-grounding'` and `entryPriceSourceBreakdown` gains that bucket in `GET /api/outcomes/summary`, so BINANCE alerts stop landing in `missing_entry_price` whenever grounding returns a price.
+- `AlertStorageService` deterministically derives `risk_reward_ratio` from `current_price`, `invalidation_level`, `target_level`, and the parsed signal `side` whenever the model omitted the ratio. The directional computation matches the trade side (`BUY` ⇒ `(target - entry) / (entry - invalidation)`, `SELL` ⇒ `(entry - target) / (invalidation - entry)`); positive numeric and non-empty string model ratios are preserved, and the new field `risk_reward_ratio_source: "computed"` only appears when we filled it in.
+Both changes are purely additive. Existing alert-delivery behavior, MarkdownV2 formatting, and fail-open semantics remain unchanged; when grounding omits `current_price` nothing new is written and all existing fields stay untouched.
+
+### Optional price fields and schema drift (GH-599)
+`current_price` and `price_currency` are deliberately **excluded** from `REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS`. That set is what produces `schemaDriftDetected`, so including the price fields would flag every production Langfuse prompt still on the pre-GH-599 schema — the drift guard would punish correct behavior and make the flag useless as a rollout signal. The risk fields remain the drift contract; price fields are validated for shape only when present.
+Note the asymmetry this creates, stated plainly in the API contract as well: `current_price` is the model's *reading* of grounded context, not a snippet-level price extraction, so it carries no field-level citation. Field-level citation alignment would require provider-level support and is out of scope for GH-599.

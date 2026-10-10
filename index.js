@@ -41,16 +41,19 @@ const { registerAlertActionHandlers } = require('./src/lib/telegramAlertActions'
 const { registerAuthMiddleware: registerTelegramCommandAuth } = require('./src/lib/telegramCommandAuth');
 const { jobService } = require('./src/services/jobs/JobService');
 const { jobBacklogService } = require('./src/services/jobs/JobBacklogService');
+const { jobQueue } = require('./src/services/jobs/JobQueue');
 const SignalOutcomeService = require('./src/services/storage/SignalOutcomeService');
 const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
 const { whatsAppCommandBridgeService } = require('./src/services/notification/WhatsAppCommandBridgeService');
 const { scannerPresetSchedulerService } = require('./src/services/scannerPresets');
 const { userPriceAlertService } = require('./src/services/alerts/UserPriceAlertService');
+const { burstAggregator } = require('./src/services/alerts/burstAggregator');
 const { newsMonitorSchedulerService } = require('./src/services/newsMonitorScheduler');
 const { alertSchedulerService } = require('./src/services/scheduler');
 const { adminSseService } = require('./src/services/sse/AdminSseService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
+const { probeManagedPromptReadiness } = require('./src/services/prompts');
 const { configureServerTimeouts } = require('./src/lib/serverTimeouts');
 const Sentry = require('@sentry/node');
 
@@ -105,6 +108,7 @@ const lifecycle = createProcessLifecycle({
 	closeAllSseConnections: () => adminSseService.closeAll(),
 	stopTelegramHealthProbe: () => stopTelegramHealthProbe(),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
+	flushAlertBurstWindows: () => burstAggregator.flushAll('shutdown'),
 	flushSentry: (timeout) => sentryService.flush(timeout),
 	timeoutMs: process.env.SHUTDOWN_TIMEOUT_MS,
 });
@@ -116,6 +120,12 @@ async function bootstrapApplication() {
 
 	void remoteConfigService.start();
 
+	// Proven, bounded and detached: `dependencies.langfuse.ready` on /api/status
+	// needs one observed resolution to flip to true, and without this an idle
+	// deployment could not tell working prompts from a valid-credential /
+	// unpublished-label pair that falls back to the local file forever (#1178).
+	void probeManagedPromptReadiness();
+
 	// Start background signal outcome evaluation worker if enabled
 	SignalOutcomeService.startWorker();
 	// Start background notification redrive worker if enabled
@@ -125,6 +135,20 @@ async function bootstrapApplication() {
 	scannerPresetSchedulerService.startWorker();
 	// Start background job backlog monitor if enabled
 	jobBacklogService.startMonitor();
+	// Prove broker connectivity at boot so /api/capabilities reports a real queue
+	// verdict on an idle deployment. Without this, readiness only ever became true
+	// as a side effect of the first enqueue, so a correct render-worker cut-over
+	// read as "not_started" and an operator could not tell it apart from a broker
+	// that was configured but unreachable.
+	void jobQueue.probeBrokerReadiness().then((result) => {
+		if (result.skipped) {
+			return;
+		}
+		console.log(
+			`Job queue broker ${result.reachable ? 'reachable' : 'UNREACHABLE'}` +
+			(result.reachable ? '' : ` (lastErrorCode=${result.errorCode})`),
+		);
+	});
 	// Start background user price alert worker if enabled
 	userPriceAlertService.setBotGetter(() => bot);
 	userPriceAlertService.startWorker({ source: 'web' });

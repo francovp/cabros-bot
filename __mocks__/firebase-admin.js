@@ -281,6 +281,7 @@ const mockBatch = jest.fn(() => {
 const mockCollection = jest.fn((collectionName) => createQueryApi(collectionName));
 const mockInitializeApp = jest.fn();
 const mockCert = jest.fn((sa) => ({ type: 'service_account_credential', sa }));
+const mockApplicationDefault = jest.fn(() => ({ type: 'application_default_credential' }));
 const mockDeleteFieldValue = jest.fn(() => ({ __deleteField: true }));
 
 let apps = [];
@@ -296,7 +297,7 @@ const mock = {
 	set apps(val) { apps = val; },
 	initializeApp: mockInitializeApp,
 	firestore,
-	credential: { cert: mockCert },
+	credential: { cert: mockCert, applicationDefault: mockApplicationDefault },
 	// Test helpers to manipulate shared state
 	__mockAdd: mockAdd,
 	__mockCollection: mockCollection,
@@ -320,6 +321,7 @@ const mock = {
 	__mockDocumentId: mockDocumentId,
 	__mockInitializeApp: mockInitializeApp,
 	__mockCert: mockCert,
+	__mockApplicationDefault: mockApplicationDefault,
 	__resetApps() { apps = []; },
 	__setApps(val) { apps = val; },
 	__resetCollectionState: resetCollectionState,
