@@ -9,6 +9,7 @@ const { parseTelegramTopicRoutes, resolveTelegramThreadId } = require('../../ser
 const { VALID_SIGNAL_CLASSES } = require('../../lib/validation');
 const { sendError } = require('../../lib/errorEnvelope');
 const { isFirestoreErrorCategory } = require('../../services/storage/firestoreErrorCategories');
+const { isRecognisedDryRunValue, resolveDryRun } = require('../../lib/dryRunRequest');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -786,11 +787,20 @@ function getIdempotencyKey(req) {
 		|| (req.query && (req.query.idempotencyKey || req.query.idempotency_key));
 }
 
-function resolveDryRun(req) {
-	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
-	const bodyFlag = req.body && typeof req.body === 'object'
-		&& (req.body.dryRun === true || req.body.dryRun === 'true');
-	return Boolean(queryFlag || bodyFlag);
+function validateDryRun(req) {
+	if (req.body && typeof req.body === 'object' && req.body.dryRun !== undefined && !isRecognisedDryRunValue(req.body.dryRun)) {
+		return {
+			error: '"dryRun" body must be a boolean if provided',
+			code: 'INVALID_REQUEST',
+		};
+	}
+	if (req.query && req.query.dryRun !== undefined && !isRecognisedDryRunValue(req.query.dryRun)) {
+		return {
+			error: '"dryRun" query must be a boolean if provided',
+			code: 'INVALID_REQUEST',
+		};
+	}
+	return null;
 }
 
 function buildStoredChannelRouting(storedAlert, storedTelegramThreadId) {
@@ -885,6 +895,11 @@ function replayAlert(botOrGetter) {
 					error: `Unknown channel(s): ${unknownChannels.join(', ')}. Valid channels: ${VALID_CHANNELS.join(', ')}.`,
 					code: 'INVALID_REQUEST',
 				});
+			}
+
+			const dryRunError = validateDryRun(req);
+			if (dryRunError) {
+				return res.status(400).json(dryRunError);
 			}
 
 			const dryRun = resolveDryRun(req);
@@ -1013,6 +1028,11 @@ function batchReplayAlerts(botOrGetter) {
 					error: 'Replay requests require an idempotency-key or x-idempotency-key header or idempotencyKey body field.',
 					code: 'INVALID_REQUEST',
 				});
+			}
+
+			const dryRunError = validateDryRun(req);
+			if (dryRunError) {
+				return res.status(400).json(dryRunError);
 			}
 
 			const dryRun = resolveDryRun(req);

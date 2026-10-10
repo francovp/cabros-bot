@@ -8975,6 +8975,13 @@
               "body": "{\n  \"error\": \"alertIds must be a non-empty array of up to 50 alert IDs.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             },
             {
+              "name": "400 Bad Request - Invalid dryRun value",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"\\\"dryRun\\\" body must be a boolean if provided\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
               "name": "Request Timeout (408)",
               "status": "Request Timeout",
               "code": 408,
@@ -9489,6 +9496,49 @@
               "status": "Not Found",
               "code": 404,
               "body": "{\n  \"error\": \"Alert not found\",\n  \"code\": \"NOT_FOUND\"\n}"
+            },
+            {
+              "name": "400 Bad Request - Invalid dryRun value",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "idempotency-key",
+                    "value": "{{replayIdempotencyKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"channels\": [\"telegram\"],\n  \"dryRun\": \"invalid\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts",
+                    "{{alertId}}",
+                    "replay"
+                  ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"error\": \"\\\"dryRun\\\" body must be a boolean if provided\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },
