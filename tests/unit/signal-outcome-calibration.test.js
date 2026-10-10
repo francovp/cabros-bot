@@ -176,6 +176,63 @@ describe('Signal Outcome Confidence Calibration', () => {
 			expect(b.targetHitRate).toBe(1);
 		});
 
+		it('excludes market-scanner technical scores and legacy unproven confidence from calibration', () => {
+			const docs = Array.from({ length: 20 }, (_, i) => ({
+				id: `market-scanner-${i}`,
+				source: 'market-scanner',
+				score: 0.85,
+				confidenceScore: i < 10 ? null : 0.85,
+				outcomeEvaluated: true,
+				outcomes: {
+					'4h': { status: 'evaluated', return: 1.5, targetHit: true },
+				},
+			}));
+
+			const result = SignalOutcomeService.computeCalibration(docs);
+
+			expect(result.available).toBe(false);
+			expect(result.totalScoredAlerts).toBe(0);
+		});
+
+		it('keeps legacy market-scanner confidence when stored values prove it was explicit', () => {
+			const docs = Array.from({ length: 20 }, (_, i) => ({
+				id: `market-scanner-proven-${i}`,
+				source: 'market-scanner',
+				score: i < 7 ? null : i < 14 ? 2 : 0.85,
+				confidenceScore: 0.72,
+				outcomeEvaluated: true,
+				outcomes: {
+					'4h': { status: 'evaluated', return: 1.5, targetHit: true },
+				},
+			}));
+
+			const result = SignalOutcomeService.computeCalibration(docs);
+
+			expect(result.available).toBe(true);
+			expect(result.totalScoredAlerts).toBe(20);
+			expect(result.buckets.find((bucket) => bucket.range === '0.70-0.75').count).toBe(20);
+		});
+
+		it('includes market-scanner confidence only when its explicit provenance is recorded', () => {
+			const docs = Array.from({ length: 20 }, (_, i) => ({
+				id: `market-scanner-explicit-${i}`,
+				source: 'market-scanner',
+				score: 0.85,
+				confidenceScore: 0.82,
+				confidenceScoreOrigin: 'explicit',
+				outcomeEvaluated: true,
+				outcomes: {
+					'4h': { status: 'evaluated', return: 1.5, targetHit: true },
+				},
+			}));
+
+			const result = SignalOutcomeService.computeCalibration(docs);
+
+			expect(result.available).toBe(true);
+			expect(result.totalScoredAlerts).toBe(20);
+			expect(result.buckets.find((bucket) => bucket.range === '0.80-0.85').count).toBe(20);
+		});
+
 		it('returns suggestedThreshold: null when no bucket reaches 50% target hit rate', () => {
 			const docs = Array.from({ length: 25 }, (_, i) => ({
 				id: `doc-${i}`,
