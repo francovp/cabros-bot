@@ -154,43 +154,55 @@ describe('event bus alert flow', () => {
 		});
 
 		it('a slow async subscriber does not delay the HTTP response', async () => {
-			// The invariant is an ordering fact, not a duration: `emit()` is
-			// synchronous, so the response must be written while the
-			// subscriber's async tail is still pending. Asserting that the
-			// subscriber had not settled pins the behaviour without depending on
-			// machine speed.
+			// Two claims, because no single duration bound can carry both.
 			//
-			// A tight wall-clock bound cannot express the same thing and is
-			// flaky: the happy path takes ~2ms, but a loaded runner stalled this
-			// request to 360ms on #1380 with the subscriber still correctly
-			// non-blocking. Any bound tight enough to catch a genuinely blocking
-			// emit (~250ms, the subscriber's sleep) is indistinguishable from
-			// that stall, so the ceiling below is a loose sanity check and the
-			// ordering assertion is the real guard.
-			const SLOW_SUBSCRIBER_MS = 250;
+			// Ordering. `emit()` calls handlers synchronously and never awaits
+			// the promise an async handler returns, so the response is written
+			// while the subscriber's tail is still pending. The subscriber is
+			// gated on a promise this test opens itself, so it provably cannot
+			// have settled while the gate is shut — there is no timer to race.
+			// A timer leaves the assertion a race a loaded runner can still
+			// lose: any stall after `emit()` longer than the sleep lets the
+			// subscriber settle before the flag is read, which is how this test
+			// failed on #1380 (360ms measured against a 250ms subscriber).
+			//
+			// Not delayed. `emitAsync()` bounds its wait at this bus's async
+			// timeout and then gives up, so awaiting it delays the response
+			// rather than hanging, and only the elapsed time reveals it. The
+			// ceiling is half that timeout: the real path is ~2ms, leaving a
+			// wide margin for a loaded runner while still failing if the
+			// publisher ever awaits the bus.
+			const busAsyncTimeoutMs =
+				Number.isFinite(eventBus._asyncTimeoutMs) && eventBus._asyncTimeoutMs > 0 ? eventBus._asyncTimeoutMs : 5000;
 			let subscriberSettled = false;
+			let openSubscriberGate;
+			const subscriberGate = new Promise((resolve) => {
+				openSubscriberGate = resolve;
+			});
 			const slow = jest.fn(async () => {
-				await new Promise((resolve) => setTimeout(resolve, SLOW_SUBSCRIBER_MS));
+				await subscriberGate;
 				subscriberSettled = true;
 			});
 			eventBus.on(EVENT_NAMES.ALERT_DELIVERED, slow);
 
-			const start = Date.now();
-			const response = await request(app)
-				.post('/api/stub-alert')
-				.set('x-api-key', 'integration-test-key')
-				.send({ alertId: 'e2e-3', text: 'third alert' })
-				.expect(200);
-			const elapsed = Date.now() - start;
+			try {
+				const start = Date.now();
+				const response = await request(app)
+					.post('/api/stub-alert')
+					.set('x-api-key', 'integration-test-key')
+					.send({ alertId: 'e2e-3', text: 'third alert' })
+					.expect(200);
+				const elapsed = Date.now() - start;
 
-			expect(response.body.success).toBe(true);
-			// Prove the subscriber ran, so the next assertion cannot pass merely
-			// because nothing was subscribed.
-			expect(slow).toHaveBeenCalledTimes(1);
-			// An `await`ed emit (`emitAsync`, or a synchronous handler) would
-			// have resolved the subscriber before writing the response.
-			expect(subscriberSettled).toBe(false);
-			expect(elapsed).toBeLessThan(SLOW_SUBSCRIBER_MS * 8);
+				expect(response.body.success).toBe(true);
+				// Prove the subscriber ran, so the ordering assertion cannot
+				// pass merely because nothing was subscribed.
+				expect(slow).toHaveBeenCalledTimes(1);
+				expect(subscriberSettled).toBe(false);
+				expect(elapsed).toBeLessThan(busAsyncTimeoutMs / 2);
+			} finally {
+				openSubscriberGate();
+			}
 		});
 	});
 });
