@@ -4450,6 +4450,181 @@
           ]
         },
         {
+          "name": "POST Send Alert (cross-timeframe duplicate suppressed)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BINANCE:BTCUSDT(240) pasó a señal de VENTA\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            },
+            "description": "Post this immediately after POST Send Alert (daily SELL) with ENABLE_ALERT_CROSS_TF_SUPPRESSION=true and ALERT_CROSS_TF_WINDOW_MS covering the gap. The daily signal already delivered to the same (channel, destination), so this 4h signal on the same exchange/symbol/side is collapsed: 200 with suppressedRepeat: true, suppressionReason: cross_timeframe_duplicate, empty results/deliveredChannels, and the alert is still persisted with the marker. The collapse is not order-dependent, so posting 4h first and D second collapses the same way. Opposite-side flips are never collapsed. The store is keyed per (channel, destination), so posting this request with a different telegramChatId/whatsappChatId/discordWebhookUrl delivers instead of collapsing, and a leg whose delivery failed is released so the next signal on another timeframe is not swallowed."
+          },
+          "response": [
+            {
+              "name": "Cross-timeframe duplicate suppressed",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"results\":[],\"enriched\":false,\"suppressedRepeat\":true,\"suppressionReason\":\"cross_timeframe_duplicate\",\"tokenUsage\":{\"formattedSummary\":\"0 tokens (estimated $0.00)\"},\"requestedChannels\":[\"telegram\"],\"deliveredChannels\":[],\"requestId\":\"req-123\"}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"BINANCE:BTCUSDT(240) pasó a señal de VENTA\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "alert"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\"success\":false,\"error\":\"Invalid or missing API key\",\"code\":\"UNAUTHORIZED\",\"requestId\":\"req-123\",\"retryable\":false}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"BINANCE:BTCUSDT(240) pasó a señal de VENTA\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "alert"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Send Alert (daily signal - cross-timeframe baseline)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BINANCE:BTCUSDT(D) cambió a señal de VENTA\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            },
+            "description": "The first leg of the cross-timeframe pair from issue #1103 (BINANCE:BTCUSDT(D) VENTA followed ~400ms later by BINANCE:BTCUSDT(240) VENTA). Posted alone it always delivers: ENABLE_ALERT_CROSS_TF_SUPPRESSION only suppresses the later arrival, never the first. The first delivered signal wins by design for each (channel, destination) — preferring the higher timeframe would require holding every alert for a full window, adding latency to the delivery path."
+          },
+          "response": [
+            {
+              "name": "Delivered",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"results\":[{\"success\":true,\"channel\":\"telegram\",\"messageId\":\"msg-123\",\"attemptCount\":1,\"durationMs\":142}],\"enriched\":false,\"requestedChannels\":[\"telegram\"],\"deliveredChannels\":[\"telegram\"],\"requestId\":\"req-123\"}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"BINANCE:BTCUSDT(D) cambió a señal de VENTA\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "alert"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
           "name": "POST Volume Confirmation (dryRun)",
           "request": {
             "method": "POST",
@@ -13983,6 +14158,101 @@
               "status": "Unauthorized",
               "code": 401,
               "body": "{\n  \"error\": \"Unauthorized\",\n  \"code\": \"ADMIN_AUTH_REQUIRED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Account Balances",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Reads free and locked balances for assets derived from BINANCE_TRADING_ALLOWED_SYMBOLS. Sanitizes sensitive account data and caches responses for a few seconds.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/account/balances",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "account",
+                "balances"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"balances\": [\n    {\n      \"asset\": \"BTC\",\n      \"free\": \"0.10000000\",\n      \"locked\": \"0.00000000\"\n    },\n    {\n      \"asset\": \"USDT\",\n      \"free\": \"1000.00000000\",\n      \"locked\": \"0.00000000\"\n    }\n  ],\n  \"cached\": false\n}"
+            },
+            {
+              "name": "Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance trading is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized\",\n  \"code\": \"ADMIN_AUTH_REQUIRED\"\n}"
+            },
+            {
+              "name": "Binance Failure",
+              "status": "Bad Gateway",
+              "code": 502,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance balance query failed\",\n  \"code\": \"BINANCE_BALANCE_QUERY_FAILED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Account Balances - Filtered by Asset",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Reads account balance filtered to a specific allowed asset (e.g. BTC).",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/account/balances?asset=BTC",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "account",
+                "balances"
+              ],
+              "query": [
+                {
+                  "key": "asset",
+                  "value": "BTC",
+                  "description": "Filter by asset"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"balances\": [\n    {\n      \"asset\": \"BTC\",\n      \"free\": \"0.10000000\",\n      \"locked\": \"0.00000000\"\n    }\n  ],\n  \"cached\": false\n}"
             }
           ]
         }

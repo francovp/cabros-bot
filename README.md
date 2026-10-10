@@ -144,6 +144,7 @@ All webhook and mutation endpoints require the `x-api-key` header (configured vi
 | `GET` | `/api/jobs/:jobId` | Poll background job progress and retrieve result | [Jobs API](docs/jobs.md#get-apijobsjobid) |
 | `POST` | `/api/news-monitor` | Trigger symbol news scanning & event detection | [News Monitoring](docs/news-monitor.md) |
 | `POST` | `/api/trading/binance/orders/preview` | Pre-trade Binance Spot cost & slippage preview | [API Reference](docs/api-reference.md#post-apitradingbinanceorderspreview) |
+| `GET` | `/api/trading/binance/account/balances` | Read-only Binance Spot balances for allowed assets | [API Reference](docs/api-reference.md#get-apitradingbinanceaccountbalances) |
 | `GET` | `/api/alerts` | Query stored alerts with pagination & filtering | [Stored Alerts](docs/alerts.md#get-apialerts) |
 | `GET` | `/api/alerts/summary` | Analytics & delivery success rate metrics | [Stored Alerts](docs/alerts.md#get-apialertssummary) |
 | `POST` | `/api/alerts/:alertId/replay` | Dry-run or live replay of stored alert | [Stored Alerts](docs/alerts.md#post-apialertsalertidreplay) |
@@ -558,7 +559,9 @@ Configure it with the repository variables `UPTIME_MONITOR_BASE_URL`, `UPTIME_MO
 
 The secretless monitor above proves only that *something* answers `/healthcheck`. A build months behind `master` answers 200 perfectly, so liveness alone cannot tell you that production is actually running your latest code or that a feature you declared enabled is enabled.
 
-The authenticated layer is `ops/production-smoke-probe.sh`, run every 15 minutes by `.github/workflows/production-smoke-probe.yml`. It asserts `service.commit` equals the latest `master` SHA (exit `5` on a stale deploy), that named dependencies are `ready` (exit `6`), and — with `PRODUCTION_REQUIRE_ENABLED_FLAGS` — that named `featureFlags` are `true` (exit `7`, `FLAG_DISABLED`).
+The authenticated layer is `ops/production-smoke-probe.sh`, run every 15 minutes by `.github/workflows/production-smoke-probe.yml`, which checks the repository out first so the script is present on the runner. It asserts `service.commit` equals the latest `master` SHA (exit `5` on a stale deploy), that named dependencies are `ready` (exit `6`), and — with `PRODUCTION_REQUIRE_ENABLED_FLAGS` — that named `featureFlags` are `true` (exit `7`, `FLAG_DISABLED`). A `401`/`403` from `/api/status` is exit `8`, `AUTH_REJECTED`: production answered and rejected the credential, so rotate the secret rather than treating alerts as undelivered.
+
+Every run resolves to exactly one named outcome (`ok`, `down`, `stale`, `degraded`, `flag_disabled`, `auth_rejected`, `unconfigured`, `script_missing`, `invalid_args`, `unknown`), so a broken CI setup is never reported as a production outage. **The workflow has no paging step** — a non-zero exit fails the scheduled job, and the [external uptime monitor](#external-uptime-monitoring) owns the Telegram page (once on a DOWN transition, once on recovery).
 
 **A flag absent from the deployed build counts as disabled.** The comparison demands the literal string `true`, so an absent key cannot satisfy it and a stale build cannot look compliant — the same shape-is-not-readiness trap this repository has hit repeatedly. The jq default (`// false`) only labels the diagnostic `value=false`; it is not the enforcement point. That distinction matters because a `render.yaml` `value: true` is a *declaration of intent* and production reality is a separate fact — which is how `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` was declared `true` in the Blueprint while production reported `false` (issue #1109).
 

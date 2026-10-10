@@ -113,6 +113,9 @@ const VALID_SETUP_TYPES = new Set([
 	'reversal',
 ]);
 const VALID_TRADINGVIEW_ENRICHMENT_STATUSES = new Set(['full', 'partial', 'failed', 'not_applicable']);
+// Closed enum: a suppression reason is only persisted for a marker this build
+// can produce, so an unexpected string can never widen the stored document shape.
+const VALID_SUPPRESSION_REASONS = new Set(['cross_timeframe_duplicate']);
 const FEATURE_TAGS = ['grounding', 'news-analysis', 'expanded-analysis', 'scanner', 'enrichment'];
 const MAX_PERSISTED_SYMBOLS_PER_BATCH = 200;
 
@@ -308,6 +311,9 @@ function formatAlertDocument(doc, options = {}) {
 	}
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
+		if (VALID_SUPPRESSION_REASONS.has(data.suppressionReason)) {
+			docObj.suppressionReason = data.suppressionReason;
+		}
 	}
 	applyBurstAggregationMarkers(docObj, data.burstAggregateId, data.burstSignalCount);
 	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
@@ -2040,6 +2046,7 @@ async function saveAlertInternal(params = {}) {
 		tradingViewEnrichmentApplied,
 		tradingViewEnrichmentStatus,
 		suppressedRepeat,
+		suppressionReason,
 		burstAggregateId,
 		burstSignalCount,
 		processingTimeMs,
@@ -2130,6 +2137,9 @@ async function saveAlertInternal(params = {}) {
 		if (suppressedRepeat === true) {
 			document.suppressedRepeat = true;
 			document.deliveryResults = [];
+			if (VALID_SUPPRESSION_REASONS.has(suppressionReason)) {
+				document.suppressionReason = suppressionReason;
+			}
 		}
 		applyBurstAggregationMarkers(document, burstAggregateId, burstSignalCount);
 		const normalizedProcessingTimeMs = normalizeProcessingTimeMs(processingTimeMs);
