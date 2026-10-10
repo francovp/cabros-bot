@@ -115,6 +115,7 @@ describe('Alert repeat suppression endpoint behavior', () => {
 			.mockRejectedValueOnce(new Error('telegram unavailable'))
 			.mockResolvedValue({ message_id: 'test-msg-id' });
 		await initializeNotificationServices(mockBot);
+		mockFetch.mockClear();
 
 		const body = {
 			text: SIGNAL_TEXT,
