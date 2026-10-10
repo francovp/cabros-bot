@@ -7036,6 +7036,105 @@ describe('structured analysis forms', () => {
 			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
 			expect(retryBtn.hidden).toBe(false);
 		});
+
+		it.each([
+			[400, 'INVALID_REQUEST', 'callbackUrl must be an https URL'],
+			[401, 'INVALID_API_KEY', 'The supplied credentials are invalid.'],
+			[409, 'IDEMPOTENCY_CONFLICT', 'Idempotency key was already used with a different payload.'],
+		])('hides same-key retry after a definitive %i rejection and keeps the server error visible', async (status, code, message) => {
+			const sentKeys = [];
+			let attempts = 0;
+			const browser = createBrowser({
+				fetchImpl: async (url, options) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/jobs/tradingview-analysis') {
+						attempts += 1;
+						sentKeys.push(options.headers['idempotency-key']);
+						if (attempts === 1) {
+							return response({ success: false, error: message, code, retryable: false }, status);
+						}
+						return response({ success: true, jobId: 'job-after-definitive-error' }, 201);
+					}
+					if (url.startsWith('/api/jobs/job-after-definitive-error')) {
+						return response({ success: true, jobId: 'job-after-definitive-error', status: 'pending' });
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(attempts).toBe(1);
+			const firstKey = sentKeys[0];
+			expect(typeof firstKey).toBe('string');
+
+			// The rejection stays readable so the operator can act on what the server said.
+			expect(createForm.textContent).toContain(message);
+			expect(createForm.textContent).toContain(`HTTP ${status}`);
+
+			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
+			expect(retryBtn.hidden).toBe(true);
+
+			// The idempotency middleware caches this rejection, so the same key cannot recover it.
+			await retryBtn.dispatch('click');
+			await flush();
+			expect(attempts).toBe(1);
+			expect(sentKeys.length).toBe(1);
+
+			// Recovery is a fresh submission, which mints a new idempotency key.
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(attempts).toBe(2);
+			expect(sentKeys[1]).not.toBe(firstKey);
+			expect(retryBtn.hidden).toBe(true);
+		});
+
+		it('keeps same-key retry for a retryable 429 rate limit', async () => {
+			const sentKeys = [];
+			let attempts = 0;
+			const browser = createBrowser({
+				fetchImpl: async (url, options) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/jobs/tradingview-analysis') {
+						attempts += 1;
+						sentKeys.push(options.headers['idempotency-key']);
+						if (attempts === 1) {
+							return response({ error: 'Too many requests, please try again later.', retryAfterSeconds: 42 }, 429);
+						}
+						return response({ success: true, jobId: 'job-after-rate-limit' }, 201);
+					}
+					if (url.startsWith('/api/jobs/job-after-rate-limit')) {
+						return response({ success: true, jobId: 'job-after-rate-limit', status: 'pending' });
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			await createForm.dispatch('submit');
+			await flush();
+
+			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
+			expect(retryBtn.hidden).toBe(false);
+			expect(createForm.textContent).toContain('Too many requests, please try again later.');
+
+			await retryBtn.dispatch('click');
+			await flush();
+
+			expect(attempts).toBe(2);
+			expect(sentKeys[1]).toBe(sentKeys[0]);
+		});
 	});
 
 	describe('Playground UX improvements', () => {

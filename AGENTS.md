@@ -1936,6 +1936,23 @@ Job-list, status, and cancel/retry responses use monotonic request versions and 
 
 This is a UI-only consumer change: job persistence, lifecycle semantics, OpenAPI, and Postman contracts remain unchanged.
 
+## Admin Job Builder Same-Key Retry Gate (Issue #1144)
+
+The `/admin` job builder only offers **Retry submission** — the control that re-sends the identical request with the **same idempotency key** — when the last attempt could still succeed. `canRetryWithSameIdempotencyKey(responseStatus)` in `src/admin/admin.js` is the single decision point:
+
+- **No observed HTTP status** → same-key retry stays. The request never reached the server (network error, client deadline, or a blocked pre-flight such as a failed role check or an unbuilt request), so the key was never spent server-side.
+- **4xx that is not retryable** → the control is hidden and the server's message stays visible. The idempotency middleware caches every response below 500 (`src/lib/idempotency.js`), so replaying the key only returns the cached rejection, and correcting the payload first turns the retry into a `409 IDEMPOTENCY_CONFLICT`. Recovery is a fresh submission, which mints a new key.
+- **408 / 425 / 429 / 5xx** → same-key retry stays, mirroring `RETRYABLE_HTTP_STATUSES` in `src/lib/errorEnvelope.js`. A `503 JOB_QUEUE_ACCEPTANCE_UNKNOWN` keeps both the existing job-status auto-handoff and the retry.
+
+The click handler re-checks the same flag (`sameKeyRetryAllowed`) instead of relying on the button's `hidden` state alone, so the invariant holds for keyboard activation and for any future programmatic activation. `retryButton.hidden` is reset to `true` at the start of every submission.
+
+**Core components**:
+- `src/admin/admin.js` and the generated `public/admin/admin.js` — retryable-status set, classifier, and the retry click guard.
+- `tests/unit/admin-client.test.js` — definitive 400/401/409 hide the control and never re-send the key, a fresh submission mints a new key, and 429 keeps it.
+- `tests/integration/openapi-docs.test.js` — the hosting asset parity guard now covers every console asset served from `src/admin` (`admin.js`, `admin.css`, `admin-request.js`, `admin-components.js`, `index.html`), so a source-only edit can no longer be reverted by the next deploy.
+
+No new environment variable, endpoint, OpenAPI, Postman, or Remote Config change; no API contract change. The 4 pre-existing lint errors in `tests/integration/openapi-docs.test.js` (lines 8, 14, 63, 66) are unrelated to this change.
+
 ## Admin Console Fetch Deadlines (CB-164 / Issue #402)
 
 The hosted admin console now bounds browser fetches: `/admin/auth-config` keeps its existing 8-second fallback, `/openapi.json` uses an 8-second contract-load deadline, ordinary protected API requests use 30 seconds, synchronous analysis/news-monitor/market-scanner/scanner-preset/direct-alert/message/replay reports use a 990-second client budget derived from their 120-second analysis and notification-delivery ceilings, volume confirmation uses 390 seconds for its three sequential 120-second MCP calls, and symbol analysis uses 150 seconds. A shared `fetchWithTimeout()` helper keeps response-body parsing inside the abortable operation, clears timers on success/failure, and preserves contract retry plus request error/finally behavior.
