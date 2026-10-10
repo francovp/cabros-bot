@@ -9,6 +9,7 @@ const { alertSchedulerService } = require('../services/scheduler');
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const alertFeedbackStorageService = require('../services/storage/AlertFeedbackStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
+const { resolveRemoteOverride } = require('../services/remoteConfig/resolveRemoteOverride');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
 const { jobQueue } = require('../services/jobs/JobQueue');
 const equityMarketDataService = require('../services/storage/EquityMarketDataService');
@@ -62,6 +63,17 @@ const DEFAULT_CF_AIG_MODEL = 'google-ai-studio/gemini-2.5-flash';
 
 function isEnabled(value) {
 	return value === 'true';
+}
+
+/**
+ * Resolve a Firestore storage gate the way the storage services do (issue #721):
+ * a published Remote Config value wins, and its absence falls back to the
+ * environment. `/api/status` reporting `process.env` would describe a gate the
+ * services are not actually evaluating.
+ */
+function resolveStorageGate(key) {
+	const remote = resolveRemoteOverride(key);
+	return typeof remote === 'boolean' ? remote : isEnabled(process.env[key]);
 }
 
 function hasValue(value) {
@@ -292,9 +304,13 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		tradingViewMcpEnrichmentEnabled
 		|| marketScannerEnabled
 		|| observedTradingViewMcpStatus.lastCheckedAt !== null;
-	const firestoreEnabled = isEnabled(process.env.ENABLE_FIRESTORE_ALERT_STORAGE);
-	const firestoreScannerPresetsEnabled = isEnabled(process.env.ENABLE_FIRESTORE_SCANNER_PRESETS);
-	const firestoreJobStorageEnabled = isEnabled(process.env.ENABLE_FIRESTORE_JOB_STORAGE)
+	// Issue #721: report the gate that actually runs, not the raw environment value.
+	// These gates are runtime-resolved, so a published remote value is what the
+	// services evaluate — reporting `process.env` here would tell an operator their
+	// toggle failed (or that it worked) when the opposite is true.
+	const firestoreEnabled = resolveStorageGate('ENABLE_FIRESTORE_ALERT_STORAGE');
+	const firestoreScannerPresetsEnabled = resolveStorageGate('ENABLE_FIRESTORE_SCANNER_PRESETS');
+	const firestoreJobStorageEnabled = resolveStorageGate('ENABLE_FIRESTORE_JOB_STORAGE')
 		|| firestoreEnabled;
 	const sentryEnabled = isEnabled(process.env.ENABLE_SENTRY);
 	const langfusePromptsEnabled = isEnabled(process.env.ENABLE_LANGFUSE_PROMPTS);

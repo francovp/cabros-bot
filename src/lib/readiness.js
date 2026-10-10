@@ -21,6 +21,16 @@
  */
 
 const { redactString } = require('./logging');
+const { resolveRemoteOverride } = require('../services/remoteConfig/resolveRemoteOverride');
+
+// Issue #721: the four Firestore storage gates are runtime-resolved, so readiness
+// resolves them the same way the storage services do.
+const FIRESTORE_READINESS_GATE_KEYS = [
+	'ENABLE_FIRESTORE_ALERT_STORAGE',
+	'ENABLE_FIRESTORE_IDEMPOTENCY',
+	'ENABLE_FIRESTORE_SCANNER_PRESETS',
+	'ENABLE_FIRESTORE_JOB_STORAGE',
+];
 
 const DEFAULT_PROBE_TIMEOUT_MS = 3000;
 const MIN_PROBE_TIMEOUT_MS = 1000;
@@ -121,10 +131,15 @@ function skippedResult(reason) {
 }
 
 function isFirestoreEnabled() {
-	return isEnabled(process.env.ENABLE_FIRESTORE_ALERT_STORAGE)
-		|| isEnabled(process.env.ENABLE_FIRESTORE_IDEMPOTENCY)
-		|| isEnabled(process.env.ENABLE_FIRESTORE_SCANNER_PRESETS)
-		|| isEnabled(process.env.ENABLE_FIRESTORE_JOB_STORAGE);
+	// Issue #721: these gates are runtime-resolved, so readiness must ask the same
+	// question the services ask. Reading `process.env` here would report the probe
+	// as skipped while `AlertStorageService.probeOrderedAlertRead` — the probe this
+	// gate wraps — is remotely enabled, so the two halves of one probe would
+	// disagree.
+	return FIRESTORE_READINESS_GATE_KEYS.some((key) => {
+		const remote = resolveRemoteOverride(key);
+		return typeof remote === 'boolean' ? remote : isEnabled(process.env[key]);
+	});
 }
 
 function buildFirestoreProbe(deps) {

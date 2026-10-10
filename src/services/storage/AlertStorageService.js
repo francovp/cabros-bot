@@ -30,6 +30,7 @@ const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
 const {
@@ -153,6 +154,14 @@ let db = null;
 let lastRetentionWarningValue = null;
 
 function isEnabled() {
+	// Issue #721: a published remote value wins over the deployment value, so a
+	// remote `false` can disable durable storage despite the `render.yaml` pin.
+	// `undefined` means "no published value" — Remote Config off, stale, or the key
+	// absent — which is not evidence, so the environment decides.
+	const remote = resolveRemoteOverride('ENABLE_FIRESTORE_ALERT_STORAGE');
+	if (typeof remote === 'boolean') {
+		return remote;
+	}
 	return process.env.ENABLE_FIRESTORE_ALERT_STORAGE === 'true';
 }
 
@@ -3238,6 +3247,9 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 
 module.exports = {
 	isEnabled,
+	// Exported so the firebase-admin bootstrap gate can be asserted directly
+	// (issue #721). It is re-evaluated per call, never cached.
+	canInitializeFirestore,
 	saveAlert,
 	listAlerts,
 	getAlertById,
