@@ -39,6 +39,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — Price lookup resolver routing crypto to Binance and equities/stocks to Twelve Data (`EquityMarketDataService`); crypto replies optionally include bounded Binance 24h ticker context and retain the bare-price fallback.
 - `src/controllers/commands.js` — Telegram command handlers wired in `index.js` (`/precio`, `/cryptobot`, `/jobs`) plus per-chat throttling for expensive commands.
 - `src/controllers/trading/binanceOrders.js` — Operator-only `POST /api/trading/binance/orders`, `GET /api/trading/binance/orders`, and `DELETE /api/trading/binance/orders` controllers.
+- `src/services/trading/AlertSignalRouter.js` — Opt-in alert-to-order bridge behind `ENABLE_AUTO_TRADE` + per-request `autoTrade=true`; derives a bounded `MARKET` `BUY` from a parsed TradingView signal and enriched sentiment, and never throws so alert delivery is never blocked. Dry-run by default.
 - `src/controllers/webhooks/handlers/alert/alert.js` — Webhook handler that forwards alert text to a Telegram chat.
 - `src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert.js` — `POST /api/webhook/expanded-analysis-alert` handler that builds TradingView MCP analysis reports and sends them through notification channels.
 - `src/controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation.js` — `POST /api/webhook/volume-confirmation` handler that returns structured TradingView MCP volume-confirmation data.
