@@ -260,10 +260,13 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			})
 			.expect(409);
 
-		expect(conflictRes.body).toEqual({
+		expect(conflictRes.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
 			error: expect.stringContaining('different payload'),
 			code: 'IDEMPOTENCY_CONFLICT',
-		});
+		}));
 	});
 
 	it('replays a sequential request without redispatching selected Telegram, WhatsApp, and Discord channels', async () => {
@@ -388,10 +391,13 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.send(conflictingPayload)
 			.expect(409);
 
-		expect(conflict.body).toEqual({
+		expect(conflict.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
 			error: expect.stringContaining('different payload'),
 			code: 'IDEMPOTENCY_CONFLICT',
-		});
+		}));
 	});
 
 	it('rejects a non-string body idempotency key before dispatch', async () => {
@@ -401,10 +407,13 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.send({ message: 'Invalid key type', channels: ['telegram'], idempotencyKey: {} })
 			.expect(400);
 
-		expect(response.body).toEqual({
+		expect(response.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
 			error: 'Idempotency key must be a non-empty string',
 			code: 'INVALID_REQUEST',
-		});
+		}));
 		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
 	});
 
@@ -415,10 +424,13 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.send({ message: 'Invalid array key', channels: ['telegram'], idempotencyKey: ['key-a'] })
 			.expect(400);
 
-		expect(response.body).toEqual({
+		expect(response.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
 			error: 'Idempotency key must be a non-empty string',
 			code: 'INVALID_REQUEST',
-		});
+		}));
 		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
 	});
 
@@ -429,10 +441,13 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.send({ message: 'Invalid null key', channels: ['telegram'], idempotencyKey: null })
 			.expect(400);
 
-		expect(response.body).toEqual({
+		expect(response.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
 			error: 'Idempotency key must be a non-empty string',
 			code: 'INVALID_REQUEST',
-		});
+		}));
 		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
 	});
 

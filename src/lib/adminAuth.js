@@ -136,7 +136,7 @@ async function validateAdminAccess(req, res, next) {
 
 function requireConfiguredAdminAccess(req, res, next) {
 	if (!isFirebaseAdminAuthEnabled() && !String(process.env.WEBHOOK_API_KEY || '').trim()) {
-		return res.status(503).json({
+		return sendErrorFrom(res, 503, {
 			error: 'Admin authentication is not configured',
 			code: 'ADMIN_AUTH_UNAVAILABLE',
 		});

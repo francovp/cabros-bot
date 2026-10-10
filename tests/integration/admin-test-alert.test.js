@@ -191,10 +191,13 @@ describe('POST /api/admin/test-alert Integration', () => {
 			.send({ text: '', channels: ['telegram'] });
 
 		expect(res.status).toBe(400);
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
 			error: 'Alert text is required and must be a string',
 			code: 'INVALID_REQUEST',
-		});
+		}));
 		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 		expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
 	});

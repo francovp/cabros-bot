@@ -140,7 +140,13 @@ describe('Firebase admin authorization', () => {
 				.set('Authorization', 'Bearer secret-firebase-token');
 
 			expect(response.status).toBe(401);
-			expect(response.body).toEqual({ error: 'Unauthorized', code: 'ADMIN_AUTH_INVALID' });
+			expect(response.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+				error: 'Unauthorized',
+				code: 'ADMIN_AUTH_INVALID',
+			}));
 			expect(JSON.stringify(response.body)).not.toContain('secret-firebase-token');
 		});
 
@@ -178,7 +184,13 @@ describe('Firebase admin authorization', () => {
 			.set('x-api-key', 'wrong-key');
 
 		expect(response.status).toBe(403);
-		expect(response.body).toEqual({ error: 'Forbidden: Invalid API key' });
+		expect(response.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+			error: 'Forbidden: Invalid API key',
+			code: 'FEATURE_DISABLED',
+		}));
 	});
 
 	it('accepts a valid API key when an invalid Firebase bearer token is also supplied', async () => {

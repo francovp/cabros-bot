@@ -29,6 +29,10 @@ const STANDARD_ERROR_CODES = Object.freeze({
     DELIVERY_FAILED: 'DELIVERY_FAILED',
     STORAGE_UNAVAILABLE: 'STORAGE_UNAVAILABLE',
     INTERNAL_ERROR: 'INTERNAL_ERROR',
+    UNAUTHORIZED: 'UNAUTHORIZED',
+    NOT_FOUND: 'NOT_FOUND',
+    PAYLOAD_TOO_LARGE: 'PAYLOAD_TOO_LARGE',
+    RATE_LIMITED: 'RATE_LIMITED',
 });
 
 const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
@@ -42,12 +46,12 @@ const RETRYABLE_HTTP_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
  */
 const STATUS_DEFAULT_CODES = Object.freeze({
 	400: STANDARD_ERROR_CODES.INVALID_REQUEST,
-	401: 'UNAUTHORIZED',
+	401: STANDARD_ERROR_CODES.UNAUTHORIZED,
 	403: STANDARD_ERROR_CODES.FEATURE_DISABLED,
-	404: 'NOT_FOUND',
+	404: STANDARD_ERROR_CODES.NOT_FOUND,
 	409: STANDARD_ERROR_CODES.INVALID_REQUEST,
-	413: 'PAYLOAD_TOO_LARGE',
-	429: 'RATE_LIMITED',
+	413: STANDARD_ERROR_CODES.PAYLOAD_TOO_LARGE,
+	429: STANDARD_ERROR_CODES.RATE_LIMITED,
 	500: STANDARD_ERROR_CODES.INTERNAL_ERROR,
 	502: STANDARD_ERROR_CODES.PROVIDER_UNAVAILABLE,
 	503: STANDARD_ERROR_CODES.STORAGE_UNAVAILABLE,
@@ -192,7 +196,7 @@ function sendError(res, statusCode, options = {}) {
  * @param {number} statusCode - HTTP status code to send (unchanged)
  * @param {object} [body] - Existing response body to extend
  * @param {object} [options]
- * @param {string} [options.requestId] - Correlation id override
+ * @param {string} [options.requestId] - Correlation id override (or pass req to resolve from headers)
  * @param {boolean} [options.retryable] - Explicit retryable override
  * @returns {object} The body that was sent
  */
@@ -201,11 +205,15 @@ function sendErrorFrom(res, statusCode, body = {}, options = {}) {
         ? body
         : {};
 
+    // Allow passing req directly or requestId explicitly
+    const req = options.req;
+    const requestId = options.requestId || source.requestId || resolveEnvelopeRequestId(req);
+
     const merged = {
         ...source,
-        success: false,
-        code: source.code || resolveErrorCode(statusCode),
-        requestId: source.requestId || options.requestId || resolveEnvelopeRequestId(res && res.req),
+        success: source.success ?? false,
+        code: normalizeCode(source.code || resolveErrorCode(statusCode)),
+        requestId,
         retryable: typeof options.retryable === 'boolean'
             ? options.retryable
             : isRetryableStatus(statusCode),

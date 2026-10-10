@@ -223,10 +223,13 @@ describe('Volume confirmation endpoint', () => {
 				.send({ symbol: 'BINANCE:ETHUSDT', timeframe: '4h' })
 				.expect(409);
 
-			expect(conflictRes.body).toEqual({
+			expect(conflictRes.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
 				error: 'Idempotency key was reused with a different payload',
 				code: 'IDEMPOTENCY_CONFLICT',
-			});
+			}));
 		});
 
 		it('returns 400 INVALID_REQUEST when Idempotency-Key is invalid', async () => {
@@ -237,10 +240,13 @@ describe('Volume confirmation endpoint', () => {
 				.send({ symbol: 'BINANCE:BTCUSDT' })
 				.expect(400);
 
-			expect(res.body).toEqual({
+			expect(res.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
 				error: 'Idempotency key must be a non-empty string',
 				code: 'INVALID_REQUEST',
-			});
+			}));
 			expect(tradingViewMcpService.callVolumeConfirmation).not.toHaveBeenCalled();
 		});
 
