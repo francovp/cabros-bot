@@ -14,6 +14,7 @@ const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const { _resetForTesting: resetScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
 	type: 'pkcs1',
@@ -179,7 +180,7 @@ describe('Scanner presets API integration tests', () => {
 		expect(deleteResponse.body.storage).toEqual(expectedStorage);
 	});
 
-	it('reports ephemeral storage when durable scanner persistence is enabled but unavailable', async () => {
+	it('reports durable intent as degraded when a scanner preset write fails', async () => {
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
 		const firestoreAdmin = require('firebase-admin');
@@ -191,14 +192,21 @@ describe('Scanner presets API integration tests', () => {
 			.send({ name: 'Ephemeral preset' })
 			.expect(201);
 
-		expect(response.body.storage).toEqual({
+		// A failed write is a store fault, not a credential problem: `mode`/`backend`
+		// stay on the configured target and the unsynced record is reported as pending
+		// workload rather than reclassifying the whole backend as `memory` (#1342).
+		expect(response.body.storage).toEqual(expect.objectContaining({
 			enabled: true,
-			configured: false,
+			configured: true,
 			ready: false,
-			status: 'misconfigured',
-			mode: 'ephemeral',
-			backend: 'memory',
-		});
+			status: 'degraded',
+			readiness: 'degraded',
+			mode: 'durable',
+			backend: 'firestore',
+			lastErrorReason: 'firestore_unavailable',
+			pendingWrites: 1,
+			oldestPendingWriteAt: expect.any(String),
+		}));
 	});
 
 	it('returns structured preview in dry-run mode without calling MCP or delivery services', async () => {
@@ -688,5 +696,51 @@ describe('Scanner presets API integration tests', () => {
 		// Fail-fast: the TradingView MCP scan must NOT have been called.
 		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
 	});
-});
+	it('records signal outcomes when manual preset run succeeds and outcomes are enabled', async () => {
+		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+		const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue({});
 
+		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+			{
+				symbol: 'BINANCE:AVAXUSDT',
+				changePercent: 15.2,
+				indicators: { close: 35.5, atr: 1.2, bb_lower: 32.0, bb_upper: 38.0 },
+			},
+		]);
+
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({
+				name: 'Outcome Manual Preset',
+				exchange: 'binance',
+				timeframe: '1h',
+				scans: ['top_gainers'],
+			})
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const runResponse = await request(app)
+			.post(`/api/scanner-presets/${presetId}/run`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(runResponse.body.success).toBe(true);
+		expect(recordSpy).toHaveBeenCalledTimes(1);
+		const recorded = recordSpy.mock.calls[0][0];
+		expect(recorded.source).toBe('scanner-preset');
+		expect(recorded.symbol).toBe('BINANCE:AVAXUSDT');
+		expect(recorded.exchange).toBe('BINANCE');
+		expect(recorded.timeframe).toBe('1h');
+		expect(recorded.setupType).toBe('top_gainers');
+		expect(recorded.side).toBe('BUY');
+		expect(recorded.price).toBe(35.5);
+		expect(recorded.stop).toBe(33.7);
+		expect(recorded.score).toBe(15.2);
+
+		recordSpy.mockRestore();
+		signalOutcomeService.isEnabled.mockRestore();
+	});
+
+});
