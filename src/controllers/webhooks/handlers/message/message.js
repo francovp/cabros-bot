@@ -18,6 +18,7 @@ const { estimateMessageChunks } = require('../../../../lib/messageHelper');
 const { isRecognisedDryRunValue, resolveDryRun } = require('../../../../lib/dryRunRequest');
 const { STANDARD_ERROR_CODES, sendError } = require('../../../../lib/errorEnvelope');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const remoteConfigService = require('../../../../services/remoteConfig/RemoteConfigService');
 const MAX_MESSAGE_LENGTH = 4000;
 
 function assertRecognisedDryRunFlag(value, source) {
@@ -32,7 +33,7 @@ function assertRecognisedDryRunFlag(value, source) {
 	}
 }
 
-function validateMessageRequest(body, query) {
+function validateMessageRequest(body, query, maxMessageLength = MAX_MESSAGE_LENGTH) {
 	if (!body || typeof body !== 'object') {
 		throw new NotificationRoutingValidationError('Request body must be a JSON object');
 	}
@@ -61,15 +62,15 @@ function validateMessageRequest(body, query) {
 	const routing = parseNotificationRouting(body);
 
 	const originalLength = message.length;
-	const truncated = originalLength > MAX_MESSAGE_LENGTH;
+	const truncated = originalLength > maxMessageLength;
 	const text = truncated
-		? message.substring(0, MAX_MESSAGE_LENGTH) + '...'
+		? message.substring(0, maxMessageLength) + '...'
 		: message;
 	const deliveredLength = text.length;
 
 	if (truncated) {
 		console.warn(
-			`[MessageWebhook] Message truncated: originalLength=${originalLength}, deliveredLength=${deliveredLength}, max=${MAX_MESSAGE_LENGTH}`,
+			`[MessageWebhook] Message truncated: originalLength=${originalLength}, deliveredLength=${deliveredLength}, max=${maxMessageLength}`,
 		);
 	}
 
@@ -128,7 +129,8 @@ function postMessage(botOrGetter) {
 		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 		try {
-			const routing = validateMessageRequest(req.body, req.query);
+			const maxMessageLength = remoteConfigService.getRuntimeConfig().GENERIC_MESSAGE_MAX_LENGTH;
+			const routing = validateMessageRequest(req.body, req.query, maxMessageLength);
 
 			if (routing.dryValidate) {
 				const estimatedChunks = estimateMessageChunks(routing.originalMessage);

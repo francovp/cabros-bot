@@ -3483,7 +3483,7 @@
           "name": "POST Send Message",
           "request": {
             "method": "POST",
-            "description": "Idempotency accepts the recommended idempotency-key header, x-idempotency-key header, idempotencyKey or idempotency_key in the JSON body, and idempotencyKey or idempotency_key in the query string. Replays return the cached response with idempotencyReplayed=true; conflicting payload reuse returns 409. The response always carries a requestId field that mirrors the inbound x-request-id header (when supplied, sanitized to printable ASCII and <=128 chars) or a generated UUIDv4 so callers can correlate deliveries with logs and Sentry.",
+            "description": "The inbound text cap is GENERIC_MESSAGE_MAX_LENGTH (integer 1-20000, default 4000); valid fresh Firebase Remote Config overrides take precedence over the environment value. Invalid environment values use 4000; invalid Remote Config values are ignored, leaving the environment value or default effective. Truncation metadata is returned only when content is clipped. Idempotency accepts the recommended idempotency-key header, x-idempotency-key header, idempotencyKey or idempotency_key in the JSON body, and idempotencyKey or idempotency_key in the query string. Replays return the cached response with idempotencyReplayed=true; conflicting payload reuse returns 409. The response always carries a requestId field that mirrors the inbound x-request-id header (when supplied, sanitized to printable ASCII and <=128 chars) or a generated UUIDv4 so callers can correlate deliveries with logs and Sentry.",
             "header": [
               {
                 "key": "Content-Type",
@@ -3664,7 +3664,7 @@
               "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
             },
             {
-              "name": "Success (truncated - message exceeded MAX_MESSAGE_LENGTH)",
+              "name": "Success (truncated - configured message limit exceeded)",
               "status": "OK",
               "code": 200,
               "body": "{\n  \"success\": true,\n  \"truncated\": true,\n  \"originalLength\": 6000,\n  \"deliveredLength\": 4003,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\"\n    }\n  ]\n}",

@@ -5608,12 +5608,12 @@
                     },
                     "truncated": {
                       "type": "boolean",
-                      "description": "True when the inbound message exceeded MAX_MESSAGE_LENGTH (4000) and was clipped before delivery. Caller can detect silent content loss; downstream delivery proceeds with the truncated text."
+                      "description": "True when the inbound message exceeded GENERIC_MESSAGE_MAX_LENGTH (default 4000; integer range 1-20000) and was clipped before delivery. Caller can detect silent content loss; downstream delivery proceeds with the truncated text."
                     },
                     "originalLength": {
                       "type": "integer",
                       "description": "Inbound message character count before truncation. Only present when truncated=true.",
-                      "minimum": 4001
+                      "minimum": 2
                     },
                     "deliveredLength": {
                       "type": "integer",
@@ -5787,7 +5787,7 @@
                 }
               },
               "truncated": {
-                "summary": "Inbound message exceeded MAX_MESSAGE_LENGTH",
+                "summary": "Inbound message exceeded GENERIC_MESSAGE_MAX_LENGTH",
                 "value": {
                   "success": true,
                   "truncated": true,

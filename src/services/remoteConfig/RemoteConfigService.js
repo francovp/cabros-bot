@@ -121,6 +121,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_FIRESTORE_CHAT_PREFERENCES: { type: 'boolean', defaultValue: false },
 	CHAT_PREFERENCES_RETENTION_DAYS: { type: 'number', defaultValue: 90, integer: true, min: 1, max: 365 },
 	CHAT_PREFERENCES_CACHE_TTL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
+	GENERIC_MESSAGE_MAX_LENGTH: { type: 'number', defaultValue: 4000, integer: true, min: 1, max: 20000 },
 	// WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_NAMESPACE excluded:
 	// notification destinations — must remain deployment-controlled.
 	WHATSAPP_TEMPLATE_PARAM_ORDER: { type: 'string', defaultValue: 'symbol,price,action,setup,timeframe,source' },

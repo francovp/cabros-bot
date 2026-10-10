@@ -152,6 +152,12 @@ All webhook and mutation endpoints require the `x-api-key` header (configured vi
 
 Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`.
 
+`POST /api/webhook/message` truncates inbound text above `GENERIC_MESSAGE_MAX_LENGTH` (integer, default `4000`, range `1`-`20000`). A fresh valid Firebase Remote Config value takes precedence over the environment value; invalid environment values use the default, while invalid Remote Config values are ignored so the environment/default remains effective. Response truncation metadata remains conditional on clipping.
+
+| Variable | Type | Default | Bounds | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `GENERIC_MESSAGE_MAX_LENGTH` | Integer | `4000` | `1`-`20000` | Maximum inbound characters before generic message webhook truncation. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored, leaving the environment/default effective. |
+
 ---
 
 ## Telegram Commands Summary

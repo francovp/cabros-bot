@@ -36,6 +36,10 @@
 
 To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project documents a private disclosure channel, scope, and safe-harbor guidance. Do not file security issues as public GitHub issues.
 
+#### Generic Message Webhook
+
+- `GENERIC_MESSAGE_MAX_LENGTH` - Maximum inbound characters for `POST /api/webhook/message` before truncation (integer `1`-`20000`, default `4000`). Invalid environment values use `4000`; invalid Remote Config values are ignored, leaving the environment value (or `4000` when unset/invalid) effective. A fresh valid Remote Config value takes precedence over the environment setting.
+
 #### WhatsApp Alerts & Commands (GreenAPI)
 
 - `ENABLE_WHATSAPP_ALERTS` - Enable WhatsApp alerts (`true` or `false`, default: `false`)
@@ -356,7 +360,7 @@ When signal-outcome tracking is disabled, or when no measurements exist in the r
 - `FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS` - Maximum template-load wait (default: `10000`, maximum: `30000`)
 - `FIREBASE_REMOTE_CONFIG_MAX_AGE_MS` - Maximum age of a successful template before environment/default fallback (default: `3600000`, maximum: `604800000`)
 
-The allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_MAINTENANCE_MODE` (an operational incident-response kill switch), and per-chat user preferences (`ENABLE_FIRESTORE_CHAT_PREFERENCES`, `CHAT_PREFERENCES_RETENTION_DAYS` between `1` and `365`, `CHAT_PREFERENCES_CACHE_TTL_MS` between `1000` and `3600000`). Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, permanent security controls, route/security gates, and Telegram destinations are never read from Remote Config.
+The allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `GENERIC_MESSAGE_MAX_LENGTH` (integer `1`-`20000`, default `4000`), `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_MAINTENANCE_MODE` (an operational incident-response kill switch), and per-chat user preferences (`ENABLE_FIRESTORE_CHAT_PREFERENCES`, `CHAT_PREFERENCES_RETENTION_DAYS` between `1` and `365`, `CHAT_PREFERENCES_CACHE_TTL_MS` between `1000` and `3600000`). Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, permanent security controls, route/security gates, and Telegram destinations are never read from Remote Config.
 
 The service loads once at startup and refreshes on the bounded cadence; it does not fetch Remote Config per alert. `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS` remains environment-only because the worker timer is created during process startup and is not a request-time setting. Disabled, unavailable, timed-out, stale, malformed, or invalid values fail open to the current environment/default behavior. The server-side Remote Config API is currently a Firebase Preview feature, so monitor its quota and error rate before enabling it in production. `firebase-admin` is upgraded to the Node 24-compatible 12.x line (`^12.1.0`, lockfile resolution `12.7.0`).
 
