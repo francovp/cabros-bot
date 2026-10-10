@@ -9,6 +9,7 @@ const { tradingViewMcpService } = require('../tradingview/TradingViewMcpService'
 const {
 	parseExpandedAnalysisAlertRequest,
 	buildExpandedAnalysisAlertReport,
+	deriveItemSide,
 	recordExpandedAnalysisOutcomes,
 } = require('../tradingview/expandedAnalysisAlertReport');
 const {
@@ -1318,7 +1319,7 @@ class JobService {
 						}
 					}
 
-					result = { symbol: input.raw, status: 'analyzed', input, analysis, multiTimeframe };
+					result = { symbol: input.raw, status: 'analyzed', input, analysis, multiTimeframe, side: deriveItemSide(analysis) };
 				} catch (error) {
 					if (this._isClaimLost(signal)) return null;
 					if (this._isAbortTriggered(signal, error)) {
@@ -1374,6 +1375,7 @@ class JobService {
 				input: result.input,
 				analysis: result.analysis,
 				multiTimeframe: result.multiTimeframe,
+				side: result.side,
 			}));
 
 		if (analyzedItems.length === 0) {
@@ -1651,7 +1653,10 @@ class JobService {
 		if (job.type === 'market-scanner') {
 			recordMarketScannerOutcomes(job.fullScanResults || [], parsed, options);
 		} else {
-			const analyzedItems = (job.fullResults || []).filter((result) => result.status === 'analyzed');
+			const analyzedItems = (job.fullResults || [])
+				.filter((result) => result.status === 'analyzed')
+				// Legacy reports rendered BUY when no direction was persisted.
+				.map((result) => ({ ...result, side: result.side || 'BUY' }));
 			recordExpandedAnalysisOutcomes(analyzedItems, parsed, options);
 		}
 	}

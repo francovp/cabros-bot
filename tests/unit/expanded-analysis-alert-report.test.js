@@ -476,6 +476,27 @@ describe('Expanded Analysis Alert report', () => {
 			expect(report).toContain('  • Bitcoin surges past 68k (CoinDesk)');
 			expect(report).toContain('  • Crypto market gains momentum (bloomberg.com)');
 		});
+
+		it('omits confluence when external evidence is empty', () => {
+			const report = buildExpandedAnalysisAlertReport([
+				{
+					input: { raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+					analysis: {
+						technical: { price_data: { current_price: 68000 } },
+						confluence: {
+							recommendation: 'STRONG BUY',
+							confidence: 'high',
+							signals_agree: true,
+						},
+						news: { count: 0, latest: [] },
+						sentiment: { posts_analyzed: 0 },
+					},
+				},
+			], { now: new Date('2026-05-22T12:00:00Z') });
+
+			expect(report).not.toContain('*Confluencia:*');
+			expect(report).not.toContain('Confianza: high');
+		});
 	});
 
 	describe('side-aware risk barriers', () => {
@@ -541,11 +562,14 @@ describe('Expanded Analysis Alert report', () => {
 	});
 
 	describe('deriveItemSide', () => {
+		it('ignores SELL confluence without external evidence', () => {
+			expect(deriveItemSide({ confluence: { recommendation: 'STRONG_SELL' }, news: { count: 0 } })).toBe('BUY');
+		});
 		it('derives SELL for bearish sentiment or sell recommendation', () => {
 			expect(deriveItemSide({ sentiment: 'bearish' })).toBe('SELL');
 			expect(deriveItemSide({ market_sentiment: { overall_sentiment: 'Bajista' } })).toBe('SELL');
-			expect(deriveItemSide({ confluence: { recommendation: 'STRONG_SELL' } })).toBe('SELL');
-			expect(deriveItemSide({ confluence: { action: 'SELL' } })).toBe('SELL');
+			expect(deriveItemSide({ confluence: { recommendation: 'STRONG_SELL' }, news: { count: 1 } })).toBe('SELL');
+			expect(deriveItemSide({ confluence: { action: 'SELL' }, reddit: { posts_analyzed: 1 } })).toBe('SELL');
 		});
 
 		it('defaults to BUY for bullish, neutral, or unknown sentiment', () => {

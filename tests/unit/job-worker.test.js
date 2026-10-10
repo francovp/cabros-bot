@@ -7,6 +7,46 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe('queued job execution', () => {
 	afterEach(() => jest.restoreAllMocks());
+	it('renders bearish async levels that match normal and recovered outcomes', async () => {
+		const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
+		jest.spyOn(tradingViewMcpService, 'analyzeSymbolIdentifier').mockResolvedValue({
+			sentiment: 'bearish',
+			price_data: { close: 100 },
+			technical_indicators: { ATR: 2 },
+		});
+		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+		const record = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue('outcome-1');
+		const job = { jobId: 'bearish-job', type: 'expanded-analysis', status: 'processing', progress: {} };
+		let persisted;
+		const service = new JobService({
+			get: async () => job,
+			save: async (current) => { persisted = JSON.parse(JSON.stringify(current)); return current.jobId; },
+		});
+		service._sendQueuedNotification = async (current, manager, payload) => {
+			expect(payload.text).toContain('por encima');
+			return [{ success: true, channel: 'telegram' }];
+		};
+		await service._executeExpandedAnalysis(job, {
+			symbols: [{ raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' }],
+			timeframe: '1D', includeMultiTimeframe: false,
+		});
+		expect(record).toHaveBeenLastCalledWith(expect.objectContaining({ side: 'SELL', stop: 103, target: 94 }));
+		service._recordJobOutcomes(persisted, { timeframe: '1D' });
+		expect(record).toHaveBeenLastCalledWith(expect.objectContaining({ side: 'SELL', stop: 103, target: 94 }));
+	});
+	it('keeps the originally rendered BUY levels for legacy bearish checkpoints without side', () => {
+		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+		const record = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue('outcome-1');
+		const service = new JobService({});
+		service._recordJobOutcomes({
+			jobId: 'legacy-bearish', type: 'expanded-analysis',
+			fullResults: [{
+				status: 'analyzed', input: { symbol: 'BTCUSDT', exchange: 'BINANCE' },
+				analysis: { sentiment: 'bearish', price_data: { close: 100 }, technical_indicators: { ATR: 2 } },
+			}],
+		}, { timeframe: '1D' });
+		expect(record).toHaveBeenCalledWith(expect.objectContaining({ side: 'BUY', stop: 97, target: 106 }));
+	});
 	it('preserves the custom Bollinger threshold from queued metadata', () => {
 		const service = new JobService({});
 

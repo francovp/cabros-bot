@@ -8975,6 +8975,13 @@
               "body": "{\n  \"error\": \"alertIds must be a non-empty array of up to 50 alert IDs.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             },
             {
+              "name": "400 Bad Request - Invalid dryRun value",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryRun\\\" body must be a boolean if provided\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-dryrun-invalid\",\n  \"retryable\": false\n}"
+            },
+            {
               "name": "Request Timeout (408)",
               "status": "Request Timeout",
               "code": 408,
@@ -8985,6 +8992,174 @@
                 }
               ],
               "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Batch Replay Alerts (invalid dryRun body)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "{{replayIdempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"alertIds\": [\"{{alertId}}\"],\n  \"channels\": [\"telegram\"],\n  \"dryRun\": \"invalid\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/batch/replay",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "batch",
+                "replay"
+              ]
+            },
+            "description": "Rejects batch replay requests where body dryRun is not a boolean."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid dryRun body",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryRun\\\" body must be a boolean if provided\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-dryrun-invalid\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST error envelope\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.success).to.eql(false);",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "    pm.expect(jsonData.error).to.include(\"dryRun\");",
+                  "    pm.expect(jsonData.retryable).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Batch Replay Alerts (invalid dryRun query)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "{{replayIdempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"alertIds\": [\"{{alertId}}\"],\n  \"channels\": [\"telegram\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/batch/replay?dryRun=invalid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "batch",
+                "replay"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "invalid"
+                }
+              ]
+            },
+            "description": "Rejects batch replay requests where query dryRun is not a boolean."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid dryRun query",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryRun\\\" query must be a boolean if provided\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-dryrun-invalid\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST error envelope\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.success).to.eql(false);",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "    pm.expect(jsonData.error).to.include(\"dryRun\");",
+                  "    pm.expect(jsonData.retryable).to.eql(false);",
+                  "});"
+                ]
+              }
             }
           ]
         },
@@ -9239,10 +9414,66 @@
                 "alerts",
                 "{{alertId}}",
                 "replay"
+              ],
+              "query": [
+                {
+                  "key": "reEnrich",
+                  "value": "true",
+                  "description": "Re-run the full enrichment pipeline before dispatch",
+                  "disabled": true
+                }
               ]
             }
           },
           "response": [
+            {
+              "name": "Success with re-enrichment",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "idempotency-key",
+                    "value": "{{replayIdempotencyKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"channels\": [\"telegram\"],\n  \"reEnrich\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay?reEnrich=true",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts",
+                    "{{alertId}}",
+                    "replay"
+                  ],
+                  "query": [
+                    {
+                      "key": "reEnrich",
+                      "value": "true"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"123\" }\n  ],\n  \"reEnriched\": true\n}"
+            },
             {
               "name": "Success",
               "originalRequest": {
@@ -9489,6 +9720,193 @@
               "status": "Not Found",
               "code": 404,
               "body": "{\n  \"error\": \"Alert not found\",\n  \"code\": \"NOT_FOUND\"\n}"
+            },
+            {
+              "name": "400 Bad Request - Invalid dryRun value",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "idempotency-key",
+                    "value": "{{replayIdempotencyKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"channels\": [\"telegram\"],\n  \"dryRun\": \"invalid\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts",
+                    "{{alertId}}",
+                    "replay"
+                  ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryRun\\\" body must be a boolean if provided\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-dryrun-invalid\",\n  \"retryable\": false\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Replay Alert (invalid dryRun body)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "{{replayIdempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channels\": [\"telegram\"],\n  \"dryRun\": \"invalid\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "{{alertId}}",
+                "replay"
+              ]
+            },
+            "description": "Rejects single alert replay requests where body dryRun is not a boolean."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid dryRun body",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryRun\\\" body must be a boolean if provided\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-dryrun-invalid\",\n  \"retryable\": false\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST error envelope\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.success).to.eql(false);",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "    pm.expect(jsonData.error).to.include(\"dryRun\");",
+                  "    pm.expect(jsonData.retryable).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Replay Alert (invalid dryRun query)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "{{replayIdempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channels\": [\"telegram\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay?dryRun=invalid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "{{alertId}}",
+                "replay"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "invalid"
+                }
+              ]
+            },
+            "description": "Rejects single alert replay requests where query dryRun is not a boolean."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid dryRun query",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryRun\\\" query must be a boolean if provided\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-dryrun-invalid\",\n  \"retryable\": false\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST error envelope\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.success).to.eql(false);",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "    pm.expect(jsonData.error).to.include(\"dryRun\");",
+                  "    pm.expect(jsonData.retryable).to.eql(false);",
+                  "});"
+                ]
+              }
             }
           ]
         },

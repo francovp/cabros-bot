@@ -2,6 +2,7 @@ const {
 	normalizeTradingViewTimeframe,
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('./parseTradingViewSignal');
+const { hasConfluenceEvidence } = require('./confluenceEvidence');
 
 const MAX_SYMBOLS = 50;
 const SUPPORTED_TIMEFRAME_ALIASES = new Set([
@@ -221,7 +222,7 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe, side = 'BUY
 	const riskRewardRatio = getRiskRewardRatio(price, stopLoss, takeProfit, side);
 
 	const sentiment = analysis.sentiment || null;
-	const confluence = analysis.confluence || null;
+	const confluence = hasConfluenceEvidence(analysis) ? analysis.confluence || null : null;
 	const news = analysis.news || null;
 
 	return {
@@ -705,7 +706,9 @@ function numberOrNull(value) {
 
 function deriveItemSide(analysis = {}) {
 	const sentiment = String(analysis?.sentiment || analysis?.market_sentiment?.overall_sentiment || '').toUpperCase();
-	const confluence = String(analysis?.confluence?.recommendation || analysis?.confluence?.action || '').toUpperCase();
+	const confluence = hasConfluenceEvidence(analysis)
+		? String(analysis?.confluence?.recommendation || analysis?.confluence?.action || '').toUpperCase()
+		: '';
 	if (confluence.includes('SELL') || sentiment.includes('BEARISH') || sentiment.includes('BAJISTA')) {
 		return 'SELL';
 	}
