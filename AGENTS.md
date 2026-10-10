@@ -838,7 +838,13 @@ The secretless uptime monitor proves only that *something* answers `/healthcheck
 
 Every failure message ends with `(probed <base_url>)`. A 404 from a decommissioned host and a 404 from a broken service are indistinguishable in a log unless the message names what was probed, so a wrong target is obvious at a glance and never confused with a real outage.
 
-**Exit codes** (closed enum; `7` is new): `0` ok, `2` `AUTH_BLOCKED`/`SECRET_LEAK`, `3` `HEALTHCHECK_FAILED`, `4` `STATUS_UNREACHABLE`, `5` `COMMIT_MISMATCH`, `6` `DEGRADED_DEPENDENCY`, `7` `FLAG_DISABLED`.
+**Exit codes** (closed enum): `0` ok, `2` `AUTH_BLOCKED`/`SECRET_LEAK`, `3` `HEALTHCHECK_FAILED`, `4` `STATUS_UNREACHABLE`, `5` `COMMIT_MISMATCH`, `6` `DEGRADED_DEPENDENCY`, `7` `FLAG_DISABLED`, `8` `AUTH_REJECTED`.
+
+**The workflow must check out the repository before invoking the script (issue #971).** `ops/production-smoke-probe.sh` lives in this repository, so without a SHA-pinned `actions/checkout` (`persist-credentials: false`) every run died at exit `127` before a single HTTP request — the only automated production availability gate was a no-op that *looked* like a real failing gate. A preflight step now reports `script_missing` explicitly so a broken CI setup is never read as a production outage.
+
+**Exit `8` is `AUTH_REJECTED`, and it deliberately is not `7`.** A `401`/`403` from `/api/status` proves production is up and serving while CI's credential is wrong, so it must not share exit `4` with real reachability failures — an operator reading `down` would conclude alerts are undelivered while they are being delivered. Issue #1360 had already shipped `7` as `FLAG_DISABLED`, so this code takes the next free slot rather than renumbering a published enum. Do not "tidy" it back onto `7`.
+
+**The probe has no paging step, and that is a decision, not an omission.** Telegram paging belongs to the secretless external uptime monitor, which pages once on a DOWN transition and once on recovery. A second pager here would duplicate the DOWN page for a single outage and drop the recovery signal — the exact alert fatigue #1107 and #971 were filed about. The consequence is that a stale deploy or a rotated secret has **no** pager at all: only the failed scheduled job reports it. That is the accepted trade, and `tests/unit/production-smoke-probe.test.js` asserts the absence of the Telegram secrets, the cooldown latch and the paging helper so the next agent to find a "missing" pager reads why.
 
 **`PRODUCTION_REQUIRE_ENABLED_FLAGS` is what makes "enable X in production" verifiable.** It is a comma-separated list of `/api/status` `featureFlags` that must be exactly `true`, wired from `vars.PRODUCTION_REQUIRE_ENABLED_FLAGS`. It defaults to **empty**, so it introduces no failure mode until deliberately enabled — do not turn it on repository-wide without first establishing the current live values.
 
