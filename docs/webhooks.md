@@ -369,8 +369,10 @@ operator-authored automation output rather than a TradingView alert or scanner r
 }
 ```
 
-- `message`: Required non-empty string. Values longer than `MAX_MESSAGE_LENGTH` (4,000 characters) are clipped
-  before delivery.
+- `message`: Required non-empty string. Values longer than `GENERIC_MESSAGE_MAX_LENGTH` (default 4,000; integer
+  range 1-20,000) are clipped before delivery. A valid fresh Remote Config value takes precedence over the
+  environment setting. Invalid environment values use 4,000; invalid Remote Config values are ignored, leaving
+  the environment value (or 4,000 when unset/invalid) effective.
 - `channels`: Optional subset of `telegram`, `whatsapp`, `discord`. Omit it to broadcast to every enabled channel.
 - `telegramChatId` / `telegramThreadId` / `whatsappChatId` / `discordWebhookUrl`: Optional per-channel destination
   overrides. `telegramThreadId` targets a forum topic (`0` = General).
@@ -379,7 +381,7 @@ operator-authored automation output rather than a TradingView alert or scanner r
 - Idempotency: send `idempotency-key` / `x-idempotency-key` (or `idempotencyKey` in the body or query) to replay a
   prior response instead of re-delivering. Reusing a key with a different payload returns `409`.
 
-**Response (message within 4,000 characters):**
+**Response (message within the configured limit):**
 ```json
 {
   "success": true,
@@ -389,7 +391,7 @@ operator-authored automation output rather than a TradingView alert or scanner r
 }
 ```
 
-**Response (message exceeded 4,000 characters):**
+**Response (message exceeded the configured limit):**
 ```json
 {
   "success": true,
@@ -402,12 +404,12 @@ operator-authored automation output rather than a TradingView alert or scanner r
 }
 ```
 
-**Truncation metadata (GH-602).** Inbound messages above `MAX_MESSAGE_LENGTH` are clipped to 4,000 characters plus a
-`'...'` suffix before delivery, so `deliveredLength` is 4,003 in the default configuration. When truncation occurs the
+**Truncation metadata (GH-602).** Inbound messages above `GENERIC_MESSAGE_MAX_LENGTH` are clipped to the configured
+limit plus a `'...'` suffix before delivery, so `deliveredLength` is 4,003 with the default configuration. When truncation occurs the
 response adds:
 
 - `truncated`: Always `true` when present. Callers can use it to detect silent content loss.
-- `originalLength`: Inbound character count before clipping (minimum 4,001).
+- `originalLength`: Inbound character count before clipping (minimum 2 when the configured cap is 1).
 - `deliveredLength`: Character count of the text actually handed to the notification channels.
 
 These three fields are **strictly additive and appear only when truncation occurred** — a message that fits returns
@@ -467,4 +469,3 @@ cached — so a dry run can be repeated freely and the same key is still free fo
   channel *availability* is only asserted when the channel registry already exists on the process.
 
 A dry run does not set the `Idempotency-Replay` header, because no reservation is taken.
-

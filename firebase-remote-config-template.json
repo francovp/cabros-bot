@@ -504,6 +504,13 @@
       "description": "Global request-deadline timeout ceiling in milliseconds",
       "valueType": "NUMBER"
     },
+    "GENERIC_MESSAGE_MAX_LENGTH": {
+      "defaultValue": {
+        "value": "4000"
+      },
+      "description": "Maximum inbound generic webhook message length before truncation",
+      "valueType": "NUMBER"
+    },
     "ENABLE_BINANCE_ORDER_AUDIT": {
       "defaultValue": {
         "value": "false"
