@@ -52,6 +52,18 @@ function liveIndex(spec, state) {
 	return { ...spec, state };
 }
 
+function liveDeclaredIndex(spec, state) {
+	const fields = [...spec.fields];
+	if (fields.at(-1)?.fieldPath !== '__name__') {
+		const lastOrderedField = [...fields].reverse().find((field) => field.order);
+		fields.push({
+			fieldPath: '__name__',
+			order: lastOrderedField ? lastOrderedField.order : 'ASCENDING',
+		});
+	}
+	return { ...spec, fields, state };
+}
+
 describe('deploy-firestore-indexes', () => {
 	describe('parseArgs()', () => {
 		it('is dry-run by default', () => {
@@ -146,6 +158,25 @@ describe('deploy-firestore-indexes', () => {
 			expect(audit[0]).toMatchObject({ deployed: true, state: 'READY', ready: true });
 		});
 
+		it('matches the implicit __name__ suffix returned by Firestore', () => {
+			const declared = {
+				collectionGroup: 'alerts',
+				queryScope: 'COLLECTION',
+				fields: [{ fieldPath: 'receivedAt', order: 'DESCENDING' }],
+			};
+			const live = liveIndex({
+				...declared,
+				fields: [
+					{ fieldPath: 'receivedAt', order: 'DESCENDING' },
+					{ fieldPath: '__name__', order: 'DESCENDING' },
+				],
+			}, 'READY');
+
+			const audit = auditIndexes([declared], [live]);
+
+			expect(audit[0]).toMatchObject({ deployed: true, state: 'READY', ready: true });
+		});
+
 		it('reports a still-building index as deployed but not ready', () => {
 			const audit = auditIndexes([ALERTS_INDEX], [liveIndex(ALERTS_INDEX, 'BUILDING')]);
 
@@ -230,8 +261,28 @@ describe('deploy-firestore-indexes', () => {
 			expect(request).toHaveBeenCalledWith(
 				'GET',
 				`https://firestore.googleapis.com/v1/projects/cabros-bot/databases/(default)/collectionGroups/-/indexes?pageSize=${INDEX_PAGE_SIZE}`,
+				expect.objectContaining({ signal: expect.any(AbortSignal) }),
 			);
 			expect(indexes[0].state).toBe('BUILDING');
+		});
+
+		it('aborts a stalled REST request at the timeout deadline', async () => {
+			let signal;
+			const onTimeout = jest.fn();
+			const request = jest.fn((method, url, options) => {
+				signal = options && options.signal;
+				return new Promise(() => {});
+			});
+			const result = await Promise.race([
+				fetchLiveIndexes({ project: 'p', database: '(default)', request, timeoutMs: 10, onTimeout })
+					.then(() => 'resolved', () => 'rejected'),
+				new Promise((resolve) => setTimeout(() => resolve('hung'), 100)),
+			]);
+
+			expect(result).toBe('rejected');
+			expect(signal).toBeDefined();
+			expect(signal.aborted).toBe(true);
+			expect(onTimeout).toHaveBeenCalledWith(expect.objectContaining({ code: 'FIRESTORE_INDEX_TIMEOUT' }));
 		});
 
 		it('refuses to treat a body with no indexes array as an authoritative empty list', async () => {
@@ -329,6 +380,69 @@ describe('deploy-firestore-indexes', () => {
 		});
 	});
 
+	describe('loadAuthenticatedClient()', () => {
+		it('caches OAuth tokens and sends the configured quota project', async () => {
+			const originalFetch = global.fetch;
+			const credential = {
+				getAccessToken: jest.fn().mockResolvedValue({ access_token: 'test-access-token', expires_in: 3600 }),
+			};
+			const app = { options: { credential, projectId: 'quota-project' } };
+			const admin = { apps: [app], app: () => app, initializeApp: jest.fn() };
+			const fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ indexes: [] }) });
+			let request;
+
+			global.fetch = fetch;
+			try {
+				jest.isolateModules(() => {
+					jest.doMock('firebase-admin', () => admin);
+					request = require('../../scripts/deploy-firestore-indexes').loadAuthenticatedClient().request;
+				});
+
+				await request('GET', 'https://firestore.googleapis.com/v1/indexes');
+				await request('GET', 'https://firestore.googleapis.com/v1/indexes');
+
+				expect(credential.getAccessToken).toHaveBeenCalledTimes(1);
+				expect(fetch).toHaveBeenCalledTimes(2);
+				expect(fetch.mock.calls[0][1].headers).toMatchObject({
+					authorization: 'Bearer test-access-token',
+					'x-goog-user-project': 'quota-project',
+				});
+			} finally {
+				jest.dontMock('firebase-admin');
+				global.fetch = originalFetch;
+			}
+		});
+
+		it('returns at the deadline when OAuth token lookup stalls', async () => {
+			const credential = { getAccessToken: jest.fn(() => new Promise(() => {})) };
+			const app = { options: { credential, projectId: 'test-project' } };
+			const admin = { apps: [app], app: () => app, initializeApp: jest.fn() };
+			const onTimeout = jest.fn();
+			const networkHandle = setInterval(() => {}, 1000);
+			let fetchIndexes;
+
+			try {
+				jest.isolateModules(() => {
+					jest.doMock('firebase-admin', () => admin);
+					fetchIndexes = require('../../scripts/deploy-firestore-indexes').fetchLiveIndexes;
+				});
+
+				await expect(fetchIndexes({
+					project: 'test-project',
+					database: '(default)',
+					timeoutMs: 10,
+					onTimeout,
+				})).rejects.toThrow(/Timed out while listing Firestore indexes/);
+
+				expect(credential.getAccessToken).toHaveBeenCalledTimes(1);
+				expect(onTimeout).toHaveBeenCalledTimes(1);
+			} finally {
+				clearInterval(networkHandle);
+				jest.dontMock('firebase-admin');
+			}
+		});
+	});
+
 	describe('resolveFirebaseBin()', () => {
 		it('resolves a real JavaScript entry, never the node_modules/.bin shell shim', () => {
 			const binPath = resolveFirebaseBin();
@@ -344,6 +458,61 @@ describe('deploy-firestore-indexes', () => {
 			const result = runDeploy({ project: 'cabros-bot', binPath: '/tmp/firebase.js', cwd: '/tmp' });
 
 			expect(result.status).not.toBe(0);
+		});
+
+		it('uses the service-account credential for CLI deployment and removes temporary auth files', () => {
+			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'firestore-index-cli-auth-'));
+			const reportPath = path.join(tempDir, 'cli-env.json');
+			const cliPath = path.join(tempDir, 'firebase.js');
+			const serviceAccount = JSON.stringify({
+				type: 'service_account',
+				project_id: 'test-project',
+				private_key: 'test-private-key',
+				client_email: 'test@example.invalid',
+			});
+			const originalEnv = {
+				FIREBASE_SERVICE_ACCOUNT_JSON: process.env.FIREBASE_SERVICE_ACCOUNT_JSON,
+				FIREBASE_TOKEN: process.env.FIREBASE_TOKEN,
+				GOOGLE_APPLICATION_CREDENTIALS: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+			};
+
+			fs.writeFileSync(cliPath, [
+				'const fs = require("node:fs");',
+				'const credentialPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;',
+				'const report = {',
+				'  configDir: process.env.XDG_CONFIG_HOME,',
+				'  credentialPath,',
+				'  credential: JSON.parse(fs.readFileSync(credentialPath, "utf8")),',
+				'  credentialMode: fs.statSync(credentialPath).mode & 0o777,',
+				'  firebaseToken: process.env.FIREBASE_TOKEN,',
+				'  inlineCredential: process.env.FIREBASE_SERVICE_ACCOUNT_JSON,',
+				'};',
+				`fs.writeFileSync(${JSON.stringify(reportPath)}, JSON.stringify(report));`,
+			].join('\n'), 'utf8');
+
+			try {
+				process.env.FIREBASE_SERVICE_ACCOUNT_JSON = serviceAccount;
+				process.env.FIREBASE_TOKEN = 'deprecated-test-token';
+				process.env.GOOGLE_APPLICATION_CREDENTIALS = '/unused/test-credentials.json';
+
+				const result = runDeploy({ project: 'test-project', binPath: cliPath, cwd: tempDir });
+				const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+
+				expect(result.status).toBe(0);
+				expect(report.credential).toEqual(JSON.parse(serviceAccount));
+				expect(report.credentialMode).toBe(0o600);
+				expect(report.firebaseToken).toBeUndefined();
+				expect(report.inlineCredential).toBeUndefined();
+				expect(report.credentialPath).not.toBe('/unused/test-credentials.json');
+				expect(fs.existsSync(report.configDir)).toBe(false);
+				expect(fs.existsSync(report.credentialPath)).toBe(false);
+			} finally {
+				for (const [key, value] of Object.entries(originalEnv)) {
+					if (value === undefined) delete process.env[key];
+					else process.env[key] = value;
+				}
+				fs.rmSync(tempDir, { recursive: true, force: true });
+			}
 		});
 	});
 
@@ -398,9 +567,14 @@ describe('deploy-firestore-indexes', () => {
 		});
 
 		const baseArgs = () => ['--indexes', indexesFile, '--log-file', logFile];
+		const applyArgs = () => ['--log-file', logFile];
 
 		const readyRequest = () => jest.fn().mockResolvedValue({
 			data: { indexes: [liveIndex(ALERTS_INDEX, 'READY')] },
+		});
+
+		const defaultIndexRequest = (state) => jest.fn().mockResolvedValue({
+			data: { indexes: readDeclaredIndexes().map((index) => liveIndex(index, state)) },
 		});
 
 		it('exits 0 when every declared index is READY', async () => {
@@ -441,10 +615,10 @@ describe('deploy-firestore-indexes', () => {
 		});
 
 		it('exits 2 when the deploy itself fails, before auditing anything', async () => {
-			const request = readyRequest();
+			const request = defaultIndexRequest('READY');
 			const deploy = jest.fn().mockReturnValue({ status: 1, stdout: '', stderr: 'boom' });
 
-			await expect(main([...baseArgs(), '--apply'], { request, runDeploy: deploy })).resolves.toBe(2);
+			await expect(main([...applyArgs(), '--apply'], { request, runDeploy: deploy })).resolves.toBe(2);
 			expect(request).not.toHaveBeenCalled();
 		});
 
@@ -453,17 +627,17 @@ describe('deploy-firestore-indexes', () => {
 				throw new Error('Unable to locate the firebase-tools CLI entry');
 			});
 
-			await expect(main([...baseArgs(), '--apply'], { request: readyRequest(), runDeploy: deploy }))
+			await expect(main([...applyArgs(), '--apply'], { request: defaultIndexRequest('READY'), runDeploy: deploy }))
 				.resolves.toBe(2);
 		});
 
 		it('waits through --apply until the build reaches READY instead of exiting on the first poll', async () => {
 			const request = jest.fn()
-				.mockResolvedValueOnce({ data: { indexes: [liveIndex(ALERTS_INDEX, 'BUILDING')] } })
-				.mockResolvedValueOnce({ data: { indexes: [liveIndex(ALERTS_INDEX, 'READY')] } });
+				.mockResolvedValueOnce({ data: { indexes: readDeclaredIndexes().map((index) => liveIndex(index, 'BUILDING')) } })
+				.mockResolvedValueOnce({ data: { indexes: readDeclaredIndexes().map((index) => liveIndex(index, 'READY')) } });
 			const deploy = jest.fn().mockReturnValue({ status: 0, stdout: '', stderr: '' });
 
-			await expect(main([...baseArgs(), '--apply'], {
+			await expect(main([...applyArgs(), '--apply'], {
 				request,
 				runDeploy: deploy,
 				pollIntervalMs: 1,
@@ -475,24 +649,75 @@ describe('deploy-firestore-indexes', () => {
 		});
 
 		it('exits 1 when --apply never reaches READY within the budget', async () => {
-			const request = jest.fn().mockResolvedValue({
-				data: { indexes: [liveIndex(ALERTS_INDEX, 'BUILDING')] },
+			let clock = 0;
+			const request = jest.fn().mockImplementation(async () => {
+				clock += 2000;
+				return { data: { indexes: readDeclaredIndexes().map((index) => liveIndex(index, 'BUILDING')) } };
 			});
 			const deploy = jest.fn().mockReturnValue({ status: 0, stdout: '', stderr: '' });
-			let clock = 0;
 
-			await expect(main([...baseArgs(), '--apply', '--timeout-ms', '1000'], {
+			await expect(main([...applyArgs(), '--apply', '--timeout-ms', '1000'], {
 				request,
 				runDeploy: deploy,
 				pollIntervalMs: 1,
-				now: () => {
-					clock += 2000;
-					return clock;
-				},
+				now: () => clock,
 			})).resolves.toBe(1);
 
 			expect(request).toHaveBeenCalledTimes(1);
 			expect(fs.readFileSync(logFile, 'utf8')).toContain('ALL_READY=false');
+		});
+
+		it.each([
+			['database override', ['--database', 'other-database']],
+			['indexes override', ['--indexes', path.join(os.tmpdir(), 'alternate-firestore-indexes.json')]],
+		])('rejects an apply %s before deployment', async (description, targetArgs) => {
+			const deploy = jest.fn().mockReturnValue({ status: 0, stdout: '', stderr: '' });
+			const request = defaultIndexRequest('READY');
+
+			await expect(main([...applyArgs(), '--apply', ...targetArgs], {
+				request,
+				runDeploy: deploy,
+			})).resolves.toBe(2);
+
+			expect(deploy).not.toHaveBeenCalled();
+			expect(request).not.toHaveBeenCalled();
+			expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/--apply/));
+		});
+
+		it('keeps stdout as a single JSON document in apply mode', async () => {
+			const deploy = jest.fn().mockReturnValue({ status: 0, stdout: '', stderr: '' });
+
+			await expect(main([...applyArgs(), '--apply', '--json'], {
+				request: defaultIndexRequest('READY'),
+				runDeploy: deploy,
+			})).resolves.toBe(0);
+
+			expect(logSpy).toHaveBeenCalledTimes(1);
+			expect(JSON.parse(logSpy.mock.calls[0][0])).toMatchObject({
+				mode: 'apply',
+				summary: { allReady: true },
+			});
+		});
+
+		it('caps the poll sleep to the remaining readiness budget', async () => {
+			let clock = 0;
+			const request = jest.fn().mockImplementation(async () => {
+				clock += 1;
+				return { data: { indexes: readDeclaredIndexes().map((index) => liveIndex(index, 'BUILDING')) } };
+			});
+			const wait = jest.fn(async (ms) => { clock += ms; });
+			const deploy = jest.fn().mockReturnValue({ status: 0, stdout: '', stderr: '' });
+
+			await expect(main([...applyArgs(), '--apply', '--timeout-ms', '3'], {
+				request,
+				runDeploy: deploy,
+				pollIntervalMs: 100,
+				now: () => clock,
+				sleep: wait,
+			})).resolves.toBe(1);
+
+			expect(wait).toHaveBeenCalledWith(2);
+			expect(request).toHaveBeenCalledTimes(1);
 		});
 
 		it('exits 0 without any request when the template declares no indexes', async () => {

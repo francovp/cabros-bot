@@ -39,6 +39,7 @@
  */
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
@@ -47,6 +48,9 @@ const DEFAULT_DATABASE = '(default)';
 const DEFAULT_LOG_FILE = '.firestore-indexes-deploy.log';
 const INDEXES_PATH = path.resolve(__dirname, '..', 'firestore.indexes.json');
 const FIRESTORE_API = 'https://firestore.googleapis.com/v1';
+const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
+const TOKEN_REFRESH_THRESHOLD_MS = 5 * 60 * 1000;
+const STALLED_CREDENTIAL_EXIT_GRACE_MS = 1000;
 
 /**
  * `READY` is the only state a query can actually use. The API also reports
@@ -192,10 +196,20 @@ function indexKey(index) {
 	if (!index || !index.collectionGroup) {
 		return '';
 	}
-	const fields = (index.fields || [])
+	const fields = Array.isArray(index.fields) ? [...index.fields] : [];
+	if (fields.length > 0 && fields[fields.length - 1].fieldPath !== '__name__') {
+		let nameOrder = 'ASCENDING';
+		for (const field of fields) {
+			if (field.order) {
+				nameOrder = field.order;
+			}
+		}
+		fields.push({ fieldPath: '__name__', order: nameOrder });
+	}
+	const serializedFields = fields
 		.map((field) => `${field.fieldPath}:${field.order}`)
 		.join(',');
-	return `${index.collectionGroup}|${index.queryScope || 'COLLECTION'}|${fields}`;
+	return `${index.collectionGroup}|${index.queryScope || 'COLLECTION'}|${serializedFields}`;
 }
 
 /**
@@ -256,25 +270,40 @@ function summarizeAudit(audit) {
 	};
 }
 
+function waitForAbort(promise, signal) {
+	if (!signal) {
+		return Promise.resolve(promise);
+	}
+	if (signal.aborted) {
+		return Promise.reject(signal.reason || new Error('Request aborted'));
+	}
+
+	return new Promise((resolve, reject) => {
+		const onAbort = () => reject(signal.reason || new Error('Request aborted'));
+		const cleanup = () => signal.removeEventListener('abort', onAbort);
+		signal.addEventListener('abort', onAbort, { once: true });
+		Promise.resolve(promise).then(
+			(value) => {
+				cleanup();
+				resolve(value);
+			},
+			(error) => {
+				cleanup();
+				reject(error);
+			},
+		);
+	});
+}
+
 /**
- * Load an authenticated HTTP client. Kept behind a function so tests can inject
- * their own request function and never touch the network or real credentials.
- *
- * Note the deep import: `utils/api-request` is firebase-admin *internal* API, not
- * published surface, so a firebase-admin major bump could move it. The coupling is
- * accepted deliberately — it is the only way to reuse the Admin SDK's own
- * credential resolution and OAuth refresh for a plain REST call, and reimplementing
- * a token refresh here would be strictly worse. If a future bump breaks it, the
- * failure is loud (a require error at startup) and the fix is a one-line path
- * change, not a silent behaviour change.
+ * Load an authenticated HTTP request function using the Admin SDK's public
+ * credential API. Native fetch keeps Firestore calls abortable at the readiness
+ * deadline without relying on Firebase Admin's private HTTP client.
  *
  * @returns {{request: Function}}
  */
 function loadAuthenticatedClient() {
 	const admin = require('firebase-admin');
-	const { AuthorizedHttpClient } = require(
-		path.join(path.dirname(require.resolve('firebase-admin')), 'utils/api-request'),
-	);
 
 	const appOptions = {};
 	const configuredProjectId = process.env.FIREBASE_PROJECT_ID
@@ -290,9 +319,54 @@ function loadAuthenticatedClient() {
 	}
 
 	const app = admin.apps.length ? admin.app() : admin.initializeApp(appOptions);
-	const client = new AuthorizedHttpClient(app);
+	const credential = app.options.credential;
+	const projectId = app.options.projectId;
+	if (!credential || typeof credential.getAccessToken !== 'function') {
+		throw new Error('Firebase Admin did not provide an OAuth credential.');
+	}
+	let cachedToken = null;
+	let tokenPromise = null;
+	const getAccessToken = (signal) => {
+		if (cachedToken && cachedToken.expirationTime - Date.now() > TOKEN_REFRESH_THRESHOLD_MS) {
+			return Promise.resolve(cachedToken.accessToken);
+		}
+		if (!tokenPromise) {
+			tokenPromise = Promise.resolve()
+				.then(() => credential.getAccessToken())
+				.then((token) => {
+					if (!token || typeof token.access_token !== 'string' || !Number.isFinite(token.expires_in)) {
+						throw new Error('Firebase Admin returned an invalid OAuth access token.');
+					}
+					cachedToken = {
+						accessToken: token.access_token,
+						expirationTime: Date.now() + token.expires_in * 1000,
+					};
+					return cachedToken.accessToken;
+				})
+				.finally(() => {
+					tokenPromise = null;
+				});
+		}
+		return waitForAbort(tokenPromise, signal);
+	};
+
 	return {
-		request: (method, url) => client.send({ method, url }),
+		request: async (method, url, options = {}) => {
+			const token = await getAccessToken(options.signal);
+			const headers = { authorization: `Bearer ${token}` };
+			if (projectId) {
+				headers['x-goog-user-project'] = projectId;
+			}
+			const response = await fetch(url, {
+				method,
+				headers,
+				signal: options.signal,
+			});
+			if (!response.ok) {
+				throw new Error(`Firestore returned HTTP ${response.status}.`);
+			}
+			return { data: await response.json() };
+		},
 	};
 }
 
@@ -311,11 +385,19 @@ function loadAuthenticatedClient() {
  * @param {string} opts.project
  * @param {string} opts.database
  * @param {Function} [opts.request]
+ * @param {number} [opts.deadline] Absolute timestamp after which the listing aborts.
+ * @param {number} [opts.timeoutMs] Total request budget when no deadline is supplied.
+ * @param {Function} [opts.now]
+ * @param {Function} [opts.onTimeout]
  * @returns {Promise<Array<Object>>}
  */
 async function fetchLiveIndexes(opts = {}) {
 	const { project, database } = opts;
 	const request = opts.request || loadAuthenticatedClient().request;
+	const now = opts.now || Date.now;
+	const deadline = Number.isFinite(opts.deadline)
+		? opts.deadline
+		: now() + (Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : DEFAULT_REQUEST_TIMEOUT_MS);
 	const databaseId = database === '(default)' ? '(default)' : database;
 	const all = [];
 	let pageToken = null;
@@ -331,13 +413,47 @@ async function fetchLiveIndexes(opts = {}) {
 		}
 
 		let response;
+		const remainingMs = deadline - now();
+		if (remainingMs <= 0) {
+			const error = new Error(`Timed out while listing Firestore indexes for project ${project}.`);
+			error.code = 'FIRESTORE_INDEX_TIMEOUT';
+			throw error;
+		}
+
+		const controller = new AbortController();
+		const timeoutError = new Error(`Timed out while listing Firestore indexes for project ${project}.`);
+		timeoutError.code = 'FIRESTORE_INDEX_TIMEOUT';
+		let onAbort;
+		const aborted = new Promise((resolve, reject) => {
+			onAbort = () => reject(timeoutError);
+			controller.signal.addEventListener('abort', onAbort, { once: true });
+		});
+		const timeout = setTimeout(() => {
+			controller.abort(timeoutError);
+			if (typeof opts.onTimeout === 'function') {
+				try {
+					opts.onTimeout(timeoutError);
+				} catch {
+					// Timeout handling must not replace the authoritative timeout result.
+				}
+			}
+		}, remainingMs);
 		try {
-			response = await request('GET', url.toString());
+			response = await Promise.race([
+				Promise.resolve().then(() => request('GET', url.toString(), { signal: controller.signal })),
+				aborted,
+			]);
 		} catch (error) {
+			if (controller.signal.aborted || error.code === 'FIRESTORE_INDEX_TIMEOUT') {
+				throw timeoutError;
+			}
 			// The provider message can embed the project/database path; surface a
 			// fixed message so no project detail leaks into CI output or the log.
 			throw new Error(`Failed to list Firestore indexes for project ${project}. `
 				+ 'Check that you are authenticated and hold datastore.indexes.list.', { cause: error });
+		} finally {
+			clearTimeout(timeout);
+			controller.signal.removeEventListener('abort', onAbort);
 		}
 
 		// `AuthorizedHttpClient.send()` resolves with the parsed JSON body on `.data`;
@@ -432,27 +548,45 @@ function resolveFirebaseBin(repoRoot = path.join(__dirname, '..')) {
  */
 function runDeploy(opts = {}) {
 	const binPath = opts.binPath || resolveFirebaseBin(opts.cwd || path.join(__dirname, '..'));
-	const result = spawnSync(process.execPath, [
-		binPath,
-		'deploy',
-		'--only',
-		'firestore:indexes',
-		'--project',
-		opts.project,
-	], {
-		encoding: 'utf8',
-		maxBuffer: 10 * 1024 * 1024,
-		cwd: opts.cwd || path.join(__dirname, '..'),
-	});
+	const cliConfigHome = fs.mkdtempSync(path.join(os.tmpdir(), 'firestore-index-cli-'));
+	try {
+		const env = { ...process.env, XDG_CONFIG_HOME: cliConfigHome };
+		// The Firebase CLI must use the same Admin credential as the REST audit.
+		// Isolate its cached login store and remove the legacy token override so
+		// neither can silently select a different deploy identity.
+		delete env.FIREBASE_TOKEN;
+		delete env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+			const credentialPath = path.join(cliConfigHome, 'service-account.json');
+			fs.writeFileSync(credentialPath, process.env.FIREBASE_SERVICE_ACCOUNT_JSON, { mode: 0o600 });
+			env.GOOGLE_APPLICATION_CREDENTIALS = credentialPath;
+		}
 
-	if (result.error) {
-		throw new Error(`Failed to launch firebase CLI: ${result.error.message}`, { cause: result.error });
+		const result = spawnSync(process.execPath, [
+			binPath,
+			'deploy',
+			'--only',
+			'firestore:indexes',
+			'--project',
+			opts.project,
+		], {
+			encoding: 'utf8',
+			maxBuffer: 10 * 1024 * 1024,
+			cwd: opts.cwd || path.join(__dirname, '..'),
+			env,
+		});
+
+		if (result.error) {
+			throw new Error(`Failed to launch firebase CLI: ${result.error.message}`, { cause: result.error });
+		}
+		return {
+			status: result.status,
+			stdout: (result.stdout || '').trim(),
+			stderr: (result.stderr || '').trim(),
+		};
+	} finally {
+		fs.rmSync(cliConfigHome, { recursive: true, force: true });
 	}
-	return {
-		status: result.status,
-		stdout: (result.stdout || '').trim(),
-		stderr: (result.stderr || '').trim(),
-	};
 }
 
 /**
@@ -499,7 +633,7 @@ function sleep(ms) {
  * path passes neither and behaves exactly as before.
  *
  * @param {string[]} [argv]
- * @param {{request?: Function|null, runDeploy?: Function, pollIntervalMs?: number, now?: Function}} [deps]
+ * @param {{request?: Function|null, runDeploy?: Function, pollIntervalMs?: number, now?: Function, onTimeout?: Function}} [deps]
  * @returns {Promise<number>}
  */
 async function main(argv = process.argv.slice(2), deps = {}) {
@@ -529,19 +663,26 @@ Usage:
 
 Options:
   --project <id>      Firebase project id (default: ${DEFAULT_PROJECT})
-  --database <id>     Firestore database id (default: ${DEFAULT_DATABASE})
-  --indexes <path>    Path to the index template (default: firestore.indexes.json)
+  --database <id>     Firestore database id (default: ${DEFAULT_DATABASE}; overrides are dry-run only)
+  --indexes <path>    Path to the index template (default: firestore.indexes.json; overrides are dry-run only)
   --timeout-ms <n>    Readiness wait budget after --apply (default: ${10 * 60 * 1000})
   --dry-run           Report only (default)
-  --apply             Run firebase deploy --only firestore:indexes, then wait for READY
+  --apply             Deploy firebase.json indexes for the default database, then wait for READY
   --log-file <path>   Audit log path (default: ${DEFAULT_LOG_FILE})
   --json              Output the result as JSON
   --help, -h          Show this help message
 
-Requires an authenticated Firebase session (firebase login, FIREBASE_TOKEN, or
-GOOGLE_APPLICATION_CREDENTIALS) with datastore.indexes permissions.
+Requires Application Default Credentials with datastore.indexes permissions. Supported sources are
+FIREBASE_SERVICE_ACCOUNT_JSON, GOOGLE_APPLICATION_CREDENTIALS, or the runtime ADC provider. The CLI
+login store and FIREBASE_TOKEN are ignored so deployment and REST auditing use the same credential.
 `);
 		return 0;
+	}
+
+	if (args.apply && (args.database !== DEFAULT_DATABASE || args.indexesPath !== INDEXES_PATH)) {
+		console.error('error: --apply deploys only the default database and firestore.indexes.json from firebase.json; '
+			+ 'use dry-run to audit a custom database or template.');
+		return 2;
 	}
 
 	let declared;
@@ -598,7 +739,9 @@ GOOGLE_APPLICATION_CREDENTIALS) with datastore.indexes permissions.
 				return 2;
 			}
 			deployed = true;
-			console.log(`Deploy finished for project ${args.project}; waiting for index builds to reach READY...`);
+			if (!args.json) {
+				console.log(`Deploy finished for project ${args.project}; waiting for index builds to reach READY...`);
+			}
 		} catch (error) {
 			console.error(`error: ${error.message}`);
 			return 2;
@@ -611,14 +754,22 @@ GOOGLE_APPLICATION_CREDENTIALS) with datastore.indexes permissions.
 	const deadline = now() + args.timeoutMs;
 	let audit;
 	let summary;
+	const wait = deps.sleep || sleep;
 
 	for (;;) {
+		if (args.apply && summary && now() >= deadline) {
+			break;
+		}
+
 		let live;
 		try {
 			live = await fetchLiveIndexes({
 				project: args.project,
 				database: args.database,
 				request,
+				deadline: args.apply ? deadline : undefined,
+				now,
+				onTimeout: deps.onTimeout,
 			});
 		} catch (error) {
 			console.error(`error: ${error.message}`);
@@ -627,10 +778,11 @@ GOOGLE_APPLICATION_CREDENTIALS) with datastore.indexes permissions.
 
 		audit = auditIndexes(declared, live);
 		summary = summarizeAudit(audit);
-		if (summary.allReady || !args.apply || now() >= deadline) {
+		const remainingMs = deadline - now();
+		if (summary.allReady || !args.apply || remainingMs <= 0) {
 			break;
 		}
-		await sleep(pollIntervalMs);
+		await wait(Math.min(pollIntervalMs, remainingMs));
 	}
 
 	const payload = {
@@ -694,6 +846,7 @@ module.exports = {
 	auditIndexes,
 	fetchLiveIndexes,
 	indexKey,
+	loadAuthenticatedClient,
 	main,
 	parseArgs,
 	readDeclaredIndexes,
@@ -704,7 +857,15 @@ module.exports = {
 };
 
 if (require.main === module) {
-	main()
+	main(process.argv.slice(2), {
+		onTimeout: () => {
+			// Firebase Admin's public credential API cannot cancel a stalled token
+			// exchange. If that socket keeps the one-shot CLI alive after the request
+			// deadline, force the process down after giving stderr time to flush.
+			const forcedExit = setTimeout(() => process.exit(2), STALLED_CREDENTIAL_EXIT_GRACE_MS);
+			forcedExit.unref();
+		},
+	})
 		.then((code) => {
 			process.exitCode = code;
 		})
