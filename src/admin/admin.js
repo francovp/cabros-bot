@@ -973,6 +973,26 @@ const createIdempotencyKey = () => (window.crypto && typeof window.crypto.random
 
 const SYMBOL_PATTERN = /^[A-Za-z0-9_]+:[A-Za-z0-9._-]+$/;
 
+// Mirrors the retryable set of the server error envelope (src/lib/errorEnvelope.js).
+const RETRYABLE_SUBMISSION_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+/**
+ * Whether an idempotent submission can still succeed if it is sent again with the
+ * exact same key.
+ *
+ * The server caches every idempotent response below 500, so replaying a key after a
+ * definitive rejection only returns the cached rejection, and correcting the payload
+ * first turns the retry into a 409 IDEMPOTENCY_CONFLICT. Only transport failures and
+ * retryable or indeterminate statuses keep the same key alive. No observed status means
+ * the request never reached the server (network error, deadline, blocked pre-flight), so
+ * the key was never spent.
+ */
+const canRetryWithSameIdempotencyKey = (responseStatus) => {
+	if (!Number.isFinite(responseStatus)) return true;
+	if (responseStatus < 400) return true;
+	return RETRYABLE_SUBMISSION_STATUSES.has(responseStatus);
+};
+
 const withReplayIdempotencyKey = (definition, body) => {
 	if (definition.method !== 'POST' || (definition.path !== '/api/alerts/{alertId}/replay' && definition.path !== '/api/alerts/batch/replay')) return body;
 	if (body && ['idempotencyKey', 'idempotency_key'].some((key) => typeof body[key] === 'string' && body[key].trim())) return body;
@@ -4860,6 +4880,7 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 
 	// Submission & retry
 	let lastIdempotencyKey = null;
+	let sameKeyRetryAllowed = false;
 	let submitInProgress = false;
 
 	const doSubmit = async (idempotencyKey) => {
@@ -4882,6 +4903,7 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 		}
 
 		lastIdempotencyKey = idempotencyKey;
+		sameKeyRetryAllowed = false;
 		retryButton.hidden = true;
 		lastRawJson = '';
 		showResult(rawOutput, '');
@@ -4925,10 +4947,12 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 			}
 
 			if (!data || (pollFailureStatus && pollFailureStatus >= 400)) {
-				retryButton.hidden = false;
+				sameKeyRetryAllowed = canRetryWithSameIdempotencyKey(pollFailureStatus);
+				retryButton.hidden = !sameKeyRetryAllowed;
 			}
 		} catch (error) {
 			showError(output, error.message);
+			sameKeyRetryAllowed = true;
 			retryButton.hidden = false;
 		} finally {
 			submitInProgress = false;
@@ -4942,7 +4966,7 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 	});
 
 	retryButton.addEventListener('click', async () => {
-		if (lastIdempotencyKey) {
+		if (lastIdempotencyKey && sameKeyRetryAllowed) {
 			await doSubmit(lastIdempotencyKey);
 		}
 	});

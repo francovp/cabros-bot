@@ -127,7 +127,7 @@ describe('OpenAPI contract', () => {
 			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/outcomes/calibration',
 			'GET /api/symbol-analyses', 'GET /api/symbol-analyses/summary',
 			'GET /api/trading/binance/orders', 'GET /api/trading/binance/orders/audit', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
-			'POST /api/trading/binance/orders/preview',
+			'POST /api/trading/binance/orders/preview', 'GET /api/trading/binance/account/balances',
 			'POST /api/news-monitor/pause', 'POST /api/news-monitor/resume', 'GET /api/news-monitor/status',
 			'GET /api/news-monitor/summary', 'GET /api/news-monitor/analyses',
 			'POST /api/admin/test-alert', 'GET /api/admin/events',
@@ -164,6 +164,7 @@ describe('OpenAPI contract', () => {
 			'GET /api/trading/binance/orders': 'admin.viewer',
 			'GET /api/trading/binance/orders/audit': 'admin.viewer',
 			'POST /api/trading/binance/orders/preview': 'admin.viewer',
+			'GET /api/trading/binance/account/balances': 'admin.viewer',
 			'POST /api/trading/binance/orders': 'admin.operator',
 			'DELETE /api/trading/binance/orders': 'admin.operator',
 			'GET /api/alerts': 'admin.viewer',
@@ -272,6 +273,44 @@ describe('OpenAPI contract', () => {
 			error: 'Idempotency key was reused with a different payload',
 			code: 'IDEMPOTENCY_CONFLICT',
 		});
+	});
+
+	it('documents the generic-message dry-run preview contract (issue #876)', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const operation = contract.paths['/api/webhook/message'].post;
+
+		expect(operation.parameters).toEqual(expect.arrayContaining([
+			{ $ref: '#/components/parameters/MessageDryRun' },
+		]));
+		expect(contract.components.parameters.MessageDryRun.name).toBe('dryRun');
+		expect(contract.components.parameters.MessageDryRun.in).toBe('query');
+		expect(contract.components.parameters.MessageDryRun.schema.type).toBe('boolean');
+		expect(contract.components.parameters.MessageDryRun.description).toContain('no idempotency key is reserved');
+
+		expect(contract.components.schemas.MessageRequest.properties.dryRun.type).toBe('boolean');
+		expect(contract.components.schemas.MessageRequest.properties.dryRun.description).toContain('400 INVALID_REQUEST');
+
+		// A dry run must never advertise the Discord webhook credential, so the
+		// preview schema documents a presence flag rather than the URL.
+		const routingProperties = contract.components.schemas.MessageDryRunRouting.properties;
+		expect(routingProperties.discordWebhookUrlProvided.type).toBe('boolean');
+		expect(routingProperties.discordWebhookUrl).toBeUndefined();
+		expect(contract.components.schemas.MessageDryRunPayload.required).toEqual(['text']);
+
+		const responseProperties = contract.components.responses.MessageDeliveryResult
+			.content['application/json'].schema.allOf[1].properties;
+		for (const field of ['dryRun', 'broadcast', 'requestedChannels', 'deliveredChannels', 'payload', 'routing']) {
+			expect(responseProperties[field]).toBeDefined();
+		}
+
+		const dryRunExample = contract.components.responses.MessageDeliveryResult
+			.content['application/json'].examples.dryRun.value;
+		expect(dryRunExample).toMatchObject({ success: true, dryRun: true, deliveredChannels: [] });
+		expect(dryRunExample.requestId).toEqual(expect.any(String));
+		expect(dryRunExample.payload.text).toEqual(expect.any(String));
+		expect(dryRunExample.routing.discordWebhookUrlProvided).toBe(true);
+		expect(Object.keys(dryRunExample.routing)).not.toContain('discordWebhookUrl');
 	});
 
 	it('aligns symbol analysis schema with runtime normalization', () => {

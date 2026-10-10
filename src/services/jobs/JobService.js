@@ -9,11 +9,14 @@ const { tradingViewMcpService } = require('../tradingview/TradingViewMcpService'
 const {
 	parseExpandedAnalysisAlertRequest,
 	buildExpandedAnalysisAlertReport,
+	deriveItemSide,
+	recordExpandedAnalysisOutcomes,
 } = require('../tradingview/expandedAnalysisAlertReport');
 const {
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
+	recordMarketScannerOutcomes,
 } = require('../tradingview/marketScannerReport');
 const { enrichScannerItemsWithTrendConfluence } = require('../tradingview/marketScannerConfluence');
 const {
@@ -1001,6 +1004,9 @@ class JobService {
 			if (claim.reason === 'terminal') {
 				const terminalJob = await this.repository.get(jobId);
 				if (terminalJob) {
+					if (terminalJob.status === 'completed' && terminalJob.deliveryCheckpoint?.status === 'completed') {
+						this._recordJobOutcomes(terminalJob, terminalJob.requestMetadata || {});
+					}
 					await this._triggerCallbackIfConfigured(terminalJob, { awaitDelivery: true });
 				}
 			}
@@ -1111,6 +1117,9 @@ class JobService {
 		}
 
 		job.status = 'processing';
+		if (job.deliveryCheckpoint?.status !== 'completed') {
+			job.startedAt = new Date(startTime).toISOString();
+		}
 		if (isQueuedMode) {
 			job.execution.status = 'running';
 		}
@@ -1171,6 +1180,7 @@ class JobService {
 					? this._buildScannerSummary(job.fullScanResults || [], job.deliveryResults)
 					: this._buildExpandedSummary(job.fullResults || [], job.deliveryResults);
 				job.status = 'completed';
+				this._recordJobOutcomes(job, parsed);
 			} else if (job.type === 'expanded-analysis') {
 				await this._executeExpandedAnalysis(job, parsed, signal, botOrGetter);
 			} else if (job.type === 'market-scanner') {
@@ -1204,6 +1214,7 @@ class JobService {
 				job.status = 'completed';
 				job.error = null;
 				job.code = null;
+				this._recordJobOutcomes(job, parsed);
 			} else {
 				const isTimeout =
 					error.message.includes('timed out') ||
@@ -1313,7 +1324,7 @@ class JobService {
 						}
 					}
 
-					result = { symbol: input.raw, status: 'analyzed', input, analysis, multiTimeframe };
+					result = { symbol: input.raw, status: 'analyzed', input, analysis, multiTimeframe, side: deriveItemSide(analysis) };
 				} catch (error) {
 					if (this._isClaimLost(signal)) return null;
 					if (this._isAbortTriggered(signal, error)) {
@@ -1369,6 +1380,7 @@ class JobService {
 				input: result.input,
 				analysis: result.analysis,
 				multiTimeframe: result.multiTimeframe,
+				side: result.side,
 			}));
 
 		if (analyzedItems.length === 0) {
@@ -1403,6 +1415,9 @@ class JobService {
 		job.requestedChannels = getRequestedChannels(notificationManager, routing);
 		job.summary = this._buildExpandedSummary(job.fullResults, deliveryResults);
 		job.status = 'completed';
+
+		this._recordJobOutcomes(job, parsed);
+
 		await this._persistJob(job);
 	}
 
@@ -1544,6 +1559,9 @@ class JobService {
 		job.requestedChannels = getRequestedChannels(notificationManager, routing);
 		job.summary = this._buildScannerSummary(job.fullScanResults, deliveryResults);
 		job.status = 'completed';
+
+		this._recordJobOutcomes(job, parsed);
+
 		await this._persistJob(job);
 	}
 
@@ -1628,6 +1646,24 @@ class JobService {
 			&& job.execution
 			&& (job.execution.mode === 'render-worker' || job.execution.mode === 'firestore-poller'),
 		);
+	}
+
+	_recordJobOutcomes(job, parsed) {
+		const options = {
+			jobId: job.jobId,
+			requestId: job.requestId || job.jobId,
+			startTime: job.startedAt ? new Date(job.startedAt).getTime() : undefined,
+			receivedAt: job.deliveryCheckpoint?.completedAt,
+		};
+		if (job.type === 'market-scanner') {
+			recordMarketScannerOutcomes(job.fullScanResults || [], parsed, options);
+		} else {
+			const analyzedItems = (job.fullResults || [])
+				.filter((result) => result.status === 'analyzed')
+				// Legacy reports rendered BUY when no direction was persisted.
+				.map((result) => ({ ...result, side: result.side || 'BUY' }));
+			recordExpandedAnalysisOutcomes(analyzedItems, parsed, options);
+		}
 	}
 
 	async _sendQueuedNotification(job, notificationManager, alert, routing = {}, options = {}) {

@@ -109,6 +109,43 @@ describe('Postman collection contract', () => {
 		]));
 	});
 
+	it('documents cross-timeframe duplicate collapse with the delivered baseline leg', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const collapsed = findItem(collection.item, 'POST Send Alert (cross-timeframe duplicate suppressed)');
+		expect(collapsed).toBeDefined();
+		expect(collapsed.request.method).toBe('POST');
+		expect(collapsed.request.url.raw).toBe('{{baseUrl}}/api/webhook/alert');
+		expect(findHeader(collapsed, 'x-api-key').value).toBe('{{apiKey}}');
+		expect(collapsed.request.body.raw).toContain('BINANCE:BTCUSDT(240)');
+
+		const suppressed = collapsed.response.find((response) => response.code === 200);
+		const suppressedBody = JSON.parse(suppressed.body);
+		expect(suppressedBody.success).toBe(true);
+		expect(suppressedBody.suppressedRepeat).toBe(true);
+		expect(suppressedBody.suppressionReason).toBe('cross_timeframe_duplicate');
+		expect(suppressedBody.results).toEqual([]);
+		expect(suppressedBody.deliveredChannels).toEqual([]);
+		expect(suppressed.originalRequest.body.raw).toContain('BINANCE:BTCUSDT(240)');
+
+		const unauthorized = collapsed.response.find((response) => response.code === 401);
+		expect(JSON.parse(unauthorized.body)).toMatchObject({ success: false, retryable: false });
+
+		const baseline = findItem(collection.item, 'POST Send Alert (daily signal - cross-timeframe baseline)');
+		expect(baseline).toBeDefined();
+		expect(baseline.request.body.raw).toContain('BINANCE:BTCUSDT(D)');
+		const delivered = baseline.response.find((response) => response.code === 200);
+		const deliveredBody = JSON.parse(delivered.body);
+		expect(deliveredBody.suppressedRepeat).toBeUndefined();
+		expect(deliveredBody.deliveredChannels).toEqual(['telegram']);
+	});
+
+	it('leaves the same-timeframe repeat suppression example without a suppression reason', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const sameTimeframe = findItem(collection.item, 'POST Send Alert (repeat suppressed)');
+		const suppressed = sameTimeframe.response.find((response) => response.code === 200);
+		expect(JSON.parse(suppressed.body).suppressionReason).toBeUndefined();
+	});
+
 	it('documents valid and invalid per-symbol alert routing variants', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const valid = findItem(collection.item, 'POST Send Alert (per-symbol routing)');
@@ -343,6 +380,65 @@ describe('Postman collection contract', () => {
 		expect(marketBuyResp.order.quoteOrderQty).toBe('50');
 		expect(marketBuyResp.order.newOrderRespType).toBe('FULL');
 		expect(marketBuyResp.order.newClientOrderId).toBeUndefined();
+	});
+
+	it('documents the generic-message dry-run preview variants (issue #876)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const queryItem = findItem(collection.item, 'POST Send Message (dry-run, query flag)');
+		const bodyItem = findItem(collection.item, 'POST Send Message (dry-run, body field)');
+
+		expect(queryItem).toBeDefined();
+		expect(bodyItem).toBeDefined();
+		expect(queryItem.request.url.raw).toContain('{{baseUrl}}/api/webhook/message?dryRun=true');
+		expect(bodyItem.request.url.raw).toBe('{{baseUrl}}/api/webhook/message');
+		expect(JSON.parse(bodyItem.request.body.raw).dryRun).toBe(true);
+		expect(findHeader(queryItem, 'idempotency-key')).toBeDefined();
+
+		for (const item of [queryItem, bodyItem]) {
+			const tests = (item.event || []).filter((event) => event.listen === 'test');
+			expect(tests.length).toBeGreaterThan(0);
+			const script = tests[0].script.exec.join('\n');
+			expect(script).toContain('pm.test');
+			expect(script).toContain('dryRun');
+			expect(script).toContain('deliveredChannels');
+
+			for (const example of item.response) {
+				if (example.code !== 200) continue;
+				const body = JSON.parse(example.body);
+				expect(body.success).toBe(true);
+				expect(body.dryRun).toBe(true);
+				expect(body.deliveredChannels).toEqual([]);
+				expect(body.requestId).toEqual(expect.any(String));
+				expect(body.payload.text).toEqual(expect.any(String));
+				expect(body.estimatedChunks).toEqual(expect.objectContaining({
+					telegram: expect.any(Number),
+					whatsapp: expect.any(Number),
+					discord: expect.any(Number),
+				}));
+				expect(body.results).toBeUndefined();
+				// The saved example must not leak the webhook credential it documents.
+				expect(example.body).not.toContain('abc-xyz-token');
+				expect(body.routing).not.toHaveProperty('discordWebhookUrl');
+			}
+		}
+
+		// Broadcast shape: an omitted channel subset is reported as a broadcast.
+		const broadcastExample = JSON.parse(bodyItem.response[0].body);
+		expect(broadcastExample.broadcast).toBe(true);
+
+		const invalidValue = queryItem.response.find((res) => res.code === 400 && res.name.includes('invalid dryRun'));
+		expect(invalidValue).toBeDefined();
+		expect(JSON.parse(invalidValue.body)).toMatchObject({
+			success: false,
+			details: { field: 'dryRun' },
+		});
+
+		const invalidRouting = queryItem.response.find((res) => res.code === 400 && res.name.includes('routing override'));
+		expect(invalidRouting).toBeDefined();
+		expect(JSON.parse(invalidRouting.body)).toMatchObject({
+			success: false,
+			details: { field: 'discordWebhookUrl' },
+		});
 	});
 
 	it('documents Request Timeout (408) response examples with required fields', () => {

@@ -138,12 +138,13 @@ All webhook and mutation endpoints require the `x-api-key` header (configured vi
 | `POST` | `/api/webhook/volume-confirmation` | TradingView volume and momentum confirmation | [Webhook Alerts](docs/webhooks.md#post-apiwebhookvolume-confirmation) |
 | `POST` | `/api/webhook/symbol-analysis` | Immediate multi-timeframe symbol analysis | [Webhook Alerts](docs/webhooks.md#post-apiwebhooksymbol-analysis) |
 | `POST` | `/api/webhook/market-scanner-alert` | Multi-asset market scanner report (gainers/losers) | [Webhook Alerts](docs/webhooks.md#post-apiwebhookmarket-scanner-alert) |
-| `POST` | `/api/webhook/message` | Generic non-alert message to enabled channels; reports inbound truncation metadata | [Webhook Alerts](docs/webhooks.md#post-apiwebhookmessage) |
+| `POST` | `/api/webhook/message` | Generic non-alert message to enabled channels; reports inbound truncation metadata, and supports `dryRun` routing preview | [Webhook Alerts](docs/webhooks.md#post-apiwebhookmessage) |
 | `POST` | `/api/jobs/tradingview-analysis` | Queue long-running analysis or scanner job | [Jobs API](docs/jobs.md#post-apijobstradingview-analysis) |
 | `GET` | `/api/jobs` | List recent background jobs with status & progress | [Jobs API](docs/jobs.md#get-apijobs) |
 | `GET` | `/api/jobs/:jobId` | Poll background job progress and retrieve result | [Jobs API](docs/jobs.md#get-apijobsjobid) |
 | `POST` | `/api/news-monitor` | Trigger symbol news scanning & event detection | [News Monitoring](docs/news-monitor.md) |
 | `POST` | `/api/trading/binance/orders/preview` | Pre-trade Binance Spot cost & slippage preview | [API Reference](docs/api-reference.md#post-apitradingbinanceorderspreview) |
+| `GET` | `/api/trading/binance/account/balances` | Read-only Binance Spot balances for allowed assets | [API Reference](docs/api-reference.md#get-apitradingbinanceaccountbalances) |
 | `GET` | `/api/alerts` | Query stored alerts with pagination & filtering | [Stored Alerts](docs/alerts.md#get-apialerts) |
 | `GET` | `/api/alerts/summary` | Analytics & delivery success rate metrics | [Stored Alerts](docs/alerts.md#get-apialertssummary) |
 | `POST` | `/api/alerts/:alertId/replay` | Dry-run or live replay of stored alert | [Stored Alerts](docs/alerts.md#post-apialertsalertidreplay) |
@@ -151,6 +152,12 @@ All webhook and mutation endpoints require the `x-api-key` header (configured vi
 | `GET` | `/api/outcomes/summary` | Expectancy, win rate, and performance summary | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomessummary) |
 
 Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`.
+
+`POST /api/webhook/message` truncates inbound text above `GENERIC_MESSAGE_MAX_LENGTH` (integer, default `4000`, range `1`-`20000`). A fresh valid Firebase Remote Config value takes precedence over the environment value; invalid environment values use the default, while invalid Remote Config values are ignored so the environment/default remains effective. Response truncation metadata remains conditional on clipping.
+
+| Variable | Type | Default | Bounds | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `GENERIC_MESSAGE_MAX_LENGTH` | Integer | `4000` | `1`-`20000` | Maximum inbound characters before generic message webhook truncation. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored, leaving the environment/default effective. |
 
 ---
 
@@ -400,7 +407,7 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
 
 `status: "ready"` with a non-zero `promptsSucceeded` and an empty `fallingBack` map is the evidence the managed prompts are live. `status: "unverified"` right after a deploy is expected until the probe settles.
 
-**`schemaDrift` is a rollout signal, not a failure.** A Langfuse `alert-enrichment` prompt that has not been republished after a local-fallback contract change (for example the #1031 reference anchors) is reported under `dependencies.langfuse.schemaDrift` with the missing markers listed. Use the [`langfuse-prompt-sync`](.agents/skills/langfuse-prompt-sync/SKILL.md) skill to publish. `promptProvenance` on each stored enriched alert carries the same signal per record.
+**`schemaDrift` is a rollout signal, not a failure.** A Langfuse `alert-enrichment` prompt that has not been republished after a local-fallback contract change (for example the #1031 reference anchors or the #1254 setup evidence and omission rubric) is reported under `dependencies.langfuse.schemaDrift` with the missing markers listed. Use the [`langfuse-prompt-sync`](.agents/skills/langfuse-prompt-sync/SKILL.md) skill to publish. `promptProvenance` on each stored enriched alert carries the same signal per record.
 
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
@@ -552,7 +559,9 @@ Configure it with the repository variables `UPTIME_MONITOR_BASE_URL`, `UPTIME_MO
 
 The secretless monitor above proves only that *something* answers `/healthcheck`. A build months behind `master` answers 200 perfectly, so liveness alone cannot tell you that production is actually running your latest code or that a feature you declared enabled is enabled.
 
-The authenticated layer is `ops/production-smoke-probe.sh`, run every 15 minutes by `.github/workflows/production-smoke-probe.yml`. It asserts `service.commit` equals the latest `master` SHA (exit `5` on a stale deploy), that named dependencies are `ready` (exit `6`), and — with `PRODUCTION_REQUIRE_ENABLED_FLAGS` — that named `featureFlags` are `true` (exit `7`, `FLAG_DISABLED`).
+The authenticated layer is `ops/production-smoke-probe.sh`, run every 15 minutes by `.github/workflows/production-smoke-probe.yml`, which checks the repository out first so the script is present on the runner. It asserts `service.commit` equals the latest `master` SHA (exit `5` on a stale deploy), that named dependencies are `ready` (exit `6`), and — with `PRODUCTION_REQUIRE_ENABLED_FLAGS` — that named `featureFlags` are `true` (exit `7`, `FLAG_DISABLED`). A `401`/`403` from `/api/status` is exit `8`, `AUTH_REJECTED`: production answered and rejected the credential, so rotate the secret rather than treating alerts as undelivered.
+
+Every run resolves to exactly one named outcome (`ok`, `down`, `stale`, `degraded`, `flag_disabled`, `auth_rejected`, `unconfigured`, `script_missing`, `invalid_args`, `unknown`), so a broken CI setup is never reported as a production outage. **The workflow has no paging step** — a non-zero exit fails the scheduled job, and the [external uptime monitor](#external-uptime-monitoring) owns the Telegram page (once on a DOWN transition, once on recovery).
 
 **A flag absent from the deployed build counts as disabled.** The comparison demands the literal string `true`, so an absent key cannot satisfy it and a stale build cannot look compliant — the same shape-is-not-readiness trap this repository has hit repeatedly. The jq default (`// false`) only labels the diagnostic `value=false`; it is not the enforcement point. That distinction matters because a `render.yaml` `value: true` is a *declaration of intent* and production reality is a separate fact — which is how `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` was declared `true` in the Blueprint while production reported `false` (issue #1109).
 

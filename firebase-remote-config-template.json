@@ -175,6 +175,13 @@
       "description": "Binance API fetch timeout in milliseconds",
       "valueType": "NUMBER"
     },
+    "BINANCE_BALANCE_CACHE_MS": {
+      "defaultValue": {
+        "value": "3000"
+      },
+      "description": "Cache duration in milliseconds for Binance account balance queries",
+      "valueType": "NUMBER"
+    },
     "TRADINGVIEW_MCP_DEFAULT_TIMEFRAME": {
       "defaultValue": {
         "value": "1h"
@@ -441,6 +448,20 @@
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
     },
+    "ENABLE_ALERT_CROSS_TF_SUPPRESSION": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Collapse cross-timeframe duplicates: suppress delivery when the same exchange/symbol/side already fired inside the window on a different timeframe (alerts stay persisted with a suppression marker)",
+      "valueType": "BOOLEAN"
+    },
+    "ALERT_CROSS_TF_WINDOW_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Cross-timeframe collapse window in milliseconds (0 disables collapsing while the flag stays on)",
+      "valueType": "NUMBER"
+    },
     "ENABLE_ALERT_SYNTH_BURST_AGGREGATION": {
       "defaultValue": {
         "value": "false"
@@ -502,6 +523,13 @@
         "value": "30000"
       },
       "description": "Global request-deadline timeout ceiling in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "GENERIC_MESSAGE_MAX_LENGTH": {
+      "defaultValue": {
+        "value": "4000"
+      },
+      "description": "Maximum inbound generic webhook message length before truncation",
       "valueType": "NUMBER"
     },
     "ENABLE_BINANCE_ORDER_AUDIT": {
