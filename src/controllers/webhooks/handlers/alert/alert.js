@@ -101,7 +101,16 @@ function getFirstTelegramMessageId(result) {
 	return Number.isSafeInteger(numericMessageId) ? numericMessageId : rawMessageId;
 }
 
-async function attachInlineKeyboardAfterPersistence({ manager, results, routing, replyMarkup, aggregated }) {
+const INLINE_KEYBOARD_ATTACH_TIMEOUT_MS = 5000;
+
+async function attachInlineKeyboardAfterPersistence({
+	manager,
+	results,
+	routing,
+	replyMarkup,
+	aggregated,
+	timeoutMs = INLINE_KEYBOARD_ATTACH_TIMEOUT_MS,
+}) {
 	// An aggregated burst delivers one synthetic message shared by every
 	// constituent alert. Attaching N per-alert keyboards would race on the same
 	// Telegram message id, and a replay button for one symbol would sit on a
@@ -114,16 +123,28 @@ async function attachInlineKeyboardAfterPersistence({ manager, results, routing,
 	const chatId = routing?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
 	if (!messageId || !chatId || typeof editMessageReplyMarkup !== 'function') return;
 
+	let timeoutId;
 	try {
-		await editMessageReplyMarkup.call(
+		const editPromise = Promise.resolve().then(() => editMessageReplyMarkup.call(
 			telegramService.bot.telegram,
 			chatId,
 			messageId,
 			undefined,
 			replyMarkup,
-		);
+		));
+		editPromise.catch(() => {});
+		const timeoutPromise = new Promise((_, reject) => {
+			timeoutId = setTimeout(() => {
+				const error = new Error(`editMessageReplyMarkup timed out after ${timeoutMs}ms`);
+				error.code = 'TELEGRAM_KEYBOARD_ATTACH_TIMEOUT';
+				reject(error);
+			}, timeoutMs);
+		});
+		await Promise.race([editPromise, timeoutPromise]);
 	} catch (error) {
 		console.warn('[Alert] Failed to attach inline keyboard after persistence:', error.message);
+	} finally {
+		clearTimeout(timeoutId);
 	}
 }
 
@@ -664,7 +685,7 @@ function postAlert(botOrGetter) {
 				burstAggregateId,
 				burstSignalCount,
 			});
-			Promise.resolve(saveAlertPromise)
+			const postPersistenceTask = Promise.resolve(saveAlertPromise)
 				.then((storedAlertId) => {
 					if (!storedAlertId) return null;
 					return attachInlineKeyboardAfterPersistence({
@@ -676,6 +697,7 @@ function postAlert(botOrGetter) {
 					});
 				})
 				.catch(() => {}); // errors already logged inside AlertStorageService
+			trackBackgroundTask(postPersistenceTask);
 
 			if (signalOutcomeService.isEnabled() && !suppressedRepeat) {
 				if (parsedSignal) {
@@ -785,4 +807,6 @@ module.exports = {
 	getNotificationManager,
 	getCooldownChannelIdentity,
 	processEnrichment,
+	attachInlineKeyboardAfterPersistence,
+	INLINE_KEYBOARD_ATTACH_TIMEOUT_MS,
 };
