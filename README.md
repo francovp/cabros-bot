@@ -639,6 +639,12 @@ pnpm test -- tests/unit/alert-handler.test.js
 # Run opt-in Firestore emulator integration suite (requires local Firebase emulator)
 pnpm run test:firebase
 
+# Run the opt-in k6 load test and dependency-outage drill (requires k6)
+pnpm test:perf
+
+# Include the 30-minute soak profile and /diag memory/event-loop samples
+pnpm test:perf -- --soak
+
 # Run linter
 pnpm run lint
 ```

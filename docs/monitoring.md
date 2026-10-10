@@ -261,6 +261,24 @@ The application logs to stdout:
 - `WARN`: Configuration warnings, retry attempts
 - `ERROR`: Delivery failures, API errors
 
+## Performance & Load Testing (opt-in)
+
+The performance harness boots a local API-only server, exercises 10/50/200 RPS
+profiles, and checks the p95 ceilings in `tests/performance/budgets.json`.
+
+```bash
+# Load profiles plus the dependency-outage drill (requires k6)
+pnpm test:perf
+
+# Additionally run the 30-minute low-RPS soak and collect /diag samples
+pnpm test:perf -- --soak
+```
+
+Install k6 from the official distribution before running it locally. The soak
+profile is schedule/manual-workflow tooling only; it is not part of the default
+Jest suite. `/diag` is available only while the harness runs the app with
+`NODE_ENV=test` and requires `x-api-key`.
+
 ## Structured Request Logging (GH-665)
 
 Every completed HTTP request emits exactly one structured JSON line, in addition
