@@ -299,6 +299,29 @@ describe('crossTimeframeCooldown', () => {
 			expect(cooldown.reserve({ ...SELL_4H, timeframe: '1h' }, [CHAT_A, CHAT_B], base + 500).suppressed).toBe(true);
 		});
 
+		it('keeps the timeframe per destination after a partial reservation', () => {
+			const cooldown = createCrossTimeframeCooldown();
+			const base = 1_000;
+			cooldown.reserve(SELL_1D, [CHAT_A], base);
+
+			// Narrowed to CHAT_B, so only CHAT_B is reserved by this 4h leg.
+			const partial = cooldown.reserve(SELL_4H, [CHAT_A, CHAT_B], base + 400);
+			expect(partial.channels).toEqual([CHAT_B]);
+
+			// Regression: the follow-up leg repeats the timeframe the partial leg
+			// just wrote. CHAT_A is still held by the 1D leg, so this 4h must be
+			// collapsed for CHAT_A — an entry-level timeframe would have been
+			// overwritten with '4h' by the partial reservation and let it through.
+			const repeat = cooldown.reserve(SELL_4H, [CHAT_A], base + 500);
+			expect(repeat.suppressed).toBe(true);
+			expect(repeat.conflictingTimeframe).toBe('1d');
+			expect(repeat.suppressedTimeframe).toBe('4h');
+
+			// A same-timeframe repeat of what CHAT_A already received stays
+			// CB-230's job, not this gate's.
+			expect(cooldown.reserve(SELL_1D, [CHAT_A], base + 600).suppressed).toBe(false);
+		});
+
 		it('releases only the requested identity and keeps the delivered one held', () => {
 			const cooldown = createCrossTimeframeCooldown();
 			const base = 1_000;

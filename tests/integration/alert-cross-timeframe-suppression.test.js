@@ -168,6 +168,57 @@ describe('Alert cross-timeframe duplicate suppression endpoint behavior', () => 
 		saveAlert.mockRestore();
 	});
 
+	describe('destination scoping', () => {
+		let originalFetch;
+
+		beforeEach(() => {
+			originalFetch = global.fetch;
+		});
+
+		afterEach(() => {
+			global.fetch = originalFetch;
+		});
+
+		it('keeps the timeframe per destination after a narrowing leg', async () => {
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/111/webhook-token';
+			const mockFetch = jest.fn().mockResolvedValue({ ok: true, status: 204, json: async () => ({}) });
+			global.fetch = mockFetch;
+			await initializeNotificationServices(mockBot);
+
+			const first = await post(DAILY_SELL, {
+				channels: ['telegram'],
+				telegramChatId: '-1001111111',
+			}).expect(200);
+			expect(first.body.suppressedRepeat).toBeUndefined();
+			expect(first.body.deliveredChannels).toEqual(['telegram']);
+
+			// Telegram:A already holds the 1D leg, so this 4h leg is narrowed to
+			// the free discord destination.
+			const narrowed = await post(FOUR_HOUR_SELL, {
+				channels: ['telegram', 'discord'],
+				telegramChatId: '-1001111111',
+			}).expect(200);
+			expect(narrowed.body.suppressedRepeat).toBeUndefined();
+			expect(narrowed.body.deliveredChannels).toEqual(['discord']);
+			expect(mockFetch).toHaveBeenCalledTimes(1);
+
+			// This leg repeats the timeframe the narrowing leg just reserved for
+			// discord, but telegram:A still holds the 1D, so it must be collapsed.
+			const repeat = await post(FOUR_HOUR_SELL, {
+				channels: ['telegram'],
+				telegramChatId: '-1001111111',
+			}).expect(200);
+			expect(repeat.body.suppressedRepeat).toBe(true);
+			expect(repeat.body.suppressionReason).toBe('cross_timeframe_duplicate');
+			expect(repeat.body.deliveredChannels).toEqual([]);
+
+			expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
+			expect(mockFetch).toHaveBeenCalledTimes(1);
+			expect(crossTimeframeCooldown.getStats().suppressedCount).toBe(1);
+		});
+	});
+
 	describe('provisional reservations', () => {
 		it('retries delivery after the first leg failed on every channel', async () => {
 			mockTelegramSendMessage.mockRejectedValueOnce(new Error('telegram unavailable'));

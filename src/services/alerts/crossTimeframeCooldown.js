@@ -22,12 +22,18 @@
  * every same-direction signal on any *other* timeframe inside the window is
  * suppressed against it.
  *
- * Destination scoping mirrors CB-230: the entry keeps one timestamp per
- * `(channel, destination)` identity, so a reservation made for
+ * Destination scoping mirrors CB-230: the entry keeps one record per
+ * `(channel, destination)` identity holding *both* its timestamp and the
+ * timeframe it was reserved for, so a reservation made for
  * `telegramChatId: -1001111111` never suppresses a later signal routed to
- * `-1002222222`. Suppression is decided per destination, so a leg is collapsed
- * only when *every* requested destination is already held by a different
- * timeframe, and the caller narrows delivery to the still-available ones.
+ * `-1002222222`. The timeframe must live on the per-destination record and not
+ * on the entry: a leg that is only partly available is reserved on the free
+ * destinations alone, so an entry-level timeframe would be overwritten with the
+ * narrowing leg's value and would stop describing the destination that actually
+ * received the earlier signal. Suppression is decided per destination against
+ * that record, so a leg is collapsed only when *every* requested destination is
+ * already held by a different timeframe, and the caller narrows delivery to the
+ * still-available ones.
  *
  * Reservations are provisional: `reserve()` returns `reservedAt` and the caller
  * hands it back to `release()` for any destination whose delivery produced
@@ -99,6 +105,21 @@ function getEntryFiredAt(entry) {
 	return entry && Number.isFinite(entry.firedAt) ? entry.firedAt : null;
 }
 
+function channelFiredAt(held) {
+	return held && Number.isFinite(held.firedAt) ? held.firedAt : 0;
+}
+
+function latestChannelFiredAt(channels, fallback) {
+	let latest = null;
+	for (const held of channels.values()) {
+		const firedAt = channelFiredAt(held);
+		if (Number.isFinite(firedAt) && (latest === null || firedAt > latest)) {
+			latest = firedAt;
+		}
+	}
+	return latest === null ? fallback : latest;
+}
+
 /**
  * Records the reserved signal and reports whether this arrival was a
  * cross-timeframe duplicate of an already-held one.
@@ -123,31 +144,32 @@ function reserve(signal, channels = [], now = Date.now()) {
 	try {
 		const current = this.store.get(key);
 		const entry = current && current.channels instanceof Map ? current : null;
-		const firedAt = getEntryFiredAt(entry);
-		const elapsedMs = firedAt === null ? null : now - firedAt;
-		const entryIsActive = elapsedMs !== null
-			&& Number.isFinite(elapsedMs)
-			&& elapsedMs >= 0
-			&& elapsedMs < windowMs;
-		// A held entry only conflicts when it was recorded for another timeframe;
-		// a same-timeframe repeat stays CB-230's job and is never collapsed here.
-		const conflictsOnTimeframe = entryIsActive && entry.timeframe !== timeframe;
 
 		const availableChannels = [];
 		let conflict = null;
 		for (const channel of requestedChannels) {
-			const channelFiredAt = entry ? entry.channels.get(channel) : null;
-			const channelElapsedMs = Number.isFinite(channelFiredAt) ? now - channelFiredAt : null;
-			const held = channelElapsedMs !== null
-				&& Number.isFinite(channelElapsedMs)
-				&& channelElapsedMs >= 0
-				&& channelElapsedMs < windowMs;
-			if (!held || !conflictsOnTimeframe) {
+			const held = entry ? entry.channels.get(channel) : null;
+			const heldElapsedMs = held ? now - channelFiredAt(held) : null;
+			const heldActive = held
+				&& Number.isFinite(heldElapsedMs)
+				&& heldElapsedMs >= 0
+				&& heldElapsedMs < windowMs;
+			// A held destination only conflicts when *it* was reserved for another
+			// timeframe; a same-timeframe repeat stays CB-230's job and is never
+			// collapsed here. The timeframe lives on the destination's own record
+			// because a narrowed leg reserves only the free destinations, so an
+			// entry-level field would be overwritten with the narrowing leg's
+			// timeframe and would no longer describe the destination that actually
+			// holds the earlier signal.
+			if (!heldActive || normalizeCrossTimeframe(held.timeframe) === timeframe) {
 				availableChannels.push(channel);
 				continue;
 			}
 			if (!conflict) {
-				conflict = { elapsedMs, conflictingTimeframe: entry.timeframe };
+				conflict = {
+					elapsedMs: heldElapsedMs,
+					conflictingTimeframe: normalizeCrossTimeframe(held.timeframe),
+				};
 			}
 		}
 
@@ -169,13 +191,17 @@ function reserve(signal, channels = [], now = Date.now()) {
 
 		// Reserved (or a same-timeframe repeat, which stays CB-230's job): re-arm
 		// the available destinations from now so the window slides from the most
-		// recent reservation while the still-held ones keep their own deadline.
+		// recent reservation while the still-held ones keep their own deadline and
+		// their own timeframe.
 		const reservedChannels = entry ? new Map(entry.channels) : new Map();
 		for (const channel of availableChannels) {
-			reservedChannels.set(channel, now);
+			reservedChannels.set(channel, { firedAt: now, timeframe });
 		}
 		trimChannels(reservedChannels);
-		this.store.set(key, { firedAt: now, timeframe, channels: reservedChannels });
+		this.store.set(key, {
+			firedAt: latestChannelFiredAt(reservedChannels, now),
+			channels: reservedChannels,
+		});
 		const opposite = oppositeCrossTimeframeKeyOf(key);
 		if (opposite) {
 			this.store.delete(opposite);
@@ -213,7 +239,7 @@ function release(key, reservedAt, channels = null) {
 		const targets = Array.isArray(channels) ? channels : [...entry.channels.keys()];
 		let released = false;
 		for (const channel of targets) {
-			if (entry.channels.get(channel) === reservedAt) {
+			if (channelFiredAt(entry.channels.get(channel)) === reservedAt) {
 				entry.channels.delete(channel);
 				released = true;
 			}
@@ -223,7 +249,7 @@ function release(key, reservedAt, channels = null) {
 			return;
 		}
 		if (released) {
-			entry.firedAt = Math.max(...entry.channels.values());
+			entry.firedAt = latestChannelFiredAt(entry.channels, reservedAt);
 			this.store.set(key, entry);
 		}
 	} catch (error) {
@@ -236,7 +262,7 @@ function trimChannels(reservedChannels) {
 		return;
 	}
 	const oldest = [...reservedChannels.entries()]
-		.sort(([, left], [, right]) => left - right)
+		.sort(([, left], [, right]) => channelFiredAt(left) - channelFiredAt(right))
 		.slice(0, reservedChannels.size - MAX_CHANNELS_PER_ENTRY);
 	for (const [channel] of oldest) {
 		reservedChannels.delete(channel);
