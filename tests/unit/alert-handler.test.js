@@ -11,6 +11,7 @@ const { groundAlert } = require('../../src/services/grounding/grounding');
 const { GROUNDING_MODEL_NAME } = require('../../src/services/grounding/config');
 const { validateAlert } = require('../../src/lib/validation');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
+const { computeDeterministicRiskReward } = require('../../src/services/tradingview/riskRewardMath');
 
 jest.mock('../../src/services/grounding/grounding');
 jest.mock('../../src/lib/validation');
@@ -63,6 +64,292 @@ describe('Alert Handler', () => {
 				preserveLanguage: true,
 			}),
 		});
+	});
+
+	it.each([
+		[false, null, 100, 'USD', 'gemini-grounding'],
+		[true, null, 100, 'USD', 'gemini-grounding'],
+		[true, 110, undefined, 'USDT', 'tradingview-mcp'],
+	])('preserves Gemini entry price through the adapter (MCP enabled=%s, price=%s)', async (mcpEnabled, mcpPrice, expectedGeminiPrice, expectedCurrency, expectedSource) => {
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100,
+			price_currency: 'USD', invalidation_level: 90, target_level: 130,
+			risk_reward_ratio: 3, insights: [], sources: [],
+		});
+		tradingViewMcpService.isEnabled.mockReturnValue(mcpEnabled);
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			current_price: mcpPrice, price_currency: mcpPrice ? 'USDT' : undefined,
+			tradingViewEnrichmentApplied: !!mcpPrice,
+		});
+		const result = await enrichAlert({ text: 'BINANCE:BTCUSDT(60) pasó a señal de COMPRA' }, { useTradingViewData: mcpEnabled });
+		expect(result.current_price).toBe(expectedGeminiPrice ?? mcpPrice);
+		expect(result.price_currency).toBe(expectedCurrency);
+		expect(result.priceSource).toBe(expectedSource);
+	});
+
+	it('keeps fallback quote price and levels together when Gemini has incomplete risk metadata', async () => {
+		groundAlert.mockResolvedValue({ current_price: 100, price_currency: 'USD', sentiment: 'BULLISH', sentiment_score: 0.6 });
+		deriveFallbackTradePlan.mockResolvedValue({ current_price: 110, price_data: { current_price: 110 }, invalidation_level: 107.25, target_level: 115.5, risk_reward_ratio: 2 });
+		const result = await enrichAlert({ text: 'BINANCE:BTCUSDT(60) pasó a señal de COMPRA' });
+		expect(result).toMatchObject({ current_price: 110, price_data: { current_price: 110 }, invalidation_level: 107.25, target_level: 115.5, priceSource: 'derived-quote' });
+		expect(result).not.toHaveProperty('price_currency');
+	});
+
+	// GH-599: `hasCompleteRiskMetadata` also requires `risk_reward_ratio`, so a grounded
+	// block that supplies a usable entry price plus BOTH directional levels but omits the
+	// optional ratio used to be thrown away wholesale and replaced with a derived-quote
+	// heuristic plan. That discarded real grounding data — the exact regression this issue
+	// exists to prevent. The ratio is arithmetic, so it must be computed from the grounded
+	// levels instead of discarding them.
+	const withGroundingOnly = (gemini) => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		tradingViewMcpService.isEnabled.mockReturnValue(false);
+		groundAlert.mockResolvedValue({ insights: [], sources: [], ...gemini });
+		// A heuristic plan that would be preferred if the grounded block were discarded.
+		deriveFallbackTradePlan.mockResolvedValue({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			current_price: 110,
+			price_data: { current_price: 110 },
+			invalidation_level: 107.25,
+			target_level: 115.5,
+			risk_reward_ratio: 2,
+			setup_type: 'trend_continuation',
+			levelsSource: 'derived-quote',
+		});
+	};
+
+	const HEURISTIC_PLAN = {
+		current_price: 110,
+		price_data: { current_price: 110 },
+		invalidation_level: 107.25,
+		target_level: 115.5,
+		priceSource: 'derived-quote',
+		levelsSource: 'derived-quote',
+	};
+
+	it.each([
+		[
+			'BUY', 'BINANCE:BTCUSDT(60) pasó una señal de COMPRA',
+			{ sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100, price_currency: 'USD', invalidation_level: 90, target_level: 120, technical_levels: { supports: ['90'], resistances: ['120'] } },
+			{ invalidation_level: 90, target_level: 120 },
+		],
+		[
+			'SELL', 'BINANCE:BTCUSDT(60) pasó una señal de VENTA',
+			{ sentiment: 'BEARISH', sentiment_score: -0.6, current_price: 100, price_currency: 'USD', invalidation_level: 110, target_level: 80, technical_levels: { supports: ['80'], resistances: ['110'] } },
+			{ invalidation_level: 110, target_level: 80 },
+		],
+	])('preserves grounded entry price and %s levels when only risk_reward_ratio is missing', async (_side, text, gemini, expectedLevels) => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		withGroundingOnly(gemini);
+
+		const result = await enrichAlert({ text });
+
+		// Grounded levels win over the heuristic plan even though the ratio is absent.
+		expect(result.current_price).toBe(100);
+		expect(result.invalidation_level).toBe(expectedLevels.invalidation_level);
+		expect(result.target_level).toBe(expectedLevels.target_level);
+		expect(result.price_currency).toBe('USD');
+		expect(result.levelsSource).toBe('gemini-grounding');
+		// The missing ratio is derived arithmetically from the grounded levels:
+		// BUY (120-100)/(100-90) = 2, SELL (100-80)/(110-100) = 2.
+		expect(result.risk_reward_ratio).toBeCloseTo(2, 4);
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	it('keeps grounded levels for free-text alerts that carry no parseable signal', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		withGroundingOnly({
+			sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100,
+			invalidation_level: 90, target_level: 120,
+			technical_levels: { supports: ['90'], resistances: ['120'] },
+		});
+		// Faithful to production: `deriveFallbackTradePlan` returns null when the text
+		// yields no symbol/side, so free text can never get a heuristic plan. `withGroundingOnly`
+		// deliberately leaves a heuristic plan mocked in, and this overrides it back to the
+		// real behavior so the assertions below test production reality rather than the mock.
+		deriveFallbackTradePlan.mockResolvedValue(null);
+
+		const result = await enrichAlert({ text: 'Bitcoin is breaking out above 100k resistance' });
+
+		// Without a side the ratio cannot be computed, but the grounded entry price and
+		// levels must still survive rather than be discarded, and no derived-quote
+		// provenance may be stamped on them.
+		expect(result.current_price).toBe(100);
+		expect(result.invalidation_level).toBe(90);
+		expect(result.target_level).toBe(120);
+		expect(result).not.toHaveProperty('risk_reward_ratio');
+		expect(result.priceSource).not.toBe('derived-quote');
+		expect(result).not.toHaveProperty('price_currency');
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	// GH-599 regression: the merge path (Gemini + MCP) had its own copy of the discard
+	// logic, so fixing the Gemini-only branch left the same data loss in place whenever
+	// `useTradingViewData=true` — the common production configuration. `hasCompleteRiskMetadata`
+	// requiring the ratio meant a grounded block with entry + both levels was overwritten by
+	// `calculateFallbackRiskLevels`, a per-timeframe percentage heuristic derived off the MCP
+	// price. These two cases cover the realistic degraded-MCP shapes: MCP present but without
+	// its own risk block (A), and MCP with no usable price at all (B).
+	const withMergePath = ({ gemini, mcp }) => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		groundAlert.mockResolvedValue({ insights: [], sources: [], ...gemini });
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue(mcp);
+	};
+
+	it('preserves grounded levels through the merge path when MCP supplies a price but no risk block', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		withMergePath({
+			gemini: {
+				sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100,
+				invalidation_level: 90, target_level: 120,
+				technical_levels: { supports: ['90'], resistances: ['120'] },
+			},
+			mcp: { current_price: 110, insights: [], sources: [], tradingViewEnrichmentApplied: true },
+		});
+
+		const result = await enrichAlert(
+			{ text: 'BINANCE:BTCUSDT(60) pasó una señal de COMPRA' },
+			{ useTradingViewData: true },
+		);
+
+		// Grounded 90/120 must survive, NOT the 1%-stop/2%-target heuristic off the MCP
+		// price of 110 that `calculateFallbackRiskLevels` would produce.
+		expect(result.invalidation_level).toBe(90);
+		expect(result.target_level).toBe(120);
+		expect(result.risk_reward_ratio).toBeCloseTo(2, 4);
+		// The emitted entry is the one the ratio was derived from, NOT the MCP quote. Emitting
+		// 110 would store a ratio of 2 alongside an entry that makes it 0.5 — a tuple that
+		// cannot be recomputed from its own fields, and one `applyDeterministicRiskReward`
+		// will not catch because it short-circuits on an already-valid ratio.
+		expect(result.current_price).toBe(100);
+		expect(result.priceSource).toBe('gemini-grounding');
+		// The MCP quote currency described the MCP price, which is no longer emitted, so it
+		// must not be attached to the grounded entry.
+		expect(result).not.toHaveProperty('price_currency');
+		// The internal selection key must never leak into the payload.
+		expect(result).not.toHaveProperty('riskLevelsEntryPrice');
+		// The load-bearing invariant: the stored tuple must be self-consistent.
+		expect(computeDeterministicRiskReward({
+			entry: result.current_price,
+			invalidation: result.invalidation_level,
+			target: result.target_level,
+			side: 'BUY',
+		})).toBeCloseTo(result.risk_reward_ratio, 4);
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	it('preserves grounded levels and entry price through the merge path when MCP has no usable price', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		withMergePath({
+			gemini: {
+				sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100,
+				invalidation_level: 90, target_level: 120,
+				technical_levels: { supports: ['90'], resistances: ['120'] },
+			},
+			// `_toEnrichedAlert` always returns a truthy object; `current_price` is null when
+			// the MCP analysis carried no usable price — exactly this degraded case.
+			mcp: { current_price: null, price_data: {}, insights: [], sources: [], tradingViewEnrichmentApplied: false },
+		});
+
+		const result = await enrichAlert(
+			{ text: 'BINANCE:BTCUSDT(60) pasó una señal de COMPRA' },
+			{ useTradingViewData: true },
+		);
+
+		expect(result.current_price).toBe(100);
+		expect(result.invalidation_level).toBe(90);
+		expect(result.target_level).toBe(120);
+		expect(result.risk_reward_ratio).toBeCloseTo(2, 4);
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	// Regression for a merge-path provenance bug: when wrong-side grounded levels are
+	// rejected, `calculateFallbackRiskLevels` REPLACES the levels with a heuristic derived
+	// off the MCP quote — but the stamp was guarded by `if (!levelsSource)`, which can
+	// never be true in that branch because every selected block sets `riskLevelsSource`.
+	// The result was heuristic levels advertised as `gemini-grounding`, which
+	// `resolveSignalOutcomePriceSource` reads as provider-grounded rather than derived.
+	// The Gemini-only equivalent of this case cannot catch it: that branch hardcodes
+	// `levelsSource: 'derived-quote'`.
+	it('stamps derived-quote when the merge path rejects wrong-side levels for the heuristic plan', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		withMergePath({
+			gemini: {
+				sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100,
+				// BUY whose stop sits above entry: no R:R exists, so the grounded block is
+				// genuinely unusable and the heuristic plan must take over.
+				invalidation_level: 110, target_level: 120,
+				technical_levels: { supports: ['110'], resistances: ['120'] },
+			},
+			mcp: { current_price: 110, insights: [], sources: [], tradingViewEnrichmentApplied: true },
+		});
+		calculateFallbackRiskLevels.mockReturnValue({
+			invalidation_level: 107.25,
+			target_level: 115.5,
+			risk_reward_ratio: 2,
+		});
+
+		const result = await enrichAlert(
+			{ text: 'BINANCE:BTCUSDT(60) pasó una señal de COMPRA' },
+			{ useTradingViewData: true },
+		);
+
+		// The emitted levels ARE the heuristic, so they must say so — not claim the
+		// grounded provenance of the block that was just rejected.
+		expect(result.invalidation_level).toBe(107.25);
+		expect(result.target_level).toBe(115.5);
+		expect(result.levelsSource).toBe('derived-quote');
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	// Wrong-side levels have no R:R to express: a BUY whose stop sits above entry has
+	// negative risk. Rather than divide anyway and emit an inverted ratio, fall back to
+	// the heuristic plan, which is directionally correct by construction.
+	it.each([
+		['BUY stop above entry', 'BINANCE:BTCUSDT(60) pasó una señal de COMPRA', { invalidation_level: 110, target_level: 120 }],
+		['BUY target below entry', 'BINANCE:BTCUSDT(60) pasó una señal de COMPRA', { invalidation_level: 90, target_level: 95 }],
+		['SELL stop below entry', 'BINANCE:BTCUSDT(60) pasó una señal de VENTA', { invalidation_level: 90, target_level: 80 }],
+	])('falls back to the heuristic plan for wrong-side levels (%s)', async (_label, text, levels) => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		withGroundingOnly({
+			sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100,
+			technical_levels: { supports: ['90'], resistances: ['120'] },
+			...levels,
+		});
+
+		const result = await enrichAlert({ text });
+
+		expect(result.levelsSource).toBe('derived-quote');
+		expect(result.current_price).toBe(110);
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	it.each([
+		[
+			'omits the levels entirely',
+			{ sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100, price_currency: 'USD' },
+		],
+		[
+			'returns non-positive levels',
+			{ sentiment: 'BULLISH', sentiment_score: 0.6, current_price: 100, invalidation_level: 0, target_level: -5 },
+		],
+	])('still derives a heuristic plan when Gemini %s', async (_label, gemini) => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		withGroundingOnly(gemini);
+
+		const result = await enrichAlert({ text: 'BINANCE:BTCUSDT(60) pasó una señal de COMPRA' });
+
+		expect(result).toMatchObject(HEURISTIC_PLAN);
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
 
 	it('should preserve the raw Gemini sentiment score in the mapped alert', async () => {
@@ -324,7 +611,7 @@ describe('Alert Handler', () => {
 			sentiment: 'BULLISH',
 			sentiment_score: 0.7,
 			insights: ['Confluencia: ALINEADA · Señales Alineadas YES · Confianza: 82', 'MCP secondary insight'],
-			confluenceData: { recommendation: 'ALINEADA', confidence: 82, signals_agree: true },
+			confluenceData: { recommendation: 'ALINEADA', confidence: 82, signals_agree: true, news: { count: 1 } },
 			sources: [],
 			truncated: false,
 		});
@@ -357,6 +644,42 @@ describe('Alert Handler', () => {
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
 
+	it('should omit confluence insight when external evidence is empty', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			original_text: 'BTCUSDT(240) pasó a señal de COMPRA',
+			sentiment: 'BULLISH',
+			sentiment_score: 0.7,
+			insights: ['Confluencia: BUY · Señales Alineadas ✅ · Confianza: HIGH'],
+			confluenceData: {
+				confluence: { recommendation: 'BUY', confidence: 'HIGH', signals_agree: true },
+				news: { count: 0, latest: [] },
+				sentiment: { posts_analyzed: 0 },
+			},
+			sources: [],
+			truncated: false,
+		});
+
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.8,
+			insights: ['Gemini insight'],
+			sources: [],
+			truncated: false,
+			modelUsed: 'gemini-2.5-flash',
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+		expect(result.insights).not.toContain('Confluencia: BUY · Señales Alineadas ✅ · Confianza: HIGH');
+		expect(result.insights).toContain('Gemini insight');
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
 	it('should prioritize contradictory confluence insight and preserve raw MCP metadata when Gemini fills the insight cap', async () => {
 		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
 		process.env.ENABLE_GEMINI_GROUNDING = 'true';
@@ -367,7 +690,7 @@ describe('Alert Handler', () => {
 			sentiment: 'NEUTRAL',
 			sentiment_score: 0.1,
 			insights: ['Confluencia contradictoria: SELL · Señales Mixtas ⚠️ · Confianza: 81', 'MCP secondary insight'],
-			confluenceData: { confluence: { recommendation: 'SELL', confidence: 81, signals_agree: false } },
+			confluenceData: { confluence: { recommendation: 'SELL', confidence: 81, signals_agree: false }, news: { count: 1 } },
 			multiTimeframeData: { alignment: 'bearish' },
 			sources: [],
 			truncated: false,
@@ -396,7 +719,10 @@ describe('Alert Handler', () => {
 		expect(result.insights).toHaveLength(6);
 		expect(result.insights[0]).toBe('Confluencia contradictoria: SELL · Señales Mixtas ⚠️ · Confianza: 81');
 		expect(result.insights).not.toContain('Gemini insight 6');
-		expect(result.confluenceData).toEqual({ confluence: { recommendation: 'SELL', confidence: 81, signals_agree: false } });
+		expect(result.confluenceData).toEqual({
+			confluence: { recommendation: 'SELL', confidence: 81, signals_agree: false },
+			news: { count: 1 },
+		});
 		expect(result.multiTimeframeData).toEqual({ alignment: 'bearish' });
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
@@ -634,6 +960,94 @@ describe('Alert Handler', () => {
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
 
+	it('does not let a heuristic fallback-trade-plan MCP block outrank complete Gemini risk levels', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+
+		// Gemini produced REAL support/resistance-derived levels.
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.7,
+			insights: ['Gemini detected breakout'],
+			sources: [],
+			truncated: false,
+			invalidation_level: 88,
+			target_level: 124,
+			risk_reward_ratio: 3,
+		});
+
+		// MCP had its ATR rejected, so it fell back to the HEURISTIC plan. That block is
+		// numerically complete, but it is a per-timeframe percentage guess and must never
+		// displace a real provider level.
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.6,
+			insights: [],
+			sources: [],
+			truncated: false,
+			current_price: 100,
+			invalidation_level: 97.5,
+			target_level: 105,
+			risk_reward_ratio: 2,
+			levelsSource: 'fallback-trade-plan',
+			tradingViewEnrichmentApplied: false,
+			tradingViewEnrichmentStatus: 'failed',
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+		expect(result.invalidation_level).toBe(88);
+		expect(result.target_level).toBe(124);
+		expect(result.risk_reward_ratio).toBe(3);
+		// The tag must describe the levels that were actually emitted, not the
+		// rejected heuristic MCP block.
+		expect(result.levelsSource).toBe('gemini-grounding');
+		expect(result).not.toHaveProperty('riskLevelsSource');
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
+	it('uses the heuristic fallback-trade-plan MCP levels when Gemini has no complete risk block', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.7,
+			insights: [],
+			sources: [],
+			truncated: false,
+		});
+
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.6,
+			insights: [],
+			sources: [],
+			truncated: false,
+			current_price: 100,
+			invalidation_level: 97.5,
+			target_level: 105,
+			risk_reward_ratio: 2,
+			levelsSource: 'fallback-trade-plan',
+			tradingViewEnrichmentApplied: false,
+			tradingViewEnrichmentStatus: 'failed',
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+		expect(result.invalidation_level).toBe(97.5);
+		expect(result.target_level).toBe(105);
+		expect(result.risk_reward_ratio).toBe(2);
+		expect(result.levelsSource).toBe('fallback-trade-plan');
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
 	it('derives fallback trade plan when Gemini is disabled and MCP enrichment fails', async () => {
 		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
 		process.env.ENABLE_GEMINI_GROUNDING = 'false';
@@ -731,7 +1145,7 @@ describe('Alert Handler', () => {
 			expect(result.sentiment_score).toBe(-0.65);
 			expect(result.sentimentConflict).toBe(true);
 			expect(warnSpy).toHaveBeenCalledWith(
-				expect.stringContaining('[Alert] Sentiment conflict between Gemini and TradingView MCP; selecting MCP indicators over LLM prose')
+				expect.stringContaining('[Alert] Sentiment conflict between Gemini and TradingView MCP; selecting MCP indicators over LLM prose'),
 			);
 
 			warnSpy.mockRestore();
@@ -790,6 +1204,7 @@ describe('Alert Handler', () => {
 						recommendation: 'SELL',
 						confidence: 85,
 					},
+					news: { count: 1 },
 				},
 				sources: [],
 				truncated: false,

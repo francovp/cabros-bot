@@ -1,3 +1,4 @@
+/* global saveEnv, restoreEnv */
 const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('fs');
 const request = require('supertest');
 const express = require('express');
@@ -11,6 +12,15 @@ const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfi
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../../src/services/grounding/metrics');
+const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
+const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
+const { getPromptService } = require('../../src/services/prompts');
+const { signalClassMetrics } = require('../../src/services/alerts/signalClassifier');
+const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
+const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
+const newsAnalysisStorageService = require('../../src/services/storage/NewsAnalysisStorageService');
+const promptReadiness = require('../../src/services/prompts/promptReadiness');
+const symbolAnalysisStorageService = require('../../src/services/storage/SymbolAnalysisStorageService');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -31,6 +41,7 @@ describe('Status endpoints', () => {
 	let savedTradingViewEnrichmentEvents;
 	let app;
 	let tempDir;
+	let promptStatusSpies = [];
 
 	beforeEach(() => {
 		savedEnv = saveEnv();
@@ -56,6 +67,7 @@ describe('Status endpoints', () => {
 			failureCount: 0,
 		};
 		tradingViewMcpService.enrichmentEvents = [];
+		tradingViewMcpService.toolMetrics = {};
 		admin.__resetApps();
 		admin.__resetCollectionState();
 		alertStorageService._resetForTesting();
@@ -77,11 +89,11 @@ describe('Status endpoints', () => {
 		process.env.NODE_ENV = 'test';
 		delete process.env.SENTRY_ENVIRONMENT;
 		process.env.ENABLE_TELEGRAM_BOT = 'true';
-		process.env.BOT_TOKEN = 'token';
+		process.env.BOT_TOKEN = 'secret-bot-token';
 		process.env.TELEGRAM_CHAT_ID = '123';
 		process.env.ENABLE_WHATSAPP_ALERTS = 'true';
 		process.env.WHATSAPP_API_URL = 'https://greenapi.example/';
-		process.env.WHATSAPP_API_KEY = 'key';
+		process.env.WHATSAPP_API_KEY = 'secret-whatsapp-key';
 		process.env.WHATSAPP_CHAT_ID = 'chat';
 		process.env.ENABLE_GEMINI_GROUNDING = 'true';
 		process.env.GEMINI_API_KEY = 'gemini-key';
@@ -101,12 +113,17 @@ describe('Status endpoints', () => {
 	});
 
 	afterEach(() => {
+		promptStatusSpies.forEach((spy) => spy.mockRestore());
+		promptStatusSpies = [];
 		remoteConfigService._resetForTesting();
 		geminiQuotaManager.resetForTesting();
 		groundingMetrics.resetForTesting();
+		deliveryMetricsService.resetForTesting();
+		firestoreWriteMetricsService.resetForTesting();
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
 		tradingViewMcpService.enrichmentEvents = savedTradingViewEnrichmentEvents;
+		tradingViewMcpService.toolMetrics = {};
 		restoreEnv(savedEnv);
 		if (tempDir) {
 			rmSync(tempDir, { recursive: true, force: true });
@@ -193,6 +210,15 @@ describe('Status endpoints', () => {
 				failureThreshold: 5,
 				cooldownMs: 600000,
 			},
+			errorCategoryCounts: {
+				circuit_breaker_open: 0,
+				http_5xx: 0,
+				http_4xx: 0,
+				timeout: 0,
+				invalid_response: 0,
+				request_failed: 0,
+			},
+			toolMetrics: {},
 		});
 		expect(response.body.dependencies.braveSearch).toEqual({
 			enabled: false,
@@ -265,14 +291,42 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.firestoreScannerPresets).toBe(false);
-		expect(response.body.dependencies.scannerPresetStorage).toEqual({
+		expect(response.body.dependencies.scannerPresetStorage).toEqual(expect.objectContaining({
 			enabled: false,
 			configured: false,
 			ready: false,
 			status: 'disabled',
 			mode: 'ephemeral',
 			backend: 'memory',
-		});
+			failOpen: true,
+			collection: 'scannerPresets',
+			pendingWrites: 0,
+			inFlightWrites: 0,
+			pendingDeletes: 0,
+			oldestPendingWriteAt: null,
+			lastReadFellBack: false,
+		}));
+	});
+
+	it('reports firestoreChatPreferences feature flag and dependency status when disabled and enabled', async () => {
+		delete process.env.ENABLE_FIRESTORE_CHAT_PREFERENCES;
+		let res = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(res.status).toBe(200);
+		expect(res.body.featureFlags.firestoreChatPreferences).toBe(false);
+		expect(res.body.dependencies.chatPreferences.enabled).toBe(false);
+
+		process.env.ENABLE_FIRESTORE_CHAT_PREFERENCES = 'true';
+		res = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(res.status).toBe(200);
+		expect(res.body.featureFlags.firestoreChatPreferences).toBe(true);
+		expect(res.body.dependencies.chatPreferences.enabled).toBe(true);
+		expect(res.body.dependencies.chatPreferences.cachedCount).toEqual(expect.any(Number));
 	});
 
 	it('reports durable scanner preset storage from its dedicated Firestore gate', async () => {
@@ -285,14 +339,30 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.firestoreScannerPresets).toBe(true);
-		expect(response.body.dependencies.scannerPresetStorage).toEqual({
+		// `ready` here is proven by the bounded durable read `/api/status` runs, not
+		// inferred from credential shape (#1342). The observed counters are a
+		// process-local window that only a restart clears, so they are asserted by type.
+		expect(response.body.dependencies.scannerPresetStorage).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: true,
 			ready: true,
 			status: 'ready',
+			readiness: 'verified',
 			mode: 'durable',
 			backend: 'firestore',
-		});
+			failOpen: true,
+			collection: 'scannerPresets',
+			operationsAttempted: expect.any(Number),
+			operationsSucceeded: expect.any(Number),
+			operationsFailed: 0,
+			consecutiveFailures: 0,
+			lastSuccessAt: expect.any(String),
+			pendingWrites: 0,
+			inFlightWrites: 0,
+			pendingDeletes: 0,
+			oldestPendingWriteAt: null,
+			lastReadFellBack: false,
+		}));
 	});
 
 	it('does not report durable scanner presets from the alert storage gate', async () => {
@@ -305,14 +375,21 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.firestoreScannerPresets).toBe(false);
-		expect(response.body.dependencies.scannerPresetStorage).toEqual({
+		expect(response.body.dependencies.scannerPresetStorage).toEqual(expect.objectContaining({
 			enabled: false,
 			configured: false,
 			ready: false,
 			status: 'disabled',
 			mode: 'ephemeral',
 			backend: 'memory',
-		});
+			failOpen: true,
+			collection: 'scannerPresets',
+			pendingWrites: 0,
+			inFlightWrites: 0,
+			pendingDeletes: 0,
+			oldestPendingWriteAt: null,
+			lastReadFellBack: false,
+		}));
 	});
 
 	it('reports scanner preset storage as misconfigured without usable credentials', async () => {
@@ -326,14 +403,57 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.scannerPresetStorage).toEqual({
+		expect(response.body.dependencies.scannerPresetStorage).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: false,
 			ready: false,
 			status: 'misconfigured',
 			mode: 'ephemeral',
 			backend: 'memory',
-		});
+			failOpen: true,
+			collection: 'scannerPresets',
+			pendingWrites: 0,
+			inFlightWrites: 0,
+			pendingDeletes: 0,
+			oldestPendingWriteAt: null,
+		}));
+	});
+
+	it('reports degraded durable scanner preset storage after a durable read failure', async () => {
+		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		// Prove durability first, which also arms the probe cooldown so the verdict below
+		// reflects the read failure rather than a fresh probe.
+		await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key')
+			.expect(200);
+
+		admin.__mockGet.mockRejectedValueOnce(new Error('Temporary Firestore outage'));
+		await request(app)
+			.get('/api/scanner-presets')
+			.set('x-api-key', 'status-key')
+			.expect(200);
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.scannerPresetStorage).toEqual(expect.objectContaining({
+			enabled: true,
+			// Credentials are valid, so this is a store fault and not `misconfigured`
+			// (#1342): the operator must not be sent to fix credentials that work.
+			configured: true,
+			ready: false,
+			status: 'degraded',
+			mode: 'durable',
+			backend: 'firestore',
+			lastErrorReason: 'firestore_unavailable',
+			consecutiveFailures: 1,
+			lastReadFellBack: true,
+		}));
 	});
 
 	it('reports Cloudflare AI Gateway as disabled by default', async () => {
@@ -414,6 +534,23 @@ describe('Status endpoints', () => {
 		expect(response.body.featureFlags.newsMonitorTestMode).toBe(true);
 	});
 
+	it('reports the optional news monitor classifier gate', async () => {
+		let response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.newsMonitorClassifier).toBe(false);
+
+		process.env.ENABLE_NEWS_MONITOR_CLASSIFIER = 'true';
+		response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.newsMonitorClassifier).toBe(true);
+	});
+
 	it('reports message footer metadata as enabled by default', async () => {
 		const response = await request(app)
 			.get('/api/capabilities')
@@ -432,6 +569,73 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.messageFooterMetadata).toBe(false);
+	});
+
+	it('reports signal class marker as enabled by default', async () => {
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.signalClassMarker).toBe(true);
+	});
+
+	it('reports signal class marker as disabled when explicitly disabled', async () => {
+		process.env.ENABLE_SIGNAL_CLASS_MARKER = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.signalClassMarker).toBe(false);
+	});
+
+	it('omits signal classification metrics until an alert has been classified', async () => {
+		signalClassMetrics.reset();
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.signalClassClassification).toBeUndefined();
+	});
+
+	it('reports an honest zero population rate when every alert is unknown', async () => {
+		signalClassMetrics.reset();
+		signalClassMetrics.record('unknown');
+		signalClassMetrics.record('unknown');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		const classification = response.body.dependencies.signalClassClassification;
+		expect(classification.populationRate).toBe(0);
+		expect(classification.classifiedAlerts).toBe(0);
+		expect(classification.unknownAlerts).toBe(2);
+		expect(classification.byClass).toEqual({ unknown: 2 });
+		// Non-secret operational counters only — no alert text, no symbols.
+		expect(JSON.stringify(classification)).not.toMatch(/BTCUSDT|ETHUSDT/i);
+	});
+
+	it('reports a non-zero signal classification population rate', async () => {
+		signalClassMetrics.reset();
+		signalClassMetrics.record('breakout');
+		signalClassMetrics.record('unknown');
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		const classification = response.body.dependencies.signalClassClassification;
+		expect(classification.totalAlerts).toBe(2);
+		expect(classification.classifiedAlerts).toBe(1);
+		expect(classification.populationRate).toBe(0.5);
+		expect(classification.byClass).toEqual({ breakout: 1, unknown: 1 });
 	});
 
 	it('reports alert signal repeat suppression as disabled by default', async () => {
@@ -506,6 +710,44 @@ describe('Status endpoints', () => {
 		}));
 	});
 
+	// Issue #598: production reported `enabled: true, configured: true` with a
+	// never-loaded server template. The status contract must make the
+	// unready-but-configured state explicit so an operator cannot mistake
+	// "wired up" for "actually serving remote values".
+	it('reports an explicit unready state while the server template has never loaded', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		const remoteConfig = response.body.dependencies.firebaseRemoteConfig;
+
+		expect(remoteConfig.ready).toBe(false);
+		expect(remoteConfig.lastSuccessfulLoad).toBeNull();
+		expect(remoteConfig.status).not.toBe('ready');
+		expect(response.body.featureFlags.firebaseRemoteConfig).toBe(true);
+		// `enabled` + `configured` alone must not read as "template is live".
+		expect(remoteConfig.templatePublished).toBe(false);
+	});
+
+	it('keeps /api/capabilities readiness consistent with /api/status', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+
+		const statusResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		const capabilitiesResponse = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(statusResponse.status).toBe(200);
+		expect(capabilitiesResponse.status).toBe(200);
+		expect(capabilitiesResponse.body.dependencies.firebaseRemoteConfig)
+			.toEqual(statusResponse.body.dependencies.firebaseRemoteConfig);
+	});
+
 	it('reports signal outcome tracking from the canonical environment variable', async () => {
 		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 
@@ -516,6 +758,171 @@ describe('Status endpoints', () => {
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.signalOutcomeTracking).toBe(true);
 		expect(response.body.dependencies.signalOutcomeWorker.enabled).toBe(true);
+	});
+
+	it('separates Langfuse configuration readiness from actual prompt serving', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
+		process.env.LANGFUSE_SECRET_KEY = 'sk-lf-status-secret';
+		process.env.LANGFUSE_PROMPT_LABEL = 'production';
+		process.env.LANGFUSE_PROMPT_CACHE_TTL_SECONDS = '60';
+
+		const { PromptService } = require('../../src/services/prompts');
+		// A real, never-used service yields the honest "configured but serving nothing yet" snapshot.
+		promptStatusSpies.push(
+			jest.spyOn(getPromptService(), 'getPromptResolutionStatus')
+				.mockReturnValue(new PromptService({ logger: { warn: jest.fn(), debug: jest.fn() } }).getPromptResolutionStatus()),
+		);
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		// Configuration/reachability keeps master's prompt-readiness shape (it answers
+		// "is the probe verified", not "were prompts served"). The serving facts live in
+		// dependencies.langfusePrompts below.
+		expect(response.body.featureFlags.langfusePrompts).toBe(true);
+		expect(response.body.dependencies.langfuse).toEqual(expect.objectContaining({
+			enabled: true,
+			configured: true,
+			readiness: 'unverified',
+			failOpen: true,
+		}));
+		// Prompt serving is a separate, honest fact.
+		expect(response.body.dependencies.langfusePrompts).toEqual(expect.objectContaining({
+			enabled: true,
+			configured: true,
+			servingStatus: 'no_traffic',
+			servingPrompts: false,
+			label: 'production',
+			cacheTtlSeconds: 60,
+			totalResolutions: 0,
+			langfuseResolutions: 0,
+			localResolutions: 0,
+			localResolutionRatePercent: null,
+			remoteFetchAttempts: 0,
+			remoteFetchSuccesses: 0,
+			remoteFetchFailures: 0,
+			remoteFetchSuccessRatePercent: null,
+			lastSuccessfulFetchAt: null,
+			lastErrorCategory: null,
+			consecutiveFailures: 0,
+			prompts: [],
+		}));
+		expect(JSON.stringify(response.body.dependencies.langfusePrompts)).not.toContain('sk-lf-status-secret');
+		expect(JSON.stringify(response.body.dependencies.langfusePrompts)).not.toContain('pk-lf-status-public');
+	});
+
+	it('exposes prompt-resolution telemetry on /api/capabilities with per-prompt resolved source', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
+		process.env.LANGFUSE_SECRET_KEY = 'sk-lf-status-secret';
+
+		const { PromptService, PromptKeys } = require('../../src/services/prompts');
+		const service = new PromptService({
+			logger: { warn: jest.fn(), debug: jest.fn() },
+			clientProvider: jest.fn().mockResolvedValue({
+				prompt: {
+					get: jest.fn().mockResolvedValue({
+						version: 12,
+						compile: jest.fn().mockReturnValue([
+							{
+								role: 'system',
+								content: 'Remote system prompt with invalidation_level, target_level, setup_type, risk_reward_ratio. 0.9+ only with corroborating sources, 0.6-0.8 partial.',
+							},
+							{ role: 'user', content: 'Context: {{alertContext}}' },
+						]),
+					}),
+				},
+			}),
+		});
+
+		await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'Bitcoin context' });
+		service.clientProvider = jest.fn().mockRejectedValue(new Error('connection reset sk-leak-me'));
+		await service.getTextPrompt(PromptKeys.MARKET_PRICE_FETCH, { symbol: 'BTCUSDT' });
+
+		promptStatusSpies.push(
+			jest.spyOn(getPromptService(), 'getPromptResolutionStatus')
+				.mockReturnValue(service.getPromptResolutionStatus()),
+		);
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.langfusePrompts).toEqual(expect.objectContaining({
+			enabled: true,
+			configured: true,
+			servingStatus: 'degraded',
+			servingPrompts: true,
+			totalResolutions: 2,
+			langfuseResolutions: 1,
+			localResolutions: 1,
+			localResolutionRatePercent: 50,
+			remoteFetchAttempts: 2,
+			remoteFetchSuccesses: 1,
+			remoteFetchFailures: 1,
+			remoteFetchSuccessRatePercent: 50,
+			lastErrorCategory: 'request_failed',
+			consecutiveFailures: 1,
+		}));
+		expect(response.body.dependencies.langfusePrompts.prompts).toEqual(expect.arrayContaining([
+			expect.objectContaining({ name: 'alert-enrichment', lastSource: 'langfuse', lastLangfuseVersion: 12 }),
+			expect.objectContaining({ name: 'market-price-fetch', lastSource: 'local' }),
+		]));
+		// Raw provider error text must never reach the status payload.
+		expect(JSON.stringify(response.body.dependencies.langfusePrompts)).not.toContain('sk-leak-me');
+	});
+
+	it('surfaces a 100 percent local fallback regression on /api/status', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
+		process.env.LANGFUSE_SECRET_KEY = 'sk-lf-status-secret';
+
+		const { PromptService, PromptKeys } = require('../../src/services/prompts');
+		const service = new PromptService({
+			logger: { warn: jest.fn(), debug: jest.fn() },
+			clientProvider: jest.fn().mockResolvedValue({
+				prompt: {
+					get: jest.fn().mockRejectedValue(new Error('Langfuse prompt not found')),
+				},
+			}),
+		});
+
+		await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'Bitcoin context' });
+		await service.getChatPrompt(PromptKeys.NEWS_ANALYSIS, { symbol: 'BTCUSDT', enrichedContext: 'ctx' });
+
+		promptStatusSpies.push(
+			jest.spyOn(getPromptService(), 'getPromptResolutionStatus')
+				.mockReturnValue(service.getPromptResolutionStatus()),
+		);
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		// Langfuse still reports itself configured/enabled — but the serving fact is
+		// now honest and lives in dependencies.langfusePrompts.
+		expect(response.body.dependencies.langfuse).toEqual(expect.objectContaining({
+			enabled: true,
+			configured: true,
+		}));
+		expect(response.body.dependencies.langfusePrompts).toEqual(expect.objectContaining({
+			// `ready` is the OBSERVED serving verdict, so a deployment serving nothing
+			// from Langfuse must not report ready here - that green light on a
+			// local_fallback state is the regression this block exists to expose.
+			ready: false,
+			servingStatus: 'local_fallback',
+			servingPrompts: false,
+			langfuseResolutions: 0,
+			localResolutions: 2,
+			localResolutionRatePercent: 100,
+			remoteFetchSuccessRatePercent: 0,
+			lastErrorCategory: 'prompt_not_found',
+		}));
 	});
 
 	it('reports dedicated worker role and heartbeat counters', async () => {
@@ -534,7 +941,53 @@ describe('Status endpoints', () => {
 			lastRunPendingCount: 0,
 			lastRunErrorCount: 0,
 			shutdownRequested: false,
+			entryPriceSources: {
+				configured: false,
+				crypto: ['mcp', 'binance', 'gemini'],
+				equity: ['twelve-data'],
+			},
 		});
+	});
+
+	it('reports the sweep lease observability on both status aliases', async () => {
+		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+		process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'web';
+
+		const status = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		const capabilities = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(status.status).toBe(200);
+		expect(status.body.dependencies.signalOutcomeWorker).toMatchObject({
+			leaseMs: 120000,
+			lastRunLeaseHeld: false,
+			leaseHeldSkipCount: 0,
+		});
+		expect(capabilities.body.dependencies.signalOutcomeWorker).toMatchObject({
+			leaseMs: 120000,
+			lastRunLeaseHeld: false,
+			leaseHeldSkipCount: 0,
+		});
+	});
+
+	it('reports the configured sweep lease duration and never lock ownership', async () => {
+		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+		process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'web';
+		process.env.SIGNAL_OUTCOME_EVALUATION_LEASE_MS = '45000';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.signalOutcomeWorker.leaseMs).toBe(45000);
+
+		// Lease ownership is an internal lock value and must never reach an operator.
+		expect(response.text).not.toContain('lockedBy');
+		delete process.env.SIGNAL_OUTCOME_EVALUATION_LEASE_MS;
 	});
 
 	it('does not report a disabled local scheduler as ready', async () => {
@@ -577,17 +1030,489 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.equityMarketData).toBe(true);
+		// Credentials have the right shape, but nothing has called the provider yet, so
+		// the endpoint must not claim equity outcomes are working (#1116).
 		expect(response.body.dependencies.equityMarketData).toEqual({
 			provider: 'twelve-data',
 			enabled: true,
 			configured: true,
-			ready: true,
-			status: 'ready',
+			ready: false,
+			status: 'unverified',
+			readiness: 'unverified',
+			requestsAttempted: 0,
+			requestsSucceeded: 0,
+			requestsFailed: 0,
+			consecutiveFailures: 0,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorReason: null,
 			supportedExchanges: ['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD'],
 			timeoutMs: 5000,
 			rpm: 0,
 		});
 		expect(JSON.stringify(response.body)).not.toContain('secret-equity-key');
+	});
+
+	it('surfaces an equity market-data provider failure through /api/status', async () => {
+		process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
+		process.env.EQUITY_MARKET_DATA_PROVIDER = 'twelve-data';
+		process.env.TWELVE_DATA_API_KEY = 'secret-equity-key';
+
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn().mockResolvedValue({
+			ok: false,
+			status: 401,
+			headers: new Map(),
+			json: async () => ({ code: 401, message: 'Invalid API key' }),
+		});
+		try {
+			await equityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' })
+				.catch(() => {});
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.dependencies.equityMarketData).toMatchObject({
+				configured: true,
+				ready: false,
+				status: 'degraded',
+				readiness: 'degraded',
+				requestsAttempted: 1,
+				requestsFailed: 1,
+				lastErrorReason: 'twelve_data_misconfigured',
+			});
+			expect(JSON.stringify(response.body)).not.toContain('secret-equity-key');
+		} finally {
+			global.fetch = originalFetch;
+			equityMarketDataService._resetReadinessForTesting();
+		}
+	});
+
+	// Issue #1180 enables durable news-monitor analysis records in production. Every
+	// Firestore error in `NewsAnalysisStorageService` is swallowed so alert delivery
+	// continues, so `featureFlags.firestoreNewsAnalysis` alone reports what was
+	// configured, not what executed: a deployment whose credentials look valid but
+	// cannot reach Firestore would have read as working.
+	it('reports news analysis storage as unverified while credentials only look valid', async () => {
+		process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
+		newsAnalysisStorageService.__resetFirestoreClient();
+		newsAnalysisStorageService.__resetReadinessForTesting();
+
+		try {
+			const response = await request(app)
+				.get('/api/capabilities')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.firestoreNewsAnalysis).toBe(true);
+			expect(response.body.dependencies.newsAnalysisStorage).toEqual({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'unverified',
+				mode: 'durable',
+				backend: 'firestore',
+				failOpen: true,
+				readiness: 'unverified',
+				collection: 'news_analysis',
+				retentionDays: 30,
+				operationsAttempted: 0,
+				operationsSucceeded: 0,
+				operationsFailed: 0,
+				consecutiveFailures: 0,
+				lastSuccessAt: null,
+				lastFailureAt: null,
+				lastErrorReason: null,
+				lastMissingIndex: false,
+			});
+		} finally {
+			newsAnalysisStorageService.__resetFirestoreClient();
+			newsAnalysisStorageService.__resetReadinessForTesting();
+		}
+	});
+
+	it('surfaces a durable news-analysis failure through /api/status as degraded', async () => {
+		process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
+		newsAnalysisStorageService.__resetFirestoreClient();
+		newsAnalysisStorageService.__resetReadinessForTesting();
+
+		try {
+			// `mockRejectedValue` (not `...Once`) because this suite never calls
+			// `clearAllMocks`, so a queued one-shot that went unconsumed would fire
+			// inside a later test. The implementation is restored in `finally`.
+			admin.__mockDocSet.mockRejectedValue(new Error('firestore unreachable'));
+			await newsAnalysisStorageService.recordAnalysis({ symbol: 'BTCUSDT', confidence: 0.9 });
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.dependencies.newsAnalysisStorage).toMatchObject({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'degraded',
+				readiness: 'degraded',
+				// Intent stays durable so an operator does not read `memory` and
+				// conclude the flag is off.
+				mode: 'durable',
+				backend: 'firestore',
+				failOpen: true,
+				operationsAttempted: 1,
+				operationsFailed: 1,
+				consecutiveFailures: 1,
+			});
+		} finally {
+			admin.__mockDocSet.mockReset();
+			newsAnalysisStorageService.__resetFirestoreClient();
+			newsAnalysisStorageService.__resetReadinessForTesting();
+		}
+	});
+
+	it('reports news analysis storage as disabled by default', async () => {
+		delete process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS;
+		newsAnalysisStorageService.__resetFirestoreClient();
+		newsAnalysisStorageService.__resetReadinessForTesting();
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firestoreNewsAnalysis).toBe(false);
+		expect(response.body.dependencies.newsAnalysisStorage).toMatchObject({
+			enabled: false,
+			status: 'disabled',
+			mode: 'ephemeral',
+			backend: 'memory',
+			ready: false,
+		});
+	});
+
+	// Issue #1180 enables durable idempotency in production. Every Firestore error in
+	// `IdempotencyStorageService` is swallowed into in-memory fallback, so before the
+	// proven-readiness change a deployment that could not reach Firestore reported the
+	// same `ready` verdict as a working one and the enablement was unverifiable.
+	it('reports idempotency storage as unverified while credentials only look valid', async () => {
+		process.env.ENABLE_FIRESTORE_IDEMPOTENCY = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
+		idempotencyStorageService._resetForTesting();
+
+		try {
+			const response = await request(app)
+				.get('/api/capabilities')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.firestoreIdempotency).toBe(true);
+			expect(response.body.dependencies.idempotencyStorage).toEqual({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'unverified',
+				mode: 'durable',
+				backend: 'firestore',
+				failOpen: true,
+				readiness: 'unverified',
+				collection: 'idempotency_keys',
+				operationsAttempted: 0,
+				operationsSucceeded: 0,
+				operationsFailed: 0,
+				consecutiveFailures: 0,
+				lastSuccessAt: null,
+				lastFailureAt: null,
+				lastErrorReason: null,
+			});
+		} finally {
+			idempotencyStorageService._resetForTesting();
+		}
+	});
+
+	it('surfaces a durable idempotency failure through /api/status as degraded', async () => {
+		process.env.ENABLE_FIRESTORE_IDEMPOTENCY = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
+		idempotencyStorageService._resetForTesting();
+
+		try {
+			// The firebase-admin double has no `runTransaction`, so the reservation
+			// rejects exactly the way an unreachable Firestore would.
+			await idempotencyStorageService.reserveEntry('status-key-replay', 'hash', 300000);
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.dependencies.idempotencyStorage).toMatchObject({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'degraded',
+				readiness: 'degraded',
+				failOpen: true,
+				operationsAttempted: 1,
+				operationsFailed: 1,
+				consecutiveFailures: 1,
+				lastErrorReason: 'firestore_unavailable',
+			});
+		} finally {
+			idempotencyStorageService._resetForTesting();
+		}
+	});
+
+	// Issue #1178 enables Langfuse dynamic prompts in production. Before the
+	// proven-readiness change `dependencies.langfuse` was
+	// `dependencyStatus({ enabled, configured })`, so flipping the gate made a
+	// deployment report `ready: true` while every alert silently resolved to the
+	// local fallback file. `configured` validates credential shape only, which a
+	// typo'd, revoked or wrong-project key satisfies.
+	it('reports Langfuse prompts as unverified while credentials only look valid', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
+		process.env.LANGFUSE_SECRET_KEY = 'sk-lf-status-secret';
+		process.env.LANGFUSE_PROMPT_LABEL = 'production';
+		process.env.LANGFUSE_PROMPT_CACHE_TTL_SECONDS = '300';
+		promptReadiness.resetPromptReadinessForTesting();
+
+		try {
+			const response = await request(app)
+				.get('/api/capabilities')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.langfusePrompts).toBe(true);
+			expect(response.body.dependencies.langfuse).toEqual({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'unverified',
+				readiness: 'unverified',
+				failOpen: true,
+				baseUrlHost: 'cloud.langfuse.com',
+				label: 'production',
+				cacheTtlSeconds: 300,
+				promptsAttempted: 0,
+				promptsSucceeded: 0,
+				promptsFailed: 0,
+				localFallbackCount: 0,
+				consecutiveFailures: 0,
+				lastSuccessAt: null,
+				lastFailureAt: null,
+				lastErrorReason: null,
+				byPrompt: {},
+				localFallbackByPrompt: {},
+			});
+			expect(JSON.stringify(response.body)).not.toContain('sk-lf-status-secret');
+			expect(JSON.stringify(response.body)).not.toContain('pk-lf-status-public');
+		} finally {
+			promptReadiness.resetPromptReadinessForTesting();
+		}
+	});
+
+	it('surfaces an observed Langfuse prompt failure through /api/status as degraded', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
+		process.env.LANGFUSE_SECRET_KEY = 'sk-lf-status-secret';
+		promptReadiness.resetPromptReadinessForTesting();
+
+		try {
+			promptReadiness.getPromptReadiness().recordAttempt();
+			promptReadiness.getPromptReadiness().recordFailure('langfuse_prompt_not_found');
+			promptReadiness.getPromptReadiness().recordLocalFallback({ promptName: 'alert-enrichment' });
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.dependencies.langfuse).toMatchObject({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'degraded',
+				readiness: 'degraded',
+				failOpen: true,
+				promptsAttempted: 1,
+				promptsFailed: 1,
+				localFallbackCount: 1,
+				lastErrorReason: 'langfuse_prompt_not_found',
+				localFallbackByPrompt: { 'alert-enrichment': 1 },
+			});
+		} finally {
+			promptReadiness.resetPromptReadinessForTesting();
+		}
+	});
+
+	it('reports Langfuse prompts ready only after an observed successful resolution', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
+		process.env.LANGFUSE_SECRET_KEY = 'sk-lf-status-secret';
+		promptReadiness.resetPromptReadinessForTesting();
+
+		try {
+			promptReadiness.getPromptReadiness().recordAttempt();
+			promptReadiness.getPromptReadiness().recordSuccess({
+				promptName: 'alert-enrichment',
+				label: 'production',
+				version: 12,
+			});
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.dependencies.langfuse).toMatchObject({
+				ready: true,
+				status: 'ready',
+				readiness: 'verified',
+				promptsSucceeded: 1,
+				byPrompt: {
+					'alert-enrichment': { langfuse: 1, local: 0, lastVersion: 12, lastLabel: 'production' },
+				},
+			});
+		} finally {
+			promptReadiness.resetPromptReadinessForTesting();
+		}
+	});
+
+	it('reports a disabled Langfuse gate even after successes were recorded', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'false';
+		promptReadiness.resetPromptReadinessForTesting();
+
+		try {
+			promptReadiness.getPromptReadiness().recordAttempt();
+			promptReadiness.getPromptReadiness().recordSuccess({ promptName: 'alert-enrichment', label: 'latest' });
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.langfusePrompts).toBe(false);
+			expect(response.body.dependencies.langfuse).toMatchObject({
+				enabled: false,
+				ready: false,
+				status: 'disabled',
+			});
+		} finally {
+			promptReadiness.resetPromptReadinessForTesting();
+		}
+	});
+
+	it('reports a Langfuse gate with a missing credential as misconfigured, not ready', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
+		process.env.LANGFUSE_SECRET_KEY = '';
+		promptReadiness.resetPromptReadinessForTesting();
+
+		try {
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.dependencies.langfuse).toMatchObject({
+				enabled: true,
+				configured: false,
+				ready: false,
+				status: 'misconfigured',
+			});
+		} finally {
+			promptReadiness.resetPromptReadinessForTesting();
+		}
+	});
+
+	// Issue #1179 enables symbol-analysis persistence in production. Every Firestore
+	// error in `SymbolAnalysisStorageService` drops the record and still answers the
+	// analysis, so before the proven-readiness change a deployment that had never
+	// persisted an analysis reported the same `ready` verdict as a working one.
+	it('reports symbol analysis storage as unverified while credentials only look valid', async () => {
+		process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
+		symbolAnalysisStorageService.__resetForTesting();
+
+		try {
+			const response = await request(app)
+				.get('/api/capabilities')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.symbolAnalysisStorage).toBe(true);
+			expect(response.body.dependencies.symbolAnalysisStorage).toEqual({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'unverified',
+				readiness: 'unverified',
+				failOpen: true,
+				collection: 'symbolAnalyses',
+				retentionDays: 7,
+				writesAttempted: 0,
+				writesSucceeded: 0,
+				writesFailed: 0,
+				readsAttempted: 0,
+				readsSucceeded: 0,
+				readsFailed: 0,
+				consecutiveFailures: 0,
+				lastWriteAt: null,
+				lastFailureAt: null,
+				lastErrorReason: null,
+			});
+		} finally {
+			symbolAnalysisStorageService.__resetForTesting();
+		}
+	});
+
+	it('reports symbol analysis storage as ephemeral when the gate is off', async () => {
+		delete process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE;
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		symbolAnalysisStorageService.__resetForTesting();
+
+		try {
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.symbolAnalysisStorage).toBe(false);
+			expect(response.body.dependencies.symbolAnalysisStorage).toMatchObject({
+				enabled: false,
+				ready: false,
+				status: 'disabled',
+				writesAttempted: 0,
+				writesSucceeded: 0,
+			});
+		} finally {
+			symbolAnalysisStorageService.__resetForTesting();
+		}
+	});
+
+	it('reports idempotency storage as ephemeral when the gate is off', async () => {
+		delete process.env.ENABLE_FIRESTORE_IDEMPOTENCY;
+		delete process.env.ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE;
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		idempotencyStorageService._resetForTesting();
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firestoreIdempotency).toBe(false);
+		expect(response.body.dependencies.idempotencyStorage).toMatchObject({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+			mode: 'ephemeral',
+			backend: 'memory',
+		});
 	});
 
 	it('reports Firestore job storage as disabled by default', async () => {
@@ -623,8 +1548,101 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'misconfigured',
+			waitingCount: expect.any(Number),
+			delayedCount: expect.any(Number),
+			failedCount: expect.any(Number),
+			activeCount: expect.any(Number),
+			durableQueuedCount: expect.any(Number),
+			// Documented in the OpenAPI JobQueueStatus schema and both Postman
+			// success examples, so the endpoint must actually surface it. Asserting
+			// here pins the published contract rather than one layer's projection.
+			durableScanRotated: expect.any(Boolean),
+			durableCycleComplete: expect.any(Boolean),
+			// A misconfigured queue has no broker to have a verdict about, so the
+			// probe fields stay null rather than reporting a fabricated false.
+			brokerReachable: null,
+			lastBrokerProbeAt: null,
+			lastBrokerProbeErrorCode: null,
+			backlogAlert: {
+				active: false,
+				thresholdMs: expect.any(Number),
+			},
 		});
 		expect(JSON.stringify(response.body.dependencies.jobExecutionQueue)).not.toContain('redis://');
+	});
+
+	it('reports the broker probe verdict so a render-worker cutover is verifiable', async () => {
+		const { jobQueue } = require('../../src/services/jobs/JobQueue');
+		const probe = jest.spyOn(jobQueue, 'probeBrokerReadiness').mockResolvedValue({ reachable: true });
+
+		try {
+			process.env.JOB_EXECUTION_MODE = 'render-worker';
+			process.env.REDIS_URL = 'redis://queue.example:6379';
+			// Mirrors a healthy boot probe without needing a live Redis in the suite.
+			jobQueue.queueReady = true;
+			jobQueue.brokerProbe = {
+				reachable: true,
+				lastProbeAt: '2026-10-04T12:00:00.000Z',
+				lastErrorCode: null,
+			};
+
+			const response = await request(app)
+				.get('/api/capabilities')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.jobExecutionWorker).toBe(true);
+			// This is the payload issue #1117 asks an operator to check after the
+			// cutover; it has to read "ready" without a job having been enqueued.
+			expect(response.body.dependencies.jobExecutionQueue).toMatchObject({
+				mode: 'render-worker',
+				enabled: true,
+				configured: true,
+				ready: true,
+				status: 'ready',
+				brokerReachable: true,
+				lastBrokerProbeAt: '2026-10-04T12:00:00.000Z',
+				lastBrokerProbeErrorCode: null,
+			});
+			expect(JSON.stringify(response.body.dependencies.jobExecutionQueue)).not.toContain('redis://');
+		} finally {
+			probe.mockRestore();
+			jobQueue.queueReady = false;
+			jobQueue.brokerProbe = { reachable: null, lastProbeAt: null, lastErrorCode: null };
+			delete process.env.REDIS_URL;
+		}
+	});
+
+	it('reports an unreachable broker as distinct from an unprobed one', async () => {
+		const { jobQueue } = require('../../src/services/jobs/JobQueue');
+
+		try {
+			process.env.JOB_EXECUTION_MODE = 'render-worker';
+			process.env.REDIS_URL = 'redis://queue.example:6379';
+			jobQueue.brokerProbe = {
+				reachable: false,
+				lastProbeAt: '2026-10-04T12:00:00.000Z',
+				lastErrorCode: 'JOB_QUEUE_PROBE_TIMEOUT',
+			};
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			// `configured` only proves REDIS_URL is a non-empty string, so without a
+			// distinct verdict an operator cannot tell this from a healthy cutover.
+			expect(response.body.dependencies.jobExecutionQueue).toMatchObject({
+				configured: true,
+				ready: false,
+				status: 'unreachable',
+				brokerReachable: false,
+				lastBrokerProbeErrorCode: 'JOB_QUEUE_PROBE_TIMEOUT',
+			});
+			expect(JSON.stringify(response.body.dependencies.jobExecutionQueue)).not.toContain('queue.example');
+		} finally {
+			jobQueue.brokerProbe = { reachable: null, lastProbeAt: null, lastErrorCode: null };
+			delete process.env.REDIS_URL;
+		}
 	});
 
 	it('reports firestore-poller mode execution readiness without Redis', async () => {
@@ -851,6 +1869,24 @@ describe('Status endpoints', () => {
 			ready: true,
 			status: 'ready',
 		});
+	});
+
+	it('reports news monitor volume tracking status and window usage', async () => {
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.newsMonitor).toEqual(
+			expect.objectContaining({
+				enabled: true,
+				paused: false,
+				alertsDelivered: 0,
+				alertsThrottled: 0,
+				windowResetsAt: expect.any(String),
+			}),
+		);
 	});
 
 	it('reports the primary news monitor Gemini provider separately from Gemini search readiness', async () => {
@@ -1128,6 +2164,14 @@ describe('Status endpoints', () => {
 				failureThreshold: 5,
 				cooldownMs: 600000,
 			},
+			errorCategoryCounts: {
+				circuit_breaker_open: 0,
+				http_5xx: 0,
+				http_4xx: 0,
+				timeout: 0,
+				invalid_response: 0,
+				request_failed: 0,
+			},
 		});
 	});
 
@@ -1232,6 +2276,63 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+		});
+	});
+
+	// ── Issue #1285 ──────────────────────────────────────────────────────────
+	// `ready` used to be derived from credential *shape* alone, so a deployment
+	// whose writes succeeded while every ordered read was rejected still reported
+	// `ready: true`. These pin the read-aware verdict.
+	it('omits firestoreReadMetrics until a read has actually been observed', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies).not.toHaveProperty('firestoreReadMetrics');
+	});
+
+	it('reports Firestore not ready with a sanitized category when the read path is broken', async () => {
+		firestoreWriteMetricsService.recordReadFailure('alerts', 'failed_precondition');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			readHealth: 'degraded',
+			lastReadErrorCategory: 'failed_precondition',
+		});
+		expect(response.body.dependencies.firestoreReadMetrics).toMatchObject({
+			readHealth: 'degraded',
+			readsFailed: 1,
+			lastErrorCategory: 'failed_precondition',
+		});
+		// Alias surface must carry the same verdict.
+		const capabilities = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+		expect(capabilities.body.dependencies.firestore).toMatchObject({
+			ready: false,
+			status: 'degraded',
+		});
+	});
+
+	it('keeps Firestore ready when the read path has only ever succeeded', async () => {
+		firestoreWriteMetricsService.recordReadSuccess('alerts');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestore).toMatchObject({
+			ready: true,
+			status: 'ready',
+			readHealth: 'healthy',
 		});
 	});
 
@@ -1586,8 +2687,8 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 		const serializedBody = JSON.stringify(response.body);
 
-		expect(serializedBody).not.toContain('token');
-		expect(serializedBody).not.toContain('key');
+		expect(serializedBody).not.toContain('secret-bot-token');
+		expect(serializedBody).not.toContain('secret-whatsapp-key');
 		expect(serializedBody).not.toContain('gemini-key');
 		expect(serializedBody).not.toContain('https://dsn.example');
 		expect(serializedBody).not.toContain('https://greenapi.example/');
@@ -1648,7 +2749,7 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+		expect(response.body.dependencies.newsMonitorDedup).toMatchObject({
 			enabled: false,
 			configured: false,
 			ready: false,
@@ -1656,6 +2757,8 @@ describe('Status endpoints', () => {
 			mode: 'in-memory',
 			backend: null,
 		});
+		expect(response.body.dependencies.newsMonitorDedup.cacheSize).toBeDefined();
+		expect(typeof response.body.dependencies.newsMonitorDedup.cacheSize.entries).toBe('number');
 	});
 
 	it('reports news monitor deduplication as persistent (firestore) when enabled', async () => {
@@ -1666,7 +2769,7 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+		expect(response.body.dependencies.newsMonitorDedup).toMatchObject({
 			enabled: true,
 			configured: true,
 			ready: true,
@@ -1688,7 +2791,7 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+		expect(response.body.dependencies.newsMonitorDedup).toMatchObject({
 			enabled: true,
 			configured: true,
 			ready: true,
@@ -1710,7 +2813,7 @@ describe('Status endpoints', () => {
 			.set('x-api-key', 'status-key');
 
 		expect(response.status).toBe(200);
-		expect(response.body.dependencies.newsMonitorDedup).toEqual({
+		expect(response.body.dependencies.newsMonitorDedup).toMatchObject({
 			enabled: false,
 			configured: false,
 			ready: false,
@@ -1774,8 +2877,12 @@ describe('Status endpoints', () => {
 		expect(disabledResponse.body.dependencies.notificationRedrive).toMatchObject({
 			enabled: false,
 			role: 'web',
+			workerRole: 'web',
 			running: false,
 			pendingCount: 0,
+			zeroChannelBroadcasts: 0,
+			lastSweepAt: null,
+			lastSweepResult: null,
 		});
 
 		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
@@ -1789,8 +2896,485 @@ describe('Status endpoints', () => {
 		expect(enabledResponse.body.dependencies.notificationRedrive).toMatchObject({
 			enabled: true,
 			role: 'worker',
+			workerRole: 'worker',
 			batchLimit: 50,
 			maxAttempts: 5,
+			zeroChannelBroadcasts: 0,
+		});
+		expect(enabledResponse.body.dependencies.notificationRedrive.lastSweepAt).toBeNull();
+		expect(enabledResponse.body.dependencies.notificationRedrive.lastSweepResult).toBeNull();
+	});
+
+	it('reports operator-intent channel configuration for zero-channel triage (GH-713)', async () => {
+		// Nothing configured: every channel must be listed as unconfigured so an operator
+		// can tell "never configured" apart from "configured but failing".
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+		delete process.env.BOT_TOKEN;
+		delete process.env.TELEGRAM_CHAT_ID;
+		process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+		delete process.env.WHATSAPP_API_URL;
+		delete process.env.WHATSAPP_API_KEY;
+		delete process.env.WHATSAPP_CHAT_ID;
+		process.env.ENABLE_DISCORD_ALERTS = 'true';
+		delete process.env.DISCORD_WEBHOOK_URL;
+
+		const unconfiguredResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(unconfiguredResponse.status).toBe(200);
+		expect(unconfiguredResponse.body.notificationChannelIntent).toEqual({
+			configured: [],
+			unconfigured: expect.arrayContaining(['telegram', 'whatsapp', 'discord']),
+		});
+
+		// Configure Discord only: intent must be Discord-configured, Telegram/WhatsApp unconfigured.
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1/abc';
+		const partialResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(partialResponse.status).toBe(200);
+		expect(partialResponse.body.notificationChannelIntent).toEqual({
+			configured: ['discord'],
+			unconfigured: expect.arrayContaining(['telegram', 'whatsapp']),
+		});
+
+		// Intent mirrors NotificationChannel.isConfigured() = enable flag AND
+		// credentials (dependencyStatus.ready). A channel whose webhook URL is set
+		// but whose ENABLE_DISCORD_ALERTS flag is off is therefore NOT configured
+		// by operator intent — the same verdict the zero-channel page reaches,
+		// since it calls that same method. Reporting it as configured here would
+		// contradict the page that reported it as unconfigured.
+		process.env.ENABLE_DISCORD_ALERTS = 'false';
+		const flagDisabledResponse = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(flagDisabledResponse.body.dependencies.discord.configured).toBe(true);
+		expect(flagDisabledResponse.body.dependencies.discord.ready).toBe(false);
+		expect(flagDisabledResponse.body.notificationChannelIntent.configured).toEqual([]);
+		expect(flagDisabledResponse.body.notificationChannelIntent.unconfigured)
+			.toEqual(expect.arrayContaining(['telegram', 'whatsapp', 'discord']));
+	});
+
+	it('exposes non-secret admin-paging health so a silent operator path is visible (#1168)', async () => {
+		const { registerAdminPagingManager, resetAdminPagingManagerForTesting } =
+			require('../../src/services/notification/adminPagingStatus');
+
+		try {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+			process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+			process.env.WHATSAPP_API_URL = 'https://greenapi.example';
+			process.env.WHATSAPP_API_KEY = 'green-key';
+			process.env.WHATSAPP_CHAT_ID = '120363000000000000@g.us';
+
+			const manager = {
+				getAdminPagingStatus: () => ({
+					enabled: true,
+					status: 'degraded',
+					telegramAdminChatConfigured: true,
+					fallbackEnabled: true,
+					fallbackChannels: ['whatsapp'],
+					attempts: 3,
+					successes: 0,
+					failures: 3,
+					consecutiveFailures: 3,
+					lastSuccessAt: null,
+					lastFailureAt: '2026-09-28T04:00:00.000Z',
+					lastSuccessChannel: null,
+					lastAttemptChannel: 'telegram',
+					lastErrorCategory: 'PROVIDER_ERROR',
+					lastError: 'Bad Request: chat not found',
+					byChannel: [{ pageType: 'delivery-failure', channel: 'telegram', success: 0, failure: 3 }],
+				}),
+			};
+			registerAdminPagingManager(manager);
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			// A channel readiness block says "ready"; adminPaging says whether the operator
+			// path is actually landing. Both are needed to see a 0/3 blackout.
+			expect(response.body.adminPaging).toEqual(expect.objectContaining({
+				status: 'degraded',
+				consecutiveFailures: 3,
+				fallbackChannels: ['whatsapp'],
+			}));
+			// Never leak destinations.
+			const serialized = JSON.stringify(response.body.adminPaging);
+			expect(serialized).not.toContain('-100-admin');
+			expect(serialized).not.toContain('120363000000000000@g.us');
+			expect(serialized).not.toContain('green-key');
+		} finally {
+			resetAdminPagingManagerForTesting();
+		}
+	});
+
+	it('omits adminPaging when no NotificationManager has been constructed', async () => {
+		const { resetAdminPagingManagerForTesting } =
+			require('../../src/services/notification/adminPagingStatus');
+		resetAdminPagingManagerForTesting();
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body).not.toHaveProperty('adminPaging');
+	});
+
+	it('waits for the initial notification redrive heartbeat before serializing status', async () => {
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
+		const statusController = require('../../src/controllers/status');
+		const service = require('../../src/services/notification/NotificationRedriveService').notificationRedriveService;
+		let releaseSync;
+		let responseSettled = false;
+		const response = {
+			status: jest.fn().mockReturnThis(),
+			json: jest.fn(),
+		};
+		const getFirestoreSpy = jest.spyOn(service, 'getFirestore').mockReturnValue({});
+		const getStatusSpy = jest.spyOn(service, 'getStatus');
+		const syncSpy = jest.spyOn(service, 'syncWorkerTelemetry').mockImplementation(() => new Promise((resolve) => {
+			releaseSync = () => {
+				service.persistedPendingCount = 6;
+				service.persistedLastSweepAt = new Date('2026-09-14T08:00:00.000Z');
+				resolve(true);
+			};
+		}));
+
+		try {
+			const responsePromise = Promise.resolve(statusController.getApiStatus({}, response))
+				.then(() => {
+					responseSettled = true;
+				});
+			await new Promise((resolve) => setImmediate(resolve));
+			expect(syncSpy).toHaveBeenCalledTimes(1);
+			expect(responseSettled).toBe(false);
+
+			releaseSync();
+			await responsePromise;
+			expect(response.status).toHaveBeenCalledWith(200);
+			expect(response.json).toHaveBeenCalledTimes(1);
+			expect(getStatusSpy).toHaveBeenCalledWith({ skipTelemetrySync: true });
+			expect(syncSpy).toHaveBeenCalledTimes(1);
+			expect(response.json.mock.calls[0][0].dependencies.notificationRedrive.pendingCount).toBe(6);
+			expect(response.json.mock.calls[0][0].dependencies.notificationRedrive.lastSweepAt).toBe('2026-09-14T08:00:00.000Z');
+		} finally {
+			releaseSync?.();
+			syncSpy.mockRestore();
+			getStatusSpy.mockRestore();
+			getFirestoreSpy.mockRestore();
+			service._resetForTesting();
+		}
+	});
+
+	it('exposes structured lastSweepResult with processed/succeeded/exhausted/errors after a sweep', async () => {
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
+		const service = require('../../src/services/notification/NotificationRedriveService').notificationRedriveService;
+		service.lastSweepAt = new Date('2026-08-30T00:00:00.000Z');
+		service.lastSweepResult = {
+			processed: 8,
+			succeeded: 3,
+			exhausted: 2,
+			errors: 1,
+		};
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.notificationRedrive.lastSweepAt).toBe('2026-08-30T00:00:00.000Z');
+		expect(response.body.dependencies.notificationRedrive.lastSweepResult).toEqual({
+			processed: 8,
+			succeeded: 3,
+			exhausted: 2,
+			errors: 1,
+		});
+		service._resetForTesting();
+	});
+
+	it('reports testAlert feature flag and dependency status', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.testAlert).toBe(true);
+		expect(response.body.dependencies.testAlert).toEqual({
+			enabled: true,
+			lastRunAt: null,
+			lastRunStatus: null,
+			rateLimitState: {
+				windowMs: 60000,
+				dailyLimit: 30,
+				dailyRunsToday: 0,
+			},
+		});
+	});
+
+	it('omits deliveryMetrics when no deliveries have been recorded', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body).not.toHaveProperty('deliveryMetrics');
+	});
+
+	it('exposes per-channel deliveryMetrics after recorded results', async () => {
+		deliveryMetricsService.record({ channel: 'telegram', success: true, durationMs: 120 });
+		deliveryMetricsService.record({ channel: 'telegram', success: false, durationMs: 250 });
+		deliveryMetricsService.record({ channel: 'whatsapp', success: true, durationMs: 300 });
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.deliveryMetrics).toEqual(expect.objectContaining({
+			success: 2,
+			failure: 1,
+			total: 3,
+			successRate: expect.closeTo(2 / 3, 4),
+			byChannel: {
+				telegram: expect.objectContaining({
+					success: 1,
+					failure: 1,
+					total: 2,
+					successRate: 0.5,
+					averageDeliveryMs: 185,
+				}),
+				whatsapp: expect.objectContaining({
+					success: 1,
+					failure: 0,
+					total: 1,
+					successRate: 1.0,
+					averageDeliveryMs: 300,
+				}),
+			},
+			window: expect.objectContaining({
+				startedAt: expect.any(String),
+				durationMs: expect.any(Number),
+			}),
+		}));
+		expect(response.body.deliveryMetrics.averageDeliveryMs).toBeCloseTo((120 + 250 + 300) / 3, 1);
+	});
+
+	it('aliases /api/capabilities to expose deliveryMetrics', async () => {
+		deliveryMetricsService.record({ channel: 'discord', success: true, durationMs: 80 });
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.deliveryMetrics).toEqual(expect.objectContaining({
+			success: 1,
+			failure: 0,
+			total: 1,
+			byChannel: expect.objectContaining({
+				discord: expect.objectContaining({ successRate: 1.0 }),
+			}),
+		}));
+	});
+
+	it('omits firestoreWriteMetrics when no writes have been recorded', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies).not.toHaveProperty('firestoreWriteMetrics');
+	});
+
+	it('exposes firestoreWriteMetrics counters after alert and job writes', async () => {
+		firestoreWriteMetricsService.recordWriteSuccess('alerts');
+		firestoreWriteMetricsService.recordWriteSuccess('alerts');
+		firestoreWriteMetricsService.recordWriteFailure('alerts');
+		firestoreWriteMetricsService.recordWriteSuccess('jobs');
+		firestoreWriteMetricsService.recordWriteFailure('jobs');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		const metrics = response.body.dependencies.firestoreWriteMetrics;
+		expect(metrics).toEqual(expect.objectContaining({
+			writesAttempted: 5,
+			writesSucceeded: 3,
+			writesFailed: 2,
+			successRate: 3 / 5,
+			window: expect.objectContaining({
+				startedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+				durationMs: expect.any(Number),
+			}),
+			byDomain: expect.objectContaining({
+				alerts: expect.objectContaining({ success: 2, failure: 1, total: 3, successRate: 2 / 3 }),
+				jobs: expect.objectContaining({ success: 1, failure: 1, total: 2, successRate: 0.5 }),
+			}),
+		}));
+	});
+
+	it('aliases /api/capabilities to expose firestoreWriteMetrics', async () => {
+		firestoreWriteMetricsService.recordWriteSuccess('alerts');
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.firestoreWriteMetrics).toEqual(expect.objectContaining({
+			writesSucceeded: 1,
+			writesFailed: 0,
+		}));
+	});
+
+	it('invokes tokenCostBudgetService.syncSharedSpendThrottled before returning status', async () => {
+		const { tokenCostBudgetService } = require('../../src/lib/tokenUsage');
+		const syncSpy = jest.spyOn(tokenCostBudgetService, 'syncSharedSpendThrottled').mockResolvedValue();
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(syncSpy).toHaveBeenCalled();
+	});
+
+
+	it('exposes per-tool metrics for TradingView MCP calls in dependencies.tradingViewMcp', async () => {
+		tradingViewMcpService._recordToolSuccess('coin_analysis', 150);
+		tradingViewMcpService._recordToolSuccess('coin_analysis', 250);
+		tradingViewMcpService._recordToolFailure('volume_confirmation_analysis', 500, new Error('ETIMEDOUT: request timed out'));
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.tradingViewMcp.toolMetrics).toEqual({
+			coin_analysis: {
+				callCount: 2,
+				successCount: 2,
+				failureCount: 0,
+				timeoutCount: 0,
+				totalDurationMs: 400,
+				averageDurationMs: 200,
+				lastCallAt: expect.any(String),
+				lastErrorCategory: null,
+			},
+			volume_confirmation_analysis: {
+				callCount: 1,
+				successCount: 0,
+				failureCount: 1,
+				timeoutCount: 1,
+				totalDurationMs: 500,
+				averageDurationMs: 500,
+				lastCallAt: expect.any(String),
+				lastErrorCategory: 'timeout',
+			},
+		});
+	});
+
+	it('aliases /api/capabilities to expose TradingView MCP toolMetrics', async () => {
+		tradingViewMcpService._recordToolSuccess('coin_analysis', 100);
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.tradingViewMcp.toolMetrics).toEqual({
+			coin_analysis: {
+				callCount: 1,
+				successCount: 1,
+				failureCount: 0,
+				timeoutCount: 0,
+				totalDurationMs: 100,
+				averageDurationMs: 100,
+				lastCallAt: expect.any(String),
+				lastErrorCategory: null,
+			},
+		});
+	});
+
+	it('omits TradingView MCP toolMetrics when ENABLE_TRADINGVIEW_MCP_ENRICHMENT is false', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
+		tradingViewMcpService._recordToolSuccess('coin_analysis', 100);
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.tradingViewMcp.toolMetrics).toBeUndefined();
+	});
+
+	it('exposes grounding operational metrics in /api/status when ENABLE_GEMINI_GROUNDING is true', async () => {
+		groundingMetrics.recordSuccess(100, 'ALERT_ENRICHMENT');
+		groundingMetrics.recordFailure('error', new Error('API error'), 'ALERT_ENRICHMENT');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.grounding).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			metrics: {
+				totalRequests: 2,
+				successRequests: 1,
+				failureRequests: 1,
+				timeoutRequests: 0,
+				successRate: 0.5,
+				uptimeSince: expect.any(String),
+			},
+		});
+	});
+
+	it('omits grounding section when ENABLE_GEMINI_GROUNDING is disabled', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies).not.toHaveProperty('grounding');
+	});
+
+	it('reports grounding as misconfigured when credentials are missing but grounding is enabled', async () => {
+		delete process.env.GEMINI_API_KEY;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.grounding).toEqual({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+			metrics: expect.objectContaining({
+				totalRequests: 0,
+				successRequests: 0,
+				failureRequests: 0,
+				timeoutRequests: 0,
+				successRate: 0,
+				uptimeSince: expect.any(String),
+			}),
 		});
 	});
 });

@@ -3,6 +3,7 @@
 const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 const alertStorageService = require('../storage/AlertStorageService');
+const { parseEntryPriceSources } = require('../../lib/signalOutcomeEntryPriceSources');
 
 const DEFAULT_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const DEFAULT_LOAD_TIMEOUT_MS = 10 * 1000;
@@ -17,6 +18,9 @@ const PARAMETER_SCHEMA = Object.freeze({
 	NEWS_GEMINI_CONCURRENCY: { type: 'number', defaultValue: Infinity, integer: true, min: 1, max: 50 },
 	NEWS_GEMINI_QUOTA_MAX_RETRIES: { type: 'number', defaultValue: 2, integer: true, min: 1, max: 5 },
 	NEWS_GEMINI_QUOTA_RETRY_BASE_MS: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 60000 },
+	NEWS_MAX_ALERTS_PER_BATCH: { type: 'number', defaultValue: 10, integer: true, min: 1, max: 50 },
+	NEWS_MAX_ALERTS_PER_WINDOW: { type: 'number', defaultValue: 20, integer: true, min: 1, max: 200 },
+	NEWS_MAX_ALERTS_PER_WINDOW_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1000, max: 3600000 },
 	TRADINGVIEW_MCP_TIMEOUT_MS: { type: 'number', defaultValue: 12000, integer: true, min: 1000, max: 120000 },
 	TRADINGVIEW_MCP_MAX_RETRIES: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 5 },
 	TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS: { type: 'number', defaultValue: 12000, integer: true, min: 1000, max: 120000 },
@@ -29,6 +33,10 @@ const PARAMETER_SCHEMA = Object.freeze({
 	GROUNDING_MAX_LENGTH: { type: 'number', defaultValue: 2000, integer: true, min: 1, max: 10000 },
 	ALERT_GROUNDING_COALESCE_MS: { type: 'number', defaultValue: 0, integer: true, min: 0, max: 60000 },
 	NEWS_CACHE_TTL_HOURS: { type: 'number', defaultValue: 6, min: 0, max: 720 },
+	NEWS_CACHE_MAX_ENTRIES: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 1000000 },
+	NEWS_DELIVERY_LOCK_MAX_ENTRIES: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 100000 },
+	URL_SHORTENER_CACHE_MAX_ENTRIES: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 100000 },
+	URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES: { type: 'number', defaultValue: 32, integer: true, min: 1, max: 1024 },
 	BINANCE_FETCH_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
 	TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: {
 		type: 'string',
@@ -49,6 +57,18 @@ const PARAMETER_SCHEMA = Object.freeze({
 	SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	SIGNAL_OUTCOME_MAX_RETRY_AGE_MS: { type: 'number', defaultValue: 604800000, integer: true, min: 60000, max: 2592000000 },
 	SIGNAL_OUTCOME_RETENTION_DAYS: { type: 'number', defaultValue: 365, integer: true, min: 1, max: 3650 },
+	SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES: {
+		type: 'string',
+		defaultValue: '',
+		validate: (value) => {
+			try {
+				parseEntryPriceSources(value);
+				return true;
+			} catch (error) {
+				return false;
+			}
+		},
+	},
 	EQUITY_MARKET_DATA_RPM: { type: 'number', defaultValue: 8, integer: true, min: 0, max: 1200 },
 	NOTIFICATION_REDRIVE_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
 	NOTIFICATION_REDRIVE_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
@@ -58,6 +78,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	SCANNER_PRESET_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
 	NEWS_MONITOR_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 10000, max: 3600000 },
 	NEWS_MONITOR_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
+	ALERT_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
+	ALERT_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 10, integer: true, min: 1, max: 100 },
 	ENABLE_GEMINI_GROUNDING: { type: 'boolean', defaultValue: false },
 	ENABLE_TRADINGVIEW_MCP_ENRICHMENT: { type: 'boolean', defaultValue: false },
 	ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION: { type: 'boolean', defaultValue: false },
@@ -66,8 +88,51 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ZERO_CHANNEL_ALERT_COOLDOWN_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1000, max: 86400000 },
 	ENABLE_API_ONLY_MODE: { type: 'boolean', defaultValue: false },
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
+	ENABLE_SIGNAL_CLASS_MARKER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	ENABLE_ALERT_SYNTH_BURST_AGGREGATION: { type: 'boolean', defaultValue: false },
+	ALERT_BURST_WINDOW_MS: { type: 'number', defaultValue: 3000, integer: true, min: 1000, max: 15000 },
+	ALERT_BURST_MIN_SIGNALS: { type: 'number', defaultValue: 3, integer: true, min: 2, max: 20 },
+	JOB_BACKLOG_ALERT_THRESHOLD_MS: { type: 'number', defaultValue: 900000, integer: true, min: 1000, max: 86400000 },
+	JOB_BACKLOG_PAGE_COOLDOWN_MS: { type: 'number', defaultValue: 900000, integer: true, min: 1000, max: 86400000 },
+	JOB_BACKLOG_PROBE_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
+	ENABLE_USER_PRICE_ALERTS: { type: 'boolean', defaultValue: false },
+	USER_PRICE_ALERT_EVALUATION_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
+	USER_PRICE_ALERT_EVALUATION_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
+	USER_PRICE_ALERT_MAX_PER_CHAT: { type: 'number', defaultValue: 20, integer: true, min: 1, max: 100 },
+	REQUEST_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1000, max: 120000 },
+	ENABLE_BINANCE_ORDER_AUDIT: { type: 'boolean', defaultValue: false },
+	BINANCE_ORDER_AUDIT_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
+	// ENABLE_SYMBOL_ANALYSIS_STORAGE, SYMBOL_ANALYSIS_RETENTION_DAYS excluded:
+	// a process-startup gate that decides where a collection lives and its TTL
+	// horizon are deployment-controlled, matching ENABLE_FIRESTORE_IDEMPOTENCY,
+	// ENABLE_FIRESTORE_SCANNER_PRESETS and ENABLE_SIGNAL_OUTCOME_TRACKING. A
+	// published template outranks render.yaml, so an allow-listed gate here
+	// would silently override the blueprint's enablement (issue #1179).
+	ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT: { type: 'boolean', defaultValue: false },
+	// ENABLE_FIRESTORE_NEWS_ANALYSIS excluded (issue #1180): it is a process-startup
+	// gate that decides where the news_analysis collection lives, like every other
+	// ENABLE_FIRESTORE_* storage gate. A published template parameter reports its
+	// defaultValue with source `remote`, so leaving the gate here would let the
+	// template silently override render.yaml and re-disable persistence the moment
+	// a template load recovered. NEWS_ANALYSIS_RETENTION_DAYS stays eligible.
+	NEWS_ANALYSIS_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
+	ENABLE_FIRESTORE_CHAT_PREFERENCES: { type: 'boolean', defaultValue: false },
+	CHAT_PREFERENCES_RETENTION_DAYS: { type: 'number', defaultValue: 90, integer: true, min: 1, max: 365 },
+	CHAT_PREFERENCES_CACHE_TTL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
+	// WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_NAMESPACE excluded:
+	// notification destinations — must remain deployment-controlled.
+	WHATSAPP_TEMPLATE_PARAM_ORDER: { type: 'string', defaultValue: 'symbol,price,action,setup,timeframe,source' },
+	// ENABLE_TEST_ALERT, TEST_ALERT_DAILY_LIMIT, ENABLE_ADMIN_SSE excluded:
+	// route-enablement gates and abuse rate-limiting controls must remain deployment-controlled.
+	ADMIN_SSE_MAX_CLIENT_CONNECTIONS: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 20 },
+	ADMIN_SSE_MAX_TOTAL_CONNECTIONS: { type: 'number', defaultValue: 100, integer: true, min: 10, max: 1000 },
+	ADMIN_SSE_HEARTBEAT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 5000, max: 120000 },
+	ENABLE_TOKEN_COST_BUDGET: { type: 'boolean', defaultValue: false },
+	TOKEN_COST_DAILY_BUDGET_USD: { type: 'number', defaultValue: 5.0, min: 0.01, max: 10000 },
+	TOKEN_COST_WARN_THRESHOLD_PCT: { type: 'number', defaultValue: 80, integer: true, min: 1, max: 100 },
+	ENABLE_MAINTENANCE_MODE: { type: 'boolean', defaultValue: false },
 });
 
 let remoteOverrides = {};
@@ -78,6 +143,26 @@ let lastErrorCategory = null;
 let refreshTimer = null;
 let loadingPromise = null;
 let consecutiveFailures = 0;
+const changeListeners = new Set();
+
+function addChangeListener(fn) {
+	if (typeof fn === 'function') {
+		changeListeners.add(fn);
+	}
+	return () => {
+		changeListeners.delete(fn);
+	};
+}
+
+function notifyChangeListeners(prevOverrides, nextOverrides, version) {
+	for (const fn of changeListeners) {
+		try {
+			fn({ prevOverrides, nextOverrides, templateVersion: version });
+		} catch (err) {
+			console.warn('[RemoteConfigService] Change listener failed:', err?.message);
+		}
+	}
+}
 
 function isEnabled() {
 	return process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true';
@@ -129,6 +214,9 @@ function parseString(value, schema, fallback) {
 	}
 	const str = String(value).trim();
 	if (Array.isArray(schema.allowedValues) && !schema.allowedValues.includes(str)) {
+		return fallback;
+	}
+	if (typeof schema.validate === 'function' && !schema.validate(str)) {
 		return fallback;
 	}
 	return str;
@@ -238,7 +326,11 @@ function getStatus() {
 	const configured = isFirestoreConfigured();
 	const stale = remoteLoadedAt !== null && !hasFreshRemoteConfig();
 	const effectiveErrorCategory = stale ? 'stale' : lastErrorCategory;
-	const isReady = enabled && configured && lastSuccessfulLoad !== null && hasFreshRemoteConfig() && !stale;
+	// Readiness requires a proven, successful, still-fresh template load. A
+	// feature that is merely `enabled` + `configured` has loaded nothing, so it
+	// must never be reported as serving remote values (issue #598).
+	const hasSuccessfulLoad = typeof lastSuccessfulLoad === 'string' && lastSuccessfulLoad.length > 0;
+	const isReady = Boolean(enabled && configured && hasSuccessfulLoad && hasFreshRemoteConfig() && !stale);
 
 	let status;
 	if (!enabled) {
@@ -258,6 +350,14 @@ function getStatus() {
 		configured,
 		ready: isReady,
 		status,
+		// True once a server template has actually been fetched at least once. Lets an
+		// operator tell "wired up" (enabled+configured) apart from "actually serving
+		// remote values" without inspecting error counters.
+		//
+		// This is deliberately exactly `hasSuccessfulLoad`: an earlier version added
+		// `(enabled && configured && !neverLoaded)`, but `neverLoaded` is `!hasSuccessfulLoad`,
+		// so the second operand was always `hasSuccessfulLoad` and reduced to a no-op.
+		templatePublished: hasSuccessfulLoad,
 		source: getSource(),
 		templateVersion,
 		lastSuccessfulLoad,
@@ -281,7 +381,18 @@ function getRemoteValue(config, key, schema) {
 		if (typeof value.asString !== 'function') {
 			return { present: false };
 		}
-		const parsed = parseValue(value.asString(), schema, undefined);
+		const raw = value.asString();
+		// A blank remote value carries no tuning, so it is an absent override
+		// rather than a malformed one. The published template ships
+		// `SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES` as an intentional empty string,
+		// which is that parameter's own schema default; reporting it as invalid
+		// would pin `lastErrorCategory: "invalid_value"` on every load and mask a
+		// genuinely malformed value. `buildDefaultConfig()` already supplies the
+		// default for any parameter the template leaves blank.
+		if (typeof raw === 'string' && raw.trim() === '') {
+			return { present: false };
+		}
+		const parsed = parseValue(raw, schema, undefined);
 		return parsed === undefined ? { present: true, valid: false } : { present: true, value: parsed };
 	} catch (error) {
 		return { present: true, valid: false };
@@ -319,6 +430,48 @@ function withTimeout(promise, timeoutMs) {
 	});
 }
 
+/**
+ * Maps firebase-admin Remote Config SDK errors (`remote-config/<code>`, a
+ * `PrefixedFirebaseError`) onto the sanitized status categories exposed by
+ * `/api/status`. Without this, an unpublished server namespace and a genuine
+ * network fault both collapsed into the opaque `load_failed`, which hid the
+ * fact that the template had simply never been published.
+ */
+const SDK_ERROR_CATEGORIES = {
+	'not-found': 'template_not_published',
+	'permission-denied': 'permission_denied',
+	'unauthenticated': 'unauthenticated',
+	'failed-precondition': 'failed_precondition',
+	'internal-error': 'internal_error',
+	'aborted': 'aborted',
+	'resource-exhausted': 'resource_exhausted',
+	'invalid-argument': 'invalid_argument',
+	'unknown-error': 'unknown_error',
+};
+
+function getSdkErrorCode(error) {
+	if (!error) {
+		return null;
+	}
+	// firebase-admin builds codes as `remote-config/<code>` and also exposes
+	// `hasCode()` on PrefixedFirebaseError; support both shapes.
+	const code = typeof error.code === 'string' ? error.code : null;
+	if (code && code.startsWith('remote-config/')) {
+		return code.slice('remote-config/'.length);
+	}
+	// Fallback for SDK-shaped errors that carry `hasCode()` but a non-prefixed `.code`.
+	// `PrefixedFirebaseError.hasCode()` is a pure string comparison and cannot throw,
+	// so this is a single probe rather than a defensive loop over every category.
+	if (typeof error.hasCode === 'function') {
+		for (const candidate of Object.keys(SDK_ERROR_CATEGORIES)) {
+			if (error.hasCode(candidate)) {
+				return candidate;
+			}
+		}
+	}
+	return null;
+}
+
 function getErrorCategory(error) {
 	if (error && error.code === 'REMOTE_CONFIG_TIMEOUT') {
 		return 'timeout';
@@ -329,7 +482,7 @@ function getErrorCategory(error) {
 	if (error && error.code === 'REMOTE_CONFIG_UNSUPPORTED') {
 		return 'unsupported_sdk';
 	}
-	return 'load_failed';
+	return SDK_ERROR_CATEGORIES[getSdkErrorCode(error)] || 'load_failed';
 }
 
 async function loadNow(options = {}) {
@@ -374,6 +527,7 @@ async function loadNow(options = {}) {
 				}
 			});
 
+			const prevOverrides = remoteOverrides;
 			remoteOverrides = nextOverrides;
 			remoteLoadedAt = Date.now();
 			templateVersion = getTemplateVersion(template);
@@ -383,13 +537,16 @@ async function loadNow(options = {}) {
 			if (invalidValue) {
 				console.warn('[RemoteConfigService] Ignored invalid allow-listed value');
 			}
+			notifyChangeListeners(prevOverrides, remoteOverrides, templateVersion);
 			return true;
 		} catch (error) {
+			const prevOverrides = remoteOverrides;
 			remoteOverrides = {};
 			remoteLoadedAt = null;
 			lastErrorCategory = getErrorCategory(error);
 			consecutiveFailures += 1;
 			console.warn('[RemoteConfigService] Remote Config load failed:', lastErrorCategory);
+			notifyChangeListeners(prevOverrides, remoteOverrides, null);
 			return false;
 		} finally {
 			loadingPromise = null;
@@ -439,13 +596,16 @@ module.exports = {
 	loadNow,
 	start,
 	stop,
+	addChangeListener,
 	_resetForTesting: resetForTesting,
-	_setRemoteOverridesForTesting(overrides, loadedAt = Date.now()) {
+	_setRemoteOverridesForTesting(overrides, loadedAt = Date.now(), version = 'test') {
+		const prevOverrides = remoteOverrides;
 		remoteOverrides = { ...overrides };
 		remoteLoadedAt = loadedAt;
-		templateVersion = 'test';
+		templateVersion = version;
 		lastSuccessfulLoad = new Date(loadedAt).toISOString();
 		lastErrorCategory = null;
 		consecutiveFailures = 0;
+		notifyChangeListeners(prevOverrides, remoteOverrides, templateVersion);
 	},
 };

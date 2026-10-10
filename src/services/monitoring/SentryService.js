@@ -109,6 +109,7 @@ const { nodeProfilingIntegration } = require('@sentry/profiling-node');
 const FEATURE_NAMES = {
 	'http-alert': 'alerts',
 	'news-monitor': 'news-monitor',
+	'market-scanner': 'market-scanner',
 	'telegram': 'telegram-alerts',
 	'whatsapp': 'whatsapp-alerts',
 	'discord': 'discord-alerts',
@@ -887,6 +888,29 @@ class SentryService {
 			console.warn(`[SentryService] Failed to capture LLM metrics: ${error.message}`);
 		}
 	}
+
+	/**
+	 * Capture Firestore write metric
+	 * @param {Object} params
+	 * @param {string} params.domain
+	 * @param {'success' | 'failure'} params.status
+	 */
+	captureFirestoreWriteMetric({ domain, status }) {
+		if (!this.state.enabled) return;
+		try {
+			const tags = {
+				domain: domain || 'unknown',
+				status: status === 'success' ? 'success' : 'failure',
+			};
+			if (Sentry.metrics && typeof Sentry.metrics.count === 'function') {
+				Sentry.metrics.count('firestore_writes', 1, { tags });
+			}
+		} catch (error) {
+			// Never throw - monitoring failures should not affect application behavior
+			console.warn(`[SentryService] Failed to capture Firestore write metric: ${error.message}`);
+		}
+	}
+
 
 	/**
 	 * Flush pending events (for graceful shutdown)

@@ -1,7 +1,7 @@
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
 	ExpandedAnalysisAlertRequestError,
 	parseExpandedAnalysisAlertRequest,
@@ -24,6 +24,8 @@ const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteCo
 const { runWithConcurrency } = require('../../../../lib/runWithConcurrency');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
 
+const { hasConfluenceEvidence } = require('../../../../services/tradingview/confluenceEvidence');
+
 const DEFAULT_ALERT_TIMEOUT_MS = 60000;
 const MAX_ALERT_TIMEOUT_MS = 120000;
 
@@ -43,7 +45,9 @@ function resolveDryRun(req) {
 
 function deriveItemSide(analysis = {}) {
 	const sentiment = String(analysis.sentiment || analysis.market_sentiment?.overall_sentiment || '').toUpperCase();
-	const confluence = String(analysis.confluence?.recommendation || analysis.confluence?.action || '').toUpperCase();
+	const confluence = hasConfluenceEvidence(analysis)
+		? String(analysis.confluence?.recommendation || analysis.confluence?.action || '').toUpperCase()
+		: '';
 	if (confluence.includes('SELL') || sentiment.includes('BEARISH') || sentiment.includes('BAJISTA')) {
 		return 'SELL';
 	}
@@ -52,7 +56,7 @@ function deriveItemSide(analysis = {}) {
 
 function postExpandedAnalysisAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 
 		try {
@@ -60,7 +64,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 			const routing = parseNotificationRouting(req.body);
 			const parsed = parseExpandedAnalysisAlertRequest(req);
 			const timeoutMs = getAlertTimeoutMs();
-			const deadline = createAlertDeadline(timeoutMs);
+			const deadline = createAlertDeadline(timeoutMs, req.requestDeadlineSignal);
 			let results;
 
 			try {
@@ -92,7 +96,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					timedOut,
 					timeoutMs,
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 
@@ -109,7 +113,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					timedOut,
 					timeoutMs,
 					requestId,
-					totalDurationMs: Date.now() - startTime,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
 			}
 
@@ -141,6 +145,12 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					requestId,
 					text: alertText,
 					symbol: firstSymbol,
+					// One document covers the whole report; persist the full symbol set
+					// so summary symbol counts are not limited to the first symbol.
+					symbols: analyzedItems
+						.map((item) => (item.input && (item.input.symbol || item.input.raw)) || item.symbol)
+						.filter(Boolean),
+					batchId: requestId,
 					exchange: firstExchange,
 					enriched: false,
 					enrichmentData: null,
@@ -165,6 +175,9 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					const closePrice = row.price ?? tech.price_data?.current_price ?? tech.price_data?.close ?? null;
 					const score = item.analysis.market_sentiment?.overall_rating ?? tech.market_sentiment?.overall_rating ?? null;
 
+					const rawConfidence = item.analysis?.confidence ?? item.confidence ?? (typeof score === 'number' && score >= 0 && score <= 1 ? score : null);
+					const validConfidence = typeof rawConfidence === 'number' && Number.isFinite(rawConfidence) && rawConfidence >= 0 && rawConfidence <= 1 ? rawConfidence : null;
+
 					signalOutcomeService.recordSignal({
 						requestId,
 						source: 'expanded-analysis',
@@ -173,8 +186,10 @@ function postExpandedAnalysisAlert(botOrGetter) {
 						timeframe: parsed.timeframe,
 						setupType: 'expanded-analysis',
 						score,
+						confidenceScore: validConfidence,
 						side: itemSide,
 						price: typeof closePrice === 'number' ? closePrice : null,
+						priceSource: typeof closePrice === 'number' ? 'tradingview-mcp' : null,
 						stop: typeof row.stopLoss === 'number' ? row.stopLoss : null,
 						target: typeof row.takeProfit === 'number' ? row.takeProfit : null,
 						sources: [],
@@ -195,7 +210,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 				timedOut,
 				timeoutMs,
 				requestId,
-				totalDurationMs: Date.now() - startTime,
+				processingTimeMs: Math.max(0, Date.now() - startTime),
 			});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
@@ -331,14 +346,14 @@ function getAlertTimeoutMs() {
 	return Math.min(parsedTimeout, MAX_ALERT_TIMEOUT_MS);
 }
 
-function createAlertDeadline(timeoutMs) {
+function createAlertDeadline(timeoutMs, parentSignal) {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => {
 		controller.abort(new Error(`Expanded analysis alert timeout after ${timeoutMs}ms`));
 	}, timeoutMs);
 
 	return {
-		signal: controller.signal,
+		signal: parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal,
 		clear: () => clearTimeout(timeoutId),
 	};
 }

@@ -5,10 +5,10 @@
  * 003-news-monitor: User Story 1 (endpoint & analysis), User Story 2 (alert delivery)
  */
 
-const { v4: uuidv4 } = require('uuid');
 const { getAnalyzer, setNotificationManager } = require('./analyzer');
 const { getCacheInstance } = require('./cache');
 const { AnalysisStatus } = require('./constants');
+const { getVolumeTracker } = require('./volumeTracker');
 const { getNotificationManager } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
@@ -20,17 +20,16 @@ const {
 	getDeliveredChannels,
 } = require('../../../../services/notification/requestRouting');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
-
-function resolveDryRun(req) {
-	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
-	const bodyFlag = req.body && typeof req.body === 'object' && (req.body.dryRun === true || req.body.dryRun === 'true');
-	return queryFlag || bodyFlag;
-}
+const newsAnalysisStorageService = require('../../../../services/storage/NewsAnalysisStorageService');
+const { isNewsMonitorPaused, getNewsMonitorPauseState } = require('./pauseState');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
+const { resolveDryRun } = require('../../../../lib/dryRunRequest');
 
 class NewsMonitorHandler {
 	constructor() {
 		this.analyzer = getAnalyzer();
 		this.cache = getCacheInstance();
+		this.volumeTracker = getVolumeTracker();
 		this.maxSymbols = 100;
 	}
 
@@ -49,9 +48,9 @@ class NewsMonitorHandler {
    * @returns {void}
    */
 	async handleRequest(req, res) {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
-		const tokenUsage = new TokenUsageTracker();
+		const tokenUsage = new TokenUsageTracker('news-analysis');
 
 		try {
 			const requestSpan = sentryService.getActiveSpan();
@@ -68,6 +67,20 @@ class NewsMonitorHandler {
 				return res.status(403).json({
 					error: 'News monitor feature is disabled. Set ENABLE_NEWS_MONITOR=true to enable.',
 					code: 'FEATURE_DISABLED',
+					requestId,
+				});
+			}
+
+			if (isNewsMonitorPaused()) {
+				const pauseState = getNewsMonitorPauseState();
+				return res.status(503).json({
+					error: pauseState.reason
+						? `News monitor analysis is temporarily paused: ${pauseState.reason}`
+						: 'News monitor analysis is temporarily paused.',
+					code: 'NEWS_MONITOR_PAUSED',
+					paused: true,
+					pausedAt: pauseState.pausedAt,
+					reason: pauseState.reason,
 					requestId,
 				});
 			}
@@ -128,6 +141,7 @@ class NewsMonitorHandler {
 				if (analysisSpan && typeof analysisSpan.setAttribute === 'function') {
 					analysisSpan.setAttribute('news.quota_exhausted', summary.quota_exhausted);
 					analysisSpan.setAttribute('news.error_count', summary.error);
+					analysisSpan.setAttribute('news.throttled_count', summary.throttled);
 				}
 			} finally {
 				sentryService.endSpan(analysisSpan);
@@ -139,10 +153,11 @@ class NewsMonitorHandler {
 			// the public contract.
 			const analysisResults = results;
 			const responseResults = (results || []).map(
-				({ attemptedDeliveryResults, originalPersistedState, ...publicResult }) => publicResult,
+				({ attemptedDeliveryResults, originalPersistedState, analysisRecord, ...publicResult }) => publicResult,
 			);
+			const tracker = this.volumeTracker || getVolumeTracker();
 			const response = {
-				success: summary.analyzed > 0 || summary.cached > 0,
+				success: summary.analyzed > 0 || summary.cached > 0 || summary.throttled > 0,
 				partial_success: summary.timeout > 0 || summary.error > 0,
 				results: responseResults,
 				summary,
@@ -151,6 +166,7 @@ class NewsMonitorHandler {
 				totalDurationMs: Date.now() - startTime,
 				requestId,
 				tokenUsage: tokenUsage.toJSON(),
+				windowUsage: tracker.getWindowUsage(),
 			};
 
 			if (dryRun) {
@@ -208,6 +224,11 @@ class NewsMonitorHandler {
 					alertStorageService.saveAlert({
 						text: result.alert.text || '',
 						symbol: result.alert.symbol || result.symbol,
+						// All documents from one request share requestId, so the summary
+						// counts this request as a single batch with its full symbol set.
+						symbols: symbolsToAnalyze,
+						batchId: requestId,
+						requestId,
 						exchange: result.alert.marketContext && result.alert.marketContext.source === 'binance' ? 'BINANCE' : undefined,
 						enriched: Boolean(result.alert.enriched),
 						enrichmentData: result.alert.enriched || null,
@@ -248,6 +269,23 @@ class NewsMonitorHandler {
 						}
 						console.warn('[NewsMonitor] Failed to persist alert to storage:', err.message);
 					});
+				}
+			}
+
+			// Fire-and-forget: persist analysis results to Firestore
+			if (!dryRun && newsAnalysisStorageService.isEnabled()) {
+				const recordsToPersist = [];
+				for (const result of analysisResults || []) {
+					if (!result || result.status !== AnalysisStatus.ANALYZED) {
+						continue;
+					}
+					if (result.analysisRecord) {
+						recordsToPersist.push(result.analysisRecord);
+					}
+				}
+				if (recordsToPersist.length > 0) {
+					newsAnalysisStorageService.recordAnalyses(recordsToPersist)
+						.catch((err) => console.warn('[NewsMonitor] Failed to persist news analysis to storage:', err.message));
 				}
 			}
 
@@ -395,6 +433,7 @@ class NewsMonitorHandler {
 			total: results.length,
 			analyzed: 0,
 			cached: 0,
+			throttled: 0,
 			timeout: 0,
 			error: 0,
 			quota_exhausted: 0,
@@ -412,6 +451,8 @@ class NewsMonitorHandler {
 				if (result.alert) {
 					summary.alerts_sent++;
 				}
+			} else if (result.status === AnalysisStatus.THROTTLED) {
+				summary.throttled++;
 			} else if (result.status === AnalysisStatus.TIMEOUT) {
 				summary.timeout++;
 			} else if (result.status === AnalysisStatus.ERROR) {
@@ -423,6 +464,186 @@ class NewsMonitorHandler {
 		}
 
 		return summary;
+	}
+
+	/**
+	 * Handle GET /api/news-monitor/summary
+	 */
+	async handleSummary(req, res) {
+		try {
+			if (!newsAnalysisStorageService.isEnabled()) {
+				return res.status(403).json({
+					error: 'News analysis storage feature is disabled. Set ENABLE_FIRESTORE_NEWS_ANALYSIS=true to enable.',
+					code: 'FEATURE_DISABLED',
+				});
+			}
+
+			const { from, to, limit, symbol, threshold } = req.query || {};
+
+			let parsedFrom;
+			if (from !== undefined) {
+				if (typeof from !== 'string' || !from.trim() || Number.isNaN(Date.parse(from))) {
+					return res.status(400).json({
+						error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedFrom = new Date(from).toISOString();
+			}
+
+			let parsedTo;
+			if (to !== undefined) {
+				if (typeof to !== 'string' || !to.trim() || Number.isNaN(Date.parse(to))) {
+					return res.status(400).json({
+						error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedTo = new Date(to).toISOString();
+			}
+
+			let parsedLimit = 500;
+			if (limit !== undefined) {
+				const n = Number(limit);
+				if (!Number.isInteger(n) || n < 1 || n > 1000) {
+					return res.status(400).json({
+						error: 'Invalid limit. Use an integer between 1 and 1000.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedLimit = n;
+			}
+
+			let parsedThreshold = 0.7;
+			if (threshold !== undefined) {
+				const th = Number(threshold);
+				if (!Number.isFinite(th) || th < 0 || th > 1) {
+					return res.status(400).json({
+						error: 'Invalid threshold. Use a number between 0 and 1.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedThreshold = th;
+			}
+
+			const parsedSymbol = typeof symbol === 'string' && symbol.trim() ? symbol.trim().toUpperCase() : undefined;
+
+			const summary = await newsAnalysisStorageService.summarizeAnalyses({
+				from: parsedFrom,
+				to: parsedTo,
+				limit: parsedLimit,
+				symbol: parsedSymbol,
+				threshold: parsedThreshold,
+			});
+
+			return res.status(200).json({ success: true, ...summary });
+		} catch (error) {
+			if (error && error.code === 'FEATURE_DISABLED') {
+				return res.status(403).json({
+					error: error.message,
+					code: 'FEATURE_DISABLED',
+				});
+			}
+			if (error && error.code === 'STORAGE_UNAVAILABLE') {
+				return res.status(503).json({
+					error: error.message,
+					code: 'STORAGE_UNAVAILABLE',
+				});
+			}
+			console.error('[NewsMonitor] Error in handleSummary:', error);
+			return res.status(500).json({
+				error: 'Internal server error while summarizing news analyses.',
+				code: 'INTERNAL_ERROR',
+			});
+		}
+	}
+
+	/**
+	 * Handle GET /api/news-monitor/analyses
+	 */
+	async handleListAnalyses(req, res) {
+		try {
+			if (!newsAnalysisStorageService.isEnabled()) {
+				return res.status(403).json({
+					error: 'News analysis storage feature is disabled. Set ENABLE_FIRESTORE_NEWS_ANALYSIS=true to enable.',
+					code: 'FEATURE_DISABLED',
+				});
+			}
+
+			// `before` is the published cursor parameter (the shared `BeforeCursor` openapi
+			// component, also used by /api/outcomes and /api/symbol-analyses); `beforeCursor`
+			// stays accepted as a deprecated alias. Reading only `beforeCursor` made a
+			// documented `before` request return page one forever.
+			const { from, to, limit, symbol, eventCategory, before: beforeParam, beforeCursor: beforeCursorAlias } = req.query || {};
+
+			let parsedFrom;
+			if (from !== undefined) {
+				if (typeof from !== 'string' || !from.trim() || Number.isNaN(Date.parse(from))) {
+					return res.status(400).json({
+						error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedFrom = new Date(from).toISOString();
+			}
+
+			let parsedTo;
+			if (to !== undefined) {
+				if (typeof to !== 'string' || !to.trim() || Number.isNaN(Date.parse(to))) {
+					return res.status(400).json({
+						error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedTo = new Date(to).toISOString();
+			}
+
+			let parsedLimit = 50;
+			if (limit !== undefined) {
+				const n = Number(limit);
+				if (!Number.isInteger(n) || n < 1 || n > 100) {
+					return res.status(400).json({
+						error: 'Invalid limit. Use an integer between 1 and 100.',
+						code: 'INVALID_REQUEST',
+					});
+				}
+				parsedLimit = n;
+			}
+
+			const parsedSymbol = typeof symbol === 'string' && symbol.trim() ? symbol.trim().toUpperCase() : undefined;
+			const parsedCategory = typeof eventCategory === 'string' && eventCategory.trim() ? eventCategory.trim().toLowerCase() : undefined;
+			const rawCursor = typeof beforeParam === 'string' && beforeParam.trim() ? beforeParam : beforeCursorAlias;
+			const parsedCursor = typeof rawCursor === 'string' && rawCursor.trim() ? rawCursor.trim() : undefined;
+
+			const result = await newsAnalysisStorageService.listAnalyses({
+				from: parsedFrom,
+				to: parsedTo,
+				limit: parsedLimit,
+				symbol: parsedSymbol,
+				eventCategory: parsedCategory,
+				beforeCursor: parsedCursor,
+			});
+
+			return res.status(200).json({ success: true, ...result });
+		} catch (error) {
+			if (error && error.code === 'FEATURE_DISABLED') {
+				return res.status(403).json({
+					error: error.message,
+					code: 'FEATURE_DISABLED',
+				});
+			}
+			if (error && error.code === 'STORAGE_UNAVAILABLE') {
+				return res.status(503).json({
+					error: error.message,
+					code: 'STORAGE_UNAVAILABLE',
+				});
+			}
+			console.error('[NewsMonitor] Error in handleListAnalyses:', error);
+			return res.status(500).json({
+				error: 'Internal server error while listing news analyses.',
+				code: 'INTERNAL_ERROR',
+			});
+		}
 	}
 }
 
