@@ -452,6 +452,25 @@ Setting the variable is **necessary but not sufficient**, because this layer is 
 
 `expiresAt` on each document is only honoured once Firestore's TTL policy exists, so run `bash ops/configure-operational-collection-retention.sh` once per Firebase project; until then the collection grows without bound. Rollback is `false` plus a redeploy — no code change. See [Environment Configuration](docs/environment-configuration.md#verifying-idempotency-storage-is-actually-durable).
 
+### Firebase Admin Auth Readiness
+`ENABLE_FIREBASE_ADMIN_AUTH=true` lets the `/admin` console authenticate with Firebase ID tokens instead of pasting `WEBHOOK_API_KEY` into the browser. `admin.viewer` authorizes reads, `admin.operator` authorizes mutations, and `verifyIdToken(token, true)` fails closed for expired, revoked, disabled, malformed, or wrong-project tokens. Webhook paths are unaffected and still require the API key.
+
+`GET /api/status` and `GET /api/capabilities` expose `featureFlags.firebaseAdminAuth` (the gate) and a non-sensitive `dependencies.adminAuth` block built by `getAdminAuthStatus()`. `verifierConfigured` reports credential **shape** only — the server holds something it *could* verify with — so `ready` is deliberately **not** derived from it. `ready` requires an observed successful `verifyIdToken()`:
+
+| `status` | Meaning |
+| :--- | :--- |
+| `disabled` | `ENABLE_FIREBASE_ADMIN_AUTH` is not `true`. |
+| `misconfigured` | Enabled, but the server has no verifier credentials. |
+| `unverified` | Configured, but no token has verified yet. Not a failure — and not health. It is the normal state right after every deploy. |
+| `ready` | A Firebase ID token has actually verified. |
+| `degraded` | Defensive, not routine: credential shape is complete but the Firebase Admin SDK could not produce an Auth instance (`ADMIN_AUTH_UNAVAILABLE`). An access decision still fails closed. |
+
+`degraded` is ranked **below** `misconfigured`, so it can only surface while `verifierConfigured` is `true`. A deployment that simply has no verifier credentials reports `misconfigured`, never `degraded`, and never inflates `verifierUnavailableCount` in a state that hides it: the absent-credential case is a configuration verdict, not an outage.
+
+**A rejected bearer token is never recorded.** Expired, revoked, wrong-project and random-garbage tokens are indistinguishable to `verifyIdToken()`, so counting them would let any unauthenticated caller flip the dependency to `degraded` with a single request — turning a monitoring surface into a one-request DoS. Only a verifier that cannot be *reached* degrades the block. A verified token **without** an admin role counts as a success, because the token verified and the role decision is an authorization outcome, not a dependency fault.
+
+`getAdminAuthStatus()` is booleans and counters only — the Firebase Web config stays behind `/admin/auth-config` and is never echoed into a status payload, and `/api/public/status` uses an explicit three-dependency allow-list that does not include this block. Counters are process-local and reset on restart, so `unverified` after a deploy is expected. See [API Reference](docs/api-reference.md#get-apistatus).
+
 ### Durable News-Monitor Analysis Records
 
 `ENABLE_FIRESTORE_NEWS_ANALYSIS=true` is enabled in production by `render.yaml` on the **web service only** (previews off), so every analyzed symbol is recorded in the `news_analysis` collection and `GET /api/news-monitor/analyses` and `GET /api/news-monitor/summary` have an audit trail to read. Previews stay off because a PR preview shares the production Firestore project.

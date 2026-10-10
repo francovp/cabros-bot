@@ -1,3 +1,4 @@
+/* global saveEnv, restoreEnv */
 'use strict';
 
 const request = require('supertest');
@@ -10,7 +11,7 @@ const { generateKeyPairSync } = require('crypto');
 
 jest.mock('firebase-admin');
 const admin = require('firebase-admin');
-const { validateAdminAccess, requireAdminRole } = require('../../src/lib/adminAuth');
+const { validateAdminAccess, requireAdminRole, getAdminAuthStatus, resetAdminAuthReadinessForTesting } = require('../../src/lib/adminAuth');
 const requestDeadline = require('../../src/lib/requestDeadline');
 
 const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -45,11 +46,13 @@ describe('Firebase admin authorization', () => {
 		process.env.FIREBASE_PROJECT_ID = 'test-project';
 		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = serviceAccount;
 		admin.__resetApps();
+		resetAdminAuthReadinessForTesting();
 	});
 
 	afterEach(() => {
 		restoreEnv(savedEnv);
 		admin.auth?.mockReset?.();
+		resetAdminAuthReadinessForTesting();
 	});
 
 	it('accepts a verified viewer token for reads but rejects it for operator actions', async () => {
@@ -194,6 +197,48 @@ describe('Firebase admin authorization', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body).toEqual({ role: 'admin.operator' });
+	});
+
+	it('does not let a rejected bearer token forge a degraded adminAuth readiness verdict', async () => {
+		admin.auth = jest.fn(() => ({
+			verifyIdToken: jest.fn().mockRejectedValue(new Error('Decoding Firebase ID token failed')),
+		}));
+		const app = createApp();
+
+		// An unauthenticated caller must not be able to move the monitoring
+		// surface by sending junk: verifyIdToken rejects expired, revoked,
+		// wrong-project and random tokens indistinguishably, so only Firebase
+		// Admin unavailability may count as a failure.
+		for (const token of ['not-a-jwt', 'aaa.bbb.ccc', 'Bearer-ish-garbage']) {
+			const response = await request(app).get('/read').set('Authorization', `Bearer ${token}`);
+			expect(response.status).toBe(401);
+		}
+
+		expect(getAdminAuthStatus()).toMatchObject({
+			status: 'unverified',
+			ready: false,
+			consecutiveFailures: 0,
+			verifierUnavailableCount: 0,
+			verificationSuccessCount: 0,
+		});
+	});
+
+	it('reports adminAuth ready after a real sign-in is proven through the router', async () => {
+		resetAdminAuthReadinessForTesting();
+		admin.auth = jest.fn(() => ({
+			verifyIdToken: jest.fn().mockResolvedValue({ uid: 'viewer-1', roles: ['admin.viewer'] }),
+		}));
+
+		const response = await request(createApp()).get('/read').set('Authorization', 'Bearer good-token');
+
+		expect(response.status).toBe(200);
+		expect(getAdminAuthStatus()).toMatchObject({
+			status: 'ready',
+			ready: true,
+			verificationSuccessCount: 1,
+			consecutiveFailures: 0,
+		});
+		resetAdminAuthReadinessForTesting();
 	});
 
 	it('preserves the existing API-key middleware behavior when Firebase auth is disabled', async () => {

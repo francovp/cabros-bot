@@ -17,6 +17,7 @@ const { firestoreWriteMetricsService } = require('../../src/services/storage/Fir
 const { getPromptService } = require('../../src/services/prompts');
 const { signalClassMetrics } = require('../../src/services/alerts/signalClassifier');
 const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
+const { resetAdminAuthReadinessForTesting } = require('../../src/lib/adminAuth');
 const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
 const newsAnalysisStorageService = require('../../src/services/storage/NewsAnalysisStorageService');
 const promptReadiness = require('../../src/services/prompts/promptReadiness');
@@ -120,6 +121,7 @@ describe('Status endpoints', () => {
 		groundingMetrics.resetForTesting();
 		deliveryMetricsService.resetForTesting();
 		firestoreWriteMetricsService.resetForTesting();
+		resetAdminAuthReadinessForTesting();
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
 		tradingViewMcpService.enrichmentEvents = savedTradingViewEnrichmentEvents;
@@ -483,6 +485,70 @@ describe('Status endpoints', () => {
 			ready: true,
 			status: 'ready',
 		});
+	});
+
+	it('reports Firebase admin auth as disabled by default', async () => {
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firebaseAdminAuth).toBe(false);
+		expect(response.body.dependencies.adminAuth).toMatchObject({
+			enabled: false,
+			provider: null,
+			signIn: null,
+			verifierConfigured: false,
+			browserConfigConfigured: false,
+			ready: false,
+			status: 'disabled',
+			verificationSuccessCount: 0,
+			verifierUnavailableCount: 0,
+			consecutiveFailures: 0,
+			lastSuccessAt: null,
+			lastUnavailableAt: null,
+		});
+	});
+
+	it('reports Firebase admin auth when enabled but not yet proven by a sign-in', async () => {
+		process.env.ENABLE_FIREBASE_ADMIN_AUTH = 'true';
+		process.env.FIREBASE_WEB_API_KEY = 'web-key';
+		process.env.FIREBASE_AUTH_DOMAIN = 'test-project.firebaseapp.com';
+		process.env.FIREBASE_PROJECT_ID = 'test-project';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firebaseAdminAuth).toBe(true);
+		expect(response.body.dependencies.adminAuth).toMatchObject({
+			enabled: true,
+			provider: 'firebase',
+			signIn: 'email-password',
+			verifierConfigured: true,
+			browserConfigConfigured: true,
+			apiKeyFallbackConfigured: true,
+			ready: false,
+			status: 'unverified',
+		});
+	});
+
+	it('never leaks Firebase Web configuration values through the status payload', async () => {
+		process.env.ENABLE_FIREBASE_ADMIN_AUTH = 'true';
+		process.env.FIREBASE_WEB_API_KEY = 'web-key-that-must-not-leak';
+		process.env.FIREBASE_AUTH_DOMAIN = 'test-project.firebaseapp.com';
+		process.env.FIREBASE_PROJECT_ID = 'test-project';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(JSON.stringify(response.body.dependencies.adminAuth))
+			.not.toContain('web-key-that-must-not-leak');
+		expect(JSON.stringify(response.body.dependencies.adminAuth))
+			.not.toContain('test-project.firebaseapp.com');
 	});
 
 	it('reports TradingView volume confirmation as disabled by default', async () => {
