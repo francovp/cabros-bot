@@ -30,6 +30,7 @@ jest.mock('../../src/controllers/webhooks/handlers/alert/alert', () => ({
 	postAlert: jest.fn(() => (_req, res) => res.status(501).json({ error: 'not mocked' })),
 	initializeNotificationServices: jest.fn(),
 	getNotificationManager: jest.fn(),
+	processEnrichment: jest.fn(),
 }));
 
 jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
@@ -1399,6 +1400,180 @@ describe('Alerts API Integration Tests', () => {
 		expect(res.body.success).toBe(true);
 	});
 
+	it('replays a stored alert with reEnrich=true query parameter, running enrichment pipeline', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-123',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay me',
+			enriched: true,
+			enrichmentData: { sentiment: 'bullish' },
+			tokenUsage: { totalTokens: 42 },
+			deliveryResults: [{ channel: 'whatsapp', success: false }],
+			source: 'webhook',
+			useTradingViewData: false,
+		});
+
+		const newEnrichment = { sentiment: 'super-bullish', current_price: 100 };
+		alertHandler.processEnrichment.mockImplementation(async (candidate) => {
+			candidate.enriched = newEnrichment;
+			return true;
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay?reEnrich=true')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-enrich-query')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(alertHandler.processEnrichment).toHaveBeenCalledWith(
+			expect.objectContaining({ text: 'Replay me', source: 'webhook' }),
+			expect.objectContaining({ useTradingViewData: false })
+		);
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				text: 'Replay me',
+				enriched: newEnrichment,
+			}),
+			['telegram']
+		);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith({
+			alertId: 'alert-123',
+			idempotencyKey: 'replay-key-enrich-query',
+			channels: ['telegram'],
+			deliveryResults: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+			reEnriched: true,
+			enrichmentData: newEnrichment,
+		});
+		expect(res.body).toEqual({
+			success: true,
+			alertId: 'alert-123',
+			replayId: 'replay-1',
+			results: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+			reEnriched: true,
+		});
+	});
+
+	it('replays a stored alert with reEnrich: true in JSON request body', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-123',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay me',
+			enriched: false,
+			enrichmentData: null,
+			deliveryResults: [],
+			source: 'webhook',
+		});
+
+		const newEnrichment = { sentiment: 'bullish' };
+		alertHandler.processEnrichment.mockImplementation(async (candidate) => {
+			candidate.enriched = newEnrichment;
+			return true;
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-enrich-body')
+			.send({ channels: ['telegram'], reEnrich: true })
+			.expect(200);
+
+		expect(alertHandler.processEnrichment).toHaveBeenCalled();
+		expect(res.body.reEnriched).toBe(true);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith(
+			expect.objectContaining({
+				reEnriched: true,
+				enrichmentData: newEnrichment,
+			})
+		);
+	});
+
+	it('falls back to original text and logs warning when re-enrichment fails (fail-open)', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-123',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay me',
+			enriched: true,
+			enrichmentData: { sentiment: 'original-data' },
+			deliveryResults: [],
+			source: 'webhook',
+		});
+
+		alertHandler.processEnrichment.mockRejectedValue(new Error('Enrichment service timed out'));
+		const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay?reEnrich=true')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-enrich-fail')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(warnSpy).toHaveBeenCalledWith(
+			expect.stringContaining('[AlertReplay] Enrichment failed'),
+			expect.stringContaining('Enrichment service timed out')
+		);
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				text: 'Replay me',
+				enriched: { sentiment: 'original-data' },
+			}),
+			['telegram']
+		);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith(
+			expect.objectContaining({
+				reEnriched: false,
+			})
+		);
+		expect(res.body.reEnriched).toBeUndefined();
+		warnSpy.mockRestore();
+	});
+
+	it('logs a warning and skips enrichment when both ENABLE_GEMINI_GROUNDING and ENABLE_TRADINGVIEW_MCP_ENRICHMENT are false', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-123',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay me',
+			enriched: true,
+			enrichmentData: { sentiment: 'original-data' },
+			deliveryResults: [],
+			source: 'webhook',
+		});
+
+		const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay?reEnrich=true')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-enrich-disabled')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(alertHandler.processEnrichment).not.toHaveBeenCalled();
+		expect(warnSpy).toHaveBeenCalledWith(
+			expect.stringContaining('[AlertReplay] reEnrich requested but enrichment is disabled')
+		);
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				text: 'Replay me',
+				enriched: { sentiment: 'original-data' },
+			}),
+			['telegram']
+		);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith(
+			expect.objectContaining({
+				reEnriched: false,
+			})
+		);
+		expect(res.body.reEnriched).toBeUndefined();
+		warnSpy.mockRestore();
+	});
+
 	it('returns 400 when replay is missing an idempotency key', async () => {
 		const res = await request(app)
 			.post('/api/alerts/alert-123/replay')
@@ -1424,6 +1599,90 @@ describe('Alerts API Integration Tests', () => {
 			error: 'Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord.',
 			code: 'INVALID_REQUEST',
 		});
+	});
+
+	it('returns 400 when replay dryRun in body is not a boolean', async () => {
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-invalid-dryrun-body')
+			.send({ channels: ['telegram'], dryRun: 'garbage' })
+			.expect(400);
+
+		expect(res.body).toEqual({
+			success: false,
+			error: '"dryRun" body must be a boolean if provided',
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		});
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+	});
+
+	it('returns 400 when replay dryRun in query string is not a boolean', async () => {
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay?dryRun=invalid')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-invalid-dryrun-query')
+			.send({ channels: ['telegram'] })
+			.expect(400);
+
+		expect(res.body).toEqual({
+			success: false,
+			error: '"dryRun" query must be a boolean if provided',
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		});
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+	});
+
+	it('returns 400 when valid body dryRun is combined with invalid query dryRun', async () => {
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay?dryRun=invalid')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-conflict-dryrun')
+			.send({ channels: ['telegram'], dryRun: true })
+			.expect(400);
+
+		expect(res.body).toEqual({
+			success: false,
+			error: '"dryRun" query must be a boolean if provided',
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		});
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+	});
+
+	it('replays alert live when dryRun=false is explicitly provided via query string', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-789-q',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Explicit false in query',
+			enriched: false,
+			enrichmentData: null,
+			deliveryResults: [],
+			source: 'webhook',
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-789-q/replay?dryRun=false')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-explicit-false-query')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body.dryRun).toBeUndefined();
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(1);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith(
+			expect.objectContaining({
+				alertId: 'alert-789-q',
+			}),
+		);
 	});
 
 	it('returns payload preview and skips delivery/persistence on dryRun=true via body', async () => {
@@ -1598,7 +1857,7 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
-	it('still returns payload preview when dryRun=false is explicitly provided', async () => {
+	it('replays alert live when dryRun=false is explicitly provided', async () => {
 		alertStorageService.getAlertById.mockResolvedValue({
 			id: 'alert-789',
 			receivedAt: '2026-06-06T12:34:56.000Z',
@@ -1867,6 +2126,42 @@ describe('Alerts API Integration Tests', () => {
 			expect(res.body.code).toBe('INVALID_REQUEST');
 		});
 
+		it('returns 400 when batch replay dryRun in body is not a boolean', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], idempotencyKey: 'batch-k-invalid-dryrun', dryRun: 'garbage' })
+				.expect(400);
+
+			expect(res.body).toEqual({
+				success: false,
+				error: '"dryRun" body must be a boolean if provided',
+				code: 'INVALID_REQUEST',
+				requestId: expect.any(String),
+				retryable: false,
+			});
+			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+		});
+
+		it('returns 400 when batch replay dryRun in query string is not a boolean', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/replay?dryRun=invalid')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], idempotencyKey: 'batch-k-invalid-dryrun-q' })
+				.expect(400);
+
+			expect(res.body).toEqual({
+				success: false,
+				error: '"dryRun" query must be a boolean if provided',
+				code: 'INVALID_REQUEST',
+				requestId: expect.any(String),
+				retryable: false,
+			});
+			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+		});
+
 		it('replays alerts live to selected channels and records attempts', async () => {
 			alertStorageService.getAlertById
 				.mockResolvedValueOnce({
@@ -1943,6 +2238,28 @@ describe('Alerts API Integration Tests', () => {
 			expect(res.body.dryRun).toBe(true);
 			expect(res.body.results[0].dryRun).toBe(true);
 			expect(res.body.results[0].payloadPreview.text).toBe('Dry run alert');
+			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+		});
+
+		it('supports dryRun preview via query string on batch replay', async () => {
+			alertStorageService.getAlertById.mockResolvedValueOnce({
+				id: 'alert-batch-q',
+				text: 'Batch query dry run',
+				source: 'webhook',
+			});
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'batch-dry-q-1')
+				.send({ alertIds: ['alert-batch-q'] })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.dryRun).toBe(true);
+			expect(res.body.results[0].dryRun).toBe(true);
+			expect(res.body.results[0].payloadPreview.text).toBe('Batch query dry run');
 			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
 		});

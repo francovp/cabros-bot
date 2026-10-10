@@ -24,6 +24,8 @@ const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteCo
 const { runWithConcurrency } = require('../../../../lib/runWithConcurrency');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
 
+const { hasConfluenceEvidence } = require('../../../../services/tradingview/confluenceEvidence');
+
 const DEFAULT_ALERT_TIMEOUT_MS = 60000;
 const MAX_ALERT_TIMEOUT_MS = 120000;
 
@@ -43,7 +45,9 @@ function resolveDryRun(req) {
 
 function deriveItemSide(analysis = {}) {
 	const sentiment = String(analysis.sentiment || analysis.market_sentiment?.overall_sentiment || '').toUpperCase();
-	const confluence = String(analysis.confluence?.recommendation || analysis.confluence?.action || '').toUpperCase();
+	const confluence = hasConfluenceEvidence(analysis)
+		? String(analysis.confluence?.recommendation || analysis.confluence?.action || '').toUpperCase()
+		: '';
 	if (confluence.includes('SELL') || sentiment.includes('BEARISH') || sentiment.includes('BAJISTA')) {
 		return 'SELL';
 	}

@@ -453,6 +453,7 @@ describe('Symbol analysis endpoint', () => {
 				technical_indicators: { RSI: 50, ATR: 4 },
 			},
 			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+			news: { count: 1 },
 		});
 		tradingViewMcpService.callMultiAgentAnalysis.mockResolvedValueOnce({
 			framework_name: 'TradingAgents-MCP Pipeline',
@@ -498,6 +499,7 @@ describe('Symbol analysis endpoint', () => {
 				technical_indicators: { RSI: 50, ATR: 4 },
 			},
 			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+			news: { count: 1 },
 		});
 		tradingViewMcpService.callMultiAgentAnalysis.mockResolvedValueOnce({
 			consensus: { decision: 'HOLD', confidence: 'Low', net_score: 0 },
@@ -529,6 +531,7 @@ describe('Symbol analysis endpoint', () => {
 				technical_indicators: { RSI: 50, ATR: 4 },
 			},
 			confluence: { recommendation: 'BUY', confidence: 'HIGH' },
+			news: { count: 1 },
 		});
 		tradingViewMcpService.callMultiAgentAnalysis.mockRejectedValueOnce(new Error('TradingView MCP multi-agent failure'));
 
