@@ -12,6 +12,7 @@ const { EventCategory } = require('../../controllers/webhooks/handlers/newsMonit
 const { getPromptService, PromptKeys } = require('../prompts');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { registerGlobalUsage, tokenCostBudgetService } = require('../../lib/tokenUsage');
+const { createSentimentScoreWindow } = require('./sentimentDistribution');
 
 const promptService = getPromptService();
 
@@ -68,8 +69,119 @@ function parseOptionalSetupType(value) {
 	return SETUP_TYPES.has(normalized) ? normalized : undefined;
 }
 
+const PRICE_CURRENCY_PATTERN = /^[A-Z]{2,5}$/;
+
+// Normalize current_price to a finite, strictly-positive number. Strings that
+// already encode a clean positive finite number (e.g. "3240.51") are accepted;
+// everything else — null, NaN, negatives, zero, boolean, objects, arrays — is
+// silently dropped so a malformed response can never persist a wrong price.
+// Re-introduced by GH-599 / CB-XXX: alert-enrichment prompt now asks the model
+// for an optional `current_price` sourced from grounded snippets; this guard
+// keeps it from leaking into R:R math, outcome eligibility, and storage.
+function parseOptionalCurrentPrice(value) {
+	if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+		return value;
+	}
+
+	if (typeof value === 'string') {
+		const trimmed = value.trim();
+		if (!trimmed) {
+			return undefined;
+		}
+		const numeric = Number(trimmed);
+		return Number.isFinite(numeric) && numeric > 0 ? numeric : undefined;
+	}
+
+	return undefined;
+}
+
+// Currency must be a short ISO-4217-style uppercase code (USD, USDT, USDC, EUR, …).
+// Anything else — lowercase, mixed case with whitespace, free-form text — is dropped.
+function parseOptionalPriceCurrency(value, hasCurrentPrice) {
+	if (!hasCurrentPrice || typeof value !== 'string') {
+		return undefined;
+	}
+	const trimmed = value.trim().toUpperCase();
+	return PRICE_CURRENCY_PATTERN.test(trimmed) ? trimmed : undefined;
+}
+
 const MAX_TECHNICAL_LEVELS_PER_SIDE = 6;
 const ZERO_SOURCE_SENTIMENT_SCORE_CAP = 0.55;
+const MAX_SENTIMENT_SCORE_EVIDENCE_LENGTH = 240;
+
+/**
+ * Sentiment saturation telemetry (issue #1031).
+ *
+ * Process-local early warning: a restart clears the window, so it stays silent
+ * until it holds enough fresh observations. The durable view of the same signal
+ * is `enrichment.sentimentCalibration` in `GET /api/alerts/summary`.
+ *
+ * Fail-open by construction — a saturated window only produces a log line and
+ * can never block enrichment or notification delivery.
+ */
+const sentimentScoreWindow = createSentimentScoreWindow();
+let lastSentimentSaturationWarningAtMs = 0;
+
+// Suppresses repeats for an hour: re-warning on every alert would flood the
+// log during exactly the condition the operator needs to read. A recovery
+// always logs, because that state change is what closes the incident.
+const SENTIMENT_SATURATION_WARNING_COOLDOWN_MS = 60 * 60 * 1000;
+
+function observeSentimentScore(sentimentScore) {
+	try {
+		sentimentScoreWindow.record(sentimentScore);
+
+		const report = sentimentScoreWindow.snapshot();
+		if (!report.saturated) {
+			if (lastSentimentSaturationWarningAtMs !== 0) {
+				lastSentimentSaturationWarningAtMs = 0;
+				console.log('[Gemini] Sentiment score distribution recovered', JSON.stringify({
+					sampleCount: report.sampleCount,
+					spread: report.spread,
+					bucketCount: report.bucketCount,
+				}));
+			}
+			return;
+		}
+
+		const now = Date.now();
+		if (now - lastSentimentSaturationWarningAtMs < SENTIMENT_SATURATION_WARNING_COOLDOWN_MS) {
+			return;
+		}
+		lastSentimentSaturationWarningAtMs = now;
+		console.warn('[Gemini] Sentiment score distribution looks saturated; score cannot rank alerts', JSON.stringify({
+			reason: report.reason,
+			sampleCount: report.sampleCount,
+			distinctValueCount: report.distinctValueCount,
+			bucketCount: report.bucketCount,
+			min: report.min,
+			max: report.max,
+			p10: report.p10,
+			p50: report.p50,
+			p90: report.p90,
+			spread: report.spread,
+			topBandCount: report.topBandCount,
+			topBandShare: report.topBandShare,
+			buckets: report.buckets,
+		}));
+	} catch (error) {
+		console.warn('[Gemini] Sentiment score distribution observation failed:', error.message);
+	}
+}
+
+function getSentimentScoreDistribution() {
+	try {
+		return sentimentScoreWindow.snapshot();
+	} catch (error) {
+		console.warn('[Gemini] Sentiment score distribution snapshot failed:', error.message);
+		return null;
+	}
+}
+
+function resetSentimentScoreDistribution() {
+	sentimentScoreWindow.reset();
+	lastSentimentSaturationWarningAtMs = 0;
+}
 
 // Validates one raw level entry: finite numbers and non-empty strings are kept as-is,
 // everything else (objects, arrays, blanks, NaN) is dropped so no fabricated structure persists.
@@ -955,10 +1067,21 @@ function parseEnrichedAlertResponse(response, sources) {
 			? Math.sign(sentimentScore) * ZERO_SOURCE_SENTIMENT_SCORE_CAP
 			: sentimentScore;
 
-		const parsedSetupType = parseOptionalSetupType(parsed.setup_type);
-		const parsedSetupEvidence = parsedSetupType && typeof parsed.setup_evidence === 'string' && parsed.setup_evidence.trim()
+		const rawSetupType = parseOptionalSetupType(parsed.setup_type);
+		const parsedSetupEvidence = rawSetupType && typeof parsed.setup_evidence === 'string' && parsed.setup_evidence.trim()
 			? parsed.setup_evidence.trim()
 			: undefined;
+		const parsedSetupType = parsedSetupEvidence ? rawSetupType : undefined;
+
+		const parsedSentimentScoreEvidence = typeof parsed.sentiment_score_evidence === 'string' && parsed.sentiment_score_evidence.trim()
+			? parsed.sentiment_score_evidence.trim().substring(0, MAX_SENTIMENT_SCORE_EVIDENCE_LENGTH)
+			: undefined;
+
+		// Observe the EFFECTIVE score, not the pre-cap value: `sentiment_score`
+		// is what lands on the alert document and what the summary aggregates,
+		// so recording the raw value would make a burst of zero-source alerts
+		// look saturated at 0.9 while storage reports 0.55.
+		observeSentimentScore(calibratedSentimentScore);
 
 		const optionalRiskMetadata = {
 			invalidation_level: parseOptionalRiskValue(parsed.invalidation_level),
@@ -969,13 +1092,18 @@ function parseEnrichedAlertResponse(response, sources) {
 		};
 
 		const technicalLevels = parseOptionalTechnicalLevels(parsed.technical_levels);
+		const parsedCurrentPrice = parseOptionalCurrentPrice(parsed.current_price);
+		const parsedPriceCurrency = parseOptionalPriceCurrency(parsed.price_currency, parsedCurrentPrice !== undefined);
 
 		return {
 			sentiment: parsed.sentiment,
 			sentiment_score: calibratedSentimentScore,
 			...(shouldCalibrate ? { sentiment_score_raw: sentimentScore } : {}),
+			...(parsedSentimentScoreEvidence ? { sentiment_score_evidence: parsedSentimentScoreEvidence } : {}),
 			insights: Array.isArray(parsed.insights) ? parsed.insights : [],
 			...(technicalLevels ? { technical_levels: technicalLevels } : {}),
+			...(parsedCurrentPrice !== undefined ? { current_price: parsedCurrentPrice } : {}),
+			...(parsedPriceCurrency !== undefined ? { price_currency: parsedPriceCurrency } : {}),
 			...Object.fromEntries(
 				Object.entries(optionalRiskMetadata).filter(([, value]) => value !== undefined),
 			),
@@ -997,4 +1125,6 @@ module.exports = {
 	analyzeNewsForSymbol,
 	parseNewsAnalysisResponse,
 	calibrateNewsConfidence,
+	getSentimentScoreDistribution,
+	resetSentimentScoreDistribution,
 };

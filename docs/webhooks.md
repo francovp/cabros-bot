@@ -259,6 +259,26 @@ BTC price is at $45,000 - breakout detected!
 }
 ```
 
+**Truncation metadata (GH-637).** `validateAlert()` clips alert text to 4,000 characters
+(plus an ellipsis). When the submitted text exceeds that cap, the 200 response — and the
+`dryRun=true` response — also carries `truncated: true`, `originalLength`, and
+`deliveredLength` so the caller can detect the loss:
+
+```json
+{
+  "success": true,
+  "requestId": "0d63f03b-d5a2-4a0b-928d-1959b8eb6a95",
+  "truncated": true,
+  "originalLength": 4001,
+  "deliveredLength": 4003,
+  "results": [],
+  "enriched": false
+}
+```
+
+The fields are absent when the text fits. The service logs a structured warning and keeps
+processing the validated text — truncation never blocks delivery or enrichment.
+
 #### Per-symbol channel routing (`symbolRoutes`)
 
 `POST /api/webhook/alert` accepts an optional `symbolRoutes` object to send different
@@ -290,3 +310,161 @@ so a route cannot resurrect a channel that is still in its repeat-suppression co
 
 Omitting `symbolRoutes` preserves the existing broadcast and request-level routing
 behavior exactly.
+
+### Same-direction burst aggregation
+
+`ENABLE_ALERT_SYNTH_BURST_AGGREGATION=true` (default `false`) buffers a parsed
+TradingView signal for `ALERT_BURST_WINDOW_MS` and collapses alerts sharing the same
+direction and identical routing into one regime message per channel:
+
+```json
+{
+  "success": true,
+  "results": [ { "channel": "telegram", "success": true } ],
+  "aggregated": true,
+  "burstAggregateId": "3f6b2a1e-...",
+  "burstSignalCount": 4,
+  "requestedChannels": ["telegram"],
+  "deliveredChannels": ["telegram"]
+}
+```
+
+The delivered message lists every constituent symbol with its exchange and timeframe, so
+nothing is lost:
+
+```
+⚡ Regime shift: RISK-OFF — 4 same-direction signals
+Direction: SELL
+Symbols:
+BINANCE:BTCUSDT (1D), BINANCE:BTCUSDT (4h), BINANCE:ETHUSDT (4h), BINANCE:BNBUSDT (1D)
+Window: 3000ms window, 2300ms span
+```
+
+Rules:
+
+- **Grouping is by direction, not by exchange.** A risk-on or risk-off event spans asset
+  classes at the same instant; grouping per venue would leave one message per asset class.
+- **Routing must be identical.** Different `channels`, `telegramChatId`, `telegramThreadId`,
+  `whatsappChatId` or `discordWebhookUrl` values are never merged, because one message can
+  only have one destination. `symbolRoutes` requests bypass aggregation entirely.
+- **Each constituent is still persisted** with the shared `burstAggregateId` and its own
+  symbol, so `/api/alerts` analytics and signal outcomes stay per-symbol.
+- **Fail-open everywhere.** A window that closes below `ALERT_BURST_MIN_SIGNALS`, a store
+  error, a failed aggregate dispatch, and shutdown mid-window all deliver the held alerts
+  individually. Aggregation can cost noise reduction, never an alert.
+- **Dry-run requests are never buffered.**
+- The added latency is bounded by `ALERT_BURST_WINDOW_MS`; unparsed alert text is not buffered
+  at all. The buffer is in-process, so a multi-replica deployment may aggregate partially.
+
+### POST /api/webhook/message
+
+Deliver a generic, non-alert message to the enabled notification channels. Use this when the payload is
+operator-authored automation output rather than a TradingView alert or scanner run.
+
+**Request (JSON):**
+```json
+{
+  "message": "Custom notification from automation",
+  "channels": ["telegram", "whatsapp"]
+}
+```
+
+- `message`: Required non-empty string. Values longer than `MAX_MESSAGE_LENGTH` (4,000 characters) are clipped
+  before delivery.
+- `channels`: Optional subset of `telegram`, `whatsapp`, `discord`. Omit it to broadcast to every enabled channel.
+- `telegramChatId` / `telegramThreadId` / `whatsappChatId` / `discordWebhookUrl`: Optional per-channel destination
+  overrides. `telegramThreadId` targets a forum topic (`0` = General).
+- `dryValidate`: Optional boolean. Validates and returns chunk estimates without sending anything.
+- `dryRun`: Optional. See [Dry-run routing preview](#dry-run-routing-preview-issue-876) below.
+- Idempotency: send `idempotency-key` / `x-idempotency-key` (or `idempotencyKey` in the body or query) to replay a
+  prior response instead of re-delivering. Reusing a key with a different payload returns `409`.
+
+**Response (message within 4,000 characters):**
+```json
+{
+  "success": true,
+  "results": [
+    { "channel": "telegram", "success": true, "messageId": "tg-msg-123" }
+  ]
+}
+```
+
+**Response (message exceeded 4,000 characters):**
+```json
+{
+  "success": true,
+  "truncated": true,
+  "originalLength": 6000,
+  "deliveredLength": 4003,
+  "results": [
+    { "channel": "telegram", "success": true, "messageId": "tg-msg-123" }
+  ]
+}
+```
+
+**Truncation metadata (GH-602).** Inbound messages above `MAX_MESSAGE_LENGTH` are clipped to 4,000 characters plus a
+`'...'` suffix before delivery, so `deliveredLength` is 4,003 in the default configuration. When truncation occurs the
+response adds:
+
+- `truncated`: Always `true` when present. Callers can use it to detect silent content loss.
+- `originalLength`: Inbound character count before clipping (minimum 4,001).
+- `deliveredLength`: Character count of the text actually handed to the notification channels.
+
+These three fields are **strictly additive and appear only when truncation occurred** — a message that fits returns
+`{ success: true, results }` unchanged, so existing integrations are unaffected. Truncation is independent of chunk
+estimation: a long message that also exceeds a channel's single-message limit returns both the truncation fields and
+the `delivered` / `channelDetails` / `estimatedChunks` metadata.
+
+A `console.warn` line records the clip with numeric `originalLength`, `deliveredLength`, and `max` values only; message
+content is never logged. Delivery proceeds with the clipped text regardless — truncation never blocks a send.
+
+#### Dry-run routing preview (issue #876)
+
+`POST /api/webhook/message?dryRun=true`, or `{"message": "…", "dryRun": true}` in the body, validates the request and
+returns the routing it *would* have used. Nothing is sent, nothing is persisted, and no idempotency key is reserved or
+cached — so a dry run can be repeated freely and the same key is still free for the real request afterwards.
+
+**Response:**
+```json
+{
+  "success": true,
+  "dryRun": true,
+  "estimatedChunks": { "telegram": 1, "whatsapp": 1, "discord": 1 },
+  "requestedChannels": ["telegram", "whatsapp"],
+  "deliveredChannels": [],
+  "payload": { "text": "Deployment completed" },
+  "routing": {
+    "channels": ["telegram", "whatsapp"],
+    "telegramChatId": "-1001234567890",
+    "telegramThreadId": 101,
+    "whatsappChatId": "120363000000000000@g.us",
+    "discordWebhookUrlProvided": true
+  },
+  "requestId": "0d63f03b-d5a2-4a0b-928d-1959b8eb6a95"
+}
+```
+
+- `requestedChannels`: the channels that would receive the message — the request's `channels` subset, or every enabled
+  channel when the request broadcasts.
+- `broadcast: true`: added only when no `channels` subset was requested, so an empty `requestedChannels` list is not
+  mistaken for "nothing would be sent".
+- `deliveredChannels`: always `[]`. `results` is absent, because nothing was dispatched.
+- `payload.text`: the exact text that would have been handed to the channels, after any inbound truncation. The
+  `truncated` / `originalLength` / `deliveredLength` fields appear here under the same conditions as a live send.
+- `routing`: the resolved per-channel overrides from the request. Each key is absent when that destination was not
+  overridden. A Discord webhook URL is itself the credential, so only `discordWebhookUrlProvided` is echoed — the URL is
+  never returned (the same reason the persistence path does not store it).
+- Channel and destination overrides are **still validated**, so a dry run is a routing test: an unknown channel, a
+  malformed `discordWebhookUrl`, a negative `telegramThreadId`, or a requested channel that is disabled or
+  misconfigured returns the same `400` a live request would.
+- A `dryRun` value — in the **query string or the body** — that is neither a boolean nor the string `"true"` / `"false"`
+  returns `400 INVALID_REQUEST` (`code: "INVALID_REQUEST"`, `retryable: false`, `details.field: "dryRun"`). It is **not**
+  silently treated as a live request — a caller who intended a preview must never get a real delivery instead. This
+  applies equally to `?dryRun=yes`, `?dryRun=1`, `?dryRun=FALSE`, and a bare `?dryRun` with no value, so the flag always
+  has to carry an explicit value.
+- When both `dryValidate` and `dryRun` are supplied, the narrower `dryValidate` response is returned.
+- A dry run never initializes the notification channel services (that validates them against their providers), so
+  channel *availability* is only asserted when the channel registry already exists on the process.
+
+A dry run does not set the `Idempotency-Replay` header, because no reservation is taken.
+

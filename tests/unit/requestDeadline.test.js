@@ -94,6 +94,36 @@ describe('Request Deadline Middleware (unit)', () => {
 		expect(res.getHeader('X-Request-Id')).toBeUndefined();
 	});
 
+	test('normalizes a trailing slash in a configured exempt path', () => {
+		// The request normalizer strips trailing slashes, so the configured value
+		// must be normalized identically or the entry silently exempts nothing.
+		process.env.REQUEST_DEADLINE_EXEMPT_PATHS = '/api/exempt/';
+		const { isExemptPath, resolveExemptPaths } = requestDeadline;
+		const exemptPaths = resolveExemptPaths();
+
+		expect(exemptPaths.has('/api/exempt')).toBe(true);
+		expect(isExemptPath('/api/exempt', exemptPaths)).toBe(true);
+		expect(isExemptPath('/api/exempt/', exemptPaths)).toBe(true);
+	});
+
+	test('treats /docs as a subtree so its assets are exempt too', () => {
+		// Swagger UI pulls css/js from the same router; exact set membership
+		// exempted none of them.
+		const { isExemptPath, resolveExemptPaths } = requestDeadline;
+		const exemptPaths = resolveExemptPaths();
+
+		for (const path of [
+			'/docs',
+			'/docs/swagger-ui.css',
+			'/docs/swagger-ui-bundle.js',
+			'/docs/swagger-ui-standalone-preset.js',
+			'/docs/swagger-initializer.js',
+		]) {
+			expect(isExemptPath(path, exemptPaths)).toBe(true);
+		}
+		expect(isExemptPath('/api/alerts', exemptPaths)).toBe(false);
+	});
+
 	test('exposes documented bounds via constants export', () => {
 		const { constants } = requestDeadline;
 		expect(constants.DEFAULT_TIMEOUT_MS).toBe(30000);

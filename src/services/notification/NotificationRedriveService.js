@@ -669,36 +669,73 @@ class NotificationRedriveService {
 	async getEligibleRecords(batchLimit, maxAgeMs) {
 		const nowMs = Date.now();
 		const records = [];
+		const seenIds = new Set();
 		const firestore = this.getFirestore();
 
 		if (firestore) {
 			try {
-				const snapshot = await firestore.collection(COLLECTION_NAME)
-					.where('status', 'in', ['pending', 'in_flight'])
-					.limit(batchLimit * 2)
+				// Push `nextAttemptAt <= now` and `leaseUntil <= now` into the
+				// Firestore query so the sweep never fetches not-yet-due or
+				// actively-claimed rows. Three indexed queries replace the previous
+				// `where('status', 'in', ...).limit(batchLimit * 2)` over-fetch:
+				// (1) due pending rows, (2) expired pending rows that need a terminal
+				// transition, (3) in_flight rows whose lease has expired.
+				const duePendingSnapshot = await firestore.collection(COLLECTION_NAME)
+					.where('status', '==', 'pending')
+					.where('nextAttemptAt', '<=', toTimestamp(new Date(nowMs)))
+					.limit(batchLimit)
 					.get();
 
-				if (snapshot && !snapshot.empty) {
-					for (const doc of snapshot.docs) {
+				if (duePendingSnapshot && !duePendingSnapshot.empty) {
+					for (const doc of duePendingSnapshot.docs) {
+						if (records.length >= batchLimit) break;
 						const data = doc.data();
-						const nextAttemptMs = toMillis(data.nextAttemptAt);
 						const expiresAtMs = toMillis(data.expiresAt);
-						const leaseUntilMs = toMillis(data.leaseUntil);
+						const expired = Boolean(expiresAtMs) && nowMs >= expiresAtMs;
+						records.push({ ...data, id: doc.id, expired });
+						seenIds.add(doc.id);
+					}
+				}
 
-						if (expiresAtMs && nowMs >= expiresAtMs) {
-							// Record has expired window
+				if (records.length < batchLimit) {
+					const expiredPendingSnapshot = await firestore.collection(COLLECTION_NAME)
+						.where('status', '==', 'pending')
+						.where('expiresAt', '<=', toTimestamp(new Date(nowMs)))
+						.limit(batchLimit)
+						.get();
+
+					if (expiredPendingSnapshot && !expiredPendingSnapshot.empty) {
+						for (const doc of expiredPendingSnapshot.docs) {
+							if (records.length >= batchLimit) break;
+							if (seenIds.has(doc.id)) continue;
+							const data = doc.data();
 							records.push({ ...data, id: doc.id, expired: true });
-						} else if (data.status === 'in_flight' && leaseUntilMs && leaseUntilMs > nowMs) {
-							// Active unexpired claim, skip
-							continue;
-						} else if (nextAttemptMs <= nowMs) {
-							records.push({ ...data, id: doc.id, expired: false });
-						}
-
-						if (records.length >= batchLimit) {
-							break;
+							seenIds.add(doc.id);
 						}
 					}
+				}
+
+				if (records.length < batchLimit) {
+					const inFlightSnapshot = await firestore.collection(COLLECTION_NAME)
+						.where('status', '==', 'in_flight')
+						.where('leaseUntil', '<=', toTimestamp(new Date(nowMs)))
+						.limit(batchLimit)
+						.get();
+
+					if (inFlightSnapshot && !inFlightSnapshot.empty) {
+						for (const doc of inFlightSnapshot.docs) {
+							if (records.length >= batchLimit) break;
+							if (seenIds.has(doc.id)) continue;
+							const data = doc.data();
+							const expiresAtMs = toMillis(data.expiresAt);
+							const expired = Boolean(expiresAtMs) && nowMs >= expiresAtMs;
+							records.push({ ...data, id: doc.id, expired });
+							seenIds.add(doc.id);
+						}
+					}
+				}
+
+				if (records.length > 0) {
 					return records;
 				}
 			} catch (error) {
@@ -706,9 +743,12 @@ class NotificationRedriveService {
 			}
 		}
 
-		// Fallback to inMemoryStore
+		// Fallback to inMemoryStore with the same eligibility split (mirrors the
+		// Firestore query so a Firestore outage cannot regress the cost savings).
+		const pending = [];
+		const expiredInFlight = [];
 		for (const [id, data] of this.inMemoryStore.entries()) {
-			if (data.status !== 'pending' && data.status !== 'in_flight') {
+			if (!data || (data.status !== 'pending' && data.status !== 'in_flight')) {
 				continue;
 			}
 
@@ -716,17 +756,33 @@ class NotificationRedriveService {
 			const expiresAtMs = toMillis(data.expiresAt);
 			const leaseUntilMs = toMillis(data.leaseUntil);
 
-			if (expiresAtMs && nowMs >= expiresAtMs) {
-				records.push({ ...data, id, expired: true });
-			} else if (data.status === 'in_flight' && leaseUntilMs && leaseUntilMs > nowMs) {
-				continue;
-			} else if (nextAttemptMs <= nowMs) {
-				records.push({ ...data, id, expired: false });
+			if (data.status === 'pending') {
+				// Expired rows must be returned (with `expired: true`) so the sweep
+				// can mark them terminal, even when `nextAttemptAt` is in the future.
+				if (expiresAtMs && nowMs >= expiresAtMs) {
+					pending.push({ ...data, id, expired: true });
+				} else if (nextAttemptMs <= nowMs) {
+					pending.push({ ...data, id, expired: false });
+				}
+			} else if (data.status === 'in_flight') {
+				// Only reclaim rows whose lease has already expired (or was never claimed)
+				if (leaseUntilMs > nowMs) continue;
+				const expired = Boolean(expiresAtMs) && nowMs >= expiresAtMs;
+				expiredInFlight.push({ ...data, id, expired });
 			}
+		}
 
-			if (records.length >= batchLimit) {
-				break;
-			}
+		for (const record of pending) {
+			if (records.length >= batchLimit) break;
+			if (seenIds.has(record.id)) continue;
+			records.push(record);
+			seenIds.add(record.id);
+		}
+		for (const record of expiredInFlight) {
+			if (records.length >= batchLimit) break;
+			if (seenIds.has(record.id)) continue;
+			records.push(record);
+			seenIds.add(record.id);
 		}
 
 		return records;
@@ -1038,18 +1094,21 @@ class NotificationRedriveService {
 
 		const supersessionId = this.getSupersessionId(record.repeatCooldown.key, record.repeatCooldown.channel);
 		const localSupersession = this.supersessionStore.get(supersessionId);
-		if ((localSupersession && isSupersededByMarker(localSupersession, record))
-			|| this.inMemoryStore.get(record.id)?.status === 'cancelled') {
+		// A local marker is process/clock-derived, so its generation can disagree with
+		// the durable creation order across replicas. It is therefore only a fallback
+		// verdict here, never a short-circuit: a proven newer durable record wins.
+		const locallySuperseded = Boolean(localSupersession && isSupersededByMarker(localSupersession, record));
+		if (this.inMemoryStore.get(record.id)?.status === 'cancelled') {
 			return true;
 		}
 
 		const firestore = this.getFirestore();
 		if (!firestore) {
-			return false;
+			return locallySuperseded;
 		}
 		const remainingMs = Math.max(0, deadline - Date.now());
 		if (remainingMs === 0) {
-			return false;
+			return locallySuperseded;
 		}
 		let timer = null;
 		try {
@@ -1063,7 +1122,7 @@ class NotificationRedriveService {
 				}),
 			]);
 			if (!snapshots) {
-				return false;
+				return locallySuperseded;
 			}
 			const [recordSnapshot, supersessionSnapshot] = snapshots;
 			const supersession = supersessionSnapshot?.exists ? supersessionSnapshot.data() : null;
@@ -1083,11 +1142,12 @@ class NotificationRedriveService {
 						return false;
 					}
 				}
+				return isSupersededByMarker(supersession, record) || locallySuperseded;
 			}
-			return isSupersededByMarker(supersession, record);
+			return locallySuperseded;
 		} catch (error) {
 			console.warn('[NotificationRedriveService] Failed to check superseded redrive:', error.message);
-			return false;
+			return locallySuperseded;
 		} finally {
 			if (timer) {
 				clearTimeout(timer);

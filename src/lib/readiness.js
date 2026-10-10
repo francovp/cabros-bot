@@ -130,6 +130,7 @@ function isFirestoreEnabled() {
 function buildFirestoreProbe(deps) {
 	const isConfigured = deps.isConfigured;
 	const getClient = deps.getClient;
+	const probeAlertReads = deps.probeAlertReads;
 	const timeoutMs = deps.timeoutMs;
 	return async function probeFirestore() {
 		if (!isFirestoreEnabled()) {
@@ -148,6 +149,13 @@ function buildFirestoreProbe(deps) {
 		}
 		return timed(async () => {
 			await client.listCollections();
+			// `listCollections()` is a metadata call: it never executes a
+			// collection query, so it reported a healthy Firestore while every
+			// ordered `alerts` read was rejected for a missing composite index
+			// (#1285). Probe the read path itself so the gate can see it.
+			if (typeof probeAlertReads === 'function') {
+				await probeAlertReads();
+			}
 			return { backend: 'firestore' };
 		}, timeoutMs);
 	};
@@ -305,10 +313,21 @@ function createReadinessService(overrides) {
 			}
 		});
 
+	const probeAlertReads = overrides.probeAlertReads
+		|| (() => {
+			try {
+				const storage = require('../services/storage/AlertStorageService');
+				return storage.probeOrderedAlertRead;
+			} catch (error) {
+				return null;
+			}
+		});
+
 	const probes = {
 		firestore: buildFirestoreProbe({
 			isConfigured: isFirestoreConfigured,
 			getClient: getFirestoreClient,
+			probeAlertReads,
 			timeoutMs,
 		}),
 		gemini: buildGeminiProbe({ timeoutMs }),

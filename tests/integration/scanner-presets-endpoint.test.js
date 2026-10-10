@@ -180,7 +180,7 @@ describe('Scanner presets API integration tests', () => {
 		expect(deleteResponse.body.storage).toEqual(expectedStorage);
 	});
 
-	it('reports ephemeral storage when durable scanner persistence is enabled but unavailable', async () => {
+	it('reports durable intent as degraded when a scanner preset write fails', async () => {
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
 		const firestoreAdmin = require('firebase-admin');
@@ -192,14 +192,21 @@ describe('Scanner presets API integration tests', () => {
 			.send({ name: 'Ephemeral preset' })
 			.expect(201);
 
-		expect(response.body.storage).toEqual({
+		// A failed write is a store fault, not a credential problem: `mode`/`backend`
+		// stay on the configured target and the unsynced record is reported as pending
+		// workload rather than reclassifying the whole backend as `memory` (#1342).
+		expect(response.body.storage).toEqual(expect.objectContaining({
 			enabled: true,
-			configured: false,
+			configured: true,
 			ready: false,
-			status: 'misconfigured',
-			mode: 'ephemeral',
-			backend: 'memory',
-		});
+			status: 'degraded',
+			readiness: 'degraded',
+			mode: 'durable',
+			backend: 'firestore',
+			lastErrorReason: 'firestore_unavailable',
+			pendingWrites: 1,
+			oldestPendingWriteAt: expect.any(String),
+		}));
 	});
 
 	it('returns structured preview in dry-run mode without calling MCP or delivery services', async () => {

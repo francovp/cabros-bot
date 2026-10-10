@@ -2,6 +2,12 @@
 
 const { idempotencyService } = require('../services/storage/IdempotencyService');
 const requestDeadline = require('./requestDeadline');
+const { resolveDryRun } = require('./dryRunRequest');
+
+// Surfaces whose dry-run response must stay side-effect free, so a probe never
+// reserves or caches a key. Path-scoped rather than global: /webhook/alert
+// keeps its existing idempotent dry-run behaviour unchanged.
+const DRY_RUN_IDEMPOTENCY_BYPASS_PATHS = new Set(['/api/webhook/message']);
 
 function getRequestPath(req) {
 	if (typeof req.path === 'string' && req.path.length > 0) {
@@ -17,6 +23,18 @@ function getRequestPath(req) {
 	}
 
 	return '';
+}
+
+// Inside a mounted router req.path is relative to the mount point, so the
+// effective route is only visible once the baseUrl prefix is put back. Both
+// spellings are accepted so the allowlist works mounted or unmounted.
+function matchesBypassPath(req) {
+	const relative = getRequestPath(req);
+	if (DRY_RUN_IDEMPOTENCY_BYPASS_PATHS.has(relative)) {
+		return true;
+	}
+	const baseUrl = typeof req.baseUrl === 'string' ? req.baseUrl : '';
+	return Boolean(baseUrl) && DRY_RUN_IDEMPOTENCY_BYPASS_PATHS.has(`${baseUrl}${relative}`);
 }
 
 function buildRequestFingerprint(req) {
@@ -42,7 +60,7 @@ function buildRequestFingerprint(req) {
 	};
 }
 
-function sendCachedResponse(res, cachedRecord) {
+function sendCachedResponse(req, res, cachedRecord) {
 	res.set('Idempotency-Replay', 'true');
 
 	if (cachedRecord.headers) {
@@ -53,14 +71,29 @@ function sendCachedResponse(res, cachedRecord) {
 
 	res.status(cachedRecord.statusCode);
 
+	// The cached body carries the ORIGINAL request's `requestId`, but the replay
+	// is a distinct HTTP request: the request deadline resolved a fresh id for
+	// it, stamped it on `req.requestId`, returned it in the `X-Request-Id`
+	// header, and the structured access log emitted that same id. Replaying the
+	// original id in the body would split one response across two correlation
+	// surfaces, so an operator searching logs by the body's advertised id would
+	// never find the replay. Rewrite it to the current request's id; the
+	// original remains available in the stored record and in the alert audit.
+	const replayedRequestId = req && req.requestId;
 	let finalBody = cachedRecord.responseBody;
 	if (finalBody && typeof finalBody === 'object') {
 		finalBody = { ...finalBody, idempotencyReplayed: true };
+		if (replayedRequestId && typeof finalBody.requestId === 'string') {
+			finalBody.requestId = replayedRequestId;
+		}
 		return res.json(finalBody);
 	} else if (typeof finalBody === 'string') {
 		try {
 			const parsed = JSON.parse(finalBody);
 			parsed.idempotencyReplayed = true;
+			if (replayedRequestId && typeof parsed.requestId === 'string') {
+				parsed.requestId = replayedRequestId;
+			}
 			return res.json(parsed);
 		} catch (error) {
 			// Leave as plain string/text
@@ -98,6 +131,14 @@ function getIdempotencyKey(req) {
  * Express middleware to handle idempotency key checks and response caching.
  */
 function idempotencyMiddleware(req, res, next) {
+	// A dry run dispatches nothing, so reserving and completing a key for it
+	// would hand the caller a replayable response for work that never happened:
+	// a later live request reusing that key would receive the probe's body
+	// instead of delivering. Skipping here keeps the probe usable.
+	if (matchesBypassPath(req) && resolveDryRun(req)) {
+		return next();
+	}
+
 	// 1. Get the key from headers (recommended), request body, or query params
 	const key = getIdempotencyKey(req);
 
@@ -128,13 +169,13 @@ function idempotencyMiddleware(req, res, next) {
 
 		if (reservation.state === 'completed') {
 			console.debug('[Idempotency] Replaying cached response');
-			return sendCachedResponse(res, reservation.record);
+			return sendCachedResponse(req, res, reservation.record);
 		}
 
 		if (reservation.state === 'pending') {
 			console.debug('[Idempotency] Waiting for in-flight response');
 			return reservation.promise
-				.then((cachedRecord) => sendCachedResponse(res, cachedRecord))
+				.then((cachedRecord) => sendCachedResponse(req, res, cachedRecord))
 				.catch((error) => {
 					if (error && (error.code === 'IDEMPOTENCY_RELEASED' || error.code === 'IDEMPOTENCY_CONFLICT')) {
 						return res.status(409).json({
@@ -301,6 +342,7 @@ function idempotencyMiddleware(req, res, next) {
 }
 
 module.exports = {
+	DRY_RUN_IDEMPOTENCY_BYPASS_PATHS,
 	getIdempotencyKey,
 	idempotencyMiddleware,
 };

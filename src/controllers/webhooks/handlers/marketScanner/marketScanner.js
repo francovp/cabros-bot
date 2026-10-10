@@ -33,7 +33,8 @@ const {
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
 
-function resolveBot(botOrGetter) {	if (typeof botOrGetter === 'function') {
+function resolveBot(botOrGetter) {
+	if (typeof botOrGetter === 'function') {
 		return botOrGetter();
 	}
 
@@ -170,6 +171,10 @@ function postMarketScannerAlert(botOrGetter) {
 					requestId,
 					text: alertText,
 					symbol: scannerSymbols[0] || null,
+					// A scanner run covers many symbols but persists one report document,
+					// so record the complete scanned symbol set.
+					symbols: scannerSymbols,
+					batchId: requestId,
 					exchange: parsed.exchange || null,
 					enriched: false,
 					enrichmentData: null,
