@@ -441,6 +441,20 @@
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
     },
+    "ENABLE_ALERT_CROSS_TF_SUPPRESSION": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Collapse cross-timeframe duplicates: suppress delivery when the same exchange/symbol/side already fired inside the window on a different timeframe (alerts stay persisted with a suppression marker)",
+      "valueType": "BOOLEAN"
+    },
+    "ALERT_CROSS_TF_WINDOW_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Cross-timeframe collapse window in milliseconds (0 disables collapsing while the flag stays on)",
+      "valueType": "NUMBER"
+    },
     "ENABLE_ALERT_SYNTH_BURST_AGGREGATION": {
       "defaultValue": {
         "value": "false"
