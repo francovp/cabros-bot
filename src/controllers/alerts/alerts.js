@@ -948,11 +948,52 @@ function replayAlert(botOrGetter) {
 				});
 			}
 
-			const { getNotificationManager, initializeNotificationServices } = require('../webhooks/handlers/alert/alert');
-			let notificationManager = getNotificationManager();
+			const alertHandler = require('../webhooks/handlers/alert/alert');
+			let notificationManager = alertHandler.getNotificationManager();
 			if (!notificationManager) {
 				const bot = typeof botOrGetter === 'function' ? botOrGetter() : botOrGetter || null;
-				notificationManager = await initializeNotificationServices(bot);
+				notificationManager = await alertHandler.initializeNotificationServices(bot);
+			}
+
+			const reEnrichRequested = (req.query && (req.query.reEnrich === 'true' || req.query.reEnrich === true))
+				|| (req.body && typeof req.body === 'object' && (req.body.reEnrich === 'true' || req.body.reEnrich === true));
+
+			let reEnriched = false;
+			let newEnrichmentData = null;
+
+			if (reEnrichRequested) {
+				const isGeminiEnabled = process.env.ENABLE_GEMINI_GROUNDING === 'true';
+				const isTradingViewMcpEnabled = process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT === 'true';
+
+				if (!isGeminiEnabled && !isTradingViewMcpEnabled) {
+					console.warn('[AlertReplay] reEnrich requested but enrichment is disabled');
+				} else {
+					let useTradingViewData = Boolean(storedAlert.useTradingViewData);
+					if (req.query && req.query.useTradingViewData !== undefined) {
+						useTradingViewData = req.query.useTradingViewData === 'true' || req.query.useTradingViewData === true;
+					} else if (req.body && typeof req.body === 'object' && req.body.useTradingViewData !== undefined) {
+						useTradingViewData = req.body.useTradingViewData === 'true' || req.body.useTradingViewData === true;
+					}
+
+					try {
+						const candidateAlert = {
+							text: storedAlert.text,
+							source: storedAlert.source || 'webhook',
+							...(storedAlert.signalClass ? { signalClass: storedAlert.signalClass } : {}),
+						};
+
+						await alertHandler.processEnrichment(candidateAlert, {
+							useTradingViewData,
+						});
+
+						if (candidateAlert.enriched && typeof candidateAlert.enriched === 'object') {
+							newEnrichmentData = candidateAlert.enriched;
+							reEnriched = true;
+						}
+					} catch (enrichmentErr) {
+						console.warn('[AlertReplay] Enrichment failed:', enrichmentErr.message);
+					}
+				}
 			}
 
 			const replayPayload = {
@@ -974,6 +1015,10 @@ function replayAlert(botOrGetter) {
 					idempotencyKey: idempotencyKey.trim(),
 					channels,
 					deliveryResults: results,
+					...(reEnrichRequested ? {
+						reEnriched: Boolean(reEnriched),
+						...(reEnriched && newEnrichmentData ? { enrichmentData: newEnrichmentData } : {}),
+					} : {}),
 				});
 			} catch (storageErr) {
 				console.warn('[AlertsController] Failed to record replay attempt in Firestore for alert:', alertId, storageErr.message);
