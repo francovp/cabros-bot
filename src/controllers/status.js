@@ -187,6 +187,36 @@ function withFirestoreReadHealth(status) {
 	};
 }
 
+/**
+ * Cloudflare AI Gateway readiness, including whether the gateway is in the
+ * runtime request path at all.
+ *
+ * Issue #1115: `ENABLE_CLOUDFLARE_AIG` never selected the runtime provider —
+ * `MODEL_PROVIDER` does — so deriving `ready` from `enabled && configured` alone
+ * let the documented enablement steps report `ready: true` while
+ * `MODEL_PROVIDER=gemini` sent every LLM call straight to Google and no request
+ * touched the gateway. Credentials present but unrouted now report
+ * `status: "inactive"` and `ready: false`.
+ */
+function cloudflareAigDependencyStatus({ enabled, configured }) {
+	const provider = getModelProvider();
+	const routed = provider === 'cloudflare';
+	if (!enabled) {
+		return { enabled, configured, routed, provider, ready: false, status: 'disabled' };
+	}
+	if (!configured) {
+		return { enabled, configured, routed, provider, ready: false, status: 'misconfigured' };
+	}
+	return {
+		enabled,
+		configured,
+		routed,
+		provider,
+		ready: routed,
+		status: routed ? 'ready' : 'inactive',
+	};
+}
+
 function getNewsMonitorLlmDependency({ enabled, provider }) {
 	switch (provider) {
 	case 'gemini':
@@ -609,7 +639,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			},
 			newsMonitorLlm,
 			llmAlertEnrichment,
-			cloudflareAig: dependencyStatus({
+			cloudflareAig: cloudflareAigDependencyStatus({
 				enabled: isEnabled(process.env.ENABLE_CLOUDFLARE_AIG),
 				configured:
 					hasValue(process.env.CF_AIG_TOKEN)

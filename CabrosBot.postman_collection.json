@@ -14491,6 +14491,177 @@
       ]
     },
     {
+      "name": "Get Status - cloudflareAig routing (issue #1115)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Issue #1115: `ENABLE_CLOUDFLARE_AIG` only controls whether Cloudflare readiness is reported in status/capabilities - `MODEL_PROVIDER` is what actually routes LLM traffic. Readiness used to be derived from `enabled && configured` alone, so the documented enablement steps (flag plus credentials) reported `ready:true` while `MODEL_PROVIDER=gemini` sent every LLM call straight to Google and no request touched the gateway. `dependencies.cloudflareAig.provider` is the selected provider and `routed` reports whether that provider is `cloudflare`; `ready` now requires all three of enabled, configured and routed. Credentials present while another provider is selected report `ready:false` with `status:\"inactive\"`."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('cloudflareAig never claims ready unless the gateway is the routed provider', function () {",
+              "  const body = pm.response.json();",
+              "  const cf = body.dependencies.cloudflareAig;",
+              "  pm.expect(pm.response.code).to.eql(200);",
+              "  pm.expect(cf).to.be.an('object');",
+              "  pm.expect(cf.provider).to.be.a('string');",
+              "  pm.expect(cf.routed).to.be.a('boolean');",
+              "  pm.expect(cf.routed).to.eql(cf.provider === 'cloudflare');",
+              "  if (cf.ready) {",
+              "    pm.expect(cf.status).to.eql('ready');",
+              "    pm.expect(cf.enabled).to.eql(true);",
+              "    pm.expect(cf.configured).to.eql(true);",
+              "    pm.expect(cf.routed).to.eql(true);",
+              "  }",
+              "});",
+              "pm.test('a credential alone never yields ready', function () {",
+              "  const cf = pm.response.json().dependencies.cloudflareAig;",
+              "  if (cf.configured && !cf.routed) {",
+              "    pm.expect(cf.ready).to.eql(false);",
+              "    pm.expect(cf.status).to.eql('inactive');",
+              "  }",
+              "  if (cf.routed && !cf.configured) {",
+              "    pm.expect(cf.ready).to.eql(false);",
+              "    pm.expect(cf.status).to.eql('misconfigured');",
+              "  }",
+              "});",
+              "pm.test('no gateway credential leaks into the status payload', function () {",
+              "  pm.expect(pm.response.text()).to.not.include('CF_AIG_TOKEN');",
+              "  pm.expect(pm.response.text()).to.not.include('CF_AIG_BASE_URL');",
+              "});"
+            ]
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "200 inactive - credentials present but another provider is selected",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"dependencies\": {\n    \"cloudflareAig\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"routed\": false,\n      \"provider\": \"gemini\",\n      \"ready\": false,\n      \"status\": \"inactive\"\n    }\n  }\n}"
+        },
+        {
+          "name": "200 ready - gateway is the routed provider",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"dependencies\": {\n    \"cloudflareAig\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"routed\": true,\n      \"provider\": \"cloudflare\",\n      \"ready\": true,\n      \"status\": \"ready\"\n    }\n  }\n}"
+        },
+        {
+          "name": "200 misconfigured - routed but credentials are missing",
+          "originalRequest": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "status"
+              ]
+            }
+          },
+          "status": {
+            "code": 200,
+            "description": ""
+          },
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"dependencies\": {\n    \"cloudflareAig\": {\n      \"enabled\": true,\n      \"configured\": false,\n      \"routed\": true,\n      \"provider\": \"cloudflare\",\n      \"ready\": false,\n      \"status\": \"misconfigured\"\n    }\n  }\n}"
+        }
+      ]
+    },
+    {
       "name": "Get Status - idempotency storage readiness (issue #1111)",
       "request": {
         "method": "GET",

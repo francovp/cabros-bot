@@ -466,10 +466,11 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.cloudflareAig.enabled).toBe(false);
 	});
 
-	it('reports Cloudflare AI Gateway when enabled', async () => {
+	it('reports Cloudflare AI Gateway as ready only when it is actually the routed provider', async () => {
 		process.env.ENABLE_CLOUDFLARE_AIG = 'true';
 		process.env.CF_AIG_TOKEN = 'cloudflare-token';
 		process.env.CF_AIG_BASE_URL = 'https://gateway.ai.cloudflare.com/v1/xyz/default/compat';
+		process.env.MODEL_PROVIDER = 'cloudflare';
 
 		const response = await request(app)
 			.get('/api/status')
@@ -480,8 +481,60 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.cloudflareAig).toEqual({
 			enabled: true,
 			configured: true,
+			routed: true,
+			provider: 'cloudflare',
 			ready: true,
 			status: 'ready',
+		});
+	});
+
+	/**
+	 * Issue #1115: `ENABLE_CLOUDFLARE_AIG` does not select the runtime provider —
+	 * `MODEL_PROVIDER` does. Deriving `ready` from env-var presence alone made the
+	 * documented enablement steps report `ready: true` while `MODEL_PROVIDER=gemini`
+	 * sent 100% of LLM traffic straight to Google and zero requests touched the
+	 * gateway. Credentials present but not routed must not read as ready.
+	 */
+	it('does not report Cloudflare AI Gateway as ready when credentials are present but it is not the routed provider', async () => {
+		process.env.ENABLE_CLOUDFLARE_AIG = 'true';
+		process.env.CF_AIG_TOKEN = 'cloudflare-token';
+		process.env.CF_AIG_BASE_URL = 'https://gateway.ai.cloudflare.com/v1/xyz/default/compat';
+		process.env.MODEL_PROVIDER = 'gemini';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.cloudflareAig).toBe(true);
+		expect(response.body.dependencies.cloudflareAig).toEqual({
+			enabled: true,
+			configured: true,
+			routed: false,
+			provider: 'gemini',
+			ready: false,
+			status: 'inactive',
+		});
+	});
+
+	it('does not report Cloudflare AI Gateway as ready when it is the routed provider but credentials are missing', async () => {
+		process.env.ENABLE_CLOUDFLARE_AIG = 'true';
+		process.env.MODEL_PROVIDER = 'cloudflare';
+		delete process.env.CF_AIG_TOKEN;
+		delete process.env.CF_AIG_BASE_URL;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.cloudflareAig).toEqual({
+			enabled: true,
+			configured: false,
+			routed: true,
+			provider: 'cloudflare',
+			ready: false,
+			status: 'misconfigured',
 		});
 	});
 
