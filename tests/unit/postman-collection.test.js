@@ -798,6 +798,17 @@ describe('Postman collection contract', () => {
 		expect(postInvalid.response[0].code).toBe(400);
 		expect(JSON.parse(postInvalid.response[0].body).code).toBe('INVALID_REQUEST');
 
+		const malformedJsonAlert = findItem(collection.item, 'POST Send Alert (malformed JSON - 400 Bad Request)');
+		expect(malformedJsonAlert).toBeDefined();
+		expect(malformedJsonAlert.request.url.raw).toBe('{{baseUrl}}/api/webhook/alert');
+		expect(malformedJsonAlert.request.body.raw).toBe('{"text":');
+		expect(malformedJsonAlert.response[0].code).toBe(400);
+		expect(JSON.parse(malformedJsonAlert.response[0].body)).toEqual(expect.objectContaining({
+			code: 'INVALID_REQUEST',
+			error: 'Malformed JSON request body',
+			requestId: expect.any(String),
+		}));
+
 		const listClassFiltered = findItem(collection.item, 'GET List Alerts (signalClass filter)');
 		expect(listClassFiltered).toBeDefined();
 		expect(listClassFiltered.request.url.raw).toContain('signalClass=breakout,reversal');

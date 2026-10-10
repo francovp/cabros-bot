@@ -921,6 +921,25 @@ describe('status dependency contract drift', () => {
 		).toBe('#/components/responses/DeliveryResult');
 	});
 
+	it('documents the structured Express fallthrough response for webhook alerts', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const alertResponses = spec.paths['/api/webhook/alert'].post.responses;
+		const schema = spec.components.schemas.ExpressErrorEnvelope;
+
+		expect(alertResponses['400'].$ref).toBe('#/components/responses/Error');
+		expect(alertResponses['500'].$ref).toBe('#/components/responses/ExpressFallthroughError');
+		expect(schema.required).toEqual(expect.arrayContaining([
+			'success',
+			'error',
+			'code',
+			'requestId',
+			'retryable',
+		]));
+		expect(schema.properties.sentryEventId.type).toBe('string');
+		expect(spec.components.responses.ExpressFallthroughError.content['application/json'].examples)
+			.toHaveProperty('sentryUnavailable');
+	});
+
 	it('documents every lastErrorCategory the remote-config service can emit', () => {
 		// The service emits `invalid_value` on a SUCCESSFUL load whose values failed
 		// schema validation. A client validating responses against the published spec
