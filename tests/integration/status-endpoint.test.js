@@ -987,6 +987,10 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.signalOutcomeWorker).toMatchObject({
 			role: 'worker',
 			running: false,
+			breakdownBucketCap: 100,
+			lastBreakdownBucketCount: 0,
+			lastBreakdownTruncated: false,
+			breakdownTruncationCount: 0,
 			lastRunScannedCount: 0,
 			lastRunPendingCount: 0,
 			lastRunErrorCount: 0,

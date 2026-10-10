@@ -86,6 +86,20 @@ function parseWindow(rawWindow) {
 	return VALID_WINDOWS[win] || null;
 }
 
+function parseBreakdown(rawBreakdown) {
+	if (rawBreakdown === undefined) {
+		return undefined;
+	}
+	if (typeof rawBreakdown !== 'string') {
+		return null;
+	}
+	const values = rawBreakdown.split(',').map((value) => value.trim().toLowerCase());
+	if (values.some((value) => value !== 'symbol' && value !== 'setup')) {
+		return null;
+	}
+	return [...new Set(values)];
+}
+
 function parseOptionalTimestamp(rawValue, name) {
 	if (rawValue === undefined) {
 		return { value: undefined };
@@ -227,6 +241,14 @@ function summarizeOutcomes(req, res) {
 			});
 		}
 
+		const breakdown = parseBreakdown(req.query.breakdown);
+		if (breakdown === null) {
+			return res.status(400).json({
+				error: 'Invalid breakdown parameter. Allowed values: symbol, setup.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
 		const from = parseOptionalTimestamp(req.query.from, 'from');
 		if (from.error) {
 			return res.status(400).json(from.error);
@@ -252,15 +274,29 @@ function summarizeOutcomes(req, res) {
 			? req.query.exchange.trim()
 			: undefined;
 
-		const summary = await signalOutcomeService.summarizeOutcomes({
+		let setupType;
+		if (req.query.setupType !== undefined) {
+			if (typeof req.query.setupType !== 'string' || !req.query.setupType.trim()) {
+				return res.status(400).json({
+					error: 'Invalid setupType parameter. Use a single non-empty value.',
+					code: 'INVALID_REQUEST',
+				});
+			}
+			setupType = req.query.setupType.trim();
+		}
+
+		const summaryParams = {
 			limit,
 			symbol,
 			exchange,
+			...(setupType !== undefined ? { setupType } : {}),
+			...(breakdown !== undefined ? { breakdown } : {}),
 			status,
 			window,
 			from: from.value,
 			to: to.value,
-		});
+		};
+		const summary = await signalOutcomeService.summarizeOutcomes(summaryParams);
 
 		return res.status(200).json({
 			success: true,
