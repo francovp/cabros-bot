@@ -982,7 +982,11 @@ function replayAlert(botOrGetter) {
 							...(storedAlert.signalClass ? { signalClass: storedAlert.signalClass } : {}),
 						};
 
+						const { TokenUsageTracker } = require('../../lib/tokenUsage');
+						const tokenUsage = new TokenUsageTracker('grounding');
+
 						await alertHandler.processEnrichment(candidateAlert, {
+							tokenUsage,
 							useTradingViewData,
 						});
 

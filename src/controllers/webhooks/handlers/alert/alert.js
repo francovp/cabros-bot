@@ -158,7 +158,7 @@ async function processEnrichment(alert, options) {
 			console.debug('Starting alert enrichment process');
 			const enrichedAlert = await enrichAlert({ text: alert.text }, { tokenUsage, useTradingViewData, parsedSignal: parsed });
 			if (enrichedAlert && typeof enrichedAlert === 'object') {
-				enrichedAlert.tokenUsage = tokenUsage.toJSON();
+				enrichedAlert.tokenUsage = tokenUsage && typeof tokenUsage.toJSON === 'function' ? tokenUsage.toJSON() : null;
 				enriched = true;
 				alert.enriched = enrichedAlert;
 				if (isTradingViewMcpEnabled) {
