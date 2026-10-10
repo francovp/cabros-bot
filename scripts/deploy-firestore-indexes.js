@@ -49,6 +49,7 @@ const DEFAULT_LOG_FILE = '.firestore-indexes-deploy.log';
 const INDEXES_PATH = path.resolve(__dirname, '..', 'firestore.indexes.json');
 const FIRESTORE_API = 'https://firestore.googleapis.com/v1';
 const DEFAULT_REQUEST_TIMEOUT_MS = 30000;
+const DEFAULT_DEPLOY_TIMEOUT_MS = 10 * 60 * 1000;
 const TOKEN_REFRESH_THRESHOLD_MS = 5 * 60 * 1000;
 const STALLED_CREDENTIAL_EXIT_GRACE_MS = 1000;
 
@@ -192,22 +193,47 @@ function readDeclaredIndexes(indexesPath = INDEXES_PATH) {
  * @param {Object} index
  * @returns {string}
  */
+function stableSerialize(value) {
+	if (value === undefined) return 'undefined';
+	if (value === null || typeof value !== 'object') return JSON.stringify(value);
+	if (Array.isArray(value)) return `[${value.map(stableSerialize).join(',')}]`;
+	return `{${Object.keys(value).sort()
+		.filter((key) => value[key] !== undefined)
+		.map((key) => `${JSON.stringify(key)}:${stableSerialize(value[key])}`)
+		.join(',')}}`;
+}
+
+function normalizeIndexFields(indexFields) {
+	const fields = Array.isArray(indexFields) ? [...indexFields] : [];
+	const lastField = fields[fields.length - 1];
+	let nameOrder = 'ASCENDING';
+	for (const field of fields) {
+		if (field.order) nameOrder = field.order;
+	}
+	const nameSuffix = { fieldPath: '__name__', order: nameOrder };
+
+	// firebase-tools places the implicit name field before a terminal vector
+	// field. Match that canonical order for both template and REST forms.
+	if (lastField && lastField.vectorConfig) {
+		const vectorField = fields.pop();
+		if (fields.length === 0 || fields[fields.length - 1].fieldPath !== '__name__') {
+			fields.push(nameSuffix);
+		}
+		fields.push(vectorField);
+	} else if (lastField && lastField.fieldPath !== '__name__') {
+		fields.push(nameSuffix);
+	}
+
+	return fields;
+}
+
 function indexKey(index) {
 	if (!index || !index.collectionGroup) {
 		return '';
 	}
-	const fields = Array.isArray(index.fields) ? [...index.fields] : [];
-	if (fields.length > 0 && fields[fields.length - 1].fieldPath !== '__name__') {
-		let nameOrder = 'ASCENDING';
-		for (const field of fields) {
-			if (field.order) {
-				nameOrder = field.order;
-			}
-		}
-		fields.push({ fieldPath: '__name__', order: nameOrder });
-	}
+	const fields = normalizeIndexFields(index.fields);
 	const serializedFields = fields
-		.map((field) => `${field.fieldPath}:${field.order}`)
+		.map((field) => `${field.fieldPath}:${stableSerialize(field)}`)
 		.join(',');
 	return `${index.collectionGroup}|${index.queryScope || 'COLLECTION'}|${serializedFields}`;
 }
@@ -402,6 +428,7 @@ async function fetchLiveIndexes(opts = {}) {
 	const all = [];
 	let pageToken = null;
 	let pages = 0;
+	const seenPageTokens = new Set();
 
 	for (;;) {
 		const url = new URL(
@@ -482,9 +509,14 @@ async function fetchLiveIndexes(opts = {}) {
 		const next = typeof body.nextPageToken === 'string' && body.nextPageToken.length > 0
 			? body.nextPageToken
 			: null;
-		if (!next || next === pageToken) {
+		if (!next) {
 			break;
 		}
+		if (seenPageTokens.has(next)) {
+			throw new Error(`Firestore repeated a pagination token for project ${project}. `
+				+ 'The listing is being truncated, so the declared indexes cannot be reported as missing or ready.');
+		}
+		seenPageTokens.add(next);
 
 		if (pages >= MAX_INDEX_PAGES) {
 			// Discarding the pages already read and refusing is deliberate: a
@@ -548,6 +580,9 @@ function resolveFirebaseBin(repoRoot = path.join(__dirname, '..')) {
  */
 function runDeploy(opts = {}) {
 	const binPath = opts.binPath || resolveFirebaseBin(opts.cwd || path.join(__dirname, '..'));
+	const timeoutMs = Number.isSafeInteger(opts.timeoutMs) && opts.timeoutMs > 0
+		? opts.timeoutMs
+		: DEFAULT_DEPLOY_TIMEOUT_MS;
 	const cliConfigHome = fs.mkdtempSync(path.join(os.tmpdir(), 'firestore-index-cli-'));
 	try {
 		const env = { ...process.env, XDG_CONFIG_HOME: cliConfigHome };
@@ -572,11 +607,15 @@ function runDeploy(opts = {}) {
 		], {
 			encoding: 'utf8',
 			maxBuffer: 10 * 1024 * 1024,
+			timeout: timeoutMs,
 			cwd: opts.cwd || path.join(__dirname, '..'),
 			env,
 		});
 
 		if (result.error) {
+			if (result.error.code === 'ETIMEDOUT') {
+				throw new Error(`Firebase CLI deploy timed out after ${timeoutMs}ms.`, { cause: result.error });
+			}
 			throw new Error(`Failed to launch firebase CLI: ${result.error.message}`, { cause: result.error });
 		}
 		return {

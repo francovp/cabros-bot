@@ -91,6 +91,9 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_SIGNAL_CLASS_MARKER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	ENABLE_ALERT_SYNTH_BURST_AGGREGATION: { type: 'boolean', defaultValue: false },
+	ALERT_BURST_WINDOW_MS: { type: 'number', defaultValue: 3000, integer: true, min: 1000, max: 15000 },
+	ALERT_BURST_MIN_SIGNALS: { type: 'number', defaultValue: 3, integer: true, min: 2, max: 20 },
 	JOB_BACKLOG_ALERT_THRESHOLD_MS: { type: 'number', defaultValue: 900000, integer: true, min: 1000, max: 86400000 },
 	JOB_BACKLOG_PAGE_COOLDOWN_MS: { type: 'number', defaultValue: 900000, integer: true, min: 1000, max: 86400000 },
 	JOB_BACKLOG_PROBE_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
@@ -101,14 +104,24 @@ const PARAMETER_SCHEMA = Object.freeze({
 	REQUEST_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1000, max: 120000 },
 	ENABLE_BINANCE_ORDER_AUDIT: { type: 'boolean', defaultValue: false },
 	BINANCE_ORDER_AUDIT_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
-	ENABLE_SYMBOL_ANALYSIS_STORAGE: { type: 'boolean', defaultValue: false },
-	SYMBOL_ANALYSIS_RETENTION_DAYS: { type: 'number', defaultValue: 7, integer: true, min: 1, max: 365 },
+	// ENABLE_SYMBOL_ANALYSIS_STORAGE, SYMBOL_ANALYSIS_RETENTION_DAYS excluded:
+	// a process-startup gate that decides where a collection lives and its TTL
+	// horizon are deployment-controlled, matching ENABLE_FIRESTORE_IDEMPOTENCY,
+	// ENABLE_FIRESTORE_SCANNER_PRESETS and ENABLE_SIGNAL_OUTCOME_TRACKING. A
+	// published template outranks render.yaml, so an allow-listed gate here
+	// would silently override the blueprint's enablement (issue #1179).
 	ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT: { type: 'boolean', defaultValue: false },
-	ENABLE_FIRESTORE_NEWS_ANALYSIS: { type: 'boolean', defaultValue: false },
+	// ENABLE_FIRESTORE_NEWS_ANALYSIS excluded (issue #1180): it is a process-startup
+	// gate that decides where the news_analysis collection lives, like every other
+	// ENABLE_FIRESTORE_* storage gate. A published template parameter reports its
+	// defaultValue with source `remote`, so leaving the gate here would let the
+	// template silently override render.yaml and re-disable persistence the moment
+	// a template load recovered. NEWS_ANALYSIS_RETENTION_DAYS stays eligible.
 	NEWS_ANALYSIS_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
 	ENABLE_FIRESTORE_CHAT_PREFERENCES: { type: 'boolean', defaultValue: false },
 	CHAT_PREFERENCES_RETENTION_DAYS: { type: 'number', defaultValue: 90, integer: true, min: 1, max: 365 },
 	CHAT_PREFERENCES_CACHE_TTL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
+	GENERIC_MESSAGE_MAX_LENGTH: { type: 'number', defaultValue: 4000, integer: true, min: 1, max: 20000 },
 	// WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_NAMESPACE excluded:
 	// notification destinations — must remain deployment-controlled.
 	WHATSAPP_TEMPLATE_PARAM_ORDER: { type: 'string', defaultValue: 'symbol,price,action,setup,timeframe,source' },
@@ -369,7 +382,18 @@ function getRemoteValue(config, key, schema) {
 		if (typeof value.asString !== 'function') {
 			return { present: false };
 		}
-		const parsed = parseValue(value.asString(), schema, undefined);
+		const raw = value.asString();
+		// A blank remote value carries no tuning, so it is an absent override
+		// rather than a malformed one. The published template ships
+		// `SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES` as an intentional empty string,
+		// which is that parameter's own schema default; reporting it as invalid
+		// would pin `lastErrorCategory: "invalid_value"` on every load and mask a
+		// genuinely malformed value. `buildDefaultConfig()` already supplies the
+		// default for any parameter the template leaves blank.
+		if (typeof raw === 'string' && raw.trim() === '') {
+			return { present: false };
+		}
+		const parsed = parseValue(raw, schema, undefined);
 		return parsed === undefined ? { present: true, valid: false } : { present: true, value: parsed };
 	} catch (error) {
 		return { present: true, valid: false };

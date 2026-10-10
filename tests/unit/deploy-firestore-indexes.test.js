@@ -121,6 +121,30 @@ describe('deploy-firestore-indexes', () => {
 
 			expect(desc).not.toBe(asc);
 		});
+
+		it('normalizes the implicit __name__ field before the final vector field', () => {
+			const declared = {
+				collectionGroup: 'embeddings',
+				queryScope: 'COLLECTION',
+				fields: [{ fieldPath: 'embedding', vectorConfig: { dimension: 128, flat: {} } }],
+			};
+			const live = {
+				...declared,
+				fields: [
+					{ fieldPath: '__name__', order: 'ASCENDING' },
+					{ fieldPath: 'embedding', vectorConfig: { dimension: 128, flat: {} } },
+				],
+			};
+
+			expect(indexKey(declared)).toBe(indexKey(live));
+			expect(indexKey(declared)).not.toBe(indexKey({
+				...live,
+				fields: [
+					{ fieldPath: '__name__', order: 'ASCENDING' },
+					{ fieldPath: 'embedding', vectorConfig: { dimension: 256, flat: {} } },
+				],
+			}));
+		});
 	});
 
 	describe('readDeclaredIndexes()', () => {
@@ -355,15 +379,13 @@ describe('deploy-firestore-indexes', () => {
 				.rejects.toThrow(/could not be read authoritatively/);
 		});
 
-		it('stops on a nextPageToken that repeats itself', async () => {
-			const request = jest.fn().mockResolvedValue({
-				data: { indexes: [liveIndex(ALERTS_INDEX, 'READY')], nextPageToken: 'stuck' },
-			});
+		it('rejects a repeated non-empty pagination token as an incomplete listing', async () => {
+			const request = jest.fn()
+				.mockResolvedValueOnce({ data: { indexes: [], nextPageToken: 'page-2' } })
+				.mockResolvedValueOnce({ data: { indexes: [liveIndex(ALERTS_INDEX, 'READY')], nextPageToken: 'page-2' } });
 
-			// The repeated page is still consumed; only the *next* hop stops. A
-			// duplicate is harmless because auditIndexes keys a Map by indexKey.
 			await expect(fetchLiveIndexes({ project: 'p', database: '(default)', request }))
-				.resolves.toHaveLength(2);
+				.rejects.toThrow(/repeated pagination token|truncated/i);
 			expect(request).toHaveBeenCalledTimes(2);
 		});
 
@@ -454,6 +476,23 @@ describe('deploy-firestore-indexes', () => {
 	});
 
 	describe('runDeploy()', () => {
+		it('bounds a stalled Firebase CLI child and reports the timeout', () => {
+			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'firestore-index-cli-timeout-'));
+			const cliPath = path.join(tempDir, 'firebase.js');
+			fs.writeFileSync(cliPath, 'setTimeout(() => {}, 10000);', 'utf8');
+
+			try {
+				expect(() => runDeploy({
+					project: 'test-project',
+					binPath: cliPath,
+					cwd: tempDir,
+					timeoutMs: 25,
+				})).toThrow(/timed out after 25ms/i);
+			} finally {
+				fs.rmSync(tempDir, { recursive: true, force: true });
+			}
+		});
+
 		it('invokes the pinned CLI for the firestore:indexes target only', () => {
 			const result = runDeploy({ project: 'cabros-bot', binPath: '/tmp/firebase.js', cwd: '/tmp' });
 

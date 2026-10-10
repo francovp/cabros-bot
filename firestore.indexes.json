@@ -205,6 +205,52 @@
       ]
     },
     {
+      "collectionGroup": "news_analysis",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "symbol",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "news_analysis",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "eventCategory",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "news_analysis",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "symbol",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "eventCategory",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
       "collectionGroup": "notificationDeadLetters",
       "queryScope": "COLLECTION",
       "fields": [

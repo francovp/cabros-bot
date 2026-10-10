@@ -13,6 +13,7 @@
     "deploy:firestore:indexes": "node scripts/deploy-firestore-indexes.js",
     "sync:production-env": "node scripts/sync-production-env.js",
     "cleanup:preview-channels": "node scripts/cleanup-preview-channels.js",
+    "uptime:monitor": "node ops/external-uptime-monitor.js",
     "preinstall": "npx only-allow pnpm",
     "start": "node index.js",
     "start-worker": "node worker.js",

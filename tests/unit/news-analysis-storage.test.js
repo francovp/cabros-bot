@@ -1,11 +1,14 @@
 'use strict';
 
+const { generateKeyPairSync } = require('crypto');
 const admin = require('firebase-admin');
 const NewsAnalysisStorageService = require('../../src/services/storage/NewsAnalysisStorageService');
 
 const {
 	__mockCollection: mockCollection,
 	__mockDocSet: mockDocSet,
+	__mockDocGet: mockDocGet,
+	__mockGet: mockGet,
 	__mockWhere: mockWhere,
 	__mockOrderBy: mockOrderBy,
 	__mockLimit: mockLimit,
@@ -18,7 +21,9 @@ describe('NewsAnalysisStorageService', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
 		resetCollectionState();
+		admin.__resetApps();
 		NewsAnalysisStorageService.__resetFirestoreClient();
+		NewsAnalysisStorageService.__resetReadinessForTesting();
 		process.env = { ...originalEnv };
 		process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS = 'true';
 	});
@@ -271,6 +276,63 @@ describe('NewsAnalysisStorageService', () => {
 			expect(summary.falsePositiveProxy.noFollowupCount).toBe(2);
 			expect(summary.falsePositiveProxy.ratePercent).toBe(66.67);
 		});
+
+		// Regression (#1152)
+		it('excludes high-confidence analyses that never sent an alert from the false-positive proxy', async () => {
+			await NewsAnalysisStorageService.recordAnalyses([
+				{
+					symbol: 'BTCUSDT',
+					eventCategory: 'price_surge',
+					confidence: 0.95,
+					alertSent: false,
+				},
+			]);
+
+			const summary = await NewsAnalysisStorageService.summarizeAnalyses({ threshold: 0.7 });
+
+			// The analysis still counts as an analysis, just not as an evaluated alert.
+			expect(summary.totalAnalyses).toBe(1);
+			expect(summary.totalAlertsSent).toBe(0);
+			expect(summary.bySymbol.BTCUSDT.alertsSent).toBe(0);
+			expect(summary.bySymbol.BTCUSDT.averageConfidence).toBe(0.95);
+
+			expect(summary.falsePositiveProxy.totalEvaluated).toBe(0);
+			expect(summary.falsePositiveProxy.noFollowupCount).toBe(0);
+			expect(summary.falsePositiveProxy.ratePercent).toBe(0);
+		});
+
+		it('ignores a no-follow-up unsent record when a delivered alert shares its symbol', async () => {
+			const now = Date.now();
+			const collectionState = global.__firebaseAdminMockState.collections.get('news_analysis') || new Map();
+			global.__firebaseAdminMockState.collections.set('news_analysis', collectionState);
+
+			// Unsent high-confidence analysis 1h before the delivered alert. It must not
+			// become the follow-up that masks the delivered alert as a true positive.
+			collectionState.set('doc-unsent', {
+				id: 'doc-unsent',
+				symbol: 'BTCUSDT',
+				eventCategory: 'price_surge',
+				confidence: 0.95,
+				alertSent: false,
+				createdAt: { toDate: () => new Date(now - 3600000) },
+			});
+			collectionState.set('doc-sent', {
+				id: 'doc-sent',
+				symbol: 'BTCUSDT',
+				eventCategory: 'price_surge',
+				confidence: 0.9,
+				alertSent: true,
+				createdAt: { toDate: () => new Date(now - 100000) },
+			});
+
+			const summary = await NewsAnalysisStorageService.summarizeAnalyses({ threshold: 0.7 });
+
+			expect(summary.totalAnalyses).toBe(2);
+			expect(summary.totalAlertsSent).toBe(1);
+			expect(summary.falsePositiveProxy.totalEvaluated).toBe(1);
+			expect(summary.falsePositiveProxy.noFollowupCount).toBe(1);
+			expect(summary.falsePositiveProxy.ratePercent).toBe(100);
+		});
 	});
 
 	describe('listAnalyses', () => {
@@ -284,6 +346,212 @@ describe('NewsAnalysisStorageService', () => {
 			const result = await NewsAnalysisStorageService.listAnalyses({ limit: 2 });
 			expect(result.analyses).toHaveLength(2);
 			expect(result.nextCursor).toBeTruthy();
+		});
+	});
+
+	describe('production enablement (#1180)', () => {
+		it('is a process-startup gate, so the Remote Config allow-list must not carry it', () => {
+			const { PARAMETER_SCHEMA } = require('../../src/services/remoteConfig/RemoteConfigService');
+			expect(PARAMETER_SCHEMA).not.toHaveProperty('ENABLE_FIRESTORE_NEWS_ANALYSIS');
+			// The retention window is the genuine runtime knob and stays eligible.
+			expect(PARAMETER_SCHEMA).toHaveProperty('NEWS_ANALYSIS_RETENTION_DAYS');
+		});
+
+		it('does not let a published template entry revert the env gate to false', () => {
+			const template = require('../../firebase-remote-config-template.json');
+			// A template parameter's defaultValue is reported by the Admin SDK with
+			// source `remote`, so a published `"false"` here would override render.yaml.
+			expect(Object.keys(template.parameters)).not.toContain('ENABLE_FIRESTORE_NEWS_ANALYSIS');
+		});
+
+		it('declares the composite indexes required by the ordered reads', () => {
+			const indexes = require('../../firestore.indexes.json');
+			const declared = indexes.indexes
+				.filter(entry => entry.collectionGroup === 'news_analysis')
+				.map(entry => entry.fields.map(f => `${f.fieldPath}:${f.order}`).join(','));
+
+			// Firestore never merges single-field indexes, so an equality filter plus a
+			// sort on createdAt each need an explicit composite.
+			expect(declared).toEqual(expect.arrayContaining([
+				'symbol:ASCENDING,createdAt:DESCENDING',
+				'eventCategory:ASCENDING,createdAt:DESCENDING',
+				'symbol:ASCENDING,eventCategory:ASCENDING,createdAt:DESCENDING',
+			]));
+		});
+
+		it('declares the gate in render.yaml for the web service with previews off', () => {
+			const fs = require('fs');
+			const yaml = fs.readFileSync(require.resolve('../../render.yaml'), 'utf8');
+			expect(yaml).toMatch(
+				/- key: ENABLE_FIRESTORE_NEWS_ANALYSIS\s+value: true\s+previewValue: false/,
+			);
+		});
+	});
+
+	describe('getStorageStatus proven readiness', () => {
+		// Generated at runtime, never committed: `isFirestoreConfigured()` runs
+		// `createPrivateKey`, so the fixture must be a real PEM, and a checked-in
+		// private key block would trip the Gitleaks secret-scan workflow (CB-257).
+		let testPrivateKey;
+
+		beforeAll(() => {
+			testPrivateKey = generateKeyPairSync('rsa', {
+				modulusLength: 2048,
+				privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+				publicKeyEncoding: { type: 'spki', format: 'pem' },
+			}).privateKey;
+		});
+
+		beforeEach(() => {
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({
+				type: 'service_account',
+				project_id: 'demo-project',
+				private_key: testPrivateKey,
+				client_email: 'a@b.iam.gserviceaccount.com',
+			});
+		});
+
+		it('reports disabled with ephemeral intent when the gate is off', () => {
+			process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS = 'false';
+			const status = NewsAnalysisStorageService.getStorageStatus();
+			expect(status).toMatchObject({
+				enabled: false,
+				status: 'disabled',
+				mode: 'ephemeral',
+				backend: 'memory',
+				ready: false,
+				failOpen: true,
+				collection: 'news_analysis',
+			});
+		});
+
+		it('reports misconfigured — not ready — when the gate is on but credentials are absent', () => {
+			delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+			const status = NewsAnalysisStorageService.getStorageStatus();
+			expect(status.status).toBe('misconfigured');
+			expect(status.configured).toBe(false);
+			expect(status.ready).toBe(false);
+			expect(status.mode).toBe('ephemeral');
+		});
+
+		it('reports unverified — not ready — on a cold process with the gate on', () => {
+			process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS = 'true';
+			const status = NewsAnalysisStorageService.getStorageStatus();
+			expect(status.status).toBe('unverified');
+			expect(status.readiness).toBe('unverified');
+			expect(status.ready).toBe(false);
+			expect(status.mode).toBe('durable');
+			expect(status.backend).toBe('firestore');
+		});
+
+		it('keeps mode/backend as intent even after a durable failure', async () => {
+			mockDocSet.mockRejectedValueOnce(new Error('transient outage'));
+			await NewsAnalysisStorageService.recordAnalysis({ symbol: 'BTCUSDT' });
+			const status = NewsAnalysisStorageService.getStorageStatus();
+			expect(status.status).toBe('degraded');
+			// An operator reading `memory` concludes the flag is off, which is the
+			// opposite of the truth while the gate is on.
+			expect(status.mode).toBe('durable');
+			expect(status.backend).toBe('firestore');
+		});
+
+		it('records no durable attempt for a status read', () => {
+			process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS = 'true';
+			NewsAnalysisStorageService.getStorageStatus();
+			NewsAnalysisStorageService.getStorageStatus();
+			expect(NewsAnalysisStorageService.getStorageStatus().operationsAttempted).toBe(0);
+		});
+
+		it('becomes ready only after an observed successful durable write', async () => {
+			await NewsAnalysisStorageService.recordAnalysis({ symbol: 'BTCUSDT', confidence: 0.8 });
+			const status = NewsAnalysisStorageService.getStorageStatus();
+			expect(status.status).toBe('ready');
+			expect(status.ready).toBe(true);
+			expect(status.operationsSucceeded).toBeGreaterThan(0);
+			expect(status.consecutiveFailures).toBe(0);
+		});
+
+		it('self-heals from degraded on the next success without a restart', async () => {
+			mockDocSet.mockRejectedValueOnce(new Error('transient outage'));
+			await NewsAnalysisStorageService.recordAnalysis({ symbol: 'BTCUSDT' });
+			expect(NewsAnalysisStorageService.getStorageStatus().status).toBe('degraded');
+
+			await NewsAnalysisStorageService.recordAnalysis({ symbol: 'BTCUSDT' });
+			expect(NewsAnalysisStorageService.getStorageStatus().status).toBe('ready');
+		});
+
+		it('keeps operationsFailed <= operationsAttempted when initialization is rejected', () => {
+			// Issue #1128: configured-but-invalid inline credentials must be refused by
+			// the shared bootstrap rather than entering initializeApp({}).
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({
+				type: 'authorized_user',
+				client_id: 'abc',
+				client_secret: 'shh',
+				refresh_token: 'token',
+			});
+			expect(NewsAnalysisStorageService.getFirestore()).toBeNull();
+			expect(admin.__mockInitializeApp).not.toHaveBeenCalled();
+
+			const status = NewsAnalysisStorageService.getStorageStatus();
+			expect(status.operationsAttempted).toBe(1);
+			expect(status.operationsFailed).toBe(1);
+			expect(status.operationsFailed).toBeLessThanOrEqual(status.operationsAttempted);
+			// Gate state wins over observed health: an `authorized_user` document has no
+			// project_id/private_key, so this is a credential fault to fix, not a
+			// transient outage. #1128 refuses it instead of authenticating with a
+			// different credential than the operator configured.
+			expect(status.status).toBe('misconfigured');
+			expect(status.lastErrorReason).toBe('uninitialized');
+		});
+
+		it('classifies a rejected query as a storage failure and names a missing index', async () => {
+			const missingIndex = new Error(
+				'Failed to get query results. The query requires an index. You can create an index here: https://console.firebase.google.com/project/demo-project/databases/(default)/indexes',
+			);
+			missingIndex.code = 9;
+			mockGet.mockRejectedValueOnce(missingIndex);
+
+			await expect(NewsAnalysisStorageService.summarizeAnalyses({})).rejects.toMatchObject({
+				code: 'STORAGE_UNAVAILABLE',
+			});
+
+			const status = NewsAnalysisStorageService.getStorageStatus();
+			expect(status.status).toBe('degraded');
+			expect(status.lastMissingIndex).toBe(true);
+			expect(status.lastErrorReason).toBe('failed_precondition');
+		});
+
+		it('never leaks the provider message or project path into the status payload', async () => {
+			const leaky = new Error('permission denied at projects/demo-project/databases/(default)');
+			leaky.code = 7;
+			mockGet.mockRejectedValueOnce(leaky);
+
+			await expect(NewsAnalysisStorageService.listAnalyses({})).rejects.toMatchObject({
+				code: 'STORAGE_UNAVAILABLE',
+			});
+
+			const status = NewsAnalysisStorageService.getStorageStatus();
+			expect(status.lastErrorReason).toBe('permission_denied');
+			expect(JSON.stringify(status)).not.toContain('demo-project');
+			expect(JSON.stringify(status)).not.toContain('(default)');
+		});
+
+		it('records read outcomes so a broken read path stays observable', async () => {
+			await NewsAnalysisStorageService.listAnalyses({});
+			await NewsAnalysisStorageService.summarizeAnalyses({});
+			const status = NewsAnalysisStorageService.getStorageStatus();
+			expect(status.operationsAttempted).toBe(2);
+			expect(status.operationsSucceeded).toBe(2);
+		});
+
+		it('resets counters in place for tests', async () => {
+			await NewsAnalysisStorageService.recordAnalysis({ symbol: 'BTCUSDT' });
+			NewsAnalysisStorageService.__resetReadinessForTesting();
+			const status = NewsAnalysisStorageService.getStorageStatus();
+			expect(status.operationsAttempted).toBe(0);
+			expect(status.operationsSucceeded).toBe(0);
+			expect(status.lastSuccessAt).toBeNull();
+			expect(status.lastMissingIndex).toBe(false);
 		});
 	});
 });
