@@ -3095,6 +3095,116 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/trading/binance/account/balances": {
+      "get": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Read Binance Spot account balances for allowed trading symbols",
+        "description": "Reads free and locked balances for assets derived from BINANCE_TRADING_ALLOWED_SYMBOLS. The endpoint is read-only, sanitizes sensitive account metadata (never exposes account ID, permissions, or raw payload), and caches responses for a few seconds to avoid rate limit spikes. Requires admin.viewer role or API key.",
+        "operationId": "getBinanceAccountBalances",
+        "parameters": [
+          {
+            "name": "asset",
+            "in": "query",
+            "required": false,
+            "description": "Filter balances by specific allowed asset (e.g. BTC).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "description": "Filter balances by base and quote assets of an allowed trading symbol (e.g. BTCUSDT).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "description": "Bypass short-lived in-memory cache and query Binance fresh.",
+            "schema": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Binance Spot account balances for allowed assets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinanceAccountBalancesResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or disallowed asset/symbol requested",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Binance trading is disabled or insufficient permissions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "502": {
+            "description": "Binance balance query failed or timed out",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Binance client unavailable or trading misconfigured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/trading/binance/orders/preview": {
       "post": {
         "tags": [
@@ -12924,6 +13034,64 @@
             "$ref": "#/components/schemas/JsonObject"
           }
         }
+      },
+      "BinanceAssetBalance": {
+        "type": "object",
+        "required": [
+          "asset",
+          "free",
+          "locked"
+        ],
+        "properties": {
+          "asset": {
+            "type": "string",
+            "example": "BTC"
+          },
+          "free": {
+            "type": "string",
+            "example": "0.10000000"
+          },
+          "locked": {
+            "type": "string",
+            "example": "0.00000000"
+          }
+        },
+        "additionalProperties": false
+      },
+      "BinanceAccountBalancesResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "environment",
+          "balances",
+          "cached"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "environment": {
+            "type": "string",
+            "enum": [
+              "testnet",
+              "demo",
+              "live"
+            ],
+            "example": "testnet"
+          },
+          "balances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BinanceAssetBalance"
+            }
+          },
+          "cached": {
+            "type": "boolean",
+            "example": false
+          }
+        },
+        "additionalProperties": false
       },
       "BinanceOrderPreviewRequest": {
         "type": "object",

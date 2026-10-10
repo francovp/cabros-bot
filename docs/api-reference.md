@@ -372,3 +372,24 @@ The response includes:
 - 5-second `expiresAt` token so the preview cannot be replayed against a stale book.
 - MARKET BUY orders fetch `GET /api/v3/depth` with a 4-second `AbortController` deadline and expose slippage estimate in basis points; an optional `maxSlippageBps` request field causes `wouldExceedBudget: true` without rejecting the preview.
 - `BINANCE_TRADING_MAX_NOTIONAL` is enforced (`403 MAX_NOTIONAL_EXCEEDED` on breach). The preview never mutates Binance and is a no-op when `ENABLE_BINANCE_TRADING=false`.
+
+### GET /api/trading/binance/account/balances
+
+`GET /api/trading/binance/account/balances` is the read-only sibling of the order endpoints and exists so a `SELL` or a "close position" can be sized against the real free balance instead of a guess. It is mounted behind the same `admin.viewer`/`admin.operator` gate as the Binance reads (API-key or Firebase bearer) and fails closed if neither mechanism is configured.
+
+The response is deliberately narrow:
+
+- Only `asset`, `free` and `locked`, for base and quote assets derived from `BINANCE_TRADING_ALLOWED_SYMBOLS`. Assets allowed but absent from the Binance response are reported as `"0.00000000"` rather than omitted, so a caller never has to distinguish "not returned" from "zero".
+- `free` and `locked` are the Binance decimal strings verbatim. They are never parsed into JavaScript numbers, so an 18-decimal precision balance survives the round trip.
+- Never returned: `accountType`, `permissions`, commission tiers, `canTrade`/`canWithdraw` flags, or any other field of the raw `getAccountInformation` payload.
+- `environment` echoes the resolved Binance environment (`testnet`, `demo` or `live`) and `cached` reports whether the answer came from the in-memory cache.
+
+Query parameters are all optional:
+
+- `asset` — restrict to one allow-listed asset (case-insensitive).
+- `symbol` — restrict to the base and quote assets of one allow-listed symbol.
+- `refresh=true` — bypass the cache and re-query Binance.
+
+An `asset` or `symbol` outside the configured allow-list is rejected with `400 INVALID_ORDER_REQUEST` *before* any provider call, so the endpoint cannot be used to probe arbitrary balances. `ENABLE_BINANCE_TRADING=false` returns `403 FEATURE_DISABLED`; missing credentials return `503 BINANCE_TRADING_UNAVAILABLE`; a Binance timeout, network error or unclassified provider failure returns `502 BINANCE_BALANCE_QUERY_FAILED`. The 502 body and the structured log line carry only the sanitized message — no API key, signature, or raw Binance payload.
+
+Responses are cached in-process for a few seconds so an operator console polling the endpoint cannot spike Binance request weight. See [`BINANCE_BALANCE_CACHE_MS`](environment-configuration.md#binance-spot-order-execution) for the bound and its Remote Config parity.
