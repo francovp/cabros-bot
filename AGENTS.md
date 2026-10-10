@@ -2122,6 +2122,16 @@ TradingView MCP alert enrichment derives optional directional invalidation, targ
 
 No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed; existing optional response fields and formatter support remain in place.
 
+## Confluence Evidence Gate (Issue #633)
+
+TradingView confluence recommendations, confidence, alignment, and contradictory sentiment dampening are used only when the MCP response carries supporting evidence for the cited fields.
+
+**Coverage**:
+- `src/services/tradingview/confluenceEvidence.js`, `src/services/tradingview/TradingViewMcpService.js`, `src/controllers/webhooks/handlers/alert/grounding.js`, `src/controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis.js`
+- `tests/unit/tradingview-mcp-service.test.js`, `tests/unit/alert-handler.test.js`, `tests/integration/symbol-analysis-endpoint.test.js`
+
+No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract changed.
+
 ## Secondary Fallback Trade Plan for Rejected ATR (Issue #1229)
 
 `TradingViewMcpService._toEnrichedAlert()` now calls `calculateFallbackRiskLevels()` from `src/services/tradingview/fallbackTradePlan.js` as a **secondary** source of risk metadata. Previously that module was dead code inside the MCP path.

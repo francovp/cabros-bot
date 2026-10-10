@@ -4,6 +4,7 @@ const { GROUNDING_MODEL_NAME } = require('../../../../services/grounding/config'
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
 const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
+const { hasConfluenceEvidence } = require('../../../../services/tradingview/confluenceEvidence');
 const {
 	deriveFallbackTradePlan,
 	calculateFallbackRiskLevels,
@@ -211,18 +212,21 @@ function buildMergedTechnicalLevels(gemini = {}, mcp = {}) {
 }
 
 function extractPriorityMcpInsights(mcp = {}) {
-	if (!mcp.confluenceData || !Array.isArray(mcp.insights)) {
+	if (!mcp.confluenceData || !hasConfluenceEvidence(mcp.confluenceData) || !Array.isArray(mcp.insights)) {
 		return [];
 	}
 
-	return mcp.insights.filter(insight => (
-		typeof insight === 'string'
-		&& (insight.startsWith('Confluencia:') || insight.startsWith('Confluencia contradictoria:'))
-	));
+	return mcp.insights.filter(isConfluenceInsight);
+}
+
+function isConfluenceInsight(insight) {
+	return typeof insight === 'string'
+		&& (insight.startsWith('Confluencia:') || insight.startsWith('Confluencia contradictoria:'));
 }
 
 function hasContradictoryConfluence(mcp = {}) {
 	if (mcp && mcp.confluenceData) {
+		if (!hasConfluenceEvidence(mcp.confluenceData)) return false;
 		const conf = mcp.confluenceData.confluence || mcp.confluenceData;
 		if (conf) {
 			const signalsAgree = conf.signals_agree;
@@ -353,8 +357,10 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched, parsedSignal = n
 			? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${groundingProviders.join('`, `')}` + '`'
 			: '';
 		const priorityMcpInsights = extractPriorityMcpInsights(mcp);
+		const emptyConfluence = mcp.confluenceData && !hasConfluenceEvidence(mcp.confluenceData);
 		const remainingMcpInsights = Array.isArray(mcp.insights)
-			? mcp.insights.filter(insight => !priorityMcpInsights.includes(insight))
+			? mcp.insights.filter(insight => !priorityMcpInsights.includes(insight)
+				&& !(emptyConfluence && isConfluenceInsight(insight)))
 			: [];
 		const insights = mergeUnique(
 			priorityMcpInsights,
