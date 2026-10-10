@@ -102,14 +102,15 @@ describe('queued job execution', () => {
 		const record = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue('outcome-1');
 		const job = {
 			jobId: 'terminal-job', type: 'expanded-analysis', status: 'completed',
+			startedAt: '2026-10-02T12:00:00.000Z',
 			requestMetadata: { timeframe: '4h' },
-			deliveryCheckpoint: { status: 'completed' },
+			deliveryCheckpoint: { status: 'completed', completedAt: '2026-10-02T12:00:05.500Z' },
 			fullResults: [{ status: 'analyzed', input: { symbol: 'BTCUSDT', exchange: 'BINANCE' }, analysis: { price_data: { close: 50000 } } }],
 		};
 		const service = new JobService({ claim: async () => ({ claimed: false, reason: 'terminal' }), get: async () => job });
 		service._triggerCallbackIfConfigured = jest.fn().mockResolvedValue(undefined);
 		await service.processQueuedJob(job.jobId);
-		expect(record).toHaveBeenCalledWith(expect.objectContaining({ price: 50000, timeframe: '4h', idempotencyKey: 'job:terminal-job:expanded-analysis:0' }));
+		expect(record).toHaveBeenCalledWith(expect.objectContaining({ price: 50000, timeframe: '4h', idempotencyKey: 'job:terminal-job:expanded-analysis:0', receivedAt: '2026-10-02T12:00:05.500Z', processingTimeMs: 5500 }));
 	});
 
 	it('waits for callback reconciliation before acknowledging terminal redelivery', async () => {
@@ -151,7 +152,8 @@ describe('queued job execution', () => {
 			jobId: 'job-123',
 			type,
 			status: 'processing',
-			createdAt: new Date().toISOString(),
+			createdAt: '2026-10-02T11:59:00.000Z',
+			startedAt: '2026-10-02T12:00:00.000Z',
 			execution: {
 				mode: 'render-worker',
 				status: 'claimed',
@@ -166,6 +168,7 @@ describe('queued job execution', () => {
 			fullScanResults: [{ scan: 'top_gainers', status: 'success', items: [{ symbol: 'BINANCE:BTCUSDT', changePercent: 5, indicators: { close: 50000 } }] }],
 			deliveryCheckpoint: {
 				status: 'completed',
+				completedAt: '2026-10-02T12:00:05.500Z',
 				results: [{ success: true, channel: 'telegram', messageId: 'message-1' }],
 			},
 		};
@@ -189,13 +192,32 @@ describe('queued job execution', () => {
 		expect(service._executeExpandedAnalysis).not.toHaveBeenCalled();
 		expect(service._executeMarketScanner).not.toHaveBeenCalled();
 		expect(record).toHaveBeenCalledTimes(1);
-		expect(record).toHaveBeenCalledWith(expect.objectContaining({ source: type, price: 50000, idempotencyKey: expect.any(String) }));
+		expect(record).toHaveBeenCalledWith(expect.objectContaining({ source: type, price: 50000, idempotencyKey: expect.any(String), receivedAt: '2026-10-02T12:00:05.500Z', processingTimeMs: 5500 }));
+		expect(job.startedAt).toBe('2026-10-02T12:00:00.000Z');
 		record.mockRestore();
 		enabled.mockRestore();
 		expect(service._triggerCallbackIfConfigured).toHaveBeenCalledWith(
 			expect.objectContaining({ status: 'completed' }),
 			{ awaitDelivery: true },
 		);
+	});
+
+	it('persists execution start before domain work so queue wait is excluded from latency', async () => {
+		jest.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-10-02T12:00:00.000Z'));
+		const job = { jobId: 'fresh-job', type: 'expanded-analysis', createdAt: '2026-10-02T11:00:00.000Z' };
+		let persisted;
+		const service = new JobService({
+			get: async () => job,
+			save: async (current) => { persisted = JSON.parse(JSON.stringify(current)); return current.jobId; },
+		});
+		service._executeExpandedAnalysis = async () => {
+			expect(persisted.startedAt).toBe('2026-10-02T12:00:00.000Z');
+			job.status = 'completed';
+		};
+		service._triggerCallbackIfConfigured = jest.fn().mockResolvedValue(undefined);
+		await service._runBackgroundJob(job.jobId, {}, {}, null);
+		expect(job.status).toBe('completed');
+		expect(persisted.startedAt).toBe('2026-10-02T12:00:00.000Z');
 	});
 
 	it('stops a redelivered job when the prior notification outcome is unknown', async () => {

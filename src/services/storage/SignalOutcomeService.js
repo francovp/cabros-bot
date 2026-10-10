@@ -730,6 +730,7 @@ function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProv
 	}
 	if (entryPrice === null || entryPrice === undefined) {
 		const isTransient = equityMarketDataService.isTransientReason(entryPriceReason)
+			|| entryPriceReason === 'historical_entry_price_unavailable'
 			|| entryPriceReason === REASON_BINANCE_UNAVAILABLE
 			|| entryPriceReason === REASON_BINANCE_REGION_BLOCKED
 			|| entryPriceReason === REASON_GEMINI_UNAVAILABLE
@@ -775,6 +776,7 @@ function normalizeConfidenceScore(val) {
 async function recordSignalInternal({
 	idempotencyKey,
 	requestId,
+	receivedAt,
 	source,
 	symbol,
 	exchange,
@@ -805,7 +807,8 @@ async function recordSignalInternal({
 		const normSymbolInfo = normalizeSymbolAndExchange(symbol, exchange);
 		const normAssetClass = normalizeAssetClass(assetClass);
 		const normSide = normalizeSide(side);
-		const now = new Date();
+		const suppliedTime = receivedAt == null ? NaN : new Date(receivedAt).getTime();
+		const now = Number.isFinite(suppliedTime) ? new Date(suppliedTime) : new Date();
 		const sessionContext = getSessionContext({
 			exchange: normSymbolInfo.exchange,
 			assetClass: normAssetClass,
@@ -846,6 +849,12 @@ async function recordSignalInternal({
 			} else {
 				entryPriceProvidersToTry = [];
 			}
+		}
+
+		// A persisted delivery anchor must not be paired with a current quote.
+		if (Number.isFinite(suppliedTime)) {
+			entryPriceProvidersToTry = [];
+			if (entryPrice === null) entryPriceReason = 'historical_entry_price_unavailable';
 		}
 
 		for (const provider of entryPriceProvidersToTry) {
@@ -958,6 +967,7 @@ async function recordSignalInternal({
 
 		const document = {
 			receivedAt: admin.firestore.Timestamp.fromDate(now),
+			...(Number.isFinite(suppliedTime) ? { requiresHistoricalEntryPrice: true } : {}),
 			observedAt: admin.firestore.Timestamp.fromDate(now),
 			decisionBarClosedAt: sessionContext.decisionBarClosedAt
 				? admin.firestore.Timestamp.fromDate(new Date(sessionContext.decisionBarClosedAt))
@@ -1245,7 +1255,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 									resolvedPriceSource = 'binance';
 								}
 							}
-							if (!resolvedPrice) {
+							if (!resolvedPrice && !data.requiresHistoricalEntryPrice) {
 								const remainingAfterKlines = effectiveMaxDurationMs - (Date.now() - startTime);
 								if (remainingAfterKlines <= 0) throw new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`);
 								const avgRes = await Promise.race([sweepClient.getAvgPrice({ symbol: data.symbol }), timeoutPromise]);
@@ -1265,7 +1275,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 						continue;
 					}
 
-					if (source === 'gemini' && data.exchange === 'BINANCE'
+					if (source === 'gemini' && data.exchange === 'BINANCE' && !data.requiresHistoricalEntryPrice
 						&& geminiPriceService.isGeminiGroundingEnabled({ requireGroundingFlag: true })) {
 						try {
 							const geminiResult = await geminiPriceService.fetchGeminiPrice(data.symbol, {
@@ -1305,7 +1315,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 						} catch (err) {
 							entryPriceError = err;
 						}
-						if (!resolvedPrice) {
+						if (!resolvedPrice && !data.requiresHistoricalEntryPrice) {
 							try {
 								const quotePrice = await equityMarketDataService.getEntryPrice({
 									symbol: data.symbol,

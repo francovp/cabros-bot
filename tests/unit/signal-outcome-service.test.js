@@ -360,6 +360,59 @@ describe('SignalOutcomeService', () => {
 	});
 
 	describe('recordSignal()', () => {
+		it.each([
+			{ price: null, chain: 'binance,gemini', expected: null },
+			{ price: 50000, chain: 'binance,mcp', expected: 50000 },
+			{ price: 50000, chain: 'binance', expected: null },
+		])('never backdates live quotes during recovery: %j', async ({ price, chain, expected }) => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = chain;
+			mockGetAvgPrice.mockResolvedValue({ price: '90000' });
+			mockFetchGeminiPrice.mockResolvedValue({ price: 90000 });
+			mockGetKlines.mockResolvedValue([]);
+			const id = await SignalOutcomeService.recordSignal({
+				symbol: 'BINANCE:BTCUSDT', price, priceSource: 'tradingview-mcp',
+				receivedAt: '2026-10-02T12:00:05.500Z',
+			});
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(id);
+			expect(saved.price).toBe(expected);
+			if (expected === null) {
+				expect(saved.eligibilityState).toBe('pending_entry_price');
+				await SignalOutcomeService.evaluatePendingOutcomes();
+				const updated = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(id);
+				expect(updated.price).toBeNull();
+				expect(mockGetKlines).toHaveBeenCalledWith(expect.objectContaining({ startTime: 1790942405500 }));
+			}
+			expect(mockGetAvgPrice).not.toHaveBeenCalled();
+			expect(mockFetchGeminiPrice).not.toHaveBeenCalled();
+		});
+
+		it('anchors recovered outcome windows to the original delivery timestamp', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const id = await SignalOutcomeService.recordSignal({
+				symbol: 'BINANCE:BTCUSDT', price: 50000,
+				receivedAt: '2026-10-02T12:00:05.500Z',
+			});
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(id);
+			expect(saved.receivedAt.toDate().toISOString()).toBe('2026-10-02T12:00:05.500Z');
+			expect(saved.observedAt.toDate().toISOString()).toBe('2026-10-02T12:00:05.500Z');
+			expect(saved.outcomes['1h'].targetTime).toBe('2026-10-02T13:00:05.500Z');
+			expect(saved.outcomes['1D'].targetTime).toBe('2026-10-03T12:00:05.500Z');
+		});
+
+		it.each([undefined, null, 'invalid'])('falls back to current time for an unavailable delivery timestamp: %s', async (receivedAt) => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			jest.useFakeTimers().setSystemTime(new Date('2026-10-03T12:00:00.000Z'));
+			try {
+				const id = await SignalOutcomeService.recordSignal({ symbol: 'BINANCE:BTCUSDT', price: 50000, receivedAt });
+				const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(id);
+				expect(saved.receivedAt.toDate().toISOString()).toBe('2026-10-03T12:00:00.000Z');
+				expect(saved.outcomes['1h'].targetTime).toBe('2026-10-03T13:00:00.000Z');
+			} finally {
+				jest.useRealTimers();
+			}
+		});
+
 		it('creates one durable outcome for concurrent and later replays without overwriting evaluation', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			const documents = new Map();

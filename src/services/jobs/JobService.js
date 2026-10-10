@@ -1111,6 +1111,9 @@ class JobService {
 		}
 
 		job.status = 'processing';
+		if (job.deliveryCheckpoint?.status !== 'completed') {
+			job.startedAt = new Date(startTime).toISOString();
+		}
 		if (isQueuedMode) {
 			job.execution.status = 'running';
 		}
@@ -1643,6 +1646,7 @@ class JobService {
 			jobId: job.jobId,
 			requestId: job.requestId || job.jobId,
 			startTime: job.startedAt ? new Date(job.startedAt).getTime() : undefined,
+			receivedAt: job.deliveryCheckpoint?.completedAt,
 		};
 		if (job.type === 'market-scanner') {
 			recordMarketScannerOutcomes(job.fullScanResults || [], parsed, options);

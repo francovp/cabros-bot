@@ -716,7 +716,7 @@ function deriveItemSide(analysis = {}) {
  * Records signal outcomes for analyzed items in a fail-open manner.
  * @param {Array<Object>} analyzedItems - Array of { input, analysis, multiTimeframe, side? }
  * @param {Object} [parsed] - { timeframe, ... }
- * @param {Object} [options] - { requestId, startTime, source, jobId }
+ * @param {Object} [options] - { requestId, startTime, receivedAt, source, jobId }
  * @returns {void}
  */
 function recordExpandedAnalysisOutcomes(analyzedItems, parsed = {}, options = {}) {
@@ -728,7 +728,9 @@ function recordExpandedAnalysisOutcomes(analyzedItems, parsed = {}, options = {}
 
 		const requestId = options.requestId || null;
 		const source = options.source || 'expanded-analysis';
-		const processingTimeMs = options.startTime ? Date.now() - options.startTime : null;
+		const endTime = options.receivedAt ? new Date(options.receivedAt).getTime() : Date.now();
+		const processingTimeMs = Number.isFinite(options.startTime) && Number.isFinite(endTime) && endTime >= options.startTime
+			? endTime - options.startTime : null;
 		const timeframe = parsed?.timeframe || null;
 
 		for (const [index, item] of analyzedItems.entries()) {
@@ -744,6 +746,7 @@ function recordExpandedAnalysisOutcomes(analyzedItems, parsed = {}, options = {}
 			signalOutcomeService.recordSignal({
 				idempotencyKey: options.jobId ? `job:${options.jobId}:expanded-analysis:${index}` : null,
 				requestId,
+				receivedAt: options.receivedAt,
 				source,
 				symbol: item.input.symbol,
 				exchange: item.input.exchange,

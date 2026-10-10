@@ -141,6 +141,53 @@ describe('ScannerPresetSchedulerService', () => {
 	});
 
 	describe('sweep and execution in memory mode', () => {
+		it('stores one outcome per symbol and scheduled occurrence after a failed finalization', async () => {
+			const { waitForBackgroundTasks } = require('../../src/lib/backgroundTaskTracker');
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'mcp';
+			const outcomes = new Map();
+			alertStorageService.getFirestore.mockReturnValue({ collection: () => ({
+				add: async (document) => {
+					const id = String(outcomes.size);
+					outcomes.set(id, document);
+					return { id };
+				},
+				doc: (id) => ({ id, create: async (document) => {
+					if (outcomes.has(id)) throw Object.assign(new Error('Already exists'), { code: 6 });
+					outcomes.set(id, document);
+				} }),
+			}) });
+			const preset = await scannerPresetService.createPreset({
+				name: 'Replay preset', exchange: 'BINANCE', scans: ['top_gainers'],
+				schedule: { enabled: true, cadence: '5m' },
+				nextRunAt: '2026-10-02T12:00:00.000Z',
+			});
+			const items = [
+				{ symbol: 'BTCUSDT', changePercent: 5, indicators: { close: 50000 } },
+				{ symbol: 'ETHUSDT', changePercent: 4, indicators: { close: 3000 } },
+			];
+			const scan = jest.spyOn(marketScannerController, 'runScans').mockResolvedValue([
+				{ scan: 'top_gainers', status: 'success', items },
+			]);
+			jest.spyOn(notificationAlertModule, 'getNotificationManager').mockReturnValue({});
+			jest.spyOn(requestRouting, 'sendWithNotificationRouting').mockResolvedValue([{ channel: 'telegram', success: true }]);
+			jest.spyOn(scheduler, '_finalizePresetRun').mockRejectedValue(new Error('process lost before finalization'));
+			await expect(scheduler._executePreset(preset)).rejects.toThrow('process lost');
+			await waitForBackgroundTasks();
+			expect(outcomes.size).toBe(2);
+			const originalIds = [...outcomes.keys()];
+			outcomes.get(originalIds[0]).evaluationMarker = 'preserve me';
+			// A new attempt may return the same symbols in a different order.
+			scan.mockResolvedValue([{ scan: 'top_gainers', status: 'success', items: [...items].reverse() }]);
+			await expect(scheduler._executePreset({ ...preset })).rejects.toThrow('process lost');
+			await waitForBackgroundTasks();
+			expect(outcomes.size).toBe(2);
+			expect(outcomes.get(originalIds[0]).evaluationMarker).toBe('preserve me');
+			await expect(scheduler._executePreset({ ...preset, nextRunAt: '2026-10-02T12:05:00.000Z' })).rejects.toThrow('process lost');
+			await waitForBackgroundTasks();
+			expect(outcomes.size).toBe(4);
+		});
+
 		it('finds and executes due preset, then advances nextRunAt', async () => {
 			const preset = await scannerPresetService.createPreset({
 				name: 'Due preset',
@@ -311,6 +358,15 @@ describe('ScannerPresetSchedulerService', () => {
 	});
 
 	describe('claim exclusivity and concurrency', () => {
+		it.each([true, false])('captures the occurrence read at claim time (transaction=%s)', async (transactional) => {
+			const preset = { id: 'claimed-occurrence', nextRunAt: '2026-10-02T12:00:00.000Z' };
+			mockDocs.set(preset.id, { schedule: { enabled: true }, nextRunAt: '2026-10-02T12:05:00.000Z' });
+			if (!transactional) delete mockFirestore.runTransaction;
+			jest.spyOn(scannerPresetService, '_getFirestore').mockReturnValue(mockFirestore);
+			expect(await scheduler._claimPreset(preset, Date.parse('2026-10-02T12:10:00.000Z'), 120000)).toBe(true);
+			expect(preset.nextRunAt).toBe('2026-10-02T12:05:00.000Z');
+		});
+
 		it('prevents concurrent schedulers from double-running the same preset', async () => {
 			const preset = await scannerPresetService.createPreset({
 				name: 'Contended preset',
