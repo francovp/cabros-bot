@@ -113,6 +113,9 @@ const VALID_SETUP_TYPES = new Set([
 	'reversal',
 ]);
 const VALID_TRADINGVIEW_ENRICHMENT_STATUSES = new Set(['full', 'partial', 'failed', 'not_applicable']);
+// Closed enum: a suppression reason is only persisted for a marker this build
+// can produce, so an unexpected string can never widen the stored document shape.
+const VALID_SUPPRESSION_REASONS = new Set(['cross_timeframe_duplicate']);
 const FEATURE_TAGS = ['grounding', 'news-analysis', 'expanded-analysis', 'scanner', 'enrichment'];
 const MAX_PERSISTED_SYMBOLS_PER_BATCH = 200;
 
@@ -308,7 +311,11 @@ function formatAlertDocument(doc, options = {}) {
 	}
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
+		if (VALID_SUPPRESSION_REASONS.has(data.suppressionReason)) {
+			docObj.suppressionReason = data.suppressionReason;
+		}
 	}
+	applyBurstAggregationMarkers(docObj, data.burstAggregateId, data.burstSignalCount);
 	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
 		const currentPrice = toPositiveFiniteNumber(data.enrichmentData.current_price);
 		if (currentPrice !== null) {
@@ -1986,6 +1993,25 @@ function emitAlertDeliveryEvents(params, alertId = null) {
 }
 
 /**
+ * Attach the burst-aggregation markers shared by every alert in a collapsed
+ * regime message. Each constituent keeps its own document (so outcome analytics
+ * stay per-symbol) and they are correlated by `burstAggregateId`.
+ *
+ * Bounded and non-secret: a fixed-shape id and a small integer count.
+ */
+function applyBurstAggregationMarkers(target, burstAggregateId, burstSignalCount) {
+	if (!target || typeof target !== 'object') {
+		return;
+	}
+	if (typeof burstAggregateId === 'string' && burstAggregateId.trim()) {
+		target.burstAggregateId = burstAggregateId.trim().slice(0, 64);
+	}
+	if (Number.isFinite(burstSignalCount) && burstSignalCount >= 1) {
+		target.burstSignalCount = Math.trunc(burstSignalCount);
+	}
+}
+
+/**
  * Persist an alert document to Firestore.
  *
  * @param {Object} params
@@ -1999,6 +2025,8 @@ function emitAlertDeliveryEvents(params, alertId = null) {
  * @param {Array}   params.deliveryResults   - Array of SendResult from notificationManager.sendToAll()
  * @param {boolean} params.useTradingViewData - Whether ?useTradingViewData=true was set on the request
  * @param {number}  params.processingTimeMs  - Bounded handler processing duration in milliseconds
+ * @param {string}  [params.burstAggregateId] - Shared id of the regime burst this alert joined
+ * @param {number}  [params.burstSignalCount] - Signals collapsed into the shared burst message
  * @param {string[]} params.symbols - Complete request-level symbol set for multi-symbol reports
  * @param {string}  params.batchId - Stable request-scoped grouping key for batch counting
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
@@ -2018,6 +2046,9 @@ async function saveAlertInternal(params = {}) {
 		tradingViewEnrichmentApplied,
 		tradingViewEnrichmentStatus,
 		suppressedRepeat,
+		suppressionReason,
+		burstAggregateId,
+		burstSignalCount,
 		processingTimeMs,
 		source,
 		eventCategory,
@@ -2106,7 +2137,11 @@ async function saveAlertInternal(params = {}) {
 		if (suppressedRepeat === true) {
 			document.suppressedRepeat = true;
 			document.deliveryResults = [];
+			if (VALID_SUPPRESSION_REASONS.has(suppressionReason)) {
+				document.suppressionReason = suppressionReason;
+			}
 		}
+		applyBurstAggregationMarkers(document, burstAggregateId, burstSignalCount);
 		const normalizedProcessingTimeMs = normalizeProcessingTimeMs(processingTimeMs);
 		if (normalizedProcessingTimeMs !== null) {
 			document.processingTimeMs = normalizedProcessingTimeMs;
@@ -2348,9 +2383,11 @@ async function getAlertById(alertId) {
  * @param {string} params.idempotencyKey
  * @param {Array<string>} params.channels
  * @param {Array} params.deliveryResults
+ * @param {boolean} [params.reEnriched]
+ * @param {Object} [params.enrichmentData]
  * @returns {Promise<string|null>}
  */
-async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryResults }) {
+async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryResults, reEnriched, enrichmentData }) {
 	const firestore = getFirestore();
 	if (!firestore) {
 		if (isEnabled()) {
@@ -2371,6 +2408,8 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 		replayedAt: admin.firestore.FieldValue.serverTimestamp(),
 		expiresAt: buildRetentionExpiryTimestamp(),
 		source: 'alert-replay',
+		...(typeof reEnriched === 'boolean' ? { reEnriched } : {}),
+		...(enrichmentData && typeof enrichmentData === 'object' ? { enrichmentData: stripUndefinedFieldsDeep(sanitizeEnrichmentData(enrichmentData)) } : {}),
 	};
 
 	try {
@@ -2433,6 +2472,8 @@ function formatReplayDocument(doc) {
 		deliverySummary: compactDelivery,
 		replayedAt,
 		attemptId: typeof data.attemptId === 'string' ? data.attemptId : null,
+		...(typeof data.reEnriched === 'boolean' ? { reEnriched: data.reEnriched } : {}),
+		...(data.enrichmentData && typeof data.enrichmentData === 'object' ? { enrichmentData: data.enrichmentData } : {}),
 	};
 }
 

@@ -115,6 +115,7 @@ describe('Alert repeat suppression endpoint behavior', () => {
 			.mockRejectedValueOnce(new Error('telegram unavailable'))
 			.mockResolvedValue({ message_id: 'test-msg-id' });
 		await initializeNotificationServices(mockBot);
+		mockFetch.mockClear();
 
 		const body = {
 			text: SIGNAL_TEXT,
@@ -189,6 +190,110 @@ describe('Alert repeat suppression endpoint behavior', () => {
 
 		expect(notificationRedriveService.inMemoryStore.get('default-destination-redrive_telegram').status)
 			.toBe('cancelled');
+	});
+
+	it('cancels a pending same-key concrete-destination redrive after concrete delivery (#918)', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		// With no env chat the handler's default bucket hashes the literal 'default',
+		// so one request can exercise a concrete and a synthetic destination.
+		delete process.env.TELEGRAM_CHAT_ID;
+		const key = 'BINANCE|ETHUSDT|4h|BUY';
+		// The fresh delivery below targets chat-a, so a dead letter on the same key
+		// and destination is a duplicate awaiting its backoff. The default
+		// destination must still be cancelled, and chat-b must not be.
+		const chatA = getCooldownChannelIdentity('telegram', { telegramChatId: 'chat-a' });
+		const chatB = getCooldownChannelIdentity('telegram', { telegramChatId: 'chat-b' });
+		const defaultChannel = getCooldownChannelIdentity('telegram', {});
+
+		await notificationRedriveService.recordDeliveryResults(
+			{ text: SIGNAL_TEXT, correlationId: 'same-key-concrete-redrive' },
+			[{ channel: 'telegram', success: false, error: 'Initial drop' }],
+			{
+				repeatCooldown: {
+					key,
+					channelsByName: { telegram: chatA },
+					destinationsByName: { telegram: 'chat-a' },
+				},
+			},
+		);
+		await notificationRedriveService.recordDeliveryResults(
+			{ text: SIGNAL_TEXT, correlationId: 'same-key-default-redrive' },
+			[{ channel: 'telegram', success: false, error: 'Initial zero-channel drop' }],
+			{
+				repeatCooldown: {
+					key,
+					channelsByName: { telegram: defaultChannel },
+					destinationsByName: { telegram: 'default' },
+				},
+			},
+		);
+		await notificationRedriveService.recordDeliveryResults(
+			{ text: SIGNAL_TEXT, correlationId: 'same-key-other-destination-redrive' },
+			[{ channel: 'telegram', success: false, error: 'Initial drop' }],
+			{
+				repeatCooldown: {
+					key,
+					channelsByName: { telegram: chatB },
+					destinationsByName: { telegram: 'chat-b' },
+				},
+			},
+		);
+
+		const response = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: SIGNAL_TEXT, channels: ['telegram'], telegramChatId: 'chat-a' })
+			.expect(200);
+		expect(response.body.deliveredChannels).toEqual(['telegram']);
+
+		expect(notificationRedriveService.inMemoryStore.get('same-key-concrete-redrive_telegram').status)
+			.toBe('cancelled');
+		expect(notificationRedriveService.inMemoryStore.get('same-key-default-redrive_telegram').status)
+			.toBe('cancelled');
+		// Destination scope must survive the widening: chat-b never received this
+		// delivery, so its dead letter stays pending.
+		expect(notificationRedriveService.inMemoryStore.get('same-key-other-destination-redrive_telegram').status)
+			.toBe('pending');
+	});
+
+	it('cancels a same-key concrete redrive before its next retry (#918)', async () => {
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		const key = 'BINANCE|ETHUSDT|4h|BUY';
+		const chatA = getCooldownChannelIdentity('telegram', { telegramChatId: 'chat-a' });
+
+		await notificationRedriveService.recordDeliveryResults(
+			{ text: SIGNAL_TEXT, correlationId: 'concrete-redrive-due-now' },
+			[{ channel: 'telegram', success: false, error: 'Initial drop' }],
+			{
+				repeatCooldown: {
+					key,
+					channelsByName: { telegram: chatA },
+					destinationsByName: { telegram: 'chat-a' },
+				},
+			},
+		);
+		// Make it due immediately so a sweep would redeliver it (a duplicate) if the
+		// fresh delivery below did not cancel it first.
+		const seeded = notificationRedriveService.inMemoryStore.get('concrete-redrive-due-now_telegram');
+		seeded.nextAttemptAt = new Date(Date.now() - 1000);
+
+		await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: SIGNAL_TEXT, channels: ['telegram'], telegramChatId: 'chat-a' })
+			.expect(200);
+		expect(notificationRedriveService.inMemoryStore.get('concrete-redrive-due-now_telegram').status)
+			.toBe('cancelled');
+
+		const sendsAfterDelivery = mockTelegramSendMessage.mock.calls.length;
+		const sweep = await notificationRedriveService.sweep();
+		const afterSweep = notificationRedriveService.inMemoryStore.get('concrete-redrive-due-now_telegram');
+		expect(sweep.redriven).toBe(0);
+		expect(afterSweep.status).toBe('cancelled');
+		expect(afterSweep.attemptCount).toBe(0);
+		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(sendsAfterDelivery);
 	});
 
 	it('cancels a pending default redrive after an opposite-side concrete delivery', async () => {

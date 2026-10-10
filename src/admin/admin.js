@@ -74,6 +74,18 @@ const VIEW_ACTIONS = {
 };
 
 const STATUS_DEFINITION = { method: 'GET', path: '/api/status', label: 'Refresh status' };
+// GET is a viewer-level read, POST is an operator-level mutation that spends real
+// outbound provider quota, so the two carry different roles and the run confirms first.
+const SELFTEST_DEFINITION = {
+	method: 'GET', path: '/api/selftest', label: 'Load self-test', requiredRole: 'admin.viewer',
+};
+const SELFTEST_RUN_DEFINITION = {
+	method: 'POST',
+	path: '/api/selftest/run',
+	label: 'Run self-test',
+	requiredRole: 'admin.operator',
+	confirm: 'Run the self-test now? It makes real outbound checks against external providers.',
+};
 const STATUS_LABELS = {
 	ready: 'Ready',
 	disabled: 'Disabled',
@@ -101,6 +113,7 @@ const DISPLAY_LABELS = {
 const VIEW_TITLES = {
 	overview: 'Overview',
 	status: 'Status',
+	diagnostics: 'Diagnostics',
 	trading: 'Trading',
 	alerts: 'Alerts',
 	outcomes: 'Outcomes',
@@ -108,6 +121,7 @@ const VIEW_TITLES = {
 	jobs: 'Jobs',
 	orders: 'Orders',
 	analysis: 'Analysis',
+	newsMonitor: 'News monitor',
 	playground: 'Playground',
 };
 const CONSOLE_TITLE_BASE = 'Cabros Bot Console';
@@ -127,6 +141,8 @@ const FILTER_SCOPE_VIEWS = Object.freeze({
 	'outcomes.list': 'outcomes',
 	'outcomes.summary': 'outcomes',
 	'outcomes.calibration': 'outcomes',
+	'newsMonitor.summary': 'newsMonitor',
+	'newsMonitor.analyses': 'newsMonitor',
 });
 
 const DEFAULT_BACKEND_ORIGIN = 'https://openclaw.tail5e4271.ts.net';
@@ -529,11 +545,71 @@ const showAuthState = (message, isError = false) => {
 	}
 };
 
+// Native constraint validation is what keeps blank/malformed credential input away
+// from the Firebase SDK, so the guard reads the control's own validity rather than
+// re-implementing the rules. The shape fallback only exists for hosts without the
+// constraint-validation API; a real browser always takes the first branch.
+const isFieldValid = (field) => {
+	if (!field) return false;
+	if (typeof field.checkValidity === 'function') return field.checkValidity();
+	const value = String(field.value == null ? '' : field.value).trim();
+	return field.required !== true || value.length > 0;
+};
+
+const CREDENTIAL_FIELD_IDS = ['auth-email', 'auth-password'];
+
+// True only once initializeApp and setPersistence have resolved. The submit handler
+// is attached before the form is ever revealed, so this flag gates the Firebase call
+// rather than the listener — an unattached listener means a native GET that writes
+// the password into the URL.
+let firebaseAuthReady = false;
+
+// Both credential controls form one pair, so a rejected sign-in is described once
+// and associated with both of them. The message never carries the submitted values.
+const showCredentialError = (message) => {
+	const error = getElement('auth-credentials-error');
+	if (error) {
+		error.textContent = message;
+		error.hidden = false;
+	}
+	CREDENTIAL_FIELD_IDS.forEach((id) => getElement(id)?.setAttribute('aria-invalid', 'true'));
+};
+
+const clearCredentialError = () => {
+	const error = getElement('auth-credentials-error');
+	if (error) {
+		error.textContent = '';
+		error.hidden = true;
+	}
+	CREDENTIAL_FIELD_IDS.forEach((id) => getElement(id)?.removeAttribute('aria-invalid'));
+};
+
+const handleFirebaseCredentialSubmit = async (event) => {
+	event.preventDefault();
+	const emailField = getElement('auth-email');
+	const passwordField = getElement('auth-password');
+	if (!firebaseAuthReady || !authState.auth) {
+		showCredentialError('Sign-in is not available yet. Try again in a moment.');
+		return;
+	}
+	if (!isFieldValid(emailField) || !isFieldValid(passwordField)) {
+		showCredentialError('Enter an email address and password to sign in.');
+		return;
+	}
+	clearCredentialError();
+	try {
+		await authState.auth.signInWithEmailAndPassword(emailField.value, passwordField.value);
+	} catch (error) {
+		showCredentialError('Sign-in failed. Check the account and try again.');
+	}
+};
+
 const showSignedOutState = () => {
 	if (typeof detachActiveViewPoll === 'function') detachActiveViewPoll();
 	detachActiveViewPoll = null;
 	setHidden('auth-form', false);
 	setHidden('sign-out', true);
+	clearCredentialError();
 	showAuthState('Sign in to continue.');
 	const view = getElement('view');
 	if (view) view.replaceChildren(element('p', { className: 'request-state', text: 'Sign in required.' }));
@@ -546,10 +622,12 @@ const showSignedInState = () => {
 };
 
 const setupFirebaseAuth = async (config) => {
+	firebaseAuthReady = false;
 	setHidden('legacy-connection', true);
 	setHidden('firebase-auth', false);
 	if (!config.configured) {
 		showAuthState('Firebase sign-in is unavailable. Ask an administrator to configure it.', true);
+		setHidden('auth-form', true);
 		return;
 	}
 
@@ -566,17 +644,8 @@ const setupFirebaseAuth = async (config) => {
 			&& window.firebase.auth.Auth.Persistence
 			&& window.firebase.auth.Auth.Persistence.NONE;
 		if (persistence && typeof auth.setPersistence === 'function') await auth.setPersistence(persistence);
+		firebaseAuthReady = true;
 
-		getElement('sign-in')?.addEventListener('click', async () => {
-			try {
-				await auth.signInWithEmailAndPassword(
-					getElement('auth-email')?.value || '',
-					getElement('auth-password')?.value || '',
-				);
-			} catch (error) {
-				showAuthState('Sign-in failed. Check the account and try again.', true);
-			}
-		});
 		getElement('sign-out')?.addEventListener('click', () => {
 			if (getElement('api-key')) getElement('api-key').value = '';
 			return auth.signOut();
@@ -610,7 +679,9 @@ const setupFirebaseAuth = async (config) => {
 			}
 		});
 	} catch (error) {
+		firebaseAuthReady = false;
 		showAuthState('Firebase sign-in is unavailable. Ask an administrator to configure it.', true);
+		setHidden('auth-form', true);
 	}
 };
 
@@ -902,6 +973,26 @@ const createIdempotencyKey = () => (window.crypto && typeof window.crypto.random
 
 const SYMBOL_PATTERN = /^[A-Za-z0-9_]+:[A-Za-z0-9._-]+$/;
 
+// Mirrors the retryable set of the server error envelope (src/lib/errorEnvelope.js).
+const RETRYABLE_SUBMISSION_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+/**
+ * Whether an idempotent submission can still succeed if it is sent again with the
+ * exact same key.
+ *
+ * The server caches every idempotent response below 500, so replaying a key after a
+ * definitive rejection only returns the cached rejection, and correcting the payload
+ * first turns the retry into a 409 IDEMPOTENCY_CONFLICT. Only transport failures and
+ * retryable or indeterminate statuses keep the same key alive. No observed status means
+ * the request never reached the server (network error, deadline, blocked pre-flight), so
+ * the key was never spent.
+ */
+const canRetryWithSameIdempotencyKey = (responseStatus) => {
+	if (!Number.isFinite(responseStatus)) return true;
+	if (responseStatus < 400) return true;
+	return RETRYABLE_SUBMISSION_STATUSES.has(responseStatus);
+};
+
 const withReplayIdempotencyKey = (definition, body) => {
 	if (definition.method !== 'POST' || (definition.path !== '/api/alerts/{alertId}/replay' && definition.path !== '/api/alerts/batch/replay')) return body;
 	if (body && ['idempotencyKey', 'idempotency_key'].some((key) => typeof body[key] === 'string' && body[key].trim())) return body;
@@ -1180,25 +1271,59 @@ const createMeter = (fraction, labelText) => {
 	return wrap;
 };
 
+// Issue #952. One renderer for every operational result table, so each one carries its own
+// accessible name, real header sections and a scroll region that can contain an unbreakable
+// header row instead of widening the page. `headers` is [label, read] pairs; `read(record)`
+// returns a string, a DOM node, or null/undefined (rendered as an em dash).
+//
+// The caption is visually hidden because every table built here already sits under a visible
+// heading (an `h3`, an `h4`, or a panel title) — repeating that text on screen would be noise,
+// while the caption still names the table for a screen reader and satisfies axe's table-name
+// rule. `role="region"` plus `tabindex="0"` is what lets a keyboard user pan the box at all.
+const createResultTable = (caption, headers, records, className = 'data-table') => {
+	const table = element('table', { className });
+	table.append(element('caption', { className: 'visually-hidden', text: caption }));
+
+	const head = element('tr');
+	headers.forEach(([label]) => head.append(element('th', { text: label, attributes: { scope: 'col' } })));
+	const thead = element('thead');
+	thead.append(head);
+	table.append(thead);
+
+	const tbody = element('tbody');
+	records.forEach((record) => {
+		const row = element('tr');
+		headers.forEach(([, read]) => {
+			const value = read(record);
+			const cell = element('td');
+			if (value !== null && value !== undefined && typeof value === 'object') cell.append(value);
+			else cell.textContent = value === null || value === undefined ? '—' : String(value);
+			row.append(cell);
+		});
+		tbody.append(row);
+	});
+	table.append(tbody);
+
+	const scroll = element('div', {
+		className: 'table-scroll',
+		attributes: { tabindex: '0', role: 'region', 'aria-label': caption },
+	});
+	scroll.append(table);
+	return { scroll, table, rows: tbody.children.length };
+};
+
 const symbolResultsTable = (results) => {
 	if (!Array.isArray(results) || !results.length) return null;
-	const table = element('table', { className: 'data-table' });
-	const head = element('tr');
-	['Symbol', 'Status', 'Price', 'RSI'].forEach((label) => head.append(element('th', { text: label })));
-	table.append(head);
-	results.forEach((result) => {
+	const { scroll, rows } = createResultTable('Symbol results', [
+		['Symbol', (result) => formatJobValue(asObject(result).symbol)],
+		['Status', (result) => formatJobValue(asObject(result).status)],
+		['Price', (result) => formatJobValue(asObject(result).price)],
+		['RSI', (result) => formatJobValue(asObject(result).rsi)],
+	], results.filter((result) => {
 		const detail = asObject(result);
-		if (!detail.symbol && !detail.status) return;
-		const row = element('tr');
-		row.append(
-			element('td', { text: formatJobValue(detail.symbol) }),
-			element('td', { text: formatJobValue(detail.status) }),
-			element('td', { text: formatJobValue(detail.price) }),
-			element('td', { text: formatJobValue(detail.rsi) }),
-		);
-		table.append(row);
-	});
-	return table.children.length > 1 ? table : null;
+		return !!(detail.symbol || detail.status);
+	}));
+	return rows ? scroll : null;
 };
 
 const trendCell = (confluence) => {
@@ -1220,23 +1345,12 @@ const scanResultSections = (scanResults) => {
 		}));
 		const scores = Array.isArray(detail.scores) ? detail.scores : [];
 		if (scores.length) {
-			const table = element('table', { className: 'data-table' });
-			const head = element('tr');
-			['Symbol', 'Score', 'Reason', 'Trend'].forEach((label) => head.append(element('th', { text: label })));
-			table.append(head);
-			scores.forEach((entry) => {
-				const score = asObject(entry);
-				const confluence = asObject(score.trendConfluence);
-				const row = element('tr');
-				row.append(
-					element('td', { text: formatJobValue(score.symbol) }),
-					element('td', { text: formatJobValue(score.score) }),
-					element('td', { text: formatJobValue(score.reason) }),
-					element('td', { text: trendCell(confluence) }),
-				);
-				table.append(row);
-			});
-			section.append(table);
+			section.append(createResultTable(`${detail.scan || 'scan'} scores`, [
+				['Symbol', (entry) => formatJobValue(asObject(entry).symbol)],
+				['Score', (entry) => formatJobValue(asObject(entry).score)],
+				['Reason', (entry) => formatJobValue(asObject(entry).reason)],
+				['Trend', (entry) => trendCell(asObject(entry).trendConfluence)],
+			], scores).scroll);
 		} else if (detail.itemCount !== undefined) {
 			section.append(element('p', {
 				className: 'request-state',
@@ -2038,6 +2152,97 @@ const createStatusExplorer = () => {
 	return dashboard;
 };
 
+const SELFTEST_UNAVAILABLE_TEXT = 'The self-test report is unavailable. GET /api/selftest did not return a result, so no check evidence exists to show.';
+const SELFTEST_MODULE_MISSING_TEXT = 'Diagnostics module unavailable. src/admin/admin-diagnostics.js did not load, so the self-test report cannot be rendered.';
+
+const getDiagnosticsApi = () => window.CabrosAdminDiagnostics || null;
+
+const createDiagnosticsView = () => {
+	const diagnostics = getDiagnosticsApi();
+	const dashboard = element('div', { className: 'dashboard' });
+	const hero = element('section', { className: 'dashboard-hero' });
+	const heroCopy = element('div');
+	const lastChecked = element('p', { className: 'request-state', text: 'Waiting for the self-test result…' });
+	heroCopy.append(
+		element('p', { className: 'eyebrow', text: 'Outbound diagnostics' }),
+		element('h2', { text: 'Self-test' }),
+		element('p', { text: 'Per-check evidence for Telegram, Gemini, TradingView MCP, Firestore and Binance. Run it when something looks quiet.' }),
+		lastChecked,
+	);
+	const heroActions = element('div', { className: 'selftest-actions' });
+	const refreshButton = element('button', { className: 'button-ghost', text: 'Refresh report' });
+	refreshButton.type = 'button';
+	const runButton = element('button', { className: 'button-primary', text: 'Run self-test' });
+	runButton.type = 'button';
+	heroActions.append(refreshButton, runButton);
+	hero.append(heroCopy, heroActions);
+
+	const reportHost = element('div', { className: 'selftest-host' });
+	const runOutput = element('div', { className: 'response-block', text: 'No self-test run from this console yet.' });
+	dashboard.append(hero, reportHost, runOutput);
+	if (!diagnostics) {
+		lastChecked.textContent = 'Diagnostics module unavailable.';
+		reportHost.append(createEmptyState(SELFTEST_MODULE_MISSING_TEXT));
+		return dashboard;
+	}
+	reportHost.append(element('p', { className: 'request-state', text: 'Loading the last self-test result…' }));
+
+	const renderReport = (data) => {
+		lastChecked.textContent = `Last checked ${new Date().toLocaleTimeString()}`;
+		reportHost.replaceChildren(diagnostics.renderSelfTest(data));
+	};
+
+	const renderUnavailable = (failure) => {
+		lastChecked.textContent = 'Self-test report unavailable.';
+		const serverMessage = failure && typeof failure.error === 'string' ? failure.error.trim() : '';
+		reportHost.replaceChildren(diagnostics.renderUnavailable(serverMessage || SELFTEST_UNAVAILABLE_TEXT));
+	};
+
+	// sendRequest resolves with undefined for two different situations: the response was an
+	// HTTP failure, or the request never reached the network at all. The pre-flight returns
+	// (declined confirm, denied role, expired sign-in, unbuildable request, superseded view)
+	// taught this console nothing new, so overwriting the loaded report with "unavailable"
+	// would destroy evidence that is still the best answer available. An attempted request
+	// that failed is the opposite case and does repaint.
+	const NO_NEW_EVIDENCE_OUTCOMES = new Set([
+		REQUEST_OUTCOMES.AUTHORIZATION_DENIED,
+		REQUEST_OUTCOMES.SIGN_IN_EXPIRED,
+		REQUEST_OUTCOMES.INVALID_REQUEST,
+		REQUEST_OUTCOMES.CANCELLED,
+		REQUEST_OUTCOMES.SUPERSEDED,
+	]);
+
+	const requestSelfTest = async (definition, button) => {
+		let failure = null;
+		let outcome = null;
+		const data = await sendRequest({
+			definition,
+			path: definition.path,
+			button,
+			output: runOutput,
+			captureResponseData: (parsed) => {
+				if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) failure = parsed;
+			},
+			captureOutcome: (recorded) => { outcome = recorded; },
+		});
+		if (data && typeof data === 'object') {
+			renderReport(data);
+			return;
+		}
+		if (outcome && NO_NEW_EVIDENCE_OUTCOMES.has(outcome)) return;
+		renderUnavailable(failure);
+	};
+
+	refreshButton.addEventListener('click', () => { requestSelfTest(SELFTEST_DEFINITION, refreshButton); });
+	runButton.addEventListener('click', () => {
+		requestSelfTest(SELFTEST_RUN_DEFINITION, runButton).catch(() => {});
+	});
+
+	if (getElement('api-key')?.value || (authState.enabled && authState.user)) requestSelfTest(SELFTEST_DEFINITION, refreshButton).catch(() => {});
+	else reportHost.replaceChildren(createEmptyState('Enter an API key or sign in to load the self-test report.'));
+	return dashboard;
+};
+
 const createOverviewDashboard = () => {
 	const dashboard = element('div', { className: 'dashboard' });
 	const hero = element('section', { className: 'dashboard-hero' });
@@ -2775,22 +2980,14 @@ const renderSentimentCalibration = (enrichment) => {
 
 	const buckets = Array.isArray(calibration.buckets) ? calibration.buckets : [];
 	if (buckets.length) {
-		const table = element('table', { className: 'data-table' });
-		const head = element('tr');
-		['Band', 'Count'].forEach((label) => head.append(element('th', { text: label })));
-		table.append(head);
-		buckets.forEach((bucket) => {
-			const row = element('tr');
-			const detail = asObject(bucket);
-			const lower = asFiniteNumber(detail.lowerBound);
-			const upper = asFiniteNumber(detail.upperBound);
-			row.append(
-				element('td', { text: lower === null || upper === null ? '—' : `${lower.toFixed(1)} – ${upper.toFixed(1)}` }),
-				element('td', { text: formatJobValue(detail.count) }),
-			);
-			table.append(row);
-		});
-		section.append(table);
+		section.append(createResultTable('Sentiment score buckets', [
+			['Band', (bucket) => {
+				const lower = asFiniteNumber(asObject(bucket).lowerBound);
+				const upper = asFiniteNumber(asObject(bucket).upperBound);
+				return lower === null || upper === null ? '—' : `${lower.toFixed(1)} – ${upper.toFixed(1)}`;
+			}],
+			['Count', (bucket) => formatJobValue(asObject(bucket).count)],
+		], buckets).scroll);
 	}
 
 	return section;
@@ -2840,22 +3037,12 @@ const renderAlertSummaryBlocks = (data) => {
 	if (channels.length) {
 		const section = element('section', { className: 'dashboard-section' });
 		section.append(element('h3', { text: 'Delivery by channel' }));
-		const table = element('table', { className: 'data-table' });
-		const head = element('tr');
-		['Channel', 'Total', 'Success', 'Failure'].forEach((label) => head.append(element('th', { text: label })));
-		table.append(head);
-		channels.forEach(([channel, stats]) => {
-			const detail = asObject(stats);
-			const row = element('tr');
-			row.append(
-				element('td', { text: displayLabel(channel) }),
-				element('td', { text: formatJobValue(detail.total) }),
-				element('td', { text: formatJobValue(detail.success) }),
-				element('td', { text: formatJobValue(detail.failure) }),
-			);
-			table.append(row);
-		});
-		section.append(table);
+		section.append(createResultTable('Delivery by channel', [
+			['Channel', ([channel]) => displayLabel(channel)],
+			['Total', ([, stats]) => formatJobValue(asObject(stats).total)],
+			['Success', ([, stats]) => formatJobValue(asObject(stats).success)],
+			['Failure', ([, stats]) => formatJobValue(asObject(stats).failure)],
+		], channels).scroll);
 		wrap.append(section);
 	}
 
@@ -2863,21 +3050,11 @@ const renderAlertSummaryBlocks = (data) => {
 	if (fields.length) {
 		const section = element('section', { className: 'dashboard-section' });
 		section.append(element('h3', { text: 'Risk metadata coverage' }));
-		const table = element('table', { className: 'data-table' });
-		const head = element('tr');
-		['Field', 'Populated', 'Coverage'].forEach((label) => head.append(element('th', { text: label })));
-		table.append(head);
-		fields.forEach(([field, info]) => {
-			const detail = asObject(info);
-			const row = element('tr');
-			row.append(
-				element('td', { text: displayLabel(field) }),
-				element('td', { text: `${formatJobValue(detail.populated)} / ${formatJobValue(coverage.denominator)}` }),
-				element('td', { text: `${formatJobValue(detail.percentage)}%` }),
-			);
-			table.append(row);
-		});
-		section.append(table);
+		section.append(createResultTable('Risk metadata coverage', [
+			['Field', ([field]) => displayLabel(field)],
+			['Populated', ([, info]) => `${formatJobValue(asObject(info).populated)} / ${formatJobValue(coverage.denominator)}`],
+			['Coverage', ([, info]) => `${formatJobValue(asObject(info).percentage)}%`],
+		], fields).scroll);
 		wrap.append(section);
 	}
 	return wrap;
@@ -3452,27 +3629,21 @@ const renderOutcomesSummaryBlocks = (data) => {
 	if (windowEntries.length) {
 		const section = element('section', { className: 'dashboard-section' });
 		section.append(element('h3', { text: 'Performance by window' }));
-		const table = element('table', { className: 'data-table' });
-		const head = element('tr');
-		['Window', 'Evaluated', 'Hit rate', 'Target hit', 'Stop hit', 'Exp (R)', 'Avg return', 'Avg MFE', 'Avg MAE'].forEach((label) => head.append(element('th', { text: label })));
-		table.append(head);
-		windowEntries.forEach(([winKey, stats]) => {
-			const detail = asObject(stats);
-			const row = element('tr');
-			row.append(
-				element('td', { text: winKey }),
-				element('td', { text: formatJobValue(detail.totalSignals ?? detail.evaluatedCount) }),
-				element('td', { text: detail.hitRatePercent !== undefined ? `${detail.hitRatePercent}%` : '—' }),
-				element('td', { text: detail.targetHitRatePercent !== undefined ? `${detail.targetHitRatePercent}%` : '—' }),
-				element('td', { text: detail.stopHitRatePercent !== undefined ? `${detail.stopHitRatePercent}%` : '—' }),
-				element('td', { text: detail.expectancyR !== undefined && detail.expectancyR !== null ? `${detail.expectancyR > 0 ? '+' : ''}${detail.expectancyR}R` : '—' }),
-				element('td', { text: detail.averageReturnPercent !== undefined ? `${detail.averageReturnPercent > 0 ? '+' : ''}${detail.averageReturnPercent}%` : '—' }),
-				element('td', { text: detail.averageMfePercent !== undefined ? `+${detail.averageMfePercent}%` : '—' }),
-				element('td', { text: detail.averageMaePercent !== undefined ? `${detail.averageMaePercent}%` : '—' }),
-			);
-			table.append(row);
-		});
-		section.append(table);
+		const percentOrDash = (value) => (value === undefined ? '—' : `${value}%`);
+		const signedPercentOrDash = (value) => (value === undefined ? '—' : `${value > 0 ? '+' : ''}${value}%`);
+		section.append(createResultTable('Performance by window', [
+			['Window', (row) => row.windowKey],
+			['Evaluated', (row) => formatJobValue(row.stats.totalSignals ?? row.stats.evaluatedCount)],
+			['Hit rate', (row) => percentOrDash(row.stats.hitRatePercent)],
+			['Target hit', (row) => percentOrDash(row.stats.targetHitRatePercent)],
+			['Stop hit', (row) => percentOrDash(row.stats.stopHitRatePercent)],
+			['Exp (R)', (row) => (row.stats.expectancyR === undefined || row.stats.expectancyR === null
+				? '—'
+				: `${row.stats.expectancyR > 0 ? '+' : ''}${row.stats.expectancyR}R`)],
+			['Avg return', (row) => signedPercentOrDash(row.stats.averageReturnPercent)],
+			['Avg MFE', (row) => (row.stats.averageMfePercent === undefined ? '—' : `+${row.stats.averageMfePercent}%`)],
+			['Avg MAE', (row) => percentOrDash(row.stats.averageMaePercent)],
+		], windowEntries.map(([windowKey, stats]) => ({ windowKey, stats: asObject(stats) }))).scroll);
 		wrap.append(section);
 	}
 
@@ -3615,32 +3786,16 @@ const renderOutcomesCalibrationBlocks = (data) => {
 	if (buckets.length) {
 		const section = element('section', { className: 'dashboard-section' });
 		section.append(element('h3', { text: 'Calibration buckets' }));
-		const table = element('table', { className: 'data-table' });
-		const head = element('tr');
-		['Confidence Range', 'Alerts', 'Avg Return (1h)', 'Avg Return (4h)', 'Target Hit Rate'].forEach((label) => head.append(element('th', { text: label })));
-		table.append(head);
-		buckets.forEach((b) => {
-			const detail = asObject(b);
-			const row = element('tr');
-			const hitRatePct = detail.targetHitRate !== undefined && detail.targetHitRate !== null
-				? `${Math.round(detail.targetHitRate * 100)}%`
-				: '—';
-			const ret1h = detail.avgReturn1h !== undefined && detail.avgReturn1h !== null
-				? `${detail.avgReturn1h > 0 ? '+' : ''}${detail.avgReturn1h}%`
-				: '—';
-			const ret4h = detail.avgReturn4h !== undefined && detail.avgReturn4h !== null
-				? `${detail.avgReturn4h > 0 ? '+' : ''}${detail.avgReturn4h}%`
-				: '—';
-			row.append(
-				element('td', { text: detail.range || '—' }),
-				element('td', { text: formatJobValue(detail.count ?? 0) }),
-				element('td', { text: ret1h }),
-				element('td', { text: ret4h }),
-				element('td', { text: hitRatePct }),
-			);
-			table.append(row);
-		});
-		section.append(table);
+		const signedPercentOrDash = (value) => (value === undefined || value === null ? '—' : `${value > 0 ? '+' : ''}${value}%`);
+		section.append(createResultTable('Calibration buckets', [
+			['Confidence Range', (bucket) => asObject(bucket).range || '—'],
+			['Alerts', (bucket) => formatJobValue(asObject(bucket).count ?? 0)],
+			['Avg Return (1h)', (bucket) => signedPercentOrDash(asObject(bucket).avgReturn1h)],
+			['Avg Return (4h)', (bucket) => signedPercentOrDash(asObject(bucket).avgReturn4h)],
+			['Target Hit Rate', (bucket) => (asObject(bucket).targetHitRate === undefined || asObject(bucket).targetHitRate === null
+				? '—'
+				: `${Math.round(asObject(bucket).targetHitRate * 100)}%`)],
+		], buckets).scroll);
 		wrap.append(section);
 	}
 
@@ -4725,6 +4880,7 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 
 	// Submission & retry
 	let lastIdempotencyKey = null;
+	let sameKeyRetryAllowed = false;
 	let submitInProgress = false;
 
 	const doSubmit = async (idempotencyKey) => {
@@ -4747,6 +4903,7 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 		}
 
 		lastIdempotencyKey = idempotencyKey;
+		sameKeyRetryAllowed = false;
 		retryButton.hidden = true;
 		lastRawJson = '';
 		showResult(rawOutput, '');
@@ -4790,10 +4947,12 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 			}
 
 			if (!data || (pollFailureStatus && pollFailureStatus >= 400)) {
-				retryButton.hidden = false;
+				sameKeyRetryAllowed = canRetryWithSameIdempotencyKey(pollFailureStatus);
+				retryButton.hidden = !sameKeyRetryAllowed;
 			}
 		} catch (error) {
 			showError(output, error.message);
+			sameKeyRetryAllowed = true;
 			retryButton.hidden = false;
 		} finally {
 			submitInProgress = false;
@@ -4807,7 +4966,7 @@ const createJobCreateForm = (contract, definition, onJobCreated) => {
 	});
 
 	retryButton.addEventListener('click', async () => {
-		if (lastIdempotencyKey) {
+		if (lastIdempotencyKey && sameKeyRetryAllowed) {
 			await doSubmit(lastIdempotencyKey);
 		}
 	});
@@ -6582,6 +6741,33 @@ const buildNewsMonitorForm = (contract, operation, fields, definition) => {
 	};
 };
 
+// The news monitor view (#1290) lives in admin-newsmonitor.js and receives its helpers
+// instead of importing them: sendRequest must stay the only owner of the operator-role
+// gate and the confirm-before-mutation contract, or this view grows a private auth path.
+const createNewsMonitorView = () => {
+	const factory = window.CabrosAdminNewsMonitor && window.CabrosAdminNewsMonitor.createNewsMonitorView;
+	if (typeof factory !== 'function') {
+		return showError(element('div'), 'The news monitor console module failed to load. Reload the console.');
+	}
+	return factory({
+		sendRequest,
+		element,
+		getElement,
+		createMetricCard,
+		createEmptyState,
+		createResultTable,
+		createTimestamp,
+		showError,
+		addField,
+		registerFilterScope,
+		reportWindowDefaults,
+		toIsoTimestamp,
+		canPerformMutation,
+		charts: window.CabrosAdminCharts,
+		authState,
+	});
+};
+
 // Realized P&L, ROI, fees and open exposure need a durable trade ledger that is not
 // deployed yet. Each real-money panel looks its path up in the loaded contract and
 // renders a named pending state when it is absent, so this path pointing at an
@@ -6920,25 +7106,14 @@ const renderAttributionPanel = (className, title, note, rows, dimensionLabel) =>
 		panel.append(createEmptyState('No evaluated signals to attribute yet.'));
 		return panel;
 	}
-	const wrap = element('div', { className: 'table-wrap' });
-	const table = element('table', { className: 'data-table' });
-	const head = element('tr');
-	[dimensionLabel, 'Signals', 'Wins', 'Hit rate', 'Avg return', 'Total return'].forEach((label) => head.append(element('th', { text: label })));
-	table.append(head);
-	rows.forEach((row) => {
-		const tr = element('tr');
-		tr.append(
-			element('td', { text: row.name }),
-			element('td', { text: String(row.count) }),
-			element('td', { text: String(row.wins) }),
-			element('td', { text: row.hitRate === null ? '—' : `${row.hitRate.toFixed(1)}%` }),
-			element('td', { text: formatTradingPercent(row.meanReturn) }),
-			element('td', { text: formatTradingPercent(row.sum) }),
-		);
-		table.append(tr);
-	});
-	wrap.append(table);
-	panel.append(wrap);
+	panel.append(createResultTable(title, [
+		[dimensionLabel, (row) => row.name],
+		['Signals', (row) => String(row.count)],
+		['Wins', (row) => String(row.wins)],
+		['Hit rate', (row) => (row.hitRate === null ? '—' : `${row.hitRate.toFixed(1)}%`)],
+		['Avg return', (row) => formatTradingPercent(row.meanReturn)],
+		['Total return', (row) => formatTradingPercent(row.sum)],
+	], rows).scroll);
 	return panel;
 };
 
@@ -6993,24 +7168,14 @@ const renderOrderAudit = (list, data) => {
 	}
 	// The rail column is narrow, so the table keeps a floor width and the wrapper scrolls
 	// instead of `width: 100%` wrapping headers into unreadable fragments.
-	const table = element('table', { className: 'data-table data-table-scroll' });
-	const head = element('tr');
-	['When', 'Symbol', 'Action', 'Status', 'Env'].forEach((label) => head.append(element('th', { text: label })));
-	table.append(head);
-	records.slice(0, 20).forEach((record) => {
-		const tr = element('tr');
-		const when = element('td');
-		when.append(record && record.timestamp ? createTimestamp(record.timestamp) : element('span', { text: '—' }));
-		tr.append(
-			when,
-			element('td', { text: formatOrderValue(record && record.symbol) }),
-			element('td', { text: formatOrderValue(record && record.action) }),
-			element('td', { text: formatOrderValue(record && record.status) }),
-			element('td', { text: formatOrderValue(record && record.environment) }),
-		);
-		table.append(tr);
-	});
-	list.append(table);
+	const whenCell = (record) => (record && record.timestamp ? createTimestamp(record.timestamp) : '—');
+	list.replaceChildren(createResultTable('Recent order audit', [
+		['When', whenCell],
+		['Symbol', (record) => formatOrderValue(record && record.symbol)],
+		['Action', (record) => formatOrderValue(record && record.action)],
+		['Status', (record) => formatOrderValue(record && record.status)],
+		['Env', (record) => formatOrderValue(record && record.environment)],
+	], records.slice(0, 20), 'data-table data-table-scroll').scroll);
 };
 
 const createQuickControl = (label, definition, body) => {
@@ -7348,6 +7513,14 @@ const renderView = async (name) => {
 			view.append(createStatusExplorer());
 			return;
 		}
+		if (name === 'diagnostics') {
+			view.append(createDiagnosticsView());
+			return;
+		}
+		if (name === 'newsMonitor') {
+			view.append(createNewsMonitorView());
+			return;
+		}
 		view.append(element('h2', { text: name[0].toUpperCase() + name.slice(1) }));
 		if (name === 'trading') {
 			view.append(createTradingView(contract));
@@ -7513,6 +7686,55 @@ const moveFocusToView = (name) => {
 	}
 };
 
+const setKeyFieldError = (message) => {
+	const apiKey = getElement('api-key');
+	const keyState = getElement('key-state');
+	if (!apiKey || !keyState) return;
+	keyState.className = 'response-error';
+	keyState.textContent = message;
+	apiKey.setAttribute('aria-invalid', 'true');
+};
+
+const clearKeyFieldError = () => {
+	const apiKey = getElement('api-key');
+	const keyState = getElement('key-state');
+	if (!apiKey || !keyState) return;
+	keyState.className = 'request-state';
+	apiKey.removeAttribute('aria-invalid');
+};
+
+// Session-only by contract: with Firebase admin auth on, the key stays in this tab's
+// memory for API-key-only webhook operations; otherwise it lives in sessionStorage.
+// Either way it is only ever sent as the x-api-key header, never in a URL.
+const saveLegacyApiKey = () => {
+	const apiKey = getElement('api-key');
+	const keyState = getElement('key-state');
+	if (!apiKey || !keyState) return false;
+	// The trim is an explicit precondition, not part of the fallback: native `required`
+	// accepts an all-whitespace value, and such a key is useless.
+	if (!isFieldValid(apiKey) || !String(apiKey.value == null ? '' : apiKey.value).trim()) {
+		setKeyFieldError('Enter an API key to use it for this session.');
+		return false;
+	}
+	clearKeyFieldError();
+	if (authState.enabled) {
+		keyState.textContent = 'API key kept only in memory for webhook operations.';
+		return true;
+	}
+	try {
+		sessionStorage.setItem('cabros-admin-api-key', apiKey.value);
+		keyState.textContent = 'API key saved for this browser session.';
+	} catch (error) {
+		keyState.textContent = `Could not save the API key: ${error.message}`;
+	}
+	return true;
+};
+
+const handleLegacyKeySubmit = (event) => {
+	event.preventDefault();
+	if (saveLegacyApiKey()) setupSseStream();
+};
+
 const setupLegacyConsole = ({ persist = true } = {}) => {
 	const apiKey = getElement('api-key');
 	const keyState = getElement('key-state');
@@ -7527,18 +7749,7 @@ const setupLegacyConsole = ({ persist = true } = {}) => {
 		keyState.textContent = 'API key is used only for webhook operations and is not stored.';
 	}
 
-	getElement('save-key')?.addEventListener('click', () => {
-		if (!persist) {
-			keyState.textContent = 'API key kept only in memory for webhook operations.';
-			return;
-		}
-		try {
-			sessionStorage.setItem('cabros-admin-api-key', apiKey.value);
-			keyState.textContent = 'API key saved for this browser session.';
-		} catch (error) {
-			keyState.textContent = `Could not save the API key: ${error.message}`;
-		}
-	});
+	apiKey.addEventListener('input', clearKeyFieldError);
 
 	getElement('clear-key')?.addEventListener('click', () => {
 		apiKey.value = '';
@@ -7594,15 +7805,13 @@ document.addEventListener('DOMContentLoaded', async () => {
 	}
 	canonicaliseConsoleUrl();
 
-	getElement('connection-form')?.addEventListener('submit', (event) => {
-		event.preventDefault();
-		getElement('save-key')?.click();
-	});
-
-	getElement('save-key')?.addEventListener('click', () => {
-		if (getElement('api-key')?.value) setupSseStream();
-	});
-
+	// Both credential forms are real <form> elements with no action, so this listener
+	// is what stops Enter from performing a native GET that would put the password or
+	// the API key in the URL. It must therefore exist before either card is revealed
+	// and before the first await below.
+	getElement('auth-form')?.addEventListener('submit', handleFirebaseCredentialSubmit);
+	CREDENTIAL_FIELD_IDS.forEach((id) => getElement(id)?.addEventListener('input', clearCredentialError));
+	getElement('connection-form')?.addEventListener('submit', handleLegacyKeySubmit);
 	getElement('clear-key')?.addEventListener('click', () => {
 		disconnectSse();
 	});

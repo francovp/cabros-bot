@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const admin = require('firebase-admin');
+const { createHash } = require('node:crypto');
 const AlertStorageService = require('./AlertStorageService');
 const equityMarketDataService = require('./EquityMarketDataService');
 const geminiPriceService = require('../grounding/geminiPriceService');
@@ -729,6 +730,7 @@ function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProv
 	}
 	if (entryPrice === null || entryPrice === undefined) {
 		const isTransient = equityMarketDataService.isTransientReason(entryPriceReason)
+			|| entryPriceReason === 'historical_entry_price_unavailable'
 			|| entryPriceReason === REASON_BINANCE_UNAVAILABLE
 			|| entryPriceReason === REASON_BINANCE_REGION_BLOCKED
 			|| entryPriceReason === REASON_GEMINI_UNAVAILABLE
@@ -772,7 +774,9 @@ function normalizeConfidenceScore(val) {
  * Persist signal metadata to Firestore.
  */
 async function recordSignalInternal({
+	idempotencyKey,
 	requestId,
+	receivedAt,
 	source,
 	symbol,
 	exchange,
@@ -810,7 +814,8 @@ async function recordSignalInternal({
 		const normSymbolInfo = normalizeSymbolAndExchange(symbol, exchange);
 		const normAssetClass = normalizeAssetClass(assetClass);
 		const normSide = normalizeSide(side);
-		const now = new Date();
+		const suppliedTime = receivedAt == null ? NaN : new Date(receivedAt).getTime();
+		const now = Number.isFinite(suppliedTime) ? new Date(suppliedTime) : new Date();
 		const sessionContext = getSessionContext({
 			exchange: normSymbolInfo.exchange,
 			assetClass: normAssetClass,
@@ -851,6 +856,12 @@ async function recordSignalInternal({
 			} else {
 				entryPriceProvidersToTry = [];
 			}
+		}
+
+		// A persisted delivery anchor must not be paired with a current quote.
+		if (Number.isFinite(suppliedTime)) {
+			entryPriceProvidersToTry = [];
+			if (entryPrice === null) entryPriceReason = 'historical_entry_price_unavailable';
 		}
 
 		for (const provider of entryPriceProvidersToTry) {
@@ -998,6 +1009,7 @@ async function recordSignalInternal({
 
 		const document = {
 			receivedAt: admin.firestore.Timestamp.fromDate(now),
+			...(Number.isFinite(suppliedTime) ? { requiresHistoricalEntryPrice: true } : {}),
 			observedAt: admin.firestore.Timestamp.fromDate(now),
 			decisionBarClosedAt: sessionContext.decisionBarClosedAt
 				? admin.firestore.Timestamp.fromDate(new Date(sessionContext.decisionBarClosedAt))
@@ -1043,7 +1055,19 @@ async function recordSignalInternal({
 			outcomes,
 		};
 
-		const docRef = await firestore.collection(COLLECTION_NAME).add(document);
+		let docRef;
+		if (idempotencyKey) {
+			const id = createHash('sha256').update(idempotencyKey).digest('hex');
+			docRef = firestore.collection(COLLECTION_NAME).doc(id);
+			try {
+				await docRef.create(document);
+			} catch (error) {
+				if (error.code !== 6) throw error;
+				// Already recorded: never overwrite a concurrently evaluated outcome.
+			}
+		} else {
+			docRef = await firestore.collection(COLLECTION_NAME).add(document);
+		}
 		console.debug(`[SignalOutcomeService] Signal outcome recorded with ID: ${docRef.id}`);
 		return docRef.id;
 	} catch (error) {
@@ -1276,7 +1300,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 									resolvedPriceSource = 'binance';
 								}
 							}
-							if (!resolvedPrice) {
+							if (!resolvedPrice && !data.requiresHistoricalEntryPrice) {
 								const remainingAfterKlines = effectiveMaxDurationMs - (Date.now() - startTime);
 								if (remainingAfterKlines <= 0) throw new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`);
 								const avgRes = await Promise.race([sweepClient.getAvgPrice({ symbol: data.symbol }), timeoutPromise]);
@@ -1296,7 +1320,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 						continue;
 					}
 
-					if (source === 'gemini' && data.exchange === 'BINANCE'
+					if (source === 'gemini' && data.exchange === 'BINANCE' && !data.requiresHistoricalEntryPrice
 						&& geminiPriceService.isGeminiGroundingEnabled({ requireGroundingFlag: true })) {
 						try {
 							const geminiResult = await geminiPriceService.fetchGeminiPrice(data.symbol, {
@@ -1336,7 +1360,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 						} catch (err) {
 							entryPriceError = err;
 						}
-						if (!resolvedPrice) {
+						if (!resolvedPrice && !data.requiresHistoricalEntryPrice) {
 							try {
 								const quotePrice = await equityMarketDataService.getEntryPrice({
 									symbol: data.symbol,

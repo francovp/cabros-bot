@@ -23,6 +23,7 @@ const REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS = Object.freeze([
 	'invalidation_level',
 	'target_level',
 	'setup_type',
+	'setup_evidence',
 	'risk_reward_ratio',
 ]);
 /**
@@ -34,10 +35,14 @@ const REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS = Object.freeze([
  * anchors are now absolute band values and the model must name its choice, so
  * the markers are the band values plus the required field.
  *
+ * It also requires the market-structure setup type rubric and omission guidance
+ * (issue #1254) so uncorroborated classifications lacking setup evidence are
+ * omitted rather than hallucinated.
+ *
  * The local fallback is inspected by the same function, so the two stay in
- * lockstep: a Langfuse prompt that has not been republished after #1031 reports
- * `schemaDriftDetected` until it carries the anchors and the justification
- * field. That flag is the intended rollout signal, not a failure.
+ * lockstep: a Langfuse prompt that has not been republished reports
+ * `schemaDriftDetected` until it carries the anchors, the justification
+ * field, and the setup rubric markers. That flag is the intended rollout signal, not a failure.
  *
  * Optional price fields stay outside drift detection for legacy prompts (GH-599).
  */
@@ -46,6 +51,8 @@ const REQUIRED_ALERT_ENRICHMENT_CALIBRATION_GUIDANCE = Object.freeze([
 	'0.90',
 	'0.60',
 	'0.30',
+	'Setup type rubric',
+	'OMIT `setup_type` and `setup_evidence` entirely',
 ]);
 
 /**

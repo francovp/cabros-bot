@@ -138,12 +138,13 @@ All webhook and mutation endpoints require the `x-api-key` header (configured vi
 | `POST` | `/api/webhook/volume-confirmation` | TradingView volume and momentum confirmation | [Webhook Alerts](docs/webhooks.md#post-apiwebhookvolume-confirmation) |
 | `POST` | `/api/webhook/symbol-analysis` | Immediate multi-timeframe symbol analysis | [Webhook Alerts](docs/webhooks.md#post-apiwebhooksymbol-analysis) |
 | `POST` | `/api/webhook/market-scanner-alert` | Multi-asset market scanner report (gainers/losers) | [Webhook Alerts](docs/webhooks.md#post-apiwebhookmarket-scanner-alert) |
-| `POST` | `/api/webhook/message` | Generic non-alert message to enabled channels; reports inbound truncation metadata | [Webhook Alerts](docs/webhooks.md#post-apiwebhookmessage) |
+| `POST` | `/api/webhook/message` | Generic non-alert message to enabled channels; reports inbound truncation metadata, and supports `dryRun` routing preview | [Webhook Alerts](docs/webhooks.md#post-apiwebhookmessage) |
 | `POST` | `/api/jobs/tradingview-analysis` | Queue long-running analysis or scanner job | [Jobs API](docs/jobs.md#post-apijobstradingview-analysis) |
 | `GET` | `/api/jobs` | List recent background jobs with status & progress | [Jobs API](docs/jobs.md#get-apijobs) |
 | `GET` | `/api/jobs/:jobId` | Poll background job progress and retrieve result | [Jobs API](docs/jobs.md#get-apijobsjobid) |
 | `POST` | `/api/news-monitor` | Trigger symbol news scanning & event detection | [News Monitoring](docs/news-monitor.md) |
 | `POST` | `/api/trading/binance/orders/preview` | Pre-trade Binance Spot cost & slippage preview | [API Reference](docs/api-reference.md#post-apitradingbinanceorderspreview) |
+| `GET` | `/api/trading/binance/account/balances` | Read-only Binance Spot balances for allowed assets | [API Reference](docs/api-reference.md#get-apitradingbinanceaccountbalances) |
 | `GET` | `/api/alerts` | Query stored alerts with pagination & filtering | [Stored Alerts](docs/alerts.md#get-apialerts) |
 | `GET` | `/api/alerts/summary` | Analytics & delivery success rate metrics | [Stored Alerts](docs/alerts.md#get-apialertssummary) |
 | `POST` | `/api/alerts/:alertId/replay` | Dry-run or live replay of stored alert | [Stored Alerts](docs/alerts.md#post-apialertsalertidreplay) |
@@ -151,6 +152,12 @@ All webhook and mutation endpoints require the `x-api-key` header (configured vi
 | `GET` | `/api/outcomes/summary` | Expectancy, win rate, and performance summary | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomessummary) |
 
 Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`.
+
+`POST /api/webhook/message` truncates inbound text above `GENERIC_MESSAGE_MAX_LENGTH` (integer, default `4000`, range `1`-`20000`). A fresh valid Firebase Remote Config value takes precedence over the environment value; invalid environment values use the default, while invalid Remote Config values are ignored so the environment/default remains effective. Response truncation metadata remains conditional on clipping.
+
+| Variable | Type | Default | Bounds | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `GENERIC_MESSAGE_MAX_LENGTH` | Integer | `4000` | `1`-`20000` | Maximum inbound characters before generic message webhook truncation. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored, leaving the environment/default effective. |
 
 ---
 
@@ -170,6 +177,33 @@ When the Telegram bot is enabled (`ENABLE_TELEGRAM_BOT=true`), the bot provides 
 | `/noticias` | `[options]` | Trigger news monitoring analysis for specified crypto/equity tickers. |
 
 See the [Telegram Commands Reference](docs/commands.md) for aliases, throttling rules, and examples.
+
+---
+
+## WhatsApp Inbound Command Bridge
+
+When `ENABLE_WHATSAPP_COMMANDS=true`, the bridge polls GreenAPI `receiveNotification` and executes commands from chats listed in `WHATSAPP_COMMAND_CHAT_IDS`. It reuses the Telegram handlers verbatim through a synthesized command context, so a WhatsApp reply is identical to its Telegram counterpart and cannot drift.
+
+| Command | Arguments | Description |
+| :--- | :--- | :--- |
+| `!precio` | `<symbol>` | Real-time crypto (Binance) or equity (Twelve Data) price quote. |
+| `!analisis` | `[<symbols>]` | Queues a background TradingView technical analysis; replies with the `jobId`. Falls back to `EXPANDED_ANALYSIS_ALERT_SYMBOLS`. |
+| `!scanner` | `[options]` | Queues a market scanner sweep; replies with the `jobId`. |
+| `!noticias` | `[<symbols>]` | Runs news monitoring analysis and replies with the analyzed/cached/alert counts. Alias: `!news`. |
+| `!outcomes` | `<symbol>` | Recent evaluated-signal performance for one symbol. Alias: `!rendimiento`. |
+| `!help`, `!start` | None | Lists the supported commands. |
+
+A job created from WhatsApp is routed with `channels: ['whatsapp']` and the originating chat id, so the completion report comes back to the chat that asked — never to a Telegram chat id shaped like a GreenAPI one, and never broadcast to every enabled channel.
+
+**Guardrails.** A chat must be allowlisted; each chat is capped at 10 commands per minute; unknown commands get a cooldown-gated hint; a non-`!` message is ignored without a reply. Each command runs under a bounded 120s deadline so one slow command cannot stall receipt draining for other chats. On timeout the chat is told the command is still processing, `dependencies.whatsappCommandBridge.commandTimeouts` increments, and a Sentry `command_timeout` event is emitted — the underlying work is not cancelled, so a late reply may still arrive.
+
+**Receipt acknowledgement is a separate concern from the command deadline.** GreenAPI redelivers any `receiptId` whose `deleteNotification` never landed, and a redelivered receipt re-enters command handling — so a receipt is only safely forgotten once its acknowledgement succeeded. The `receiveNotification` and `deleteNotification` steps therefore each own an independent 10s deadline rather than sharing one budget, which is what lets a command run for the full 120s and still be acknowledged. The acknowledgement validates the response status and retries 429/5xx, and processed receipt ids are held in a bounded 120s/500-entry suppression window so a redelivery is absorbed instead of re-running the command. `duplicateSkippedCount` (redeliveries absorbed), `deleteFailureCount` / `deleteRetryCount` / `deleteAbortedCount` (acknowledgement failures, extra attempts, and deadline hits) and `trackedReceiptCount` make this visible on `/api/status`; a rising `deleteFailureCount` with flat `duplicateSkippedCount` means receipts are escaping the window and re-executing.
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `ENABLE_WHATSAPP_COMMANDS` | `false` | Master gate for the inbound command poller. Environment-only — a process-startup gate. |
+| `WHATSAPP_COMMAND_CHAT_IDS` | — | Comma-separated allowlist of chat/group IDs permitted to run commands. Security control; environment-only. |
+| `WHATSAPP_COMMAND_POLL_INTERVAL_MS` | `3000` | Idle poll interval for `receiveNotification`. |
 
 ---
 
@@ -364,7 +398,7 @@ Verify the rollout on the deployed service rather than trusting the flag:
 
 ```bash
 curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
-  https://cabros-bot-telegram.onrender.com/api/capabilities \
+  https://cabros-crypto-bot-telegram.onrender.com/api/capabilities \
   | jq '{flag: .featureFlags.langfusePrompts,
          dep: .dependencies.langfuse | {status, ready, label, promptsSucceeded,
                                          localFallbackCount, lastErrorReason,
@@ -373,7 +407,7 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
 
 `status: "ready"` with a non-zero `promptsSucceeded` and an empty `fallingBack` map is the evidence the managed prompts are live. `status: "unverified"` right after a deploy is expected until the probe settles.
 
-**`schemaDrift` is a rollout signal, not a failure.** A Langfuse `alert-enrichment` prompt that has not been republished after a local-fallback contract change (for example the #1031 reference anchors) is reported under `dependencies.langfuse.schemaDrift` with the missing markers listed. Use the [`langfuse-prompt-sync`](.agents/skills/langfuse-prompt-sync/SKILL.md) skill to publish. `promptProvenance` on each stored enriched alert carries the same signal per record.
+**`schemaDrift` is a rollout signal, not a failure.** A Langfuse `alert-enrichment` prompt that has not been republished after a local-fallback contract change (for example the #1031 reference anchors or the #1254 setup evidence and omission rubric) is reported under `dependencies.langfuse.schemaDrift` with the missing markers listed. Use the [`langfuse-prompt-sync`](.agents/skills/langfuse-prompt-sync/SKILL.md) skill to publish. `promptProvenance` on each stored enriched alert carries the same signal per record.
 
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
@@ -521,13 +555,41 @@ Configure it with the repository variables `UPTIME_MONITOR_BASE_URL`, `UPTIME_MO
 
 **Any platform or host change must update `UPTIME_MONITOR_BASE_URL` and re-register the third-party uptime monitor** — see the platform migration re-activation checklist in [Observability & Monitoring](docs/monitoring.md#external-uptime-monitoring).
 
+### Production Enablement Verification
+
+The secretless monitor above proves only that *something* answers `/healthcheck`. A build months behind `master` answers 200 perfectly, so liveness alone cannot tell you that production is actually running your latest code or that a feature you declared enabled is enabled.
+
+The authenticated layer is `ops/production-smoke-probe.sh`, run every 15 minutes by `.github/workflows/production-smoke-probe.yml`, which checks the repository out first so the script is present on the runner. It asserts `service.commit` equals the latest `master` SHA (exit `5` on a stale deploy), that named dependencies are `ready` (exit `6`), and — with `PRODUCTION_REQUIRE_ENABLED_FLAGS` — that named `featureFlags` are `true` (exit `7`, `FLAG_DISABLED`). A `401`/`403` from `/api/status` is exit `8`, `AUTH_REJECTED`: production answered and rejected the credential, so rotate the secret rather than treating alerts as undelivered.
+
+Every run resolves to exactly one named outcome (`ok`, `down`, `stale`, `degraded`, `flag_disabled`, `auth_rejected`, `unconfigured`, `script_missing`, `invalid_args`, `unknown`), so a broken CI setup is never reported as a production outage. **The workflow has no paging step** — a non-zero exit fails the scheduled job, and the [external uptime monitor](#external-uptime-monitoring) owns the Telegram page (once on a DOWN transition, once on recovery).
+
+**A flag absent from the deployed build counts as disabled.** The comparison demands the literal string `true`, so an absent key cannot satisfy it and a stale build cannot look compliant — the same shape-is-not-readiness trap this repository has hit repeatedly. The jq default (`// false`) only labels the diagnostic `value=false`; it is not the enforcement point. That distinction matters because a `render.yaml` `value: true` is a *declaration of intent* and production reality is a separate fact — which is how `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` was declared `true` in the Blueprint while production reported `false` (issue #1109).
+
+Set the `PRODUCTION_REQUIRE_ENABLED_FLAGS` repository variable to a comma-separated flag list; it defaults to empty, so it adds no failure mode until you enable it. Every failure message ends with `(probed <base_url>)`, so a misconfigured target is never mistaken for a real outage. See [Observability & Monitoring](docs/monitoring.md#production-smoke-probe).
+
 ### TradingView Confluence Enrichment
 
-`ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true` are enabled in production on the **web service only** (previews off). Together they add an optional `combined_analysis` call to each enriched alert webhook followed by a `multi_timeframe_analysis` call. Both are fail-open: a failure never blocks alert delivery, and it is recorded as a `partial` enrichment rather than a dropped alert.
+`ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true` are declared `true` in `render.yaml` on the **web service only** (previews off) — and production is **not** yet running them: as of this writing `featureFlags.tradingViewConfluenceEnrichment` reports `false` live (issue #1109), because the enablement needs a Blueprint apply plus a redeploy onto a current build, and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` is inert while its parent gate is off. Treat the Blueprint entry as intent and `/api/status` as reality; the check above is how you tell them apart. Together the flags add an optional `combined_analysis` call to each enriched alert webhook followed by a `multi_timeframe_analysis` call. Both are fail-open: a failure never blocks alert delivery, and it is recorded as a `partial` enrichment rather than a dropped alert.
 
 `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` is nested **inside** the confluence gate, so it is inert until confluence enrichment is on — the two flags cannot disagree. Both keys need a web-service declaration in `render.yaml` even though they are only ever read on the web service, because the worker block mirrors them with `fromService` and a mirror whose source is never declared resolves to nothing.
 
 **The enrichment budget decides how much of this actually runs.** `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` (default `12000`) is the ceiling for the whole webhook enrichment path. Whenever volume confirmation *or* confluence is enabled, the base `coin_analysis` call is reserved 75% of it and the optional calls share what remains — a single split, not a cumulative one, so enabling confluence does not shrink the base slice further when volume confirmation is also on. (Note that `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` is **not** declared in `render.yaml`, so which slice production actually reserves is not verifiable from the repository; the single-ternary conclusion above is a property of the code and holds either way.) Both confluence calls share one deadline of `min(8000, remaining budget)`, so with the default budget the second (`multi_timeframe_analysis`) call is commonly cut short and the alert is stored as `tradingViewEnrichmentStatus: "partial"`. Raise `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` (Remote Config eligible, max `120000`) if you want both to complete — but note the webhook request deadline (`REQUEST_TIMEOUT_MS`, default `30000`) bounds the whole request, so the budget cannot usefully exceed it.
+
+**The primary base attempt gets the whole base sub-budget, and retries only run while the remainder can still fund one.** `callCoinAnalysis` is three sequential HTTP hops (`initialize`, `notifications/initialized`, `tools/call`), each bounded by `TRADINGVIEW_MCP_TIMEOUT_MS`, so attempt 1 is sized at `min(TRADINGVIEW_MCP_TIMEOUT_MS, remaining base budget)` rather than a slice of it. A retry is issued only while the residual can still afford a window that completes the tool call — `min(25% of TRADINGVIEW_MCP_TIMEOUT_MS, half the base sub-budget)`. When it cannot, the last real failure is returned immediately: no backoff is paid, and **the declined retry is never charged to the circuit breaker**. That last part matters more than the latency it saves — a client-side deadline is not provider evidence, and counting these as failures opened the breaker against a healthy host and suppressed enrichment for the full `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` (issue #948). A primary attempt that burns its whole viable window is still charged, so a genuinely slow or hung provider still trips the breaker and pages.
+
+`dependencies.tradingViewMcp.enrichment.baseAttempts` makes that spend observable, and is the fastest way to tell a starved budget from a dead host:
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
+  | jq '{breaker: .dependencies.tradingViewMcp.circuitBreaker,
+         base: .dependencies.tradingViewMcp.enrichment.baseAttempts}'
+```
+
+- `p50Ms` / `p95Ms` near the whole envelope with `p50Ms` far above a warm call means the **budget** is too small; raise `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS`.
+- `skippedNonViableCount` climbing means attempts are consuming the budget without a second chance — the same signal, one stage later. Each one is also logged at info with its residual and floor.
+- `p95Ms` far beyond any budget means the **provider** is slow or cold: that is breaker/paging territory, not an allocator problem. On the current free-tier MCP host a spun-down cold start exceeds 60s and cannot fit a ~12s envelope at all, so no budget setting fixes it.
+- Counters (`attemptedCount`/`appliedCount`/`failedCount`/`skippedNonViableCount`) are **cumulative since process start**; only the percentile basis is bounded, and `sampledCount` reports how many durations back `p50Ms`/`p95Ms`/`maxMs`. So the applied-rate comparison stays valid on a long-lived process.
+- All-zero with `enabled: true` is expected right after a deploy; counters are process-local.
 
 Setting the flag is **necessary but not sufficient**, because the layer is fail-open: a confluence call that fails looks identical in delivery terms to one that was never attempted. `dependencies.tradingViewMcp.enrichment.confluence` reports the observed window — `attemptedCount`, `appliedCount`, `failedCount`, `budgetExhaustedCount`, `lastAppliedAt` and a closed-enum `lastFailureCategory`.
 
@@ -542,6 +604,24 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
   | jq '{flag: .featureFlags.tradingViewConfluenceEnrichment,
          confluence: .dependencies.tradingViewMcp.enrichment.confluence}'
 ```
+
+### Same-Direction Alert Burst Aggregation
+
+`ENABLE_ALERT_SYNTH_BURST_AGGREGATION=true` buffers a parsed TradingView signal for `ALERT_BURST_WINDOW_MS` and collapses alerts sharing a direction **and** identical routing into one "⚡ Regime shift" message per channel, so a market-wide move reads as one event instead of N×channels messages. Grouping is by direction, not by exchange, because a risk-on or risk-off shift spans asset classes at the same instant; each symbol's exchange and timeframe are listed in the message.
+
+Every constituent alert is still persisted with the shared `burstAggregateId`, so `/api/alerts` analytics and signal outcomes stay per-symbol, and each response reports `aggregated: true`, the shared `burstAggregateId`, `burstSignalCount`, and the aggregate `results`/`deliveredChannels`.
+
+Aggregation is fail-open by design: a window that closes below `ALERT_BURST_MIN_SIGNALS`, a store error, a failed aggregate dispatch, and shutdown mid-window all deliver the held alerts individually, and a `symbolRoutes` request or unparsed text is never buffered at all. It can cost noise reduction, never an alert.
+
+`dependencies.alertBurstAggregation` reports `windowMs`, `minSignals`, `openWindows`, `aggregatedBurstCount`, `aggregatedSignalCount`, `aggregatedFailoverCount`, `releasedSignalCount`, `lastAggregatedAt` and `lastWindowClosedAt`. Counters are process-local, so all zeros with `enabled: true` is expected right after a deploy.
+
+| Variable | Default | Bounds | Purpose |
+| :--- | :--- | :--- | :--- |
+| `ENABLE_ALERT_SYNTH_BURST_AGGREGATION` | `false` | — | Master gate. Remote Config eligible. |
+| `ALERT_BURST_WINDOW_MS` | `3000` | `1000`–`15000` | Buffered window; also the maximum latency added to a parsed alert. Remote Config eligible. |
+| `ALERT_BURST_MIN_SIGNALS` | `3` | `2`–`20` | Minimum same-direction signals required to send one aggregate message. Remote Config eligible. |
+
+The window is **leading-edge**, so the added latency is exactly `ALERT_BURST_WINDOW_MS` and can never grow under an alert storm. The trade-off is that a burst wider than the window splits: on the two production bursts behind this feature the 2.3s burst collapses at the default while the ~10s burst needs `ALERT_BURST_WINDOW_MS` raised toward its maximum to collapse as a single message. See [Webhook Alerts](docs/webhooks.md#same-direction-burst-aggregation).
 
 ### Market Scanner MCP Fast-Fail Gate
 `POST /api/webhook/market-scanner-alert` checks the process-local TradingView MCP status before running its sequential scans. If the status is `degraded` with `http_5xx`, `request_failed`, or `circuit_breaker_open` **and** the circuit breaker still reports `state: "open"`, it skips every scan and returns `502 TRADINGVIEW_MCP_UNAVAILABLE` with each scan as `status: "skipped"`. The endpoint returns `502` in two shapes: `TRADINGVIEW_MCP_UNAVAILABLE` (skipped, nothing attempted) and `ALL_SCANS_FAILED` (attempted, all failed). The gate keys on the breaker's time-based state so that after `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses the next request is allowed through as a recovery probe — a transient outage self-heals without a restart. See [Webhook Alerts](docs/webhooks.md#post-apiwebhookmarket-scanner-alert).
