@@ -36,9 +36,11 @@ Each capability lists: one-line description, primary endpoint or command, status
 | Brave Search fallback | `FORCE_BRAVE_SEARCH=true` | opt-in | — |
 | TradingView MCP confluence | `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true` | opt-in | — |
 | Multi-timeframe alignment | `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true` | opt-in | — |
-| Langfuse-managed prompts | `ENABLE_LANGFUSE_PROMPTS=true` | opt-in | — |
+| Langfuse-managed prompts | `ENABLE_LANGFUSE_PROMPTS=true` | live | `dependencies.langfuse.status` |
 | Per-channel routing override | `channels`, `telegramChatId`, `whatsappChatId`, `telegramThreadId` | live | — |
 | Same-signal repeat suppression | `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true` | opt-in | — |
+| Cross-timeframe duplicate collapse | `ENABLE_ALERT_CROSS_TF_SUPPRESSION=true` | opt-in | — |
+| Same-direction burst aggregation | `ENABLE_ALERT_SYNTH_BURST_AGGREGATION=true` | opt-in | — |
 | Header metadata footer | `ENABLE_MESSAGE_FOOTER_METADATA=true` | opt-in | — |
 
 ### Track whether alerts made money

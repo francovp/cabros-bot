@@ -25,9 +25,13 @@ const {
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
+const { resolveDryRun } = require('../../../../lib/dryRunRequest');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
+const { crossTimeframeCooldown } = require('../../../../services/alerts/crossTimeframeCooldown');
+const { burstAggregator, buildBurstGroupKey } = require('../../../../services/alerts/burstAggregator');
 const { alertModeration } = require('../../../../services/alerts/alertModeration');
+const { classifySignal } = require('../../../../services/alerts/signalClassifier');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
 const { buildReplyMarkup } = require('../../../../services/alerts/telegramAlertKeyboard');
@@ -98,8 +102,21 @@ function getFirstTelegramMessageId(result) {
 	return Number.isSafeInteger(numericMessageId) ? numericMessageId : rawMessageId;
 }
 
-async function attachInlineKeyboardAfterPersistence({ manager, results, routing, replyMarkup }) {
-	if (!replyMarkup || !Array.isArray(results)) return;
+const INLINE_KEYBOARD_ATTACH_TIMEOUT_MS = 5000;
+
+async function attachInlineKeyboardAfterPersistence({
+	manager,
+	results,
+	routing,
+	replyMarkup,
+	aggregated,
+	timeoutMs = INLINE_KEYBOARD_ATTACH_TIMEOUT_MS,
+}) {
+	// An aggregated burst delivers one synthetic message shared by every
+	// constituent alert. Attaching N per-alert keyboards would race on the same
+	// Telegram message id, and a replay button for one symbol would sit on a
+	// message that represents all of them.
+	if (aggregated || !replyMarkup || !Array.isArray(results)) return;
 	const telegramResult = results.find((result) => result?.channel === 'telegram' && result.success);
 	const messageId = getFirstTelegramMessageId(telegramResult);
 	const telegramService = manager?.channels?.get?.('telegram');
@@ -107,16 +124,28 @@ async function attachInlineKeyboardAfterPersistence({ manager, results, routing,
 	const chatId = routing?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
 	if (!messageId || !chatId || typeof editMessageReplyMarkup !== 'function') return;
 
+	let timeoutId;
 	try {
-		await editMessageReplyMarkup.call(
+		const editPromise = Promise.resolve().then(() => editMessageReplyMarkup.call(
 			telegramService.bot.telegram,
 			chatId,
 			messageId,
 			undefined,
 			replyMarkup,
-		);
+		));
+		editPromise.catch(() => {});
+		const timeoutPromise = new Promise((_, reject) => {
+			timeoutId = setTimeout(() => {
+				const error = new Error(`editMessageReplyMarkup timed out after ${timeoutMs}ms`);
+				error.code = 'TELEGRAM_KEYBOARD_ATTACH_TIMEOUT';
+				reject(error);
+			}, timeoutMs);
+		});
+		await Promise.race([editPromise, timeoutPromise]);
 	} catch (error) {
 		console.warn('[Alert] Failed to attach inline keyboard after persistence:', error.message);
+	} finally {
+		clearTimeout(timeoutId);
 	}
 }
 
@@ -151,7 +180,7 @@ async function processEnrichment(alert, options) {
 			console.debug('Starting alert enrichment process');
 			const enrichedAlert = await enrichAlert({ text: alert.text }, { tokenUsage, useTradingViewData, parsedSignal: parsed });
 			if (enrichedAlert && typeof enrichedAlert === 'object') {
-				enrichedAlert.tokenUsage = tokenUsage.toJSON();
+				enrichedAlert.tokenUsage = tokenUsage && typeof tokenUsage.toJSON === 'function' ? tokenUsage.toJSON() : null;
 				enriched = true;
 				alert.enriched = enrichedAlert;
 				if (isTradingViewMcpEnabled) {
@@ -181,12 +210,6 @@ async function processEnrichment(alert, options) {
 	}
 
 	return enriched;
-}
-
-function resolveDryRun(req) {
-	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
-	const bodyFlag = req.body && typeof req.body === 'object' && (req.body.dryRun === true || req.body.dryRun === 'true');
-	return queryFlag || bodyFlag;
 }
 
 function getCooldownDestination(channel, routing = {}) {
@@ -224,6 +247,31 @@ function getCooldownChannelIdentityForDestination(channel, destination) {
 
 function getChannelName(identity) {
 	return String(identity).split(':', 1)[0];
+}
+
+/**
+ * Restricts a routing decision to `allowedChannelNames`, intersecting any
+ * `symbolRoutes` entry with the same set. A route's own channel list must not
+ * resurrect a channel that a cooldown gate is still holding.
+ */
+function narrowDeliveryRouting(baseRouting, allowedChannelNames) {
+	return {
+		...baseRouting,
+		channels: allowedChannelNames,
+		symbolRoutes: baseRouting.symbolRoutes
+			? Object.fromEntries(
+				Object.entries(baseRouting.symbolRoutes).map(([symbol, route]) => [
+					symbol,
+					{
+						...route,
+						channels: (route.channels || []).filter((channel) =>
+							allowedChannelNames.includes(channel),
+						),
+					},
+				]),
+			)
+			: undefined,
+	};
 }
 
 function resolveSignalOutcomePriceSource(enriched, parsed) {
@@ -270,16 +318,45 @@ function postAlert(botOrGetter) {
 			const rawSignalClass = (typeof body === 'object' && body && 'signalClass' in body)
 				? body.signalClass
 				: req.query?.signalClass;
+			// `validateAlert` falls back to `metadata.signalClass` when neither the body
+			// nor the query carried one. The classifier must see the same precedence, or
+			// a caller using the documented metadata form is silently misclassified -
+			// and replay, which preserves metadata, would not round-trip (AGENTS.md
+			// "Replay Payload Preservation"). Mirrors validation's `!== undefined` test
+			// exactly, including the `'signalClass' in body` short-circuit above.
+			const metadataSignalClass = (rawSignalClass === undefined
+				&& typeof body === 'object' && body && body.metadata && typeof body.metadata === 'object')
+				? body.metadata.signalClass
+				: undefined;
+			const effectiveSignalClass = rawSignalClass === undefined ? metadataSignalClass : rawSignalClass;
 
-			const { text, signalClass } = validateAlert(
+			const validatedAlert = validateAlert(
 				alertText,
 				typeof body === 'object' ? body.metadata : undefined,
 				rawSignalClass,
 			);
+			const { text } = validatedAlert;
+			// `validateAlert` collapses "no explicit class" into the string
+			// 'unknown', which would always beat derivation and leave the badge
+			// markers rendering for a class nothing populated (issue #858). So we
+			// classify here from the RAW explicit value instead - honouring an
+			// explicit 'unknown' - and fall back to deriving from the text.
+			// Deterministic, channel neutral, fail-open to 'unknown'.
+			const signalClass = classifySignal(text, { explicit: effectiveSignalClass });
+			const truncation = validatedAlert.truncated === true
+				? {
+					truncated: true,
+					originalLength: validatedAlert.originalLength,
+					deliveredLength: validatedAlert.deliveredLength,
+				}
+				: {};
+			if (truncation.truncated) {
+				console.warn('[Alert] Alert text truncated before processing', truncation);
+			}
 			const source = (typeof body === 'object' && body && typeof body.source === 'string' && body.source.trim())
 				? body.source.trim()
 				: 'webhook-alert';
-			alert = { text, source, signalClass };
+			alert = { text, source, signalClass, ...truncation };
 			// `alert.text` is immutable from here on, so the TradingView signal is parsed
 			// once and shared by the repeat-suppression, persistence, and outcome-eligibility
 			// paths below.
@@ -314,7 +391,7 @@ function postAlert(botOrGetter) {
 				assertChannelsAvailable(notificationManager, routing);
 			}
 
-			const tokenUsage = new TokenUsageTracker();
+			const tokenUsage = new TokenUsageTracker('grounding');
 			const enriched = await processEnrichment(alert, { tokenUsage, useTradingViewData, parentSpan: requestSpan, parsedSignal });
 
 			const tokenUsageJSON = tokenUsage.toJSON();
@@ -325,6 +402,7 @@ function postAlert(botOrGetter) {
 				return res.json({
 					success: true,
 					dryRun: true,
+					...truncation,
 					enriched,
 					payload: {
 						text: alert.text,
@@ -350,25 +428,31 @@ function postAlert(botOrGetter) {
 			// reservation is made before delivery so overlapping requests cannot
 			// both send; failed channels remain retryable.
 			let suppressedRepeat = false;
+			let suppressionReason = null;
 			let reservation = null;
+			let crossReservation = null;
 			let deliveryRouting = routing;
 			let repeatCooldownOptions;
+			const crossTimeframeSuppressionEnabled = crossTimeframeCooldown.isEnabled();
+			const anyRepeatSuppressionEnabled = signalRepeatCooldown.isEnabled() || crossTimeframeSuppressionEnabled;
+			// Both cooldown gates key per (channel, destination), so a reservation for
+			// one chat/thread/webhook never suppresses a signal routed elsewhere.
+			const cooldownChannelNames = anyRepeatSuppressionEnabled
+				? (requestedChannels.length > 0 ? requestedChannels : ['telegram', 'whatsapp', 'discord'])
+				: [];
+			const cooldownChannels = cooldownChannelNames.map((channel) => getCooldownChannelIdentity(channel, routing));
+			// Unsupported timeframes normalize to the default timeframe, so
+			// they must never enter either cooldown store: a raw token like
+			// "3M" collapses to "1h" and stays unsuppressed, while "4H"
+			// legitimately maps to the 4h bar via the TIMEFRAME_MAP.
+			const hasUsableTimeframe = Boolean(
+				parsedSignal
+			&& parsedSignal.rawTimeframe
+			&& Object.prototype.hasOwnProperty.call(TIMEFRAME_MAP, parsedSignal.rawTimeframe)
+			&& TIMEFRAME_MAP[parsedSignal.rawTimeframe] === parsedSignal.timeframe,
+			);
 			if (signalRepeatCooldown.isEnabled()) {
-				// Unsupported timeframes normalize to the default timeframe, so
-				// they must never enter the cooldown store: a raw token like
-				// "3M" collapses to "1h" and stays unsuppressed, while "4H"
-				// legitimately maps to the 4h bar via the TIMEFRAME_MAP.
-				const hasUsableTimeframe = Boolean(
-					parsedSignal
-					&& parsedSignal.rawTimeframe
-					&& Object.prototype.hasOwnProperty.call(TIMEFRAME_MAP, parsedSignal.rawTimeframe)
-					&& TIMEFRAME_MAP[parsedSignal.rawTimeframe] === parsedSignal.timeframe,
-				);
-				const cooldownChannelNames = requestedChannels.length > 0
-					? requestedChannels
-					: ['telegram', 'whatsapp', 'discord'];
 				if (parsedSignal && hasUsableTimeframe) {
-					const cooldownChannels = cooldownChannelNames.map((channel) => getCooldownChannelIdentity(channel, routing));
 					await notificationRedriveService.reconcileRepeatCooldown(buildSignalKey(parsedSignal), cooldownChannels);
 					const verdict = signalRepeatCooldown.reserve(
 						{ ...parsedSignal, timeframe: parsedSignal.timeframe },
@@ -397,29 +481,35 @@ function postAlert(botOrGetter) {
 							})),
 						};
 						if (verdict.channels.length < requestedChannels.length) {
-							const narrowedChannelNames = verdict.channels.map(getChannelName);
-							deliveryRouting = {
-								...routing,
-								channels: narrowedChannelNames,
-								// Repeat suppression is per (channel, destination). When it narrows
-								// the request-level channels, every symbol route must be narrowed to the
-								// same subset; otherwise a route's own channel list resurrects a channel
-								// that is still cooling down and defeats the channel-specific guarantee.
-								symbolRoutes: routing.symbolRoutes
-									? Object.fromEntries(
-										Object.entries(routing.symbolRoutes).map(([symbol, route]) => [
-											symbol,
-											{
-												...route,
-												channels: (route.channels || []).filter((channel) =>
-													narrowedChannelNames.includes(channel),
-												),
-											},
-										]),
-									)
-									: undefined,
-							};
+							deliveryRouting = narrowDeliveryRouting(routing, verdict.channels.map(getChannelName));
 						}
+					}
+				}
+			}
+
+			// Issue #1103: same symbol + same direction on two timeframes seconds apart
+			// (BINANCE:BTCUSDT(D) VENTA then BINANCE:BTCUSDT(240) VENTA) is one trading
+			// idea; CB-230 cannot catch it because its key includes timeframe. Runs after
+			// the CB-230 gate so an already-suppressed request is not double-booked.
+			if (crossTimeframeSuppressionEnabled && !suppressedRepeat && parsedSignal && hasUsableTimeframe) {
+				const crossVerdict = crossTimeframeCooldown.reserve(parsedSignal, cooldownChannels);
+				if (crossVerdict.suppressed) {
+					suppressedRepeat = true;
+					suppressionReason = crossVerdict.reason;
+					crossTimeframeCooldown.recordSuppression();
+					console.log(
+						`[Alert] Cross-timeframe duplicate suppressed for ${crossVerdict.key} `
+					+ `(${crossVerdict.suppressedTimeframe} collapsed against ${crossVerdict.conflictingTimeframe} inside the window, `
+					+ `${Math.round(crossVerdict.elapsedMs / 1000)}s elapsed)`,
+					);
+				} else if (crossVerdict.key) {
+					crossReservation = crossVerdict;
+					const availableChannelNames = [...new Set(crossVerdict.channels.map(getChannelName))];
+					const effectiveChannelNames = deliveryRouting.channels && deliveryRouting.channels.length > 0
+						? deliveryRouting.channels
+						: requestedChannels;
+					if (availableChannelNames.length < effectiveChannelNames.length) {
+						deliveryRouting = narrowDeliveryRouting(deliveryRouting, availableChannelNames);
 					}
 				}
 			}
@@ -454,20 +544,65 @@ function postAlert(botOrGetter) {
 				console.warn('[Alert] Failed to attach inline keyboard markup:', error.message);
 				inlineAlertId = null;
 			}
+			let burstAggregateId;
+			let burstSignalCount;
+			let aggregated = false;
 			try {
-				results = suppressedRepeat
-					? []
-					: await sendWithNotificationRouting(notificationManager, alert, deliveryRouting, {
-						parentSpan: requestSpan,
-						repeatCooldown: repeatCooldownOptions,
+				if (suppressedRepeat) {
+					results = [];
+				} else {
+					// A held alert dispatches after its request span ended, so the
+					// deferred send must not claim that span as its parent (it would
+					// report a duration longer than the span that contains it).
+					const willBuffer = burstAggregator.isEnabled()
+						&& buildBurstGroupKey({ parsedSignal, routing: deliveryRouting }) !== null;
+					const dispatchOutcome = await burstAggregator.dispatch({
+						parsedSignal,
+						routing: deliveryRouting,
+						deliver: async (overrides = {}) => sendWithNotificationRouting(
+							notificationManager,
+							overrides.alert || alert,
+							deliveryRouting,
+							{
+								parentSpan: willBuffer ? undefined : requestSpan,
+								// One synthetic message cannot satisfy N per-signal cooldown
+								// reservations; each member finalizes its own reservation
+								// against the shared delivery results instead.
+								repeatCooldown: overrides.dropRepeatCooldown ? undefined : repeatCooldownOptions,
+							},
+						),
 					});
+					results = dispatchOutcome.results;
+					aggregated = dispatchOutcome.aggregated === true;
+					burstAggregateId = dispatchOutcome.burstAggregateId;
+					burstSignalCount = dispatchOutcome.burstSignalCount;
+				}
 			} catch (error) {
 				if (reservation) {
 					signalRepeatCooldown.finalize(reservation.key, reservation.channels, [], [], reservation.generation);
 				}
+				if (crossReservation) {
+					crossTimeframeCooldown.release(crossReservation.key, crossReservation.reservedAt);
+				}
 				throw error;
 			}
 			const deliveredChannels = suppressedRepeat ? [] : getDeliveredChannels(results);
+			const zeroChannelRedriveExpected = requestedChannels.length === 0
+			&& !notificationManager.isIntentionalApiOnly();
+			const keepFailedForRedrive = notificationRedriveService.isEnabled()
+			&& notificationRedriveService.getWorkerRole() !== 'disabled'
+			&& (notificationRedriveService.getWorkerRole() === 'web' || notificationRedriveService.hasDurableStore())
+			&& (results.some((result) => result && !result.success) || zeroChannelRedriveExpected);
+			// A reservation that notified nobody must not swallow the next real signal
+			// on another timeframe, unless the redrive queue owns the retry.
+			if (crossReservation && !keepFailedForRedrive) {
+				const undeliveredChannels = crossReservation.channels.filter((channel) => (
+					!deliveredChannels.includes(getChannelName(channel))
+				));
+				if (undeliveredChannels.length > 0) {
+					crossTimeframeCooldown.release(crossReservation.key, crossReservation.reservedAt, undeliveredChannels);
+				}
+			}
 			if (reservation) {
 				const failedChannelNames = new Set(
 					results.filter((result) => result && !result.success).map((result) => result.channel),
@@ -491,15 +626,9 @@ function postAlert(botOrGetter) {
 							}
 						}));
 				}
-				const zeroChannelRedriveExpected = requestedChannels.length === 0
-					&& !notificationManager.isIntentionalApiOnly();
 				const deliveredReservationChannels = reservation.channels.filter((channel) => (
 					deliveredChannels.includes(getChannelName(channel))
 				));
-				const keepFailedForRedrive = notificationRedriveService.isEnabled()
-					&& notificationRedriveService.getWorkerRole() !== 'disabled'
-					&& (notificationRedriveService.getWorkerRole() === 'web' || notificationRedriveService.hasDurableStore())
-					&& (results.some((result) => result && !result.success) || zeroChannelRedriveExpected);
 				const redriveReservationChannels = reservation.channels.filter((channel) => (
 					!supersededReservationChannels.has(channel)
 				));
@@ -517,10 +646,18 @@ function postAlert(botOrGetter) {
 					const defaultDestinationChannels = deliveredReservationChannels
 						.map((channel) => repeatCooldownOptions?.defaultChannelsByName?.[getChannelName(channel)])
 						.filter(Boolean);
-					if (defaultDestinationChannels.length > 0) {
+					// A pending dead letter on this repeat key is stale on every identity this
+					// delivery just satisfied, not only the synthetic default one: a
+					// redrive keyed to the very chat that just received the alert would
+					// otherwise fire after its backoff and deliver a duplicate (#918).
+					const deliveredCooldownChannels = [...new Set([
+						...deliveredReservationChannels,
+						...defaultDestinationChannels,
+					])];
+					if (deliveredCooldownChannels.length > 0) {
 						const cancellation = notificationRedriveService.cancelPendingRepeatCooldowns(
 							reservation.key,
-							defaultDestinationChannels,
+							deliveredCooldownChannels,
 						);
 						await Promise.race([
 							cancellation,
@@ -530,11 +667,7 @@ function postAlert(botOrGetter) {
 					}
 					const oppositeKey = oppositeKeyOf(reservation.key);
 					if (oppositeKey) {
-						const oppositeChannels = [...new Set([
-							...deliveredReservationChannels,
-							...defaultDestinationChannels,
-						])];
-						const cancellation = notificationRedriveService.cancelPendingRepeatCooldowns(oppositeKey, oppositeChannels);
+						const cancellation = notificationRedriveService.cancelPendingRepeatCooldowns(oppositeKey, deliveredCooldownChannels);
 						await Promise.race([
 							cancellation,
 							new Promise((resolve) => setTimeout(resolve, 500)),
@@ -549,8 +682,13 @@ function postAlert(botOrGetter) {
 			res.json({
 				success: true,
 				results,
+				...truncation,
 				enriched,
 				suppressedRepeat: suppressedRepeat || undefined,
+				suppressionReason: suppressionReason || undefined,
+				aggregated: aggregated || undefined,
+				burstAggregateId,
+				burstSignalCount,
 				tokenUsage: tokenUsageJSON,
 				requestedChannels,
 				deliveredChannels,
@@ -588,6 +726,7 @@ function postAlert(botOrGetter) {
 				tradingViewEnrichmentApplied: Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true),
 				tradingViewEnrichmentStatus: alert.tradingViewEnrichmentStatus,
 				suppressedRepeat,
+				suppressionReason,
 				signalClass: alert.signalClass,
 				source: body.source || 'webhook-alert',
 				telegramChatId: routing.telegramChatId,
@@ -596,8 +735,10 @@ function postAlert(botOrGetter) {
 				discordWebhookUrl: routing.discordWebhookUrl,
 				alertId: inlineAlertId || undefined,
 				side: parsedSignal?.side || null,
+				burstAggregateId,
+				burstSignalCount,
 			});
-			Promise.resolve(saveAlertPromise)
+			const postPersistenceTask = Promise.resolve(saveAlertPromise)
 				.then((storedAlertId) => {
 					if (!storedAlertId) return null;
 					return attachInlineKeyboardAfterPersistence({
@@ -605,9 +746,11 @@ function postAlert(botOrGetter) {
 						results,
 						routing,
 						replyMarkup: inlineReplyMarkup,
+						aggregated,
 					});
 				})
 				.catch(() => {}); // errors already logged inside AlertStorageService
+			trackBackgroundTask(postPersistenceTask);
 
 			if (signalOutcomeService.isEnabled() && !suppressedRepeat) {
 				if (parsedSignal) {
@@ -687,7 +830,7 @@ function postAlert(botOrGetter) {
 						textLength: alertText ? alertText.length : 0,
 						hasEnrichment: !!(alert && alert.enriched),
 						enrichedSource: alert && alert.enriched && alert.enriched.extraText && alert.enriched.extraText.includes('tradingview-mcp') ? 'tradingview-mcp' : (alert && alert.enriched ? 'gemini-grounding' : undefined),
-						truncated: false,
+						truncated: Boolean(alert && alert.truncated),
 					},
 				});
 			}
@@ -717,4 +860,6 @@ module.exports = {
 	getNotificationManager,
 	getCooldownChannelIdentity,
 	processEnrichment,
+	attachInlineKeyboardAfterPersistence,
+	INLINE_KEYBOARD_ATTACH_TIMEOUT_MS,
 };

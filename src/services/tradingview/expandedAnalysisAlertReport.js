@@ -2,6 +2,7 @@ const {
 	normalizeTradingViewTimeframe,
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('./parseTradingViewSignal');
+const { hasConfluenceEvidence } = require('./confluenceEvidence');
 
 const MAX_SYMBOLS = 50;
 const SUPPORTED_TIMEFRAME_ALIASES = new Set([
@@ -221,7 +222,7 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe, side = 'BUY
 	const riskRewardRatio = getRiskRewardRatio(price, stopLoss, takeProfit, side);
 
 	const sentiment = analysis.sentiment || null;
-	const confluence = analysis.confluence || null;
+	const confluence = hasConfluenceEvidence(analysis) ? analysis.confluence || null : null;
 	const news = analysis.news || null;
 
 	return {
@@ -703,6 +704,74 @@ function numberOrNull(value) {
 	return Number.isFinite(number) ? number : null;
 }
 
+function deriveItemSide(analysis = {}) {
+	const sentiment = String(analysis?.sentiment || analysis?.market_sentiment?.overall_sentiment || '').toUpperCase();
+	const confluence = hasConfluenceEvidence(analysis)
+		? String(analysis?.confluence?.recommendation || analysis?.confluence?.action || '').toUpperCase()
+		: '';
+	if (confluence.includes('SELL') || sentiment.includes('BEARISH') || sentiment.includes('BAJISTA')) {
+		return 'SELL';
+	}
+	return 'BUY';
+}
+
+/**
+ * Records signal outcomes for analyzed items in a fail-open manner.
+ * @param {Array<Object>} analyzedItems - Array of { input, analysis, multiTimeframe, side? }
+ * @param {Object} [parsed] - { timeframe, ... }
+ * @param {Object} [options] - { requestId, startTime, receivedAt, source, jobId }
+ * @returns {void}
+ */
+function recordExpandedAnalysisOutcomes(analyzedItems, parsed = {}, options = {}) {
+	try {
+		const signalOutcomeService = require('../storage/SignalOutcomeService');
+		if (!signalOutcomeService.isEnabled() || !Array.isArray(analyzedItems)) {
+			return;
+		}
+
+		const requestId = options.requestId || null;
+		const source = options.source || 'expanded-analysis';
+		const endTime = options.receivedAt ? new Date(options.receivedAt).getTime() : Date.now();
+		const processingTimeMs = Number.isFinite(options.startTime) && Number.isFinite(endTime) && endTime >= options.startTime
+			? endTime - options.startTime : null;
+		const timeframe = parsed?.timeframe || null;
+
+		for (const [index, item] of analyzedItems.entries()) {
+			if (!item || !item.input) continue;
+			const itemSide = item.side || deriveItemSide(item.analysis);
+			const row = buildReportRow({ ...item, side: itemSide });
+			const tech = item.analysis?.technical || item.analysis || {};
+			const closePrice = row.price ?? tech.price_data?.current_price ?? tech.price_data?.close ?? null;
+			const score = item.analysis?.market_sentiment?.overall_rating ?? tech.market_sentiment?.overall_rating ?? null;
+			const rawConfidence = item.analysis?.confidence ?? item.confidence ?? (typeof score === 'number' && score >= 0 && score <= 1 ? score : null);
+			const validConfidence = typeof rawConfidence === 'number' && Number.isFinite(rawConfidence) && rawConfidence >= 0 && rawConfidence <= 1 ? rawConfidence : null;
+
+			signalOutcomeService.recordSignal({
+				idempotencyKey: options.jobId ? `job:${options.jobId}:expanded-analysis:${index}` : null,
+				requestId,
+				receivedAt: options.receivedAt,
+				source,
+				symbol: item.input.symbol,
+				exchange: item.input.exchange,
+				timeframe,
+				setupType: 'expanded-analysis',
+				score,
+				confidenceScore: validConfidence,
+				side: itemSide,
+				price: typeof closePrice === 'number' ? closePrice : null,
+				priceSource: typeof closePrice === 'number' ? 'tradingview-mcp' : null,
+				stop: typeof row.stopLoss === 'number' ? row.stopLoss : null,
+				target: typeof row.takeProfit === 'number' ? row.takeProfit : null,
+				sources: [],
+				tokenUsage: null,
+				processingTimeMs,
+			}).catch(() => {});
+		}
+	} catch (err) {
+		// Fail-open: signal-outcome tracking failure must never block callers or throw
+	}
+}
+
 module.exports = {
 	ExpandedAnalysisAlertRequestError,
 	parseExpandedAnalysisAlertRequest,
@@ -712,4 +781,6 @@ module.exports = {
 	getStopLossMeta,
 	getTakeProfitTarget,
 	getRiskRewardRatio,
+	deriveItemSide,
+	recordExpandedAnalysisOutcomes,
 };

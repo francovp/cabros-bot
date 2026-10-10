@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const MarkdownV2Formatter = require('../../src/services/notification/formatters/markdownV2Formatter');
 
 const collectionPath = path.join(__dirname, '../../CabrosBot.postman_collection.json');
 
@@ -207,6 +208,43 @@ describe('Postman collection contract', () => {
 		]));
 	});
 
+	it('documents cross-timeframe duplicate collapse with the delivered baseline leg', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const collapsed = findItem(collection.item, 'POST Send Alert (cross-timeframe duplicate suppressed)');
+		expect(collapsed).toBeDefined();
+		expect(collapsed.request.method).toBe('POST');
+		expect(collapsed.request.url.raw).toBe('{{baseUrl}}/api/webhook/alert');
+		expect(findHeader(collapsed, 'x-api-key').value).toBe('{{apiKey}}');
+		expect(collapsed.request.body.raw).toContain('BINANCE:BTCUSDT(240)');
+
+		const suppressed = collapsed.response.find((response) => response.code === 200);
+		const suppressedBody = JSON.parse(suppressed.body);
+		expect(suppressedBody.success).toBe(true);
+		expect(suppressedBody.suppressedRepeat).toBe(true);
+		expect(suppressedBody.suppressionReason).toBe('cross_timeframe_duplicate');
+		expect(suppressedBody.results).toEqual([]);
+		expect(suppressedBody.deliveredChannels).toEqual([]);
+		expect(suppressed.originalRequest.body.raw).toContain('BINANCE:BTCUSDT(240)');
+
+		const unauthorized = collapsed.response.find((response) => response.code === 401);
+		expect(JSON.parse(unauthorized.body)).toMatchObject({ success: false, retryable: false });
+
+		const baseline = findItem(collection.item, 'POST Send Alert (daily signal - cross-timeframe baseline)');
+		expect(baseline).toBeDefined();
+		expect(baseline.request.body.raw).toContain('BINANCE:BTCUSDT(D)');
+		const delivered = baseline.response.find((response) => response.code === 200);
+		const deliveredBody = JSON.parse(delivered.body);
+		expect(deliveredBody.suppressedRepeat).toBeUndefined();
+		expect(deliveredBody.deliveredChannels).toEqual(['telegram']);
+	});
+
+	it('leaves the same-timeframe repeat suppression example without a suppression reason', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const sameTimeframe = findItem(collection.item, 'POST Send Alert (repeat suppressed)');
+		const suppressed = sameTimeframe.response.find((response) => response.code === 200);
+		expect(JSON.parse(suppressed.body).suppressionReason).toBeUndefined();
+	});
+
 	it('documents valid and invalid per-symbol alert routing variants', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const valid = findItem(collection.item, 'POST Send Alert (per-symbol routing)');
@@ -412,6 +450,65 @@ describe('Postman collection contract', () => {
 		expect(marketBuyResp.order.newClientOrderId).toBeUndefined();
 	});
 
+	it('documents the generic-message dry-run preview variants (issue #876)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const queryItem = findItem(collection.item, 'POST Send Message (dry-run, query flag)');
+		const bodyItem = findItem(collection.item, 'POST Send Message (dry-run, body field)');
+
+		expect(queryItem).toBeDefined();
+		expect(bodyItem).toBeDefined();
+		expect(queryItem.request.url.raw).toContain('{{baseUrl}}/api/webhook/message?dryRun=true');
+		expect(bodyItem.request.url.raw).toBe('{{baseUrl}}/api/webhook/message');
+		expect(JSON.parse(bodyItem.request.body.raw).dryRun).toBe(true);
+		expect(findHeader(queryItem, 'idempotency-key')).toBeDefined();
+
+		for (const item of [queryItem, bodyItem]) {
+			const tests = (item.event || []).filter((event) => event.listen === 'test');
+			expect(tests.length).toBeGreaterThan(0);
+			const script = tests[0].script.exec.join('\n');
+			expect(script).toContain('pm.test');
+			expect(script).toContain('dryRun');
+			expect(script).toContain('deliveredChannels');
+
+			for (const example of item.response) {
+				if (example.code !== 200) continue;
+				const body = JSON.parse(example.body);
+				expect(body.success).toBe(true);
+				expect(body.dryRun).toBe(true);
+				expect(body.deliveredChannels).toEqual([]);
+				expect(body.requestId).toEqual(expect.any(String));
+				expect(body.payload.text).toEqual(expect.any(String));
+				expect(body.estimatedChunks).toEqual(expect.objectContaining({
+					telegram: expect.any(Number),
+					whatsapp: expect.any(Number),
+					discord: expect.any(Number),
+				}));
+				expect(body.results).toBeUndefined();
+				// The saved example must not leak the webhook credential it documents.
+				expect(example.body).not.toContain('abc-xyz-token');
+				expect(body.routing).not.toHaveProperty('discordWebhookUrl');
+			}
+		}
+
+		// Broadcast shape: an omitted channel subset is reported as a broadcast.
+		const broadcastExample = JSON.parse(bodyItem.response[0].body);
+		expect(broadcastExample.broadcast).toBe(true);
+
+		const invalidValue = queryItem.response.find((res) => res.code === 400 && res.name.includes('invalid dryRun'));
+		expect(invalidValue).toBeDefined();
+		expect(JSON.parse(invalidValue.body)).toMatchObject({
+			success: false,
+			details: { field: 'dryRun' },
+		});
+
+		const invalidRouting = queryItem.response.find((res) => res.code === 400 && res.name.includes('routing override'));
+		expect(invalidRouting).toBeDefined();
+		expect(JSON.parse(invalidRouting.body)).toMatchObject({
+			success: false,
+			details: { field: 'discordWebhookUrl' },
+		});
+	});
+
 	it('documents Request Timeout (408) response examples with required fields', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const endpointsWithTimeout = [
@@ -440,6 +537,54 @@ describe('Postman collection contract', () => {
 				durationMs: expect.any(Number),
 			}));
 		}
+	});
+
+	it('documents the empty test-alert text 400 that mirrors the OpenAPI minLength', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'POST Test Alert (Invalid Input - 400 Bad Request)');
+		const example = item.response.find((response) => response.name === '400 Bad Request - Empty Text');
+
+		expect(example).toBeDefined();
+		expect(example.code).toBe(400);
+		expect(JSON.parse(example.body)).toEqual({
+			error: 'Alert text is required and must be a string',
+			code: 'INVALID_REQUEST',
+		});
+		expect(JSON.parse(example.originalRequest.body.raw)).toEqual({ text: '', channels: ['telegram'] });
+
+		const contract = JSON.parse(fs.readFileSync(
+			path.join(__dirname, '../../src/openapi/openapi.json'),
+			'utf8',
+		));
+		expect(contract.components.schemas.TestAlertRequest.properties.text.minLength).toBe(1);
+	});
+
+	it('documents the test-alert dry-run preview the formatter actually returns (GH-1158)', () => {
+		// postTestAlert() sets `text` to the same string as `preview` and
+		// `length` to preview.length, so asserting preview === text looks redundant
+		// until you know it: it is the property the stale GH-1158 example broke by
+		// hand-writing an ellipsis preview. Regenerated from the documented request so
+		// the example can still detect formatter or contract drift.
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'POST Test Alert (Dry Run)');
+		const example = item.response.find((response) => response.name === '200 OK - Dry Run Preview');
+
+		expect(example).toBeDefined();
+		const requestBody = JSON.parse(item.request.body.raw);
+		expect(JSON.parse(example.originalRequest.body.raw)).toEqual(requestBody);
+		expect(requestBody.dryRun).toBe(true);
+		expect(requestBody.channels).toEqual(['telegram']);
+
+		const body = JSON.parse(example.body);
+		expect(body.ok).toBe(true);
+		expect(body.dryRun).toBe(true);
+		expect(body.persisted).toBe(false);
+		expect(body.results).toEqual([]);
+
+		const expectedPreview = new MarkdownV2Formatter().format(requestBody.text);
+		expect(body.formatted.telegram.preview).toBe(expectedPreview);
+		expect(body.formatted.telegram.text).toBe(expectedPreview);
+		expect(body.formatted.telegram.length).toBe(expectedPreview.length);
 	});
 
 	it('documents Request Timeout (408) on every affected admin request variant', () => {
@@ -544,6 +689,78 @@ describe('Postman collection contract', () => {
 		expect(summaryInvalid).toBeDefined();
 		expect(summaryInvalid.response[0].code).toBe(400);
 		expect(JSON.parse(summaryInvalid.response[0].body).code).toBe('INVALID_REQUEST');
+	});
+
+	it('documents the optional summary interval series with self-consistent examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const hourly = findItem(collection.item, 'GET Alert Analytics Summary (interval=hour)');
+		const daily = findItem(collection.item, 'GET Alert Analytics Summary (interval=day)');
+		const invalid = findItem(collection.item, 'GET Alert Analytics Summary (invalid interval - 400 Bad Request)');
+		const overCap = findItem(collection.item, 'GET Alert Analytics Summary (interval window over cap - 400 Bad Request)');
+
+		expect(hourly).toBeDefined();
+		expect(hourly.request.url.raw).toContain('interval=hour');
+		expect(daily).toBeDefined();
+		expect(daily.request.url.raw).toContain('interval=day');
+
+		expect(invalid).toBeDefined();
+		expect(invalid.response[0].code).toBe(400);
+		const invalidBody = JSON.parse(invalid.response[0].body);
+		expect(invalidBody).toEqual({
+			success: false,
+			error: 'Invalid interval parameter. Allowed values: hour, day.',
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		});
+
+		expect(overCap).toBeDefined();
+		expect(overCap.response[0].code).toBe(400);
+		const overCapBody = JSON.parse(overCap.response[0].body);
+		expect(overCapBody.error).toContain('interval "hour"');
+		expect(overCapBody.error).toContain('31 days');
+		expect(overCapBody.code).toBe('INVALID_REQUEST');
+
+		// The examples must be internally consistent with the runtime contract,
+		// otherwise they document a shape the server never produces.
+		const hourlyBody = JSON.parse(hourly.response[0].body).summary;
+		expect(hourlyBody.window.interval).toBe('hour');
+		expect(hourlyBody.window.maxDays).toBe(31);
+		expect(hourlyBody.buckets.map(b => b.bucketStart)).toEqual([
+			'2026-06-06T00:00:00.000Z',
+			'2026-06-06T01:00:00.000Z',
+			'2026-06-06T02:00:00.000Z',
+			'2026-06-06T03:00:00.000Z',
+		]);
+
+		const dailyBody = JSON.parse(daily.response[0].body).summary;
+		expect(dailyBody.window.interval).toBe('day');
+		expect(dailyBody.window.maxDays).toBe(366);
+
+		for (const body of [hourlyBody, dailyBody]) {
+			expect(body.buckets.reduce((sum, b) => sum + b.total, 0)).toBe(body.totalAlerts);
+			for (const bucket of body.buckets) {
+				expect(Object.keys(bucket)).toEqual(['bucketStart', 'total', 'success', 'failure', 'byChannel']);
+				const channels = Object.values(bucket.byChannel);
+				expect(bucket.success).toBe(channels.reduce((sum, c) => sum + c.success, 0));
+				expect(bucket.failure).toBe(channels.reduce((sum, c) => sum + c.failure, 0));
+			}
+			const starts = body.buckets.map(b => Date.parse(b.bucketStart));
+			expect(starts).toEqual([...starts].sort((a, b) => a - b));
+		}
+
+		// Gapless series: the empty-window example must still be zero-filled.
+		const emptyBody = JSON.parse(hourly.response[1].body).summary;
+		expect(emptyBody.buckets).toHaveLength(3);
+		for (const bucket of emptyBody.buckets) {
+			expect(bucket).toEqual({
+				bucketStart: expect.any(String),
+				total: 0,
+				success: 0,
+				failure: 0,
+				byChannel: {},
+			});
+		}
 	});
 
 	it('documents signalClass in alert webhook and alert query/summary examples', () => {
@@ -674,6 +891,68 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(unauthorized.body).error).toContain('Unauthorized');
 	});
 
+	it('documents the job queue broker readiness variants for the #1117 cutover', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Capabilities - job queue broker readiness (#1117)');
+
+		expect(item).toBeDefined();
+
+		const queueOf = (res) => JSON.parse(res.body).dependencies.jobExecutionQueue;
+		const ready = item.response.find((res) => res.name.includes('ready -'));
+		const unreachable = item.response.find((res) => res.name.includes('unreachable'));
+		const notStarted = item.response.find((res) => res.name.includes('not_started'));
+		const disabled = item.response.find((res) => res.name.includes('disabled -'));
+
+		// The acceptance step in #1117 is a curl against /api/capabilities, so the
+		// request must hit that exact path.
+		expect(item.request.url.path).toEqual(['api', 'capabilities']);
+		expect(JSON.parse(ready.body).featureFlags.jobExecutionWorker).toBe(true);
+
+		expect(queueOf(ready)).toMatchObject({
+			mode: 'render-worker',
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			brokerReachable: true,
+			lastBrokerProbeAt: '2026-10-04T12:00:00.000Z',
+			lastBrokerProbeErrorCode: null,
+		});
+
+		// configured stays true because REDIS_URL is a non-empty string; only the
+		// probe verdict can distinguish this from the healthy case above.
+		expect(queueOf(unreachable)).toMatchObject({
+			configured: true,
+			ready: false,
+			status: 'unreachable',
+			brokerReachable: false,
+			lastBrokerProbeErrorCode: 'JOB_QUEUE_PROBE_TIMEOUT',
+		});
+
+		expect(queueOf(notStarted)).toMatchObject({
+			ready: false,
+			status: 'not_started',
+			brokerReachable: null,
+		});
+
+		expect(queueOf(disabled)).toMatchObject({
+			mode: 'local',
+			enabled: false,
+			status: 'disabled',
+			brokerReachable: null,
+		});
+
+		const scripts = JSON.stringify(item.event);
+		expect(scripts).toContain('unreachable');
+		expect(scripts).toContain('brokerReachable');
+		expect(scripts).toContain('redis://');
+
+		for (const res of item.response) {
+			expect(res.body).not.toContain('queue.example');
+			expect(res.body).not.toContain('redis://');
+		}
+	});
+
 	it('documents unverified, ready, degraded and disabled idempotency storage variants', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const item = findItem(collection.item, 'Get Status - idempotency storage readiness (issue #1111)');
@@ -735,6 +1014,80 @@ describe('Postman collection contract', () => {
 			status: 'disabled',
 			mode: 'ephemeral',
 			backend: 'memory',
+		});
+
+		// Every documented variant must be free of the provider text that Firestore
+		// embeds in its error messages.
+		for (const response of item.response) {
+			expect(response.body).not.toContain('projects/');
+			expect(response.body).not.toContain('console.firebase.google.com');
+		}
+	});
+
+	it('documents unverified, ready, degraded and disabled symbol analysis storage variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - symbol analysis storage readiness (issue #1179)');
+
+		expect(item).toBeDefined();
+
+		const unverified = item.response.find((res) => res.name.includes('unverified'));
+		const ready = item.response.find((res) => res.name.includes('was persisted'));
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const disabled = item.response.find((res) => res.name.includes('flag off'));
+
+		// Issue #1179 acceptance: enabling the flag must not immediately report `ready`,
+		// because every Firestore failure here drops the record and still answers the
+		// analysis, so credential shape alone proves nothing about persistence.
+		expect(unverified.code).toBe(200);
+		expect(JSON.parse(unverified.body).dependencies.symbolAnalysisStorage).toEqual({
+			enabled: true,
+			configured: true,
+			ready: false,
+			status: 'unverified',
+			readiness: 'unverified',
+			failOpen: true,
+			collection: 'symbolAnalyses',
+			retentionDays: 7,
+			writesAttempted: 0,
+			writesSucceeded: 0,
+			writesFailed: 0,
+			readsAttempted: 0,
+			readsSucceeded: 0,
+			readsFailed: 0,
+			consecutiveFailures: 0,
+			lastWriteAt: null,
+			lastFailureAt: null,
+			lastErrorReason: null,
+		});
+
+		expect(ready.code).toBe(200);
+		expect(JSON.parse(ready.body).dependencies.symbolAnalysisStorage).toMatchObject({
+			ready: true,
+			status: 'ready',
+			readiness: 'verified',
+			// Only a write proves persistence; the reads alongside it do not.
+			writesSucceeded: 31,
+			consecutiveFailures: 0,
+		});
+
+		expect(degraded.code).toBe(200);
+		expect(JSON.parse(degraded.body).dependencies.symbolAnalysisStorage).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			readiness: 'degraded',
+			// Intent is unchanged while storage is broken, and the fallback is stated.
+			enabled: true,
+			configured: true,
+			failOpen: true,
+			lastErrorReason: 'firestore_unavailable',
+		});
+
+		expect(disabled.code).toBe(200);
+		expect(JSON.parse(disabled.body).dependencies.symbolAnalysisStorage).toMatchObject({
+			enabled: false,
+			ready: false,
+			status: 'disabled',
+			writesAttempted: 0,
 		});
 
 		// Every documented variant must be free of the provider text that Firestore
@@ -1181,5 +1534,128 @@ describe('news-monitor stop/target example (GH-712)', () => {
 		expect(typeof alert.target).toBe('number');
 		expect(alert.stop).toBeGreaterThan(0);
 		expect(alert.target).toBeGreaterThan(alert.stop);
+	});
+
+	// Issue #1109. Re-validating the examples here keeps them honest against the same
+	// invariants their `pm.test` scripts assert, instead of drifting from them.
+	it('Get Status - confluence enrichment counters examples satisfy the counter invariants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - confluence enrichment counters');
+		expect(item).toBeDefined();
+
+		const allowedFailureCategories = [
+			null, 'timeout', 'http_5xx', 'http_4xx', 'invalid_response',
+			'provider_unavailable', 'circuit_breaker_open', 'request_failed', 'unknown_error',
+		];
+
+		for (const response of item.response) {
+			const body = JSON.parse(response.body);
+			const confluence = body.dependencies.tradingViewMcp.enrichment.confluence;
+
+			expect(confluence.enabled).toBe(true);
+			expect(body.featureFlags.tradingViewConfluenceEnrichment).toBe(true);
+			expect(allowedFailureCategories).toContain(confluence.lastFailureCategory);
+			expect(confluence.appliedCount + confluence.failedCount)
+				.toBeLessThanOrEqual(confluence.attemptedCount);
+			expect(response.body).not.toContain('combined_analysis failed');
+			expect(response.body).not.toContain('projects/');
+		}
+	});
+
+	it('Get Status - confluence enrichment counters asserts the block is separate from alertPath', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - confluence enrichment counters');
+		const script = item.event.find((entry) => entry.listen === 'test').script.exec.join('\n');
+
+		expect(script).toContain('enrichment.confluence');
+		expect(script).toContain('enrichment.alertPath');
+		expect(script).toContain('appliedCount + c.failedCount');
+	});
+
+	// GH-637: a saved response alone cannot demonstrate the 4,000-character clip, because
+	// the request that produced it must actually send an oversized body. The example is
+	// only runnable if it generates that body itself.
+	it('provides a runnable oversized-alert example that reproduces the truncation response', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'POST Send Alert (truncation metadata)');
+		expect(item).toBeDefined();
+
+		// The body must be larger than the 4,000-character cap, built at runtime.
+		const prerequest = item.event.find((entry) => entry.listen === 'prerequest');
+		expect(prerequest).toBeDefined();
+		const prerequestScript = prerequest.script.exec.join('\n');
+		expect(prerequestScript).toContain('truncationPadding');
+		expect(prerequestScript).toMatch(/repeat\(\s*\d{4,}\s*\)/);
+		expect(item.request.body.raw).toContain('{{truncationPadding}}');
+
+		// And it must assert the documented response rather than only display it.
+		const test = item.event.find((entry) => entry.listen === 'test');
+		expect(test).toBeDefined();
+		const testScript = test.script.exec.join('\n');
+		for (const field of ['truncated', 'originalLength', 'deliveredLength']) {
+			expect(testScript).toContain(field);
+		}
+
+		const example = item.response.find((response) => /truncated/.test(response.name));
+		expect(example.code).toBe(200);
+		const body = JSON.parse(example.body);
+		expect(body.truncated).toBe(true);
+		expect(body.originalLength).toBeGreaterThan(4000);
+		expect(body.deliveredLength).toBe(4003);
+	});
+
+	// The first version of this example was named for a budget-starved multi-timeframe
+	// call while recording failedCount: 0, so it could not represent the scenario it was
+	// named for and the `pm.test` invariant was never exercised against a failure. These
+	// two assertions pin the example to the case it claims to show.
+	it('exercises the budget-starved multi-timeframe case in the confluence status example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - confluence enrichment counters');
+		const example = item.response.find((response) => /multi-timeframe call budget-starved/.test(response.name));
+		expect(example).toBeDefined();
+
+		const body = JSON.parse(example.body);
+		const enrichment = body.dependencies.tradingViewMcp.enrichment;
+		const confluence = enrichment.confluence;
+
+		expect(body.featureFlags.tradingViewConfluenceMultiTimeframe).toBe(true);
+		expect(confluence.failedCount).toBeGreaterThan(0);
+		expect(confluence.lastFailureCategory).not.toBeNull();
+		// Two calls per alert with multi-timeframe on, so the window cannot be 1:1 with alerts.
+		expect(confluence.attemptedCount).toBeGreaterThan(enrichment.alertPath.totalCount);
+		expect(confluence.appliedCount + confluence.failedCount).toBeLessThanOrEqual(confluence.attemptedCount);
+	});
+});
+
+// `success` was added to both news-monitor read envelopes but the saved 200 examples kept
+// omitting it, so the examples contradicted the runtime and the schema sitting beside them
+// — and nothing enforced it. These assert each example against the schema that declares the
+// field required, so the drift cannot come back silently.
+describe('news-monitor admin read examples (issue #1290)', () => {
+	const readEndpoints = [
+		{ name: 'GET News Monitor Summary', schema: 'NewsAnalysisSummary' },
+		{ name: 'GET News Monitor Analyses', schema: 'NewsAnalysisList' },
+	];
+
+	readEndpoints.forEach(({ name, schema }) => {
+		it(`${name} saved 200 example carries every field its schema marks required`, () => {
+			const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+			const openapi = JSON.parse(fs.readFileSync(
+				path.join(__dirname, '../../src/openapi/openapi.json'), 'utf8'));
+			const item = findItem(collection.item, name);
+			expect(item).toBeDefined();
+
+			const required = openapi.components.schemas[schema].required || [];
+			expect(required).toContain('success');
+
+			const example = item.response.find((response) => response.code === 200);
+			expect(example).toBeDefined();
+			const body = JSON.parse(example.body);
+
+			// The console reads these bodies directly, so an example that understates the
+			// envelope teaches the next reader the wrong contract.
+			expect(Object.keys(body)).toEqual(expect.arrayContaining(required));
+			expect(body.success).toBe(true);
+		});
 	});
 });
