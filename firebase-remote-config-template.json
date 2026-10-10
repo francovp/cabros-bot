@@ -453,6 +453,8 @@
         "value": "60000"
       },
       "description": "Cross-timeframe collapse window in milliseconds (0 disables collapsing while the flag stays on)",
+      "valueType": "NUMBER"
+    },
     "ENABLE_ALERT_SYNTH_BURST_AGGREGATION": {
       "defaultValue": {
         "value": "false"

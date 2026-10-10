@@ -186,6 +186,11 @@ describe('Alert cross-timeframe duplicate suppression endpoint behavior', () => 
 			global.fetch = mockFetch;
 			await initializeNotificationServices(mockBot);
 
+			// DiscordService also probes the webhook, so count only the executions
+			// it POSTs rather than every fetch.
+			const discordPosts = () => mockFetch.mock.calls
+				.filter(([, init]) => init && init.method === 'POST').length;
+
 			const first = await post(DAILY_SELL, {
 				channels: ['telegram'],
 				telegramChatId: '-1001111111',
@@ -201,7 +206,7 @@ describe('Alert cross-timeframe duplicate suppression endpoint behavior', () => 
 			}).expect(200);
 			expect(narrowed.body.suppressedRepeat).toBeUndefined();
 			expect(narrowed.body.deliveredChannels).toEqual(['discord']);
-			expect(mockFetch).toHaveBeenCalledTimes(1);
+			expect(discordPosts()).toBe(1);
 
 			// This leg repeats the timeframe the narrowing leg just reserved for
 			// discord, but telegram:A still holds the 1D, so it must be collapsed.
@@ -214,7 +219,7 @@ describe('Alert cross-timeframe duplicate suppression endpoint behavior', () => 
 			expect(repeat.body.deliveredChannels).toEqual([]);
 
 			expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
-			expect(mockFetch).toHaveBeenCalledTimes(1);
+			expect(discordPosts()).toBe(1);
 			expect(crossTimeframeCooldown.getStats().suppressedCount).toBe(1);
 		});
 	});
