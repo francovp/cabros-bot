@@ -2,7 +2,7 @@ const {
 	normalizeTradingViewTimeframe,
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('./parseTradingViewSignal');
-const { rankScannerItems, resolveTrendConfluence } = require('./marketScannerScoring');
+const { rankScannerItems, resolveTrendConfluence, numberOrNull } = require('./marketScannerScoring');
 const { SCANNER_ERROR_CATEGORY_DISPLAY, isScannerErrorCategory } = require('./marketScannerErrorCategories');
 
 const SUPPORTED_SCAN_TYPES = new Set([
@@ -764,13 +764,6 @@ function formatNumber(value, decimals) {
 	return value.toFixed(decimals);
 }
 
-function numberOrNull(value) {
-	if (value === null || value === undefined) {
-		return null;
-	}
-	const number = Number(value);
-	return Number.isFinite(number) ? number : null;
-}
 
 function formatScannerErrorLine(scanResult = {}) {
 	const baseMessage = typeof scanResult.error === 'string' ? scanResult.error : 'Unknown error';

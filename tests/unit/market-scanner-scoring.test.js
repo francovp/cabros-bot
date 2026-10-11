@@ -1,4 +1,4 @@
-const { scoreScannerItem, rankScannerItems } = require('../../src/services/tradingview/marketScannerScoring');
+const { scoreScannerItem, rankScannerItems, numberOrNull } = require('../../src/services/tradingview/marketScannerScoring');
 
 describe('Market Scanner Scoring', () => {
 	describe('scoreScannerItem', () => {
@@ -104,6 +104,119 @@ describe('Market Scanner Scoring', () => {
 			const result = scoreScannerItem(item, 'bollinger_scan');
 			// Squeeze detection should boost score
 			expect(result.score).toBeGreaterThanOrEqual(20);
+		});
+
+		it('treats missing RSI as absent rather than RSI 0 and does not emit RSI 0.0 in reason', () => {
+			const itemWithMissingRsi = {
+				symbol: 'BINANCE:UNIUSDT',
+				changePercent: 5,
+				indicators: {},
+			};
+			const itemWithExplicitZeroRsi = {
+				symbol: 'BINANCE:UNIUSDT',
+				changePercent: 5,
+				indicators: { RSI: 0 },
+			};
+			const itemWithEmptyStringRsi = {
+				symbol: 'BINANCE:UNIUSDT',
+				changePercent: 5,
+				indicators: { RSI: '   ' },
+			};
+			const itemWithNullRsi = {
+				symbol: 'BINANCE:UNIUSDT',
+				changePercent: 5,
+				indicators: { RSI: null },
+			};
+			const itemWithBooleanRsi = {
+				symbol: 'BINANCE:UNIUSDT',
+				changePercent: 5,
+				indicators: { RSI: false },
+			};
+
+			const resMissing = scoreScannerItem(itemWithMissingRsi, 'top_gainers');
+			const resExplicitZero = scoreScannerItem(itemWithExplicitZeroRsi, 'top_gainers');
+			const resEmpty = scoreScannerItem(itemWithEmptyStringRsi, 'top_gainers');
+			const resNull = scoreScannerItem(itemWithNullRsi, 'top_gainers');
+			const resBool = scoreScannerItem(itemWithBooleanRsi, 'top_gainers');
+
+			// Missing/empty/null/boolean RSI should not produce 'RSI 0.0'
+			expect(resMissing.reason).not.toContain('RSI 0.0');
+			expect(resEmpty.reason).not.toContain('RSI 0.0');
+			expect(resNull.reason).not.toContain('RSI 0.0');
+			expect(resBool.reason).not.toContain('RSI 0.0');
+
+			// Explicit RSI: 0 should produce 'RSI 0.0'
+			expect(resExplicitZero.reason).toContain('RSI 0.0');
+
+			// Missing RSI momentum score is 5; explicit RSI: 0 momentum score for gainer is 0
+			// (50% scale: (0 / 50) * 15 = 0)
+			expect(resMissing.score).toBe(resNull.score);
+			expect(resMissing.score).toBe(resEmpty.score);
+			expect(resMissing.score).toBe(resBool.score);
+			expect(resMissing.score).not.toBe(resExplicitZero.score);
+		});
+
+		it('does not award squeeze bonus when bbw is absent, boolean, or array on bollinger_scan', () => {
+			const itemWithoutBbw = {
+				symbol: 'BINANCE:AVAXUSDT',
+				indicators: { close: 30, RSI: 52 },
+			};
+			const itemWithBooleanBbw = {
+				symbol: 'BINANCE:AVAXUSDT',
+				indicators: { close: 30, RSI: 52 },
+				bbw: false,
+			};
+			const itemWithArrayBbw = {
+				symbol: 'BINANCE:AVAXUSDT',
+				indicators: { close: 30, RSI: 52 },
+				bbw: [],
+			};
+			const itemWithSqueezeBbw = {
+				symbol: 'BINANCE:AVAXUSDT',
+				indicators: { close: 30, RSI: 52 },
+				bbw: 0.05,
+			};
+
+			const resWithoutBbw = scoreScannerItem(itemWithoutBbw, 'bollinger_scan');
+			const resWithBoolBbw = scoreScannerItem(itemWithBooleanBbw, 'bollinger_scan');
+			const resWithArrBbw = scoreScannerItem(itemWithArrayBbw, 'bollinger_scan');
+			const resWithSqueezeBbw = scoreScannerItem(itemWithSqueezeBbw, 'bollinger_scan');
+
+			// When bbw is absent, volatilityScore is 2 (expected but missing); when bbw is 0.05 (< 0.1), volatilityScore is 10.
+			// Difference should be 8 points!
+			expect(resWithSqueezeBbw.score - resWithoutBbw.score).toBe(8);
+			expect(resWithoutBbw.score).toBe(resWithBoolBbw.score);
+			expect(resWithoutBbw.score).toBe(resWithArrBbw.score);
+		});
+
+		it('handles whitespace or empty consecutive candle metrics cleanly in reason text', () => {
+			const item = {
+				symbol: 'BINANCE:SOLUSDT',
+				changePercent: 3,
+				indicators: { close: 100, RSI: 50 },
+				pattern_strength: '   ',
+				candle_body_ratio: '',
+			};
+			const res = scoreScannerItem(item, 'consecutive_candles_scan');
+			expect(res.reason).not.toContain('strength');
+			expect(res.reason).not.toContain('body');
+		});
+
+		it('numberOrNull safely parses numbers and rejects invalid types', () => {
+			expect(numberOrNull(0)).toBe(0);
+			expect(numberOrNull('0')).toBe(0);
+			expect(numberOrNull('-5.2')).toBe(-5.2);
+			expect(numberOrNull('  42.5  ')).toBe(42.5);
+			expect(numberOrNull(null)).toBeNull();
+			expect(numberOrNull(undefined)).toBeNull();
+			expect(numberOrNull('')).toBeNull();
+			expect(numberOrNull('   ')).toBeNull();
+			expect(numberOrNull(false)).toBeNull();
+			expect(numberOrNull(true)).toBeNull();
+			expect(numberOrNull([])).toBeNull();
+			expect(numberOrNull({})).toBeNull();
+			expect(numberOrNull(NaN)).toBeNull();
+			expect(numberOrNull(Infinity)).toBeNull();
 		});
 
 		it('returns 0-100 bounded score always', () => {
