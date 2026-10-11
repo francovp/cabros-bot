@@ -24,7 +24,7 @@ jest.mock('../../src/services/grounding/grounding', () => ({
 
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const { signalClassMetrics } = require('../../src/services/alerts/signalClassifier');
 
@@ -71,6 +71,7 @@ describe('Alert signal classification (issue #858)', () => {
 			},
 		};
 
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 		app.use('/api', getRoutes(mockBot));
 	});

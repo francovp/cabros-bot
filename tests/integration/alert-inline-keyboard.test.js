@@ -60,7 +60,7 @@ describe('Inline keyboard markup on /api/webhook/alert', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
 		resetTasksForTesting();
-		alertModule.__resetNotificationManagerForTesting();
+		alertModule.resetNotificationManagerForTesting();
 		editMessageReplyMarkupMock = jest.fn().mockResolvedValue(undefined);
 		sendToAllMock = jest.fn().mockImplementation((alert) => Promise.resolve([
 			{ channel: 'telegram', success: true, messageId: '101', alert },

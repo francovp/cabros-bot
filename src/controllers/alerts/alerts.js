@@ -937,7 +937,6 @@ function replayAlert(botOrGetter) {
 					code: 'NOT_FOUND',
 				});
 			}
-
 			let storedTelegramThreadId = storedAlert.telegramThreadId;
 			if (storedTelegramThreadId === undefined && Array.isArray(storedAlert.deliveryResults)) {
 				const telegramResult = storedAlert.deliveryResults.find((r) => r && r.channel === 'telegram');
@@ -978,7 +977,7 @@ function replayAlert(botOrGetter) {
 			let notificationManager = alertHandler.getNotificationManager();
 			if (!notificationManager) {
 				const bot = typeof botOrGetter === 'function' ? botOrGetter() : botOrGetter || null;
-				notificationManager = await alertHandler.initializeNotificationServices(bot);
+				notificationManager = await alertHandler.getOrInitializeNotificationManager(bot);
 			}
 
 			const reEnrichRequested = (req.query && (req.query.reEnrich === 'true' || req.query.reEnrich === true))
