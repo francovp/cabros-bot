@@ -379,6 +379,54 @@ describe('NotificationManager admin failure notifications', () => {
 		notificationRedriveService.resetForTesting();
 	});
 
+	it('does not include dead-letters queued claim in admin failure page for probe deliveries (isProbe: true)', async () => {
+		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn()
+				.mockResolvedValueOnce({ success: false, channel: 'telegram', error: 'Delivery failure' })
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'admin-page-1' }),
+		};
+
+		const manager = new NotificationManager(telegramService);
+		await manager.sendToChannels({ text: 'Probe check' }, ['telegram'], { isProbe: true });
+		await waitForBackgroundTasks();
+
+		expect(notificationRedriveService.getPendingCount()).toBe(0);
+		expect(telegramService.send).toHaveBeenCalledTimes(2);
+		const adminMessage = telegramService.send.mock.calls[1][0].text;
+		expect(adminMessage).toContain('Notification delivery failure');
+		expect(adminMessage).not.toContain('Dead-letters queued for redrive');
+		notificationRedriveService.resetForTesting();
+	});
+
+	it('does not include dead-letters queued claim in admin failure page when alert has redriveEligible: false', async () => {
+		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn()
+				.mockResolvedValueOnce({ success: false, channel: 'telegram', error: 'Delivery failure' })
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'admin-page-2' }),
+		};
+
+		const manager = new NotificationManager(telegramService);
+		await manager.sendToAll({ text: 'Non-redrive alert', redriveEligible: false });
+		await waitForBackgroundTasks();
+
+		expect(notificationRedriveService.getPendingCount()).toBe(0);
+		expect(telegramService.send).toHaveBeenCalledTimes(2);
+		const adminMessage = telegramService.send.mock.calls[1][0].text;
+		expect(adminMessage).toContain('Notification delivery failure');
+		expect(adminMessage).not.toContain('Dead-letters queued for redrive');
+		notificationRedriveService.resetForTesting();
+	});
+
 	it('does not send standard admin failure alert for redrive dispatches (isRedrive: true)', async () => {
 		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
 		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
