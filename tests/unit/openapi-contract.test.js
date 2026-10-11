@@ -229,6 +229,21 @@ describe('OpenAPI contract', () => {
 		]));
 	});
 
+	it('keeps the availability flag required only on the direct outcomes summary response', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const outcomesSummary = contract.components.schemas.OutcomesSummary;
+		const directSummary = contract.components.responses.OutcomesSummaryResult
+			.content['application/json'].schema.properties.summary;
+
+		expect(outcomesSummary.properties).toHaveProperty('available');
+		expect(outcomesSummary.required).not.toContain('available');
+		expect(directSummary.allOf).toEqual(expect.arrayContaining([
+			{ $ref: '#/components/schemas/OutcomesSummary' },
+			{ type: 'object', required: ['available'] },
+		]));
+	});
+
 	it('documents the X-Shadow-Mode-Metrics header on GET /api/alerts/export', () => {
 		if (!fs.existsSync(contractPath)) return;
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));

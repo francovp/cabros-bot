@@ -6157,7 +6157,17 @@
                   "example": true
                 },
                 "summary": {
-                  "$ref": "#/components/schemas/OutcomesSummary"
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/OutcomesSummary"
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "available"
+                      ]
+                    }
+                  ]
                 }
               }
             }
@@ -8581,7 +8591,6 @@
       "OutcomesSummary": {
         "type": "object",
         "required": [
-          "available",
           "totalSignalsReceived",
           "totalSignalsEligible",
           "totalSignalsEvaluated",

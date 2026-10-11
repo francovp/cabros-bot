@@ -1244,6 +1244,30 @@ describe('Postman collection contract', () => {
 	});
 });
 
+describe('alert analytics summary examples (issue #731)', () => {
+	it('documents complete schema-conforming outcome breakdown responses', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const contract = JSON.parse(fs.readFileSync(
+			path.join(__dirname, '../../src/openapi/openapi.json'), 'utf8'));
+		const required = contract.components.schemas.OutcomesSummary.required;
+		const direct = findItem(collection.item, 'GET Summarize Signal Outcomes (breakdowns)');
+		const alertSummary = findItem(collection.item, 'GET Alert Analytics Summary (outcome breakdowns)');
+		expect(direct).toBeDefined();
+		expect(alertSummary).toBeDefined();
+		const directExample = direct.response.find((response) => response.name === '200 Success (breakdowns)');
+		const shadowExample = alertSummary.response.find((response) => response.name === '200 OK - Shadow mode breakdowns');
+		expect(directExample).toBeDefined();
+		expect(shadowExample).toBeDefined();
+
+		const directSummary = JSON.parse(directExample.body).summary;
+		const shadowMetrics = JSON.parse(shadowExample.body).summary.shadowModeMetrics;
+		expect(Object.keys(directSummary)).toEqual(expect.arrayContaining([...required, 'available']));
+		expect(directSummary.available).toBe(true);
+		expect(Object.keys(shadowMetrics)).toEqual(expect.arrayContaining(required));
+		expect(shadowMetrics).not.toHaveProperty('available');
+	});
+});
+
 describe('news-monitor stop/target example (GH-712)', () => {
 	it('POST News Monitor success example includes a populated stop/target alert', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
