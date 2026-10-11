@@ -223,6 +223,7 @@ async function deleteBinanceOrder(req, res) {
 			status: result.order?.status || 'CANCELED',
 			environment: result.environment,
 			binanceOrderId: result.order?.orderId ?? req.body?.orderId ?? null,
+			clientOrderId: result.order?.clientOrderId ?? req.body?.origClientOrderId ?? req.body?.clientOrderId ?? null,
 			response: result,
 			processingMs,
 		}).catch((err) => {
@@ -232,6 +233,7 @@ async function deleteBinanceOrder(req, res) {
 		return res.status(200).json(result);
 	} catch (error) {
 		const processingMs = Date.now() - startTime;
+		const clientOrderId = error.clientOrderId ?? req.body?.origClientOrderId ?? req.body?.clientOrderId ?? null;
 		if (error instanceof BinanceOrderRequestError || error instanceof BinanceOrderServiceError) {
 			console.warn('[BinanceOrdersController] order cancel rejected', { code: error.code });
 			binanceOrderAuditService.recordMutation({
@@ -243,9 +245,11 @@ async function deleteBinanceOrder(req, res) {
 				type: null,
 				quantity: null,
 				price: null,
-				status: error.code || 'REJECTED',
+				status: 'rejected',
+				errorCode: error.code,
 				environment: error.environment,
 				binanceOrderId: req.body?.orderId ?? null,
+				clientOrderId,
 				response: { error: error.message, code: error.code },
 				processingMs,
 			}).catch((err) => {
@@ -268,8 +272,10 @@ async function deleteBinanceOrder(req, res) {
 			type: null,
 			quantity: null,
 			price: null,
-			status: 'FAILED',
+			status: 'failed',
+			errorCode: 'BINANCE_ORDER_CANCEL_FAILED',
 			binanceOrderId: req.body?.orderId ?? null,
+			clientOrderId,
 			response: { error: error.message, code: 'BINANCE_ORDER_CANCEL_FAILED' },
 			processingMs,
 		}).catch((err) => {

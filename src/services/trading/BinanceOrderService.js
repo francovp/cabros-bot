@@ -1169,20 +1169,26 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 				};
 			} catch (error) {
 				if (isOrderNotFoundError(error) || isAlreadyTerminalOrderError(error)) {
-					throw new BinanceOrderRequestError('Binance order not found', 'ORDER_NOT_FOUND', 404);
+					const reqError = new BinanceOrderRequestError('Binance order not found', 'ORDER_NOT_FOUND', 404);
+					reqError.clientOrderId = origClientOrderId || null;
+					throw reqError;
 				}
 				if (isDefinitiveBinanceRejection(error)) {
-					throw new BinanceOrderRequestError(
+					const reqError = new BinanceOrderRequestError(
 						'Binance rejected the cancel request',
 						'BINANCE_REQUEST_REJECTED',
 						400,
 					);
+					reqError.clientOrderId = origClientOrderId || null;
+					throw reqError;
 				}
-				throw new BinanceOrderServiceError(
+				const svcError = new BinanceOrderServiceError(
 					'Binance cancel request failed; the order may still be open, retry the status check before resubmitting',
 					'BINANCE_QUERY_FAILED',
 					502,
 				);
+				svcError.clientOrderId = origClientOrderId || null;
+				throw svcError;
 			}
 		},
 
