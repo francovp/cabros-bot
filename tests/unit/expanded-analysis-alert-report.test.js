@@ -36,6 +36,7 @@ describe('Expanded Analysis Alert report', () => {
 			timeframe: '1D',
 			includeMultiTimeframe: false,
 			analysisMode: 'standard',
+			duplicatesRemoved: 0,
 		});
 	});
 
@@ -330,6 +331,134 @@ describe('Expanded Analysis Alert report', () => {
 		expect(report).toContain('- *Stop Loss sugerido:* $105.00');
 		expect(report).not.toContain('Invalidación');
 		expect(report).not.toContain('Risk/Reward');
+	});
+
+	describe('symbol deduplication (#874)', () => {
+		beforeEach(() => {
+			process.env = {
+				...originalEnv,
+				EXPANDED_ANALYSIS_ALERT_SYMBOLS: '',
+				TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: '1D',
+			};
+		});
+
+		it('collapses exact duplicates and reports how many were removed', () => {
+			const parsed = parseExpandedAnalysisAlertRequest({
+				body: { symbols: ['BINANCE:BTCUSDT', 'BINANCE:BTCUSDT', 'NASDAQ:NVDA'] },
+			});
+
+			expect(parsed.symbols).toEqual([
+				{ raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+				{ raw: 'NASDAQ:NVDA', exchange: 'NASDAQ', symbol: 'NVDA' },
+			]);
+			expect(parsed.duplicatesRemoved).toBe(1);
+		});
+
+		it('is case-insensitive and whitespace-tolerant', () => {
+			const parsed = parseExpandedAnalysisAlertRequest({
+				body: { symbols: ['binance:btcusdt', ' BINANCE:BTCUSDT ', 'Binance:Btcusdt'] },
+			});
+
+			expect(parsed.symbols).toEqual([
+				{ raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+			]);
+			expect(parsed.duplicatesRemoved).toBe(2);
+		});
+
+		it('collapses probe-verified exchange aliases that resolve to the same MCP venue', () => {
+			const parsed = parseExpandedAnalysisAlertRequest({
+				body: { symbols: ['BATS:AAPL', 'NASDAQ:AAPL', 'NASDAQ_DLY:AAPL', 'NASDAQ:MSFT'] },
+			});
+
+			expect(parsed.symbols).toEqual([
+				{ raw: 'BATS:AAPL', exchange: 'BATS', symbol: 'AAPL' },
+				{ raw: 'NASDAQ:MSFT', exchange: 'NASDAQ', symbol: 'MSFT' },
+			]);
+			expect(parsed.duplicatesRemoved).toBe(2);
+		});
+
+		it('keeps the first occurrence and preserves first-occurrence order', () => {
+			const parsed = parseExpandedAnalysisAlertRequest({
+				body: { symbols: ['NASDAQ:MSFT', 'BATS:AAPL', 'NASDAQ:MSFT', 'BINANCE:BTCUSDT', 'BATS:AAPL'] },
+			});
+
+			expect(parsed.symbols.map((entry) => entry.raw)).toEqual([
+				'NASDAQ:MSFT',
+				'BATS:AAPL',
+				'BINANCE:BTCUSDT',
+			]);
+			expect(parsed.duplicatesRemoved).toBe(2);
+		});
+
+		it('keeps distinct venues distinct even when the symbol is identical', () => {
+			const parsed = parseExpandedAnalysisAlertRequest({
+				body: { symbols: ['NASDAQ:ABC', 'NYSE:ABC', 'FX_IDC:ABC'] },
+			});
+
+			expect(parsed.symbols.map((entry) => entry.raw)).toEqual([
+				'NASDAQ:ABC',
+				'NYSE:ABC',
+				'FX_IDC:ABC',
+			]);
+			expect(parsed.duplicatesRemoved).toBe(0);
+		});
+
+		it('applies the MAX_SYMBOLS cap to the deduplicated list', () => {
+			const duplicate = 'BINANCE:BTCUSDT';
+			// 51 distinct markets plus 60 copies of one of them: the raw list is far
+			// over the cap, the deduplicated list is one market over it.
+			const symbols = [
+				...Array.from({ length: 60 }, () => duplicate),
+				...Array.from({ length: 50 }, (_, index) => `NASDAQ:SYM${index}`),
+			];
+
+			expect(() => parseExpandedAnalysisAlertRequest({ body: { symbols } }))
+				.toThrow('Too many symbols requested (max: 50)');
+
+			const withinCap = parseExpandedAnalysisAlertRequest({
+				body: { symbols: [...Array.from({ length: 60 }, () => duplicate), 'NASDAQ:NVDA'] },
+			});
+
+			expect(withinCap.symbols).toEqual([
+				{ raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+				{ raw: 'NASDAQ:NVDA', exchange: 'NASDAQ', symbol: 'NVDA' },
+			]);
+			expect(withinCap.duplicatesRemoved).toBe(59);
+		});
+
+		it('deduplicates the EXPANDED_ANALYSIS_ALERT_SYMBOLS env fallback too', () => {
+			process.env = {
+				...originalEnv,
+				EXPANDED_ANALYSIS_ALERT_SYMBOLS: 'BINANCE:BTCUSDT, binance:btcusdt ,NASDAQ:NVDA',
+				TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: '1D',
+			};
+
+			const parsed = parseExpandedAnalysisAlertRequest({ body: {} });
+
+			expect(parsed.symbols.map((entry) => entry.raw)).toEqual([
+				'BINANCE:BTCUSDT',
+				'NASDAQ:NVDA',
+			]);
+			expect(parsed.duplicatesRemoved).toBe(1);
+		});
+
+		it('is idempotent, so a re-parse of already deduplicated metadata removes nothing', () => {
+			const first = parseExpandedAnalysisAlertRequest({
+				body: { symbols: ['BATS:AAPL', 'NASDAQ:AAPL', 'BINANCE:BTCUSDT'] },
+			});
+			const second = parseExpandedAnalysisAlertRequest({
+				body: { symbols: first.symbols.map((entry) => entry.raw) },
+			});
+
+			expect(second.symbols).toEqual(first.symbols);
+			expect(second.duplicatesRemoved).toBe(0);
+		});
+
+		it('still rejects an entirely invalid symbol list before deduplication runs', () => {
+			expect(() => parseExpandedAnalysisAlertRequest({
+				body: { symbols: ['NVDA', 'NVDA'] },
+			})).toThrow('Symbol must use EXCHANGE:SYMBOL format: NVDA');
+		});
 	});
 
 	describe('includeMultiTimeframe updates', () => {

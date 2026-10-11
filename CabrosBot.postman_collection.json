@@ -2813,6 +2813,88 @@
           ]
         },
         {
+          "name": "POST Expanded Analysis Alert (duplicate symbols)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbols\": [\"BINANCE:BTCUSDT\", \"binance:btcusdt\", \"BATS:AAPL\", \"NASDAQ:AAPL\", \"NASDAQ:NVDA\"],\n  \"timeframe\": \"1D\",\n  \"dryRun\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/expanded-analysis-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "expanded-analysis-alert"
+              ]
+            },
+            "description": "Issue #874. Duplicate symbol entries are collapsed before any TradingView MCP call is issued, so repeating a symbol no longer spends a second MCP budget slot nor shrinks the shared deadline left for the symbols that are not duplicates. Comparison is case-insensitive and uses the venue the identifier resolves to, so the probe-verified aliases BATS and NASDAQ_DLY fold into NASDAQ. This body sends 5 entries that resolve to 3 distinct symbols: exactly 3 analyses run, the report holds 3 sections, and `duplicatesRemoved` is 2. First occurrence wins, report ordering follows it, and the retained entry keeps the caller's own exchange (BATS:AAPL stays BATS in the report). `dryRun` keeps the request free of notification delivery."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('expanded analysis deduplicates symbols before calling MCP', function () {",
+                  "  pm.expect(pm.response.code).to.eql(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.eql(true);",
+                  "  pm.expect(body.results).to.have.lengthOf(3);",
+                  "  pm.expect(body.results.map((r) => r.symbol)).to.eql([",
+                  "    'BINANCE:BTCUSDT',",
+                  "    'BATS:AAPL',",
+                  "    'NASDAQ:NVDA',",
+                  "  ]);",
+                  "  pm.expect(body.duplicatesRemoved).to.eql(2);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "OK - duplicates collapsed (200)",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"results\": [\n    { \"symbol\": \"BINANCE:BTCUSDT\", \"status\": \"analyzed\", \"price\": 68000, \"rsi\": 50 },\n    { \"symbol\": \"BATS:AAPL\", \"status\": \"analyzed\", \"price\": 233.1, \"rsi\": 48 },\n    { \"symbol\": \"NASDAQ:NVDA\", \"status\": \"analyzed\", \"price\": 219.51, \"rsi\": 57.8 }\n  ],\n  \"summary\": { \"total\": 3, \"analyzed\": 3, \"error\": 0, \"delivered\": 0 },\n  \"duplicatesRemoved\": 2,\n  \"timedOut\": false,\n  \"timeoutMs\": 60000,\n  \"requestId\": \"6f1c2b7e-0f5a-4c9a-9f2e-3a1b7c9d4e11\",\n  \"processingTimeMs\": 4210\n}"
+            },
+            {
+              "name": "Bad Request - too many distinct symbols after dedup (400)",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Too many symbols requested (max: 50)\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"6f1c2b7e-0f5a-4c9a-9f2e-3a1b7c9d4e11\"\n}"
+            }
+          ]
+        },
+        {
           "name": "POST Expanded Analysis Alert (combined mode)",
           "request": {
             "method": "POST",

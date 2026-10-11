@@ -10447,6 +10447,7 @@
           "symbols": {
             "type": "array",
             "maxItems": 50,
+            "description": "EXCHANGE:SYMBOL identifiers to analyse. Duplicates are collapsed before any TradingView MCP call is issued: comparison is case-insensitive and uses the MCP venue the identifier resolves to, so the probe-verified aliases BATS and NASDAQ_DLY collapse into NASDAQ (e.g. ['BATS:AAPL','NASDAQ:AAPL'] analyses AAPL once). First occurrence wins and report ordering follows first-occurrence order, and the retained entry keeps the caller's own exchange. maxItems applies to the deduplicated list, so repeating one symbol does not count against the cap. The number of collapsed entries is reported as `duplicatesRemoved` in the response.",
             "items": {
               "type": "string",
               "pattern": "^[A-Z0-9_]+:[A-Z0-9._-]+$"
@@ -12700,6 +12701,11 @@
           "results": {
             "$ref": "#/components/schemas/JsonObject",
             "description": "Per-symbol analysis results (expanded-analysis jobs only, when completed)."
+          },
+          "duplicatesRemoved": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of duplicate symbol entries collapsed out of the submitted `symbols` list before analysis (expanded-analysis jobs only). Compare it with `results.length` to see how many distinct symbols were actually requested. 0 means nothing was collapsed."
           },
           "scanResults": {
             "$ref": "#/components/schemas/JsonObject",
