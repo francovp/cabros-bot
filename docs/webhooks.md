@@ -311,6 +311,50 @@ so a route cannot resurrect a channel that is still in its repeat-suppression co
 Omitting `symbolRoutes` preserves the existing broadcast and request-level routing
 behavior exactly.
 
+#### Cross-timeframe duplicate collapse
+
+`ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` keys on `exchange|symbol|timeframe|side`, so a
+symbol that fires the same direction on two *different* timeframes seconds apart is two
+separate keys and both messages are delivered:
+
+```
+2026-08-31T00:00:25.419Z  BINANCE:BTCUSDT(D)   cambió a señal de VENTA
+2026-08-31T00:00:25.845Z  BINANCE:BTCUSDT(240) pasó a señal de VENTA
+```
+
+Set `ENABLE_ALERT_CROSS_TF_SUPPRESSION=true` to collapse that pair. The rule keys on
+`exchange|symbol|side` — timeframe deliberately excluded — over a window of
+`ALERT_CROSS_TF_WINDOW_MS` (default `60000`, bounded `0`-`600000`).
+
+**Collapse direction: the first arrival reserves, the later arrival is suppressed.**
+Preferring the higher timeframe would mean holding every alert until the window
+closed before deciding, which would add up to a full window of latency to the
+delivery path. The first signal to arrive is therefore always delivered, and
+every same-direction signal on any other timeframe inside the window is
+suppressed against it.
+
+Reservations are provisional: the gate keeps one entry per
+`(exchange|symbol|side)` **and per `(channel, destination)`**, and any destination
+whose delivery produced nothing is released again as soon as the response is
+built.
+
+| Property | Behavior |
+| :--- | :--- |
+| Suppressed response | `200` with `suppressedRepeat: true`, `suppressionReason: "cross_timeframe_duplicate"`, empty `results` and `deliveredChannels` |
+| Persistence | Still persisted with the suppression marker, so replay and audit stay complete |
+| Opposite side | Never collapsed; a delivered flip also clears the stale opposite-side entry |
+| Same timeframe | Not this rule's job — that stays `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` |
+| Unmapped timeframes | Signals whose raw token does not map exactly (e.g. `3M`) never enter the store |
+| Store failures | Fail open to normal delivery |
+| Replicas | The store is in-process and per replica, so each replica may still deliver one copy |
+| `dryRun` | Bypasses the gate entirely and does not consume the store |
+| Keying boundary | `entry` price is ignored; acceptable inside a `60s` window |
+| Destination scoping | Keyed per `(channel, destination)`, where destination is the request's `telegramChatId`/`telegramThreadId`, `whatsappChatId` or `discordWebhookUrl` override, else the channel default. A reservation made for one chat never suppresses a signal routed to another chat, and the rule is independent of the request-level `channels` list |
+| Partly available destinations | Collapsed only when *every* requested destination is already held; otherwise the request is delivered and narrowed to the still-available channels (and any `symbolRoutes` entry is intersected with the same set) |
+| Failed or zero-channel delivery | The reservation is released after the response when the destination notified nobody — a failed channel, a throwing dispatch, or a deployment that cannot deliver at all — so a leg that reached no trader cannot swallow the next signal on another timeframe. The reservation is kept only while the dead-letter redrive queue owns the retry (`ENABLE_NOTIFICATION_REDRIVE` with an active worker role) |
+
+Both flags are Remote Config eligible and default to disabled, so existing CB-230
+behavior is unchanged until an operator opts in.
 ### Same-direction burst aggregation
 
 `ENABLE_ALERT_SYNTH_BURST_AGGREGATION=true` (default `false`) buffers a parsed
@@ -369,8 +413,10 @@ operator-authored automation output rather than a TradingView alert or scanner r
 }
 ```
 
-- `message`: Required non-empty string. Values longer than `MAX_MESSAGE_LENGTH` (4,000 characters) are clipped
-  before delivery.
+- `message`: Required non-empty string. Values longer than `GENERIC_MESSAGE_MAX_LENGTH` (default 4,000; integer
+  range 1-20,000) are clipped before delivery. A valid fresh Remote Config value takes precedence over the
+  environment setting. Invalid environment values use 4,000; invalid Remote Config values are ignored, leaving
+  the environment value (or 4,000 when unset/invalid) effective.
 - `channels`: Optional subset of `telegram`, `whatsapp`, `discord`. Omit it to broadcast to every enabled channel.
 - `telegramChatId` / `telegramThreadId` / `whatsappChatId` / `discordWebhookUrl`: Optional per-channel destination
   overrides. `telegramThreadId` targets a forum topic (`0` = General).
@@ -379,7 +425,7 @@ operator-authored automation output rather than a TradingView alert or scanner r
 - Idempotency: send `idempotency-key` / `x-idempotency-key` (or `idempotencyKey` in the body or query) to replay a
   prior response instead of re-delivering. Reusing a key with a different payload returns `409`.
 
-**Response (message within 4,000 characters):**
+**Response (message within the configured limit):**
 ```json
 {
   "success": true,
@@ -389,7 +435,7 @@ operator-authored automation output rather than a TradingView alert or scanner r
 }
 ```
 
-**Response (message exceeded 4,000 characters):**
+**Response (message exceeded the configured limit):**
 ```json
 {
   "success": true,
@@ -402,12 +448,12 @@ operator-authored automation output rather than a TradingView alert or scanner r
 }
 ```
 
-**Truncation metadata (GH-602).** Inbound messages above `MAX_MESSAGE_LENGTH` are clipped to 4,000 characters plus a
-`'...'` suffix before delivery, so `deliveredLength` is 4,003 in the default configuration. When truncation occurs the
+**Truncation metadata (GH-602).** Inbound messages above `GENERIC_MESSAGE_MAX_LENGTH` are clipped to the configured
+limit plus a `'...'` suffix before delivery, so `deliveredLength` is 4,003 with the default configuration. When truncation occurs the
 response adds:
 
 - `truncated`: Always `true` when present. Callers can use it to detect silent content loss.
-- `originalLength`: Inbound character count before clipping (minimum 4,001).
+- `originalLength`: Inbound character count before clipping (minimum 2 when the configured cap is 1).
 - `deliveredLength`: Character count of the text actually handed to the notification channels.
 
 These three fields are **strictly additive and appear only when truncation occurred** — a message that fits returns
@@ -467,4 +513,3 @@ cached — so a dry run can be repeated freely and the same key is still free fo
   channel *availability* is only asserted when the channel registry already exists on the process.
 
 A dry run does not set the `Idempotency-Replay` header, because no reservation is taken.
-

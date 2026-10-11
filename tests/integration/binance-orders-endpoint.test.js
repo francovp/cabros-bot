@@ -1278,4 +1278,145 @@ describe('Binance orders API', () => {
 			expect(response.body.code).toBe('MAX_NOTIONAL_EXCEEDED');
 		});
 	});
+
+	describe('GET /api/trading/binance/account/balances', () => {
+		it('requires authentication before querying balances', async () => {
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances')
+				.expect(401);
+
+			expect(response.body.error).toContain('Missing API key');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('fails closed when no authentication mechanism is configured', async () => {
+			delete process.env.WEBHOOK_API_KEY;
+			delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
+
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances')
+				.set('x-api-key', 'test-key')
+				.expect(503);
+
+			expect(response.body.code).toBe('ADMIN_AUTH_UNAVAILABLE');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('fails closed when the feature is disabled', async () => {
+			process.env.ENABLE_BINANCE_TRADING = 'false';
+
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances')
+				.set('x-api-key', 'test-key')
+				.expect(403);
+
+			expect(response.body.code).toBe('FEATURE_DISABLED');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('returns 200 with balances for allowed assets preserving decimal precision', async () => {
+			client.getAccountInformation = jest.fn().mockResolvedValue({
+				accountType: 'SPOT',
+				balances: [
+					{ asset: 'BTC', free: '1.234567890123456789', locked: '0.000000000000000000' },
+					{ asset: 'USDT', free: '5000.500000000000000000', locked: '100.000000000000000000' },
+					{ asset: 'DOGE', free: '99999.0', locked: '0.0' },
+				],
+			});
+
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances?refresh=true')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(response.body.success).toBe(true);
+			expect(response.body.environment).toBe('testnet');
+			expect(response.body.balances).toEqual([
+				{ asset: 'BTC', free: '1.234567890123456789', locked: '0.000000000000000000' },
+				{ asset: 'USDT', free: '5000.500000000000000000', locked: '100.000000000000000000' },
+			]);
+			expect(response.body.accountType).toBeUndefined();
+		});
+
+		it('supports asset filter query parameter', async () => {
+			client.getAccountInformation = jest.fn().mockResolvedValue({
+				balances: [
+					{ asset: 'BTC', free: '1.0', locked: '0.0' },
+					{ asset: 'USDT', free: '500.0', locked: '0.0' },
+				],
+			});
+
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances?asset=BTC&refresh=true')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(response.body.balances).toHaveLength(1);
+			expect(response.body.balances[0].asset).toBe('BTC');
+			expect(client.getAccountInformation).toHaveBeenCalledTimes(1);
+		});
+
+		it('supports symbol filter query parameter', async () => {
+			client.getAccountInformation = jest.fn().mockResolvedValue({
+				balances: [
+					{ asset: 'BTC', free: '1.0', locked: '0.0' },
+					{ asset: 'USDT', free: '500.0', locked: '0.0' },
+				],
+			});
+
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances?symbol=BTCUSDT&refresh=true')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(response.body.balances).toHaveLength(2);
+			expect(response.body.balances.map((b) => b.asset)).toEqual(['BTC', 'USDT']);
+			expect(client.getAccountInformation).toHaveBeenCalledTimes(1);
+		});
+
+		it('rejects disallowed asset with 400', async () => {
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances?asset=DOGE')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+
+			expect(response.body.code).toBe('INVALID_ORDER_REQUEST');
+		});
+
+		it('rejects disallowed symbol with 400', async () => {
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances?symbol=DOGEUSDT')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+
+			expect(response.body.code).toBe('INVALID_ORDER_REQUEST');
+		});
+
+		it('returns 502 when Binance returns an error or times out without leaking secrets', async () => {
+			client.getAccountInformation = jest.fn().mockRejectedValue(new Error('Network timeout'));
+
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances?refresh=true')
+				.set('x-api-key', 'test-key')
+				.expect(502);
+
+			expect(response.body.code).toBe('BINANCE_BALANCE_QUERY_FAILED');
+			expect(JSON.stringify(response.body)).not.toContain('fake-key');
+			expect(JSON.stringify(response.body)).not.toContain('fake-secret');
+		});
+
+		it('returns 502 when the Binance account call exceeds the configured request timeout', async () => {
+			process.env.BINANCE_TRADING_TIMEOUT_MS = '1';
+			client.getAccountInformation = jest.fn().mockReturnValue(new Promise(() => {}));
+
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances?refresh=true')
+				.set('x-api-key', 'test-key')
+				.expect(502);
+
+			expect(response.body.code).toBe('BINANCE_BALANCE_QUERY_FAILED');
+			expect(JSON.stringify(response.body)).not.toContain('fake-key');
+			expect(JSON.stringify(response.body)).not.toContain('fake-secret');
+		});
+	});
 });

@@ -28,6 +28,7 @@ const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { resolveDryRun } = require('../../../../lib/dryRunRequest');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
+const { crossTimeframeCooldown } = require('../../../../services/alerts/crossTimeframeCooldown');
 const { burstAggregator, buildBurstGroupKey } = require('../../../../services/alerts/burstAggregator');
 const { alertModeration } = require('../../../../services/alerts/alertModeration');
 const { classifySignal } = require('../../../../services/alerts/signalClassifier');
@@ -101,7 +102,16 @@ function getFirstTelegramMessageId(result) {
 	return Number.isSafeInteger(numericMessageId) ? numericMessageId : rawMessageId;
 }
 
-async function attachInlineKeyboardAfterPersistence({ manager, results, routing, replyMarkup, aggregated }) {
+const INLINE_KEYBOARD_ATTACH_TIMEOUT_MS = 5000;
+
+async function attachInlineKeyboardAfterPersistence({
+	manager,
+	results,
+	routing,
+	replyMarkup,
+	aggregated,
+	timeoutMs = INLINE_KEYBOARD_ATTACH_TIMEOUT_MS,
+}) {
 	// An aggregated burst delivers one synthetic message shared by every
 	// constituent alert. Attaching N per-alert keyboards would race on the same
 	// Telegram message id, and a replay button for one symbol would sit on a
@@ -114,16 +124,28 @@ async function attachInlineKeyboardAfterPersistence({ manager, results, routing,
 	const chatId = routing?.telegramChatId || process.env.TELEGRAM_CHAT_ID;
 	if (!messageId || !chatId || typeof editMessageReplyMarkup !== 'function') return;
 
+	let timeoutId;
 	try {
-		await editMessageReplyMarkup.call(
+		const editPromise = Promise.resolve().then(() => editMessageReplyMarkup.call(
 			telegramService.bot.telegram,
 			chatId,
 			messageId,
 			undefined,
 			replyMarkup,
-		);
+		));
+		editPromise.catch(() => {});
+		const timeoutPromise = new Promise((_, reject) => {
+			timeoutId = setTimeout(() => {
+				const error = new Error(`editMessageReplyMarkup timed out after ${timeoutMs}ms`);
+				error.code = 'TELEGRAM_KEYBOARD_ATTACH_TIMEOUT';
+				reject(error);
+			}, timeoutMs);
+		});
+		await Promise.race([editPromise, timeoutPromise]);
 	} catch (error) {
 		console.warn('[Alert] Failed to attach inline keyboard after persistence:', error.message);
+	} finally {
+		clearTimeout(timeoutId);
 	}
 }
 
@@ -158,7 +180,7 @@ async function processEnrichment(alert, options) {
 			console.debug('Starting alert enrichment process');
 			const enrichedAlert = await enrichAlert({ text: alert.text }, { tokenUsage, useTradingViewData, parsedSignal: parsed });
 			if (enrichedAlert && typeof enrichedAlert === 'object') {
-				enrichedAlert.tokenUsage = tokenUsage.toJSON();
+				enrichedAlert.tokenUsage = tokenUsage && typeof tokenUsage.toJSON === 'function' ? tokenUsage.toJSON() : null;
 				enriched = true;
 				alert.enriched = enrichedAlert;
 				if (isTradingViewMcpEnabled) {
@@ -225,6 +247,31 @@ function getCooldownChannelIdentityForDestination(channel, destination) {
 
 function getChannelName(identity) {
 	return String(identity).split(':', 1)[0];
+}
+
+/**
+ * Restricts a routing decision to `allowedChannelNames`, intersecting any
+ * `symbolRoutes` entry with the same set. A route's own channel list must not
+ * resurrect a channel that a cooldown gate is still holding.
+ */
+function narrowDeliveryRouting(baseRouting, allowedChannelNames) {
+	return {
+		...baseRouting,
+		channels: allowedChannelNames,
+		symbolRoutes: baseRouting.symbolRoutes
+			? Object.fromEntries(
+				Object.entries(baseRouting.symbolRoutes).map(([symbol, route]) => [
+					symbol,
+					{
+						...route,
+						channels: (route.channels || []).filter((channel) =>
+							allowedChannelNames.includes(channel),
+						),
+					},
+				]),
+			)
+			: undefined,
+	};
 }
 
 function resolveSignalOutcomePriceSource(enriched, parsed) {
@@ -381,25 +428,31 @@ function postAlert(botOrGetter) {
 			// reservation is made before delivery so overlapping requests cannot
 			// both send; failed channels remain retryable.
 			let suppressedRepeat = false;
+			let suppressionReason = null;
 			let reservation = null;
+			let crossReservation = null;
 			let deliveryRouting = routing;
 			let repeatCooldownOptions;
+			const crossTimeframeSuppressionEnabled = crossTimeframeCooldown.isEnabled();
+			const anyRepeatSuppressionEnabled = signalRepeatCooldown.isEnabled() || crossTimeframeSuppressionEnabled;
+			// Both cooldown gates key per (channel, destination), so a reservation for
+			// one chat/thread/webhook never suppresses a signal routed elsewhere.
+			const cooldownChannelNames = anyRepeatSuppressionEnabled
+				? (requestedChannels.length > 0 ? requestedChannels : ['telegram', 'whatsapp', 'discord'])
+				: [];
+			const cooldownChannels = cooldownChannelNames.map((channel) => getCooldownChannelIdentity(channel, routing));
+			// Unsupported timeframes normalize to the default timeframe, so
+			// they must never enter either cooldown store: a raw token like
+			// "3M" collapses to "1h" and stays unsuppressed, while "4H"
+			// legitimately maps to the 4h bar via the TIMEFRAME_MAP.
+			const hasUsableTimeframe = Boolean(
+				parsedSignal
+			&& parsedSignal.rawTimeframe
+			&& Object.prototype.hasOwnProperty.call(TIMEFRAME_MAP, parsedSignal.rawTimeframe)
+			&& TIMEFRAME_MAP[parsedSignal.rawTimeframe] === parsedSignal.timeframe,
+			);
 			if (signalRepeatCooldown.isEnabled()) {
-				// Unsupported timeframes normalize to the default timeframe, so
-				// they must never enter the cooldown store: a raw token like
-				// "3M" collapses to "1h" and stays unsuppressed, while "4H"
-				// legitimately maps to the 4h bar via the TIMEFRAME_MAP.
-				const hasUsableTimeframe = Boolean(
-					parsedSignal
-					&& parsedSignal.rawTimeframe
-					&& Object.prototype.hasOwnProperty.call(TIMEFRAME_MAP, parsedSignal.rawTimeframe)
-					&& TIMEFRAME_MAP[parsedSignal.rawTimeframe] === parsedSignal.timeframe,
-				);
-				const cooldownChannelNames = requestedChannels.length > 0
-					? requestedChannels
-					: ['telegram', 'whatsapp', 'discord'];
 				if (parsedSignal && hasUsableTimeframe) {
-					const cooldownChannels = cooldownChannelNames.map((channel) => getCooldownChannelIdentity(channel, routing));
 					await notificationRedriveService.reconcileRepeatCooldown(buildSignalKey(parsedSignal), cooldownChannels);
 					const verdict = signalRepeatCooldown.reserve(
 						{ ...parsedSignal, timeframe: parsedSignal.timeframe },
@@ -428,29 +481,35 @@ function postAlert(botOrGetter) {
 							})),
 						};
 						if (verdict.channels.length < requestedChannels.length) {
-							const narrowedChannelNames = verdict.channels.map(getChannelName);
-							deliveryRouting = {
-								...routing,
-								channels: narrowedChannelNames,
-								// Repeat suppression is per (channel, destination). When it narrows
-								// the request-level channels, every symbol route must be narrowed to the
-								// same subset; otherwise a route's own channel list resurrects a channel
-								// that is still cooling down and defeats the channel-specific guarantee.
-								symbolRoutes: routing.symbolRoutes
-									? Object.fromEntries(
-										Object.entries(routing.symbolRoutes).map(([symbol, route]) => [
-											symbol,
-											{
-												...route,
-												channels: (route.channels || []).filter((channel) =>
-													narrowedChannelNames.includes(channel),
-												),
-											},
-										]),
-									)
-									: undefined,
-							};
+							deliveryRouting = narrowDeliveryRouting(routing, verdict.channels.map(getChannelName));
 						}
+					}
+				}
+			}
+
+			// Issue #1103: same symbol + same direction on two timeframes seconds apart
+			// (BINANCE:BTCUSDT(D) VENTA then BINANCE:BTCUSDT(240) VENTA) is one trading
+			// idea; CB-230 cannot catch it because its key includes timeframe. Runs after
+			// the CB-230 gate so an already-suppressed request is not double-booked.
+			if (crossTimeframeSuppressionEnabled && !suppressedRepeat && parsedSignal && hasUsableTimeframe) {
+				const crossVerdict = crossTimeframeCooldown.reserve(parsedSignal, cooldownChannels);
+				if (crossVerdict.suppressed) {
+					suppressedRepeat = true;
+					suppressionReason = crossVerdict.reason;
+					crossTimeframeCooldown.recordSuppression();
+					console.log(
+						`[Alert] Cross-timeframe duplicate suppressed for ${crossVerdict.key} `
+					+ `(${crossVerdict.suppressedTimeframe} collapsed against ${crossVerdict.conflictingTimeframe} inside the window, `
+					+ `${Math.round(crossVerdict.elapsedMs / 1000)}s elapsed)`,
+					);
+				} else if (crossVerdict.key) {
+					crossReservation = crossVerdict;
+					const availableChannelNames = [...new Set(crossVerdict.channels.map(getChannelName))];
+					const effectiveChannelNames = deliveryRouting.channels && deliveryRouting.channels.length > 0
+						? deliveryRouting.channels
+						: requestedChannels;
+					if (availableChannelNames.length < effectiveChannelNames.length) {
+						deliveryRouting = narrowDeliveryRouting(deliveryRouting, availableChannelNames);
 					}
 				}
 			}
@@ -522,9 +581,28 @@ function postAlert(botOrGetter) {
 				if (reservation) {
 					signalRepeatCooldown.finalize(reservation.key, reservation.channels, [], [], reservation.generation);
 				}
+				if (crossReservation) {
+					crossTimeframeCooldown.release(crossReservation.key, crossReservation.reservedAt);
+				}
 				throw error;
 			}
 			const deliveredChannels = suppressedRepeat ? [] : getDeliveredChannels(results);
+			const zeroChannelRedriveExpected = requestedChannels.length === 0
+			&& !notificationManager.isIntentionalApiOnly();
+			const keepFailedForRedrive = notificationRedriveService.isEnabled()
+			&& notificationRedriveService.getWorkerRole() !== 'disabled'
+			&& (notificationRedriveService.getWorkerRole() === 'web' || notificationRedriveService.hasDurableStore())
+			&& (results.some((result) => result && !result.success) || zeroChannelRedriveExpected);
+			// A reservation that notified nobody must not swallow the next real signal
+			// on another timeframe, unless the redrive queue owns the retry.
+			if (crossReservation && !keepFailedForRedrive) {
+				const undeliveredChannels = crossReservation.channels.filter((channel) => (
+					!deliveredChannels.includes(getChannelName(channel))
+				));
+				if (undeliveredChannels.length > 0) {
+					crossTimeframeCooldown.release(crossReservation.key, crossReservation.reservedAt, undeliveredChannels);
+				}
+			}
 			if (reservation) {
 				const failedChannelNames = new Set(
 					results.filter((result) => result && !result.success).map((result) => result.channel),
@@ -548,15 +626,9 @@ function postAlert(botOrGetter) {
 							}
 						}));
 				}
-				const zeroChannelRedriveExpected = requestedChannels.length === 0
-					&& !notificationManager.isIntentionalApiOnly();
 				const deliveredReservationChannels = reservation.channels.filter((channel) => (
 					deliveredChannels.includes(getChannelName(channel))
 				));
-				const keepFailedForRedrive = notificationRedriveService.isEnabled()
-					&& notificationRedriveService.getWorkerRole() !== 'disabled'
-					&& (notificationRedriveService.getWorkerRole() === 'web' || notificationRedriveService.hasDurableStore())
-					&& (results.some((result) => result && !result.success) || zeroChannelRedriveExpected);
 				const redriveReservationChannels = reservation.channels.filter((channel) => (
 					!supersededReservationChannels.has(channel)
 				));
@@ -613,6 +685,7 @@ function postAlert(botOrGetter) {
 				...truncation,
 				enriched,
 				suppressedRepeat: suppressedRepeat || undefined,
+				suppressionReason: suppressionReason || undefined,
 				aggregated: aggregated || undefined,
 				burstAggregateId,
 				burstSignalCount,
@@ -653,6 +726,7 @@ function postAlert(botOrGetter) {
 				tradingViewEnrichmentApplied: Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true),
 				tradingViewEnrichmentStatus: alert.tradingViewEnrichmentStatus,
 				suppressedRepeat,
+				suppressionReason,
 				signalClass: alert.signalClass,
 				source: body.source || 'webhook-alert',
 				telegramChatId: routing.telegramChatId,
@@ -664,7 +738,7 @@ function postAlert(botOrGetter) {
 				burstAggregateId,
 				burstSignalCount,
 			});
-			Promise.resolve(saveAlertPromise)
+			const postPersistenceTask = Promise.resolve(saveAlertPromise)
 				.then((storedAlertId) => {
 					if (!storedAlertId) return null;
 					return attachInlineKeyboardAfterPersistence({
@@ -676,6 +750,7 @@ function postAlert(botOrGetter) {
 					});
 				})
 				.catch(() => {}); // errors already logged inside AlertStorageService
+			trackBackgroundTask(postPersistenceTask);
 
 			if (signalOutcomeService.isEnabled() && !suppressedRepeat) {
 				if (parsedSignal) {
@@ -685,17 +760,30 @@ function postAlert(botOrGetter) {
 							? alert.enriched.price_data.current_price
 							: null;
 
-					const stopLevel = alert.enriched && typeof alert.enriched.invalidation_level === 'number' && Number.isFinite(alert.enriched.invalidation_level) && alert.enriched.invalidation_level > 0
-						? alert.enriched.invalidation_level
-						: (alert.enriched && typeof alert.enriched.invalidation_level === 'string' && Number.isFinite(Number(alert.enriched.invalidation_level)) && Number(alert.enriched.invalidation_level) > 0
-							? Number(alert.enriched.invalidation_level)
+					const riskMetadata = alert.enriched && typeof alert.enriched === 'object' ? {
+						invalidation_level: alert.enriched.invalidation_level !== undefined ? alert.enriched.invalidation_level : alert.enriched.invalidationLevel,
+						target_level: alert.enriched.target_level !== undefined ? alert.enriched.target_level : alert.enriched.targetLevel,
+						setup_type: alert.enriched.setup_type !== undefined ? alert.enriched.setup_type : alert.enriched.setupType,
+						risk_reward_ratio: alert.enriched.risk_reward_ratio !== undefined ? alert.enriched.risk_reward_ratio : alert.enriched.riskRewardRatio,
+					} : null;
+
+					const stopLevel = riskMetadata && typeof riskMetadata.invalidation_level === 'number' && Number.isFinite(riskMetadata.invalidation_level) && riskMetadata.invalidation_level > 0
+						? riskMetadata.invalidation_level
+						: (riskMetadata && typeof riskMetadata.invalidation_level === 'string' && Number.isFinite(Number(riskMetadata.invalidation_level)) && Number(riskMetadata.invalidation_level) > 0
+							? Number(riskMetadata.invalidation_level)
 							: null);
 
-					const targetLevel = alert.enriched && typeof alert.enriched.target_level === 'number' && Number.isFinite(alert.enriched.target_level) && alert.enriched.target_level > 0
-						? alert.enriched.target_level
-						: (alert.enriched && typeof alert.enriched.target_level === 'string' && Number.isFinite(Number(alert.enriched.target_level)) && Number(alert.enriched.target_level) > 0
-							? Number(alert.enriched.target_level)
+					const targetLevel = riskMetadata && typeof riskMetadata.target_level === 'number' && Number.isFinite(riskMetadata.target_level) && riskMetadata.target_level > 0
+						? riskMetadata.target_level
+						: (riskMetadata && typeof riskMetadata.target_level === 'string' && Number.isFinite(Number(riskMetadata.target_level)) && Number(riskMetadata.target_level) > 0
+							? Number(riskMetadata.target_level)
 							: null);
+
+					const setupType = (riskMetadata && typeof riskMetadata.setup_type === 'string' && riskMetadata.setup_type.trim())
+						? riskMetadata.setup_type.trim()
+						: 'tradingview-enrichment';
+
+					const riskRewardRatio = riskMetadata ? riskMetadata.risk_reward_ratio : null;
 
 					const priceSource = mcpPrice !== null
 						? resolveSignalOutcomePriceSource(alert.enriched, parsedSignal)
@@ -707,7 +795,7 @@ function postAlert(botOrGetter) {
 						symbol: parsedSignal.symbol,
 						exchange: parsedSignal.exchange || 'BINANCE',
 						timeframe: parsedSignal.timeframe,
-						setupType: (alert.enriched && alert.enriched.setup_type) || 'tradingview-enrichment',
+						setupType,
 						score: alert.enriched ? alert.enriched.sentiment_score : null,
 						confidenceScore: (typeof alert.enriched?.confidence === 'number' && Number.isFinite(alert.enriched.confidence) && alert.enriched.confidence >= 0 && alert.enriched.confidence <= 1)
 							? alert.enriched.confidence
@@ -718,6 +806,9 @@ function postAlert(botOrGetter) {
 						price: mcpPrice,
 						stop: stopLevel,
 						target: targetLevel,
+						invalidationLevel: stopLevel,
+						targetLevel,
+						riskRewardRatio,
 						priceSource,
 						sources: alert.enriched && Array.isArray(alert.enriched.sources) ? alert.enriched.sources : [],
 						tokenUsage: tokenUsageJSON,
@@ -785,4 +876,6 @@ module.exports = {
 	getNotificationManager,
 	getCooldownChannelIdentity,
 	processEnrichment,
+	attachInlineKeyboardAfterPersistence,
+	INLINE_KEYBOARD_ATTACH_TIMEOUT_MS,
 };

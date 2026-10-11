@@ -470,11 +470,46 @@ async function postBinanceOrderPreview(req, res) {
 	}
 }
 
+async function getBinanceAccountBalances(req, res) {
+	const startTime = Date.now();
+	try {
+		const result = await binanceOrderService.getBalances(req.query);
+		return res.status(200).json(result);
+	} catch (error) {
+		const processingMs = Date.now() - startTime;
+		if (error instanceof BinanceOrderRequestError || error instanceof BinanceOrderServiceError) {
+			console.warn('[BinanceOrdersController] balances query rejected', { code: error.code });
+			return res.status(error.statusCode || 400).json({
+				success: false,
+				error: error.message,
+				code: error.code,
+			});
+		}
+
+		console.error('[BinanceOrdersController] balances query failed', { code: 'BINANCE_BALANCE_QUERY_FAILED' });
+		sentryService.captureRuntimeError({
+			channel: 'binance-orders-controller',
+			error,
+			http: {
+				endpoint: '/api/trading/binance/account/balances',
+				method: 'GET',
+				statusCode: 502,
+			},
+		});
+		return res.status(502).json({
+			success: false,
+			error: 'Binance balance query failed',
+			code: 'BINANCE_BALANCE_QUERY_FAILED',
+		});
+	}
+}
+
 module.exports = {
 	postBinanceOrder,
 	getBinanceOrders,
 	deleteBinanceOrder,
 	getBinanceOrderAudit,
 	postBinanceOrderPreview,
+	getBinanceAccountBalances,
 };
 

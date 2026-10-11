@@ -26,6 +26,7 @@ const {
 	getTakeProfitTarget,
 	getRiskRewardRatio,
 } = require('./expandedAnalysisAlertReport');
+const { hasConfluenceEvidence } = require('./confluenceEvidence');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const alertStorageService = require('../storage/AlertStorageService');
 
@@ -789,52 +790,71 @@ class TradingViewMcpService {
 		let multiTimeframeAnalysis = null;
 		if (confluenceEnabled && !budgetController.signal.aborted) {
 			const remainingBudgetMs = budgetDeadlineAt ? budgetDeadlineAt - Date.now() : cfg.timeoutMs;
-			const confluenceTimeoutMs = Math.min(8000, Math.max(1, remainingBudgetMs));
-			const confluenceController = new AbortController();
-			const confluenceTimeoutId = setTimeout(() => {
-				confluenceController.abort(new Error(`TradingView MCP confluence timeout after ${confluenceTimeoutMs}ms`));
-			}, confluenceTimeoutMs);
+			if (remainingBudgetMs <= 0) {
+				optionalEnrichmentPartial = true;
+				this._recordConfluenceOutcome({ budgetExhausted: true });
+			} else {
+				const confluenceTimeoutMs = Math.min(8000, Math.max(1, remainingBudgetMs));
+				const confluenceController = new AbortController();
+				const confluenceTimeoutId = setTimeout(() => {
+					confluenceController.abort(new Error(`TradingView MCP confluence timeout after ${confluenceTimeoutMs}ms`));
+				}, confluenceTimeoutMs);
 
-			// Respect both the per-call timeout and the overall enrichment budget
-			const combinedSignal = AbortSignal.any([confluenceController.signal, budgetController.signal]);
-			// These counters count CALLS, not enrichments. One alert enrichment issues up
-			// to two confluence calls (combined_analysis, then multi_timeframe_analysis when
-			// enabled), so each call records its own attempt and exactly one outcome. The
-			// alternative - one attempt per enrichment - makes applied+failed<=attempted
-			// arithmetically impossible, because a budget-starved second call would then be
-			// charged to the first call's attempt and be reported as both applied and failed.
-			this._recordConfluenceOutcome({ attempted: true });
+				// Respect both the per-call timeout and the overall enrichment budget
+				const combinedSignal = AbortSignal.any([confluenceController.signal, budgetController.signal]);
+				// These counters count CALLS, not enrichments. One alert enrichment issues up
+				// to two confluence calls (combined_analysis, then multi_timeframe_analysis when
+				// enabled), so each call records its own attempt and exactly one outcome. The
+				// alternative - one attempt per enrichment - makes applied+failed<=attempted
+				// arithmetically impossible, because a budget-starved second call would then be
+				// charged to the first call's attempt and be reported as both applied and failed.
+				this._recordConfluenceOutcome({ attempted: true });
 
-			try {
-				confluenceAnalysis = await this.callCombinedAnalysis({
-					symbol,
-					exchange,
-					timeframe,
-					signal: combinedSignal,
-				});
-				this._recordConfluenceOutcome({ applied: true });
-				console.debug(`[TradingViewMcpService] Confluence analysis fetched for ${symbol}`);
-				if (multiTimeframeEnabled) {
-					if (budgetController.signal.aborted) {
-						optionalEnrichmentPartial = true;
-						this._recordConfluenceOutcome({ budgetExhausted: true });
-					} else {
-						this._recordConfluenceOutcome({ attempted: true });
-						multiTimeframeAnalysis = await this.callMultiTimeframeAnalysis({
+				try {
+					try {
+						confluenceAnalysis = await this.callCombinedAnalysis({
 							symbol,
 							exchange,
+							timeframe,
 							signal: combinedSignal,
 						});
 						this._recordConfluenceOutcome({ applied: true });
-						console.debug(`[TradingViewMcpService] Multi-timeframe confluence analysis fetched for ${symbol}`);
+						console.debug(`[TradingViewMcpService] Confluence analysis fetched for ${symbol}`);
+					} finally {
+						clearTimeout(confluenceTimeoutId);
 					}
+
+					if (multiTimeframeEnabled) {
+						const remainingMtfBudgetMs = budgetDeadlineAt ? budgetDeadlineAt - Date.now() : cfg.timeoutMs;
+						if (budgetController.signal.aborted || remainingMtfBudgetMs <= 0) {
+							optionalEnrichmentPartial = true;
+							this._recordConfluenceOutcome({ budgetExhausted: true });
+						} else {
+							const mtfTimeoutMs = Math.min(8000, Math.max(1, remainingMtfBudgetMs));
+							const mtfController = new AbortController();
+							const mtfTimeoutId = setTimeout(() => {
+								mtfController.abort(new Error(`TradingView MCP multi-timeframe timeout after ${mtfTimeoutMs}ms`));
+							}, mtfTimeoutMs);
+							const mtfSignal = AbortSignal.any([mtfController.signal, budgetController.signal]);
+							this._recordConfluenceOutcome({ attempted: true });
+							try {
+								multiTimeframeAnalysis = await this.callMultiTimeframeAnalysis({
+									symbol,
+									exchange,
+									signal: mtfSignal,
+								});
+								this._recordConfluenceOutcome({ applied: true });
+								console.debug(`[TradingViewMcpService] Multi-timeframe confluence analysis fetched for ${symbol}`);
+							} finally {
+								clearTimeout(mtfTimeoutId);
+							}
+						}
+					}
+				} catch (error) {
+					optionalEnrichmentPartial = true;
+					this._recordConfluenceOutcome({ failed: true, error });
+					this.logger.warn(`[TradingViewMcpService] Confluence enrichment failed for ${symbol} (fail-open): ${error.message}`);
 				}
-			} catch (error) {
-				optionalEnrichmentPartial = true;
-				this._recordConfluenceOutcome({ failed: true, error });
-				this.logger.warn(`[TradingViewMcpService] Confluence enrichment failed for ${symbol} (fail-open): ${error.message}`);
-			} finally {
-				clearTimeout(confluenceTimeoutId);
 			}
 		} else if (confluenceEnabled) {
 			optionalEnrichmentPartial = true;
@@ -1433,7 +1453,7 @@ class TradingViewMcpService {
 		// Confluence insight: append summary line using the .confluence sub-object from combined_analysis.
 		// The MCP payload shape (established in expandedAnalysisAlertReport.js) is:
 		//   confluenceAnalysis.confluence = { recommendation, confidence, signals_agree }
-		if (confluenceAnalysis) {
+		if (confluenceAnalysis && hasConfluenceEvidence(confluenceAnalysis)) {
 			const conf = confluenceAnalysis.confluence;
 			if (conf) {
 				const rec = conf.recommendation || conf.action || null;

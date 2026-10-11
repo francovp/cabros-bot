@@ -5,6 +5,7 @@ const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
+const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
 jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	saveAlert: jest.fn().mockResolvedValue('stored-message-id'),
@@ -18,11 +19,14 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 	beforeEach(async () => {
 		savedEnv = saveEnv();
+		remoteConfigService._resetForTesting();
+		delete process.env.GENERIC_MESSAGE_MAX_LENGTH;
 		Object.assign(process.env, {
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_TELEGRAM_BOT: 'true',
 			ENABLE_WHATSAPP_ALERTS: 'true',
 			ENABLE_DISCORD_ALERTS: 'false',
+			ENABLE_FIREBASE_REMOTE_CONFIG: 'false',
 			BOT_TOKEN: 'test-bot-token',
 			TELEGRAM_CHAT_ID: '123456789',
 			WHATSAPP_API_URL: 'https://api.greenapi.com/waInstance123/',
@@ -52,6 +56,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 	});
 
 	afterEach(() => {
+		remoteConfigService._resetForTesting();
 		restoreEnv(savedEnv);
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
@@ -119,7 +124,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 	it('does not persist raw discordWebhookUrl to AlertStorageService to prevent credential leakage', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
-		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
 		global.fetch = jest.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({ id: 'discord-msg-789' }),
@@ -163,7 +168,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 	it('sends a message to discord using per-request discordWebhookUrl override', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
-		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
 		global.fetch = jest.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({ id: 'discord-msg-789' }),
@@ -193,7 +198,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 	it('returns 400 when discordWebhookUrl is invalid (non-HTTPS or non-Discord)', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
-		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
 		await initializeNotificationServices(mockBot);
 
 		const res = await request(app)
@@ -231,7 +236,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 	it('returns 409 IDEMPOTENCY_CONFLICT when reusing key with different discordWebhookUrl', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
-		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
 		global.fetch = jest.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({ id: 'discord-msg-1' }),
@@ -274,6 +279,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			json: async () => ({ idMessage: 'provider-message-123', id: 'provider-message-123' }),
 		});
 		await initializeNotificationServices(mockBot);
+		global.fetch.mockClear();
 
 		const payload = {
 			message: 'Replay this notification once',
@@ -484,6 +490,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		});
 
 		await initializeNotificationServices(mockBot);
+		global.fetch.mockClear();
 
 		const res = await request(app)
 			.post('/api/webhook/message')
@@ -859,6 +866,41 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 	// ---------------------------------------------------------------------------
 	// Truncation metadata (GH-602)
 	// ---------------------------------------------------------------------------
+	it('uses a valid environment limit and preserves exact-boundary truncation behavior', async () => {
+		process.env.GENERIC_MESSAGE_MAX_LENGTH = '5000';
+
+		const atLimit = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'C'.repeat(5000), channels: ['telegram'] })
+			.expect(200);
+
+		expect(atLimit.body).not.toHaveProperty('truncated');
+
+		const overLimit = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'D'.repeat(5001), channels: ['telegram'] })
+			.expect(200);
+
+		expect(overLimit.body.truncated).toBe(true);
+		expect(overLimit.body.originalLength).toBe(5001);
+		expect(overLimit.body.deliveredLength).toBe(5003);
+	});
+
+	it('uses a fresh Remote Config limit for generic message delivery', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		remoteConfigService._setRemoteOverridesForTesting({ GENERIC_MESSAGE_MAX_LENGTH: 5000 });
+
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'R'.repeat(4500), channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body).not.toHaveProperty('truncated');
+	});
+
 	it('omits truncation metadata when message fits within MAX_MESSAGE_LENGTH', async () => {
 		const res = await request(app)
 			.post('/api/webhook/message')

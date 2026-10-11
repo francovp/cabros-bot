@@ -9,6 +9,7 @@ const { tradingViewMcpService } = require('../../src/services/tradingview/Tradin
 const { jobRepository, _resetForTesting: resetJobRepository } = require('../../src/services/jobs/JobRepository');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
+const { jobService } = require('../../src/services/jobs/JobService');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
@@ -59,7 +60,8 @@ describe('Jobs API Integration Tests', () => {
 		app.use('/api', getRoutes(mockBot));
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
+		await jobService.waitForActiveJobs();
 		restoreEnv(savedEnv);
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
