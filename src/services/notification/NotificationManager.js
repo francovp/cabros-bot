@@ -452,6 +452,14 @@ class NotificationManager {
 		};
 	}
 
+	_isRedriveIneligible(alert, options = {}) {
+		return Boolean(options && options.isRedrive) ||
+			(options && options.redriveEligible === false) ||
+			Boolean(options && options.isProbe) ||
+			Boolean(alert && alert.isProbe) ||
+			Boolean(alert && alert.redriveEligible === false);
+	}
+
 	async notifyAdminOfFailures(alert, results, options = {}) {
 		if (options && options.isRedrive) {
 			return;
@@ -471,7 +479,8 @@ class NotificationManager {
 			return `- ${result.channel}: ${result.error || 'Unknown error'}${metadata.length ? ` (${metadata.join(', ')})` : ''}`;
 		});
 		const requestId = alert && (alert.requestId || alert.correlationId);
-		const redriveContext = notificationRedriveService.isEnabled()
+		const isRedriveIneligible = this._isRedriveIneligible(alert, options);
+		const redriveContext = !isRedriveIneligible && notificationRedriveService.isEnabled()
 			? [`Dead-letters queued for redrive (pending: ${notificationRedriveService.getPendingCount()})`]
 			: [];
 		const message = [
@@ -503,10 +512,11 @@ class NotificationManager {
 		const requestId = alert && (alert.requestId || alert.correlationId);
 		const configuredChannels = this.getConfiguredChannels();
 		const unconfiguredChannels = this.getUnconfiguredChannels();
-		const redriveContext = notificationRedriveService.isEnabled() && configuredChannels.length > 0
+		const isRedriveIneligible = this._isRedriveIneligible(alert, options);
+		const redriveContext = !isRedriveIneligible && notificationRedriveService.isEnabled() && configuredChannels.length > 0
 			? [`Dead-letters queued for redrive (pending: ${notificationRedriveService.getPendingCount()})`]
 			: [];
-		const droppedMessage = configuredChannels.length > 0
+		const droppedMessage = configuredChannels.length > 0 && !isRedriveIneligible
 			? 'Broadcast alerts are being dropped and dead-lettered.'
 			: 'Broadcast alerts are being dropped.';
 		// Operator intent is the difference between "a channel broke" and "a channel was never
@@ -708,12 +718,7 @@ class NotificationManager {
 			}
 		}
 
-		const isRedriveIneligible =
-			Boolean(options.isRedrive) ||
-			options.redriveEligible === false ||
-			Boolean(options.isProbe) ||
-			Boolean(alert?.isProbe) ||
-			alert?.redriveEligible === false;
+		const isRedriveIneligible = this._isRedriveIneligible(alert, options);
 
 		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
 			const failedResults = formattedResults.filter(result => result && !result.success);
@@ -779,12 +784,7 @@ class NotificationManager {
 				http: httpContext,
 			});
 
-		const isRedriveIneligible =
-			Boolean(options.isRedrive) ||
-			options.redriveEligible === false ||
-			Boolean(options.isProbe) ||
-			Boolean(alert?.isProbe) ||
-			alert?.redriveEligible === false;
+		const isRedriveIneligible = this._isRedriveIneligible(alert, options);
 
 		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
 				const candidateChannels = this.getConfiguredChannels();
@@ -947,12 +947,7 @@ class NotificationManager {
 			}
 		}
 
-		const isRedriveIneligible =
-			Boolean(options.isRedrive) ||
-			options.redriveEligible === false ||
-			Boolean(options.isProbe) ||
-			Boolean(alert?.isProbe) ||
-			alert?.redriveEligible === false;
+		const isRedriveIneligible = this._isRedriveIneligible(alert, options);
 
 		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
 			const failedResults = formattedResults.filter(result => result && !result.success);
