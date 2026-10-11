@@ -2,6 +2,7 @@
 
 const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
+const { hasConfluenceEvidence } = require('../../../../services/tradingview/confluenceEvidence');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
 	ExpandedAnalysisAlertRequestError,
@@ -97,6 +98,7 @@ function postSymbolAnalysis() {
 			const normalized = normalizeAnalysis({ analysis, input, parsed, multiTimeframe, multiAgent, side });
 			const reportAnalysis = {
 				...analysis,
+				confluence: hasConfluenceEvidence(analysis) ? analysis.confluence : null,
 				technical: {
 					...(analysis.technical || analysis),
 					price_data: normalized.price_data,
@@ -379,7 +381,7 @@ function emptyRisk(side, price) {
 function buildDecision({ analysis, technical, side, risk, price, technicalIndicators, multiAgent }) {
 	const reasons = [];
 	const warnings = [];
-	const confluence = analysis.confluence || {};
+	const confluence = hasConfluenceEvidence(analysis) ? analysis.confluence || {} : {};
 	const dataSufficient = Boolean(price !== null && technicalIndicators.RSI !== null && side && risk.valid);
 	if (confluence.recommendation || confluence.action) reasons.push(`Confluencia: ${confluence.recommendation || confluence.action}`);
 	if (technicalIndicators.RSI !== null) reasons.push(`RSI: ${technicalIndicators.RSI}`);
@@ -417,7 +419,9 @@ function buildDecision({ analysis, technical, side, risk, price, technicalIndica
 }
 
 function inferSide(analysis = {}) {
-	const confluence = String(analysis.confluence?.recommendation || analysis.confluence?.action || '').toUpperCase();
+	const confluence = hasConfluenceEvidence(analysis)
+		? String(analysis.confluence?.recommendation || analysis.confluence?.action || '').toUpperCase()
+		: '';
 	if (confluence.includes('SELL')) return 'SELL';
 	if (confluence.includes('BUY')) return 'BUY';
 	const sentiment = String(analysis.sentiment?.sentiment_label || analysis.market_sentiment?.overall_sentiment || '').toUpperCase();

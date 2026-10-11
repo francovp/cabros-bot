@@ -67,6 +67,7 @@ describe('Alert Grounding Integration', () => {
 				invalidation_level: '$48000',
 				target_level: '$55000',
 				setup_type: 'breakout',
+				setup_evidence: 'Volume confirms resistance breakout',
 				risk_reward_ratio: '2:1',
 			}),
 			citations: mockSearchResults,

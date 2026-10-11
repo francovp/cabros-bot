@@ -234,6 +234,23 @@ function sendReadinessWarning(context, warningText, signal) {
 	return Promise.resolve();
 }
 
+/**
+ * Routing merged into a created job's payload.
+ *
+ * Telegram contexts carry no `notificationRouting` and keep `{ telegramChatId }`
+ * unchanged. Issue #886's WhatsApp bridge sets it so a job is delivered to the chat
+ * the command arrived in rather than to a GreenAPI chat id shaped like a Telegram
+ * one. A malformed override is ignored: dropping routing would turn the job into an
+ * unintended broadcast.
+ */
+function resolveJobRouting(context, chatId) {
+	const override = context && context.notificationRouting;
+	if (override && typeof override === 'object' && !Array.isArray(override)) {
+		return { ...override };
+	}
+	return chatId !== undefined && chatId !== null ? { telegramChatId: String(chatId) } : {};
+}
+
 const createTradingViewJobCommand = (type, command, buildPayload) => async (context) => {
 	if (isMaintenanceModeEnabled()) {
 		await sendMaintenanceReply(context);
@@ -255,7 +272,7 @@ const createTradingViewJobCommand = (type, command, buildPayload) => async (cont
 	try {
 		const payload = {
 			...buildPayload(args),
-			...(chatId !== undefined && chatId !== null ? { telegramChatId: String(chatId) } : {}),
+			...resolveJobRouting(context, chatId),
 		};
 		if (typeof jobService.validateJobRequest === 'function') {
 			jobService.validateJobRequest(type, payload);
@@ -1112,4 +1129,5 @@ module.exports = {
 	telegramCommandRateLimiter,
 	telegramMaintenanceMode,
 	setWarningReplyTimeoutMsForTest,
+	resolveJobRouting,
 };

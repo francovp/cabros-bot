@@ -94,6 +94,7 @@ jobs:
         env:
           NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL || 'https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message' }}
           NOTIFY_API_KEY: ${{ secrets.WEBHOOK_API_KEY || secrets.NOTIFY_API_KEY || '' }}
+          NOTIFY_WHATSAPP_CHAT_ID: ${{ vars.NOTIFY_WHATSAPP_CHAT_ID || '120363422033474991@g.us' }}
         run: |
           if [ -n "$NOTIFY_API_KEY" ]; then
             curl --connect-timeout 10 --max-time 30 --silent --show-error -X POST "$NOTIFY_WEBHOOK_URL" \
@@ -102,6 +103,6 @@ jobs:
               -d '{
                 "message": "[ALERT] Firestore scheduled backup failed on GitHub Actions! Check workflow run: '"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"'",
                 "channels": ["whatsapp"],
-                "whatsappChatId": "120363422033474991@g.us"
+                "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
               }' || true
           fi

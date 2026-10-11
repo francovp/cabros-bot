@@ -266,6 +266,78 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		}));
 	});
 
+	it('collapses duplicate symbols into one MCP call and one report section (#874)', async () => {
+		const requested = [];
+		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(async (input) => {
+			requested.push(input.raw);
+			return {
+				price_data: { current_price: 100 },
+				technical_indicators: { rsi: 50 },
+			};
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/expanded-analysis-alert')
+			.set('x-api-key', 'test-key')
+			.send({ symbols: ['BINANCE:BTCUSDT', 'BINANCE:BTCUSDT', 'NASDAQ:NVDA'], timeframe: '1D' })
+			.expect(200);
+
+		expect(requested).toHaveLength(2);
+		expect(requested).toEqual(['BINANCE:BTCUSDT', 'NASDAQ:NVDA']);
+		expect(res.body.results).toHaveLength(2);
+		expect(res.body.duplicatesRemoved).toBe(1);
+
+		const btcRow = res.body.alertText.match(/BTCUSDT/g) || [];
+		expect(btcRow.length).toBeGreaterThan(0);
+		expect((res.body.alertText.match(/^BTCUSDT /gm) || [])).toHaveLength(1);
+		expect((res.body.alertText.match(/^NVDA /gm) || [])).toHaveLength(1);
+	});
+
+	it('collapses exchange aliases that resolve to the same MCP venue (#874)', async () => {
+		const requested = [];
+		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(async (input) => {
+			requested.push(input.raw);
+			return {
+				price_data: { current_price: 100 },
+				technical_indicators: { rsi: 50 },
+			};
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/expanded-analysis-alert')
+			.set('x-api-key', 'test-key')
+			.send({ symbols: ['BATS:AAPL', 'NASDAQ:AAPL', 'NASDAQ_DLY:AAPL'], timeframe: '1D' })
+			.expect(200);
+
+		expect(requested).toEqual(['BATS:AAPL']);
+		expect(res.body.results).toHaveLength(1);
+		expect(res.body.duplicatesRemoved).toBe(2);
+		// The retained entry keeps the caller's own venue; alias resolution stays outbound.
+		expect(res.body.results[0].symbol).toBe('BATS:AAPL');
+	});
+
+	it('applies the 50-symbol cap after deduplication (#874)', async () => {
+		const symbols = [
+			...Array.from({ length: 60 }, () => 'BINANCE:BTCUSDT'),
+			...Array.from({ length: 50 }, (_, index) => `NASDAQ:SYM${index}`),
+		];
+
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValue({
+			price_data: { current_price: 100 },
+			technical_indicators: { rsi: 50 },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/expanded-analysis-alert')
+			.set('x-api-key', 'test-key')
+			.send({ symbols });
+
+		expect(res.status).toBe(400);
+		expect(res.body.code).toBe('INVALID_REQUEST');
+		expect(res.body.error).toContain('Too many symbols requested (max: 50)');
+		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
+	});
+
 	it('returns 400 when neither body symbols nor EXPANDED_ANALYSIS_ALERT_SYMBOLS are defined', async () => {
 		const res = await request(app)
 			.post('/api/webhook/expanded-analysis-alert')
@@ -626,5 +698,42 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
+	it('ignores evidence-empty confluence when deriving item side for signal outcome recording', async () => {
+		tradingViewMcpService.analyzeSymbolIdentifier.mockResolvedValueOnce({
+			symbol: 'NASDAQ:NVDA',
+			price_data: {
+				current_price: 219.51,
+				change_percent: 1.5,
+				volume: 70213090,
+			},
+			technical_indicators: {
+				rsi: 57.8,
+				sma20: 214.1,
+				macd: 6.1,
+				macd_signal: 7.2,
+				atr: 7.69,
+			},
+			confluence: {
+				recommendation: 'STRONG_SELL',
+				confidence: 'HIGH',
+			},
+			news: { count: 0 },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/expanded-analysis-alert')
+			.set('x-api-key', 'test-key')
+			.send({ symbols: ['NASDAQ:NVDA'], timeframe: '1D' })
+			.expect(200);
+
+		expect(res.body.success).toBe(true);
+		expect(signalOutcomeService.recordSignal).toHaveBeenCalledWith(
+			expect.objectContaining({
+				symbol: 'NVDA',
+				side: 'BUY',
+			})
+		);
 	});
 });

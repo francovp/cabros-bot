@@ -1101,7 +1101,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 
 		it('should re-deliver cached alerts when a later request specifies a different discordWebhookUrl', async () => {
 			process.env.ENABLE_DISCORD_ALERTS = 'true';
-			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/default';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
 			await initializeNotificationServices(mockBot);
 			const webhookA = 'https://discord.com/api/webhooks/123/abc';
 			const webhookB = 'https://discord.com/api/webhooks/456/def';
@@ -1144,7 +1144,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 
 		it('should not re-deliver when a cached request uses the exact same discordWebhookUrl override', async () => {
 			process.env.ENABLE_DISCORD_ALERTS = 'true';
-			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/default';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
 			await initializeNotificationServices(mockBot);
 			const webhookA = 'https://discord.com/api/webhooks/123/abc';
 

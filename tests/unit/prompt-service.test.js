@@ -235,17 +235,18 @@ describe('PromptService', () => {
 			'invalidation_level',
 			'target_level',
 			'setup_type',
+			'setup_evidence',
 			'risk_reward_ratio',
 		]);
 		expect(logger.warn).toHaveBeenCalledWith(
-			expect.stringContaining('missing required risk fields: invalidation_level, target_level, setup_type, risk_reward_ratio'),
+			expect.stringContaining('missing required risk fields: invalidation_level, target_level, setup_type, setup_evidence, risk_reward_ratio'),
 		);
 
 		const driftStatus = service.getSchemaDriftStatus();
 		expect(driftStatus['alert-enrichment:4']).toEqual(expect.objectContaining({
 			promptName: 'alert-enrichment',
 			version: 4,
-			missingRiskFields: ['invalidation_level', 'target_level', 'setup_type', 'risk_reward_ratio'],
+			missingRiskFields: ['invalidation_level', 'target_level', 'setup_type', 'setup_evidence', 'risk_reward_ratio'],
 		}));
 	});
 
@@ -255,7 +256,7 @@ describe('PromptService', () => {
 		const remotePrompt = {
 			version: 6,
 			compile: jest.fn().mockReturnValue([
-				{ role: 'system', content: 'Include invalidation_level, target_level, setup_type, and risk_reward_ratio.' },
+				{ role: 'system', content: 'Include invalidation_level, target_level, setup_type, setup_evidence, and risk_reward_ratio.' },
 				{ role: 'user', content: 'Context: {{alertContext}}' },
 			]),
 		};
@@ -272,6 +273,53 @@ describe('PromptService', () => {
 			'0.90',
 			'0.60',
 			'0.30',
+			'Setup type rubric',
+			'OMIT `setup_type` and `setup_evidence` entirely',
+		]);
+	});
+
+	it('should detect missing setup_evidence in remote prompt risk fields', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+
+		const remotePrompt = {
+			version: 9,
+			compile: jest.fn().mockReturnValue([
+				{ role: 'system', content: 'Include invalidation_level, target_level, setup_type, and risk_reward_ratio. Setup type rubric: Omit uncorroborated setup types. Score against reference anchors: 0.90, 0.60, 0.30. Require sentiment_score_evidence.' },
+				{ role: 'user', content: 'Context: {{alertContext}}' },
+			]),
+		};
+		const service = new PromptService({
+			logger,
+			clientProvider: jest.fn().mockResolvedValue({ prompt: { get: jest.fn().mockResolvedValue(remotePrompt) } }),
+		});
+
+		const prompt = await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'Bitcoin alert context' });
+
+		expect(prompt.schemaDriftDetected).toBe(true);
+		expect(prompt.missingRiskFields).toEqual(['setup_evidence']);
+	});
+
+	it('should detect missing omission rubric guidance in remote prompt calibration markers', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+
+		const remotePrompt = {
+			version: 10,
+			compile: jest.fn().mockReturnValue([
+				{ role: 'system', content: 'Include invalidation_level, target_level, setup_type, setup_evidence, and risk_reward_ratio. Score against reference anchors: 0.90, 0.60, 0.30. Require sentiment_score_evidence.' },
+				{ role: 'user', content: 'Context: {{alertContext}}' },
+			]),
+		};
+		const service = new PromptService({
+			logger,
+			clientProvider: jest.fn().mockResolvedValue({ prompt: { get: jest.fn().mockResolvedValue(remotePrompt) } }),
+		});
+
+		const prompt = await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'Bitcoin alert context' });
+
+		expect(prompt.schemaDriftDetected).toBe(true);
+		expect(prompt.missingCalibrationGuidance).toEqual([
+			'Setup type rubric',
+			'OMIT `setup_type` and `setup_evidence` entirely',
 		]);
 	});
 
@@ -281,7 +329,7 @@ describe('PromptService', () => {
 		const remotePrompt = {
 			version: 5,
 			compile: jest.fn().mockReturnValue([
-				{ role: 'system', content: 'You are an analyst. Include invalidation_level, target_level, setup_type, and risk_reward_ratio. Score against reference anchors: 0.90 multi-source major catalyst, 0.60 partial, 0.30 negligible. Require sentiment_score_evidence.' },
+				{ role: 'system', content: 'You are an analyst. Include invalidation_level, target_level, setup_type, setup_evidence, and risk_reward_ratio. Setup type rubric: OMIT `setup_type` and `setup_evidence` entirely. Score against reference anchors: 0.90 multi-source major catalyst, 0.60 partial, 0.30 negligible. Require sentiment_score_evidence.' },
 				{ role: 'user', content: 'Context: {{alertContext}}' },
 			]),
 		};
@@ -318,7 +366,7 @@ describe('PromptService', () => {
 		const remotePrompt = {
 			version: 7,
 			compile: jest.fn().mockReturnValue([
-				{ role: 'system', content: 'You are an analyst. Include invalidation_level, target_level, setup_type, and risk_reward_ratio. Score against reference anchors: 0.90 multi-source major catalyst, 0.60 partial, 0.30 negligible. Require sentiment_score_evidence.' },
+				{ role: 'system', content: 'You are an analyst. Include invalidation_level, target_level, setup_type, setup_evidence, and risk_reward_ratio. Setup type rubric: OMIT `setup_type` and `setup_evidence` entirely. Score against reference anchors: 0.90 multi-source major catalyst, 0.60 partial, 0.30 negligible. Require sentiment_score_evidence.' },
 				{ role: 'user', content: 'Context: {{alertContext}}' },
 			]),
 		};
@@ -609,6 +657,7 @@ describe('PromptService prompt-resolution telemetry', () => {
 			'invalidation_level',
 			'target_level',
 			'setup_type',
+			'setup_evidence',
 			'risk_reward_ratio',
 		]);
 		const status = service.getPromptResolutionStatus();

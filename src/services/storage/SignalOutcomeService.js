@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const admin = require('firebase-admin');
+const { createHash } = require('node:crypto');
 const AlertStorageService = require('./AlertStorageService');
 const equityMarketDataService = require('./EquityMarketDataService');
 const geminiPriceService = require('../grounding/geminiPriceService');
@@ -729,6 +730,7 @@ function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProv
 	}
 	if (entryPrice === null || entryPrice === undefined) {
 		const isTransient = equityMarketDataService.isTransientReason(entryPriceReason)
+			|| entryPriceReason === 'historical_entry_price_unavailable'
 			|| entryPriceReason === REASON_BINANCE_UNAVAILABLE
 			|| entryPriceReason === REASON_BINANCE_REGION_BLOCKED
 			|| entryPriceReason === REASON_GEMINI_UNAVAILABLE
@@ -772,12 +774,15 @@ function normalizeConfidenceScore(val) {
  * Persist signal metadata to Firestore.
  */
 async function recordSignalInternal({
+	idempotencyKey,
 	requestId,
+	receivedAt,
 	source,
 	symbol,
 	exchange,
 	timeframe,
 	setupType,
+	setup_type,
 	score,
 	confidenceScore,
 	side,
@@ -785,6 +790,12 @@ async function recordSignalInternal({
 	priceSource,
 	stop,
 	target,
+	invalidationLevel,
+	invalidation_level,
+	targetLevel,
+	target_level,
+	riskRewardRatio,
+	risk_reward_ratio,
 	sources,
 	tokenUsage,
 	processingTimeMs,
@@ -803,7 +814,8 @@ async function recordSignalInternal({
 		const normSymbolInfo = normalizeSymbolAndExchange(symbol, exchange);
 		const normAssetClass = normalizeAssetClass(assetClass);
 		const normSide = normalizeSide(side);
-		const now = new Date();
+		const suppliedTime = receivedAt == null ? NaN : new Date(receivedAt).getTime();
+		const now = Number.isFinite(suppliedTime) ? new Date(suppliedTime) : new Date();
 		const sessionContext = getSessionContext({
 			exchange: normSymbolInfo.exchange,
 			assetClass: normAssetClass,
@@ -844,6 +856,12 @@ async function recordSignalInternal({
 			} else {
 				entryPriceProvidersToTry = [];
 			}
+		}
+
+		// A persisted delivery anchor must not be paired with a current quote.
+		if (Number.isFinite(suppliedTime)) {
+			entryPriceProvidersToTry = [];
+			if (entryPrice === null) entryPriceReason = 'historical_entry_price_unavailable';
 		}
 
 		for (const provider of entryPriceProvidersToTry) {
@@ -954,8 +972,44 @@ async function recordSignalInternal({
 			};
 		}
 
+		const rawSetupType = setupType !== undefined ? setupType : setup_type;
+		const cleanSetupType = typeof rawSetupType === 'string' && rawSetupType.trim()
+			? rawSetupType.trim().toLowerCase()
+			: null;
+
+		const rawInvalidation = invalidationLevel !== undefined
+			? invalidationLevel
+			: (invalidation_level !== undefined ? invalidation_level : stop);
+		const cleanInvalidation = typeof rawInvalidation === 'number' && Number.isFinite(rawInvalidation) && rawInvalidation > 0
+			? rawInvalidation
+			: (typeof rawInvalidation === 'string' && rawInvalidation.trim() && Number.isFinite(Number(rawInvalidation)) && Number(rawInvalidation) > 0
+				? Number(rawInvalidation)
+				: null);
+
+		const rawTarget = targetLevel !== undefined
+			? targetLevel
+			: (target_level !== undefined ? target_level : target);
+		const cleanTarget = typeof rawTarget === 'number' && Number.isFinite(rawTarget) && rawTarget > 0
+			? rawTarget
+			: (typeof rawTarget === 'string' && rawTarget.trim() && Number.isFinite(Number(rawTarget)) && Number(rawTarget) > 0
+				? Number(rawTarget)
+				: null);
+
+		const rawRrr = riskRewardRatio !== undefined ? riskRewardRatio : risk_reward_ratio;
+		let cleanRrr = null;
+		if (typeof rawRrr === 'number' && Number.isFinite(rawRrr) && rawRrr > 0) {
+			cleanRrr = rawRrr;
+		} else if (typeof rawRrr === 'string' && rawRrr.trim()) {
+			const cleaned = rawRrr.replace(/:1$/, '').trim();
+			const num = Number(cleaned);
+			if (Number.isFinite(num) && num > 0) {
+				cleanRrr = num;
+			}
+		}
+
 		const document = {
 			receivedAt: admin.firestore.Timestamp.fromDate(now),
+			...(Number.isFinite(suppliedTime) ? { requiresHistoricalEntryPrice: true } : {}),
 			observedAt: admin.firestore.Timestamp.fromDate(now),
 			decisionBarClosedAt: sessionContext.decisionBarClosedAt
 				? admin.firestore.Timestamp.fromDate(new Date(sessionContext.decisionBarClosedAt))
@@ -976,7 +1030,7 @@ async function recordSignalInternal({
 			exchange: normSymbolInfo.exchange,
 			assetClass: normAssetClass || null,
 			timeframe: timeframe ? String(timeframe).toLowerCase() : null,
-			setupType: setupType ? String(setupType).toLowerCase() : null,
+			setupType: cleanSetupType,
 			score: typeof score === 'number' && Number.isFinite(score) ? score : null,
 			confidenceScore: normalizeConfidenceScore(confidenceScore) ?? normalizeConfidenceScore(score),
 			side: normSide,
@@ -986,8 +1040,11 @@ async function recordSignalInternal({
 				? entryPrice
 				: null,
 			entryPriceSource: entryPriceSource || null,
-			stop: typeof stop === 'number' && Number.isFinite(stop) ? stop : null,
-			target: typeof target === 'number' && Number.isFinite(target) ? target : null,
+			stop: cleanInvalidation,
+			target: cleanTarget,
+			invalidationLevel: cleanInvalidation,
+			targetLevel: cleanTarget,
+			riskRewardRatio: cleanRrr,
 			sources: Array.isArray(sources) ? sources : [],
 			tokenUsage: tokenUsage || null,
 			processingTimeMs: typeof processingTimeMs === 'number' && Number.isFinite(processingTimeMs) ? processingTimeMs : null,
@@ -998,7 +1055,19 @@ async function recordSignalInternal({
 			outcomes,
 		};
 
-		const docRef = await firestore.collection(COLLECTION_NAME).add(document);
+		let docRef;
+		if (idempotencyKey) {
+			const id = createHash('sha256').update(idempotencyKey).digest('hex');
+			docRef = firestore.collection(COLLECTION_NAME).doc(id);
+			try {
+				await docRef.create(document);
+			} catch (error) {
+				if (error.code !== 6) throw error;
+				// Already recorded: never overwrite a concurrently evaluated outcome.
+			}
+		} else {
+			docRef = await firestore.collection(COLLECTION_NAME).add(document);
+		}
 		console.debug(`[SignalOutcomeService] Signal outcome recorded with ID: ${docRef.id}`);
 		return docRef.id;
 	} catch (error) {
@@ -1231,7 +1300,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 									resolvedPriceSource = 'binance';
 								}
 							}
-							if (!resolvedPrice) {
+							if (!resolvedPrice && !data.requiresHistoricalEntryPrice) {
 								const remainingAfterKlines = effectiveMaxDurationMs - (Date.now() - startTime);
 								if (remainingAfterKlines <= 0) throw new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`);
 								const avgRes = await Promise.race([sweepClient.getAvgPrice({ symbol: data.symbol }), timeoutPromise]);
@@ -1251,7 +1320,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 						continue;
 					}
 
-					if (source === 'gemini' && data.exchange === 'BINANCE'
+					if (source === 'gemini' && data.exchange === 'BINANCE' && !data.requiresHistoricalEntryPrice
 						&& geminiPriceService.isGeminiGroundingEnabled({ requireGroundingFlag: true })) {
 						try {
 							const geminiResult = await geminiPriceService.fetchGeminiPrice(data.symbol, {
@@ -1291,7 +1360,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 						} catch (err) {
 							entryPriceError = err;
 						}
-						if (!resolvedPrice) {
+						if (!resolvedPrice && !data.requiresHistoricalEntryPrice) {
 							try {
 								const quotePrice = await equityMarketDataService.getEntryPrice({
 									symbol: data.symbol,
@@ -1933,6 +2002,8 @@ function createWindowBucket() {
 		maxMae: 0,
 		totalR: 0,
 		rCount: 0,
+		totalRiskRewardRatio: 0,
+		riskRewardRatioCount: 0,
 	};
 }
 
@@ -1963,6 +2034,15 @@ function accumulateWindowBucket(accumulator, signal, outcome, key) {
 		bucket.totalR += outcome.rMultiple;
 		bucket.rCount++;
 	}
+	const rrr = typeof signal.riskRewardRatio === 'number' && Number.isFinite(signal.riskRewardRatio) && signal.riskRewardRatio > 0
+		? signal.riskRewardRatio
+		: (typeof signal.risk_reward_ratio === 'number' && Number.isFinite(signal.risk_reward_ratio) && signal.risk_reward_ratio > 0
+			? signal.risk_reward_ratio
+			: null);
+	if (rrr !== null) {
+		bucket.totalRiskRewardRatio += rrr;
+		bucket.riskRewardRatioCount++;
+	}
 	bucket.totalReturn += outcome.return;
 	bucket.totalMfe += outcome.maxFavorableExcursion;
 	bucket.totalMae += outcome.maxAdverseExcursion;
@@ -1985,6 +2065,12 @@ function buildWindowStatsShape(bucket) {
 			? parseFloat(((bucket.stopHits / bucket.stopEligibleWindows) * 100).toFixed(2))
 			: 0,
 		expectancyR: bucket.rCount > 0 ? parseFloat((bucket.totalR / bucket.rCount).toFixed(4)) : null,
+		averageRiskRewardRatio: bucket.riskRewardRatioCount > 0
+			? parseFloat((bucket.totalRiskRewardRatio / bucket.riskRewardRatioCount).toFixed(2))
+			: null,
+		avgRrr: bucket.riskRewardRatioCount > 0
+			? parseFloat((bucket.totalRiskRewardRatio / bucket.riskRewardRatioCount).toFixed(2))
+			: null,
 		averageReturnPercent: parseFloat((bucket.totalReturn / total).toFixed(4)),
 		averageMfePercent: parseFloat((bucket.totalMfe / total).toFixed(4)),
 		averageMaePercent: parseFloat((bucket.totalMae / total).toFixed(4)),
@@ -2471,6 +2557,15 @@ function formatOutcomeDocument(doc) {
 		entryPriceSource: typeof data.entryPriceSource === 'string' ? data.entryPriceSource : null,
 		stop: typeof data.stop === 'number' && Number.isFinite(data.stop) ? data.stop : null,
 		target: typeof data.target === 'number' && Number.isFinite(data.target) ? data.target : null,
+		invalidationLevel: typeof data.invalidationLevel === 'number' && Number.isFinite(data.invalidationLevel)
+			? data.invalidationLevel
+			: (typeof data.stop === 'number' && Number.isFinite(data.stop) ? data.stop : null),
+		targetLevel: typeof data.targetLevel === 'number' && Number.isFinite(data.targetLevel)
+			? data.targetLevel
+			: (typeof data.target === 'number' && Number.isFinite(data.target) ? data.target : null),
+		riskRewardRatio: typeof data.riskRewardRatio === 'number' && Number.isFinite(data.riskRewardRatio)
+			? data.riskRewardRatio
+			: null,
 		marketDataProvider: typeof data.marketDataProvider === 'string' ? data.marketDataProvider : null,
 		eligibilityState: typeof data.eligibilityState === 'string' ? data.eligibilityState : null,
 		eligibilityReason: typeof data.eligibilityReason === 'string' ? data.eligibilityReason : null,

@@ -224,6 +224,7 @@ async function deleteBinanceOrder(req, res) {
 			status: result.order?.status || 'CANCELED',
 			environment: result.environment,
 			binanceOrderId: result.order?.orderId ?? req.body?.orderId ?? null,
+			clientOrderId: result.order?.clientOrderId ?? req.body?.origClientOrderId ?? req.body?.clientOrderId ?? null,
 			response: result,
 			processingMs,
 		}).catch((err) => {
@@ -233,6 +234,7 @@ async function deleteBinanceOrder(req, res) {
 		return res.status(200).json(result);
 	} catch (error) {
 		const processingMs = Date.now() - startTime;
+		const clientOrderId = error.clientOrderId ?? req.body?.origClientOrderId ?? req.body?.clientOrderId ?? null;
 		if (error instanceof BinanceOrderRequestError || error instanceof BinanceOrderServiceError) {
 			console.warn('[BinanceOrdersController] order cancel rejected', { code: error.code });
 			binanceOrderAuditService.recordMutation({
@@ -244,9 +246,11 @@ async function deleteBinanceOrder(req, res) {
 				type: null,
 				quantity: null,
 				price: null,
-				status: error.code || 'REJECTED',
+				status: 'rejected',
+				errorCode: error.code,
 				environment: error.environment,
 				binanceOrderId: req.body?.orderId ?? null,
+				clientOrderId,
 				response: { error: error.message, code: error.code },
 				processingMs,
 			}).catch((err) => {
@@ -269,8 +273,10 @@ async function deleteBinanceOrder(req, res) {
 			type: null,
 			quantity: null,
 			price: null,
-			status: 'FAILED',
+			status: 'failed',
+			errorCode: 'BINANCE_ORDER_CANCEL_FAILED',
 			binanceOrderId: req.body?.orderId ?? null,
+			clientOrderId,
 			response: { error: error.message, code: 'BINANCE_ORDER_CANCEL_FAILED' },
 			processingMs,
 		}).catch((err) => {
@@ -471,11 +477,46 @@ async function postBinanceOrderPreview(req, res) {
 	}
 }
 
+async function getBinanceAccountBalances(req, res) {
+	const startTime = Date.now();
+	try {
+		const result = await binanceOrderService.getBalances(req.query);
+		return res.status(200).json(result);
+	} catch (error) {
+		const processingMs = Date.now() - startTime;
+		if (error instanceof BinanceOrderRequestError || error instanceof BinanceOrderServiceError) {
+			console.warn('[BinanceOrdersController] balances query rejected', { code: error.code });
+			return res.status(error.statusCode || 400).json({
+				success: false,
+				error: error.message,
+				code: error.code,
+			});
+		}
+
+		console.error('[BinanceOrdersController] balances query failed', { code: 'BINANCE_BALANCE_QUERY_FAILED' });
+		sentryService.captureRuntimeError({
+			channel: 'binance-orders-controller',
+			error,
+			http: {
+				endpoint: '/api/trading/binance/account/balances',
+				method: 'GET',
+				statusCode: 502,
+			},
+		});
+		return res.status(502).json({
+			success: false,
+			error: 'Binance balance query failed',
+			code: 'BINANCE_BALANCE_QUERY_FAILED',
+		});
+	}
+}
+
 module.exports = {
 	postBinanceOrder,
 	getBinanceOrders,
 	deleteBinanceOrder,
 	getBinanceOrderAudit,
 	postBinanceOrderPreview,
+	getBinanceAccountBalances,
 };
 

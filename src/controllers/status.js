@@ -31,6 +31,8 @@ const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsApp
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const { crossTimeframeCooldown } = require('../services/alerts/crossTimeframeCooldown');
+const { burstAggregator } = require('../services/alerts/burstAggregator');
 const { userPriceAlertService } = require('../services/alerts/UserPriceAlertService');
 const { alertModeration } = require('../services/alerts/alertModeration');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
@@ -272,6 +274,10 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
 	const runtimeConfig = remoteConfigService.getRuntimeConfig();
+	const notificationManager = notificationRedriveService.getNotificationManager();
+	const channelStatuses = notificationManager && typeof notificationManager.getChannelStatuses === 'function'
+		? notificationManager.getChannelStatuses()
+		: {};
 	const telegramFlagEnabled = isEnabled(process.env.ENABLE_TELEGRAM_BOT);
 	const telegramEnabled = telegramFlagEnabled && !previewEnvironment;
 	const whatsappEnabled = isEnabled(process.env.ENABLE_WHATSAPP_ALERTS);
@@ -506,6 +512,9 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
+			alertCrossTimeframeSuppression: crossTimeframeCooldown.isEnabled(),
+			alertBurstAggregation: burstAggregator.isEnabled(),
+			alertHtfRender: runtimeConfig.ENABLE_ALERT_HTF_RENDER,
 			alertModeration: alertModeration.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
 			userPriceAlerts: userPriceAlertService.isEnabled(),
@@ -532,6 +541,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				status: discord.status,
 			},
 		},
+		channelHealth: channelStatuses,
 		// Operator intent, not runtime reachability. Mirrors
 		// NotificationChannel.isConfigured(), which is the enable flag AND the
 		// required credentials — i.e. exactly the `ready` semantics of
@@ -643,6 +653,14 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			alertSignalRepeatSuppression: {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
+			},
+			alertCrossTimeframeSuppression: {
+				enabled: crossTimeframeCooldown.isEnabled(),
+				...crossTimeframeCooldown.getStats(),
+			},
+			alertBurstAggregation: {
+				enabled: burstAggregator.isEnabled(),
+				...burstAggregator.getStats(),
 			},
 			alertModeration: {
 				enabled: alertModeration.isEnabled(),

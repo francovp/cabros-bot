@@ -62,7 +62,7 @@ The skill sends notifications for alert-worthy events via the production webhook
 - `NOTIFY_TELEGRAM_CHAT_ID` — defaults to `-1001234567890` (optional when `whatsapp` only)
 - `NOTIFY_WHATSAPP_CHAT_ID` — defaults to `120363422033474991@g.us` — ALWAYS use this value for every notification
 
-**ALWAYS send to WhatsApp** — every notification in this skill (global deadlock, Railway manual-deploy needed, `NEEDS_USER`/`HUMAN NEEDED`, and `In review` handoff) MUST include `channels: ["whatsapp"]` and `whatsappChatId: "120363422033474991@g.us"`. Include the issue URL in every message and the PR URL (`https://github.com/francovp/cabros-bot/pull/<number>`) when a PR exists.
+**ALWAYS send to WhatsApp** — every notification in this skill (global deadlock, Railway manual-deploy needed, `NEEDS_USER`/`HUMAN NEEDED`, and `In review` handoff) MUST include `channels: ["whatsapp"]` and a `whatsappChatId` resolved from `NOTIFY_WHATSAPP_CHAT_ID`, which defaults to `120363422033474991@g.us`. To move PR notifications to a different group, change that variable — never type a chat id straight into a payload, because a hardcoded destination silently overrides the operator's configuration. Include the issue URL in every message and the PR URL (`https://github.com/francovp/cabros-bot/pull/<number>`) when a PR exists.
 
 **Notification helper** — use this curl template whenever a notification is required:
 
@@ -73,11 +73,11 @@ curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrend
   --data-raw '{
     "message": "'"${NOTIFY_MESSAGE}"'",
     "channels": ["whatsapp"],
-    "whatsappChatId": "120363422033474991@g.us"
+    "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
   }'
 ```
 
-For backward compatibility you may send `["telegram","whatsapp"]` with both chat IDs, but `whatsapp` to `120363422033474991@g.us` is mandatory. Example with both channels and PR link:
+For backward compatibility you may send `["telegram","whatsapp"]` with both chat IDs, but `whatsapp` to `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`) is mandatory. Example with both channels and PR link:
 
 ```bash
 PR_URL="https://github.com/francovp/cabros-bot/pull/${PR_NUMBER}"
@@ -89,11 +89,11 @@ NOTIFY_MESSAGE="[GLOBAL_BLOCKED] Issue #${ISSUE_NUM} (${ISSUE_URL}) blocked on $
   --data-raw '{
     "message": "'"${NOTIFY_MESSAGE}"'",
     "channels": ["whatsapp"],
-    "whatsappChatId": "120363422033474991@g.us"
+    "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
   }'
 ```
 
-**Events that trigger a notification (all to WhatsApp `120363422033474991@g.us` with an issue link and a PR link when available):**
+**Events that trigger a notification (all to WhatsApp `NOTIFY_WHATSAPP_CHAT_ID`, default `120363422033474991@g.us`, with an issue link and a PR link when available):**
 1. **Global deadlock** — when a PR/issue is `GLOBAL_BLOCKED` and still cannot be unblocked after the unblock attempt, alerting humans that tooling/auth/infra prevents safe work on that item. The run then continues with the next oldest issue (see Step 6), unless the blocker is a total tooling/access failure, in which case the run stops with `GLOBAL_BLOCKED`.
 2. **Railway manual deploy needed** — when Railway bounded-retry or stale-deployment recovery fails and the `need manual PR deploy` label is added (see Step 6.5).
 3. **`NEEDS_USER` / `HUMAN NEEDED`** — when an issue requires human input (`NEEDS_USER`, `HUMAN NEEDED`, `NEEDS USER`). Notify with the issue URL and a PR URL only if one exists, release this session's claim, and stop the run. Do not append the issue to `SKIPPED_ISSUES` or advance.
@@ -313,7 +313,7 @@ If the issue/PR carries `GLOBAL_BLOCKED` **caused by a bounded retry (`429`/`rat
    gh pr edit <PR_NUMBER> --add-label "need manual PR deploy" 2>/dev/null || true
    gh issue edit <ISSUE_NUMBER> --add-label "need manual PR deploy" 2>/dev/null || true
    ```
-   Send a WhatsApp notification with issue and PR links to `120363422033474991@g.us`:
+   Send a WhatsApp notification with issue and PR links to `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`):
    ```bash
    PR_URL="https://github.com/francovp/cabros-bot/pull/${PR_NUMBER}"
    ISSUE_URL="https://github.com/francovp/cabros-bot/issues/${ISSUE_NUMBER}"
@@ -321,7 +321,7 @@ If the issue/PR carries `GLOBAL_BLOCKED` **caused by a bounded retry (`429`/`rat
      curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
      --header 'Content-Type: application/json' \
      --header "x-api-key: ${NOTIFY_API_KEY}" \
-     --data-raw '{"message": "'"${NOTIFY_MESSAGE}"'","channels": ["whatsapp"],"whatsappChatId": "120363422033474991@g.us"}'
+     --data-raw '{"message": "'"${NOTIFY_MESSAGE}"'","channels": ["whatsapp"],"whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"}'
    ```
    Append the issue number to `SKIPPED_ISSUES`, keep `GLOBAL_BLOCKED`, release `agent-working`, and advance to the next oldest issue.
 
@@ -331,7 +331,7 @@ Before applying the skip branches below, if this session still owns the issue's 
 2. **If the issue has a merged PR**: Clean up stale `agent-working` labels (issue + PR), ensure the GitHub issue is closed if the merged PR did not close it automatically, and end with outcome `SHIPPED` (same handling as Step 1).
 3. **If `IN_REVIEW` with no agent writes**: The PR/issue state is already correct and must not be changed further — except that, if this session claimed the issue this run (Step 1/Step 2 returned `RESULT=CLAIMED` or `RESULT=TAKEOVER`), the one remaining cleanup is to release the freshly-acquired claim it added: remove the `agent-working` label so the issue is not held claimed until `CLAIM_TTL_MINUTES` (see the **Release a claim on a no-write terminal exit** rule). Do not make any other issue or PR state changes. Append the issue number to `SKIPPED_ISSUES`.
 4. **If the issue is claimed by another agent session** (claim script exit `2` / `RESULT=SKIP`): Do not modify the issue or PR state. Append the issue number to `SKIPPED_ISSUES`.
-5. **If the current outcome is `NEEDS_USER` or the issue/linked PR has a `NEEDS_USER` / `HUMAN NEEDED` / `need user` label**: Do not attempt implementation or advance to another issue. Send a WhatsApp notification to `120363422033474991@g.us` with the issue URL and a PR URL only if one exists. Release this session's claim using the **Release a claim on a no-write terminal exit** procedure, record `NEEDS_USER`, and stop the run. Do not append the issue to `SKIPPED_ISSUES`.
+5. **If the current outcome is `NEEDS_USER` or the issue/linked PR has a `NEEDS_USER` / `HUMAN NEEDED` / `need user` label**: Do not attempt implementation or advance to another issue. Send a WhatsApp notification to `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`) with the issue URL and a PR URL only if one exists. Release this session's claim using the **Release a claim on a no-write terminal exit** procedure, record `NEEDS_USER`, and stop the run. Do not append the issue to `SKIPPED_ISSUES`.
 6. **If the issue or its linked PR is `GLOBAL_BLOCKED`** (the label is present or the iteration set the outcome):
    - **Docs-only N/A gate first**: if the linked PR is documentation-only and the only blocker is preview or code-check status, confirm this session still owns the claim, remove the stale `GLOBAL_BLOCKED` label from the issue and PR where present, and continue the review flow. Do not retry those gates, notify, or add the issue to `SKIPPED_ISSUES`. If any other blocker is present, use the applicable branch below.
    - **Write-producing check**: if this iteration already produced agent writes (code changes or PR creation/update) before any other blocker was hit, do NOT skip — record `GLOBAL_BLOCKED`, count it against the max-2 write budget (Hard Rule #4), then clean up before stopping: remove the `agent-working` label from the issue and PR (work on this item has ended — see Hard Rule 9) and send the WhatsApp global-deadlock notification with issue link and PR link (see Notification Webhook). Neither Step 7 nor the zero-work branch cleanup runs on this exit, so ownership release and the human notification must happen here. Then stop the run.
@@ -365,7 +365,7 @@ If the primary issue ends with any other (non-skip) outcome, including `IN_REVIE
    gh pr edit "$PR_NUMBER" --add-label "In review"
    ```
 5. Record the final outcome as `IN_REVIEW` according to `references/outcomes-and-deadlocks.md`.
-6. Send an `In review` notification to WhatsApp `120363422033474991@g.us` with issue and PR links:
+6. Send an `In review` notification to WhatsApp `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`) with issue and PR links:
    ```bash
    PR_URL="$(gh pr view --json url --jq .url 2>/dev/null || echo "N/A")"
    ISSUE_NUM="$(gh issue view --json number --jq .number 2>/dev/null || echo "N/A")"
@@ -377,7 +377,7 @@ If the primary issue ends with any other (non-skip) outcome, including `IN_REVIE
      --data-raw '{
        "message": "'"${NOTIFY_MESSAGE}"'",
        "channels": ["whatsapp"],
-       "whatsappChatId": "120363422033474991@g.us"
+       "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
      }'
    ```
 7. **Restore original GitHub user** after all `gh` commands are done:
@@ -406,7 +406,7 @@ Refer to this section when encountering execution issues:
   - Verify the `francovp` account has valid credentials with `gh auth status`.
   - If the user switch itself fails, check if `GITHUB_TOKEN` env var is overriding the keyring-based auth.
   - If the CLI is unavailable, use GitHub MCP if available. If both access paths fail:
-  - Send a WhatsApp global-deadlock notification to `120363422033474991@g.us` with the issue URL and a PR URL if one exists:
+  - Send a WhatsApp global-deadlock notification to `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`) with the issue URL and a PR URL if one exists:
     ```bash
     ISSUE_URL="https://github.com/$repo/issues/$issue"
     NOTIFY_MESSAGE="[GLOBAL_BLOCKED] Issue automator halted: GitHub CLI and MCP access both failed for $repo/$issue. Human intervention required. Issue: $ISSUE_URL. PR: ${PR_URL:-none}" \
@@ -416,14 +416,14 @@ Refer to this section when encountering execution issues:
       --data-raw '{
         "message": "'"${NOTIFY_MESSAGE}"'",
         "channels": ["whatsapp"],
-        "whatsappChatId": "120363422033474991@g.us"
+        "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
       }'
     ```
   - Then end the run with outcome `GLOBAL_BLOCKED`. Do not attempt to advance: without authenticated `gh` or an available GitHub MCP path, there is no GitHub access to fetch the next issue — `get-oldest-issue.sh` fails its auth check. The Step 6 skip loop applies only to issue-specific `GLOBAL_BLOCKED` PRs where tooling remains functional.
 - **Merge Conflicts**: If branch checkout or pushes fail due to conflicts, pull from `master` and resolve conflicts locally. Re-run tests for code changes; docs-only changes keep the Hard Rule 23 exemption. If resolving conflicts introduces ambiguity, end with `AMBIGUOUS`.
 - **Preview deployment timeout / bounded retry**: If `scripts/verify-preview.sh` fails after 3 attempts, first re-resolve the host with `scripts/get-pr-deployment-url.sh <N>` — the failure may belong to a provider other than Railway.
   - Check if the PR preview commit matches the head: `gh pr view <N> --json headRefOid` vs. the SHA reported by `verify-preview.sh`'s `EXPECTED_SHA` comparison, or the deployed commit visible via `curl "$(scripts/get-pr-deployment-url.sh <N>)/healthcheck"`.
-  - If the resolved host is Railway and the failure is a Railway `429` bounded retry or stale deployment (previous commit, not the HEAD), follow Step 6.5: update branch with `master` or trigger `railway up`/`railway redeploy` (requires `RAILWAY_TOKEN`), wait up to 5 minutes, re-run `scripts/verify-preview.sh`. On success, remove `GLOBAL_BLOCKED` / `need manual PR deploy` labels. On failure, add `need manual PR deploy`, notify WhatsApp `120363422033474991@g.us` with PR link, and skip to next issue.
+  - If the resolved host is Railway and the failure is a Railway `429` bounded retry or stale deployment (previous commit, not the HEAD), follow Step 6.5: update branch with `master` or trigger `railway up`/`railway redeploy` (requires `RAILWAY_TOKEN`), wait up to 5 minutes, re-run `scripts/verify-preview.sh`. On success, remove `GLOBAL_BLOCKED` / `need manual PR deploy` labels. On failure, add `need manual PR deploy`, notify WhatsApp `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`) with PR link, and skip to next issue.
   - If the resolved host is not Railway, do not run `railway up`/`railway redeploy` — that deploys a host the PR is not served from. Wait for the provider's deployment to settle, re-resolve, and re-run `scripts/verify-preview.sh`; escalate to `need manual PR deploy` only if the resolved host still does not serve the PR head.
   - If it is an application error/crash (5xx with current commit), treat it as a `LOCAL_DEADLOCK`.
 - **Firebase Hosting preview `RESOURCE_EXHAUSTED`**: This is NOT a blocker. When `firebase hosting:channel:deploy` or PR checks report `RESOURCE_EXHAUSTED` / `channel quota reached`:
