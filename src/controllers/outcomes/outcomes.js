@@ -3,6 +3,7 @@
 const sentryService = require('../../services/monitoring/SentryService');
 const signalOutcomeService = require('../../services/storage/SignalOutcomeService');
 const { parseAlertPaginationCursor } = require('../../services/storage/alertPaginationCursor');
+const { sendErrorFrom, STANDARD_ERROR_CODES } = require('../../lib/errorEnvelope');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -106,7 +107,7 @@ function parseOptionalTimestamp(rawValue, name) {
 function listOutcomes(req, res) {
 	return handleAsync(req, res, '/api/outcomes', async () => {
 		if (!signalOutcomeService.isEnabled()) {
-			return res.status(403).json({
+			return sendErrorFrom(res, 403, {
 				error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
 				code: 'FEATURE_DISABLED',
 			});
@@ -114,7 +115,7 @@ function listOutcomes(req, res) {
 
 		const limit = parseLimit(req.query.limit);
 		if (limit === null) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: `Invalid limit. Use an integer between 1 and ${MAX_LIMIT}.`,
 				code: 'INVALID_REQUEST',
 			});
@@ -124,7 +125,7 @@ function listOutcomes(req, res) {
 			? req.query.before.trim()
 			: undefined;
 		if (before && !parseAlertPaginationCursor(before)) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: signalOutcomeService.INVALID_CURSOR_MESSAGE,
 				code: 'INVALID_REQUEST',
 			});
@@ -132,7 +133,7 @@ function listOutcomes(req, res) {
 
 		const status = parseStatus(req.query.status);
 		if (status === null) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: 'Invalid status filter. Use pending, evaluated, or unavailable.',
 				code: 'INVALID_REQUEST',
 			});
@@ -140,7 +141,7 @@ function listOutcomes(req, res) {
 
 		const window = parseWindow(req.query.window);
 		if (window === null) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
 				code: 'INVALID_REQUEST',
 			});
@@ -148,16 +149,16 @@ function listOutcomes(req, res) {
 
 		const from = parseOptionalTimestamp(req.query.from, 'from');
 		if (from.error) {
-			return res.status(400).json(from.error);
+			return sendErrorFrom(res, 400, from.error);
 		}
 
 		const to = parseOptionalTimestamp(req.query.to, 'to');
 		if (to.error) {
-			return res.status(400).json(to.error);
+			return sendErrorFrom(res, 400, to.error);
 		}
 
 		if (from.value && to.value && new Date(from.value) > new Date(to.value)) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: 'Invalid time window. from must be before or equal to to.',
 				code: 'INVALID_REQUEST',
 			});
@@ -197,7 +198,7 @@ function listOutcomes(req, res) {
 function summarizeOutcomes(req, res) {
 	return handleAsync(req, res, '/api/outcomes/summary', async () => {
 		if (!signalOutcomeService.isEnabled()) {
-			return res.status(403).json({
+			return sendErrorFrom(res, 403, {
 				error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
 				code: 'FEATURE_DISABLED',
 			});
@@ -205,7 +206,7 @@ function summarizeOutcomes(req, res) {
 
 		const limit = parseLimit(req.query.limit);
 		if (limit === null) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: `Invalid limit. Use an integer between 1 and ${MAX_LIMIT}.`,
 				code: 'INVALID_REQUEST',
 			});
@@ -213,7 +214,7 @@ function summarizeOutcomes(req, res) {
 
 		const status = parseStatus(req.query.status);
 		if (status === null) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: 'Invalid status filter. Use pending, evaluated, or unavailable.',
 				code: 'INVALID_REQUEST',
 			});
@@ -221,7 +222,7 @@ function summarizeOutcomes(req, res) {
 
 		const window = parseWindow(req.query.window);
 		if (window === null) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
 				code: 'INVALID_REQUEST',
 			});
@@ -229,16 +230,16 @@ function summarizeOutcomes(req, res) {
 
 		const from = parseOptionalTimestamp(req.query.from, 'from');
 		if (from.error) {
-			return res.status(400).json(from.error);
+			return sendErrorFrom(res, 400, from.error);
 		}
 
 		const to = parseOptionalTimestamp(req.query.to, 'to');
 		if (to.error) {
-			return res.status(400).json(to.error);
+			return sendErrorFrom(res, 400, to.error);
 		}
 
 		if (from.value && to.value && new Date(from.value) > new Date(to.value)) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: 'Invalid time window. from must be before or equal to to.',
 				code: 'INVALID_REQUEST',
 			});
@@ -272,7 +273,7 @@ function summarizeOutcomes(req, res) {
 function getOutcomesCalibration(req, res) {
 	return handleAsync(req, res, '/api/outcomes/calibration', async () => {
 		if (!signalOutcomeService.isEnabled()) {
-			return res.status(403).json({
+			return sendErrorFrom(res, 403, {
 				error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
 				code: 'FEATURE_DISABLED',
 			});
@@ -280,7 +281,7 @@ function getOutcomesCalibration(req, res) {
 
 		const limit = parseCalibrationLimit(req.query.limit);
 		if (limit === null) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: `Invalid limit. Use an integer between 1 and ${MAX_CALIBRATION_LIMIT}.`,
 				code: 'INVALID_REQUEST',
 			});
@@ -288,7 +289,7 @@ function getOutcomesCalibration(req, res) {
 
 		const window = parseWindow(req.query.window);
 		if (window === null) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
 				code: 'INVALID_REQUEST',
 			});
@@ -296,16 +297,16 @@ function getOutcomesCalibration(req, res) {
 
 		const from = parseOptionalTimestamp(req.query.from, 'from');
 		if (from.error) {
-			return res.status(400).json(from.error);
+			return sendErrorFrom(res, 400, from.error);
 		}
 
 		const to = parseOptionalTimestamp(req.query.to, 'to');
 		if (to.error) {
-			return res.status(400).json(to.error);
+			return sendErrorFrom(res, 400, to.error);
 		}
 
 		if (from.value && to.value && new Date(from.value) > new Date(to.value)) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: 'Invalid time window. from must be before or equal to to.',
 				code: 'INVALID_REQUEST',
 			});
@@ -355,14 +356,14 @@ function handleAsync(req, res, endpoint, handler) {
 
 function handleError(error, req, res, route) {
 	if (error.code === signalOutcomeService.STORAGE_UNAVAILABLE_CODE) {
-		return res.status(503).json({
+		return sendErrorFrom(res, 503, {
 			error: error.message,
 			code: signalOutcomeService.STORAGE_UNAVAILABLE_CODE,
 		});
 	}
 
 	if (error.message === signalOutcomeService.INVALID_CURSOR_MESSAGE) {
-		return res.status(400).json({
+		return sendErrorFrom(res, 400, {
 			error: error.message,
 			code: 'INVALID_REQUEST',
 		});
@@ -370,20 +371,20 @@ function handleError(error, req, res, route) {
 
 	const statusCode = error.statusCode || error.status;
 	if (statusCode === 404) {
-		return res.status(404).json({
+		return sendErrorFrom(res, 404, {
 			error: error.message,
 			code: 'NOT_FOUND',
 		});
 	}
 
 	if (statusCode === 400) {
-		return res.status(400).json({
+		return sendErrorFrom(res, 400, {
 			error: error.message,
 			code: 'INVALID_REQUEST',
 		});
 	}
 
-	return res.status(500).json({
+	return sendErrorFrom(res, 500, {
 		error: 'Internal server error',
 		code: 'INTERNAL_ERROR',
 	});

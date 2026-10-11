@@ -1,3 +1,4 @@
+const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
@@ -61,7 +62,7 @@ function postVolumeConfirmation() {
 		} catch (error) {
 			const processingTimeMs = Math.max(0, Date.now() - startTime);
 			if (error instanceof VolumeConfirmationRequestError) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: error.message,
 					code: error.code,
 					requestId,
@@ -71,7 +72,7 @@ function postVolumeConfirmation() {
 
 			if (error && error.message) {
 				console.warn('[VolumeConfirmation] TradingView MCP call failed:', error.message);
-				return res.status(502).json({
+				return sendErrorFrom(res, 502, {
 					success: false,
 					error: error.message,
 					code: 'VOLUME_CONFIRMATION_FAILED',
@@ -92,7 +93,7 @@ function postVolumeConfirmation() {
 				},
 			});
 
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error. Please try again later.',
 				code: 'INTERNAL_ERROR',
 				requestId,

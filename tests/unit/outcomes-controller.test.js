@@ -123,10 +123,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(403);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
 				code: 'FEATURE_DISABLED',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 for invalid limit', async () => {
@@ -137,10 +142,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid limit. Use an integer between 1 and 100.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 for invalid before cursor', async () => {
@@ -151,10 +161,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 for invalid status', async () => {
@@ -165,10 +180,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid status filter. Use pending, evaluated, or unavailable.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 for invalid window', async () => {
@@ -179,10 +199,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 for invalid from timestamp', async () => {
@@ -193,10 +218,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 for invalid to timestamp', async () => {
@@ -207,10 +237,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 when from is greater than to', async () => {
@@ -228,10 +263,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid time window. from must be before or equal to to.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 200 with outcomes list and pagination on success', async () => {
@@ -304,10 +344,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(503);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Firestore is unavailable',
 				code: 'STORAGE_UNAVAILABLE',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: true,
+				requestId: expect.any(String),
+			}));
 			expect(sentryService.captureRuntimeError).toHaveBeenCalled();
 		});
 
@@ -321,10 +366,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(500);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Internal server error',
 				code: 'INTERNAL_ERROR',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: true,
+				requestId: expect.any(String),
+			}));
 			expect(sentryService.captureRuntimeError).toHaveBeenCalled();
 		});
 	});
@@ -338,10 +388,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(403);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
 				code: 'FEATURE_DISABLED',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 when limit is invalid', async () => {
@@ -352,10 +407,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid limit. Use an integer between 1 and 100.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 when status is invalid', async () => {
@@ -366,10 +426,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid status filter. Use pending, evaluated, or unavailable.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 when window is invalid', async () => {
@@ -380,10 +445,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 when from is not a valid date', async () => {
@@ -394,10 +464,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 when to is not a valid date', async () => {
@@ -408,10 +483,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 when from is greater than to', async () => {
@@ -429,10 +509,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid time window. from must be before or equal to to.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 200 with aggregate summary on success', async () => {
@@ -572,10 +657,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(503);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Firestore is unavailable',
 				code: 'STORAGE_UNAVAILABLE',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: true,
+				requestId: expect.any(String),
+			}));
 			expect(sentryService.captureRuntimeError).toHaveBeenCalled();
 		});
 
@@ -589,10 +679,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(500);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Internal server error',
 				code: 'INTERNAL_ERROR',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: true,
+				requestId: expect.any(String),
+			}));
 			expect(sentryService.captureRuntimeError).toHaveBeenCalled();
 		});
 	});
@@ -607,10 +702,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await getOutcomesCalibration(req, res);
 
 			expect(res.statusCode).toBe(403);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
 				code: 'FEATURE_DISABLED',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 for invalid limit', async () => {

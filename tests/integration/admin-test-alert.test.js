@@ -90,10 +90,15 @@ describe('POST /api/admin/test-alert Integration', () => {
 			.send({ text: 'Smoke probe test' });
 
 		expect(res.status).toBe(403);
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Test alert endpoint is disabled',
 			code: 'FEATURE_DISABLED',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('executes dry-run mode returning formatted preview without side effects', async () => {
@@ -186,10 +191,13 @@ describe('POST /api/admin/test-alert Integration', () => {
 			.send({ text: '', channels: ['telegram'] });
 
 		expect(res.status).toBe(400);
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
 			error: 'Alert text is required and must be a string',
 			code: 'INVALID_REQUEST',
-		});
+		}));
 		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 		expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
 	});
