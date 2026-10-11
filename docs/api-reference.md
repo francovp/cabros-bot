@@ -153,6 +153,11 @@ When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` rep
 
 When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true`, `/api/webhook/alert` suppresses duplicate channel delivery for the same `(exchange, symbol, timeframe, side)` signal within a cooldown window of `ALERT_SIGNAL_COOLDOWN_BARS` bars (default `1`). Suppressed requests still return 200 with `suppressedRepeat: true`, empty `results`/`deliveredChannels`, and remain persisted with a suppression marker so replay and audit stay complete. Opposite-side flips always deliver; storage failures fail open to normal delivery. `featureFlags.alertSignalRepeatSuppression` reports the gate and `dependencies.alertSignalRepeatSuppression` exposes non-sensitive counters (`suppressedCount`, `lastSuppressedAt`, `activeTrackedSignals`).
 
+When `ENABLE_ALERT_CROSS_TF_SUPPRESSION=true`, `/api/webhook/alert` additionally collapses cross-timeframe duplicates: a signal whose `(exchange, symbol, side)` already fired inside `ALERT_CROSS_TF_WINDOW_MS` (default `60000`, `0`-`600000`) on a **different** timeframe skips channel delivery. This covers the pattern CB-230 cannot see, where the same symbol fires the same direction on `D` and `240` seconds apart. The first signal to arrive is delivered and the later one is collapsed into it, so the response carries `suppressedRepeat: true` plus `suppressionReason: "cross_timeframe_duplicate"`, with empty `results`/`deliveredChannels`, and the alert is still persisted with the marker. Opposite-side flips are never collapsed, and a delivered flip clears the stale opposite-side entry. The store is keyed per `(channel, destination)` — the request's `telegramChatId`/`telegramThreadId`, `whatsappChatId` or `discordWebhookUrl` override, else the channel default — so a reservation for one chat never suppresses a signal routed to another, and a request is collapsed only when every requested destination is already held (otherwise it is delivered, narrowed to the still-available channels). Reservations are provisional: any destination whose delivery produced nothing (failed channel, thrown dispatch, or no enabled channel at all) is released again, so an undelivered leg cannot swallow the next signal on another timeframe; the reservation is kept only while the dead-letter redrive queue owns the retry. Signals whose raw timeframe token does not map exactly (for example `3M`) never enter the store. Store read/write failures fail open to normal delivery, and the in-process store is per replica. `featureFlags.alertCrossTimeframeSuppression` reports the gate; `dependencies.alertCrossTimeframeSuppression` exposes non-sensitive `windowMs`, `suppressedCount`, `lastSuppressedAt`, and `activeTrackedSignals`.
+When `ENABLE_ALERT_SYNTH_BURST_AGGREGATION=true`, `/api/webhook/alert` buffers a parsed TradingView signal for `ALERT_BURST_WINDOW_MS` and collapses alerts that share the same direction **and** identical notification routing into a single "⚡ Regime shift" message per channel. Alerts are grouped by direction only — a market-wide burst spanning crypto and equities is one event, and each symbol's exchange and timeframe are listed in the message. Requests that reach `ALERT_BURST_MIN_SIGNALS` inside the window return `200` with `aggregated: true`, the shared `burstAggregateId`, `burstSignalCount`, and the single aggregate set of `results`/`deliveredChannels`; every constituent alert is still persisted individually with the same `burstAggregateId`, so outcome analytics keep per-symbol granularity. A window that closes below the minimum, a direction that never matches, a `symbolRoutes` request, and unparsed text all take the normal individual path (only the window latency is added). Any store, dispatch or shutdown failure releases held alerts to individual delivery — aggregation can lose noise reduction, never an alert. `featureFlags.alertBurstAggregation` reports the gate and `dependencies.alertBurstAggregation` exposes non-sensitive counters (`openWindows`, `windowMs`, `minSignals`, `aggregatedBurstCount`, `aggregatedSignalCount`, `aggregatedFailoverCount`, `releasedSignalCount`, `lastAggregatedAt`, `lastWindowClosedAt`), which are process-local and reset on restart.
+
+`dependencies.signalClassClassification` exposes in-memory counters for signal classification on the `POST /api/webhook/alert` ingest path. `featureFlags.signalClassMarker` only states that the badge marker is *allowed* to render; this block states whether alerts are *actually* being classified, so a silent regression back to 100% `unknown` is detectable instead of looking healthy. The section is omitted entirely until at least one alert has been classified and resets on process restart, mirroring the `firestoreWriteMetrics` pattern. Counters report `totalAlerts`, `classifiedAlerts`, `unknownAlerts`, `populationRate` (`classifiedAlerts / totalAlerts`, so a sustained `0` means nothing is being classified), and a per-class `byClass` breakdown. Only enum class names and counts are exposed — never alert text, symbols, or chat IDs. Historical records are **not** backfilled; the counters describe the current process window only.
+
 `dependencies.firestoreWriteMetrics` exposes in-memory per-domain Firestore write counters for `AlertStorageService.saveAlert`/`saveReplayAttempt` and `JobRepository.save`. The section is omitted entirely until at least one write has been recorded and resets on process restart, mirroring the existing `deliveryMetrics` pattern. Counters report `writesAttempted`, `writesSucceeded`, `writesFailed`, overall `successRate`, and a per-domain `byDomain` breakdown with sanitized counts so silent persistence failures can be detected without exposing provider responses or credentials.
 
 ### Firestore read health (issue #1285)
@@ -193,6 +198,8 @@ Stored-alert read endpoints answer `503` with a machine-readable `category` so a
 `featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready. Runtime provider selection is controlled separately by `MODEL_PROVIDER=cloudflare`; set both values when status/capability telemetry should match active Cloudflare routing.
 
 `notificationChannelIntent` reports the operator-intent view of notification channel configuration (`telegram`, `whatsapp`, `discord`). It mirrors `NotificationChannel.isConfigured()`: a channel counts as `configured` when its enable flag is set **and** its required credentials/chat id/webhook are present — the same `ready` semantics `dependencyStatus` already uses. A channel with a webhook URL present but its enable flag off therefore reports as **not** configured, which is the same verdict the zero-channel admin page reaches because both call that one method. The view answers the question the zero-channel page exists to raise — a channel the operator never set up (`unconfigured`) versus one that is set up but currently failing. The page reports the same two sets, so an operator can reconcile an alert from the page and `/api/status` without inspecting credentials. Only channel names are exposed; never tokens, webhook URLs, or chat IDs.
+
+`adminPaging` reports whether operator pages are actually landing, which channel readiness cannot: a readiness block says `ready` from configuration alone, so it reports `ready` for a channel that is failing 100% of live sends. Operator pages (delivery-failure and zero-channel) are sent over the non-recursive admin path — the Telegram admin chat first, then the other operator-configured channels — and when the primary destination fails the fallback prefers whichever candidate's observed delivery health is best (`healthy` → `unknown` → `degraded` → `failing`, with a deterministic `discord`-then-`whatsapp` tie-break). A channel the operator never configured is never used, so no phantom page is produced. The block is omitted until a `NotificationManager` exists and exposes `status` (`unknown` before the first attempt, `ready` once a page landed, `degraded` when every page failed on every operator channel), `attempts`/`successes`/`failures`, `consecutiveFailures`, `lastSuccessAt`/`lastFailureAt`, `lastSuccessChannel`, `lastErrorCategory`, a truncated sanitized `lastError`, `fallbackEnabled`, and `fallbackChannels`. `consecutiveFailures` is the signal external uptime monitoring can page on. Admin paging never re-enters the broadcast dispatch path, so it cannot inflate `deliveryMetrics` or the dead-letter queue, and no destination value is ever exposed.
 
 When `ENABLE_EQUITY_MARKET_DATA=true`, `dependencies.equityMarketData` reports Twelve Data readiness and the supported `BATS`/`NASDAQ`/`NYSE`/`AMEX`/`NYSE ARCA`/`FX_IDC`/`SPCFD` exchanges without exposing the API key. Signal outcome tracking uses `/quote` for missing entry prices and `/time_series` for bounded historical bars; provider, timeout, malformed-data, and quota failures mark equity outcomes unavailable without blocking alert delivery. Extended-hours data is excluded by default. Confirm current Twelve Data plan limits and licensing before production use: [pricing](https://twelvedata.com/pricing), [US equities coverage](https://support.twelvedata.com/en/articles/9935903-us-equities-market-data), and [commercial usage](https://support.twelvedata.com/en/articles/5332349-commercial-and-personal-usage).
 `dependencies.signalOutcomeWorker` reports the scheduler role, shutdown state, cadence/budgets, active entry-price chains, and the last-sweep heartbeat counters (`lastRunAt`, scanned, pending, evaluated, and error counts). The `worker` role is intended for the dedicated Render service; set the web service role to `disabled` during cutover so only one scheduler is active. A disabled local scheduler reports `ready: false` and `status: "disabled"` because it is not the process evaluating outcomes.
@@ -247,9 +254,13 @@ The snapshot is cached for 30 seconds per process. The endpoint returns HTTP `50
 
 `/admin` is public shell content. With `ENABLE_FIREBASE_ADMIN_AUTH=false` (the default), it keeps the existing session-only `WEBHOOK_API_KEY` console flow. With the flag enabled, the shell shows Firebase email/password sign-in, keeps an API-key field only in memory for API-key-only webhook/news-monitor operations, and does not read or write that key to browser storage. `/admin/auth-config` returns only the public Firebase Web configuration needed by the client.
 
+Both credential controls are native `<form>` elements with a submit handler, so Enter signs in or saves the key and the browser performs constraint validation before the Firebase SDK or session storage is reached. The email field is `type="email"` and `required`, the key field is `required` (an all-whitespace key is refused too, which native `required` alone accepts), and every field carries a stable `name` plus an explicit `label`/`for` pairing. A rejected credential pair is reported once through `#auth-credentials-error`, which both credential inputs reference with `aria-describedby`, with `aria-invalid` cleared on the next edit.
+
+Neither form has an `action`, so a submit the client did not handle would perform a native `GET` and place the credentials in the URL. Both submit listeners are therefore attached before either card is revealed and always cancel the submission; readiness (`initializeApp` plus `setPersistence` having resolved) gates only the authentication call, and the credential card is not shown at all when Firebase auth is unconfigured. Error text is always a fixed string: submitted credentials are never echoed into a message, a log, or a URL. The legacy key remains session-only and is still sent as the `x-api-key` request header.
+
 The server verifies Firebase ID tokens with revoked-token checks enabled. Custom claims may use `roles: ["admin.viewer"]`, `roles: ["admin.operator"]`, `adminRole`, `role`, or the equivalent `admin.viewer`/`admin.operator` boolean claims. Viewers can read status, alerts, analytics, exports, scanner presets, and job metadata; operators can perform the existing preset, replay, and job actions. The legacy API-key path remains available for machine clients. Protected webhook and news-monitor routes remain API-key-only.
 
-When Firebase auth is enabled, configure `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS` for server-side Admin SDK token verification, plus the public browser settings listed above. Do not put service-account JSON or ID tokens in browser config, Postman variables, logs, or client error messages.
+When Firebase auth is enabled, configure `FIREBASE_SERVICE_ACCOUNT_JSON` or `GOOGLE_APPLICATION_CREDENTIALS` for server-side Admin SDK token verification, plus the public browser settings listed above. `GOOGLE_APPLICATION_CREDENTIALS` accepts either a service-account key or an Application Default Credentials document (`authorized_user` from `gcloud application-default login`, or `external_account` workload identity); the latter types carry no project id, so `FIREBASE_PROJECT_ID` is required on that path. `FIREBASE_SERVICE_ACCOUNT_JSON` accepts service accounts only. Do not put service-account JSON or ID tokens in browser config, Postman variables, logs, or client error messages.
 
 The public browser configuration may also include `FIREBASE_STORAGE_BUCKET`, `FIREBASE_MESSAGING_SENDER_ID`, and `FIREBASE_MEASUREMENT_ID`; these values are not service-account credentials.
 
@@ -304,6 +315,30 @@ The `/admin` console is deployed as a static site on Firebase Hosting for the `c
     "telegram": { "enabled": true, "status": "ready" },
     "whatsapp": { "enabled": false, "status": "disabled" }
   },
+  "notificationChannelIntent": {
+    "configured": ["telegram"],
+    "unconfigured": ["whatsapp", "discord"]
+  },
+  "adminPaging": {
+    "enabled": true,
+    "status": "degraded",
+    "telegramAdminChatConfigured": true,
+    "fallbackEnabled": false,
+    "fallbackChannels": [],
+    "attempts": 3,
+    "successes": 0,
+    "failures": 3,
+    "consecutiveFailures": 3,
+    "lastSuccessAt": null,
+    "lastFailureAt": "2026-09-28T04:00:00.000Z",
+    "lastSuccessChannel": null,
+    "lastAttemptChannel": "telegram",
+    "lastErrorCategory": "PROVIDER_ERROR",
+    "lastError": "Bad Request: chat not found",
+    "byChannel": [
+      { "pageType": "delivery-failure", "channel": "telegram", "success": 0, "failure": 3 }
+    ]
+  },
   "dependencies": {
     "telegram": { "enabled": true, "configured": true, "ready": true, "status": "ready" },
     "whatsapp": { "enabled": false, "configured": false, "ready": false, "status": "disabled" },
@@ -352,3 +387,24 @@ The response includes:
 - 5-second `expiresAt` token so the preview cannot be replayed against a stale book.
 - MARKET BUY orders fetch `GET /api/v3/depth` with a 4-second `AbortController` deadline and expose slippage estimate in basis points; an optional `maxSlippageBps` request field causes `wouldExceedBudget: true` without rejecting the preview.
 - `BINANCE_TRADING_MAX_NOTIONAL` is enforced (`403 MAX_NOTIONAL_EXCEEDED` on breach). The preview never mutates Binance and is a no-op when `ENABLE_BINANCE_TRADING=false`.
+
+### GET /api/trading/binance/account/balances
+
+`GET /api/trading/binance/account/balances` is the read-only sibling of the order endpoints and exists so a `SELL` or a "close position" can be sized against the real free balance instead of a guess. It is mounted behind the same `admin.viewer`/`admin.operator` gate as the Binance reads (API-key or Firebase bearer) and fails closed if neither mechanism is configured.
+
+The response is deliberately narrow:
+
+- Only `asset`, `free` and `locked`, for base and quote assets derived from `BINANCE_TRADING_ALLOWED_SYMBOLS`. Assets allowed but absent from the Binance response are reported as `"0.00000000"` rather than omitted, so a caller never has to distinguish "not returned" from "zero".
+- `free` and `locked` are the Binance decimal strings verbatim. They are never parsed into JavaScript numbers, so an 18-decimal precision balance survives the round trip.
+- Never returned: `accountType`, `permissions`, commission tiers, `canTrade`/`canWithdraw` flags, or any other field of the raw `getAccountInformation` payload.
+- `environment` echoes the resolved Binance environment (`testnet`, `demo` or `live`) and `cached` reports whether the answer came from the in-memory cache.
+
+Query parameters are all optional:
+
+- `asset` — restrict to one allow-listed asset (case-insensitive).
+- `symbol` — restrict to the base and quote assets of one allow-listed symbol.
+- `refresh=true` — bypass the cache and re-query Binance.
+
+An `asset` or `symbol` outside the configured allow-list is rejected with `400 INVALID_ORDER_REQUEST` *before* any provider call, so the endpoint cannot be used to probe arbitrary balances. `ENABLE_BINANCE_TRADING=false` returns `403 FEATURE_DISABLED`; missing credentials return `503 BINANCE_TRADING_UNAVAILABLE`; a Binance timeout, network error or unclassified provider failure returns `502 BINANCE_BALANCE_QUERY_FAILED`. The 502 body and the structured log line carry only the sanitized message — no API key, signature, or raw Binance payload.
+
+Responses are cached in-process for a few seconds so an operator console polling the endpoint cannot spike Binance request weight. See [`BINANCE_BALANCE_CACHE_MS`](environment-configuration.md#binance-spot-order-execution) for the bound and its Remote Config parity.

@@ -9,6 +9,7 @@ const { tradingViewMcpService } = require('../../src/services/tradingview/Tradin
 const { jobRepository, _resetForTesting: resetJobRepository } = require('../../src/services/jobs/JobRepository');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
+const { jobService } = require('../../src/services/jobs/JobService');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
@@ -59,7 +60,8 @@ describe('Jobs API Integration Tests', () => {
 		app.use('/api', getRoutes(mockBot));
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
+		await jobService.waitForActiveJobs();
 		restoreEnv(savedEnv);
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
@@ -521,6 +523,48 @@ describe('Jobs API Integration Tests', () => {
 			'BINANCE:SOLUSDT',
 		]);
 		expect(callOrder.indexOf('end:BINANCE:ETHUSDT')).toBeLessThan(callOrder.indexOf('start:BINANCE:SOLUSDT'));
+	});
+
+	it('collapses duplicate expanded-analysis symbols into one MCP call (#874)', async () => {
+		process.env.EXPANDED_ANALYSIS_ALERT_CONCURRENCY = '2';
+		const requested = [];
+		tradingViewMcpService.analyzeSymbolIdentifier.mockImplementation(async ({ raw }) => {
+			requested.push(raw);
+			return { price_data: { close: 65000 }, rsi: { value: 45 } };
+		});
+
+		const createRes = await request(app)
+			.post('/api/jobs/tradingview-analysis')
+			.set('x-api-key', 'test-key')
+			.send({
+				type: 'expanded-analysis',
+				symbols: ['BINANCE:BTCUSDT', 'binance:btcusdt', 'NASDAQ:NVDA'],
+			})
+			.expect(201);
+
+		let statusRes = await request(app)
+			.get(`/api/jobs/${createRes.body.jobId}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+		let attempts = 0;
+		while (statusRes.body.status !== 'completed' && attempts < 20) {
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			statusRes = await request(app)
+				.get(`/api/jobs/${createRes.body.jobId}`)
+				.set('x-api-key', 'test-key')
+				.expect(200);
+			attempts++;
+		}
+
+		expect(statusRes.body.status).toBe('completed');
+		expect(requested).toEqual(['BINANCE:BTCUSDT', 'NASDAQ:NVDA']);
+		expect(statusRes.body.results.map((result) => result.symbol)).toEqual([
+			'BINANCE:BTCUSDT',
+			'NASDAQ:NVDA',
+		]);
+		expect(statusRes.body.duplicatesRemoved).toBe(1);
+		expect(statusRes.body.progress.total).toBe(2);
+		expect((statusRes.body.alertText.match(/^BTCUSDT /gm) || [])).toHaveLength(1);
 	});
 
 	it('stops launching queued expanded-analysis symbols after cancellation', async () => {

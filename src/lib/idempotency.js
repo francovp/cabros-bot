@@ -2,6 +2,12 @@
 
 const { idempotencyService } = require('../services/storage/IdempotencyService');
 const requestDeadline = require('./requestDeadline');
+const { resolveDryRun } = require('./dryRunRequest');
+
+// Surfaces whose dry-run response must stay side-effect free, so a probe never
+// reserves or caches a key. Path-scoped rather than global: /webhook/alert
+// keeps its existing idempotent dry-run behaviour unchanged.
+const DRY_RUN_IDEMPOTENCY_BYPASS_PATHS = new Set(['/api/webhook/message']);
 
 function getRequestPath(req) {
 	if (typeof req.path === 'string' && req.path.length > 0) {
@@ -17,6 +23,18 @@ function getRequestPath(req) {
 	}
 
 	return '';
+}
+
+// Inside a mounted router req.path is relative to the mount point, so the
+// effective route is only visible once the baseUrl prefix is put back. Both
+// spellings are accepted so the allowlist works mounted or unmounted.
+function matchesBypassPath(req) {
+	const relative = getRequestPath(req);
+	if (DRY_RUN_IDEMPOTENCY_BYPASS_PATHS.has(relative)) {
+		return true;
+	}
+	const baseUrl = typeof req.baseUrl === 'string' ? req.baseUrl : '';
+	return Boolean(baseUrl) && DRY_RUN_IDEMPOTENCY_BYPASS_PATHS.has(`${baseUrl}${relative}`);
 }
 
 function buildRequestFingerprint(req) {
@@ -113,6 +131,14 @@ function getIdempotencyKey(req) {
  * Express middleware to handle idempotency key checks and response caching.
  */
 function idempotencyMiddleware(req, res, next) {
+	// A dry run dispatches nothing, so reserving and completing a key for it
+	// would hand the caller a replayable response for work that never happened:
+	// a later live request reusing that key would receive the probe's body
+	// instead of delivering. Skipping here keeps the probe usable.
+	if (matchesBypassPath(req) && resolveDryRun(req)) {
+		return next();
+	}
+
 	// 1. Get the key from headers (recommended), request body, or query params
 	const key = getIdempotencyKey(req);
 
@@ -316,6 +342,7 @@ function idempotencyMiddleware(req, res, next) {
 }
 
 module.exports = {
+	DRY_RUN_IDEMPOTENCY_BYPASS_PATHS,
 	getIdempotencyKey,
 	idempotencyMiddleware,
 };
