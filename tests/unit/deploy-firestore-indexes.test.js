@@ -168,6 +168,34 @@ describe('deploy-firestore-indexes', () => {
 			expect(declared).toContainEqual(REPLAYS_INDEX);
 		});
 
+		it('preserves configured field modes when auditing template indexes', () => {
+			const indexes = [
+				{
+					collectionGroup: 'embeddings',
+					queryScope: 'COLLECTION',
+					fields: [{ fieldPath: 'embedding', vectorConfig: { dimension: 128, flat: {} } }],
+				},
+				{
+					collectionGroup: 'documents',
+					queryScope: 'COLLECTION',
+					fields: [{ fieldPath: 'tags', arrayConfig: 'CONTAINS' }],
+				},
+				{
+					collectionGroup: 'documents',
+					queryScope: 'COLLECTION',
+					fields: [{ fieldPath: 'content', searchConfig: { searchMethod: 'TEST_ONLY' } }],
+				},
+			];
+			const indexesPath = path.join(tempDir, 'indexes.json');
+			fs.writeFileSync(indexesPath, JSON.stringify({ indexes }));
+
+			const declared = readDeclaredIndexes(indexesPath);
+			const audit = auditIndexes(declared, indexes.map((index) => liveIndex(index, 'READY')));
+
+			expect(declared.map((index) => index.fields[0])).toEqual(indexes.map((index) => index.fields[0]));
+			expect(audit.map(({ ready }) => ready)).toEqual([true, true, true]);
+		});
+
 		it('reports an unreadable template instead of silently auditing nothing', () => {
 			expect(() => readDeclaredIndexes(path.join(tempDir, 'missing.json')))
 				.toThrow(/Failed to read/);

@@ -162,7 +162,7 @@ function parseArgs(argv = process.argv.slice(2)) {
  * Read the composite indexes declared in the repository template.
  *
  * @param {string} [indexesPath]
- * @returns {Array<{collectionGroup: string, queryScope: string, fields: Array<{fieldPath: string, order: string}>}>}
+ * @returns {Array<{collectionGroup: string, queryScope: string, fields: Array<Record<string, unknown>>}>}
  */
 function readDeclaredIndexes(indexesPath = INDEXES_PATH) {
 	let parsed;
@@ -177,10 +177,7 @@ function readDeclaredIndexes(indexesPath = INDEXES_PATH) {
 		collectionGroup: index.collectionGroup,
 		queryScope: index.queryScope || 'COLLECTION',
 		fields: Array.isArray(index.fields)
-			? index.fields.map((field) => ({
-				fieldPath: field.fieldPath,
-				order: field.order,
-			}))
+			? index.fields.map((field) => ({ ...field }))
 			: [],
 	}));
 }
