@@ -6,7 +6,7 @@ const { execFileSync } = require('child_process');
 const BLOCKING_SEVERITIES = new Set(['high', 'critical']);
 
 function readAuditReport() {
-	let stdout = '';
+	let stdout;
 	let exitCode = 0;
 	try {
 		stdout = execFileSync(
@@ -15,14 +15,14 @@ function readAuditReport() {
 			{ encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
 		);
 	} catch (error) {
-		stdout = error.stdout || '';
+		stdout = error.stdout;
 		exitCode = typeof error.status === 'number' ? error.status : 1;
 	}
 
 	// `--ignore-registry-errors` lets pnpm exit 0 when the registry is
 	// unreachable, so a non-JSON payload here means the report is unusable and
 	// we must not silently pass it off as a clean audit.
-	const trimmed = stdout.trim();
+	const trimmed = String(stdout || '').trim();
 	if (trimmed === '' || trimmed[0] !== '{') {
 		throw new Error(`pnpm audit produced no parsable report (exit ${exitCode})`);
 	}
@@ -53,7 +53,7 @@ function main() {
 		return 1;
 	}
 
-	console.log(`[audit-gate] OK: no high or critical advisories (${advisories.length} below threshold)`);
+	console.log(`[audit-gate] OK: no high or critical advisories (${advisories.length} reported at or above the threshold)`);
 	return 0;
 }
 
