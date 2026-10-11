@@ -26,6 +26,7 @@ describe('Volume confirmation endpoint', () => {
 
 	afterEach(() => {
 		process.env = originalEnv;
+		jest.restoreAllMocks();
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
 		}
@@ -215,6 +216,7 @@ describe('Volume confirmation endpoint', () => {
 
 	it('fails open when multi-timeframe analysis throws an error', async () => {
 		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = 'true';
+		const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
 		tradingViewMcpService.callVolumeConfirmation.mockResolvedValueOnce({
 			symbol: 'BINANCE:BTCUSDT',
@@ -242,6 +244,10 @@ describe('Volume confirmation endpoint', () => {
 			multiTimeframeAnalysis: null,
 			htfAlignment: 'unknown',
 		}));
+		expect(warnSpy).toHaveBeenCalledWith(
+			'[VolumeConfirmation] Multi-timeframe analysis failed:',
+			{ symbol: 'BINANCE:BTCUSDT', errorMessage: 'MCP multi-timeframe timeout' },
+		);
 	});
 
 	it('does not invoke multi-timeframe analysis when feature flag is disabled', async () => {

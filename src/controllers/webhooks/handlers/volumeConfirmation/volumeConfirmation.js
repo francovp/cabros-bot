@@ -42,10 +42,10 @@ function postVolumeConfirmation() {
 					});
 					htfAlignment = trendConfluence?.status || 'unknown';
 				} catch (error) {
-					console.warn(
-						`[VolumeConfirmation] Multi-timeframe analysis failed for ${parsed.rawSymbol}:`,
-						error.message,
-					);
+					console.warn('[VolumeConfirmation] Multi-timeframe analysis failed:', {
+						symbol: parsed.rawSymbol,
+						errorMessage: error.message,
+					});
 					multiTimeframeAnalysis = null;
 					htfAlignment = 'unknown';
 				}
