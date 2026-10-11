@@ -151,13 +151,26 @@ describe('Dependency advisory remediation (issue #872)', () => {
 		it('leaves the callable minimatch export intact for nodemon and superstatic', () => {
 			// The live assertion the broken override failed: these two consumers call
 			// `minimatch(...)` directly, so a namespace-object export is a TypeError.
-			for (const entry of [
-				'node_modules/nodemon/lib/monitor/match.js',
-				'node_modules/superstatic/lib/utils/patterns.js',
+			// Resolve from the store copy rather than from `node_modules/<consumer>`:
+			// superstatic is not a direct dependency so no root symlink exists for it,
+			// and createRequire() on a missing literal path walks up past the repo and
+			// resolves an unrelated minimatch -- different one locally than in CI.
+			const { createRequire } = require('module');
+			const store = path.join(REPO_ROOT, 'node_modules/.pnpm');
+			for (const [consumer, entry] of [
+				['nodemon', 'lib/monitor/match.js'],
+				['superstatic', 'lib/utils/patterns.js'],
 			]) {
-				const { createRequire } = require('module');
-				const requireFrom = createRequire(path.join(REPO_ROOT, entry));
-				expect(typeof requireFrom('minimatch')).toBe('function');
+				const storeDir = fs
+					.readdirSync(store)
+					.find((d) => d.startsWith(`${consumer}@`) && fs.existsSync(path.join(store, d)));
+				expect([consumer, storeDir !== undefined]).toEqual([consumer, true]);
+
+				const consumerDir = fs.realpathSync(
+					path.join(store, storeDir, 'node_modules', consumer)
+				);
+				const requireFrom = createRequire(path.join(consumerDir, entry));
+				expect([consumer, typeof requireFrom('minimatch')]).toEqual([consumer, 'function']);
 			}
 		});
 	});
