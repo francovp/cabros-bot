@@ -9729,7 +9729,7 @@
               },
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"123\" }\n  ],\n  \"reEnriched\": true\n}"
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"123\" }\n  ],\n  \"reEnriched\": true,\n  \"originalEnrichment\": { \"sentiment\": \"bullish\", \"current_price\": 64000 },\n  \"reEnrichedData\": { \"sentiment\": \"super-bullish\", \"current_price\": 65000 }\n}"
             },
             {
               "name": "Success",
@@ -9833,7 +9833,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"channels\": [\"telegram\", \"slack\"]\n}"
+                  "raw": "{\n  \"channels\": [\"telegram\", \"slack\"],\n  \"reEnrich\": true\n}"
                 },
                 "url": {
                   "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
