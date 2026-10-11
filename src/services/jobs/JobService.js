@@ -21,7 +21,7 @@ const {
 const { enrichScannerItemsWithTrendConfluence } = require('../tradingview/marketScannerConfluence');
 const {
 	getNotificationManager,
-	initializeNotificationServices,
+	getOrInitializeNotificationManager,
 } = require('../../controllers/webhooks/handlers/alert/alert');
 const sentryService = require('../monitoring/SentryService');
 const { jobRepository } = require('./JobRepository');
@@ -1398,7 +1398,7 @@ class JobService {
 
 		let notificationManager = getNotificationManager();
 		if (!notificationManager) {
-			notificationManager = await initializeNotificationServices(this._resolveBot(botOrGetter));
+			notificationManager = await getOrInitializeNotificationManager(this._resolveBot(botOrGetter));
 		}
 
 		const routing = this._getRoutingFromJob(job);
@@ -1542,7 +1542,7 @@ class JobService {
 
 		let notificationManager = getNotificationManager();
 		if (!notificationManager) {
-			notificationManager = await initializeNotificationServices(this._resolveBot(botOrGetter));
+			notificationManager = await getOrInitializeNotificationManager(this._resolveBot(botOrGetter));
 		}
 
 		const routing = this._getRoutingFromJob(job);

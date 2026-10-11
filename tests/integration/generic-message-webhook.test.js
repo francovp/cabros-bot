@@ -3,7 +3,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
@@ -36,6 +36,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 		idempotencyService.clear();
 
 		mockBot = {
@@ -129,6 +130,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			ok: true,
 			json: async () => ({ id: 'discord-msg-789' }),
 		});
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		const res = await request(app)
@@ -173,6 +175,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			ok: true,
 			json: async () => ({ id: 'discord-msg-789' }),
 		});
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		const res = await request(app)
@@ -218,6 +221,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 	it('returns 400 when discordWebhookUrl path lacks webhook ID and token', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
 		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		const res = await request(app)
@@ -241,6 +245,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			ok: true,
 			json: async () => ({ id: 'discord-msg-1' }),
 		});
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		await request(app)
@@ -278,6 +283,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			ok: true,
 			json: async () => ({ idMessage: 'provider-message-123', id: 'provider-message-123' }),
 		});
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 		global.fetch.mockClear();
 
@@ -336,6 +342,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			ok: true,
 			json: async () => ({ idMessage: 'provider-validation-123', id: 'provider-validation-123' }),
 		});
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		global.fetch = jest.fn().mockImplementation(async () => {
@@ -450,6 +457,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			json: async () => ({ id: 'discord-msg-789' }),
 		});
 
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		const res = await request(app)
@@ -489,6 +497,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			return { ok: true, json: async () => ({ idMessage: 'wa-msg-456' }) };
 		});
 
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 		global.fetch.mockClear();
 
@@ -1266,6 +1275,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		it('surfaces resolved destination overrides but never the Discord webhook credential', async () => {
 			process.env.ENABLE_DISCORD_ALERTS = 'true';
 			process.env.DISCORD_WEBHOOK_URL = VALID_DISCORD_WEBHOOK;
+			resetNotificationManagerForTesting();
 			await initializeNotificationServices(mockBot);
 
 			const res = await request(app)

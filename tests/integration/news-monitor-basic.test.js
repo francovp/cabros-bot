@@ -1,7 +1,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { getCacheInstance } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
 
 jest.mock('../../src/services/grounding/gemini');
@@ -33,6 +33,7 @@ describe('News Monitor - Basic Endpoint Integration', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 		getCacheInstance().clear();
 
 		// Mock Gemini for symbol analysis

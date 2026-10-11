@@ -30,6 +30,7 @@ jest.mock('../../src/controllers/webhooks/handlers/alert/alert', () => ({
 	postAlert: jest.fn(() => (_req, res) => res.status(501).json({ error: 'not mocked' })),
 	initializeNotificationServices: jest.fn(),
 	getNotificationManager: jest.fn(),
+	getOrInitializeNotificationManager: jest.fn(),
 	processEnrichment: jest.fn(),
 }));
 
@@ -82,6 +83,7 @@ describe('Alerts API Integration Tests', () => {
 		};
 		alertHandler.getNotificationManager.mockReturnValue(mockNotificationManager);
 		alertHandler.initializeNotificationServices.mockResolvedValue(mockNotificationManager);
+		alertHandler.getOrInitializeNotificationManager.mockResolvedValue(mockNotificationManager);
 		alertStorageService.isEnabled.mockReturnValue(true);
 		alertStorageService.saveReplayAttempt.mockResolvedValue('replay-1');
 		alertStorageService.listReplayAttempts.mockResolvedValue({ replays: [], hasMore: false, nextBefore: null });
@@ -1343,6 +1345,31 @@ describe('Alerts API Integration Tests', () => {
 			replayId: 'replay-1',
 			results: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
 		});
+	});
+
+	it('uses the shared bootstrap when replay has no initialized notification manager', async () => {
+		alertHandler.getNotificationManager.mockReturnValue(null);
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-bootstrap',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Bootstrap replay',
+			deliveryResults: [{ channel: 'telegram', success: false }],
+			source: 'webhook',
+		});
+
+		await request(app)
+			.post('/api/alerts/alert-bootstrap/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-bootstrap-key')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(alertHandler.getOrInitializeNotificationManager).toHaveBeenCalledWith(null);
+		expect(alertHandler.initializeNotificationServices).not.toHaveBeenCalled();
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({ text: 'Bootstrap replay' }),
+			['telegram'],
+		);
 	});
 
 	it('preserves signalClass when replaying a stored alert', async () => {
