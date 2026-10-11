@@ -602,6 +602,13 @@
       "description": "Heartbeat interval in milliseconds for SSE comment keepalive frames",
       "valueType": "NUMBER"
     },
+    "ADMIN_SSE_DRAIN_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "15000"
+      },
+      "description": "Maximum time in milliseconds to wait for a backpressured SSE client socket to drain before eviction",
+      "valueType": "NUMBER"
+    },
     "ENABLE_TOKEN_COST_BUDGET": {
       "defaultValue": {
         "value": "false"
