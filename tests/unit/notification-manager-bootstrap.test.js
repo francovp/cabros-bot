@@ -115,8 +115,39 @@ describe('NotificationManagerBootstrap', () => {
 		expect(mockCtor).toHaveBeenCalledTimes(1);
 	});
 
-	it('getInitialized returns null until initialize completes', () => {
+	it('getInitialized returns null before initialization starts', () => {
 		expect(bootstrapModule.getInitialized()).toBeNull();
+	});
+
+	it('publishes the manager while channel validation is still pending', async () => {
+		const telegram = makeChannel('telegram');
+		const whatsapp = makeChannel('whatsapp');
+		const discord = makeChannel('discord');
+		let resolveValidation;
+		const manager = {
+			validateAll: jest.fn(() => new Promise((resolve) => {
+				resolveValidation = resolve;
+			})),
+			getEnabledChannels: () => ['telegram'],
+		};
+
+		jest.doMock('../../src/services/notification/TelegramService', () => jest.fn(() => telegram));
+		jest.doMock('../../src/services/notification/WhatsAppService', () => jest.fn(() => whatsapp));
+		jest.doMock('../../src/services/notification/DiscordService', () => jest.fn(() => discord));
+		jest.doMock('../../src/services/notification/NotificationManager', () => jest.fn(() => manager));
+
+		jest.resetModules();
+		const fresh = require('../../src/services/notification/NotificationManagerBootstrap');
+
+		const initialization = fresh.initialize({ id: 'startup-bot' });
+		const managerDuringValidation = fresh.getInitialized();
+		const statusDuringValidation = fresh.getBootstrapStatus();
+		resolveValidation();
+		await initialization;
+
+		expect(managerDuringValidation).toBe(manager);
+		expect(statusDuringValidation.initialized).toBe(false);
+		expect(statusDuringValidation.enabledChannels).toEqual([]);
 	});
 
 	it('records bootstrap status metadata', async () => {
@@ -164,6 +195,39 @@ describe('NotificationManagerBootstrap', () => {
 
 		expect(fresh.getInitialized()).toBeNull();
 		expect(fresh.getBootstrapStatus().lastInitSucceeded).toBe(false);
+	});
+
+	it('clears a manager after validation rejects so a later initialization can retry', async () => {
+		const telegram = makeChannel('telegram');
+		const whatsapp = makeChannel('whatsapp');
+		const discord = makeChannel('discord');
+		const failedManager = {
+			validateAll: jest.fn().mockRejectedValue(new Error('validation failed')),
+			getEnabledChannels: () => ['telegram'],
+		};
+		const retryManager = {
+			validateAll: jest.fn().mockResolvedValue(undefined),
+			getEnabledChannels: () => ['telegram'],
+		};
+		const managerCtor = jest.fn()
+			.mockImplementationOnce(() => failedManager)
+			.mockImplementationOnce(() => retryManager);
+
+		jest.doMock('../../src/services/notification/TelegramService', () => jest.fn(() => telegram));
+		jest.doMock('../../src/services/notification/WhatsAppService', () => jest.fn(() => whatsapp));
+		jest.doMock('../../src/services/notification/DiscordService', () => jest.fn(() => discord));
+		jest.doMock('../../src/services/notification/NotificationManager', () => managerCtor);
+
+		jest.resetModules();
+		const fresh = require('../../src/services/notification/NotificationManagerBootstrap');
+
+		const failedInitialization = fresh.initialize({ id: 'failed-bot' });
+		await expect(failedInitialization).rejects.toThrow('validation failed');
+		expect(fresh.getInitialized()).toBeNull();
+
+		const retried = await fresh.getOrInitialize({ id: 'retry-bot' });
+		expect(retried).toBe(retryManager);
+		expect(managerCtor).toHaveBeenCalledTimes(2);
 	});
 
 	it('rejects a throwing bot getter without poisoning the singleton', async () => {
@@ -256,7 +320,7 @@ describe('NotificationManagerBootstrap', () => {
 		oldValidation.resolve();
 		await oldInitialization;
 
-		expect(fresh.getInitialized()).toBeNull();
+		expect(fresh.getInitialized()).toBe(newManager);
 		const joinedNewInitialization = fresh.getOrInitialize({ id: 'third' });
 		expect(joinedNewInitialization).toBe(newInitialization);
 		expect(managerCtor).toHaveBeenCalledTimes(2);
