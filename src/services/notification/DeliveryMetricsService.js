@@ -95,6 +95,35 @@ class DeliveryMetricsService {
 		};
 	}
 
+	/**
+	 * Classify the current health of a single channel from broadcast delivery counters.
+	 * Distinguishes "configured" (operator intent) from "currently reachable", which is
+	 * what admin-paging fallback needs to prefer a healthy channel over a merely
+	 * configured one.
+	 * @param {string} channel
+	 * @returns {{state: 'healthy'|'degraded'|'failing'|'unknown', total: number, success: number, failure: number, successRate: number|null}}
+	 */
+	getChannelHealth(channel) {
+		if (typeof channel !== 'string' || channel.length === 0) {
+			return { state: 'unknown', total: 0, success: 0, failure: 0, successRate: null };
+		}
+		const counters = this.channelCounters.get(channel);
+		if (!counters || counters.success + counters.failure === 0) {
+			return { state: 'unknown', total: 0, success: 0, failure: 0, successRate: null };
+		}
+		const total = counters.success + counters.failure;
+		const successRate = counters.success / total;
+		let state;
+		if (counters.success === 0) {
+			state = 'failing';
+		} else if (counters.failure === 0) {
+			state = 'healthy';
+		} else {
+			state = successRate >= 0.5 ? 'healthy' : 'degraded';
+		}
+		return { state, total, success: counters.success, failure: counters.failure, successRate };
+	}
+
 	_globalAverage() {
 		let totalDuration = 0;
 		let totalSamples = 0;

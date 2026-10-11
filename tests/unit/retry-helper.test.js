@@ -154,6 +154,43 @@ describe('retryHelper', () => {
 		});
 	});
 
+	describe('non-retryable results', () => {
+		it('stops after the first attempt when the result is marked non-retryable', async () => {
+			// A deterministic "no data for this symbol/venue" answer (GH-591) never
+			// succeeds on a retry, so the caller marks the result `retryable: false`
+			// and the chain halts. This is the pre-existing stop mechanism; no
+			// second `shouldRetry` hook is needed.
+			const sendFn = jest.fn().mockResolvedValue({
+				success: false,
+				channel: 'test',
+				error: 'no data',
+				retryable: false,
+			});
+
+			const result = await sendWithRetry(sendFn, 3, null);
+
+			expect(sendFn).toHaveBeenCalledTimes(1);
+			expect(result).toEqual(expect.objectContaining({
+				success: false,
+				attemptCount: 1,
+				error: 'no data',
+			}));
+		});
+
+		it('still exhausts retries when a deterministic-looking error is retryable', async () => {
+			const sendFn = jest.fn().mockResolvedValue({
+				success: false,
+				channel: 'test',
+				error: 'no data',
+			});
+
+			await sendWithRetry(sendFn, 3, null);
+
+			expect(sendFn).toHaveBeenCalledTimes(3);
+		});
+
+	});
+
 	describe('sleep', () => {
 		it('should sleep for specified milliseconds', async () => {
 			const start = Date.now();
