@@ -9,7 +9,10 @@ const { getAnalyzer, setNotificationManager } = require('./analyzer');
 const { getCacheInstance } = require('./cache');
 const { AnalysisStatus } = require('./constants');
 const { getVolumeTracker } = require('./volumeTracker');
-const { getNotificationManager } = require('../alert/alert');
+const {
+	getNotificationManager,
+	getOrInitializeNotificationManager,
+} = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const { TokenUsageTracker } = require('../../../../lib/tokenUsage');
 const {
@@ -56,12 +59,6 @@ class NewsMonitorHandler {
 			const requestSpan = sentryService.getActiveSpan();
 			const dryRun = resolveDryRun(req);
 
-			// Inject notification manager into analyzer (set once before analysis)
-			const notificationManager = getNotificationManager();
-			if (notificationManager) {
-				setNotificationManager(notificationManager);
-			}
-
 			// Check feature flag
 			if (process.env.ENABLE_NEWS_MONITOR !== 'true') {
 				return res.status(403).json({
@@ -84,6 +81,13 @@ class NewsMonitorHandler {
 					requestId,
 				});
 			}
+
+			// Join any startup bootstrap already in progress before analysis can
+			// dispatch alerts. A constructed manager is not ready until every
+			// channel has completed validation.
+			const notificationManager = getNotificationManager()
+				|| await getOrInitializeNotificationManager();
+			setNotificationManager(notificationManager);
 
 			// Parse request
 			const routing = req.method === 'GET'

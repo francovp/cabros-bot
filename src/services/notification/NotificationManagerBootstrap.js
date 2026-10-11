@@ -26,8 +26,8 @@
  *    the existing manager if already initialized, otherwise runs the
  *    bootstrap once and shares the same in-flight Promise across all
  *    concurrent callers (no double init).
- *  - `getInitialized()` returns the constructed manager or `null` (never
- *    throws), including while channel validation is pending.
+ *  - `getInitialized()` returns the validated manager or `null` (never
+ *    throws) so handlers can check readiness without re-running init.
  *  - `resetForTesting()` clears the cached manager + in-flight Promise.
  */
 
@@ -62,9 +62,17 @@ function buildServices(bot) {
 	return { telegramService, whatsappService, discordService };
 }
 
-function constructManager(bot) {
+async function constructManager(bot) {
 	const { telegramService, whatsappService, discordService } = buildServices(bot);
-	return new NotificationManager(telegramService, whatsappService, discordService);
+	const manager = new NotificationManager(telegramService, whatsappService, discordService);
+
+	console.debug('Initializing notification services...');
+	await manager.validateAll();
+
+	const enabledChannels = manager.getEnabledChannels();
+	console.debug(`Notification services initialized: ${enabledChannels.join(', ') || 'none'}`);
+
+	return manager;
 }
 
 /**
@@ -97,27 +105,11 @@ function initialize(botOrGetter) {
 		return Promise.reject(error);
 	}
 
-	let manager;
-	try {
-		manager = constructManager(bot);
-		notificationManager = manager;
-	} catch (error) {
-		console.error('[NotificationManagerBootstrap] Initialization failed:', error.message);
-		lastInitFinishedAt = Date.now();
-		lastInitSucceeded = false;
-		return Promise.reject(error);
-	}
-
-	let currentInitPromise;
-	currentInitPromise = (async () => {
+	const currentInitPromise = (async () => {
 		try {
-			console.debug('Initializing notification services...');
-			await manager.validateAll();
-
-			const enabledChannels = manager.getEnabledChannels();
-			console.debug(`Notification services initialized: ${enabledChannels.join(', ') || 'none'}`);
-
+			const manager = await constructManager(bot);
 			if (generation === initializationGeneration) {
+				notificationManager = manager;
 				lastInitFinishedAt = Date.now();
 				lastInitSucceeded = true;
 			}
@@ -125,9 +117,6 @@ function initialize(botOrGetter) {
 		} catch (error) {
 			console.error('[NotificationManagerBootstrap] Initialization failed:', error.message);
 			if (generation === initializationGeneration) {
-				if (notificationManager === manager) {
-					notificationManager = null;
-				}
 				lastInitFinishedAt = Date.now();
 				lastInitSucceeded = false;
 			}
@@ -155,13 +144,15 @@ function initialize(botOrGetter) {
  * @returns {Promise<NotificationManager>}
  */
 function getOrInitialize(botOrGetter) {
+	if (notificationManager) {
+		return Promise.resolve(notificationManager);
+	}
 	return initialize(botOrGetter);
 }
 
 /**
- * Returns the constructed manager, or `null` until construction completes.
- * The manager may still be undergoing channel validation. Never throws and
- * never invokes initialization.
+ * Returns the validated manager, or `null` until initialization completes.
+ * Never throws and never invokes initialization.
  *
  * @returns {NotificationManager|null}
  */
@@ -175,11 +166,11 @@ function getInitialized() {
  */
 function getBootstrapStatus() {
 	return {
-		initialized: notificationManager !== null && lastInitSucceeded,
+		initialized: notificationManager !== null,
 		lastInitStartedAt,
 		lastInitFinishedAt,
 		lastInitSucceeded,
-		enabledChannels: notificationManager && lastInitSucceeded
+		enabledChannels: notificationManager
 			? notificationManager.getEnabledChannels()
 			: [],
 	};

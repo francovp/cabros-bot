@@ -119,7 +119,7 @@ describe('NotificationManagerBootstrap', () => {
 		expect(bootstrapModule.getInitialized()).toBeNull();
 	});
 
-	it('publishes the manager while channel validation is still pending', async () => {
+	it('keeps the manager unavailable until channel validation completes', async () => {
 		const telegram = makeChannel('telegram');
 		const whatsapp = makeChannel('whatsapp');
 		const discord = makeChannel('discord');
@@ -142,12 +142,15 @@ describe('NotificationManagerBootstrap', () => {
 		const initialization = fresh.initialize({ id: 'startup-bot' });
 		const managerDuringValidation = fresh.getInitialized();
 		const statusDuringValidation = fresh.getBootstrapStatus();
+		expect(managerDuringValidation).toBeNull();
+		expect(statusDuringValidation.initialized).toBe(false);
+		expect(statusDuringValidation.enabledChannels).toEqual([]);
+
 		resolveValidation();
 		await initialization;
 
-		expect(managerDuringValidation).toBe(manager);
-		expect(statusDuringValidation.initialized).toBe(false);
-		expect(statusDuringValidation.enabledChannels).toEqual([]);
+		expect(fresh.getInitialized()).toBe(manager);
+		expect(fresh.getBootstrapStatus().initialized).toBe(true);
 	});
 
 	it('records bootstrap status metadata', async () => {
@@ -320,7 +323,7 @@ describe('NotificationManagerBootstrap', () => {
 		oldValidation.resolve();
 		await oldInitialization;
 
-		expect(fresh.getInitialized()).toBe(newManager);
+		expect(fresh.getInitialized()).toBeNull();
 		const joinedNewInitialization = fresh.getOrInitialize({ id: 'third' });
 		expect(joinedNewInitialization).toBe(newInitialization);
 		expect(managerCtor).toHaveBeenCalledTimes(2);
