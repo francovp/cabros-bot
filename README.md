@@ -650,12 +650,14 @@ pnpm run lint
 `pnpm audit --audit-level=high` exits `0`:
 
 ```bash
-pnpm audit --audit-level=high
+pnpm run audit:gate   # or: pnpm audit --audit-level=high
 ```
 
-Transitive pins live in `pnpm-workspace.yaml` under `overrides`, **not** in a `pnpm` field in `package.json` — pnpm 10 ignores that field with a warning, so an override placed there is silently inert. `tests/unit/dependency-advisory-remediation.test.js` enforces both the placement and the resolved versions, and fails if a critical or high advisory returns.
+`pnpm run audit:gate` is the enforced form: CI runs it as its own step, and it exits `1` on any high or critical advisory. It is a **separate command, not part of `pnpm test`**, because it queries the npm registry and `pnpm test` is documented to run without external network access. It also fails closed (exit `2`) when the registry is unreachable, so a registry outage can never be reported as a clean audit.
 
-An advisory does not authorize a semver-major migration. `firebase-admin` stays on 12.x and `express` stays on 4.x because a pinned transitive version clears the advisory without an API break — see [SDK Major Drift Audit](docs/runtime-sdk-major-drift-audit.md#41-advisory-remediation-without-a-major-migration-issue-872) for the escalation order and the reasoning behind the single documented `auditConfig` ignore.
+Transitive pins live in `pnpm-workspace.yaml` under `overrides`, **not** in a `pnpm` field in `package.json` — pnpm 10 ignores that field with a warning, so an override placed there is silently inert. `tests/unit/dependency-advisory-remediation.test.js` enforces the placement and the resolved versions offline, against the lockfile.
+
+**A pin that fixes an advisory must not break a consumer.** That is why `firebase-admin` stays on 12.x and `express` on 4.x, and why `minimatch` is overridden *per consumer* rather than globally. A bare `minimatch:` override forces one major onto every consumer, and minimatch 10's CommonJS entry point is a namespace object rather than the directly-callable export the 3.x/6.x lines ship — so `nodemon`, `test-exclude@6` and `superstatic` throw `TypeError: minimatch is not a function`, which breaks `pnpm run start-dev`. Each consumer is instead pinned to its own major at that line's patched floor (`3.x→3.1.4`, `5.x→5.1.8`, `6.x→6.2.2`, `9.x→9.0.7`, `10.x→10.2.3`), which clears both ReDoS advisories without changing any caller's API contract. See [SDK Major Drift Audit](docs/runtime-sdk-major-drift-audit.md#41-advisory-remediation-without-a-major-migration-issue-872) for the escalation order and the reasoning behind the single documented `auditConfig` ignore.
 
 ---
 

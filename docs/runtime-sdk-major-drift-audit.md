@@ -136,8 +136,13 @@ Criterion 4 of Section 5 promotes a package for *attention*, but the remedy for 
 a pinned transitive version, not a framework change. The gate is:
 
 ```bash
-pnpm audit --audit-level=high   # must exit 0
+pnpm run audit:gate   # must exit 0; equivalent to `pnpm audit --audit-level=high`
 ```
+
+The gate is a **separate command, not part of `pnpm test`**, because it queries the npm registry
+while the default Jest suite is documented to need no external network access. CI runs
+`pnpm run audit:gate` as its own step. It exits `1` on any high or critical advisory, and `2` when
+the audit report cannot be parsed — a registry outage must never be reported as a clean tree.
 
 **Where an override is declared.** pnpm 10 reads `overrides` and `auditConfig` from
 `pnpm-workspace.yaml`. The `pnpm` field in `package.json` is *ignored* — pnpm prints a warning and
@@ -160,6 +165,22 @@ advisory:
 4. **`auditConfig.ignoreGhsas`** — last resort, and only with a written reachability argument
    recorded next to the ignore in `pnpm-workspace.yaml`.
 
+**A pin that fixes an advisory must not break a consumer that calls it.** The `minimatch` case is
+the worked example of why step 2 says *scoped*. Two high ReDoS advisories cover it —
+`GHSA-23c5-xmqv-rm74` (nested `*()` extglobs) and `GHSA-7r86-cg39-jmmj` (non-adjacent GLOBSTAR
+backtracking) — and each is patched on every major line at a *different* floor: `3.x→3.1.4`,
+`5.x→5.1.8`, `6.x→6.2.2`, `9.x→9.0.7`, `10.x→10.2.3`. A bare `minimatch:` override therefore does
+not just choose a version, it forces one major onto every consumer in the tree, and minimatch 10's
+CommonJS entry point is a namespace object rather than the directly-callable export that the 3.x and
+6.x lines ship. `nodemon`, `test-exclude@6` and `superstatic` all call `minimatch(...)` directly, so
+the global pin turned `pnpm run start-dev` into `TypeError: minimatch is not a function` on the first
+watched-file change. Each consumer is instead pinned to its own major at that line's floor
+(`nodemon>minimatch`, `firebase-tools>minimatch`, `test-exclude@6>minimatch`, `superstatic>minimatch`,
+`glob@10>minimatch`), which clears both advisories while leaving every caller's API contract intact.
+This is the same rule as the `firebase-admin` hold one layer down: a dependency's *declared* range is
+part of its contract. Two tests pin it — no bare `minimatch:` override, and `require('minimatch')`
+resolved from nodemon's and superstatic's own directories is still a function.
+
 **An ignore requires a reachability proof, not a risk tolerance.** The single current ignore,
 `GHSA-86w9-cpqp-85rv` (node-forge RSA PKCS#1 v1.5 verification), has no patched release at any
 version. It is suppressed because `firebase-admin` calls exactly one node-forge function —
@@ -174,10 +195,10 @@ test suite mocks `firebase-admin` — so the migration would have passed CI and 
 The `protobufjs` override clears the same critical advisory (the Firestore wire decoder,
 `GHSA-xq3m-2v4x-88gg`) with no API change, which is why `firebase-admin` remains on 12.x.
 
-**Re-verify after every change to the dependency tree.** `pnpm test` covers the unit and
-integration surfaces, and `pnpm test:firebase` exercises the real Admin SDK against the emulator —
-which is the only thing that proves the pinned `protobufjs` still decodes Firestore responses
-correctly. See Section 6, Stage 2.
+**Re-verify after every change to the dependency tree.** `pnpm run audit:gate` re-checks the
+advisory surface, `pnpm test` covers the unit and integration surfaces, and `pnpm test:firebase`
+exercises the real Admin SDK against the emulator — which is the only thing that proves the pinned
+`protobufjs` still decodes Firestore responses correctly. See Section 6, Stage 2.
 
 ---
 

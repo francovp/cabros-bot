@@ -1,11 +1,12 @@
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
 
 const REPO_ROOT = path.join(__dirname, '..', '..');
 const WORKSPACE_YAML_PATH = path.join(REPO_ROOT, 'pnpm-workspace.yaml');
 const LOCKFILE_PATH = path.join(REPO_ROOT, 'pnpm-lock.yaml');
 const PACKAGE_JSON_PATH = path.join(REPO_ROOT, 'package.json');
+const CI_WORKFLOW_PATH = path.join(REPO_ROOT, '.github/workflows/node.js.yml');
+const AUDIT_GATE_PATH = path.join(REPO_ROOT, 'scripts/audit-advisories.js');
 
 const readOverrides = () => fs.readFileSync(WORKSPACE_YAML_PATH, 'utf8');
 const readLockfile = () => fs.readFileSync(LOCKFILE_PATH, 'utf8');
@@ -111,6 +112,56 @@ describe('Dependency advisory remediation (issue #872)', () => {
 		});
 	});
 
+	describe('minimatch is scoped per consumer, never pinned to one major', () => {
+		// A bare `minimatch:` override forces a semver-major onto every consumer.
+		// minimatch 10's CommonJS entry point is a namespace object rather than the
+		// directly-callable export the 3.x/6.x lines ship, so nodemon, test-exclude@6
+		// and superstatic each throw `TypeError: minimatch is not a function` -- which
+		// broke `pnpm run start-dev` on the first watched-file change.
+		const PATCHED_FLOOR = { 3: '3.1.4', 5: '5.1.8', 6: '6.2.2', 9: '9.0.7', 10: '10.2.3' };
+
+		it('declares no global minimatch override', () => {
+			expect(readOverrides()).not.toMatch(/^\s+minimatch:/m);
+		});
+
+		it('keeps every consumer on its own major at that line’s patched floor', () => {
+			// pnpm quotes override keys containing `@`, so compare without the quotes.
+			const overrides = readOverrides().replace(/'/g, '');
+			for (const scope of [
+				'firebase-tools>minimatch',
+				'nodemon>minimatch',
+				'superstatic>minimatch',
+				'glob@10>minimatch',
+				'test-exclude@6>minimatch',
+			]) {
+				expect(overrides).toContain(`${scope}: ^`);
+			}
+
+			const resolved = resolvedVersions(readLockfile(), 'minimatch');
+			for (const major of Object.keys(PATCHED_FLOOR)) {
+				const onLine = resolved.filter((v) => v.split('.')[0] === major);
+				expect(onLine.length).toBeGreaterThan(0);
+				for (const version of onLine) {
+					expect(version.localeCompare(PATCHED_FLOOR[major], undefined, { numeric: true }))
+						.toBeGreaterThanOrEqual(0);
+				}
+			}
+		});
+
+		it('leaves the callable minimatch export intact for nodemon and superstatic', () => {
+			// The live assertion the broken override failed: these two consumers call
+			// `minimatch(...)` directly, so a namespace-object export is a TypeError.
+			for (const entry of [
+				'node_modules/nodemon/lib/monitor/match.js',
+				'node_modules/superstatic/lib/utils/patterns.js',
+			]) {
+				const { createRequire } = require('module');
+				const requireFrom = createRequire(path.join(REPO_ROOT, entry));
+				expect(typeof requireFrom('minimatch')).toBe('function');
+			}
+		});
+	});
+
 	describe('firebase-admin stays on the 12.x line', () => {
 		it('is not upgraded to the API-breaking 13/14 line', () => {
 			const range = readPackageJson().dependencies['firebase-admin'];
@@ -164,31 +215,23 @@ describe('Dependency advisory remediation (issue #872)', () => {
 	});
 
 	describe('the advisory gate itself', () => {
-		it('reports no critical or high finding at --audit-level=high', () => {
-			let stdout = '';
-			let exitCode = 0;
-			try {
-				stdout = execFileSync('pnpm', ['audit', '--audit-level=high', '--json'], {
-					cwd: REPO_ROOT,
-					encoding: 'utf8',
-					stdio: ['ignore', 'pipe', 'ignore'],
-					env: { ...process.env, npm_config_loglevel: 'silent' },
-				});
-			} catch (error) {
-				stdout = error.stdout || '';
-				exitCode = error.status;
-			}
+		it('does not run the registry-backed audit inside the default suite', () => {
+			// docs/environment-configuration.md promises `pnpm test` needs no external
+			// network. A live `pnpm audit` here would break that on any registry outage.
+			const suite = fs.readFileSync(__filename, 'utf8');
+			expect(suite).not.toContain(['child', 'process'].join('_'));
+		});
 
-			const report = JSON.parse(stdout);
-			const advisories = Object.values(report.advisories || {});
-			const blocking = advisories.filter(
-				(a) => a.severity === 'high' || a.severity === 'critical'
-			);
+		it('keeps the gate as a dedicated command that CI runs as its own step', () => {
+			expect(readPackageJson().scripts['audit:gate']).toBe('node scripts/audit-advisories.js');
+			expect(fs.existsSync(AUDIT_GATE_PATH)).toBe(true);
+			expect(fs.readFileSync(CI_WORKFLOW_PATH, 'utf8')).toMatch(/run: pnpm run audit:gate/);
+		});
 
-			expect(
-				blocking.map((a) => `${a.severity}:${a.module_name}:${a.github_advisory_id}`)
-			).toEqual([]);
-			expect(exitCode).toBe(0);
-		}, 180000);
+		it('fails closed when the audit report is unparsable', () => {
+			const gate = fs.readFileSync(AUDIT_GATE_PATH, 'utf8');
+			expect(gate).toMatch(/no parsable report/);
+			expect(gate).toMatch(/--ignore-registry-errors/);
+		});
 	});
 });

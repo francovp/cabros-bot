@@ -41,6 +41,20 @@ allowBuilds:
 #   pulls `braces`, which has NO patched release (GHSA-vfj7-8cjw-p6xm). chokidar 4
 #   drops the dependency, so the advisory leaves the tree instead of being ignored.
 #
+#   minimatch is overridden PER CONSUMER, never globally. Two high ReDoS advisories
+#   cover it -- GHSA-23c5-xmqv-rm74 (nested `*()` extglobs) and GHSA-7r86-cg39-jmmj
+#   (non-adjacent GLOBSTAR backtracking) -- and each is patched on every major line
+#   at a DIFFERENT floor: 3.x->3.1.4, 5.x->5.1.8, 6.x->6.2.2, 9.x->9.0.7, 10.x->10.2.3.
+#   A global `minimatch: ^10` does not merely pick a version, it forces a semver-major
+#   onto every consumer, and minimatch 10's CommonJS entry point is a namespace object
+#   rather than the directly-callable export the 3.x/6.x lines ship. nodemon,
+#   test-exclude@6 and superstatic all call `minimatch(...)` directly, so the global
+#   pin makes `pnpm run start-dev` fail with `TypeError: minimatch is not a function`
+#   on the first watched-file change. Scoping each consumer to its own major at that
+#   line's patched floor clears both advisories while leaving every consumer's API
+#   contract intact -- the same rule the firebase-admin hold follows: a pin that
+#   fixes an advisory must not be allowed to break a caller.
+#
 # The single ignore below is an unreachable code path, not a tolerated risk.
 # GHSA-86w9-cpqp-85rv (node-forge RSA PKCS#1 v1.5 verification accepts extra
 # nested structures) has NO patched release at any version. firebase-admin calls
@@ -78,15 +92,17 @@ overrides:
   firebase-tools>chokidar: ^4.0.3
   firebase-tools>js-yaml: ^4.3.2
   firebase-tools>morgan: ^1.12.1
+  firebase-tools>minimatch: ^3.1.4
   flatted: ^3.4.4
   follow-redirects: ^1.16.0
   form-data: ^4.0.6
   hono: ^4.13.13
   ip-address: ^10.7.1
+  'glob@10>minimatch': ^9.0.7
   'js-yaml@<4': ^3.15.2
-  minimatch: ^10.2.6
   node-gyp>undici: ^8.11.2
   nodemon>chokidar: ^4.0.3
+  nodemon>minimatch: ^3.1.4
   nodemon>semver: ^7.5.2
   picomatch: ^4.0.7
   protobufjs: ^7.6.6
@@ -94,6 +110,8 @@ overrides:
   qs: ^6.16.0
   semver: ^7.5.2
   source-map-js: ^1.2.2
+  superstatic>minimatch: ^6.2.2
+  'test-exclude@6>minimatch': ^3.1.4
   telegraf>@tootallnate/once: ^2.0.1
   uuid: ^11.1.1
 
