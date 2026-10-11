@@ -3449,4 +3449,101 @@ describe('Status endpoints', () => {
 			}),
 		});
 	});
+
+	// Issue #1118: ENABLE_BINANCE_ORDER_AUDIT gates BinanceOrderAuditService, so the
+	// status payload must let an operator distinguish "audit off", "audit on and
+	// storing", and "audit on but storage unconfigured".
+	describe('Binance order audit observability (issue #1118)', () => {
+		it('reports the audit flag as disabled by default', async () => {
+			delete process.env.ENABLE_BINANCE_ORDER_AUDIT;
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.binanceOrderAudit).toBe(false);
+			// `configured` reports Firestore credential readiness, so an operator can
+			// see "credentials present but audit off" instead of a bare `false`.
+			expect(response.body.dependencies.binanceOrderAudit).toEqual({
+				enabled: false,
+				configured: true,
+				ready: false,
+				status: 'disabled',
+				collection: 'binanceOrderAudit',
+				retentionDays: 30,
+			});
+		});
+
+		it('reports the audit flag on /api/capabilities when enabled', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+
+			const response = await request(app)
+				.get('/api/capabilities')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.binanceOrderAudit).toBe(true);
+			expect(response.body.dependencies.binanceOrderAudit.enabled).toBe(true);
+			expect(response.body.dependencies.binanceOrderAudit.ready).toBe(true);
+			expect(response.body.dependencies.binanceOrderAudit.status).toBe('ready');
+			expect(response.body.dependencies.binanceOrderAudit.collection).toBe('binanceOrderAudit');
+		});
+
+		it('reports misconfigured when enabled without Firestore credentials', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+			delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.binanceOrderAudit).toBe(true);
+			expect(response.body.dependencies.binanceOrderAudit).toEqual({
+				enabled: true,
+				configured: false,
+				ready: false,
+				status: 'misconfigured',
+				collection: 'binanceOrderAudit',
+				retentionDays: 30,
+			});
+		});
+
+		it('never exposes credentials or operator identifiers in the audit dependency block', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(Object.keys(response.body.dependencies.binanceOrderAudit).sort()).toEqual([
+				'collection',
+				'configured',
+				'enabled',
+				'ready',
+				'retentionDays',
+				'status',
+			]);
+			expect(response.text).not.toContain('status-key');
+		});
+
+		it('honors the Remote Config override over a conflicting environment value', async () => {
+			// The audit service resolves Remote Config before process.env. A remote
+			// override must therefore win, so flipping the flag in Firebase actually
+			// turns the reported flag instead of silently being ignored.
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'false';
+			remoteConfigService._setRemoteOverridesForTesting({ ENABLE_BINANCE_ORDER_AUDIT: true }, Date.now());
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.binanceOrderAudit).toBe(true);
+		});
+	});
 });

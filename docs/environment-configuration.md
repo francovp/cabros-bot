@@ -491,6 +491,15 @@ The response and audit logs include only sanitized order metadata. API credentia
 - `AZURE_LLM_KEY` - Azure AI Inference API key (required if enrichment enabled)
 - `AZURE_LLM_MODEL` - Azure AI LLM model name (e.g., `gpt-4o`, required if enrichment enabled)
 
+#### Binance Order Mutation Audit
+
+- `ENABLE_BINANCE_ORDER_AUDIT` - Persist a structured audit record for every Binance order mutation in the `binanceOrderAudit` Firestore collection (`true` or `false`, default: `false`; Remote Config supported)
+- `BINANCE_ORDER_AUDIT_RETENTION_DAYS` - Retention window in days applied to each audit document before Firestore TTL expiry (default: `30`, range: `1`-`365`; Remote Config supported)
+
+`GET /api/status` and `GET /api/capabilities` expose `featureFlags.binanceOrderAudit` and `dependencies.binanceOrderAudit`. `dependencies.binanceOrderAudit` reports `enabled`, `configured`, `ready`, `status` (`ready`, `misconfigured`, or `disabled`), `collection`, and `retentionDays`. `configured` reflects Firestore credential readiness **independently** of the gate, so an operator can distinguish "credentials present but audit off" (`enabled: false`, `configured: true`, `status: "disabled"`) from "audit on but storage unconfigured" (`enabled: true`, `configured: false`, `status: "misconfigured"`), where order mutations still execute but produce no audit trail. Operator identifiers are stored only as PBKDF2 hashes; no operator identifier, exchange credential, or API key is ever returned in the status payload.
+
+Audit writes are fail-open: a failed audit write is logged as a warning and never blocks or rejects an order.
+
 #### Runtime Error Monitoring (005-sentry-runtime-errors)
 
 - `ENABLE_SENTRY` - Enable Sentry error reporting (`true` or `false`, default: `false`)

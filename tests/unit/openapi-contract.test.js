@@ -585,6 +585,49 @@ describe('OpenAPI contract', () => {
 			expect(statusExample.dependencies.tokenCostBudget.budgetUsd).toBe(5);
 			expect(statusExample.featureFlags.tokenCostBudget).toBe(false);
 		});
+
+		// Issue #1118: `binanceOrderAudit` was returned by the handler but declared
+		// in neither the spec nor a Postman example, so the generic drift test above
+		// had nothing to compare. Pinning the name keeps a future removal from
+		// passing silently on both surfaces at once.
+		it('documents BinanceOrderAuditDependency and exposes the audit flag in the Status contract', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			expect(contract.components.schemas.Status.properties.dependencies.properties.binanceOrderAudit)
+				.toEqual({ $ref: '#/components/schemas/BinanceOrderAuditDependency' });
+
+			const auditSchema = contract.components.schemas.BinanceOrderAuditDependency;
+			expect(auditSchema.type).toBe('object');
+			expect(auditSchema.additionalProperties).toBe(false);
+			expect(auditSchema.required).toEqual([
+				'enabled',
+				'configured',
+				'ready',
+				'status',
+				'collection',
+				'retentionDays',
+			]);
+			expect(auditSchema.properties.status.enum).toEqual(['ready', 'misconfigured', 'disabled']);
+			expect(auditSchema.properties.retentionDays).toEqual(expect.objectContaining({
+				type: 'integer',
+				minimum: 1,
+				maximum: 365,
+			}));
+
+			expect(contract.components.schemas.Status.description).toContain('featureFlags.binanceOrderAudit reports ENABLE_BINANCE_ORDER_AUDIT');
+
+			const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+			expect(statusExample.featureFlags.binanceOrderAudit).toBe(false);
+			expect(statusExample.dependencies.binanceOrderAudit).toEqual({
+				enabled: false,
+				configured: true,
+				ready: false,
+				status: 'disabled',
+				collection: 'binanceOrderAudit',
+				retentionDays: 30,
+			});
+		});
 	});
 
 	describe('news-monitor alert barrier fields (GH-712)', () => {
