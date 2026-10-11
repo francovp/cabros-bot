@@ -1054,13 +1054,19 @@ function replayAlert(botOrGetter) {
 				console.warn('[AlertsController] Failed to record replay attempt in Firestore for alert:', alertId, storageErr.message);
 			}
 
-			return res.status(200).json({
+			const responseBody = {
 				success: true,
 				alertId,
 				replayId,
 				results,
 				...(reEnriched ? { reEnriched: true } : {}),
-			});
+			};
+			if (reEnrichRequested) {
+				responseBody.originalEnrichment = storedAlert.enrichmentData || null;
+				responseBody.reEnrichedData = reEnriched ? newEnrichmentData : null;
+			}
+
+			return res.status(200).json(responseBody);
 		});
 	};
 }

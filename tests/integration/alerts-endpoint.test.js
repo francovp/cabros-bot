@@ -1592,6 +1592,8 @@ describe('Alerts API Integration Tests', () => {
 			replayId: 'replay-1',
 			results: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
 			reEnriched: true,
+			originalEnrichment: { sentiment: 'bullish' },
+			reEnrichedData: newEnrichment,
 		});
 	});
 
@@ -1669,6 +1671,8 @@ describe('Alerts API Integration Tests', () => {
 			})
 		);
 		expect(res.body.reEnriched).toBeUndefined();
+		expect(res.body.originalEnrichment).toEqual({ sentiment: 'original-data' });
+		expect(res.body.reEnrichedData).toBeNull();
 		warnSpy.mockRestore();
 	});
 
