@@ -126,6 +126,21 @@ function parseSummaryLimit(rawLimit) {
 	return limit;
 }
 
+function parseOutcomeBreakdown(rawBreakdown) {
+	if (rawBreakdown === undefined) {
+		return undefined;
+	}
+	const items = typeof rawBreakdown === 'string' ? rawBreakdown.split(',') : null;
+	if (!items || items.length === 0) {
+		return null;
+	}
+	const values = items.map((item) => item.trim().toLowerCase());
+	if (values.some((value) => value !== 'symbol' && value !== 'setup')) {
+		return null;
+	}
+	return [...new Set(values)];
+}
+
 function parseExportLimit(rawLimit) {
 	if (rawLimit === undefined) {
 		return DEFAULT_EXPORT_LIMIT;
@@ -392,6 +407,14 @@ function summarizeAlerts(req, res) {
 			});
 		}
 
+		const outcomeBreakdown = parseOutcomeBreakdown(req.query.breakdown);
+		if (outcomeBreakdown === null) {
+			return res.status(400).json({
+				error: 'Invalid breakdown parameter. Allowed values: symbol, setup.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
 		const from = parseOptionalTimestamp(req.query.from, 'from');
 		if (from.error) {
 			return sendErrorFrom(res, 400, from.error);
@@ -488,6 +511,7 @@ function summarizeAlerts(req, res) {
 					from: from.value,
 					to: to.value,
 					limit,
+					...(outcomeBreakdown !== undefined ? { breakdown: outcomeBreakdown } : {}),
 				});
 			}
 			summary.shadowModeMetrics = shadowModeMetrics;
