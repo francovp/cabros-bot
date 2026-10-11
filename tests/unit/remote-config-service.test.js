@@ -574,10 +574,12 @@ describe('RemoteConfigService', () => {
 		process.env.ADMIN_SSE_MAX_CLIENT_CONNECTIONS = '3';
 		process.env.ADMIN_SSE_MAX_TOTAL_CONNECTIONS = '50';
 		process.env.ADMIN_SSE_HEARTBEAT_MS = '20000';
+		process.env.ADMIN_SSE_DRAIN_TIMEOUT_MS = '10000';
 		mockTemplate({
 			ADMIN_SSE_MAX_CLIENT_CONNECTIONS: 8,
 			ADMIN_SSE_MAX_TOTAL_CONNECTIONS: 200,
 			ADMIN_SSE_HEARTBEAT_MS: 15000,
+			ADMIN_SSE_DRAIN_TIMEOUT_MS: 5000,
 			ENABLE_ADMIN_SSE: true,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
@@ -588,6 +590,7 @@ describe('RemoteConfigService', () => {
 		expect(config.ADMIN_SSE_MAX_CLIENT_CONNECTIONS).toBe(8);
 		expect(config.ADMIN_SSE_MAX_TOTAL_CONNECTIONS).toBe(200);
 		expect(config.ADMIN_SSE_HEARTBEAT_MS).toBe(15000);
+		expect(config.ADMIN_SSE_DRAIN_TIMEOUT_MS).toBe(5000);
 
 		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('ENABLE_ADMIN_SSE');
 		expect(config).not.toHaveProperty('ENABLE_ADMIN_SSE');
