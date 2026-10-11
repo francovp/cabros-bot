@@ -37,7 +37,7 @@ describe('News Monitor dry-run mode', () => {
 			WHATSAPP_API_URL: 'https://api.greenapi.com/waInstance123/',
 			WHATSAPP_API_KEY: 'test-whatsapp-key',
 			WHATSAPP_CHAT_ID: '120363000000000000@g.us',
-			DISCORD_WEBHOOK_URL: 'https://discord.example/webhook',
+			DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/123456789012345678/token',
 			NEWS_ALERT_THRESHOLD: '0.7',
 			ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: 'false',
 		});
@@ -77,6 +77,7 @@ describe('News Monitor dry-run mode', () => {
 		};
 
 		await initializeNotificationServices(mockBot);
+		mockFetch.mockClear();
 		app.use('/api', getRoutes(mockBot));
 		originalDiscordEnabled = getNotificationManager().channels.get('discord').enabled;
 

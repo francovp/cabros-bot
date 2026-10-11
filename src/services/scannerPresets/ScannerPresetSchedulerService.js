@@ -339,6 +339,7 @@ class ScannerPresetSchedulerService {
 
 					const lockedUntilMs = data.lockedUntil ? new Date(data.lockedUntil).getTime() : 0;
 					if (lockedUntilMs > nowMs) return false;
+					preset.nextRunAt = data.nextRunAt || null;
 
 					const lockedUntilDate = new Date(nowMs + leaseMs).toISOString();
 					const currentVersion = normalizeVersion(data.version, 1);
@@ -371,6 +372,7 @@ class ScannerPresetSchedulerService {
 
 				const lockedUntilMs = data.lockedUntil ? new Date(data.lockedUntil).getTime() : 0;
 				if (lockedUntilMs > nowMs) return false;
+				preset.nextRunAt = data.nextRunAt || null;
 
 				const lockedUntilDate = new Date(nowMs + leaseMs).toISOString();
 				const currentVersion = normalizeVersion(data.version, 1);
@@ -396,6 +398,7 @@ class ScannerPresetSchedulerService {
 
 		const lockedUntilMs = mem.lockedUntil ? new Date(mem.lockedUntil).getTime() : 0;
 		if (lockedUntilMs > nowMs) return false;
+		preset.nextRunAt = mem.nextRunAt || null;
 
 		mem.lockedUntil = new Date(nowMs + leaseMs).toISOString();
 		mem.lockedBy = this.workerId;
@@ -456,6 +459,14 @@ class ScannerPresetSchedulerService {
 						parentSpan: sentryService.getActiveSpan(),
 					});
 				}
+
+				// Preset reports currently render unranked; persist the same item directions.
+				marketScannerReportModule.recordMarketScannerOutcomes(scanResults, { ...preset, ranked: false }, {
+					idempotencyKeyPrefix: JSON.stringify(['scanner-preset', preset.id, preset.nextRunAt || null]),
+					requestId: `preset-${preset.id}-${startTime}`,
+					startTime,
+					source: 'scanner-preset',
+				});
 			}
 		} catch (err) {
 			status = 'error';

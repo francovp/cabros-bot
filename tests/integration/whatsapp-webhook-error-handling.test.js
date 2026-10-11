@@ -178,7 +178,10 @@ describe('WhatsApp Webhook Error Handling & Resiliency (GH-337 / CB-136)', () =>
 			});
 
 		expect(res1.status).toBe(200);
-		expect(fetchMock).toHaveBeenCalledTimes(3); // 3 retry attempts for initial request
+		// AMBIGUOUS_OUTCOME is terminal after the first attempt to prevent
+		// duplicate WhatsApp delivery; only 1 fetch should fire on the
+		// initial request (matches TelegramService / DiscordService parity).
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 
 		// Replay request with same key
 		const res2 = await request(app)
@@ -193,7 +196,7 @@ describe('WhatsApp Webhook Error Handling & Resiliency (GH-337 / CB-136)', () =>
 		expect(res2.status).toBe(200);
 		expect(res2.header['idempotency-replay']).toBe('true');
 		expect(res2.body.idempotencyReplayed).toBe(true);
-		expect(fetchMock).toHaveBeenCalledTimes(3); // No new network calls made on replay
+		expect(fetchMock).toHaveBeenCalledTimes(1); // No new network calls made on replay
 	});
 
 	it('should capture actionable Sentry error event with endpoint, channel, provider, and sanitized error context on WhatsApp 500', async () => {

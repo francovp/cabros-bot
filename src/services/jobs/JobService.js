@@ -9,11 +9,14 @@ const { tradingViewMcpService } = require('../tradingview/TradingViewMcpService'
 const {
 	parseExpandedAnalysisAlertRequest,
 	buildExpandedAnalysisAlertReport,
+	deriveItemSide,
+	recordExpandedAnalysisOutcomes,
 } = require('../tradingview/expandedAnalysisAlertReport');
 const {
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
+	recordMarketScannerOutcomes,
 } = require('../tradingview/marketScannerReport');
 const { enrichScannerItemsWithTrendConfluence } = require('../tradingview/marketScannerConfluence');
 const {
@@ -36,6 +39,7 @@ const {
 } = require('../notification/requestRouting');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { runWithConcurrency } = require('../../lib/runWithConcurrency');
+const { adminSseService } = require('../sse/AdminSseService');
 
 const EXPIRATION_MS = 3600000; // 1 hour
 const DEFAULT_JOB_TIMEOUT_MS = 300000; // 5 minutes
@@ -487,6 +491,10 @@ class JobService {
 
 		if (job.type === 'expanded-analysis') {
 			formatted.results = this._compactResults(job.fullResults);
+			// requestMetadata already holds the deduplicated symbol list, so re-parsing
+			// it in queue/poller modes reports zero. The count captured at creation is
+			// the authoritative record of what the caller's list collapsed to.
+			formatted.duplicatesRemoved = job.requestMetadata?.duplicatesRemoved ?? 0;
 		} else if (job.type === 'market-scanner') {
 			formatted.scanResults = this._compactScanResults(
 				job.fullScanResults,
@@ -584,20 +592,12 @@ class JobService {
 	}
 
 	/**
-	 * Creates a job, validates the request synchronously, and runs it in the background.
+	 * Validates a job request synchronously based on job type and payload.
 	 * @param {string} type - 'expanded-analysis' | 'market-scanner'
 	 * @param {Object} payload - request body payload
-	 * @param {Function|Object} botOrGetter - Telegraf bot instance or getter
-	 * @returns {Object} The created job metadata
+	 * @returns {{ parsed: Object, validatedTimeoutMs: number }}
 	 */
-	async createJob(type, payload, botOrGetter) {
-		await this._cleanExpiredJobs();
-		const routing = parseNotificationRouting(payload);
-		const mode = this._getExecutionMode();
-		const queueMode = this._isQueueMode();
-		const durableQueueMode = this._isDurableQueueMode();
-
-		// Synchronous validation based on job type
+	validateJobRequest(type, payload) {
 		let parsed;
 		if (type === 'expanded-analysis') {
 			parsed = parseExpandedAnalysisAlertRequest({ body: payload });
@@ -633,6 +633,27 @@ class JobService {
 			}
 			validatedTimeoutMs = Math.min(timeoutVal, MAX_JOB_TIMEOUT_MS);
 		}
+
+		return { parsed, validatedTimeoutMs };
+	}
+
+	/**
+	 * Creates a job, validates the request synchronously, and runs it in the background.
+	 *
+	 * @param {string} type - Job type: 'expanded-analysis' or 'market-scanner'
+	 * @param {Object} payload - Request payload matching the job type schema
+	 * @param {Function|Object} botOrGetter - Telegraf bot instance or getter
+	 * @returns {Object} The created job metadata
+	 */
+	async createJob(type, payload, botOrGetter) {
+		await this._cleanExpiredJobs();
+		const routing = parseNotificationRouting(payload);
+		const mode = this._getExecutionMode();
+		const queueMode = this._isQueueMode();
+		const durableQueueMode = this._isDurableQueueMode();
+
+		// Synchronous validation based on job type
+		const { parsed, validatedTimeoutMs } = this.validateJobRequest(type, payload);
 
 		let callbackUrl = null;
 		let callbackSecret = null;
@@ -713,12 +734,17 @@ class JobService {
 				timeframe: parsed.timeframe,
 				includeMultiTimeframe: parsed.includeMultiTimeframe,
 				analysisMode: parsed.analysisMode,
+				duplicatesRemoved: parsed.duplicatesRemoved,
 			} : {
 				exchange: parsed.exchange,
 				timeframe: parsed.timeframe,
 				scans: parsed.scans,
 				limit: parsed.limit,
 				bbwThreshold: parsed.bbwThreshold,
+				rating: parsed.rating,
+				pattern_type: parsed.consecutiveCandlesPatternType,
+				candle_count: parsed.candleCount,
+				...(parsed.minGrowth !== undefined ? { min_growth: parsed.minGrowth } : {}),
 				ranked: parsed.ranked,
 				includeMultiTimeframe: parsed.includeMultiTimeframe,
 			}),
@@ -774,6 +800,7 @@ class JobService {
 		try {
 			creation.persistencePromise = this.repository.save(job, { required: durableQueueMode });
 			await creation.persistencePromise;
+			this._broadcastJobProgress(job);
 
 			if (job.shutdownFinalized) {
 				return {
@@ -977,6 +1004,9 @@ class JobService {
 			if (claim.reason === 'terminal') {
 				const terminalJob = await this.repository.get(jobId);
 				if (terminalJob) {
+					if (terminalJob.status === 'completed' && terminalJob.deliveryCheckpoint?.status === 'completed') {
+						this._recordJobOutcomes(terminalJob, terminalJob.requestMetadata || {});
+					}
 					await this._triggerCallbackIfConfigured(terminalJob, { awaitDelivery: true });
 				}
 			}
@@ -1087,6 +1117,9 @@ class JobService {
 		}
 
 		job.status = 'processing';
+		if (job.deliveryCheckpoint?.status !== 'completed') {
+			job.startedAt = new Date(startTime).toISOString();
+		}
 		if (isQueuedMode) {
 			job.execution.status = 'running';
 		}
@@ -1147,6 +1180,7 @@ class JobService {
 					? this._buildScannerSummary(job.fullScanResults || [], job.deliveryResults)
 					: this._buildExpandedSummary(job.fullResults || [], job.deliveryResults);
 				job.status = 'completed';
+				this._recordJobOutcomes(job, parsed);
 			} else if (job.type === 'expanded-analysis') {
 				await this._executeExpandedAnalysis(job, parsed, signal, botOrGetter);
 			} else if (job.type === 'market-scanner') {
@@ -1180,6 +1214,7 @@ class JobService {
 				job.status = 'completed';
 				job.error = null;
 				job.code = null;
+				this._recordJobOutcomes(job, parsed);
 			} else {
 				const isTimeout =
 					error.message.includes('timed out') ||
@@ -1289,7 +1324,7 @@ class JobService {
 						}
 					}
 
-					result = { symbol: input.raw, status: 'analyzed', input, analysis, multiTimeframe };
+					result = { symbol: input.raw, status: 'analyzed', input, analysis, multiTimeframe, side: deriveItemSide(analysis) };
 				} catch (error) {
 					if (this._isClaimLost(signal)) return null;
 					if (this._isAbortTriggered(signal, error)) {
@@ -1345,6 +1380,7 @@ class JobService {
 				input: result.input,
 				analysis: result.analysis,
 				multiTimeframe: result.multiTimeframe,
+				side: result.side,
 			}));
 
 		if (analyzedItems.length === 0) {
@@ -1379,6 +1415,9 @@ class JobService {
 		job.requestedChannels = getRequestedChannels(notificationManager, routing);
 		job.summary = this._buildExpandedSummary(job.fullResults, deliveryResults);
 		job.status = 'completed';
+
+		this._recordJobOutcomes(job, parsed);
+
 		await this._persistJob(job);
 	}
 
@@ -1510,7 +1549,7 @@ class JobService {
 		const deliveryResults = await this._sendQueuedNotification(
 			job,
 			notificationManager,
-			{ text: alertText, source: 'tradingview-analysis' },
+			{ text: alertText, source: 'tradingview-analysis', category: 'scanner' },
 			routing,
 		);
 		if (this._isClaimLost(signal)) {
@@ -1520,6 +1559,9 @@ class JobService {
 		job.requestedChannels = getRequestedChannels(notificationManager, routing);
 		job.summary = this._buildScannerSummary(job.fullScanResults, deliveryResults);
 		job.status = 'completed';
+
+		this._recordJobOutcomes(job, parsed);
+
 		await this._persistJob(job);
 	}
 
@@ -1563,7 +1605,38 @@ class JobService {
 			}
 			return false;
 		}
+		this._broadcastJobProgress(job);
 		return true;
+	}
+
+	_broadcastJobProgress(job) {
+		if (!job || !job.jobId) return;
+		try {
+			adminSseService.broadcast('job-progress', {
+				jobId: job.jobId,
+				type: job.type,
+				status: job.status,
+				progress: job.progress || null,
+				error: job.error || null,
+				code: job.code || null,
+				updatedAt: job.updatedAt || job.createdAt || new Date().toISOString(),
+				totalDurationMs: job.totalDurationMs || null,
+				summary: job.summary || job.result?.summary || null,
+				timestamp: new Date().toISOString(),
+			});
+
+			if (job.status === 'completed' && job.type === 'market-scanner') {
+				adminSseService.broadcast('scanner-result', {
+					jobId: job.jobId,
+					type: job.type,
+					status: job.status,
+					summary: job.summary || job.result?.summary || null,
+					timestamp: new Date().toISOString(),
+				});
+			}
+		} catch (_) {
+			// Fail-safe
+		}
 	}
 
 	_isQueuedExecution(job) {
@@ -1573,6 +1646,24 @@ class JobService {
 			&& job.execution
 			&& (job.execution.mode === 'render-worker' || job.execution.mode === 'firestore-poller'),
 		);
+	}
+
+	_recordJobOutcomes(job, parsed) {
+		const options = {
+			jobId: job.jobId,
+			requestId: job.requestId || job.jobId,
+			startTime: job.startedAt ? new Date(job.startedAt).getTime() : undefined,
+			receivedAt: job.deliveryCheckpoint?.completedAt,
+		};
+		if (job.type === 'market-scanner') {
+			recordMarketScannerOutcomes(job.fullScanResults || [], parsed, options);
+		} else {
+			const analyzedItems = (job.fullResults || [])
+				.filter((result) => result.status === 'analyzed')
+				// Legacy reports rendered BUY when no direction was persisted.
+				.map((result) => ({ ...result, side: result.side || 'BUY' }));
+			recordExpandedAnalysisOutcomes(analyzedItems, parsed, options);
+		}
 	}
 
 	async _sendQueuedNotification(job, notificationManager, alert, routing = {}, options = {}) {
@@ -1655,6 +1746,14 @@ class JobService {
 		};
 		if (scanType === 'bollinger_scan') {
 			args.bbw_threshold = parsed.bbwThreshold;
+		} else if (scanType === 'rating_filter') {
+			args.rating = parsed.rating;
+		} else if (scanType === 'consecutive_candles_scan') {
+			args.pattern_type = parsed.consecutiveCandlesPatternType;
+			args.candle_count = parsed.candleCount;
+			if (parsed.minGrowth !== undefined) {
+				args.min_growth = parsed.minGrowth;
+			}
 		}
 		return args;
 	}

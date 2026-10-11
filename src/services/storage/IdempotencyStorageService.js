@@ -26,11 +26,107 @@
 const crypto = require('crypto');
 const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('./firestoreConfig');
+const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
 
 const COLLECTION_NAME = 'idempotency_keys';
 const PENDING_STALE_TIMEOUT_MS = 180000; // 3 minutes max pending claim lifetime to cover 120s webhook limits
 
+/**
+ * Closed enum for `lastErrorReason`. Every Firestore failure in this service is
+ * swallowed so the caller can fall back to in-memory idempotency, which means an
+ * operator has no other way to learn that durability silently stopped working. The
+ * reason is constrained to this enum so a Firestore error message — which embeds the
+ * fully-qualified project/database path — can never leak into a status response.
+ */
+const REASONS = Object.freeze({
+	NOT_INITIALIZED: 'firestore_not_initialized',
+	UNAVAILABLE: 'firestore_unavailable',
+});
+
+const KNOWN_REASONS = new Set(Object.values(REASONS));
+
+/**
+ * Durable-readiness states. `unverified` is deliberately distinct from `ready`
+ * (and from `degraded`): before the first observed durable operation there is no
+ * evidence that reservations actually persist, and reporting that as "ready" is
+ * what would make the production enablement unverifiable.
+ */
+const READINESS = Object.freeze({
+	UNVERIFIED: 'unverified',
+	VERIFIED: 'verified',
+	DEGRADED: 'degraded',
+});
+
 let db = null;
+
+/**
+ * Process-local window of observed durable idempotency outcomes. Readiness is
+ * derived from real Firestore work rather than credential shape, so a deployment
+ * whose credentials look valid but cannot reach Firestore reports `degraded`
+ * instead of `ready`. Counters reset on restart and every recorder is fail-open:
+ * telemetry must never reject a webhook.
+ */
+const durableReadiness = {
+	operationsAttempted: 0,
+	operationsSucceeded: 0,
+	operationsFailed: 0,
+	consecutiveFailures: 0,
+	lastSuccessAt: null,
+	lastFailureAt: null,
+	lastErrorReason: null,
+};
+
+function _resetReadinessForTesting() {
+	durableReadiness.operationsAttempted = 0;
+	durableReadiness.operationsSucceeded = 0;
+	durableReadiness.operationsFailed = 0;
+	durableReadiness.consecutiveFailures = 0;
+	durableReadiness.lastSuccessAt = null;
+	durableReadiness.lastFailureAt = null;
+	durableReadiness.lastErrorReason = null;
+}
+
+// A durable use attempt is counted even when Firebase initialization fails, because
+// asking for durable storage and not getting it is exactly the event an operator
+// needs to see. `operationsFailed` therefore never exceeds `operationsAttempted`.
+function _recordDurableAttempt() {
+	durableReadiness.operationsAttempted += 1;
+}
+
+function _recordDurableSuccess() {
+	durableReadiness.operationsSucceeded += 1;
+	durableReadiness.consecutiveFailures = 0;
+	durableReadiness.lastSuccessAt = new Date().toISOString();
+}
+
+function _recordDurableFailure(reason) {
+	durableReadiness.operationsFailed += 1;
+	durableReadiness.consecutiveFailures += 1;
+	durableReadiness.lastFailureAt = new Date().toISOString();
+	durableReadiness.lastErrorReason = typeof reason === 'string' && KNOWN_REASONS.has(reason)
+		? reason
+		: REASONS.UNAVAILABLE;
+}
+
+function _resolveDurableReadiness() {
+	if (durableReadiness.consecutiveFailures > 0) {
+		return READINESS.DEGRADED;
+	}
+	if (durableReadiness.operationsSucceeded > 0) {
+		return READINESS.VERIFIED;
+	}
+	return READINESS.UNVERIFIED;
+}
+
+// Telemetry must never be able to fail a webhook: every readiness mutation runs
+// through this guard so a counter error cannot reject the caller.
+function recordReadinessSafely(record) {
+	try {
+		record();
+	} catch (error) {
+		console.warn('[IdempotencyStorageService] readiness recording failed:', error && error.message);
+	}
+}
 
 function isEnabled() {
 	return process.env.ENABLE_FIRESTORE_IDEMPOTENCY === 'true'
@@ -47,7 +143,11 @@ function hashKey(key) {
 /**
  * Initialize Firebase Admin (idempotent) and return Firestore client.
  * Reuses existing admin app if initialized by other storage services.
- * Returns null when feature is disabled or credentials missing/invalid.
+ * Returns null when feature is disabled, or when configured Firebase credentials
+ * fail validation (in-memory fallback without touching the SDK).
+ *
+ * A rejected initialization is recorded as a durable failure so status reports
+ * `degraded` rather than an unproven `ready`.
  *
  * @returns {FirebaseFirestore.Firestore | null}
  */
@@ -61,22 +161,17 @@ function getFirestore() {
 	}
 
 	try {
-		let credential;
-		if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-			const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-			credential = admin.credential.cert(serviceAccount);
-		}
-
-		const appOptions = {};
-		if (credential) {
-			appOptions.credential = credential;
-		}
-		if (process.env.FIREBASE_PROJECT_ID) {
-			appOptions.projectId = process.env.FIREBASE_PROJECT_ID;
-		}
-
-		if (!admin.apps.length) {
-			admin.initializeApp(appOptions);
+		const initialization = initializeFirebaseAdminApp({ admin });
+		if (!initialization.ok) {
+			console.warn(
+				`[IdempotencyStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`
+			);
+			db = null;
+			recordReadinessSafely(() => {
+				_recordDurableAttempt();
+				_recordDurableFailure(REASONS.NOT_INITIALIZED);
+			});
+			return null;
 		}
 
 		db = admin.firestore();
@@ -84,11 +179,22 @@ function getFirestore() {
 	} catch (error) {
 		console.warn('[IdempotencyStorageService] Failed to initialize Firestore client:', error.message);
 		db = null;
+		recordReadinessSafely(() => {
+			_recordDurableAttempt();
+			_recordDurableFailure(REASONS.NOT_INITIALIZED);
+		});
 	}
 
 	return db;
 }
 
+/**
+ * Whether durable storage is usable *right now*. This is intentionally the
+ * availability question, not the proof question: `IdempotencyService` must take the
+ * durable path on a freshly restarted process that has not yet served a keyed
+ * request, so this must never require a prior success. Only `getStorageStatus()`
+ * reports proven readiness.
+ */
 function isReady() {
 	if (!isEnabled()) {
 		return false;
@@ -96,17 +202,54 @@ function isReady() {
 	return isFirestoreConfigured() && getFirestore() !== null;
 }
 
+/**
+ * Reported storage state for `/api/status` and `/api/capabilities`.
+ *
+ * `mode` and `backend` describe configured **intent** — what the service will use
+ * once it can — and keep their historical values so existing consumers do not
+ * change meaning. `ready` is the proof question: true only after an observed
+ * successful durable operation, and cleared by the first failure.
+ *
+ * `failOpen` is always `true` and is stated rather than implied: every Firestore
+ * error in this service is swallowed, so a `degraded` verdict still delivers
+ * alerts, it just cannot suppress a duplicate after a restart or across replicas.
+ */
 function getStorageStatus() {
 	const enabled = isEnabled();
 	const configured = isFirestoreConfigured();
+	const durableIntent = enabled && configured;
+	const readiness = _resolveDurableReadiness();
+
+	let status;
+	if (!enabled) {
+		status = 'disabled';
+	} else if (!configured) {
+		status = 'misconfigured';
+	} else if (readiness === READINESS.DEGRADED) {
+		status = 'degraded';
+	} else if (readiness === READINESS.VERIFIED) {
+		status = 'ready';
+	} else {
+		status = READINESS.UNVERIFIED;
+	}
 
 	return {
 		enabled,
 		configured,
-		ready: enabled && configured,
-		status: enabled ? (configured ? 'ready' : 'misconfigured') : 'disabled',
-		mode: enabled && configured ? 'durable' : 'ephemeral',
-		backend: enabled && configured ? 'firestore' : 'memory',
+		ready: status === 'ready',
+		status,
+		mode: durableIntent ? 'durable' : 'ephemeral',
+		backend: durableIntent ? 'firestore' : 'memory',
+		failOpen: true,
+		readiness,
+		collection: COLLECTION_NAME,
+		operationsAttempted: durableReadiness.operationsAttempted,
+		operationsSucceeded: durableReadiness.operationsSucceeded,
+		operationsFailed: durableReadiness.operationsFailed,
+		consecutiveFailures: durableReadiness.consecutiveFailures,
+		lastSuccessAt: durableReadiness.lastSuccessAt,
+		lastFailureAt: durableReadiness.lastFailureAt,
+		lastErrorReason: durableReadiness.lastErrorReason,
 	};
 }
 
@@ -127,6 +270,7 @@ async function reserveEntry(key, payloadHash, ttlMs) {
 	const docId = hashKey(key);
 	const docRef = firestore.collection(COLLECTION_NAME).doc(docId);
 	const claimToken = crypto.randomUUID();
+	recordReadinessSafely(_recordDurableAttempt);
 
 	try {
 		const result = await firestore.runTransaction(async (transaction) => {
@@ -196,9 +340,11 @@ async function reserveEntry(key, payloadHash, ttlMs) {
 			return { state: 'fresh', claimToken };
 		});
 
+		recordReadinessSafely(_recordDurableSuccess);
 		return result;
 	} catch (error) {
 		console.warn(`[IdempotencyStorageService] reserveEntry error for hash ${docId} (fail-open):`, error.message);
+		recordReadinessSafely(() => _recordDurableFailure(REASONS.UNAVAILABLE));
 		return null;
 	}
 }
@@ -221,21 +367,25 @@ async function waitForPendingCompletion(key, payloadHash, maxWaitMs = 15000, pol
 	const docId = hashKey(key);
 	const docRef = firestore.collection(COLLECTION_NAME).doc(docId);
 	const startTime = Date.now();
+	recordReadinessSafely(_recordDurableAttempt);
 
 	while (Date.now() - startTime < maxWaitMs) {
 		try {
 			await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
 			const snapshot = await docRef.get();
 			if (!snapshot.exists) {
+				recordReadinessSafely(_recordDurableSuccess);
 				return { state: 'released' };
 			}
 
 			const data = snapshot.data();
 			if (data.payloadHash !== payloadHash) {
+				recordReadinessSafely(_recordDurableSuccess);
 				return { state: 'conflict' };
 			}
 
 			if (data.state === 'completed') {
+				recordReadinessSafely(_recordDurableSuccess);
 				return {
 					state: 'completed',
 					record: {
@@ -251,10 +401,12 @@ async function waitForPendingCompletion(key, payloadHash, maxWaitMs = 15000, pol
 			}
 		} catch (error) {
 			console.warn(`[IdempotencyStorageService] waitForPendingCompletion poll error for hash ${docId}:`, error.message);
+			recordReadinessSafely(() => _recordDurableFailure(REASONS.UNAVAILABLE));
 			return { state: 'released' };
 		}
 	}
 
+	recordReadinessSafely(_recordDurableSuccess);
 	return { state: 'timeout' };
 }
 
@@ -276,6 +428,7 @@ async function setEntry(key, payloadHash, { statusCode, body, headers }, ttlMs, 
 
 	const docId = hashKey(key);
 	const docRef = firestore.collection(COLLECTION_NAME).doc(docId);
+	recordReadinessSafely(_recordDurableAttempt);
 
 	try {
 		const nowMs = Date.now();
@@ -321,7 +474,11 @@ async function setEntry(key, payloadHash, { statusCode, body, headers }, ttlMs, 
 		}
 	} catch (error) {
 		console.warn(`[IdempotencyStorageService] setEntry error for hash ${docId} (fail-open):`, error.message);
+		recordReadinessSafely(() => _recordDurableFailure(REASONS.UNAVAILABLE));
+		return;
 	}
+
+	recordReadinessSafely(_recordDurableSuccess);
 }
 
 /**
@@ -340,6 +497,7 @@ async function releaseEntry(key, payloadHash, claimToken) {
 
 	const docId = hashKey(key);
 	const docRef = firestore.collection(COLLECTION_NAME).doc(docId);
+	recordReadinessSafely(_recordDurableAttempt);
 
 	try {
 		const released = await firestore.runTransaction(async (transaction) => {
@@ -362,7 +520,11 @@ async function releaseEntry(key, payloadHash, claimToken) {
 		}
 	} catch (error) {
 		console.warn(`[IdempotencyStorageService] releaseEntry error for hash ${docId} (fail-open):`, error.message);
+		recordReadinessSafely(() => _recordDurableFailure(REASONS.UNAVAILABLE));
+		return;
 	}
+
+	recordReadinessSafely(_recordDurableSuccess);
 }
 
 /**
@@ -380,9 +542,13 @@ async function getEntry(key, payloadHash) {
 
 	const docId = hashKey(key);
 	const docRef = firestore.collection(COLLECTION_NAME).doc(docId);
+	recordReadinessSafely(_recordDurableAttempt);
 
 	try {
 		const snapshot = await docRef.get();
+		// The read is the only Firestore call in this function, so success is
+		// recorded here — once — before any early return or the conflict throw.
+		recordReadinessSafely(_recordDurableSuccess);
 		if (!snapshot.exists) {
 			return null;
 		}
@@ -438,7 +604,11 @@ module.exports = {
 	releaseEntry,
 	getEntry,
 	COLLECTION_NAME,
+	REASONS,
+	READINESS,
+	getFirestore,
 	_resetForTesting() {
 		db = null;
+		_resetReadinessForTesting();
 	},
 };

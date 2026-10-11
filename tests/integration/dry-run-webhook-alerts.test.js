@@ -109,6 +109,48 @@ describe('Dry-run mode for webhook alert endpoints', () => {
 
 			expect(res.body.tokenUsage).toBeDefined();
 		});
+
+		it('defaults signalClass to unknown in dry-run payload when omitted', async () => {
+			const res = await request(app)
+				.post('/api/webhook/alert?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.send({ text: 'BTC breaks $70,000' })
+				.expect(200);
+
+			expect(res.body.payload.signalClass).toBe('unknown');
+		});
+
+		it('preserves valid signalClass in dry-run payload', async () => {
+			const res = await request(app)
+				.post('/api/webhook/alert?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.send({ text: 'BTC breaks $70,000', signalClass: 'breakout' })
+				.expect(200);
+
+			expect(res.body.payload.signalClass).toBe('breakout');
+		});
+
+		it('rejects invalid signalClass in request body with 400 INVALID_REQUEST', async () => {
+			const res = await request(app)
+				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
+				.send({ text: 'BTC breaks $70,000', signalClass: 'moon_rocket' })
+				.expect(400);
+
+			expect(res.body.code).toBe('INVALID_REQUEST');
+			expect(res.body.error).toContain('Invalid signalClass');
+		});
+
+		it('rejects invalid signalClass in query string with 400 INVALID_REQUEST', async () => {
+			const res = await request(app)
+				.post('/api/webhook/alert?signalClass=moon_rocket')
+				.set('x-api-key', 'test-key')
+				.send({ text: 'BTC breaks $70,000' })
+				.expect(400);
+
+			expect(res.body.code).toBe('INVALID_REQUEST');
+			expect(res.body.error).toContain('Invalid signalClass');
+		});
 	});
 
 	// ---------------------------------------------------------------------------

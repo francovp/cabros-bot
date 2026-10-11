@@ -1,7 +1,9 @@
 const {
 	normalizeTradingViewTimeframe,
+	resolveMcpExchange,
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('./parseTradingViewSignal');
+const { hasConfluenceEvidence } = require('./confluenceEvidence');
 
 const MAX_SYMBOLS = 50;
 const SUPPORTED_TIMEFRAME_ALIASES = new Set([
@@ -35,24 +37,70 @@ class ExpandedAnalysisAlertRequestError extends Error {
 function parseExpandedAnalysisAlertRequest(req = {}) {
 	const body = getRequestBody(req);
 	const rawSymbols = getRequestSymbols(body);
-	const symbols = rawSymbols.map(parseSymbolIdentifier);
+	const parsedSymbols = rawSymbols.map(parseSymbolIdentifier);
 	validateTimeframeType(body);
 	const timeframe = parseTimeframe(body.timeframe);
 	const includeMultiTimeframe = parseIncludeMultiTimeframe(body);
 	const analysisMode = parseAnalysisMode(body);
 
-	if (symbols.length === 0) {
+	if (parsedSymbols.length === 0) {
 		throw new ExpandedAnalysisAlertRequestError(
 			'No expanded analysis symbols provided. Pass body.symbols or set EXPANDED_ANALYSIS_ALERT_SYMBOLS.',
 			'NO_SYMBOLS',
 		);
 	}
 
+	// Deduplicate BEFORE the cap: the budget is shared serially across symbols, so
+	// N copies of one symbol are one unit of work, not N. Capping the raw list would
+	// reject a request that only names a handful of distinct markets.
+	const { symbols, duplicatesRemoved } = dedupeSymbolIdentifiers(parsedSymbols);
+
 	if (symbols.length > MAX_SYMBOLS) {
 		throw new ExpandedAnalysisAlertRequestError(`Too many symbols requested (max: ${MAX_SYMBOLS})`);
 	}
 
-	return { symbols, timeframe, includeMultiTimeframe, analysisMode };
+	return { symbols, timeframe, includeMultiTimeframe, analysisMode, duplicatesRemoved };
+}
+
+/**
+ * Two identifiers that produce the same outbound MCP call are the same unit of work,
+ * so the later occurrence is collapsed instead of re-spending an MCP budget slot and
+ * shrinking the shared deadline left for the symbols that are not duplicates.
+ *
+ * The comparison key is the venue the MCP server would actually be asked for, so the
+ * probe-verified aliases in `MCP_EXCHANGE_ALIASES` (BATS/NASDAQ_DLY -> NASDAQ) collapse
+ * too. Only that closed table is consulted — never suffix-shape or fuzzy inference,
+ * which would merge venues the server keeps distinct (issue #591).
+ *
+ * The retained entry keeps the caller's own exchange: alias resolution stays
+ * outbound-only and never rewrites the symbol reported or stored. First occurrence
+ * wins, so report ordering is the request's first-occurrence order.
+ *
+ * @param {Array<{raw: string, exchange: string, symbol: string}>} parsedSymbols
+ * @returns {{symbols: Array<object>, duplicatesRemoved: number}}
+ */
+function dedupeSymbolIdentifiers(parsedSymbols = []) {
+	const seenKeys = new Set();
+	const symbols = [];
+	let duplicatesRemoved = 0;
+
+	for (const parsedSymbol of parsedSymbols) {
+		const key = buildSymbolDedupeKey(parsedSymbol);
+		if (seenKeys.has(key)) {
+			duplicatesRemoved += 1;
+			continue;
+		}
+
+		seenKeys.add(key);
+		symbols.push(parsedSymbol);
+	}
+
+	return { symbols, duplicatesRemoved };
+}
+
+function buildSymbolDedupeKey({ exchange, symbol } = {}) {
+	const { mappedExchange } = resolveMcpExchange(exchange);
+	return `${mappedExchange || exchange}:${symbol}`;
 }
 
 function parseIncludeMultiTimeframe(body = {}) {
@@ -221,7 +269,7 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe, side = 'BUY
 	const riskRewardRatio = getRiskRewardRatio(price, stopLoss, takeProfit, side);
 
 	const sentiment = analysis.sentiment || null;
-	const confluence = analysis.confluence || null;
+	const confluence = hasConfluenceEvidence(analysis) ? analysis.confluence || null : null;
 	const news = analysis.news || null;
 
 	return {
@@ -703,6 +751,77 @@ function numberOrNull(value) {
 	return Number.isFinite(number) ? number : null;
 }
 
+function deriveItemSide(analysis = {}) {
+	const sentiment = String(analysis?.sentiment || analysis?.market_sentiment?.overall_sentiment || '').toUpperCase();
+	const confluence = hasConfluenceEvidence(analysis)
+		? String(analysis?.confluence?.recommendation || analysis?.confluence?.action || '').toUpperCase()
+		: '';
+	if (confluence.includes('SELL') || sentiment.includes('BEARISH') || sentiment.includes('BAJISTA')) {
+		return 'SELL';
+	}
+	return 'BUY';
+}
+
+/**
+ * Records signal outcomes for analyzed items in a fail-open manner.
+ * @param {Array<Object>} analyzedItems - Array of { input, analysis, multiTimeframe, side? }
+ * @param {Object} [parsed] - { timeframe, ... }
+ * @param {Object} [options] - { requestId, startTime, receivedAt, source, jobId }
+ * @returns {void}
+ */
+function recordExpandedAnalysisOutcomes(analyzedItems, parsed = {}, options = {}) {
+	try {
+		const signalOutcomeService = require('../storage/SignalOutcomeService');
+		if (!signalOutcomeService.isEnabled() || !Array.isArray(analyzedItems)) {
+			return;
+		}
+
+		const requestId = options.requestId || null;
+		const source = options.source || 'expanded-analysis';
+		const endTime = options.receivedAt ? new Date(options.receivedAt).getTime() : Date.now();
+		const processingTimeMs = Number.isFinite(options.startTime) && Number.isFinite(endTime) && endTime >= options.startTime
+			? endTime - options.startTime : null;
+		const timeframe = parsed?.timeframe || null;
+
+		for (const [index, item] of analyzedItems.entries()) {
+			if (!item || !item.input) continue;
+			const itemSide = item.side || deriveItemSide(item.analysis);
+			const row = buildReportRow({ ...item, side: itemSide });
+			const tech = item.analysis?.technical || item.analysis || {};
+			const closePrice = row.price ?? tech.price_data?.current_price ?? tech.price_data?.close ?? null;
+			const score = item.analysis?.market_sentiment?.overall_rating ?? tech.market_sentiment?.overall_rating ?? null;
+			const rawConfidence = item.analysis?.confidence ?? item.confidence ?? (typeof score === 'number' && score >= 0 && score <= 1 ? score : null);
+			const validConfidence = typeof rawConfidence === 'number' && Number.isFinite(rawConfidence) && rawConfidence >= 0 && rawConfidence <= 1 ? rawConfidence : null;
+
+			signalOutcomeService.recordSignal({
+				idempotencyKey: options.jobId ? `job:${options.jobId}:expanded-analysis:${index}` : null,
+				requestId,
+				receivedAt: options.receivedAt,
+				source,
+				symbol: item.input.symbol,
+				exchange: item.input.exchange,
+				timeframe,
+				setupType: 'expanded-analysis',
+				score,
+				confidenceScore: validConfidence,
+				side: itemSide,
+				price: typeof closePrice === 'number' ? closePrice : null,
+				priceSource: typeof closePrice === 'number' ? 'tradingview-mcp' : null,
+				stop: typeof row.stopLoss === 'number' ? row.stopLoss : null,
+				target: typeof row.takeProfit === 'number' ? row.takeProfit : null,
+				invalidationLevel: typeof row.stopLoss === 'number' ? row.stopLoss : null,
+				targetLevel: typeof row.takeProfit === 'number' ? row.takeProfit : null,
+				riskRewardRatio: typeof row.riskRewardRatio === 'number' ? row.riskRewardRatio : null,
+				sources: [],
+				tokenUsage: null,
+				processingTimeMs,
+			}).catch(() => {});
+		}
+	} catch (err) {
+		// Fail-open: signal-outcome tracking failure must never block callers or throw
+	}
+}
+
 module.exports = {
 	ExpandedAnalysisAlertRequestError,
 	parseExpandedAnalysisAlertRequest,
@@ -712,4 +831,6 @@ module.exports = {
 	getStopLossMeta,
 	getTakeProfitTarget,
 	getRiskRewardRatio,
+	deriveItemSide,
+	recordExpandedAnalysisOutcomes,
 };
