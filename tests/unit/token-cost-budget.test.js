@@ -693,6 +693,78 @@ describe('Token Cost Budget Tracking', () => {
 			expect(sharedDocData.alertsSent).toBe(1);
 		});
 
+		it('returns a Promise from _triggerThresholdAlert when Firestore is active to allow .catch() chaining and avoid TypeError', async () => {
+			process.env.ENABLE_TOKEN_COST_BUDGET = 'true';
+			process.env.TOKEN_COST_DAILY_BUDGET_USD = '10.00';
+
+			const mockDocRef = {
+				get: jest.fn().mockResolvedValue({ exists: false }),
+				set: jest.fn().mockResolvedValue({}),
+			};
+			const runTransactionMock = jest.fn(async (callback) => {
+				const tx = {
+					get: jest.fn().mockResolvedValue({ exists: false, data: () => ({}) }),
+					set: jest.fn(),
+				};
+				return callback(tx);
+			});
+
+			const tracker = new GlobalTokenCostBudgetTracker();
+			tracker.firestore = {
+				collection: jest.fn().mockReturnValue({ doc: jest.fn().mockReturnValue(mockDocRef) }),
+				runTransaction: runTransactionMock,
+			};
+
+			jest.spyOn(tracker, '_sendAdminNotification').mockResolvedValue(true);
+			const config = tracker.getBudgetConfig();
+
+			// Calling _triggerThresholdAlert must return a Promise that supports .catch() chaining
+			const alertPromise = tracker._triggerThresholdAlert('warning', config, 85);
+			expect(alertPromise).toBeDefined();
+			expect(typeof alertPromise?.then).toBe('function');
+			expect(typeof alertPromise?.catch).toBe('function');
+
+			// Chaining .catch() should not throw TypeError
+			let catchError = null;
+			try {
+				alertPromise.catch(() => {});
+			} catch (err) {
+				catchError = err;
+			}
+			expect(catchError).toBeNull();
+
+			await alertPromise;
+
+			// Also verify that recordUsage triggering budget alerts with Firestore does not throw TypeError: Cannot read properties of undefined (reading 'catch')
+			const tracker2 = new GlobalTokenCostBudgetTracker();
+			tracker2.firestore = {
+				collection: jest.fn().mockReturnValue({ doc: jest.fn().mockReturnValue(mockDocRef) }),
+				runTransaction: runTransactionMock,
+			};
+			jest.spyOn(tracker2, '_sendAdminNotification').mockResolvedValue(true);
+
+			// Adding usage that triggers 100% budget limit
+			expect(() => {
+				tracker2.recordUsage({ inputCost: 6.00, outputCost: 5.00 }, 'gemini-2.0-flash');
+			}).not.toThrow();
+
+			// Unrecognized type returns resolved promise cleanly
+			const unknownPromise = tracker2._triggerThresholdAlert('unknown_type', config, 50);
+			expect(unknownPromise).toBeInstanceOf(Promise);
+			await expect(unknownPromise).resolves.toBeUndefined();
+
+			// Transaction error fallback invokes notification without cascading into unhandled rejection
+			const tracker3 = new GlobalTokenCostBudgetTracker();
+			tracker3.firestore = {
+				collection: jest.fn().mockReturnValue({ doc: jest.fn().mockReturnValue(mockDocRef) }),
+				runTransaction: jest.fn().mockRejectedValue(new Error('Firestore transaction aborted')),
+			};
+			const fallbackNotifySpy = jest.spyOn(tracker3, '_sendAdminNotification').mockResolvedValue(true);
+			const fallbackPromise = tracker3._triggerThresholdAlert('warning', config, 85);
+			await expect(fallbackPromise).resolves.toBeUndefined();
+			expect(fallbackNotifySpy).toHaveBeenCalledWith('warning', expect.any(Object));
+		});
+
 		it('discards stale Firestore spend sync results if day rolled over during read', async () => {
 			process.env.ENABLE_TOKEN_COST_BUDGET = 'true';
 			process.env.TOKEN_COST_DAILY_BUDGET_USD = '10.00';
