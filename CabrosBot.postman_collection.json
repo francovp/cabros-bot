@@ -3408,6 +3408,112 @@
           ]
         },
         {
+          "name": "POST Volume Confirmation (multi-timeframe)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "volume-confirm-mtf-demo-1",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"includeMultiTimeframe\": true,\n  \"side\": \"BUY\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/volume-confirmation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "volume-confirmation"
+              ]
+            },
+            "description": "Requests higher-timeframe confluence. The multiTimeframeAnalysis and htfAlignment fields are returned only when ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true. Failures in optional multi-timeframe analysis preserve the base volume-confirmation response."
+          },
+          "response": [
+            {
+              "name": "Success - higher-timeframe alignment",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"confirmed\": true,\n  \"decision\": \"confirm\",\n  \"volumeRatio\": 1.7,\n  \"analysis\": {\n    \"symbol\": \"BINANCE:BTCUSDT\",\n    \"volume_analysis\": {\n      \"volume_ratio\": 1.7,\n      \"volume_strength\": \"HIGH\"\n    }\n  },\n  \"volumeConfirmation\": {\n    \"confirmed\": true,\n    \"decision\": \"confirm\",\n    \"volumeRatio\": 1.7,\n    \"analysis\": {\n      \"symbol\": \"BINANCE:BTCUSDT\",\n      \"volume_analysis\": {\n        \"volume_ratio\": 1.7,\n        \"volume_strength\": \"HIGH\"\n      }\n    }\n  },\n  \"multiTimeframeAnalysis\": {\n    \"alignment\": {\n      \"status\": \"ALIGNED\",\n      \"confidence\": 0.9\n    },\n    \"recommendation\": {\n      \"action\": \"BUY\"\n    }\n  },\n  \"htfAlignment\": \"aligned\",\n  \"requestId\": \"req-vol-mtf-123\",\n  \"processingTimeMs\": 850\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Volume Confirmation (invalid multi-timeframe flag)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "volume-confirm-invalid-mtf-demo-1",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"includeMultiTimeframe\": \"yes\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/volume-confirmation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "volume-confirmation"
+              ]
+            },
+            "description": "Negative variant: includeMultiTimeframe must be a boolean (or the strings true/false); other values return 400 INVALID_REQUEST before calling TradingView MCP."
+          },
+          "response": [
+            {
+              "name": "400 Invalid multi-timeframe flag",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"includeMultiTimeframe must be a boolean\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-vol-mtf-400\",\n  \"processingTimeMs\": 4\n}"
+            }
+          ]
+        },
+        {
           "name": "POST Single Symbol Analysis",
           "request": {
             "method": "POST",

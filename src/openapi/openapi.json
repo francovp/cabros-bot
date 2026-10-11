@@ -4860,7 +4860,9 @@
             },
             "example": {
               "symbol": "BINANCE:BTCUSDT",
-              "timeframe": "1h"
+              "timeframe": "1h",
+              "includeMultiTimeframe": true,
+              "side": "BUY"
             }
           }
         }
@@ -10848,6 +10850,40 @@
           "timeframe": {
             "type": "string"
           },
+          "includeMultiTimeframe": {
+            "type": "boolean",
+            "default": false,
+            "description": "When true and ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true, include higher-timeframe analysis in the response."
+          },
+          "include_multi_timeframe": {
+            "type": "boolean",
+            "default": false,
+            "description": "Snake-case alias for includeMultiTimeframe."
+          },
+          "side": {
+            "type": "string",
+            "description": "Optional candidate direction used for higher-timeframe alignment."
+          },
+          "direction": {
+            "type": "string",
+            "description": "Optional candidate direction used for higher-timeframe alignment."
+          },
+          "breakoutType": {
+            "type": "string",
+            "description": "Optional candidate breakout direction used for higher-timeframe alignment."
+          },
+          "breakout_type": {
+            "type": "string",
+            "description": "Snake-case alias for breakoutType."
+          },
+          "tradingRecommendation": {
+            "type": "string",
+            "description": "Optional candidate recommendation used for higher-timeframe alignment."
+          },
+          "trading_recommendation": {
+            "type": "string",
+            "description": "Snake-case alias for tradingRecommendation."
+          },
           "dryRun": {
             "type": "boolean",
             "description": "When true, validates the request and returns a dryRun response without invoking the TradingView MCP volume_confirmation_analysis call. Useful for probe requests that want to avoid the ~360s MCP budget.",
@@ -11030,6 +11066,27 @@
           },
           "analysis": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "volumeConfirmation": {
+            "type": "object",
+            "properties": {
+              "confirmed": { "type": ["boolean", "null"] },
+              "decision": { "type": "string", "enum": ["confirm", "deny", "unknown"] },
+              "volumeRatio": { "type": ["number", "null"] },
+              "analysis": { "$ref": "#/components/schemas/JsonObject" }
+            }
+          },
+          "multiTimeframeAnalysis": {
+            "anyOf": [
+              { "$ref": "#/components/schemas/JsonObject" },
+              { "type": "null" }
+            ],
+            "description": "Present only when multi-timeframe analysis was requested and enabled."
+          },
+          "htfAlignment": {
+            "type": "string",
+            "enum": ["aligned", "counter-trend", "unknown"],
+            "description": "Present only when multi-timeframe analysis was requested and enabled."
           },
           "requestId": {
             "type": "string"

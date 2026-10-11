@@ -79,12 +79,16 @@ Run TradingView MCP `volume_confirmation_analysis` on demand and return structur
 ```json
 {
   "symbol": "BINANCE:BTCUSDT",
-  "timeframe": "4h"
+  "timeframe": "4h",
+  "includeMultiTimeframe": true,
+  "side": "BUY"
 }
 ```
 
 - `symbol`: Required `EXCHANGE:SYMBOL` identifier.
 - `timeframe`: Optional indicator interval. Defaults to `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` or `1h`.
+- `includeMultiTimeframe`: Optional boolean (default `false`). When `true` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true`, the endpoint adds higher-timeframe analysis and an `htfAlignment` result. The response omits those fields when the request or feature flag disables the analysis. Multi-timeframe failures fail open and retain the volume-confirmation result with `htfAlignment: "unknown"`.
+- `side`, `direction`, `breakoutType`/`breakout_type`, and `tradingRecommendation`/`trading_recommendation`: Optional directional context used to compare a candidate direction with the higher-timeframe result.
 - `dryRun`: Optional. When `true` (or `?dryRun=true`), validates the request and returns the parsed `symbol`/`exchange`/`timeframe` echo with `dryRun: true`, `decision: 'unknown'`, `volumeRatio: null`, and `analysis: null` — no MCP call is made. Useful for validating request shape before paying the ~360s MCP budget.
 
 **Response (JSON):**
@@ -105,6 +109,23 @@ Run TradingView MCP `volume_confirmation_analysis` on demand and return structur
       "volume_strength": "HIGH"
     }
   },
+  "volumeConfirmation": {
+    "confirmed": true,
+    "decision": "confirm",
+    "volumeRatio": 1.7,
+    "analysis": {
+      "symbol": "BINANCE:BTCUSDT",
+      "volume_analysis": {
+        "volume_ratio": 1.7,
+        "volume_strength": "HIGH"
+      }
+    }
+  },
+  "multiTimeframeAnalysis": {
+    "alignment": { "status": "ALIGNED", "confidence": 0.9 },
+    "recommendation": { "action": "BUY" }
+  },
+  "htfAlignment": "aligned",
   "requestId": "req-vol-123",
   "processingTimeMs": 310
 }
