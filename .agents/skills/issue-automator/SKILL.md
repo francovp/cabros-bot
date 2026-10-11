@@ -148,8 +148,8 @@ Resolve each PR preview dynamically from its active GitHub deployment record. Ru
 - Railway is unavailable. The resolver falls back to the Railway pattern only for compatibility; `source=railway-fallback` is not a deployment target or proof of preview health. Do not probe a resolved Railway URL even if it came from a deployment record. Prefer a reachable URL returned by an active GitHub deployment record, which may differ from any hostname template.
 - If the resolver has no usable deployment URL, use `https://openclaw.tail5e4271.ts.net/cabros-bot-pr-<PR_NUMBER>` only as an OpenClaw candidate fallback. Check `/healthcheck`, `/openapi.json`, changed endpoints, and relevant E2E flows, and confirm `/api/status` reports `service.commit` equal to the PR head before counting it as verified. Send `WEBHOOK_API_KEY` only in the `x-api-key` header; never expose credentials. If the served SHA cannot be confirmed, record verification as unavailable.
 - If OpenClaw is also unavailable, ship when local smoke tests, required tests/CI, code review, acceptance criteria, and ownership checks pass and the agent trusts the change. Record deployment/E2E checks as unavailable. This exception overrides preview-live and stale-deployment recovery requirements in bundled references; it does not waive code failures or unresolved feedback.
-- Ignore Firebase Hosting preview `RESOURCE_EXHAUSTED` / channel quota errors as non-blocking. Channel deletion or redeploy retries are not required.
-- After merge, discover the active deployment for `master` and run relevant E2E there. If unavailable, report it as unverified rather than passed.
+- Treat Firebase Hosting preview `RESOURCE_EXHAUSTED` / channel quota errors as non-blocking. Run `node scripts/cleanup-preview-channels.js --apply`, then retry the preview deployment as described in Error Handling and `references/readiness-and-verification.md`; never add `GLOBAL_BLOCKED` or `need manual PR deploy` solely for channel quota.
+- After merge, verify production with `scripts/verify-preview.sh production "/healthcheck,/openapi.json"` and run relevant E2E against the resolved deployment for `master`. If unavailable, report it as unverified rather than passed.
 
 ## Procedural Workflow
 
@@ -303,6 +303,22 @@ If `GLOBAL_BLOCKED` is caused by the last deployment being inactive, suspended, 
 2. Railway is unavailable: trigger and verify OpenClaw instead. Wait boundedly (up to five minutes, 30-second checks) for the new active deployment; verify its SHA, health, changed endpoints, and E2E. Queued/building status is not readiness.
 3. On verified recovery, remove deployment-only `GLOBAL_BLOCKED` / `need manual PR deploy` labels and resume review/merge. Keep unrelated blockers.
 4. If a deployment environment variable is missing, inspect/keep/add `need manual PR deploy` and send WhatsApp to the configured `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`) with the variable name, environment, operator action, and PR link; never include its secret value.
+
+   Send a WhatsApp notification with issue and PR links to `NOTIFY_WHATSAPP_CHAT_ID` (default `120363422033474991@g.us`); identify the missing variable by name, never its value:
+
+   ```bash
+   PR_URL="https://github.com/francovp/cabros-bot/pull/${PR_NUMBER}"
+   ISSUE_URL="https://github.com/francovp/cabros-bot/issues/${ISSUE_NUMBER}"
+   NOTIFY_MESSAGE="[need manual PR deploy] ${PR_URL}: configure ${MISSING_VARIABLE_NAME} in ${DEPLOYMENT_ENVIRONMENT}, then redeploy. Issue: ${ISSUE_URL}"
+   curl --location "${NOTIFY_WEBHOOK_URL:-https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message}" \
+     --header 'Content-Type: application/json' \
+     --header "x-api-key: ${NOTIFY_API_KEY}" \
+     --data-raw '{
+       "message": "'"${NOTIFY_MESSAGE}"'",
+       "channels": ["whatsapp"],
+       "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
+     }'
+   ```
 5. If OpenClaw is also unavailable and all other gates pass, use the shipping exception. Otherwise record the exact blocker and notification; release only owned claims. Branch/PR writes during recovery count toward the write budget.
 6. Archive sessions ending with `GLOBAL_BLOCKED` after recording the blocker, notification, and ownership cleanup. In a parallel batch, archive the blocked item's session when supported; archive the coordinator after all assigned items finish. A single-item skip loop may advance before final session archival.
 
