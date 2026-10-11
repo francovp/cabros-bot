@@ -998,6 +998,55 @@ describe('Binance orders API', () => {
 					symbol: 'BTCUSDT',
 					status: 'CANCELED',
 					binanceOrderId: 42,
+					clientOrderId: 'cancel-client-order',
+				}),
+			);
+		});
+
+		it('records clientOrderId and normalized rejected status on cancel rejection', async () => {
+			client.cancelOrder = jest.fn().mockRejectedValue({
+				code: -2011,
+				message: 'Unknown order sent.',
+			});
+
+			const response = await request(app)
+				.delete('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', origClientOrderId: 'my-client-order-123' })
+				.expect(404);
+
+			expect(response.body.success).toBe(false);
+			expect(recordMutationSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					action: 'CANCEL',
+					symbol: 'BTCUSDT',
+					status: 'rejected',
+					errorCode: 'ORDER_NOT_FOUND',
+					clientOrderId: 'my-client-order-123',
+				}),
+			);
+		});
+
+		it('records clientOrderId when using clientOrderId property alias in cancel request', async () => {
+			client.cancelOrder = jest.fn().mockRejectedValue({
+				code: -2011,
+				message: 'Unknown order sent.',
+			});
+
+			const response = await request(app)
+				.delete('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', clientOrderId: 'my-alias-order-456' })
+				.expect(404);
+
+			expect(response.body.success).toBe(false);
+			expect(recordMutationSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					action: 'CANCEL',
+					symbol: 'BTCUSDT',
+					status: 'rejected',
+					errorCode: 'ORDER_NOT_FOUND',
+					clientOrderId: 'my-alias-order-456',
 				}),
 			);
 		});
