@@ -7,6 +7,10 @@ const {
 	redactString,
 } = require('../../src/lib/logging');
 
+function makeHighEntropyToken(suffix = 'z') {
+	return ['Qm7_vB2n', 'L8xW4sK9', 'pD3aR6tY', '1uF5cH0', suffix].join('');
+}
+
 describe('structured console logging', () => {
 	const originalEnv = process.env;
 	let output;
@@ -149,6 +153,215 @@ describe('structured console logging', () => {
 		expect(log2.message).toBe('Token = [REDACTED]');
 		expect(log2.parameters).toEqual(['[REDACTED]']);
 		expect(JSON.stringify(log2)).not.toContain(token);
+	});
+
+	it('should redact values labeled with the generic key label', () => {
+		configureLogging();
+		output.warn.mockClear();
+
+		const secret = 'webhook-signing-secret-value';
+		console.warn('key', secret);
+
+		const log = parseLast(output.warn);
+		expect(log.message).toBe('key [REDACTED]');
+		expect(log.parameters).toEqual(['[REDACTED]']);
+		expect(JSON.stringify(log)).not.toContain(secret);
+	});
+
+	it('should preserve uppercase environment variable names in log messages', () => {
+		configureLogging();
+		output.warn.mockClear();
+
+		console.warn('Configuration warning: SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES must contain only mcp, binance, twelve-data, or gemini providers.');
+
+		const log = parseLast(output.warn);
+		expect(log.message).toContain('SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES');
+	});
+
+	it('should redact DSNs and high-entropy scalar tokens while preserving low-entropy identifiers', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const dsn = 'https://public-dsn-key@sentry.example.com/12345';
+		console.log('Sentry endpoint', dsn);
+		const dsnLog = parseLast(output.log);
+		expect(dsnLog.message).toBe('Sentry endpoint [REDACTED]');
+		expect(dsnLog.parameters).toEqual(['[REDACTED]']);
+		expect(JSON.stringify(dsnLog)).not.toContain(dsn);
+
+		const token = makeHighEntropyToken('A');
+		console.log('provider output', token);
+		const tokenLog = parseLast(output.log);
+		expect(tokenLog.message).toBe('provider output [REDACTED]');
+		expect(tokenLog.parameters).toEqual(['[REDACTED]']);
+		expect(JSON.stringify(tokenLog)).not.toContain(token);
+
+		const lowEntropy = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+		console.log('request id', lowEntropy);
+		const safeLog = parseLast(output.log);
+		expect(safeLog.message).toBe(`request id ${lowEntropy}`);
+		expect(safeLog.parameters).toEqual([lowEntropy]);
+	});
+
+	it('should redact high-entropy string values nested under non-sensitive keys', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = makeHighEntropyToken();
+		console.info('provider response', { state: token });
+
+		const log = parseLast(output.info);
+		expect(log.attributes).toEqual({ state: '[REDACTED]' });
+		expect(JSON.stringify(log)).not.toContain(token);
+	});
+
+	it('should redact high-entropy values longer than 512 characters', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = makeHighEntropyToken().repeat(20);
+		console.info('provider response', { state: token });
+
+		const log = parseLast(output.info);
+		expect(log.attributes).toEqual({ state: '[REDACTED]' });
+		expect(JSON.stringify(log)).not.toContain(token);
+	});
+
+	it('should redact high-entropy hexadecimal values under non-sensitive keys', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = ['01234567', '89abcdef', '01234567', '89abcdef'].join('');
+		console.info('provider response', { state: token });
+
+		const log = parseLast(output.info);
+		expect(log.attributes).toEqual({ state: '[REDACTED]' });
+		expect(JSON.stringify(log)).not.toContain(token);
+	});
+
+	it('should redact uppercase high-entropy values under non-sensitive keys', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = makeHighEntropyToken().toUpperCase();
+		console.info('provider response', { state: token });
+
+		const log = parseLast(output.info);
+		expect(log.attributes).toEqual({ state: '[REDACTED]' });
+		expect(JSON.stringify(log)).not.toContain(token);
+	});
+
+	it('should redact diverse lowercase-only high-entropy values', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = 'qzmxncvbaplsjdhfgktyurowieqzmxnv';
+		console.info('provider response', { state: token });
+
+		const log = parseLast(output.info);
+		expect(log.attributes).toEqual({ state: '[REDACTED]' });
+		expect(JSON.stringify(log)).not.toContain(token);
+	});
+
+	it('should redact UUID-shaped values outside request-id context', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const secret = ['3f1c8e2a-0b1d', '-4a7e-9c11-', 'abcdef012345'].join('');
+		console.info('provider response', { state: secret });
+
+		const log = parseLast(output.info);
+		expect(log.attributes).toEqual({ state: '[REDACTED]' });
+		expect(JSON.stringify(log)).not.toContain(secret);
+	});
+
+	it('should redact high-entropy tokens that contain an API path fragment', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = 'Qm7_vB2nL8xW4sK9pD3aR6tY1uF5cH0z/api/A7k_Q2vN9eWm4LxB8rYc5HsP1dFz3UaG';
+		console.info('provider response', { state: token });
+
+		const log = parseLast(output.info);
+		expect(log.attributes.state).not.toContain(token);
+		expect(log.attributes.state).toContain('[REDACTED]');
+		expect(JSON.stringify(log)).not.toContain(token);
+	});
+
+	it('should redact high-entropy tokens in ordinary absolute URL paths', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = makeHighEntropyToken();
+		console.info('provider URL', `https://example.com/reset/${token}`);
+
+		const log = parseLast(output.info);
+		expect(log.message).toBe('provider URL https://example.com/reset/[REDACTED]');
+		expect(JSON.stringify(log)).not.toContain(token);
+	});
+
+	it('should redact path-shaped high-entropy values outside path fields', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = '/api/alerts/Qm7_vB2nL8xW4sK9pD3aR6tY1uF5cH0z';
+		console.info('provider response', { state: token });
+
+		const log = parseLast(output.info);
+		expect(log.attributes).toEqual({ state: '/api/alerts/[REDACTED]' });
+		expect(JSON.stringify(log)).not.toContain(token);
+	});
+
+	it('should preserve opaque API path identifiers and UUID request ids', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const path = '/api/alerts/aB3xK9mQ2pL7zR4tY8wC';
+		const requestId = '3f1c8e2a-0b1d-4a7e-9c11-abcdef012345';
+		console.info('Request completed', { path, requestId });
+
+		const log = parseLast(output.info);
+		expect(log.attributes).toEqual({ path, requestId });
+
+		const highEntropyApiId = 'Qm7_vB2nL8xW4sK9pD3aR6tY1uF5cH0z';
+		const apiUrl = `https://service.example.com/api/alerts/${highEntropyApiId}`;
+		console.info('Request URL', apiUrl);
+		expect(parseLast(output.info).message).toBe(`Request URL ${apiUrl}`);
+
+		console.info(`requestId=${requestId}`);
+		expect(parseLast(output.info).message).toBe(`requestId=${requestId}`);
+
+		const parenthesizedRequestIdMessage = `[RequestDeadline] 408 REQUEST_TIMEOUT (requestId=${requestId})`;
+		console.warn(parenthesizedRequestIdMessage);
+		expect(parseLast(output.warn).message).toBe(parenthesizedRequestIdMessage);
+
+		const opaqueRequestId = '0123456789abcdef0123456789abcdef';
+		console.info('Request metadata', { requestId: opaqueRequestId });
+		expect(parseLast(output.info).attributes.requestId).toBe(opaqueRequestId);
+		console.info('Request headers', { headers: { 'x-request-id': opaqueRequestId } });
+		expect(parseLast(output.info).attributes.headers['x-request-id']).toBe(opaqueRequestId);
+		console.info(`requestId=${opaqueRequestId}`);
+		expect(parseLast(output.info).message).toBe(`requestId=${opaqueRequestId}`);
+
+		const requestIdToken = makeHighEntropyToken();
+		const overlongRequestId = requestIdToken.repeat(4) + requestIdToken.slice(0, 1);
+		console.info(`requestId=${overlongRequestId}`);
+		const overlongRequestLog = parseLast(output.info);
+		expect(overlongRequestLog.message).toBe('requestId=[REDACTED]');
+		expect(JSON.stringify(overlongRequestLog)).not.toContain(overlongRequestId);
+
+		const requestUrl = 'https://example.com/api/alerts/3f1c8e2a-0b1d-4a7e-9c11-abcdef012345';
+		console.info('Request URL', requestUrl);
+		expect(parseLast(output.info).message).toBe(`Request URL ${requestUrl}`);
+	});
+
+	it('should still redact recognized credentials in request-id context', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		console.info('Request metadata', { requestId: 'sk-abcdef1234567890' });
+
+		expect(parseLast(output.info).attributes.requestId).toBe('[REDACTED]');
 	});
 
 	it('should redact string-content secrets embedded in messages and JSON', () => {
@@ -333,5 +546,4 @@ describe('structured console logging', () => {
 		expect(infoLog.attributes.endpoint).toBe('https://example.com/webhook?token=[REDACTED]');
 	});
 });
-
 
