@@ -78,9 +78,11 @@ describe('admin/operator API key scope helpers', () => {
 			});
 		});
 
-		it('returns true on no-credential dev/test fallback so the gate stays open', () => {
+		it('rejects supplied API keys when no credential is configured', () => {
+			const arbitraryKeyReq = { headers: { 'x-api-key': 'arbitrary-key' } };
 			withEnv({ WEBHOOK_API_KEY: undefined, ADMIN_API_KEY: undefined }, () => {
-				expect(isValidAdminApiKey(noKeyReq)).toBe(true);
+				expect(isValidAdminApiKey(noKeyReq)).toBe(false);
+				expect(isValidAdminApiKey(arbitraryKeyReq)).toBe(false);
 			});
 		});
 	});

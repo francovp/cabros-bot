@@ -56,6 +56,15 @@ function warnQueryApiKeyDeprecationOnce(req) {
 	console.warn(`[auth] The api-key query parameter is deprecated and may leak through reverse-proxy access logs. Route: ${route}.${sunsetNote}`);
 }
 
+function rejectQueryApiKeyAfterSunset(req, res) {
+	if (!isQueryApiKeyPresent(req) || !isQueryAuthSunsetReached()) return false;
+	sendErrorFrom(res, 401, {
+		error: 'The api-key query parameter support has been removed; use the x-api-key header instead.',
+		code: 'API_KEY_QUERY_REMOVED',
+	});
+	return true;
+}
+
 /**
  * Middleware to validate API key for webhook endpoints.
  * Requires `x-api-key` header to match `WEBHOOK_API_KEY` environment variable.
@@ -106,12 +115,7 @@ function validateApiKey(req, res, next) {
 	}
 
 	// Sunset has passed: query-parameter auth is no longer accepted.
-	if (isQueryApiKeyPresent(req) && isQueryAuthSunsetReached()) {
-		return sendErrorFrom(res, 401, {
-			error: 'The api-key query parameter support has been removed; use the x-api-key header instead.',
-			code: 'API_KEY_QUERY_REMOVED',
-		});
-	}
+	if (rejectQueryApiKeyAfterSunset(req, res)) return;
 
 	// Get API key from headers (recommended) or query params. Headers is recommended, query params are less secure.
 	const apiKey = req.headers['x-api-key'] || req.query['api-key'];
@@ -192,9 +196,9 @@ function isValidAdminApiKey(req) {
 	// Preserve legacy webhook-key behavior, including query compatibility,
 	// until the operator configures the dedicated admin credential.
 	if (process.env.WEBHOOK_API_KEY) return isValidApiKey(req);
-	// Match validateApiKey's open local/test path without letting a supplied
-	// credential bypass Firebase auth in production-like deployments.
-	return process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test';
+	// The permissive local/test behavior is handled by validateApiKey only when
+	// Firebase auth is disabled. With Firebase auth enabled, no key is valid.
+	return false;
 }
 
 function isValidBinanceTradingApiKey(req) {
@@ -214,10 +218,12 @@ module.exports = {
 	_isQueryAuthSunsetReached: isQueryAuthSunsetReached,
 	_parseApiKeyQuerySunset: parseApiKeyQuerySunset,
 	_resetQueryDeprecationFlagForTests,
+	rejectQueryApiKeyAfterSunset,
 	getAdminApiKey,
 	isAdminApiKeyScoped,
 	isValidAdminApiKey,
 	isValidApiKey,
 	isValidBinanceTradingApiKey,
+	warnQueryApiKeyDeprecationOnce,
 	validateApiKey,
 };

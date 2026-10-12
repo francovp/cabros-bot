@@ -59,7 +59,7 @@ describe('Admin/operator API key scope separation', () => {
 			.set('x-api-key', 'webhook-only');
 
 		expect(response.status).toBe(403);
-		expect(response.body).toEqual({ error: 'Forbidden: Invalid API key' });
+		expect(response.body).toMatchObject({ error: 'Forbidden: Invalid API key' });
 	});
 
 	it('rejects the webhook API key on /api/status (admin surface)', async () => {
@@ -68,6 +68,19 @@ describe('Admin/operator API key scope separation', () => {
 			.set('x-api-key', 'webhook-only');
 
 		expect(response.status).toBe(403);
+	});
+
+	it('rejects an arbitrary API key with Firebase auth enabled and no API keys configured', async () => {
+		delete process.env.WEBHOOK_API_KEY;
+		delete process.env.ADMIN_API_KEY;
+		app = makeApp();
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'arbitrary-key');
+
+		expect(response.status).toBe(403);
+		expect(response.body).toMatchObject({ error: 'Forbidden: Invalid API key' });
 	});
 
 	it('rejects the webhook API key on /api/jobs (admin surface)', async () => {
@@ -126,15 +139,61 @@ describe('Admin/operator API key scope separation', () => {
 	it('preserves legacy WEBHOOK_API_KEY query authentication when ADMIN_API_KEY is unset', async () => {
 		const previousAdmin = process.env.ADMIN_API_KEY;
 		delete process.env.ADMIN_API_KEY;
+		delete process.env.API_KEY_QUERY_SUNSET;
+		const deprecationWarning = jest.spyOn(console, 'warn').mockImplementation(() => {});
 		app = makeApp();
 
 		try {
 			const response = await request(app).get('/api/status?api-key=webhook-only');
 			expect(response.status).toBe(200);
+			expect(deprecationWarning).toHaveBeenCalledWith(expect.stringContaining('api-key query parameter is deprecated'));
+			expect(deprecationWarning.mock.calls[0][0]).not.toContain('webhook-only');
 		} finally {
+			deprecationWarning.mockRestore();
 			if (previousAdmin === undefined) delete process.env.ADMIN_API_KEY;
 			else process.env.ADMIN_API_KEY = previousAdmin;
 		}
+	});
+
+	it('enforces the query-key sunset on Firebase-enabled admin and Binance fallbacks', async () => {
+		delete process.env.ADMIN_API_KEY;
+		delete process.env.BINANCE_TRADING_API_KEY;
+		process.env.API_KEY_QUERY_SUNSET = '2000-01-01';
+		app = makeApp();
+
+		const [adminResponse, binanceResponse] = await Promise.all([
+			request(app).get('/api/status?api-key=webhook-only'),
+			request(app).get('/api/trading/binance/orders?api-key=webhook-only'),
+		]);
+
+		for (const response of [adminResponse, binanceResponse]) {
+			expect(response.status).toBe(401);
+			expect(response.body.code).toBe('API_KEY_QUERY_REMOVED');
+		}
+	});
+
+	it('allows Firebase bearer auth when an expired legacy query key is present', async () => {
+		delete process.env.ADMIN_API_KEY;
+		process.env.API_KEY_QUERY_SUNSET = '2000-01-01';
+		app = makeApp();
+
+		const response = await request(app)
+			.get('/api/status?api-key=stale-query-key')
+			.set('Authorization', 'Bearer firebase-token');
+
+		expect(response.status).toBe(200);
+	});
+
+	it('allows a valid legacy API key header when an expired query key is also present', async () => {
+		delete process.env.ADMIN_API_KEY;
+		process.env.API_KEY_QUERY_SUNSET = '2000-01-01';
+		app = makeApp();
+
+		const response = await request(app)
+			.get('/api/status?api-key=stale-query-key')
+			.set('x-api-key', 'webhook-only');
+
+		expect(response.status).toBe(200);
 	});
 
 	it('still accepts the webhook API key on /api/webhook/alert', async () => {
@@ -158,7 +217,7 @@ describe('Admin/operator API key scope separation', () => {
 		// detail; the scope-boundary contract is that the admin key alone
 		// does not authenticate the webhook ingest path.
 		expect(response.status).toBe(403);
-		expect(response.body).toEqual({ error: 'Forbidden: Invalid API key' });
+		expect(response.body).toMatchObject({ error: 'Forbidden: Invalid API key' });
 	});
 
 	it('keeps Firebase bearer tokens as the browser-admin path', async () => {

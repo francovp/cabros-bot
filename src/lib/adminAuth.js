@@ -7,7 +7,11 @@ const {
 	isAdminApiKeyScoped,
 	isValidAdminApiKey,
 	isValidBinanceTradingApiKey,
+	_isQueryApiKeyPresent,
+	_isQueryAuthSunsetReached,
+	rejectQueryApiKeyAfterSunset,
 	validateApiKey,
+	warnQueryApiKeyDeprecationOnce,
 } = require('./auth');
 const requestDeadline = require('./requestDeadline');
 const { sendErrorFrom } = require('./errorEnvelope');
@@ -115,10 +119,30 @@ async function validateAdminAccess(req, res, next) {
 		}
 		return sendErrorFrom(res, 401, { error: 'Unauthorized: Missing API key' });
 	}
+	const expiredLegacyQueryKey = !isAdminApiKeyScoped()
+		&& process.env.WEBHOOK_API_KEY
+		&& _isQueryApiKeyPresent(req)
+		&& _isQueryAuthSunsetReached();
+	const hasApiKeyHeader = Boolean(req.headers['x-api-key']);
+	const hasBearerHeader = typeof req.headers.authorization === 'string'
+		&& /^Bearer\s+\S+$/i.test(req.headers.authorization);
+	if (
+		!isAdminApiKeyScoped()
+		&& process.env.WEBHOOK_API_KEY
+		&& expiredLegacyQueryKey
+		&& !hasApiKeyHeader
+		&& !hasBearerHeader
+		&& rejectQueryApiKeyAfterSunset(req, res)
+	) {
+		return;
+	}
 
 	const suppliedApiKey = req.headers['x-api-key']
-		|| (isAdminApiKeyScoped() ? undefined : req.query['api-key']);
+		|| (isAdminApiKeyScoped() || expiredLegacyQueryKey ? undefined : req.query['api-key']);
 	if (suppliedApiKey !== undefined && isValidAdminApiKey(req)) {
+		if (!isAdminApiKeyScoped() && !expiredLegacyQueryKey && _isQueryApiKeyPresent(req)) {
+			warnQueryApiKeyDeprecationOnce(req);
+		}
 		req.adminRole = ADMIN_OPERATOR;
 		return requestDeadline.guard(req, res, next);
 	}

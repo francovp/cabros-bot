@@ -27,6 +27,17 @@ function collectRequestItems(items, result = []) {
 	return result;
 }
 
+function collectRequestsAndSavedExamples(items, result = []) {
+	for (const item of items) {
+		if (item.request) result.push(item.request);
+		for (const response of item.response || []) {
+			if (response.originalRequest) result.push(response.originalRequest);
+		}
+		if (Array.isArray(item.item)) collectRequestsAndSavedExamples(item.item, result);
+	}
+	return result;
+}
+
 describe('Postman collection contract', () => {
 	it('documents Firebase admin configuration and bearer-auth status access', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
@@ -1493,12 +1504,12 @@ describe('scoped API key Postman examples', () => {
 		expect(invalidAdminQuery.response[0].body).toContain('ADMIN_AUTH_REQUIRED');
 	});
 
-	it('uses the matching dedicated variable for every admin and Binance API request', () => {
+	it('uses the matching scoped variable for every API request and saved response example', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
-		for (const item of collectRequestItems(collection.item)) {
-			const rawUrl = item.request.url?.raw || '';
+		for (const request of collectRequestsAndSavedExamples(collection.item)) {
+			const rawUrl = request.url?.raw || '';
 			if (!rawUrl.includes('/api/')) continue;
-			const header = (item.request.header || []).find((entry) => entry.key.toLowerCase() === 'x-api-key');
+			const header = (request.header || []).find((entry) => entry.key.toLowerCase() === 'x-api-key');
 			if (!header) continue;
 
 			const pathname = new URL(rawUrl.replace('{{baseUrl}}', 'https://placeholder.invalid')).pathname;

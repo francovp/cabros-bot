@@ -1,4 +1,5 @@
 const request = require('supertest');
+const { saveEnv, restoreEnv } = global;
 
 describe('public OpenAPI documentation', () => {
 	let app;
@@ -35,6 +36,24 @@ describe('public OpenAPI documentation', () => {
 			in: 'header',
 			name: 'x-api-key',
 		}));
+		expect(response.body.components.securitySchemes.ApiKeyHeader.description).toContain(
+			'Admin routes accept it only when ADMIN_API_KEY is unset',
+		);
+		expect(response.body.components.securitySchemes.ApiKeyQuery.description).toContain(
+			'BINANCE_TRADING_API_KEY is unset and the admin-auth fallback also accepts the query',
+		);
+		const binanceOperations = Object.entries(response.body.paths)
+			.filter(([path]) => path.startsWith('/api/trading/binance/'))
+			.flatMap(([, pathItem]) => Object.values(pathItem).filter((operation) => operation.operationId));
+		expect(binanceOperations.length).toBeGreaterThan(0);
+		for (const operation of binanceOperations) {
+			expect(operation.description).toContain(
+				'when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted',
+			);
+			expect(operation.description).toContain(
+				'accepts Firebase bearer tokens when enabled',
+			);
+		}
 		expect(response.text).not.toContain(process.env.WEBHOOK_API_KEY);
 	});
 
@@ -70,10 +89,10 @@ describe('public OpenAPI documentation', () => {
 		const page = await request(app).get('/admin');
 		const policy = page.headers['content-security-policy'];
 
-		expect(policy).toContain("script-src 'self' https://www.gstatic.com");
+		expect(policy).toContain('script-src \'self\' https://www.gstatic.com');
 		expect(policy).toContain('https://identitytoolkit.googleapis.com');
 		expect(policy).toContain('https://securetoken.googleapis.com');
-		expect(policy).not.toContain("script-src 'self' https:;");
+		expect(policy).not.toContain('script-src \'self\' https:;');
 	});
 
 	it('keeps the admin client contract-driven without exposing the configured API key', async () => {
