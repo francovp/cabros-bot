@@ -178,6 +178,16 @@ describe('structured console logging', () => {
 		expect(log.message).toContain('SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES');
 	});
 
+	it('should preserve environment variable names in invalid-configuration warnings', () => {
+		configureLogging();
+		output.warn.mockClear();
+
+		const warning = '[SignalOutcomeService] Invalid SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES configuration, using existing fallback chains';
+		console.warn(warning);
+
+		expect(parseLast(output.warn).message).toBe(warning);
+	});
+
 	it('should redact DSNs and high-entropy scalar tokens while preserving low-entropy identifiers', () => {
 		configureLogging();
 		output.info.mockClear();
@@ -232,6 +242,18 @@ describe('structured console logging', () => {
 		output.info.mockClear();
 
 		const token = ['01234567', '89abcdef', '01234567', '89abcdef'].join('');
+		console.info('provider response', { state: token });
+
+		const log = parseLast(output.info);
+		expect(log.attributes).toEqual({ state: '[REDACTED]' });
+		expect(JSON.stringify(log)).not.toContain(token);
+	});
+
+	it('should redact high-entropy hexadecimal values without every hex digit', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = ['8f31a26c', '8b70d49e', '8f31a26c', '8b70d49e'].join('');
 		console.info('provider response', { state: token });
 
 		const log = parseLast(output.info);
@@ -300,6 +322,177 @@ describe('structured console logging', () => {
 		expect(JSON.stringify(log)).not.toContain(token);
 	});
 
+	it('should redact high-entropy tokens from non-correlation API URLs', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = makeHighEntropyToken();
+		console.info('provider URL', `https://mcp.example.com/api/session/${token}`);
+
+		const log = parseLast(output.info);
+		expect(log.message).toBe('provider URL https://mcp.example.com/api/session/[REDACTED]');
+		expect(JSON.stringify(log)).not.toContain(token);
+	});
+
+	it('should redact high-entropy secrets split across short URL path segments', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const secret = 'Qm7_vB2nL8xW4sK9p/D3aR6tY1uF5cH0zN';
+		const url = `https://mcp.example.com/api/session/${secret}`;
+		console.info('provider URL', url);
+
+		const log = parseLast(output.info);
+		expect(log.message).toBe('provider URL https://mcp.example.com/api/session/[REDACTED]');
+		expect(JSON.stringify(log)).not.toContain(secret);
+	});
+
+	it('should redact secrets split after a short URL path segment', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const secret = 'Qm7_vB2/L8xW4sK9pD3aR6tY1uF5cH0zNq';
+		const url = `https://mcp.example.com/api/session/${secret}`;
+		console.info('provider URL', url);
+
+		const log = parseLast(output.info);
+		expect(log.message).toBe('provider URL https://mcp.example.com/api/session/[REDACTED]');
+		expect(JSON.stringify(log)).not.toContain(secret);
+	});
+
+	it('should redact lower-diversity split secrets in sensitive API paths', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const secret = [
+			'abcdefghijk',
+			'abcde',
+			'/',
+			'lmnopqrstuv',
+			'lmnop',
+		].join('');
+		const url = `https://mcp.example.com/api/session/${secret}`;
+		console.info('provider URL', url);
+
+		const log = parseLast(output.info);
+		expect(log.message).toBe('provider URL https://mcp.example.com/api/session/[REDACTED]');
+		expect(JSON.stringify(log)).not.toContain(secret);
+	});
+
+	it.each(['/auth', '/token'])('should redact split secrets under root %s paths', (route) => {
+		configureLogging();
+		output.info.mockClear();
+
+		const secret = [
+			'abcdefghijk',
+			'abcde',
+			'/',
+			'lmnopqrstuv',
+			'lmnop',
+		].join('');
+		const url = `https://mcp.example.com${route}/${secret}`;
+		console.info('provider URL', url);
+
+		const log = parseLast(output.info);
+		expect(log.message).toBe(`provider URL https://mcp.example.com${route}/[REDACTED]`);
+		expect(JSON.stringify(log)).not.toContain(secret);
+	});
+
+	it('should redact dot-separated credentials under sensitive paths', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = [
+			['eyJhbG', 'ciOiJIUz', 'I1NiJ9'].join(''),
+			'.',
+			['eyJzdW', 'IiOiJ1c', '2VyIn0'].join(''),
+			'.sig',
+		].join('');
+		const url = `https://mcp.example.com/api/session/${token}`;
+		console.info('provider URL', url);
+
+		const log = parseLast(output.info);
+		expect(log.message).toBe('provider URL https://mcp.example.com/api/session/[REDACTED]');
+		expect(JSON.stringify(log)).not.toContain(token);
+	});
+
+	it('should redact percent-encoded JWT separators under sensitive paths', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = `${['eyJhbG', 'ciOiJIUz', 'I1NiJ9'].join('')}%2E${[
+			'eyJzdW',
+			'IiOiJ1c',
+			'2VyIn0',
+		].join('')}%2Esig`;
+		const url = `https://mcp.example.com/api/session/${token}`;
+		console.info('provider URL', url);
+
+		const log = parseLast(output.info);
+		expect(log.message).toBe('provider URL https://mcp.example.com/api/session/[REDACTED]');
+		expect(JSON.stringify(log)).not.toContain(token);
+	});
+
+	it('should redact percent-encoded base64 separators under sensitive paths', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = `${['Qm7_vB2n', 'L8xW4sK9p'].join('')}%2F${[
+			'D3aR6tY1',
+			'uF5cH0zN',
+		].join('')}`;
+		const url = `https://mcp.example.com/api/session/${token}`;
+		console.info('provider URL', url);
+
+		const log = parseLast(output.info);
+		expect(log.message).toBe('provider URL https://mcp.example.com/api/session/[REDACTED]');
+		expect(JSON.stringify(log)).not.toContain(token);
+	});
+
+	it('should redact the full credential when it spans more than two path segments', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = ['Qm7_vB2n', 'L8xW4sK9', 'pD3aR6tY', '1uF5cH0z'].join('');
+		const splitToken = `${token.slice(0, 16)}/${token.slice(16)}/${token.slice(0, 16)}/${token.slice(16)}`;
+		const url = `https://mcp.example.com/api/session/${splitToken}`;
+		console.info('provider URL', url);
+
+		const log = parseLast(output.info);
+		expect(log.message).toBe('provider URL https://mcp.example.com/api/session/[REDACTED]');
+		expect(JSON.stringify(log)).not.toContain(splitToken);
+	});
+
+	it('should redact high-entropy tokens from unrecognized relative API paths', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = makeHighEntropyToken();
+		console.info('Request completed', { path: `/api/session/${token}` });
+
+		expect(parseLast(output.info).attributes.path).toBe('/api/session/[REDACTED]');
+	});
+
+	it('should preserve ordinary multi-segment URLs in log messages', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const url = 'https://github.com/francovp/cabros-bot/commit/abcdef';
+		console.info('Deployment source', url);
+
+		expect(parseLast(output.info).message).toBe(`Deployment source ${url}`);
+	});
+
+	it('should preserve long readable URL path segments', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const url = 'https://example.com/configuration/long-named-repo-name/options';
+		console.info('Provider URL', url);
+
+		expect(parseLast(output.info).message).toBe(`Provider URL ${url}`);
+	});
+
 	it('should redact path-shaped high-entropy values outside path fields', () => {
 		configureLogging();
 		output.info.mockClear();
@@ -322,6 +515,10 @@ describe('structured console logging', () => {
 
 		const log = parseLast(output.info);
 		expect(log.attributes).toEqual({ path, requestId });
+
+		const retryJobPath = `/api/jobs/${makeHighEntropyToken()}/retry`;
+		console.info('Request completed', { path: retryJobPath });
+		expect(parseLast(output.info).attributes.path).toBe(retryJobPath);
 
 		const highEntropyApiId = 'Qm7_vB2nL8xW4sK9pD3aR6tY1uF5cH0z';
 		const apiUrl = `https://service.example.com/api/alerts/${highEntropyApiId}`;

@@ -64,19 +64,7 @@ function isValidRequestId(value) {
 		&& /^[\x21-\x7E]+$/.test(value);
 }
 
-function isHighEntropyToken(value) {
-	if (typeof value !== 'string' || value.length < 32) {
-		return false;
-	}
-
-	if (!/^[A-Za-z0-9+/_=-]+$/.test(value)) {
-		return false;
-	}
-
-	if (new Set(value).size < 16) {
-		return false;
-	}
-
+function calculateEntropy(value) {
 	const frequencies = new Map();
 	for (const character of value) {
 		frequencies.set(character, (frequencies.get(character) || 0) + 1);
@@ -87,19 +75,91 @@ function isHighEntropyToken(value) {
 		const probability = count / value.length;
 		entropy -= probability * Math.log2(probability);
 	}
+	return entropy;
+}
 
-	return entropy >= 3.5;
+function isHighEntropyToken(value) {
+	if (typeof value !== 'string' || value.length < 32) {
+		return false;
+	}
+
+	if (!/^[A-Za-z0-9+/_=-]+$/.test(value)) {
+		return false;
+	}
+
+	const isHexadecimal = /^[a-f0-9]+$/i.test(value);
+	const minimumDistinctCharacters = isHexadecimal ? 12 : 16;
+	if (new Set(value).size < minimumDistinctCharacters) {
+		return false;
+	}
+
+	return calculateEntropy(value) >= 3.5;
+}
+
+function isHighEntropyPathSegment(value) {
+	return typeof value === 'string'
+		&& value.length >= 12
+		&& new Set(value).size >= 12
+		&& calculateEntropy(value) >= 3.5;
+}
+
+function redactSensitiveCredentialPathTokens(text) {
+	return text.replace(
+		/(\/api\/|\/)(session|auth|token|secret|credential|reset|login|oauth)\/((?:%2[EF]|%2B|%3D|[A-Za-z0-9+/_=.-])+)/gi,
+		(_match, apiPrefix, route, pathTail) => {
+			const pathSegments = pathTail.split('/');
+			let joinedToken = '';
+			for (let index = 0; index < pathSegments.length; index += 1) {
+				joinedToken += pathSegments[index];
+				const entropyCandidate = joinedToken
+					.replace(/[/.]/g, '')
+					.replace(/%2F/gi, '')
+					.replace(/%2E/gi, '')
+					.replace(/%2B/gi, '+')
+					.replace(/%3D/gi, '=');
+				if (isHighEntropyToken(entropyCandidate)) {
+					return `${apiPrefix}${route}/[REDACTED]`;
+				}
+				joinedToken += '/';
+			}
+			return `${apiPrefix}${route}/${pathTail}`;
+		},
+	);
 }
 
 function isConfigurationVariableLabel(value, offset, source) {
-	return /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(value)
-		&& /(?:^|\b)configuration warning:\s*$/i.test(source.slice(0, offset));
+	if (!/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+$/.test(value)) return false;
+
+	const prefix = source.slice(0, offset);
+	const suffix = source.slice(offset + value.length);
+	return /(?:^|\b)configuration warning:\s*$/i.test(prefix)
+		|| (/\binvalid\s+$/i.test(prefix) && /^\s+configuration\b/i.test(suffix));
+}
+
+function getCorrelationApiId(pathname) {
+	const segments = pathname.split(/[?#]/, 1)[0].split('/').filter(Boolean);
+	if (segments[0]?.toLowerCase() !== 'api') return null;
+
+	const collection = segments[1]?.toLowerCase();
+	if (collection === 'alerts'
+		&& (segments.length === 3 || (segments.length === 4 && segments[3].toLowerCase() === 'replay'))) {
+		return segments[2];
+	}
+	return collection === 'jobs'
+		&& (segments.length === 3
+			|| (segments.length === 4 && ['cancel', 'retry', 'retry-failed'].includes(segments[3].toLowerCase())))
+		? segments[2]
+		: null;
 }
 
 function isApiPathToken(candidate, offset, source, preserveRelativeApiPath) {
 	if (preserveRelativeApiPath && /^\/api\//i.test(source)) {
 		const pathEnd = source.search(/[?#]/);
-		if (pathEnd === -1 || offset + candidate.length <= pathEnd) return true;
+		const pathname = source.slice(0, pathEnd === -1 ? source.length : pathEnd);
+		if (pathEnd === -1 || offset + candidate.length <= pathEnd) {
+			const correlationId = getCorrelationApiId(pathname);
+			return correlationId !== null && (candidate === pathname || candidate === correlationId);
+		}
 	}
 
 	const urlPrefix = source.slice(0, offset).match(/https?:\/\/[^\s"'<>]*$/i)?.[0];
@@ -119,21 +179,50 @@ function isApiPathToken(candidate, offset, source, preserveRelativeApiPath) {
 		const pathEnd = urlStart + (pathEndInUrl === -1 ? url.length : pathEndInUrl);
 		const pathStart = pathStartInUrl === -1 ? pathEnd : urlStart + pathStartInUrl;
 		if (offset + candidate.length > pathEnd) return false;
-
-		return offset >= pathStart || candidate.toLowerCase().includes('/api/');
+		const correlationId = getCorrelationApiId(parsed.pathname);
+		if (correlationId === null) return false;
+		if (offset >= pathStart) return candidate === correlationId;
+		return offset + candidate.length >= pathEnd;
 	} catch (_) {
 		return false;
 	}
 }
 
 function redactHighEntropyPathSegments(text, { preserveRelativeApiPath = false } = {}) {
-	return text.replace(
+	const redactedSegments = redactSensitiveCredentialPathTokens(text).replace(
 		/(?<=\/)[A-Za-z0-9+_-]{32,}={0,2}(?![A-Za-z0-9+/_=-])/g,
 		(candidate, offset, source) => {
 			if (isApiPathToken(candidate, offset, source, preserveRelativeApiPath)) return candidate;
 			return isHighEntropyToken(candidate) ? '[REDACTED]' : candidate;
 		},
 	);
+
+	return redactedSegments.replace(
+		/(?<=\/)([A-Za-z0-9+_-]{12,}(?:\/[A-Za-z0-9+_-]{12,})+)/g,
+		(_match, candidate, offset, source) => {
+			if (isApiPathToken(candidate, offset, source, preserveRelativeApiPath)) return candidate;
+			if (!candidate.split('/').every(isHighEntropyPathSegment)) return candidate;
+			return isHighEntropyToken(candidate.replaceAll('/', '')) ? '[REDACTED]' : candidate;
+		},
+	);
+}
+
+function isUrlPathSpanningToken(candidate, offset, source) {
+	if (!candidate.includes('/')) return false;
+
+	const urlPrefix = source.slice(0, offset).match(/https?:\/\/[^\s"'<>]*$/i)?.[0];
+	if (!urlPrefix) return false;
+
+	const urlStart = offset - urlPrefix.length;
+	const url = source.slice(urlStart).match(/^https?:\/\/[^\s"'<>]+/i)?.[0];
+	if (!url) return false;
+
+	const authorityStart = url.indexOf('://') + 3;
+	const pathStart = url.indexOf('/', authorityStart);
+	const queryStart = url.search(/[?#]/);
+	const pathEnd = queryStart === -1 ? url.length : queryStart;
+	const candidateStart = offset - urlStart;
+	return pathStart !== -1 && candidateStart < pathEnd && candidateStart + candidate.length > pathStart;
 }
 
 function redactHighEntropyTokens(text, {
@@ -146,10 +235,10 @@ function redactHighEntropyTokens(text, {
 			if (preserveConfigurationVariableLabels && isConfigurationVariableLabel(candidate, offset, source)) {
 				return candidate;
 			}
+			// URL path segments are screened separately; do not join ordinary slugs into one token.
+			if (isUrlPathSpanningToken(candidate, offset, source)) return candidate;
 
-			// API paths carry opaque alert/job ids used for log correlation. Preserve
-			// only actual relative paths or URL pathnames, never an arbitrary token
-			// that happens to contain the same substring.
+			// Only alert/job IDs on known routes are safe correlation values.
 			if (isApiPathToken(candidate, offset, source, preserveRelativeApiPath)) return candidate;
 			return isHighEntropyToken(candidate) ? '[REDACTED]' : candidate;
 		},
