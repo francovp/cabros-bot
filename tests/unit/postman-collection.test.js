@@ -1404,14 +1404,33 @@ describe('news-monitor stop/target example (GH-712)', () => {
 			const body = JSON.parse(response.body);
 			const confluence = body.dependencies.tradingViewMcp.enrichment.confluence;
 
-			expect(confluence.enabled).toBe(true);
-			expect(body.featureFlags.tradingViewConfluenceEnrichment).toBe(true);
+			expect(confluence.enabled).toBe(body.featureFlags.tradingViewConfluenceEnrichment);
+			expect(typeof confluence.enabled).toBe('boolean');
 			expect(allowedFailureCategories).toContain(confluence.lastFailureCategory);
 			expect(confluence.appliedCount + confluence.failedCount)
 				.toBeLessThanOrEqual(confluence.attemptedCount);
 			expect(response.body).not.toContain('combined_analysis failed');
 			expect(response.body).not.toContain('projects/');
 		}
+	});
+
+	it('Get Status documents MTF-only telemetry with the confluence gate disabled', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - confluence enrichment counters');
+		const example = item.response.find((response) => /multi-timeframe-only/i.test(response.name));
+		expect(example).toBeDefined();
+
+		const body = JSON.parse(example.body);
+		const confluence = body.dependencies.tradingViewMcp.enrichment.confluence;
+		expect(body.featureFlags.tradingViewConfluenceEnrichment).toBe(false);
+		expect(body.featureFlags.tradingViewConfluenceMultiTimeframe).toBe(true);
+		expect(confluence).toMatchObject({
+			enabled: false,
+			attemptedCount: 1,
+			appliedCount: 1,
+			failedCount: 0,
+			budgetExhaustedCount: 0,
+		});
 	});
 
 	it('Get Status - confluence enrichment counters asserts the block is separate from alertPath', () => {
