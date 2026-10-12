@@ -1,65 +1,79 @@
-## [LRN-20261006-001] correction
+## [LRN-20261010-001] correction
 
-**Logged**: 2026-10-06T22:55:00Z
-**Priority**: medium
+**Logged**: 2026-10-10T21:50:00Z
+**Priority**: high
 **Status**: pending
 **Area**: backend
 
 ### Summary
-Prioritize immediate value delivery (YAGNI) over premature architectural abstractions.
+Reject invalid `dryRun` values with HTTP 400 instead of coercing to defaults.
 
 ### Details
-In Issue #886, the trainee suggested a "unified communication layer" to abstract Telegram and WhatsApp bridges. The Senior Dev (@gigachad-senior-dev) corrected this approach, noting that while the instinct to abstract is correct for an AI Engineer, doing it *now* constitutes scope creep and violates pragmatism. 
-
-Key points:
-- Telegram and WhatsApp have fundamental API differences (Templates, session windows, media handling) that make premature abstraction a "leaky abstraction".
-- Value delivery for the user (parity of 4 commands) must come first.
-- Abstractions should be driven by clear signals: 3rd channel addition, >2x logic duplication, or failing integration tests.
+In Issue #1153, @francovp clarified that coercing invalid or unrecognized `dryRun` values to a default (like `true` or `false`) is incorrect because it hides client bugs and breaks the strict OpenAPI boolean contract. Specifically, coercing to `false` was a prior bug that led to unintended live deliveries. The correct approach is explicit fail-closed validation at the request boundary using `isRecognisedDryRunValue` from `src/lib/dryRunRequest.js`, returning a `400 Bad Request` with code `INVALID_REQUEST`.
 
 ### Suggested Action
-Avoid proposing structural refactors for small feature sets. Focus on the immediate requirement, ensuring high quality (tests, logging), and only open tech-debt issues for abstractions once a concrete pattern is proven.
+Always implement strict validation for boolean flags that control safety-critical behavior (like dry-runs) and reject invalid inputs rather than assuming a default.
 
 ### Metadata
 - Source: user_feedback
-- Related Files: src/controllers/webhooks/handlers/whatsapp/
-- Tags: YAGNI, pragmatism, architecture
-- See Also: N/A
-- Pattern-Key: architecture.premature_abstraction
-- Recurrence-Count: 1
-- First-Seen: 2026-10-06
-- Last-Seen: 2026-10-06
+- Related Files: src/lib/dryRunRequest.js
+- Tags: validation, safety, api-contract
+- See Also: none
+- Pattern-Key: harden.input_validation
 
 ---
 
-## [LRN-20261009-001] correction
+## [LRN-20261010-002] best_practice
 
-**Logged**: 2026-10-09T20:51:00Z
-**Priority**: high
+**Logged**: 2026-10-10T21:52:00Z
+**Priority**: medium
 **Status**: pending
-**Area**: configuration
+**Area**: infra
 
 ### Summary
-Verify "environment-only" flags; do not trust annotations that claim a flag is a "process-startup gate" without testing.
+Define failure modes first, then layer resilience patterns (retries, timeouts, circuit-breakers).
 
 ### Details
-In Issue #721, several Firestore storage flags were documented as "environment-only" because they were believed to be startup gates. Verification (via grep/code review) proved they are re-evaluated on every call (`getFirestore()` / `isFirestoreEnabled()`), making them remotely toggleable.
-
-Key technical takeaways:
-- **Verification**: The claim that a flag is only read at startup is testable by checking if the gate function is called within the request lifecycle.
-- **Remote Config Priority**: To allow disabling a feature in production that is enabled in `render.yaml`, the logic must be `remote ?? env` (Remote Config overrides environment), not `env || remote`.
-- **Default Value Trap**: In the Firebase Admin SDK, a `defaultValue` in the template is reported as source `'remote'`. To avoid accidentally overriding existing production settings on first publish, use `useInAppDefault: true` for parameters that should not have a forced remote value.
+In Issue #1109, @gigachad-senior-dev provided senior-level guidance on operational thinking: prioritize defining how a system can fail before implementing recovery mechanisms. Additionally, emphasize the use of structured logs and correlation IDs over simple printf debugging for better observability.
 
 ### Suggested Action
-Perform a first-principles check on any "environment-only" annotations in the repository. Grep for gate functions to see if they are invoked at runtime.
+When designing new integrations or features, start the design doc/discussion with a "Failure Modes" section before detailing the "Happy Path" or "Resilience" strategies.
+
+### Metadata
+- Source: user_feedback
+- Related Files: none
+- Tags: sre, observability, resilience
+- See Also: none
+- Pattern-Key: simplify.operational-thinking
+
+---
+
+## [LRN-20261012-001] correction
+
+**Logged**: 2026-10-12T00:18:00Z
+**Priority**: high
+**Status**: pending
+**Area**: infra
+
+### Summary
+"Environment-only" gate classifications must be verified empirically — they are testable claims, not documentation axioms.
+
+### Details
+In Issue #721, @francovp discovered that four Firestore storage feature flags (classified as "environment-only" because "they are process-startup gates that decide where a collection lives") were actually re-evaluated on every call via `getFirestore()` / `isFirestoreEnabled()`. A gate re-read per call is not a startup gate, so they are remotely toggleable. The classification was documenting an assumption nobody had verified.
+
+Two consequences emerged when making them remote:
+1. A published `false` must beat a `true` in `render.yaml` — `env || remote` gets this wrong; it needs `remote ?? env`.
+2. `getRuntimeConfig()` cannot distinguish "Remote Config said false" from "environment says false" — it returns a value for every schema key. Using it made `ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE` (deprecated alias) unreachable.
+
+Also, a template `defaultValue` is not a default — the Admin SDK reports unmatched parameters with source `'remote'`, so shipping `false` would silently disable storage modes in production. `useInAppDefault: true` is the correct encoding for "no published value".
+
+### Suggested Action
+On any "this is environment-only" annotation in this repo: verify the claim with a grep of the gate functions. The claim is testable, and it was wrong here.
 
 ### Metadata
 - Source: user_feedback
 - Related Files: firebase-remote-config-template.json, src/services/storage/
-- Tags: RemoteConfig, Firestore, first-principles
-- See Also: Issue #721
-- Pattern-Key: config.false_assumption_startup_gate
-- Recurrence-Count: 1
-- First-Seen: 2026-10-09
-- Last-Seen: 2026-10-09
-
+- Tags: remote-config, feature-flags, verification
+- See Also: Issue #721, PR #1367
+- Pattern-Key: harden.config-verification
 ---
