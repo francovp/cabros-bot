@@ -1,9 +1,13 @@
 'use strict';
 
 const request = require('supertest');
+const httpMocks = require('node-mocks-http');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const NotificationManager = require('../../src/services/notification/NotificationManager');
+const { getNewsMonitor } = require('../../src/controllers/webhooks/handlers/newsMonitor/newsMonitor');
+const { setNotificationManager } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
 const { getCacheInstance } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 
@@ -38,6 +42,7 @@ describe('News Monitor - Alert Storage Integration', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 		getCacheInstance().clear();
 
 		const gemini = require('../../src/services/grounding/gemini');
@@ -113,6 +118,43 @@ describe('News Monitor - Alert Storage Integration', () => {
 				expect.objectContaining({ channel: 'telegram', success: true }),
 			]),
 		}));
+	});
+
+	it('waits for startup channel validation before analyzing webhook alerts', async () => {
+		const newsMonitor = getNewsMonitor();
+		const analyzeSpy = jest.spyOn(newsMonitor.analyzer, 'analyzeSymbols');
+		const originalValidateAll = NotificationManager.prototype.validateAll;
+		let completeValidation;
+		const validateSpy = jest.spyOn(NotificationManager.prototype, 'validateAll').mockImplementation(function() {
+			return new Promise((resolve, reject) => {
+				completeValidation = () => originalValidateAll.call(this).then(resolve, reject);
+			});
+		});
+
+		setNotificationManager(null);
+		resetNotificationManagerForTesting();
+		const initialization = initializeNotificationServices(mockBot);
+		const req = httpMocks.createRequest({
+			method: 'POST',
+			url: '/api/news-monitor',
+			body: { crypto: ['BTCUSDT'], stocks: [] },
+			query: {},
+		});
+		const res = httpMocks.createResponse();
+		const requestPromise = newsMonitor.handleRequest(req, res);
+		const analyzedBeforeValidation = analyzeSpy.mock.calls.length > 0;
+
+		try {
+			completeValidation();
+			await Promise.all([initialization, requestPromise]);
+
+			expect(analyzedBeforeValidation).toBe(false);
+			expect(res._getStatusCode()).toBe(200);
+			expect(mockTelegramSendMessage).toHaveBeenCalled();
+		} finally {
+			validateSpy.mockRestore();
+			analyzeSpy.mockRestore();
+		}
 	});
 
 	it('skips persistence when dryRun is true', async () => {
