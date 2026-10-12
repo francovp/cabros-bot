@@ -804,6 +804,35 @@ describe('status dependency contract drift', () => {
 			.map(([key]) => key);
 	}
 
+	it('documents multi-timeframe-only calls in confluence-family telemetry', () => {
+		const enrichment = contract.components.schemas.TradingViewMcpRuntimeStatus
+			.properties.enrichment;
+		const confluence = enrichment.properties.confluence;
+
+		expect(enrichment.description).toContain('multi_timeframe_analysis');
+		expect(confluence.properties.enabled.description).toContain('combined_analysis');
+		expect(confluence.properties.attemptedCount.description).toContain('multi_timeframe_analysis');
+		expect(confluence.examples).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				enabled: false,
+				attemptedCount: 1,
+				appliedCount: 1,
+				failedCount: 0,
+			}),
+		]));
+
+		const collection = JSON.parse(fs.readFileSync(postmanPath, 'utf8'));
+		const item = collectRequestLeaves(collection.item)
+			.find((request) => request.name === 'Get Status - confluence enrichment counters');
+		const mtfOnlyExample = item.response.find((response) => /multi-timeframe-only/i.test(response.name));
+		expect(mtfOnlyExample).toBeDefined();
+		const body = JSON.parse(mtfOnlyExample.body);
+		expect(body.featureFlags.tradingViewConfluenceEnrichment).toBe(false);
+		expect(body.featureFlags.tradingViewConfluenceMultiTimeframe).toBe(true);
+		expect(body.dependencies.tradingViewMcp.enrichment.confluence)
+			.toMatchObject({ enabled: false, attemptedCount: 1, appliedCount: 1, failedCount: 0 });
+	});
+
 	it('documents at least one named dependency schema to guard against', () => {
 		expect(documentedDependencyKeys().length).toBeGreaterThan(0);
 	});

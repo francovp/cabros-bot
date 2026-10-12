@@ -573,7 +573,7 @@ class TradingViewMcpService {
 		const volumeConfirmationEnabled = getRuntimeConfig().ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
 		const confluenceEnabled = process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT === 'true';
 		const multiTimeframeEnabled = process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME === 'true';
-		const optionalEnrichmentEnabled = volumeConfirmationEnabled || confluenceEnabled;
+		const optionalEnrichmentEnabled = volumeConfirmationEnabled || confluenceEnabled || multiTimeframeEnabled;
 		const baseBudgetMs = budgetDeadlineAt
 			? Math.max(1, Math.floor(budgetMs * (optionalEnrichmentEnabled ? 0.75 : 1)))
 			: null;
@@ -787,7 +787,6 @@ class TradingViewMcpService {
 		// The confluence call is wired to BOTH its own per-call timeout AND the overall budget signal
 		// (via AbortSignal.any) so an exhausted enrichment budget cancels it immediately.
 		let confluenceAnalysis = null;
-		let multiTimeframeAnalysis = null;
 		if (confluenceEnabled && !budgetController.signal.aborted) {
 			const remainingBudgetMs = budgetDeadlineAt ? budgetDeadlineAt - Date.now() : cfg.timeoutMs;
 			if (remainingBudgetMs <= 0) {
@@ -811,54 +810,62 @@ class TradingViewMcpService {
 				this._recordConfluenceOutcome({ attempted: true });
 
 				try {
-					try {
-						confluenceAnalysis = await this.callCombinedAnalysis({
-							symbol,
-							exchange,
-							timeframe,
-							signal: combinedSignal,
-						});
-						this._recordConfluenceOutcome({ applied: true });
-						console.debug(`[TradingViewMcpService] Confluence analysis fetched for ${symbol}`);
-					} finally {
-						clearTimeout(confluenceTimeoutId);
-					}
-
-					if (multiTimeframeEnabled) {
-						const remainingMtfBudgetMs = budgetDeadlineAt ? budgetDeadlineAt - Date.now() : cfg.timeoutMs;
-						if (budgetController.signal.aborted || remainingMtfBudgetMs <= 0) {
-							optionalEnrichmentPartial = true;
-							this._recordConfluenceOutcome({ budgetExhausted: true });
-						} else {
-							const mtfTimeoutMs = Math.min(8000, Math.max(1, remainingMtfBudgetMs));
-							const mtfController = new AbortController();
-							const mtfTimeoutId = setTimeout(() => {
-								mtfController.abort(new Error(`TradingView MCP multi-timeframe timeout after ${mtfTimeoutMs}ms`));
-							}, mtfTimeoutMs);
-							const mtfSignal = AbortSignal.any([mtfController.signal, budgetController.signal]);
-							this._recordConfluenceOutcome({ attempted: true });
-							try {
-								multiTimeframeAnalysis = await this.callMultiTimeframeAnalysis({
-									symbol,
-									exchange,
-									signal: mtfSignal,
-								});
-								this._recordConfluenceOutcome({ applied: true });
-								console.debug(`[TradingViewMcpService] Multi-timeframe confluence analysis fetched for ${symbol}`);
-							} finally {
-								clearTimeout(mtfTimeoutId);
-							}
-						}
-					}
+					confluenceAnalysis = await this.callCombinedAnalysis({
+						symbol,
+						exchange,
+						timeframe,
+						signal: combinedSignal,
+					});
+					this._recordConfluenceOutcome({ applied: true });
+					console.debug(`[TradingViewMcpService] Confluence analysis fetched for ${symbol}`);
 				} catch (error) {
 					optionalEnrichmentPartial = true;
 					this._recordConfluenceOutcome({ failed: true, error });
 					this.logger.warn(`[TradingViewMcpService] Confluence enrichment failed for ${symbol} (fail-open): ${error.message}`);
+				} finally {
+					clearTimeout(confluenceTimeoutId);
 				}
 			}
 		} else if (confluenceEnabled) {
 			optionalEnrichmentPartial = true;
 			this._recordConfluenceOutcome({ budgetExhausted: true });
+		}
+
+		// Multi-timeframe enrichment: optional call to multi_timeframe_analysis for higher-timeframe
+		// trend alignment. Gated independently by ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true
+		// so it runs whether or not confluence enrichment is enabled (fail-open: errors do not block
+		// delivery). Respects both the per-call timeout and the overall enrichment budget signal.
+		let multiTimeframeAnalysis = null;
+		if (multiTimeframeEnabled) {
+			const remainingBudgetMs = budgetDeadlineAt ? budgetDeadlineAt - Date.now() : cfg.timeoutMs;
+			if (budgetController.signal.aborted || remainingBudgetMs <= 0) {
+				optionalEnrichmentPartial = true;
+				this._recordConfluenceOutcome({ budgetExhausted: true });
+			} else {
+				const multiTimeframeTimeoutMs = Math.min(8000, Math.max(1, remainingBudgetMs));
+				const multiTimeframeController = new AbortController();
+				const multiTimeframeTimeoutId = setTimeout(() => {
+					multiTimeframeController.abort(new Error(`TradingView MCP multi-timeframe timeout after ${multiTimeframeTimeoutMs}ms`));
+				}, multiTimeframeTimeoutMs);
+				const combinedSignal = AbortSignal.any([multiTimeframeController.signal, budgetController.signal]);
+				this._recordConfluenceOutcome({ attempted: true });
+
+				try {
+					multiTimeframeAnalysis = await this.callMultiTimeframeAnalysis({
+						symbol,
+						exchange,
+						signal: combinedSignal,
+					});
+					this._recordConfluenceOutcome({ applied: true });
+					console.debug(`[TradingViewMcpService] Multi-timeframe confluence analysis fetched for ${symbol}`);
+				} catch (error) {
+					optionalEnrichmentPartial = true;
+					this._recordConfluenceOutcome({ failed: true, error });
+					this.logger.warn(`[TradingViewMcpService] Multi-timeframe enrichment failed for ${symbol} (fail-open): ${error.message}`);
+				} finally {
+					clearTimeout(multiTimeframeTimeoutId);
+				}
+			}
 		}
 
 		cleanBudget();
