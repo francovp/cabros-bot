@@ -44,6 +44,59 @@ describe('WhatsApp Command Bridge Integration', () => {
 			status: 'ready',
 			allowlistedChatsCount: 2,
 		});
+		for (const field of [
+			'duplicateSkippedCount',
+			'deleteFailureCount',
+			'deleteRetryCount',
+			'deleteAbortedCount',
+			'trackedReceiptCount',
+		]) {
+			expect(typeof res.body.dependencies.whatsappCommandBridge[field]).toBe('number');
+		}
+	});
+
+	test('acknowledges a redelivered receipt without re-running the command (issue #881)', async () => {
+		const receipt = {
+			receiptId: 778899,
+			body: {
+				typeWebhook: 'incomingMessageReceived',
+				senderData: { chatId: '120363025492938@g.us' },
+				messageData: { textMessageData: { textMessage: '!precio BTCUSDT' } },
+			},
+		};
+
+		let deleteCalls = 0;
+		const mockFetch = jest.fn().mockImplementation((url, options = {}) => {
+			if (url.includes('/receiveNotification/')) {
+				return Promise.resolve({ ok: true, status: 200, json: async () => receipt });
+			}
+			deleteCalls += 1;
+			if (deleteCalls === 1) {
+				return Promise.resolve({ ok: false, status: 500, text: async () => 'Internal Server Error' });
+			}
+			return Promise.resolve({ ok: true, status: 200, json: async () => ({ result: true }) });
+		});
+
+		const mockPriceResolver = jest.fn().mockResolvedValue({
+			symbol: 'BTCUSDT',
+			price: 68450.25,
+			message: 'Precio de BTCUSDT en Binance: 68,450.25 USDT',
+		});
+		const bridge = new WhatsAppCommandBridgeService({
+			fetchFn: mockFetch,
+			priceResolver: mockPriceResolver,
+			whatsAppService: { send: jest.fn().mockResolvedValue({ success: true }) },
+		});
+
+		const first = await bridge.pollOnce();
+		expect(first.deleted).toBe(true);
+		expect(deleteCalls).toBe(2);
+
+		const second = await bridge.pollOnce();
+		expect(second.duplicate).toBe(true);
+		expect(second.handlingResult.action).toBe('skipped_duplicate');
+		expect(mockPriceResolver).toHaveBeenCalledTimes(1);
+		expect(bridge.getStatus().duplicateSkippedCount).toBe(1);
 	});
 
 	test('processes !precio command end-to-end via GreenAPI polling flow', async () => {
