@@ -431,6 +431,17 @@ Replay a stored alert through the configured notification channels. The endpoint
 
 **Dry-run mode:** add `dryRun: true` to the body (or `?dryRun=true` to the URL) to fetch the stored alert and build the would-be payload, then return it without dispatching to any channel and without persisting a replay attempt. Use this to preview the text, enrichment data, and per-channel routing (resolving channel service defaults and `TELEGRAM_TOPIC_ROUTES` when the stored alert lacks explicit overrides) before triggering a real replay. The dry-run response returns the 12-character SHA-256 hash prefix `idempotencyKeyHashPrefix` without leaking the raw key into upstream caches (the live endpoint never returns it).
 
+**Re-enrichment (`reEnrich`):** add `reEnrich: true` to the body to re-run the full enrichment
+pipeline (Gemini grounding and TradingView MCP data) on the stored alert before dispatching.
+Defaults to `false`, in which case the stored alert text is dispatched with its original enrichment
+data. When re-enrichment succeeds the replay dispatches the refreshed payload and the persisted
+`alertReplays` audit document records `reEnriched: true` together with the sanitized
+`enrichmentData`. The live replay response keeps `reEnriched` as a boolean and, when re-enrichment
+was requested, includes both `originalEnrichment` and `reEnrichedData` for comparison. On fail-open,
+`reEnrichedData` is `null`, the original enrichment is dispatched, and `reEnriched` is omitted.
+If both `ENABLE_GEMINI_GROUNDING=false` and
+`ENABLE_TRADINGVIEW_MCP_ENRICHMENT=false`, the flag is safely ignored and the standard replay path runs.
+
 **Request body:**
 ```json
 {
@@ -468,6 +479,21 @@ Replay a stored alert through the configured notification channels. The endpoint
   "results": [
     { "channel": "telegram", "success": true, "messageId": "tg-1" }
   ]
+}
+```
+
+**Response (200 OK - re-enriched live replay):**
+```json
+{
+  "success": true,
+  "alertId": "alert-123",
+  "replayId": "1700000000000_<uuid>",
+  "results": [
+    { "channel": "telegram", "success": true, "messageId": "tg-1" }
+  ],
+  "reEnriched": true,
+  "originalEnrichment": { "sentiment": "BULLISH", "current_price": 64000 },
+  "reEnrichedData": { "sentiment": "BULLISH", "current_price": 65000 }
 }
 ```
 

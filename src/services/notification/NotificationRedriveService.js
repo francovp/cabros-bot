@@ -1606,7 +1606,7 @@ class NotificationRedriveService {
 					}, 0);
 					this.persistedPendingCount = Math.max(0, Math.floor(count + localDeltaAfterSnapshot));
 					this._pendingCountObservedAt = new Date(observedAtMs);
-					return Math.floor(count);
+					return this.persistedPendingCount;
 				};
 
 				const countPromise = Promise.resolve()

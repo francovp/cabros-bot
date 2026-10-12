@@ -1,3 +1,4 @@
+const { sendErrorFrom } = require('./errorEnvelope');
 // src/lib/rateLimiter.js
 
 const rateLimit = new Map();
@@ -132,7 +133,7 @@ function rateLimiter(req, res, next) {
 	if (data.count > maxRequests) {
 		const retryAfterSeconds = Math.max(1, Math.ceil((data.resetTime - now) / 1000));
 		res.setHeader('Retry-After', String(retryAfterSeconds));
-		return res.status(429).json({
+		return sendErrorFrom(res, 429, {
 			error: 'Too many requests, please try again later.',
 			retryAfterSeconds,
 		});

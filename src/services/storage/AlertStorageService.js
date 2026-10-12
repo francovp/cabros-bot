@@ -30,6 +30,7 @@ const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
 const {
@@ -113,6 +114,9 @@ const VALID_SETUP_TYPES = new Set([
 	'reversal',
 ]);
 const VALID_TRADINGVIEW_ENRICHMENT_STATUSES = new Set(['full', 'partial', 'failed', 'not_applicable']);
+// Closed enum: a suppression reason is only persisted for a marker this build
+// can produce, so an unexpected string can never widen the stored document shape.
+const VALID_SUPPRESSION_REASONS = new Set(['cross_timeframe_duplicate']);
 const FEATURE_TAGS = ['grounding', 'news-analysis', 'expanded-analysis', 'scanner', 'enrichment'];
 const MAX_PERSISTED_SYMBOLS_PER_BATCH = 200;
 
@@ -153,6 +157,14 @@ let db = null;
 let lastRetentionWarningValue = null;
 
 function isEnabled() {
+	// Issue #721: a published remote value wins over the deployment value, so a
+	// remote `false` can disable durable storage despite the `render.yaml` pin.
+	// `undefined` means "no published value" — Remote Config off, stale, or the key
+	// absent — which is not evidence, so the environment decides.
+	const remote = resolveRemoteOverride('ENABLE_FIRESTORE_ALERT_STORAGE');
+	if (typeof remote === 'boolean') {
+		return remote;
+	}
 	return process.env.ENABLE_FIRESTORE_ALERT_STORAGE === 'true';
 }
 
@@ -308,6 +320,9 @@ function formatAlertDocument(doc, options = {}) {
 	}
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
+		if (VALID_SUPPRESSION_REASONS.has(data.suppressionReason)) {
+			docObj.suppressionReason = data.suppressionReason;
+		}
 	}
 	applyBurstAggregationMarkers(docObj, data.burstAggregateId, data.burstSignalCount);
 	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
@@ -2040,6 +2055,7 @@ async function saveAlertInternal(params = {}) {
 		tradingViewEnrichmentApplied,
 		tradingViewEnrichmentStatus,
 		suppressedRepeat,
+		suppressionReason,
 		burstAggregateId,
 		burstSignalCount,
 		processingTimeMs,
@@ -2130,6 +2146,9 @@ async function saveAlertInternal(params = {}) {
 		if (suppressedRepeat === true) {
 			document.suppressedRepeat = true;
 			document.deliveryResults = [];
+			if (VALID_SUPPRESSION_REASONS.has(suppressionReason)) {
+				document.suppressionReason = suppressionReason;
+			}
 		}
 		applyBurstAggregationMarkers(document, burstAggregateId, burstSignalCount);
 		const normalizedProcessingTimeMs = normalizeProcessingTimeMs(processingTimeMs);
@@ -2373,9 +2392,11 @@ async function getAlertById(alertId) {
  * @param {string} params.idempotencyKey
  * @param {Array<string>} params.channels
  * @param {Array} params.deliveryResults
+ * @param {boolean} [params.reEnriched]
+ * @param {Object} [params.enrichmentData]
  * @returns {Promise<string|null>}
  */
-async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryResults }) {
+async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryResults, reEnriched, enrichmentData }) {
 	const firestore = getFirestore();
 	if (!firestore) {
 		if (isEnabled()) {
@@ -2396,6 +2417,8 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 		replayedAt: admin.firestore.FieldValue.serverTimestamp(),
 		expiresAt: buildRetentionExpiryTimestamp(),
 		source: 'alert-replay',
+		...(typeof reEnriched === 'boolean' ? { reEnriched } : {}),
+		...(enrichmentData && typeof enrichmentData === 'object' ? { enrichmentData: stripUndefinedFieldsDeep(sanitizeEnrichmentData(enrichmentData)) } : {}),
 	};
 
 	try {
@@ -2458,6 +2481,8 @@ function formatReplayDocument(doc) {
 		deliverySummary: compactDelivery,
 		replayedAt,
 		attemptId: typeof data.attemptId === 'string' ? data.attemptId : null,
+		...(typeof data.reEnriched === 'boolean' ? { reEnriched: data.reEnriched } : {}),
+		...(data.enrichmentData && typeof data.enrichmentData === 'object' ? { enrichmentData: data.enrichmentData } : {}),
 	};
 }
 
@@ -3232,6 +3257,9 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 
 module.exports = {
 	isEnabled,
+	// Exported so the firebase-admin bootstrap gate can be asserted directly
+	// (issue #721). It is re-evaluated per call, never cached.
+	canInitializeFirestore,
 	saveAlert,
 	listAlerts,
 	getAlertById,

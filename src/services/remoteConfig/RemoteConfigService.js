@@ -38,6 +38,12 @@ const PARAMETER_SCHEMA = Object.freeze({
 	URL_SHORTENER_CACHE_MAX_ENTRIES: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 100000 },
 	URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES: { type: 'number', defaultValue: 32, integer: true, min: 1, max: 1024 },
 	BINANCE_FETCH_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
+	BINANCE_BALANCE_CACHE_MS: { type: 'number', defaultValue: 3000, integer: true, min: 1000, max: 60000 },
+	TRADINGVIEW_MCP_DEFAULT_EXCHANGE: {
+		type: 'string',
+		defaultValue: 'BINANCE',
+		validate: (value) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value),
+	},
 	TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: {
 		type: 'string',
 		defaultValue: '1h',
@@ -54,6 +60,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	JOB_POLL_INTERVAL_MS: { type: 'number', defaultValue: 15000, integer: true, min: 1000, max: 300000 },
 	SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
 	SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 300000 },
+	SIGNAL_OUTCOME_WINDOWS: { type: 'string', defaultValue: '1h,4h,1D,1W' },
+	SIGNAL_OUTCOME_WINDOW_LABELS: { type: 'string', defaultValue: '' },
 	SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	SIGNAL_OUTCOME_MAX_RETRY_AGE_MS: { type: 'number', defaultValue: 604800000, integer: true, min: 60000, max: 2592000000 },
 	SIGNAL_OUTCOME_RETENTION_DAYS: { type: 'number', defaultValue: 365, integer: true, min: 1, max: 3650 },
@@ -91,6 +99,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_SIGNAL_CLASS_MARKER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	ENABLE_ALERT_CROSS_TF_SUPPRESSION: { type: 'boolean', defaultValue: false },
+	ALERT_CROSS_TF_WINDOW_MS: { type: 'number', defaultValue: 60000, integer: true, min: 0, max: 600000 },
 	ENABLE_ALERT_SYNTH_BURST_AGGREGATION: { type: 'boolean', defaultValue: false },
 	ALERT_BURST_WINDOW_MS: { type: 'number', defaultValue: 3000, integer: true, min: 1000, max: 15000 },
 	ALERT_BURST_MIN_SIGNALS: { type: 'number', defaultValue: 3, integer: true, min: 2, max: 20 },
@@ -121,6 +131,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_FIRESTORE_CHAT_PREFERENCES: { type: 'boolean', defaultValue: false },
 	CHAT_PREFERENCES_RETENTION_DAYS: { type: 'number', defaultValue: 90, integer: true, min: 1, max: 365 },
 	CHAT_PREFERENCES_CACHE_TTL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
+	GENERIC_MESSAGE_MAX_LENGTH: { type: 'number', defaultValue: 4000, integer: true, min: 1, max: 20000 },
 	// WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_NAMESPACE excluded:
 	// notification destinations — must remain deployment-controlled.
 	WHATSAPP_TEMPLATE_PARAM_ORDER: { type: 'string', defaultValue: 'symbol,price,action,setup,timeframe,source' },
@@ -129,10 +140,25 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ADMIN_SSE_MAX_CLIENT_CONNECTIONS: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 20 },
 	ADMIN_SSE_MAX_TOTAL_CONNECTIONS: { type: 'number', defaultValue: 100, integer: true, min: 10, max: 1000 },
 	ADMIN_SSE_HEARTBEAT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 5000, max: 120000 },
+	ADMIN_SSE_DRAIN_TIMEOUT_MS: { type: 'number', defaultValue: 15000, integer: true, min: 1000, max: 60000 },
 	ENABLE_TOKEN_COST_BUDGET: { type: 'boolean', defaultValue: false },
 	TOKEN_COST_DAILY_BUDGET_USD: { type: 'number', defaultValue: 5.0, min: 0.01, max: 10000 },
 	TOKEN_COST_WARN_THRESHOLD_PCT: { type: 'number', defaultValue: 80, integer: true, min: 1, max: 100 },
 	ENABLE_MAINTENANCE_MODE: { type: 'boolean', defaultValue: false },
+	// Issue #721 — Firestore storage gates. Each is resolved per call (the gate is
+	// checked before the cached `db` handle), so a remote value flips it at runtime
+	// rather than only at process start. Consumers must read `remote ?? env`, never
+	// `env || remote`: `getRuntimeConfig()` always yields a boolean for these keys, so
+	// the `||` form would let a `true` render.yaml pin mask a remote `false` and make
+	// the flag impossible to turn off in production.
+	//
+	// These remain environment-only for *startup* control in one respect: a preview
+	// deployment has ENABLE_FIREBASE_REMOTE_CONFIG=false, so it keeps the render.yaml
+	// value and can never mutate the production collection through a remote toggle.
+	ENABLE_FIRESTORE_ALERT_STORAGE: { type: 'boolean', defaultValue: false },
+	ENABLE_FIRESTORE_IDEMPOTENCY: { type: 'boolean', defaultValue: false },
+	ENABLE_FIRESTORE_JOB_STORAGE: { type: 'boolean', defaultValue: false },
+	ENABLE_FIRESTORE_SCANNER_PRESETS: { type: 'boolean', defaultValue: false },
 });
 
 let remoteOverrides = {};
@@ -307,6 +333,33 @@ function getRuntimeConfig() {
 		Object.assign(config, remoteOverrides);
 	}
 	return config;
+}
+
+/**
+ * Return the *published remote* value for `key`, or `undefined` when Remote
+ * Config has not supplied one.
+ *
+ * `getRuntimeConfig()` cannot answer this question: it always returns a value for
+ * every schema key, environment-derived when the gate is off, so a consumer
+ * reading it cannot tell "Remote Config said false" apart from "the environment
+ * says false". Gating behaviour on that ambiguity is how a deployment-level
+ * `false` silently overrode a published `true`.
+ *
+ * Consumers that need `remote ?? env` semantics must use this instead. A returned
+ * `undefined` is not evidence about the gate, so it must fall through to the
+ * environment rather than being coerced to `false`.
+ *
+ * @param {string} key
+ * @returns {boolean|number|string|undefined}
+ */
+function getRemoteOverride(key) {
+	if (!isEnabled() || !hasFreshRemoteConfig()) {
+		return undefined;
+	}
+	if (!Object.prototype.hasOwnProperty.call(PARAMETER_SCHEMA, key)) {
+		return undefined;
+	}
+	return remoteOverrides[key];
 }
 
 function getSource() {
@@ -592,6 +645,7 @@ function resetForTesting() {
 module.exports = {
 	PARAMETER_SCHEMA,
 	getRuntimeConfig,
+	getRemoteOverride,
 	getStatus,
 	loadNow,
 	start,

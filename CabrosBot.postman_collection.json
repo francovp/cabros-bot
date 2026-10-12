@@ -12,7 +12,17 @@
     },
     {
       "key": "apiKey",
-      "value": "your-api-key-here",
+      "value": "your-webhook-api-key-here",
+      "type": "string"
+    },
+    {
+      "key": "adminApiKey",
+      "value": "your-admin-api-key-here",
+      "type": "string"
+    },
+    {
+      "key": "binanceTradingApiKey",
+      "value": "your-binance-trading-api-key-here",
       "type": "string"
     },
     {
@@ -322,7 +332,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -360,7 +370,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -410,7 +420,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -460,7 +470,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -484,7 +494,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -553,7 +563,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -585,7 +595,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -599,7 +609,7 @@
             "status"
           ]
         },
-        "description": "Issue #1109 enables `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` in production. `enrichment.alertPath` aggregates the whole webhook enrichment path, so it cannot attribute an outcome to the confluence calls specifically; `enrichment.confluence` reports the optional confluence calls on their own. Those counters are per **call**, not per alert: one enrichment issues up to two calls, each recording exactly one outcome, so `appliedCount + failedCount <= attemptedCount`. Counters are process-local and reset on restart, so all zeros with `enabled: true` is the expected state right after a deploy until an alert exercises the path. Confluence is fail-open: a failure never blocks alert delivery."
+        "description": "Issue #1109 exposes optional TradingView analysis outcomes. `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` gates `combined_analysis`; `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` independently gates `multi_timeframe_analysis`. The `enrichment.confluence` counters count both call types, so MTF-only calls can increase counters while `enabled` is false. Counters are per **call**, not per alert, and each call records exactly one outcome, so `appliedCount + failedCount <= attemptedCount`. They are process-local and reset on restart. Both optional calls are fail-open and never block alert delivery."
       },
       "event": [
         {
@@ -623,7 +633,7 @@
               "    pm.expect(c[key]).to.be.at.least(0);",
               "  });",
               "  // Counters are per CALL, not per alert: one enrichment issues up to two",
-              "  // confluence calls (combined_analysis, then multi_timeframe_analysis), and",
+              "  // optional analysis calls (combined_analysis and multi_timeframe_analysis), and",
               "  // each issued call records exactly one outcome. Budget exhaustion is recorded",
               "  // without an attempt because no call was made.",
               "  pm.expect(c.appliedCount + c.failedCount).to.be.at.most(c.attemptedCount);",
@@ -651,6 +661,12 @@
           "status": "OK",
           "code": 200,
           "body": "{\"featureFlags\":{\"tradingViewConfluenceEnrichment\":true,\"tradingViewConfluenceMultiTimeframe\":true},\"dependencies\":{\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"status\":\"ready\",\"enrichment\":{\"lastStatus\":\"partial\",\"fullCount\":1,\"partialCount\":2,\"failedCount\":0,\"confluence\":{\"enabled\":true,\"attemptedCount\":4,\"appliedCount\":3,\"failedCount\":1,\"budgetExhaustedCount\":1,\"lastAppliedAt\":\"2026-10-04T09:41:12.482Z\",\"lastFailureCategory\":\"timeout\"},\"alertPath\":{\"windowMs\":86400000,\"totalCount\":3,\"appliedCount\":3,\"failedCount\":0,\"appliedRate24h\":100,\"failureRate24h\":0}}}}}"
+        },
+        {
+          "name": "200 OK - multi-timeframe-only enrichment while confluence is disabled",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"featureFlags\":{\"tradingViewConfluenceEnrichment\":false,\"tradingViewConfluenceMultiTimeframe\":true},\"dependencies\":{\"tradingViewMcp\":{\"enabled\":true,\"configured\":true,\"status\":\"ready\",\"enrichment\":{\"lastStatus\":\"full\",\"fullCount\":1,\"partialCount\":0,\"failedCount\":0,\"confluence\":{\"enabled\":false,\"attemptedCount\":1,\"appliedCount\":1,\"failedCount\":0,\"budgetExhaustedCount\":0,\"lastAppliedAt\":\"2026-10-12T09:00:00.000Z\",\"lastFailureCategory\":null},\"alertPath\":{\"windowMs\":86400000,\"totalCount\":1,\"appliedCount\":1,\"failedCount\":0,\"appliedRate24h\":100,\"failureRate24h\":0}}}}}"
         }
       ]
     },
@@ -661,7 +677,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -762,7 +778,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -794,7 +810,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -826,7 +842,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -876,7 +892,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -920,7 +936,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -976,7 +992,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -1043,7 +1059,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -1087,7 +1103,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -1141,7 +1157,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -1177,7 +1193,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -1213,7 +1229,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -1249,7 +1265,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -1287,7 +1303,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -1357,7 +1373,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -1393,7 +1409,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -1429,7 +1445,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -1465,7 +1481,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -1503,7 +1519,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -1536,7 +1552,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -1574,7 +1590,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           },
           {
@@ -1626,7 +1642,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           },
           {
@@ -1678,7 +1694,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           },
           {
@@ -1731,7 +1747,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           },
           {
@@ -1784,7 +1800,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -1829,7 +1845,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -1861,7 +1877,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -1919,7 +1935,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -1956,7 +1972,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -1993,7 +2009,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -2341,7 +2357,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -2404,7 +2420,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -2455,7 +2471,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -2500,7 +2516,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -2809,6 +2825,88 @@
                 }
               ],
               "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Expanded Analysis Alert (duplicate symbols)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbols\": [\"BINANCE:BTCUSDT\", \"binance:btcusdt\", \"BATS:AAPL\", \"NASDAQ:AAPL\", \"NASDAQ:NVDA\"],\n  \"timeframe\": \"1D\",\n  \"dryRun\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/expanded-analysis-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "expanded-analysis-alert"
+              ]
+            },
+            "description": "Issue #874. Duplicate symbol entries are collapsed before any TradingView MCP call is issued, so repeating a symbol no longer spends a second MCP budget slot nor shrinks the shared deadline left for the symbols that are not duplicates. Comparison is case-insensitive and uses the venue the identifier resolves to, so the probe-verified aliases BATS and NASDAQ_DLY fold into NASDAQ. This body sends 5 entries that resolve to 3 distinct symbols: exactly 3 analyses run, the report holds 3 sections, and `duplicatesRemoved` is 2. First occurrence wins, report ordering follows it, and the retained entry keeps the caller's own exchange (BATS:AAPL stays BATS in the report). `dryRun` keeps the request free of notification delivery."
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('expanded analysis deduplicates symbols before calling MCP', function () {",
+                  "  pm.expect(pm.response.code).to.eql(200);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.eql(true);",
+                  "  pm.expect(body.results).to.have.lengthOf(3);",
+                  "  pm.expect(body.results.map((r) => r.symbol)).to.eql([",
+                  "    'BINANCE:BTCUSDT',",
+                  "    'BATS:AAPL',",
+                  "    'NASDAQ:NVDA',",
+                  "  ]);",
+                  "  pm.expect(body.duplicatesRemoved).to.eql(2);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "OK - duplicates collapsed (200)",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"results\": [\n    { \"symbol\": \"BINANCE:BTCUSDT\", \"status\": \"analyzed\", \"price\": 68000, \"rsi\": 50 },\n    { \"symbol\": \"BATS:AAPL\", \"status\": \"analyzed\", \"price\": 233.1, \"rsi\": 48 },\n    { \"symbol\": \"NASDAQ:NVDA\", \"status\": \"analyzed\", \"price\": 219.51, \"rsi\": 57.8 }\n  ],\n  \"summary\": { \"total\": 3, \"analyzed\": 3, \"error\": 0, \"delivered\": 0 },\n  \"duplicatesRemoved\": 2,\n  \"timedOut\": false,\n  \"timeoutMs\": 60000,\n  \"requestId\": \"6f1c2b7e-0f5a-4c9a-9f2e-3a1b7c9d4e11\",\n  \"processingTimeMs\": 4210\n}"
+            },
+            {
+              "name": "Bad Request - too many distinct symbols after dedup (400)",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Too many symbols requested (max: 50)\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"6f1c2b7e-0f5a-4c9a-9f2e-3a1b7c9d4e11\"\n}"
             }
           ]
         },
@@ -3326,6 +3424,112 @@
           ]
         },
         {
+          "name": "POST Volume Confirmation (multi-timeframe)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "volume-confirm-mtf-demo-1",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"includeMultiTimeframe\": true,\n  \"side\": \"BUY\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/volume-confirmation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "volume-confirmation"
+              ]
+            },
+            "description": "Requests higher-timeframe confluence. The multiTimeframeAnalysis and htfAlignment fields are returned only when ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true. Failures in optional multi-timeframe analysis preserve the base volume-confirmation response."
+          },
+          "response": [
+            {
+              "name": "Success - higher-timeframe alignment",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"confirmed\": true,\n  \"decision\": \"confirm\",\n  \"volumeRatio\": 1.7,\n  \"analysis\": {\n    \"symbol\": \"BINANCE:BTCUSDT\",\n    \"volume_analysis\": {\n      \"volume_ratio\": 1.7,\n      \"volume_strength\": \"HIGH\"\n    }\n  },\n  \"volumeConfirmation\": {\n    \"confirmed\": true,\n    \"decision\": \"confirm\",\n    \"volumeRatio\": 1.7,\n    \"analysis\": {\n      \"symbol\": \"BINANCE:BTCUSDT\",\n      \"volume_analysis\": {\n        \"volume_ratio\": 1.7,\n        \"volume_strength\": \"HIGH\"\n      }\n    }\n  },\n  \"multiTimeframeAnalysis\": {\n    \"alignment\": {\n      \"status\": \"ALIGNED\",\n      \"confidence\": 0.9\n    },\n    \"recommendation\": {\n      \"action\": \"BUY\"\n    }\n  },\n  \"htfAlignment\": \"aligned\",\n  \"requestId\": \"req-vol-mtf-123\",\n  \"processingTimeMs\": 850\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Volume Confirmation (invalid multi-timeframe flag)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "volume-confirm-invalid-mtf-demo-1",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"includeMultiTimeframe\": \"yes\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/volume-confirmation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "volume-confirmation"
+              ]
+            },
+            "description": "Negative variant: includeMultiTimeframe must be a boolean (or the strings true/false); other values return 400 INVALID_REQUEST before calling TradingView MCP."
+          },
+          "response": [
+            {
+              "name": "400 Invalid multi-timeframe flag",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"includeMultiTimeframe must be a boolean\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-vol-mtf-400\",\n  \"processingTimeMs\": 4\n}"
+            }
+          ]
+        },
+        {
           "name": "POST Single Symbol Analysis",
           "request": {
             "method": "POST",
@@ -3483,7 +3687,7 @@
           "name": "POST Send Message",
           "request": {
             "method": "POST",
-            "description": "Idempotency accepts the recommended idempotency-key header, x-idempotency-key header, idempotencyKey or idempotency_key in the JSON body, and idempotencyKey or idempotency_key in the query string. Replays return the cached response with idempotencyReplayed=true; conflicting payload reuse returns 409. The response always carries a requestId field that mirrors the inbound x-request-id header (when supplied, sanitized to printable ASCII and <=128 chars) or a generated UUIDv4 so callers can correlate deliveries with logs and Sentry.",
+            "description": "The inbound text cap is GENERIC_MESSAGE_MAX_LENGTH (integer 1-20000, default 4000); valid fresh Firebase Remote Config overrides take precedence over the environment value. Invalid environment values use 4000; invalid Remote Config values are ignored, leaving the environment value or default effective. Truncation metadata is returned only when content is clipped. Idempotency accepts the recommended idempotency-key header, x-idempotency-key header, idempotencyKey or idempotency_key in the JSON body, and idempotencyKey or idempotency_key in the query string. Replays return the cached response with idempotencyReplayed=true; conflicting payload reuse returns 409. The response always carries a requestId field that mirrors the inbound x-request-id header (when supplied, sanitized to printable ASCII and <=128 chars) or a generated UUIDv4 so callers can correlate deliveries with logs and Sentry.",
             "header": [
               {
                 "key": "Content-Type",
@@ -3535,7 +3739,7 @@
               "name": "Success (selected channels)",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"requestId\": \"msg-correlation-001\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\",\n      \"attemptCount\": 1,\n      \"durationMs\": 320\n    },\n    {\n      \"channel\": \"discord\",\n      \"success\": true,\n      \"messageId\": \"discord-msg-789\"\n    }\n  ]\n}"
+              "body": "{\n  \"success\": true,\n  \"requestId\": \"msg-correlation-001\",\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\",\n      \"attemptCount\": 1,\n      \"durationMs\": 450\n    },\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true,\n      \"messageId\": \"wa-msg-456\",\n      \"attemptCount\": 1,\n      \"durationMs\": 320\n    },\n    {\n      \"channel\": \"discord\",\n      \"success\": true,\n      \"messageId\": \"discord-msg-789\",\n      \"attemptCount\": 1,\n      \"durationMs\": 280\n    }\n  ]\n}"
             },
             {
               "name": "Success (single channel)",
@@ -3664,7 +3868,7 @@
               "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
             },
             {
-              "name": "Success (truncated - message exceeded MAX_MESSAGE_LENGTH)",
+              "name": "Success (truncated - configured message limit exceeded)",
               "status": "OK",
               "code": 200,
               "body": "{\n  \"success\": true,\n  \"truncated\": true,\n  \"originalLength\": 6000,\n  \"deliveredLength\": 4003,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"tg-msg-123\"\n    }\n  ]\n}",
@@ -4450,6 +4654,181 @@
           ]
         },
         {
+          "name": "POST Send Alert (cross-timeframe duplicate suppressed)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BINANCE:BTCUSDT(240) pasó a señal de VENTA\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            },
+            "description": "Post this immediately after POST Send Alert (daily SELL) with ENABLE_ALERT_CROSS_TF_SUPPRESSION=true and ALERT_CROSS_TF_WINDOW_MS covering the gap. The daily signal already delivered to the same (channel, destination), so this 4h signal on the same exchange/symbol/side is collapsed: 200 with suppressedRepeat: true, suppressionReason: cross_timeframe_duplicate, empty results/deliveredChannels, and the alert is still persisted with the marker. The collapse is not order-dependent, so posting 4h first and D second collapses the same way. Opposite-side flips are never collapsed. The store is keyed per (channel, destination), so posting this request with a different telegramChatId/whatsappChatId/discordWebhookUrl delivers instead of collapsing, and a leg whose delivery failed is released so the next signal on another timeframe is not swallowed."
+          },
+          "response": [
+            {
+              "name": "Cross-timeframe duplicate suppressed",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"results\":[],\"enriched\":false,\"suppressedRepeat\":true,\"suppressionReason\":\"cross_timeframe_duplicate\",\"tokenUsage\":{\"formattedSummary\":\"0 tokens (estimated $0.00)\"},\"requestedChannels\":[\"telegram\"],\"deliveredChannels\":[],\"requestId\":\"req-123\"}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"BINANCE:BTCUSDT(240) pasó a señal de VENTA\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "alert"
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\"success\":false,\"error\":\"Invalid or missing API key\",\"code\":\"UNAUTHORIZED\",\"requestId\":\"req-123\",\"retryable\":false}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"BINANCE:BTCUSDT(240) pasó a señal de VENTA\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "alert"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Send Alert (daily signal - cross-timeframe baseline)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BINANCE:BTCUSDT(D) cambió a señal de VENTA\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            },
+            "description": "The first leg of the cross-timeframe pair from issue #1103 (BINANCE:BTCUSDT(D) VENTA followed ~400ms later by BINANCE:BTCUSDT(240) VENTA). Posted alone it always delivers: ENABLE_ALERT_CROSS_TF_SUPPRESSION only suppresses the later arrival, never the first. The first delivered signal wins by design for each (channel, destination) — preferring the higher timeframe would require holding every alert for a full window, adding latency to the delivery path."
+          },
+          "response": [
+            {
+              "name": "Delivered",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"results\":[{\"success\":true,\"channel\":\"telegram\",\"messageId\":\"msg-123\",\"attemptCount\":1,\"durationMs\":142}],\"enriched\":false,\"requestedChannels\":[\"telegram\"],\"deliveredChannels\":[\"telegram\"],\"requestId\":\"req-123\"}",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"BINANCE:BTCUSDT(D) cambió a señal de VENTA\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "alert"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        {
           "name": "POST Volume Confirmation (dryRun)",
           "request": {
             "method": "POST",
@@ -5175,7 +5554,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -5234,7 +5613,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -5277,7 +5656,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -5326,7 +5705,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -5403,7 +5782,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -5458,7 +5837,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -5495,7 +5874,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -5550,7 +5929,7 @@
           },
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -5588,7 +5967,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -5679,7 +6058,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -5729,7 +6108,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -6082,7 +6461,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -6164,7 +6543,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -6229,7 +6608,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -6528,7 +6907,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -6693,7 +7072,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -6857,7 +7236,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -6881,7 +7260,7 @@
                 "header": [
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -6917,7 +7296,7 @@
                 "header": [
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -6955,7 +7334,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -6997,7 +7376,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7035,7 +7414,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7081,7 +7460,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7131,7 +7510,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7169,7 +7548,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7207,7 +7586,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7245,7 +7624,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7288,7 +7667,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7331,7 +7710,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7374,7 +7753,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7417,7 +7796,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7483,7 +7862,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7518,7 +7897,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7561,7 +7940,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7608,7 +7987,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7685,7 +8064,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7750,7 +8129,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7797,7 +8176,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7844,7 +8223,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7891,7 +8270,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -7930,7 +8309,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -7977,7 +8356,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -8024,7 +8403,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -8066,7 +8445,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -8114,7 +8493,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -8154,7 +8533,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -8213,7 +8592,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -8252,7 +8631,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -8303,7 +8682,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -8342,7 +8721,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -8407,7 +8786,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -8463,7 +8842,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -8519,7 +8898,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -8575,7 +8954,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -8630,7 +9009,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -8693,7 +9072,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -8744,7 +9123,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -8800,7 +9179,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -8852,7 +9231,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -8895,7 +9274,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -8932,7 +9311,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -8975,6 +9354,13 @@
               "body": "{\n  \"error\": \"alertIds must be a non-empty array of up to 50 alert IDs.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             },
             {
+              "name": "400 Bad Request - Invalid dryRun value",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryRun\\\" body must be a boolean if provided\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-dryrun-invalid\",\n  \"retryable\": false\n}"
+            },
+            {
               "name": "Request Timeout (408)",
               "status": "Request Timeout",
               "code": 408,
@@ -8985,6 +9371,174 @@
                 }
               ],
               "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Batch Replay Alerts (invalid dryRun body)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "{{replayIdempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"alertIds\": [\"{{alertId}}\"],\n  \"channels\": [\"telegram\"],\n  \"dryRun\": \"invalid\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/batch/replay",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "batch",
+                "replay"
+              ]
+            },
+            "description": "Rejects batch replay requests where body dryRun is not a boolean."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid dryRun body",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryRun\\\" body must be a boolean if provided\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-dryrun-invalid\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST error envelope\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.success).to.eql(false);",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "    pm.expect(jsonData.error).to.include(\"dryRun\");",
+                  "    pm.expect(jsonData.retryable).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Batch Replay Alerts (invalid dryRun query)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "{{replayIdempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"alertIds\": [\"{{alertId}}\"],\n  \"channels\": [\"telegram\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/batch/replay?dryRun=invalid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "batch",
+                "replay"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "invalid"
+                }
+              ]
+            },
+            "description": "Rejects batch replay requests where query dryRun is not a boolean."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid dryRun query",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryRun\\\" query must be a boolean if provided\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-dryrun-invalid\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST error envelope\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.success).to.eql(false);",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "    pm.expect(jsonData.error).to.include(\"dryRun\");",
+                  "    pm.expect(jsonData.retryable).to.eql(false);",
+                  "});"
+                ]
+              }
             }
           ]
         },
@@ -9000,7 +9554,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -9073,7 +9627,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -9146,7 +9700,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -9209,7 +9763,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -9239,10 +9793,66 @@
                 "alerts",
                 "{{alertId}}",
                 "replay"
+              ],
+              "query": [
+                {
+                  "key": "reEnrich",
+                  "value": "true",
+                  "description": "Re-run the full enrichment pipeline before dispatch",
+                  "disabled": true
+                }
               ]
             }
           },
           "response": [
+            {
+              "name": "Success with re-enrichment",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{adminApiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "idempotency-key",
+                    "value": "{{replayIdempotencyKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"channels\": [\"telegram\"],\n  \"reEnrich\": true\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay?reEnrich=true",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts",
+                    "{{alertId}}",
+                    "replay"
+                  ],
+                  "query": [
+                    {
+                      "key": "reEnrich",
+                      "value": "true"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"alertId\": \"alert-123\",\n  \"replayId\": \"alert-123_06bdeddf2a292e8940d24fb2847d88234dc85d7cd751d4cc7dbc471692aadf38_1700000000000_5b1f0c79-9f0b-4d6e-9b1f-3b8c0e6a5f1a\",\n  \"results\": [\n    { \"channel\": \"telegram\", \"success\": true, \"messageId\": \"123\" }\n  ],\n  \"reEnriched\": true,\n  \"originalEnrichment\": { \"sentiment\": \"bullish\", \"current_price\": 64000 },\n  \"reEnrichedData\": { \"sentiment\": \"super-bullish\", \"current_price\": 65000 }\n}"
+            },
             {
               "name": "Success",
               "originalRequest": {
@@ -9255,7 +9865,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   },
                   {
@@ -9297,7 +9907,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -9334,7 +9944,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   },
                   {
@@ -9345,7 +9955,7 @@
                 ],
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"channels\": [\"telegram\", \"slack\"]\n}"
+                  "raw": "{\n  \"channels\": [\"telegram\", \"slack\"],\n  \"reEnrich\": true\n}"
                 },
                 "url": {
                   "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
@@ -9378,7 +9988,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -9418,7 +10028,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   },
                   {
@@ -9460,7 +10070,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   },
                   {
@@ -9489,6 +10099,193 @@
               "status": "Not Found",
               "code": 404,
               "body": "{\n  \"error\": \"Alert not found\",\n  \"code\": \"NOT_FOUND\"\n}"
+            },
+            {
+              "name": "400 Bad Request - Invalid dryRun value",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{adminApiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "idempotency-key",
+                    "value": "{{replayIdempotencyKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"channels\": [\"telegram\"],\n  \"dryRun\": \"invalid\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "alerts",
+                    "{{alertId}}",
+                    "replay"
+                  ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryRun\\\" body must be a boolean if provided\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-dryrun-invalid\",\n  \"retryable\": false\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Replay Alert (invalid dryRun body)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "{{replayIdempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channels\": [\"telegram\"],\n  \"dryRun\": \"invalid\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "{{alertId}}",
+                "replay"
+              ]
+            },
+            "description": "Rejects single alert replay requests where body dryRun is not a boolean."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid dryRun body",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryRun\\\" body must be a boolean if provided\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-dryrun-invalid\",\n  \"retryable\": false\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST error envelope\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.success).to.eql(false);",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "    pm.expect(jsonData.error).to.include(\"dryRun\");",
+                  "    pm.expect(jsonData.retryable).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Replay Alert (invalid dryRun query)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "{{replayIdempotencyKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"channels\": [\"telegram\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/{{alertId}}/replay?dryRun=invalid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "{{alertId}}",
+                "replay"
+              ],
+              "query": [
+                {
+                  "key": "dryRun",
+                  "value": "invalid"
+                }
+              ]
+            },
+            "description": "Rejects single alert replay requests where query dryRun is not a boolean."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid dryRun query",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryRun\\\" query must be a boolean if provided\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-dryrun-invalid\",\n  \"retryable\": false\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST error envelope\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.success).to.eql(false);",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "    pm.expect(jsonData.error).to.include(\"dryRun\");",
+                  "    pm.expect(jsonData.retryable).to.eql(false);",
+                  "});"
+                ]
+              }
             }
           ]
         },
@@ -9504,7 +10301,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -9552,7 +10349,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -9601,7 +10398,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -9643,7 +10440,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   },
                   {
@@ -9691,7 +10488,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   },
                   {
@@ -9733,7 +10530,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   },
                   {
@@ -9774,7 +10571,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -9817,7 +10614,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -9864,7 +10661,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -9907,7 +10704,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -9954,7 +10751,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -9997,7 +10794,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -10044,7 +10841,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -10091,7 +10888,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -10138,7 +10935,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -10181,7 +10978,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -10223,7 +11020,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -10265,7 +11062,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -10290,7 +11087,7 @@
                 "header": [
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -10332,7 +11129,7 @@
                 "header": [
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -10364,6 +11161,127 @@
               "body": "{\n  \"error\": \"Server has reached maximum SSE connection capacity. Please retry shortly.\",\n  \"code\": \"SSE_CONNECTION_LIMIT_EXCEEDED\"\n}"
             }
           ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (outcome breakdowns)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Adds bounded symbol and setup breakdowns to shadowModeMetrics when outcome data is available.",
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?breakdown=symbol,setup",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "breakdown",
+                  "value": "symbol,setup"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK - Shadow mode breakdowns",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"shadowModeMetrics\": {\n      \"totalSignalsReceived\": 10,\n      \"totalSignalsEligible\": 9,\n      \"totalSignalsEvaluated\": 8,\n      \"totalSignalsPending\": 1,\n      \"totalSignalsUnavailable\": 1,\n      \"coveragePercent\": 80,\n      \"isCoverageComplete\": false,\n      \"targetHitRatePercent\": 57.14,\n      \"stopHitRatePercent\": 14.29,\n      \"expectancyR\": 1.2,\n      \"populationNote\": \"Metrics represent 8 evaluated signals out of 10 total received signals (80% coverage).\",\n      \"exchangeBreakdown\": {\n        \"BINANCE\": {\n          \"received\": 10,\n          \"eligible\": 9,\n          \"evaluated\": 8,\n          \"pending\": 1,\n          \"unavailable\": 1\n        }\n      },\n      \"providerBreakdown\": {\n        \"binance\": {\n          \"received\": 10,\n          \"eligible\": 9,\n          \"evaluated\": 8,\n          \"pending\": 1,\n          \"unavailable\": 1\n        }\n      },\n      \"entryPriceSourceBreakdown\": {\n        \"binance\": 9\n      },\n      \"eligibilityBreakdown\": {\n        \"supported_provider\": 9\n      },\n      \"windows\": {\n        \"1h\": {\n          \"totalSignals\": 8,\n          \"hitRatePercent\": 50,\n          \"targetEligibleWindows\": 7,\n          \"stopEligibleWindows\": 7,\n          \"targetHitRatePercent\": 57.14,\n          \"stopHitRatePercent\": 14.29,\n          \"expectancyR\": 1.2,\n          \"averageReturnPercent\": 1.6,\n          \"averageMfePercent\": 2.15,\n          \"averageMaePercent\": -0.8,\n          \"maxAdverseExcursionPercent\": -3.5\n        }\n      },\n      \"drawdownProxy\": {\n        \"averageMaxAdverseExcursionPercent\": -0.8,\n        \"absoluteMaxAdverseExcursionPercent\": -3.5\n      },\n      \"falsePositiveCandidatesCount\": 0,\n      \"falsePositiveCandidates\": [],\n      \"latencyCostMetadata\": {\n        \"averageProcessingTimeMs\": 350,\n        \"tokenUsage\": {\n          \"inputTokens\": 1000,\n          \"outputTokens\": 250,\n          \"totalCost\": 0.00125\n        }\n      },\n      \"symbolBreakdown\": [\n        {\n          \"symbol\": \"BTCUSDT\",\n          \"exchange\": \"BINANCE\",\n          \"received\": 10,\n          \"eligible\": 9,\n          \"evaluated\": 8,\n          \"pending\": 1,\n          \"unavailable\": 1,\n          \"targetEligibleWindows\": 7,\n          \"stopEligibleWindows\": 7,\n          \"targetHitRate\": 0.5714,\n          \"stopHitRate\": 0.1429,\n          \"windows\": {\n            \"1h\": {\n              \"evaluatedWindows\": 8,\n              \"targetEligibleWindows\": 7,\n              \"stopEligibleWindows\": 7,\n              \"targetHitRate\": 0.5714,\n              \"stopHitRate\": 0.1429,\n              \"barrierEligibleWindows\": 7,\n              \"averageMfePercent\": 2.15,\n              \"averageMaePercent\": -0.8\n            }\n          }\n        }\n      ],\n      \"setupBreakdown\": [\n        {\n          \"setupType\": \"breakout\",\n          \"exchange\": \"BINANCE\",\n          \"received\": 10,\n          \"eligible\": 9,\n          \"evaluated\": 8,\n          \"pending\": 1,\n          \"unavailable\": 1,\n          \"targetEligibleWindows\": 7,\n          \"stopEligibleWindows\": 7,\n          \"targetHitRate\": 0.5714,\n          \"stopHitRate\": 0.1429,\n          \"windows\": {\n            \"1h\": {\n              \"evaluatedWindows\": 8,\n              \"targetEligibleWindows\": 7,\n              \"stopEligibleWindows\": 7,\n              \"targetHitRate\": 0.5714,\n              \"stopHitRate\": 0.1429,\n              \"barrierEligibleWindows\": 7,\n              \"averageMfePercent\": 2.15,\n              \"averageMaePercent\": -0.8\n            }\n          }\n        }\n      ],\n      \"truncated\": false\n    }\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (invalid outcome breakdown)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST when shadowModeMetrics breakdown contains an unsupported value.",
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?breakdown=symbol,invalid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "breakdown",
+                  "value": "symbol,invalid"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Breakdown",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid breakdown parameter. Allowed values: symbol, setup.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (repeated outcome breakdown)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST when breakdown is supplied in repeated query parameters.",
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?breakdown=symbol&breakdown=setup",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "breakdown",
+                  "value": "symbol"
+                },
+                {
+                  "key": "breakdown",
+                  "value": "setup"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Query",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid breakdown parameter. Allowed values: symbol, setup.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
         }
       ]
     },
@@ -10378,7 +11296,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -10428,13 +11346,13 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
             "description": "Lists signal outcomes filtered by symbol, exchange, status, window, and time range.",
             "url": {
-              "raw": "{{baseUrl}}/api/outcomes?symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=1h&limit=10&from=2026-08-23T00:00:00.000Z&to=2026-08-23T23:59:59.000Z",
+              "raw": "{{baseUrl}}/api/outcomes?symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=5m&limit=10&from=2026-08-23T00:00:00.000Z&to=2026-08-23T23:59:59.000Z",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -10457,7 +11375,7 @@
                 },
                 {
                   "key": "window",
-                  "value": "1h"
+                  "value": "5m"
                 },
                 {
                   "key": "limit",
@@ -10528,7 +11446,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -10566,7 +11484,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -10588,7 +11506,7 @@
               "name": "200 Success",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"available\": true,\n    \"totalSignalsReceived\": 50,\n    \"totalSignalsEligible\": 45,\n    \"totalSignalsEvaluated\": 40,\n    \"totalSignalsPending\": 5,\n    \"totalSignalsUnavailable\": 5,\n    \"coveragePercent\": 80,\n    \"isCoverageComplete\": false,\n    \"targetHitRatePercent\": 65.5,\n    \"stopHitRatePercent\": 25,\n    \"expectancyR\": 1.25,\n    \"populationNote\": \"Metrics represent 40 evaluated signals out of 50 total received signals (80% coverage).\",\n    \"exchangeBreakdown\": {\n      \"BINANCE\": {\n        \"received\": 40,\n        \"eligible\": 40,\n        \"evaluated\": 35,\n        \"pending\": 3,\n        \"unavailable\": 2\n      }\n    },\n    \"providerBreakdown\": {\n      \"binance\": {\n        \"received\": 40,\n        \"eligible\": 40,\n        \"evaluated\": 35,\n        \"pending\": 3,\n        \"unavailable\": 2\n      }\n    },\n    \"entryPriceSourceBreakdown\": {\n      \"tradingview-mcp\": 40\n    },\n    \"eligibilityBreakdown\": {\n      \"supported_provider\": 45\n    },\n    \"windows\": {\n      \"1h\": {\n        \"totalSignals\": 35,\n        \"hitRatePercent\": 60,\n        \"targetEligibleWindows\": 30,\n        \"stopEligibleWindows\": 30,\n        \"targetHitRatePercent\": 55,\n        \"stopHitRatePercent\": 20,\n        \"expectancyR\": 0.85,\n        \"averageReturnPercent\": 2.15,\n        \"averageMfePercent\": 3.45,\n        \"averageMaePercent\": -1.1,\n        \"maxAdverseExcursionPercent\": -4.5,\n        \"bySide\": {\n          \"BUY\": {\n            \"totalSignals\": 20,\n            \"hitRatePercent\": 65,\n            \"targetEligibleWindows\": 18,\n            \"stopEligibleWindows\": 18,\n            \"targetHitRatePercent\": 60,\n            \"stopHitRatePercent\": 22,\n            \"expectancyR\": 0.92,\n            \"averageReturnPercent\": 2.4,\n            \"averageMfePercent\": 3.6,\n            \"averageMaePercent\": -1.05,\n            \"maxAdverseExcursionPercent\": -4.2\n          },\n          \"SELL\": {\n            \"totalSignals\": 15,\n            \"hitRatePercent\": 53,\n            \"targetEligibleWindows\": 12,\n            \"stopEligibleWindows\": 12,\n            \"targetHitRatePercent\": 48,\n            \"stopHitRatePercent\": 18,\n            \"expectancyR\": 0.71,\n            \"averageReturnPercent\": 1.8,\n            \"averageMfePercent\": 3.2,\n            \"averageMaePercent\": -1.2,\n            \"maxAdverseExcursionPercent\": -4.5\n          }\n        },\n        \"bySetupType\": {\n          \"trend_continuation\": {\n            \"totalSignals\": 25,\n            \"hitRatePercent\": 68,\n            \"targetEligibleWindows\": 22,\n            \"stopEligibleWindows\": 22,\n            \"targetHitRatePercent\": 64,\n            \"stopHitRatePercent\": 18,\n            \"expectancyR\": 1.05,\n            \"averageReturnPercent\": 2.6,\n            \"averageMfePercent\": 3.8,\n            \"averageMaePercent\": -0.95,\n            \"maxAdverseExcursionPercent\": -3.8\n          },\n          \"reversal\": {\n            \"totalSignals\": 10,\n            \"hitRatePercent\": 40,\n            \"targetEligibleWindows\": 8,\n            \"stopEligibleWindows\": 8,\n            \"targetHitRatePercent\": 38,\n            \"stopHitRatePercent\": 25,\n            \"expectancyR\": 0.45,\n            \"averageReturnPercent\": 1.2,\n            \"averageMfePercent\": 2.9,\n            \"averageMaePercent\": -1.5,\n            \"maxAdverseExcursionPercent\": -4.5\n          }\n        }\n      }\n    },\n    \"drawdownProxy\": {\n      \"averageMaxAdverseExcursionPercent\": -1.85,\n      \"absoluteMaxAdverseExcursionPercent\": -7.2\n    },\n    \"falsePositiveCandidatesCount\": 0,\n    \"falsePositiveCandidates\": [],\n    \"latencyCostMetadata\": {\n      \"averageProcessingTimeMs\": 450,\n      \"tokenUsage\": {\n        \"inputTokens\": 1200,\n        \"outputTokens\": 400,\n        \"totalCost\": 0.0035\n      }\n    }\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"available\": true,\n    \"totalSignalsReceived\": 50,\n    \"totalSignalsEligible\": 45,\n    \"totalSignalsEvaluated\": 40,\n    \"totalSignalsPending\": 5,\n    \"totalSignalsUnavailable\": 5,\n    \"coveragePercent\": 80,\n    \"isCoverageComplete\": false,\n    \"targetHitRatePercent\": 65.5,\n    \"stopHitRatePercent\": 25,\n    \"expectancyR\": 1.25,\n    \"populationNote\": \"Metrics represent 40 evaluated signals out of 50 total received signals (80% coverage).\",\n    \"exchangeBreakdown\": {\n      \"BINANCE\": {\n        \"received\": 40,\n        \"eligible\": 40,\n        \"evaluated\": 35,\n        \"pending\": 3,\n        \"unavailable\": 2\n      }\n    },\n    \"providerBreakdown\": {\n      \"binance\": {\n        \"received\": 40,\n        \"eligible\": 40,\n        \"evaluated\": 35,\n        \"pending\": 3,\n        \"unavailable\": 2\n      }\n    },\n    \"entryPriceSourceBreakdown\": {\n      \"tradingview-mcp\": 40\n    },\n    \"eligibilityBreakdown\": {\n      \"supported_provider\": 45\n    },\n    \"windows\": {\n      \"1h\": {\n        \"totalSignals\": 35,\n        \"hitRatePercent\": 60,\n        \"targetEligibleWindows\": 30,\n        \"stopEligibleWindows\": 30,\n        \"targetHitRatePercent\": 55,\n        \"stopHitRatePercent\": 20,\n        \"expectancyR\": 0.85,\n        \"averageRiskRewardRatio\": 2.5,\n        \"avgRrr\": 2.5,\n        \"averageReturnPercent\": 2.15,\n        \"averageMfePercent\": 3.45,\n        \"averageMaePercent\": -1.1,\n        \"maxAdverseExcursionPercent\": -4.5,\n        \"bySide\": {\n          \"BUY\": {\n            \"totalSignals\": 20,\n            \"hitRatePercent\": 65,\n            \"targetEligibleWindows\": 18,\n            \"stopEligibleWindows\": 18,\n            \"targetHitRatePercent\": 60,\n            \"stopHitRatePercent\": 22,\n            \"expectancyR\": 0.92,\n            \"averageReturnPercent\": 2.4,\n            \"averageMfePercent\": 3.6,\n            \"averageMaePercent\": -1.05,\n            \"maxAdverseExcursionPercent\": -4.2\n          },\n          \"SELL\": {\n            \"totalSignals\": 15,\n            \"hitRatePercent\": 53,\n            \"targetEligibleWindows\": 12,\n            \"stopEligibleWindows\": 12,\n            \"targetHitRatePercent\": 48,\n            \"stopHitRatePercent\": 18,\n            \"expectancyR\": 0.71,\n            \"averageReturnPercent\": 1.8,\n            \"averageMfePercent\": 3.2,\n            \"averageMaePercent\": -1.2,\n            \"maxAdverseExcursionPercent\": -4.5\n          }\n        },\n        \"bySetupType\": {\n          \"trend_continuation\": {\n            \"totalSignals\": 25,\n            \"hitRatePercent\": 68,\n            \"targetEligibleWindows\": 22,\n            \"stopEligibleWindows\": 22,\n            \"targetHitRatePercent\": 64,\n            \"stopHitRatePercent\": 18,\n            \"expectancyR\": 1.05,\n            \"averageRiskRewardRatio\": 2.65,\n            \"avgRrr\": 2.65,\n            \"averageReturnPercent\": 2.6,\n            \"averageMfePercent\": 3.8,\n            \"averageMaePercent\": -0.95,\n            \"maxAdverseExcursionPercent\": -3.8\n          },\n          \"reversal\": {\n            \"totalSignals\": 10,\n            \"hitRatePercent\": 40,\n            \"targetEligibleWindows\": 8,\n            \"stopEligibleWindows\": 8,\n            \"targetHitRatePercent\": 38,\n            \"stopHitRatePercent\": 25,\n            \"expectancyR\": 0.45,\n            \"averageRiskRewardRatio\": 1.8,\n            \"avgRrr\": 1.8,\n            \"averageReturnPercent\": 1.2,\n            \"averageMfePercent\": 2.9,\n            \"averageMaePercent\": -1.5,\n            \"maxAdverseExcursionPercent\": -4.5\n          }\n        }\n      }\n    },\n    \"drawdownProxy\": {\n      \"averageMaxAdverseExcursionPercent\": -1.85,\n      \"absoluteMaxAdverseExcursionPercent\": -7.2\n    },\n    \"falsePositiveCandidatesCount\": 0,\n    \"falsePositiveCandidates\": [],\n    \"latencyCostMetadata\": {\n      \"averageProcessingTimeMs\": 450,\n      \"tokenUsage\": {\n        \"inputTokens\": 1200,\n        \"outputTokens\": 400,\n        \"totalCost\": 0.0035\n      }\n    }\n  }\n}"
             },
             {
               "name": "200 Empty / No Measurements",
@@ -10623,13 +11541,13 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
-            "description": "Summarizes signal outcomes metrics filtered by symbol, exchange, status, window, and time range.",
+            "description": "Summarizes signal outcomes filtered by symbol, exchange, setupType, status, window, and time range. setupType filtering is applied before the summary limit.",
             "url": {
-              "raw": "{{baseUrl}}/api/outcomes/summary?symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=1h&limit=10&from=2026-08-23T00:00:00.000Z&to=2026-08-23T23:59:59.000Z",
+              "raw": "{{baseUrl}}/api/outcomes/summary?symbol=BTCUSDT&exchange=BINANCE&setupType=breakout&status=evaluated&window=1h&limit=10&from=2026-08-23T00:00:00.000Z&to=2026-08-23T23:59:59.000Z",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -10646,6 +11564,10 @@
                 {
                   "key": "exchange",
                   "value": "BINANCE"
+                },
+                {
+                  "key": "setupType",
+                  "value": "breakout"
                 },
                 {
                   "key": "status",
@@ -10725,7 +11647,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -10781,7 +11703,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -10837,7 +11759,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -10893,7 +11815,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -10949,7 +11871,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -11005,7 +11927,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -11065,7 +11987,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -11104,7 +12026,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -11143,7 +12065,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -11182,7 +12104,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -11221,7 +12143,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -11264,7 +12186,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -11321,7 +12243,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -11419,7 +12341,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -11458,7 +12380,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -11489,6 +12411,209 @@
               "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (breakdowns)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Returns optional per-symbol and per-setup coverage, barrier-aware hit rates, and per-window MFE/MAE. Each requested grouping is capped at 100 buckets.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?breakdown=symbol,setup",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "breakdown",
+                  "value": "symbol,setup"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success (breakdowns)",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"totalSignalsReceived\": 10,\n    \"totalSignalsEligible\": 9,\n    \"totalSignalsEvaluated\": 8,\n    \"totalSignalsPending\": 1,\n    \"totalSignalsUnavailable\": 1,\n    \"coveragePercent\": 80,\n    \"isCoverageComplete\": false,\n    \"targetHitRatePercent\": 57.14,\n    \"stopHitRatePercent\": 14.29,\n    \"expectancyR\": 1.2,\n    \"populationNote\": \"Metrics represent 8 evaluated signals out of 10 total received signals (80% coverage).\",\n    \"exchangeBreakdown\": {\n      \"BINANCE\": {\n        \"received\": 10,\n        \"eligible\": 9,\n        \"evaluated\": 8,\n        \"pending\": 1,\n        \"unavailable\": 1\n      }\n    },\n    \"providerBreakdown\": {\n      \"binance\": {\n        \"received\": 10,\n        \"eligible\": 9,\n        \"evaluated\": 8,\n        \"pending\": 1,\n        \"unavailable\": 1\n      }\n    },\n    \"entryPriceSourceBreakdown\": {\n      \"binance\": 9\n    },\n    \"eligibilityBreakdown\": {\n      \"supported_provider\": 9\n    },\n    \"windows\": {\n      \"1h\": {\n        \"totalSignals\": 8,\n        \"hitRatePercent\": 50,\n        \"targetEligibleWindows\": 7,\n        \"stopEligibleWindows\": 7,\n        \"targetHitRatePercent\": 57.14,\n        \"stopHitRatePercent\": 14.29,\n        \"expectancyR\": 1.2,\n        \"averageReturnPercent\": 1.6,\n        \"averageMfePercent\": 2.15,\n        \"averageMaePercent\": -0.8,\n        \"maxAdverseExcursionPercent\": -3.5\n      }\n    },\n    \"drawdownProxy\": {\n      \"averageMaxAdverseExcursionPercent\": -0.8,\n      \"absoluteMaxAdverseExcursionPercent\": -3.5\n    },\n    \"falsePositiveCandidatesCount\": 0,\n    \"falsePositiveCandidates\": [],\n    \"latencyCostMetadata\": {\n      \"averageProcessingTimeMs\": 350,\n      \"tokenUsage\": {\n        \"inputTokens\": 1000,\n        \"outputTokens\": 250,\n        \"totalCost\": 0.00125\n      }\n    },\n    \"symbolBreakdown\": [\n      {\n        \"symbol\": \"BTCUSDT\",\n        \"exchange\": \"BINANCE\",\n        \"received\": 10,\n        \"eligible\": 9,\n        \"evaluated\": 8,\n        \"pending\": 1,\n        \"unavailable\": 1,\n        \"targetEligibleWindows\": 7,\n        \"stopEligibleWindows\": 7,\n        \"targetHitRate\": 0.5714,\n        \"stopHitRate\": 0.1429,\n        \"windows\": {\n          \"1h\": {\n            \"evaluatedWindows\": 8,\n            \"targetEligibleWindows\": 7,\n            \"stopEligibleWindows\": 7,\n            \"targetHitRate\": 0.5714,\n            \"stopHitRate\": 0.1429,\n            \"barrierEligibleWindows\": 7,\n            \"averageMfePercent\": 2.15,\n            \"averageMaePercent\": -0.8\n          }\n        }\n      }\n    ],\n    \"setupBreakdown\": [\n      {\n        \"setupType\": \"breakout\",\n        \"exchange\": \"BINANCE\",\n        \"received\": 10,\n        \"eligible\": 9,\n        \"evaluated\": 8,\n        \"pending\": 1,\n        \"unavailable\": 1,\n        \"targetEligibleWindows\": 7,\n        \"stopEligibleWindows\": 7,\n        \"targetHitRate\": 0.5714,\n        \"stopHitRate\": 0.1429,\n        \"windows\": {\n          \"1h\": {\n            \"evaluatedWindows\": 8,\n            \"targetEligibleWindows\": 7,\n            \"stopEligibleWindows\": 7,\n            \"targetHitRate\": 0.5714,\n            \"stopHitRate\": 0.1429,\n            \"barrierEligibleWindows\": 7,\n            \"averageMfePercent\": 2.15,\n            \"averageMaePercent\": -0.8\n          }\n        }\n      }\n    ],\n    \"truncated\": false,\n    \"available\": true\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (invalid breakdown)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST when breakdown contains an unsupported value.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?breakdown=symbol,unknown",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "breakdown",
+                  "value": "symbol,unknown"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Breakdown",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid breakdown parameter. Allowed values: symbol, setup.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (repeated breakdown)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST when breakdown is supplied in repeated query parameters.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?breakdown=symbol&breakdown=setup",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "breakdown",
+                  "value": "symbol"
+                },
+                {
+                  "key": "breakdown",
+                  "value": "setup"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Query",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid breakdown parameter. Allowed values: symbol, setup.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (repeated setupType)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST when setupType is supplied in repeated query parameters.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?setupType=breakout&setupType=mean-reversion",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "setupType",
+                  "value": "breakout"
+                },
+                {
+                  "key": "setupType",
+                  "value": "mean-reversion"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Query",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid setupType parameter. Use a single non-empty value.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Summarize Signal Outcomes (empty setupType)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST when setupType is explicitly empty.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?setupType=",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "setupType",
+                  "value": ""
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Query",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid setupType parameter. Use a single non-empty value.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
         }
       ]
     },
@@ -11503,7 +12628,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -11565,7 +12690,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -11633,7 +12758,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -11677,7 +12802,7 @@
                 "header": [
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -11716,7 +12841,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -11803,7 +12928,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -11840,7 +12965,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -11876,7 +13001,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -11914,7 +13039,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -11952,7 +13077,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -11989,7 +13114,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -12025,7 +13150,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   }
                 ],
@@ -12063,7 +13188,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -12108,7 +13233,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -12141,7 +13266,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -12174,7 +13299,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -12199,7 +13324,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -12256,7 +13381,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -12319,7 +13444,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               },
               {
@@ -12360,7 +13485,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   },
                   {
@@ -12407,7 +13532,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   },
                   {
@@ -12448,7 +13573,7 @@
                   },
                   {
                     "key": "x-api-key",
-                    "value": "{{apiKey}}",
+                    "value": "{{adminApiKey}}",
                     "type": "text"
                   },
                   {
@@ -12494,7 +13619,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -12549,7 +13674,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -12592,7 +13717,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -12635,7 +13760,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -12677,7 +13802,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               },
               {
@@ -12766,7 +13891,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -12808,7 +13933,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -12850,7 +13975,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -12893,7 +14018,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -12935,7 +14060,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -12977,7 +14102,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -13019,7 +14144,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -13056,7 +14181,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -13100,7 +14225,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -13144,7 +14269,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -13188,7 +14313,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -13228,7 +14353,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -13277,7 +14402,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -13326,7 +14451,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -13375,7 +14500,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -13418,7 +14543,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -13461,7 +14586,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -13499,7 +14624,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{binanceTradingApiKey}}",
                 "type": "text"
               }
             ],
@@ -13565,6 +14690,101 @@
               "status": "Unauthorized",
               "code": 401,
               "body": "{\n  \"error\": \"Unauthorized\",\n  \"code\": \"ADMIN_AUTH_REQUIRED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Account Balances",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Reads free and locked balances for assets derived from BINANCE_TRADING_ALLOWED_SYMBOLS. Sanitizes sensitive account data and caches responses for a few seconds.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/account/balances",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "account",
+                "balances"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"balances\": [\n    {\n      \"asset\": \"BTC\",\n      \"free\": \"0.10000000\",\n      \"locked\": \"0.00000000\"\n    },\n    {\n      \"asset\": \"USDT\",\n      \"free\": \"1000.00000000\",\n      \"locked\": \"0.00000000\"\n    }\n  ],\n  \"cached\": false\n}"
+            },
+            {
+              "name": "Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance trading is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized\",\n  \"code\": \"ADMIN_AUTH_REQUIRED\"\n}"
+            },
+            {
+              "name": "Binance Failure",
+              "status": "Bad Gateway",
+              "code": 502,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance balance query failed\",\n  \"code\": \"BINANCE_BALANCE_QUERY_FAILED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Account Balances - Filtered by Asset",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Reads account balance filtered to a specific allowed asset (e.g. BTC).",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/account/balances?asset=BTC",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "account",
+                "balances"
+              ],
+              "query": [
+                {
+                  "key": "asset",
+                  "value": "BTC",
+                  "description": "Filter by asset"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"balances\": [\n    {\n      \"asset\": \"BTC\",\n      \"free\": \"0.10000000\",\n      \"locked\": \"0.00000000\"\n    }\n  ],\n  \"cached\": false\n}"
             }
           ]
         }
@@ -13641,7 +14861,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -13702,7 +14922,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -13737,7 +14957,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -13772,7 +14992,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -13809,7 +15029,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -13865,7 +15085,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -13901,7 +15121,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -13937,7 +15157,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -13973,7 +15193,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -14011,7 +15231,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -14097,7 +15317,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -14133,7 +15353,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -14169,7 +15389,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -14205,7 +15425,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -14243,7 +15463,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -14374,7 +15594,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
@@ -14434,7 +15654,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -14470,7 +15690,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -14506,7 +15726,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -14542,7 +15762,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -14570,6 +15790,989 @@
           ],
           "body": "{\n  \"featureFlags\": {\n    \"symbolAnalysisStorage\": false\n  },\n  \"dependencies\": {\n    \"symbolAnalysisStorage\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"readiness\": \"unverified\",\n      \"failOpen\": true,\n      \"collection\": \"symbolAnalyses\",\n      \"retentionDays\": 7,\n      \"writesAttempted\": 0,\n      \"writesSucceeded\": 0,\n      \"writesFailed\": 0,\n      \"readsAttempted\": 0,\n      \"readsSucceeded\": 0,\n      \"readsFailed\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastWriteAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorReason\": null\n    }\n  }\n}",
           "response": []
+        }
+      ]
+    },
+    {
+      "name": "Error Envelope Contract",
+      "description": "Contract coverage for the standardized error envelope introduced in issue #1231. Every /api/* error response now carries success:false, a machine-readable code, a requestId, and a retryable flag derived from the HTTP status, so an automated monitor can distinguish a transient provider failure (retryable) from a permanently disabled feature (not retryable).",
+      "item": [
+        {
+          "name": "GET /api/outcomes - invalid limit (400, permanent)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes?limit=not-a-number",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "not-a-number"
+                }
+              ]
+            },
+            "description": "Non-numeric limit is a client error and must not be retried."
+          },
+          "event": [
+            {
+              "event": "test",
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 400', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('envelope: success is false', () => pm.expect(pm.response.json().success).to.eql(false));",
+                  "",
+                  "pm.test('envelope: code is INVALID_REQUEST', () => pm.expect(pm.response.json().code).to.eql('INVALID_REQUEST'));",
+                  "",
+                  "pm.test('envelope: requestId is present', () => pm.expect(pm.response.json().requestId).to.be.a('string').and.not.empty);",
+                  "",
+                  "pm.test('envelope: retryable is false for 400', () => pm.expect(pm.response.json().retryable).to.eql(false));",
+                  "",
+                  "pm.test('envelope: human error message is present', () => pm.expect(pm.response.json().error).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Standard error envelope",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{adminApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/outcomes?limit=not-a-number",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "outcomes"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "not-a-number"
+                    }
+                  ]
+                },
+                "description": "Non-numeric limit is a client error and must not be retried."
+              },
+              "status": "INVALID_REQUEST",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid request\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{adminApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/outcomes?limit=not-a-number",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "outcomes"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "not-a-number"
+                    }
+                  ]
+                },
+                "description": "Non-numeric limit is a client error and must not be retried."
+              },
+              "status": "REQUEST_TIMEOUT",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30001\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /api/outcomes/summary - invalid status filter (400, permanent)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/summary?status=bogus",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "bogus"
+                }
+              ]
+            },
+            "description": "Unknown status filter value is a client error."
+          },
+          "event": [
+            {
+              "event": "test",
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 400', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('envelope: success is false', () => pm.expect(pm.response.json().success).to.eql(false));",
+                  "",
+                  "pm.test('envelope: code is INVALID_REQUEST', () => pm.expect(pm.response.json().code).to.eql('INVALID_REQUEST'));",
+                  "",
+                  "pm.test('envelope: requestId is present', () => pm.expect(pm.response.json().requestId).to.be.a('string').and.not.empty);",
+                  "",
+                  "pm.test('envelope: retryable is false for 400', () => pm.expect(pm.response.json().retryable).to.eql(false));",
+                  "",
+                  "pm.test('envelope: human error message is present', () => pm.expect(pm.response.json().error).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Standard error envelope",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{adminApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/outcomes/summary?status=bogus",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "outcomes",
+                    "summary"
+                  ],
+                  "query": [
+                    {
+                      "key": "status",
+                      "value": "bogus"
+                    }
+                  ]
+                },
+                "description": "Unknown status filter value is a client error."
+              },
+              "status": "INVALID_REQUEST",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid request\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{adminApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/outcomes/summary?status=bogus",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "outcomes",
+                    "summary"
+                  ],
+                  "query": [
+                    {
+                      "key": "status",
+                      "value": "bogus"
+                    }
+                  ]
+                },
+                "description": "Unknown status filter value is a client error."
+              },
+              "status": "REQUEST_TIMEOUT",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30001\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /api/symbol-analyses - invalid limit (400, permanent)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/symbol-analyses?limit=9999",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "symbol-analyses"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "9999"
+                }
+              ]
+            },
+            "description": "Limit above the documented maximum is a client error."
+          },
+          "event": [
+            {
+              "event": "test",
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 400', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('envelope: success is false', () => pm.expect(pm.response.json().success).to.eql(false));",
+                  "",
+                  "pm.test('envelope: code is INVALID_REQUEST', () => pm.expect(pm.response.json().code).to.eql('INVALID_REQUEST'));",
+                  "",
+                  "pm.test('envelope: requestId is present', () => pm.expect(pm.response.json().requestId).to.be.a('string').and.not.empty);",
+                  "",
+                  "pm.test('envelope: retryable is false for 400', () => pm.expect(pm.response.json().retryable).to.eql(false));",
+                  "",
+                  "pm.test('envelope: human error message is present', () => pm.expect(pm.response.json().error).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Standard error envelope",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{adminApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/symbol-analyses?limit=9999",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "symbol-analyses"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "9999"
+                    }
+                  ]
+                },
+                "description": "Limit above the documented maximum is a client error."
+              },
+              "status": "INVALID_REQUEST",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid request\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{adminApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/symbol-analyses?limit=9999",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "symbol-analyses"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "9999"
+                    }
+                  ]
+                },
+                "description": "Limit above the documented maximum is a client error."
+              },
+              "status": "REQUEST_TIMEOUT",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30001\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /api/jobs - invalid limit (400, permanent)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/jobs?limit=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "jobs"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "Job list limit below the documented minimum is a client error."
+          },
+          "event": [
+            {
+              "event": "test",
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 400', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('envelope: success is false', () => pm.expect(pm.response.json().success).to.eql(false));",
+                  "",
+                  "pm.test('envelope: code is INVALID_REQUEST', () => pm.expect(pm.response.json().code).to.eql('INVALID_REQUEST'));",
+                  "",
+                  "pm.test('envelope: requestId is present', () => pm.expect(pm.response.json().requestId).to.be.a('string').and.not.empty);",
+                  "",
+                  "pm.test('envelope: retryable is false for 400', () => pm.expect(pm.response.json().retryable).to.eql(false));",
+                  "",
+                  "pm.test('envelope: human error message is present', () => pm.expect(pm.response.json().error).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Standard error envelope",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{adminApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/jobs?limit=0",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "jobs"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "0"
+                    }
+                  ]
+                },
+                "description": "Job list limit below the documented minimum is a client error."
+              },
+              "status": "INVALID_REQUEST",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid request\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{adminApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/jobs?limit=0",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "jobs"
+                  ],
+                  "query": [
+                    {
+                      "key": "limit",
+                      "value": "0"
+                    }
+                  ]
+                },
+                "description": "Job list limit below the documented minimum is a client error."
+              },
+              "status": "REQUEST_TIMEOUT",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30001\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /api/jobs/{jobId} - not found (404, permanent)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/jobs/does-not-exist",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "jobs",
+                "does-not-exist"
+              ]
+            },
+            "description": "Unknown job ids are permanent failures; retrying cannot help."
+          },
+          "event": [
+            {
+              "event": "test",
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 404', () => pm.response.to.have.status(404));",
+                  "",
+                  "pm.test('envelope: success is false', () => pm.expect(pm.response.json().success).to.eql(false));",
+                  "",
+                  "pm.test('envelope: code is NOT_FOUND', () => pm.expect(pm.response.json().code).to.eql('NOT_FOUND'));",
+                  "",
+                  "pm.test('envelope: requestId is present', () => pm.expect(pm.response.json().requestId).to.be.a('string').and.not.empty);",
+                  "",
+                  "pm.test('envelope: retryable is false for 404', () => pm.expect(pm.response.json().retryable).to.eql(false));",
+                  "",
+                  "pm.test('envelope: human error message is present', () => pm.expect(pm.response.json().error).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Standard error envelope",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{adminApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/jobs/does-not-exist",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "jobs",
+                    "does-not-exist"
+                  ]
+                },
+                "description": "Unknown job ids are permanent failures; retrying cannot help."
+              },
+              "status": "INVALID_REQUEST",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Job not found\",\n  \"code\": \"NOT_FOUND\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{adminApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/jobs/does-not-exist",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "jobs",
+                    "does-not-exist"
+                  ]
+                },
+                "description": "Unknown job ids are permanent failures; retrying cannot help."
+              },
+              "status": "REQUEST_TIMEOUT",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30001\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /api/preferences/{channel}/{chatId} - invalid channel (400, permanent)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/preferences/carrier-pigeon/123",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "preferences",
+                "carrier-pigeon",
+                "123"
+              ]
+            },
+            "description": "Unsupported notification channel is a client error."
+          },
+          "event": [
+            {
+              "event": "test",
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 400', () => pm.response.to.have.status(400));",
+                  "",
+                  "pm.test('envelope: success is false', () => pm.expect(pm.response.json().success).to.eql(false));",
+                  "",
+                  "pm.test('envelope: code is INVALID_REQUEST', () => pm.expect(pm.response.json().code).to.eql('INVALID_REQUEST'));",
+                  "",
+                  "pm.test('envelope: requestId is present', () => pm.expect(pm.response.json().requestId).to.be.a('string').and.not.empty);",
+                  "",
+                  "pm.test('envelope: retryable is false for 400', () => pm.expect(pm.response.json().retryable).to.eql(false));",
+                  "",
+                  "pm.test('envelope: human error message is present', () => pm.expect(pm.response.json().error).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Standard error envelope",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{adminApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/preferences/carrier-pigeon/123",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "preferences",
+                    "carrier-pigeon",
+                    "123"
+                  ]
+                },
+                "description": "Unsupported notification channel is a client error."
+              },
+              "status": "INVALID_REQUEST",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid request\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{adminApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/preferences/carrier-pigeon/123",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "preferences",
+                    "carrier-pigeon",
+                    "123"
+                  ]
+                },
+                "description": "Unsupported notification channel is a client error."
+              },
+              "status": "REQUEST_TIMEOUT",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30001\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET /api/scanner-presets/{id} - not found (404, permanent)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/scanner-presets/missing-preset",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "scanner-presets",
+                "missing-preset"
+              ]
+            },
+            "description": "Unknown preset ids are permanent failures."
+          },
+          "event": [
+            {
+              "event": "test",
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 404', () => pm.response.to.have.status(404));",
+                  "",
+                  "pm.test('envelope: success is false', () => pm.expect(pm.response.json().success).to.eql(false));",
+                  "",
+                  "pm.test('envelope: code is NOT_FOUND', () => pm.expect(pm.response.json().code).to.eql('NOT_FOUND'));",
+                  "",
+                  "pm.test('envelope: requestId is present', () => pm.expect(pm.response.json().requestId).to.be.a('string').and.not.empty);",
+                  "",
+                  "pm.test('envelope: retryable is false for 404', () => pm.expect(pm.response.json().retryable).to.eql(false));",
+                  "",
+                  "pm.test('envelope: human error message is present', () => pm.expect(pm.response.json().error).to.be.a('string').and.not.empty);"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "Standard error envelope",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{adminApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/scanner-presets/missing-preset",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "scanner-presets",
+                    "missing-preset"
+                  ]
+                },
+                "description": "Unknown preset ids are permanent failures."
+              },
+              "status": "INVALID_REQUEST",
+              "code": 404,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Preset not found\",\n  \"code\": \"NOT_FOUND\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{adminApiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/scanner-presets/missing-preset",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "scanner-presets",
+                    "missing-preset"
+                  ]
+                },
+                "description": "Unknown preset ids are permanent failures."
+              },
+              "status": "REQUEST_TIMEOUT",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30001\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "GET Status (dedicated key query rejected)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/status?api-key=not-a-valid-key",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ],
+          "query": [
+            {
+              "key": "api-key",
+              "value": "not-a-valid-key"
+            }
+          ]
+        },
+        "description": "Invalid auth variant: when ADMIN_API_KEY is configured, query credentials are ignored; provide ADMIN_API_KEY in x-api-key instead."
+      },
+      "response": [
+        {
+          "name": "Unauthorized - query credential ignored",
+          "status": "Unauthorized",
+          "code": 401,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"error\": \"Unauthorized\",\n  \"code\": \"ADMIN_AUTH_REQUIRED\"\n}"
+        }
+      ]
+    },
+    {
+      "name": "GET Binance Orders (dedicated key query rejected)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "description": "Invalid auth variant: when BINANCE_TRADING_API_KEY is configured, query credentials are ignored; provide BINANCE_TRADING_API_KEY in x-api-key instead.",
+        "url": {
+          "raw": "{{baseUrl}}/api/trading/binance/orders?api-key=not-a-valid-key",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "trading",
+            "binance",
+            "orders"
+          ],
+          "query": [
+            {
+              "key": "api-key",
+              "value": "not-a-valid-key"
+            }
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "Unauthorized - query credential ignored",
+          "status": "Unauthorized",
+          "code": 401,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"error\": \"Unauthorized: Missing API key\"\n}"
         }
       ]
     }

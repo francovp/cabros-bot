@@ -27,6 +27,17 @@ function collectRequestItems(items, result = []) {
 	return result;
 }
 
+function collectRequestsAndSavedExamples(items, result = []) {
+	for (const item of items) {
+		if (item.request) result.push(item.request);
+		for (const response of item.response || []) {
+			if (response.originalRequest) result.push(response.originalRequest);
+		}
+		if (Array.isArray(item.item)) collectRequestsAndSavedExamples(item.item, result);
+	}
+	return result;
+}
+
 describe('Postman collection contract', () => {
 	it('documents Firebase admin configuration and bearer-auth status access', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
@@ -109,6 +120,43 @@ describe('Postman collection contract', () => {
 		]));
 	});
 
+	it('documents cross-timeframe duplicate collapse with the delivered baseline leg', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const collapsed = findItem(collection.item, 'POST Send Alert (cross-timeframe duplicate suppressed)');
+		expect(collapsed).toBeDefined();
+		expect(collapsed.request.method).toBe('POST');
+		expect(collapsed.request.url.raw).toBe('{{baseUrl}}/api/webhook/alert');
+		expect(findHeader(collapsed, 'x-api-key').value).toBe('{{apiKey}}');
+		expect(collapsed.request.body.raw).toContain('BINANCE:BTCUSDT(240)');
+
+		const suppressed = collapsed.response.find((response) => response.code === 200);
+		const suppressedBody = JSON.parse(suppressed.body);
+		expect(suppressedBody.success).toBe(true);
+		expect(suppressedBody.suppressedRepeat).toBe(true);
+		expect(suppressedBody.suppressionReason).toBe('cross_timeframe_duplicate');
+		expect(suppressedBody.results).toEqual([]);
+		expect(suppressedBody.deliveredChannels).toEqual([]);
+		expect(suppressed.originalRequest.body.raw).toContain('BINANCE:BTCUSDT(240)');
+
+		const unauthorized = collapsed.response.find((response) => response.code === 401);
+		expect(JSON.parse(unauthorized.body)).toMatchObject({ success: false, retryable: false });
+
+		const baseline = findItem(collection.item, 'POST Send Alert (daily signal - cross-timeframe baseline)');
+		expect(baseline).toBeDefined();
+		expect(baseline.request.body.raw).toContain('BINANCE:BTCUSDT(D)');
+		const delivered = baseline.response.find((response) => response.code === 200);
+		const deliveredBody = JSON.parse(delivered.body);
+		expect(deliveredBody.suppressedRepeat).toBeUndefined();
+		expect(deliveredBody.deliveredChannels).toEqual(['telegram']);
+	});
+
+	it('leaves the same-timeframe repeat suppression example without a suppression reason', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const sameTimeframe = findItem(collection.item, 'POST Send Alert (repeat suppressed)');
+		const suppressed = sameTimeframe.response.find((response) => response.code === 200);
+		expect(JSON.parse(suppressed.body).suppressionReason).toBeUndefined();
+	});
+
 	it('documents valid and invalid per-symbol alert routing variants', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const valid = findItem(collection.item, 'POST Send Alert (per-symbol routing)');
@@ -145,6 +193,37 @@ describe('Postman collection contract', () => {
 		expect(oversized.request.body.raw).toContain('{{oversizedWebhookPadding}}');
 		expect(oversized.request.body.raw).not.toContain('{{$padString}}');
 
+	});
+
+	it('documents expanded-analysis symbol deduplication as an internally consistent variant (#874)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const variant = findItem(collection.item, 'POST Expanded Analysis Alert (duplicate symbols)');
+
+		expect(variant).toBeDefined();
+
+		const requested = JSON.parse(variant.request.body.raw).symbols;
+		expect(requested.length).toBeGreaterThan(2);
+
+		const [ok, tooMany] = variant.response;
+		expect(ok.code).toBe(200);
+		expect(tooMany.code).toBe(400);
+
+		const okBody = JSON.parse(ok.body);
+		expect(okBody.success).toBe(true);
+		expect(okBody.results.map((result) => result.symbol)).toEqual([
+			'BINANCE:BTCUSDT',
+			'BATS:AAPL',
+			'NASDAQ:NVDA',
+		]);
+		expect(okBody.results).toHaveLength(3);
+		expect(okBody.summary.total).toBe(okBody.results.length);
+
+		// The documented count must equal submitted minus analysed, so the example
+		// cannot drift away from the body it documents.
+		expect(okBody.duplicatesRemoved).toBe(requested.length - okBody.results.length);
+		expect(okBody.duplicatesRemoved).toBeGreaterThan(0);
+
+		expect(JSON.parse(tooMany.body).error).toContain('Too many symbols requested');
 	});
 
 	it('uses distinct demo keys for middleware-backed scanner requests', () => {
@@ -1244,6 +1323,30 @@ describe('Postman collection contract', () => {
 	});
 });
 
+describe('alert analytics summary examples (issue #731)', () => {
+	it('documents complete schema-conforming outcome breakdown responses', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const contract = JSON.parse(fs.readFileSync(
+			path.join(__dirname, '../../src/openapi/openapi.json'), 'utf8'));
+		const required = contract.components.schemas.OutcomesSummary.required;
+		const direct = findItem(collection.item, 'GET Summarize Signal Outcomes (breakdowns)');
+		const alertSummary = findItem(collection.item, 'GET Alert Analytics Summary (outcome breakdowns)');
+		expect(direct).toBeDefined();
+		expect(alertSummary).toBeDefined();
+		const directExample = direct.response.find((response) => response.name === '200 Success (breakdowns)');
+		const shadowExample = alertSummary.response.find((response) => response.name === '200 OK - Shadow mode breakdowns');
+		expect(directExample).toBeDefined();
+		expect(shadowExample).toBeDefined();
+
+		const directSummary = JSON.parse(directExample.body).summary;
+		const shadowMetrics = JSON.parse(shadowExample.body).summary.shadowModeMetrics;
+		expect(Object.keys(directSummary)).toEqual(expect.arrayContaining([...required, 'available']));
+		expect(directSummary.available).toBe(true);
+		expect(Object.keys(shadowMetrics)).toEqual(expect.arrayContaining(required));
+		expect(shadowMetrics).not.toHaveProperty('available');
+	});
+});
+
 describe('news-monitor stop/target example (GH-712)', () => {
 	it('POST News Monitor success example includes a populated stop/target alert', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
@@ -1301,14 +1404,33 @@ describe('news-monitor stop/target example (GH-712)', () => {
 			const body = JSON.parse(response.body);
 			const confluence = body.dependencies.tradingViewMcp.enrichment.confluence;
 
-			expect(confluence.enabled).toBe(true);
-			expect(body.featureFlags.tradingViewConfluenceEnrichment).toBe(true);
+			expect(confluence.enabled).toBe(body.featureFlags.tradingViewConfluenceEnrichment);
+			expect(typeof confluence.enabled).toBe('boolean');
 			expect(allowedFailureCategories).toContain(confluence.lastFailureCategory);
 			expect(confluence.appliedCount + confluence.failedCount)
 				.toBeLessThanOrEqual(confluence.attemptedCount);
 			expect(response.body).not.toContain('combined_analysis failed');
 			expect(response.body).not.toContain('projects/');
 		}
+	});
+
+	it('Get Status documents MTF-only telemetry with the confluence gate disabled', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - confluence enrichment counters');
+		const example = item.response.find((response) => /multi-timeframe-only/i.test(response.name));
+		expect(example).toBeDefined();
+
+		const body = JSON.parse(example.body);
+		const confluence = body.dependencies.tradingViewMcp.enrichment.confluence;
+		expect(body.featureFlags.tradingViewConfluenceEnrichment).toBe(false);
+		expect(body.featureFlags.tradingViewConfluenceMultiTimeframe).toBe(true);
+		expect(confluence).toMatchObject({
+			enabled: false,
+			attemptedCount: 1,
+			appliedCount: 1,
+			failedCount: 0,
+			budgetExhaustedCount: 0,
+		});
 	});
 
 	it('Get Status - confluence enrichment counters asserts the block is separate from alertPath', () => {
@@ -1373,6 +1495,50 @@ describe('news-monitor stop/target example (GH-712)', () => {
 		// Two calls per alert with multi-timeframe on, so the window cannot be 1:1 with alerts.
 		expect(confluence.attemptedCount).toBeGreaterThan(enrichment.alertPath.totalCount);
 		expect(confluence.appliedCount + confluence.failedCount).toBeLessThanOrEqual(confluence.attemptedCount);
+	});
+});
+
+describe('scoped API key Postman examples', () => {
+	it('documents header-only dedicated keys and uses the scoped variable on each surface', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const alert = findItem(collection.item, 'POST Send Alert');
+		const order = findItem(collection.item, 'POST Binance order (dry-run LIMIT)');
+		const balances = findItem(collection.item, 'GET Binance Account Balances');
+		const invalidAdminQuery = findItem(collection.item, 'GET Status (dedicated key query rejected)');
+		const invalidTradingQuery = findItem(collection.item, 'GET Binance Orders (dedicated key query rejected)');
+
+		expect(findHeader(status, 'x-api-key').value).toBe('{{adminApiKey}}');
+		expect(findHeader(alert, 'x-api-key').value).toBe('{{apiKey}}');
+		expect(findHeader(order, 'x-api-key').value).toBe('{{binanceTradingApiKey}}');
+		expect(findHeader(balances, 'x-api-key').value).toBe('{{binanceTradingApiKey}}');
+
+		for (const example of [invalidAdminQuery, invalidTradingQuery]) {
+			expect(example.request.url.raw).toContain('api-key=not-a-valid-key');
+			expect(example.request.header).not.toEqual(expect.arrayContaining([
+				expect.objectContaining({ key: 'x-api-key' }),
+			]));
+			expect(example.response[0].code).toBe(401);
+		}
+		expect(invalidAdminQuery.response[0].body).toContain('ADMIN_AUTH_REQUIRED');
+	});
+
+	it('uses the matching scoped variable for every API request and saved response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		for (const request of collectRequestsAndSavedExamples(collection.item)) {
+			const rawUrl = request.url?.raw || '';
+			if (!rawUrl.includes('/api/')) continue;
+			const header = (request.header || []).find((entry) => entry.key.toLowerCase() === 'x-api-key');
+			if (!header) continue;
+
+			const pathname = new URL(rawUrl.replace('{{baseUrl}}', 'https://placeholder.invalid')).pathname;
+			const expected = pathname.startsWith('/api/webhook/') || pathname === '/api/news-monitor'
+				? '{{apiKey}}'
+				: pathname.startsWith('/api/trading/binance/')
+					? '{{binanceTradingApiKey}}'
+					: '{{adminApiKey}}';
+			expect(header.value).toBe(expected);
+		}
 	});
 });
 

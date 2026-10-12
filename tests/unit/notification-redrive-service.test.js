@@ -2698,7 +2698,62 @@ describe('NotificationRedriveService', () => {
 					],
 				});
 
-				await countPromise;
+				const countResult = await countPromise;
+				expect(countResult).toBe(4);
+				expect(service.persistedPendingCount).toBe(4);
+			} finally {
+				nowSpy.mockRestore();
+			}
+		});
+
+		it('persists reconciled pending count in workerHeartbeat payload after local mutation following snapshot', async () => {
+			let resolveQuery;
+			const queryPromise = new Promise((resolve) => {
+				resolveQuery = resolve;
+			});
+			let committedPayload = null;
+			const mockDocRef = {
+				set: jest.fn(async (payload) => {
+					committedPayload = payload;
+				}),
+				get: jest.fn(async () => ({
+					exists: false,
+					data: () => ({}),
+				})),
+			};
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					where: jest.fn().mockReturnThis(),
+					limit: jest.fn(() => ({
+						get: jest.fn(() => queryPromise),
+					})),
+					doc: jest.fn(() => mockDocRef),
+				})),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+			service.persistedPendingCount = 2;
+			const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1000);
+
+			try {
+				const persistPromise = service.persistWorkerTelemetry({ timeoutMs: 100 });
+				await new Promise((resolve) => setImmediate(resolve));
+				service._adjustPendingCount(null, 'pending');
+				nowSpy.mockReturnValue(2000);
+				service._adjustPendingCount(null, 'pending');
+				resolveQuery({
+					readTime: new Date(1500),
+					empty: false,
+					docs: [
+						{ data: () => ({ expiresAt: new Date(60000) }) },
+						{ data: () => ({ expiresAt: new Date(60000) }) },
+						{ data: () => ({ expiresAt: new Date(60000) }) },
+					],
+				});
+
+				const success = await persistPromise;
+				expect(success).toBe(true);
+				expect(committedPayload).not.toBeNull();
+				expect(committedPayload.pendingCount).toBe(4);
 				expect(service.persistedPendingCount).toBe(4);
 			} finally {
 				nowSpy.mockRestore();

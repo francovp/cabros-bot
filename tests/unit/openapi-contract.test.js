@@ -127,7 +127,7 @@ describe('OpenAPI contract', () => {
 			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/outcomes/calibration',
 			'GET /api/symbol-analyses', 'GET /api/symbol-analyses/summary',
 			'GET /api/trading/binance/orders', 'GET /api/trading/binance/orders/audit', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
-			'POST /api/trading/binance/orders/preview',
+			'POST /api/trading/binance/orders/preview', 'GET /api/trading/binance/account/balances',
 			'POST /api/news-monitor/pause', 'POST /api/news-monitor/resume', 'GET /api/news-monitor/status',
 			'GET /api/news-monitor/summary', 'GET /api/news-monitor/analyses',
 			'POST /api/admin/test-alert', 'GET /api/admin/events',
@@ -138,6 +138,14 @@ describe('OpenAPI contract', () => {
 		const unauthenticatedOperations = new Set([
 			'GET /api/public/status',
 		]);
+		const binanceTradingOperations = new Set([
+			'GET /api/trading/binance/orders',
+			'GET /api/trading/binance/orders/audit',
+			'POST /api/trading/binance/orders/preview',
+			'GET /api/trading/binance/account/balances',
+			'POST /api/trading/binance/orders',
+			'DELETE /api/trading/binance/orders',
+		]);
 
 		for (const operation of operations) {
 			const operationKey = `${operation.method || 'UNKNOWN'} ${operation.path || ''}`;
@@ -146,9 +154,30 @@ describe('OpenAPI contract', () => {
 				continue;
 			}
 			const expected = [{ ApiKeyHeader: [] }, { ApiKeyQuery: [] }];
+			if (binanceTradingOperations.has(operationKey)) {
+				expected.unshift({ BinanceTradingApiKeyHeader: [] }, { AdminApiKeyHeader: [] });
+			} else if (firebaseAdminOperations.has(operationKey)) {
+				expected.unshift({ AdminApiKeyHeader: [] });
+			}
 			if (firebaseAdminOperations.has(operationKey)) expected.push({ FirebaseBearerAuth: [] });
 			expect(operation.security).toEqual(expected);
 		}
+	});
+
+	it('documents dedicated admin and Binance API keys as header-only credentials', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+		expect(contract.components.securitySchemes.AdminApiKeyHeader).toEqual(expect.objectContaining({
+			type: 'apiKey',
+			in: 'header',
+			name: 'x-api-key',
+		}));
+		expect(contract.components.securitySchemes.BinanceTradingApiKeyHeader).toEqual(expect.objectContaining({
+			type: 'apiKey',
+			in: 'header',
+			name: 'x-api-key',
+		}));
 	});
 
 	it('marks Firebase-backed admin operations with viewer or operator roles', () => {
@@ -164,6 +193,7 @@ describe('OpenAPI contract', () => {
 			'GET /api/trading/binance/orders': 'admin.viewer',
 			'GET /api/trading/binance/orders/audit': 'admin.viewer',
 			'POST /api/trading/binance/orders/preview': 'admin.viewer',
+			'GET /api/trading/binance/account/balances': 'admin.viewer',
 			'POST /api/trading/binance/orders': 'admin.operator',
 			'DELETE /api/trading/binance/orders': 'admin.operator',
 			'GET /api/alerts': 'admin.viewer',
@@ -226,6 +256,21 @@ describe('OpenAPI contract', () => {
 				enum: ['No measurements found'],
 			},
 			{ $ref: '#/components/schemas/OutcomesSummary' },
+		]));
+	});
+
+	it('keeps the availability flag required only on the direct outcomes summary response', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const outcomesSummary = contract.components.schemas.OutcomesSummary;
+		const directSummary = contract.components.responses.OutcomesSummaryResult
+			.content['application/json'].schema.properties.summary;
+
+		expect(outcomesSummary.properties).toHaveProperty('available');
+		expect(outcomesSummary.required).not.toContain('available');
+		expect(directSummary.allOf).toEqual(expect.arrayContaining([
+			{ $ref: '#/components/schemas/OutcomesSummary' },
+			{ type: 'object', required: ['available'] },
 		]));
 	});
 
@@ -758,6 +803,35 @@ describe('status dependency contract drift', () => {
 			.filter(([, schema]) => schema && schema.$ref)
 			.map(([key]) => key);
 	}
+
+	it('documents multi-timeframe-only calls in confluence-family telemetry', () => {
+		const enrichment = contract.components.schemas.TradingViewMcpRuntimeStatus
+			.properties.enrichment;
+		const confluence = enrichment.properties.confluence;
+
+		expect(enrichment.description).toContain('multi_timeframe_analysis');
+		expect(confluence.properties.enabled.description).toContain('combined_analysis');
+		expect(confluence.properties.attemptedCount.description).toContain('multi_timeframe_analysis');
+		expect(confluence.examples).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				enabled: false,
+				attemptedCount: 1,
+				appliedCount: 1,
+				failedCount: 0,
+			}),
+		]));
+
+		const collection = JSON.parse(fs.readFileSync(postmanPath, 'utf8'));
+		const item = collectRequestLeaves(collection.item)
+			.find((request) => request.name === 'Get Status - confluence enrichment counters');
+		const mtfOnlyExample = item.response.find((response) => /multi-timeframe-only/i.test(response.name));
+		expect(mtfOnlyExample).toBeDefined();
+		const body = JSON.parse(mtfOnlyExample.body);
+		expect(body.featureFlags.tradingViewConfluenceEnrichment).toBe(false);
+		expect(body.featureFlags.tradingViewConfluenceMultiTimeframe).toBe(true);
+		expect(body.dependencies.tradingViewMcp.enrichment.confluence)
+			.toMatchObject({ enabled: false, attemptedCount: 1, appliedCount: 1, failedCount: 0 });
+	});
 
 	it('documents at least one named dependency schema to guard against', () => {
 		expect(documentedDependencyKeys().length).toBeGreaterThan(0);

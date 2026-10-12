@@ -1,4 +1,5 @@
 const packageJson = require('../../package.json');
+const { sendErrorFrom } = require('../lib/errorEnvelope');
 const sentryService = require('../services/monitoring/SentryService');
 const {
 	scannerPresetService,
@@ -9,6 +10,7 @@ const { alertSchedulerService } = require('../services/scheduler');
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const alertFeedbackStorageService = require('../services/storage/AlertFeedbackStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
+const { resolveRemoteOverride } = require('../services/remoteConfig/resolveRemoteOverride');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
 const { jobQueue } = require('../services/jobs/JobQueue');
 const equityMarketDataService = require('../services/storage/EquityMarketDataService');
@@ -30,6 +32,7 @@ const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsApp
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const { crossTimeframeCooldown } = require('../services/alerts/crossTimeframeCooldown');
 const { burstAggregator } = require('../services/alerts/burstAggregator');
 const { userPriceAlertService } = require('../services/alerts/UserPriceAlertService');
 const { alertModeration } = require('../services/alerts/alertModeration');
@@ -62,6 +65,17 @@ const DEFAULT_CF_AIG_MODEL = 'google-ai-studio/gemini-2.5-flash';
 
 function isEnabled(value) {
 	return value === 'true';
+}
+
+/**
+ * Resolve a Firestore storage gate the way the storage services do (issue #721):
+ * a published Remote Config value wins, and its absence falls back to the
+ * environment. `/api/status` reporting `process.env` would describe a gate the
+ * services are not actually evaluating.
+ */
+function resolveStorageGate(key) {
+	const remote = resolveRemoteOverride(key);
+	return typeof remote === 'boolean' ? remote : isEnabled(process.env[key]);
 }
 
 function hasValue(value) {
@@ -272,6 +286,10 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
 	const runtimeConfig = remoteConfigService.getRuntimeConfig();
+	const notificationManager = notificationRedriveService.getNotificationManager();
+	const channelStatuses = notificationManager && typeof notificationManager.getChannelStatuses === 'function'
+		? notificationManager.getChannelStatuses()
+		: {};
 	const telegramFlagEnabled = isEnabled(process.env.ENABLE_TELEGRAM_BOT);
 	const telegramEnabled = telegramFlagEnabled && !previewEnvironment;
 	const whatsappEnabled = isEnabled(process.env.ENABLE_WHATSAPP_ALERTS);
@@ -292,9 +310,13 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		tradingViewMcpEnrichmentEnabled
 		|| marketScannerEnabled
 		|| observedTradingViewMcpStatus.lastCheckedAt !== null;
-	const firestoreEnabled = isEnabled(process.env.ENABLE_FIRESTORE_ALERT_STORAGE);
-	const firestoreScannerPresetsEnabled = isEnabled(process.env.ENABLE_FIRESTORE_SCANNER_PRESETS);
-	const firestoreJobStorageEnabled = isEnabled(process.env.ENABLE_FIRESTORE_JOB_STORAGE)
+	// Issue #721: report the gate that actually runs, not the raw environment value.
+	// These gates are runtime-resolved, so a published remote value is what the
+	// services evaluate — reporting `process.env` here would tell an operator their
+	// toggle failed (or that it worked) when the opposite is true.
+	const firestoreEnabled = resolveStorageGate('ENABLE_FIRESTORE_ALERT_STORAGE');
+	const firestoreScannerPresetsEnabled = resolveStorageGate('ENABLE_FIRESTORE_SCANNER_PRESETS');
+	const firestoreJobStorageEnabled = resolveStorageGate('ENABLE_FIRESTORE_JOB_STORAGE')
 		|| firestoreEnabled;
 	const sentryEnabled = isEnabled(process.env.ENABLE_SENTRY);
 	const langfusePromptsEnabled = isEnabled(process.env.ENABLE_LANGFUSE_PROMPTS);
@@ -455,10 +477,30 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		signalOutcomeWorkerDependency.status = 'disabled';
 	}
 
-	const webhookAuth = dependencyStatus({
-		enabled: true,
-		configured: hasValue(process.env.WEBHOOK_API_KEY),
-	});
+	const webhookAuth = {
+		...dependencyStatus({
+			enabled: true,
+			configured: hasValue(process.env.WEBHOOK_API_KEY),
+		}),
+		scope: 'webhook',
+	};
+
+	const adminApiKey = {
+		...dependencyStatus({
+			enabled: hasValue(process.env.ADMIN_API_KEY),
+			configured: hasValue(process.env.ADMIN_API_KEY),
+		}),
+		scope: 'admin',
+		legacyFallback: hasValue(process.env.WEBHOOK_API_KEY) && !hasValue(process.env.ADMIN_API_KEY),
+	};
+
+	const binanceTradingApiKey = {
+		...dependencyStatus({
+			enabled: hasValue(process.env.BINANCE_TRADING_API_KEY),
+			configured: hasValue(process.env.BINANCE_TRADING_API_KEY),
+		}),
+		scope: 'binance-trading',
+	};
 
 	return {
 		readiness: bootstrapReadiness.getStatus(),
@@ -506,7 +548,9 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
+			alertCrossTimeframeSuppression: crossTimeframeCooldown.isEnabled(),
 			alertBurstAggregation: burstAggregator.isEnabled(),
+			alertHtfRender: runtimeConfig.ENABLE_ALERT_HTF_RENDER,
 			alertModeration: alertModeration.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
 			userPriceAlerts: userPriceAlertService.isEnabled(),
@@ -533,6 +577,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				status: discord.status,
 			},
 		},
+		channelHealth: channelStatuses,
 		// Operator intent, not runtime reachability. Mirrors
 		// NotificationChannel.isConfigured(), which is the enable flag AND the
 		// required credentials — i.e. exactly the `ready` semantics of
@@ -567,6 +612,8 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			whatsapp,
 			discord,
 			webhookAuth,
+			adminApiKey,
+			binanceTradingApiKey,
 			whatsappCommandBridge: whatsAppCommandBridgeService.getStatus(),
 			whatsappTemplate: getWhatsAppTemplateStatus(),
 			gemini,
@@ -622,6 +669,10 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
 				...signalOutcomeWorkerDependency,
+				breakdownBucketCap: signalOutcomeWorkerStatus.breakdownBucketCap,
+				lastBreakdownBucketCount: signalOutcomeWorkerStatus.lastBreakdownBucketCount,
+				lastBreakdownTruncated: signalOutcomeWorkerStatus.lastBreakdownTruncated,
+				breakdownTruncationCount: signalOutcomeWorkerStatus.breakdownTruncationCount,
 				entryPriceSources: signalOutcomeWorkerStatus.entryPriceSources,
 				role: signalOutcomeWorkerStatus.role,
 				running: signalOutcomeWorkerStatus.running,
@@ -644,6 +695,10 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			alertSignalRepeatSuppression: {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
+			},
+			alertCrossTimeframeSuppression: {
+				enabled: crossTimeframeCooldown.isEnabled(),
+				...crossTimeframeCooldown.getStats(),
 			},
 			alertBurstAggregation: {
 				enabled: burstAggregator.isEnabled(),
@@ -698,7 +753,7 @@ async function getApiStatus(req, res) {
 		return res.status(200).json(getStatus({ skipTelemetrySync: true }));
 	} catch (error) {
 		console.error('[StatusController] getStatus failed:', error);
-		return res.status(500).json({ error: error.message, code: 'INTERNAL_ERROR' });
+		return sendErrorFrom(res, 500, { error: error.message, code: 'INTERNAL_ERROR' });
 	}
 }
 

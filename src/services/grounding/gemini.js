@@ -527,6 +527,24 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 
 		return analysisResult;
 	} catch (error) {
+		const isBudgetError = error?.code === 'TOKEN_BUDGET_EXCEEDED'
+			|| (typeof error?.message === 'string' && error.message.includes('TOKEN_BUDGET_EXCEEDED'));
+
+		if (isBudgetError) {
+			console.warn('[Gemini][analyzeNewsForSymbol] Daily token cost budget exceeded during analysis, returning fallback analysis');
+			return {
+				event_category: EventCategory.NONE,
+				event_significance: 0,
+				sentiment_score: 0,
+				headline: 'Token cost budget ceiling reached',
+				description: 'Skipping news analysis due to daily token cost budget ceiling.',
+				confidence: 0,
+				promptVersion: 'fallback-budget',
+				sources: [],
+				budgetExceeded: true,
+			};
+		}
+
 		console.error('[Gemini] News analysis failed:', error.message);
 		throw error;
 	}
