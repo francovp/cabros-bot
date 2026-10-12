@@ -137,6 +137,7 @@ describe('TradingViewMcpService', () => {
 		delete process.env.ENABLE_MESSAGE_FOOTER_METADATA;
 		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
 		delete process.env.TRADINGVIEW_MCP_URL;
+		delete process.env.TRADINGVIEW_MCP_DEFAULT_EXCHANGE;
 		remoteConfigService._resetForTesting();
 	});
 
@@ -636,6 +637,18 @@ describe('TradingViewMcpService', () => {
 			timeoutMs: 5000,
 			maxRetries: 1,
 		}));
+	});
+
+	it('uses the Remote Config default exchange over the environment fallback', () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.TRADINGVIEW_MCP_DEFAULT_EXCHANGE = 'NYSE';
+		remoteConfigService._setRemoteOverridesForTesting({
+			TRADINGVIEW_MCP_DEFAULT_EXCHANGE: 'NASDAQ',
+		});
+
+		const service = new TradingViewMcpService();
+
+		expect(service.getConfig().defaultExchange).toBe('NASDAQ');
 	});
 
 	it('keeps environment-derived MCP timing values finite and positive', () => {

@@ -378,6 +378,32 @@ describe('RemoteConfigService', () => {
 		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
 	});
 
+	it('applies the TradingView default exchange from Remote Config with environment fallback', async () => {
+		process.env.TRADINGVIEW_MCP_DEFAULT_EXCHANGE = 'NYSE';
+		expect(remoteConfigService.getRuntimeConfig().TRADINGVIEW_MCP_DEFAULT_EXCHANGE).toBe('NYSE');
+
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({ TRADINGVIEW_MCP_DEFAULT_EXCHANGE: 'NASDAQ' });
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+		expect(remoteConfigService.getRuntimeConfig().TRADINGVIEW_MCP_DEFAULT_EXCHANGE).toBe('NASDAQ');
+
+		mockTemplate({ TRADINGVIEW_MCP_DEFAULT_EXCHANGE: '   ' });
+		await remoteConfigService.loadNow();
+		expect(remoteConfigService.getRuntimeConfig().TRADINGVIEW_MCP_DEFAULT_EXCHANGE).toBe('NYSE');
+
+		mockTemplate({ TRADINGVIEW_MCP_DEFAULT_EXCHANGE: 'NASDAQ:NVDA' });
+		await remoteConfigService.loadNow();
+		expect(remoteConfigService.getRuntimeConfig().TRADINGVIEW_MCP_DEFAULT_EXCHANGE).toBe('NYSE');
+		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
+
+		mockTemplate({ TRADINGVIEW_MCP_DEFAULT_EXCHANGE: '.' });
+		await remoteConfigService.loadNow();
+		expect(remoteConfigService.getRuntimeConfig().TRADINGVIEW_MCP_DEFAULT_EXCHANGE).toBe('NYSE');
+		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
+	});
+
 	it('validates and applies expanded operational parameters from remote config', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 		mockTemplate({
@@ -446,7 +472,7 @@ describe('RemoteConfigService', () => {
 		expect(config.NOTIFICATION_REDRIVE_MAX_AGE_MS).toBe(7200000);
 		expect(config.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD).toBe(10);
 		expect(config.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS).toBe(300000);
-			expect(config.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS).toBe(1800000);
+		expect(config.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS).toBe(1800000);
 	});
 
 	it('supports configurable signal outcome windows and labels in Remote Config', async () => {
