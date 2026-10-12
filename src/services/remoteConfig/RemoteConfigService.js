@@ -39,6 +39,11 @@ const PARAMETER_SCHEMA = Object.freeze({
 	URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES: { type: 'number', defaultValue: 32, integer: true, min: 1, max: 1024 },
 	BINANCE_FETCH_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
 	BINANCE_BALANCE_CACHE_MS: { type: 'number', defaultValue: 3000, integer: true, min: 1000, max: 60000 },
+	TRADINGVIEW_MCP_DEFAULT_EXCHANGE: {
+		type: 'string',
+		defaultValue: 'BINANCE',
+		validate: (value) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value),
+	},
 	TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: {
 		type: 'string',
 		defaultValue: '1h',
