@@ -1468,6 +1468,50 @@ describe('news-monitor stop/target example (GH-712)', () => {
 	});
 });
 
+describe('scoped API key Postman examples', () => {
+	it('documents header-only dedicated keys and uses the scoped variable on each surface', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const alert = findItem(collection.item, 'POST Send Alert');
+		const order = findItem(collection.item, 'POST Binance order (dry-run LIMIT)');
+		const balances = findItem(collection.item, 'GET Binance Account Balances');
+		const invalidAdminQuery = findItem(collection.item, 'GET Status (dedicated key query rejected)');
+		const invalidTradingQuery = findItem(collection.item, 'GET Binance Orders (dedicated key query rejected)');
+
+		expect(findHeader(status, 'x-api-key').value).toBe('{{adminApiKey}}');
+		expect(findHeader(alert, 'x-api-key').value).toBe('{{apiKey}}');
+		expect(findHeader(order, 'x-api-key').value).toBe('{{binanceTradingApiKey}}');
+		expect(findHeader(balances, 'x-api-key').value).toBe('{{binanceTradingApiKey}}');
+
+		for (const example of [invalidAdminQuery, invalidTradingQuery]) {
+			expect(example.request.url.raw).toContain('api-key=not-a-valid-key');
+			expect(example.request.header).not.toEqual(expect.arrayContaining([
+				expect.objectContaining({ key: 'x-api-key' }),
+			]));
+			expect(example.response[0].code).toBe(401);
+		}
+		expect(invalidAdminQuery.response[0].body).toContain('ADMIN_AUTH_REQUIRED');
+	});
+
+	it('uses the matching dedicated variable for every admin and Binance API request', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		for (const item of collectRequestItems(collection.item)) {
+			const rawUrl = item.request.url?.raw || '';
+			if (!rawUrl.includes('/api/')) continue;
+			const header = (item.request.header || []).find((entry) => entry.key.toLowerCase() === 'x-api-key');
+			if (!header) continue;
+
+			const pathname = new URL(rawUrl.replace('{{baseUrl}}', 'https://placeholder.invalid')).pathname;
+			const expected = pathname.startsWith('/api/webhook/') || pathname === '/api/news-monitor'
+				? '{{apiKey}}'
+				: pathname.startsWith('/api/trading/binance/')
+					? '{{binanceTradingApiKey}}'
+					: '{{adminApiKey}}';
+			expect(header.value).toBe(expected);
+		}
+	});
+});
+
 // `success` was added to both news-monitor read envelopes but the saved 200 examples kept
 // omitting it, so the examples contradicted the runtime and the schema sitting beside them
 // — and nothing enforced it. These assert each example against the schema that declares the

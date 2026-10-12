@@ -104,7 +104,8 @@ async function validateAdminAccess(req, res, next) {
 			});
 		}
 
-		const suppliedApiKey = req.headers['x-api-key'] || req.query['api-key'];
+		const suppliedApiKey = req.headers['x-api-key']
+			|| (isAdminApiKeyScoped() ? undefined : req.query['api-key']);
 		if (suppliedApiKey !== undefined && isValidAdminApiKey(req)) {
 			req.adminRole = ADMIN_OPERATOR;
 			return requestDeadline.guard(req, res, next);
@@ -115,7 +116,8 @@ async function validateAdminAccess(req, res, next) {
 		return sendErrorFrom(res, 401, { error: 'Unauthorized: Missing API key' });
 	}
 
-	const suppliedApiKey = req.headers['x-api-key'] || req.query['api-key'];
+	const suppliedApiKey = req.headers['x-api-key']
+		|| (isAdminApiKeyScoped() ? undefined : req.query['api-key']);
 	if (suppliedApiKey !== undefined && isValidAdminApiKey(req)) {
 		req.adminRole = ADMIN_OPERATOR;
 		return requestDeadline.guard(req, res, next);
@@ -169,7 +171,7 @@ function validateBinanceTradingAccess(req, res, next) {
 	const tradingKey = String(process.env.BINANCE_TRADING_API_KEY || '').trim();
 	if (!tradingKey) return validateAdminAccess(req, res, next);
 
-	const suppliedApiKey = req.headers['x-api-key'] || req.query['api-key'];
+	const suppliedApiKey = req.headers['x-api-key'];
 	if (suppliedApiKey !== undefined && isValidBinanceTradingApiKey(req)) {
 		req.adminRole = ADMIN_OPERATOR;
 		return requestDeadline.guard(req, res, next);

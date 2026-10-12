@@ -57,10 +57,24 @@ describe('admin/operator API key scope helpers', () => {
 			});
 		});
 
+		it('rejects ADMIN_API_KEY supplied in a query string', () => {
+			const queryReq = { headers: {}, query: { 'api-key': 'admin-only' } };
+			withEnv({ WEBHOOK_API_KEY: 'webhook-only', ADMIN_API_KEY: 'admin-only' }, () => {
+				expect(isValidAdminApiKey(queryReq)).toBe(false);
+			});
+		});
+
 		it('accepts the webhook key on admin when ADMIN_API_KEY is unset (legacy fallback)', () => {
 			withEnv({ WEBHOOK_API_KEY: 'webhook-only', ADMIN_API_KEY: undefined }, () => {
 				expect(isValidAdminApiKey(adminReq)).toBe(false);
 				expect(isValidAdminApiKey(webhookReq)).toBe(true);
+			});
+		});
+
+		it('preserves the legacy WEBHOOK_API_KEY query fallback when ADMIN_API_KEY is unset', () => {
+			const queryReq = { headers: {}, query: { 'api-key': 'webhook-only' } };
+			withEnv({ WEBHOOK_API_KEY: 'webhook-only', ADMIN_API_KEY: undefined }, () => {
+				expect(isValidAdminApiKey(queryReq)).toBe(true);
 			});
 		});
 
@@ -79,6 +93,13 @@ describe('admin/operator API key scope helpers', () => {
 			withEnv({ BINANCE_TRADING_API_KEY: 'trading-only' }, () => {
 				expect(isValidBinanceTradingApiKey(tradingReq)).toBe(true);
 				expect(isValidBinanceTradingApiKey(webhookReq)).toBe(false);
+			});
+		});
+
+		it('rejects BINANCE_TRADING_API_KEY supplied in a query string', () => {
+			const queryReq = { headers: {}, query: { 'api-key': 'trading-only' } };
+			withEnv({ BINANCE_TRADING_API_KEY: 'trading-only' }, () => {
+				expect(isValidBinanceTradingApiKey(queryReq)).toBe(false);
 			});
 		});
 

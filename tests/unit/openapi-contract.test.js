@@ -138,6 +138,14 @@ describe('OpenAPI contract', () => {
 		const unauthenticatedOperations = new Set([
 			'GET /api/public/status',
 		]);
+		const binanceTradingOperations = new Set([
+			'GET /api/trading/binance/orders',
+			'GET /api/trading/binance/orders/audit',
+			'POST /api/trading/binance/orders/preview',
+			'GET /api/trading/binance/account/balances',
+			'POST /api/trading/binance/orders',
+			'DELETE /api/trading/binance/orders',
+		]);
 
 		for (const operation of operations) {
 			const operationKey = `${operation.method || 'UNKNOWN'} ${operation.path || ''}`;
@@ -146,9 +154,30 @@ describe('OpenAPI contract', () => {
 				continue;
 			}
 			const expected = [{ ApiKeyHeader: [] }, { ApiKeyQuery: [] }];
+			if (binanceTradingOperations.has(operationKey)) {
+				expected.unshift({ BinanceTradingApiKeyHeader: [] }, { AdminApiKeyHeader: [] });
+			} else if (firebaseAdminOperations.has(operationKey)) {
+				expected.unshift({ AdminApiKeyHeader: [] });
+			}
 			if (firebaseAdminOperations.has(operationKey)) expected.push({ FirebaseBearerAuth: [] });
 			expect(operation.security).toEqual(expected);
 		}
+	});
+
+	it('documents dedicated admin and Binance API keys as header-only credentials', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+		expect(contract.components.securitySchemes.AdminApiKeyHeader).toEqual(expect.objectContaining({
+			type: 'apiKey',
+			in: 'header',
+			name: 'x-api-key',
+		}));
+		expect(contract.components.securitySchemes.BinanceTradingApiKeyHeader).toEqual(expect.objectContaining({
+			type: 'apiKey',
+			in: 'header',
+			name: 'x-api-key',
+		}));
 	});
 
 	it('marks Firebase-backed admin operations with viewer or operator roles', () => {

@@ -184,8 +184,9 @@ function isValidConfiguredApiKey(supplied, configured) {
 function isValidAdminApiKey(req) {
 	const adminKey = String(process.env.ADMIN_API_KEY || '').trim();
 	if (adminKey) {
-		const supplied = req && req.headers && (req.headers['x-api-key'] || req.headers['X-API-Key'])
-			|| req && req.query && req.query['api-key'];
+		// Dedicated credentials stay out of URLs; only the legacy fallback below
+		// preserves query compatibility.
+		const supplied = req && req.headers && (req.headers['x-api-key'] || req.headers['X-API-Key']);
 		return isValidConfiguredApiKey(supplied, adminKey);
 	}
 	// Preserve legacy webhook-key behavior, including query compatibility,
@@ -199,8 +200,8 @@ function isValidAdminApiKey(req) {
 function isValidBinanceTradingApiKey(req) {
 	const tradingKey = String(process.env.BINANCE_TRADING_API_KEY || '').trim();
 	if (!tradingKey) return false;
-	const supplied = req && req.headers && (req.headers['x-api-key'] || req.headers['X-API-Key'])
-		|| req && req.query && req.query['api-key'];
+	// Dedicated trading credentials are header-only to avoid URL exposure.
+	const supplied = req && req.headers && (req.headers['x-api-key'] || req.headers['X-API-Key']);
 	return isValidConfiguredApiKey(supplied, tradingKey);
 }
 

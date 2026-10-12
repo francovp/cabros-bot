@@ -4,6 +4,7 @@ const request = require('supertest');
 const express = require('express');
 const { generateKeyPairSync } = require('crypto');
 const { getRoutes } = require('../../src/routes');
+const { saveEnv, restoreEnv } = global;
 
 jest.mock('firebase-admin');
 
@@ -98,6 +99,42 @@ describe('Admin/operator API key scope separation', () => {
 			.set('x-api-key', 'admin-only');
 
 		expect(response.status).toBe(200);
+	});
+
+	it('rejects the dedicated admin API key in the query string', async () => {
+		const response = await request(app).get('/api/status?api-key=admin-only');
+
+		expect(response.status).toBe(401);
+		expect(response.body.code).toBe('ADMIN_AUTH_REQUIRED');
+	});
+
+	it('rejects the dedicated admin API key in the query string when Firebase auth is disabled', async () => {
+		const previousFirebase = process.env.ENABLE_FIREBASE_ADMIN_AUTH;
+		process.env.ENABLE_FIREBASE_ADMIN_AUTH = 'false';
+		app = makeApp();
+
+		try {
+			const response = await request(app).get('/api/status?api-key=admin-only');
+			expect(response.status).toBe(401);
+			expect(response.body.error).toBe('Unauthorized: Missing API key');
+		} finally {
+			if (previousFirebase === undefined) delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
+			else process.env.ENABLE_FIREBASE_ADMIN_AUTH = previousFirebase;
+		}
+	});
+
+	it('preserves legacy WEBHOOK_API_KEY query authentication when ADMIN_API_KEY is unset', async () => {
+		const previousAdmin = process.env.ADMIN_API_KEY;
+		delete process.env.ADMIN_API_KEY;
+		app = makeApp();
+
+		try {
+			const response = await request(app).get('/api/status?api-key=webhook-only');
+			expect(response.status).toBe(200);
+		} finally {
+			if (previousAdmin === undefined) delete process.env.ADMIN_API_KEY;
+			else process.env.ADMIN_API_KEY = previousAdmin;
+		}
 	});
 
 	it('still accepts the webhook API key on /api/webhook/alert', async () => {
@@ -213,6 +250,13 @@ describe('Binance trading API key scope separation', () => {
 			throw new Error(`Auth failed with 403: ${JSON.stringify(response.body)}`);
 		}
 		expect([200, 400, 403, 502, 503]).toContain(response.status);
+	});
+
+	it('rejects the dedicated trading API key in the query string', async () => {
+		const response = await request(app).get('/api/trading/binance/orders?api-key=trading-only');
+
+		expect(response.status).toBe(401);
+		expect(response.body.error).toBe('Unauthorized: Missing API key');
 	});
 
 	it('falls back to admin auth on the trading path when BINANCE_TRADING_API_KEY is unset', async () => {

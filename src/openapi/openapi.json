@@ -913,6 +913,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -990,6 +993,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1054,6 +1060,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1109,6 +1118,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -1183,6 +1195,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1255,6 +1270,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1308,6 +1326,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -1393,6 +1414,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1440,6 +1464,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -1501,6 +1528,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -1564,6 +1594,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1603,6 +1636,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -1672,6 +1708,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1715,6 +1754,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -1761,6 +1803,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1803,6 +1848,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1837,6 +1885,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -1884,6 +1935,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1923,6 +1977,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -2006,6 +2063,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2074,6 +2134,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2138,6 +2201,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2190,6 +2256,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2236,6 +2305,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2275,6 +2347,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -2318,6 +2393,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -2367,6 +2445,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -2419,6 +2500,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -2576,6 +2660,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2638,6 +2725,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2680,6 +2770,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2716,6 +2809,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2751,6 +2847,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -2820,6 +2919,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2884,6 +2986,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -2953,6 +3058,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -3017,6 +3125,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -3091,6 +3202,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -3201,6 +3315,12 @@
           }
         },
         "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -3400,6 +3520,12 @@
         },
         "security": [
           {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -3502,6 +3628,12 @@
         },
         "security": [
           {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -3580,6 +3712,12 @@
           }
         },
         "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -3669,6 +3807,12 @@
           }
         },
         "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -3788,6 +3932,12 @@
         },
         "security": [
           {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -3817,6 +3967,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -3845,6 +3998,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -3917,6 +4073,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -4003,6 +4162,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -4028,20 +4190,20 @@
         "type": "apiKey",
         "in": "query",
         "name": "api-key",
-        "description": "Deprecated (GH-756): legacy compatibility only — query strings may be logged by reverse proxies and access logs. Prefer the x-api-key header. A process-scoped deprecation warning is logged on first use, and a sunset date (API_KEY_QUERY_SUNSET, YYYY-MM-DD UTC) can be set to reject query-parameter auth with 401 API_KEY_QUERY_REMOVED.",
+        "description": "Deprecated (GH-756): legacy compatibility only — query strings may be logged by reverse proxies and access logs. Prefer the x-api-key header. Query credentials are accepted on admin or Binance routes only while the matching dedicated key is unset; they are ignored when ADMIN_API_KEY or BINANCE_TRADING_API_KEY is configured. A process-scoped deprecation warning is logged on first use, and API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) can reject query auth with 401 API_KEY_QUERY_REMOVED.",
         "x-deprecated": true
       },
       "AdminApiKeyHeader": {
         "type": "apiKey",
         "in": "header",
         "name": "x-api-key",
-        "description": "Admin/operator-scope API key (env: ADMIN_API_KEY). Authenticates the browser admin console and the /api/admin/* read/write surfaces (alerts, scanner-presets, jobs, outcomes, status, capabilities, replay). Independent of the webhook key. When unset, falls back to the legacy WEBHOOK_API_KEY for backward compatibility."
+        "description": "Admin/operator-scope API key (env: ADMIN_API_KEY). Authenticates admin read/write surfaces, including alerts, scanner presets, jobs, outcomes, status, capabilities, and replay. When configured, send it only in x-api-key; query credentials are ignored. When unset, the legacy WEBHOOK_API_KEY header/query behavior remains for backward compatibility."
       },
       "BinanceTradingApiKeyHeader": {
         "type": "apiKey",
         "in": "header",
         "name": "x-api-key",
-        "description": "Binance trading-scope API key (env: BINANCE_TRADING_API_KEY). Authenticates POST/GET/DELETE /api/trading/binance/orders. Independent of the webhook and admin keys. When unset, falls back to admin authentication for backward compatibility."
+        "description": "Binance trading-scope API key (env: BINANCE_TRADING_API_KEY). Authenticates protected /api/trading/binance/* operations, including order reads, audit, preview, balances, submission, and cancellation. When configured, send it only in x-api-key; query credentials and admin/webhook keys are rejected. When unset, admin authentication remains the fallback."
       },
       "FirebaseBearerAuth": {
         "type": "http",
@@ -8449,7 +8611,9 @@
         "properties": {
           "success": {
             "type": "boolean",
-            "enum": [false],
+            "enum": [
+              false
+            ],
             "description": "Always false on an error response."
           },
           "error": {
@@ -8459,7 +8623,13 @@
           "code": {
             "type": "string",
             "description": "Machine-readable error code. Standard codes are INVALID_REQUEST, FEATURE_DISABLED, PROVIDER_UNAVAILABLE, PROVIDER_TIMEOUT, DELIVERY_FAILED, STORAGE_UNAVAILABLE and INTERNAL_ERROR; endpoints may return additional specific codes such as NOT_FOUND, RATE_LIMITED, UNAUTHORIZED or MAINTENANCE_MODE.",
-            "examples": ["INVALID_REQUEST", "FEATURE_DISABLED", "PROVIDER_TIMEOUT", "STORAGE_UNAVAILABLE", "INTERNAL_ERROR"]
+            "examples": [
+              "INVALID_REQUEST",
+              "FEATURE_DISABLED",
+              "PROVIDER_TIMEOUT",
+              "STORAGE_UNAVAILABLE",
+              "INTERNAL_ERROR"
+            ]
           },
           "requestId": {
             "type": "string",
@@ -8468,7 +8638,10 @@
           "retryable": {
             "type": "boolean",
             "description": "True when the caller should retry. Derived from the HTTP status: true for 408, 425, 429, 500, 502, 503 and 504; false otherwise. This is the field an automated monitor uses to distinguish a transient provider failure from a permanently disabled feature.",
-            "examples": [false, true]
+            "examples": [
+              false,
+              true
+            ]
           },
           "details": {
             "type": "object",
@@ -11083,22 +11256,49 @@
           "volumeConfirmation": {
             "type": "object",
             "properties": {
-              "confirmed": { "type": ["boolean", "null"] },
-              "decision": { "type": "string", "enum": ["confirm", "deny", "unknown"] },
-              "volumeRatio": { "type": ["number", "null"] },
-              "analysis": { "$ref": "#/components/schemas/JsonObject" }
+              "confirmed": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "decision": {
+                "type": "string",
+                "enum": [
+                  "confirm",
+                  "deny",
+                  "unknown"
+                ]
+              },
+              "volumeRatio": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "analysis": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
             }
           },
           "multiTimeframeAnalysis": {
             "anyOf": [
-              { "$ref": "#/components/schemas/JsonObject" },
-              { "type": "null" }
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              {
+                "type": "null"
+              }
             ],
             "description": "Present only when multi-timeframe analysis was requested and enabled."
           },
           "htfAlignment": {
             "type": "string",
-            "enum": ["aligned", "counter-trend", "unknown"],
+            "enum": [
+              "aligned",
+              "counter-trend",
+              "unknown"
+            ],
             "description": "Present only when multi-timeframe analysis was requested and enabled."
           },
           "requestId": {
@@ -14243,7 +14443,11 @@
           },
           "status": {
             "type": "string",
-            "enum": ["unknown", "ready", "degraded"],
+            "enum": [
+              "unknown",
+              "ready",
+              "degraded"
+            ],
             "description": "unknown before the first page attempt, ready once at least one page landed, degraded when every attempted page failed on every operator channel."
           },
           "telegramAdminChatConfigured": {
@@ -14257,7 +14461,13 @@
           "fallbackChannels": {
             "type": "array",
             "description": "Alternate channel names eligible to carry a page, ordered by observed delivery health. Only channels the operator configured are listed, so a never-configured channel never produces a phantom page.",
-            "items": { "type": "string", "enum": ["whatsapp", "discord"] }
+            "items": {
+              "type": "string",
+              "enum": [
+                "whatsapp",
+                "discord"
+              ]
+            }
           },
           "attempts": {
             "type": "integer",
@@ -14275,11 +14485,28 @@
             "type": "integer",
             "description": "Admin page attempts failed since the last successful page. This is the signal external uptime monitoring can page on."
           },
-          "lastSuccessAt": { "type": "string", "format": "date-time", "nullable": true },
-          "lastFailureAt": { "type": "string", "format": "date-time", "nullable": true },
-          "lastSuccessChannel": { "type": "string", "nullable": true },
-          "lastAttemptChannel": { "type": "string", "nullable": true },
-          "lastErrorCategory": { "type": "string", "nullable": true },
+          "lastSuccessAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastFailureAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastSuccessChannel": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastAttemptChannel": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastErrorCategory": {
+            "type": "string",
+            "nullable": true
+          },
           "lastError": {
             "type": "string",
             "nullable": true,
@@ -14291,10 +14518,27 @@
             "items": {
               "type": "object",
               "properties": {
-                "pageType": { "type": "string", "enum": ["delivery-failure", "zero-channel"] },
-                "channel": { "type": "string", "enum": ["telegram", "whatsapp", "discord"] },
-                "success": { "type": "integer" },
-                "failure": { "type": "integer" }
+                "pageType": {
+                  "type": "string",
+                  "enum": [
+                    "delivery-failure",
+                    "zero-channel"
+                  ]
+                },
+                "channel": {
+                  "type": "string",
+                  "enum": [
+                    "telegram",
+                    "whatsapp",
+                    "discord"
+                  ]
+                },
+                "success": {
+                  "type": "integer"
+                },
+                "failure": {
+                  "type": "integer"
+                }
               },
               "additionalProperties": false
             }
@@ -14453,7 +14697,10 @@
             "description": "Commands released because they exceeded commandTimeoutMs. The underlying work is not cancelled, so a late reply may still arrive; a rising count means delegated commands are too slow for the bridge."
           },
           "lastCommandTimeoutAt": {
-            "type": ["integer", "null"],
+            "type": [
+              "integer",
+              "null"
+            ],
             "description": "Epoch milliseconds of the most recent command timeout, or null before the first one."
           }
         }
