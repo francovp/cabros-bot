@@ -782,10 +782,10 @@ describe('RemoteConfigService', () => {
 			}));
 		});
 
-		// A published template outranks render.yaml for every allow-listed key, so a
-		// blueprint value that disagrees with the template is a flag that reports one
-		// thing while doing another (issue #1179). Storage gates that decide where a
-		// collection lives are excluded from the template entirely instead.
+		// A published template value outranks render.yaml for every allow-listed key,
+		// so disagreeing literal defaults make a flag report one thing while doing
+		// another (issue #1179). `useInAppDefault` explicitly means there is no remote
+		// value, so the deployment remains authoritative for that parameter.
 		it('never lets render.yaml and the published template disagree on an allow-listed key', () => {
 			const fs = require('fs');
 			const path = require('path');
@@ -802,7 +802,11 @@ describe('RemoteConfigService', () => {
 				if (blueprintValue === undefined) {
 					continue;
 				}
-				expect({ [key]: parameter.defaultValue.value }).toEqual({ [key]: blueprintValue });
+				if (parameter.defaultValue?.useInAppDefault === true) {
+					expect(parameter.defaultValue).toEqual({ useInAppDefault: true });
+					continue;
+				}
+				expect({ [key]: parameter.defaultValue?.value }).toEqual({ [key]: blueprintValue });
 			}
 		});
 
