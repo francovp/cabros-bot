@@ -30,6 +30,7 @@ const BASE_CONSOLE_METHODS = {
 };
 
 const SENSITIVE_KEY_PATTERN = /(password|secret|token|api[-_]?key|authorization|cookie|dsn|discordWebhookUrl|webhookUrl)/i;
+const CORRELATION_IDENTIFIER_KEY_PATTERN = /^(?:(?:original|parent)[_-]?)?(?:alert|job|replay)(?:[_-]?ids?)$/i;
 const registeredSecrets = new Set();
 
 function registerSecretValue(value) {
@@ -64,6 +65,16 @@ function isValidRequestId(value) {
 		&& /^[\x21-\x7E]+$/.test(value);
 }
 
+function isUuid(value) {
+	return typeof value === 'string'
+		&& /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(value);
+}
+
+function isCorrelationIdLabel(value) {
+	return typeof value === 'string'
+		&& /(?:^|[\s._-])(?:(?:original|parent)[_-]?)?(?:alert|job|replay)(?:[_-]?id)?s?\s*[:=]?\s*$/i.test(value.trim());
+}
+
 function calculateEntropy(value) {
 	const frequencies = new Map();
 	for (const character of value) {
@@ -96,6 +107,56 @@ function isHighEntropyToken(value) {
 	return calculateEntropy(value) >= 3.5;
 }
 
+function hasHighEntropyCredentialPathPrefix(pathTail) {
+	const frequencies = new Map();
+	let tokenLength = 0;
+	let countLogSum = 0;
+	let isHexadecimal = true;
+
+	for (let index = 0; index < pathTail.length; index += 1) {
+		let character = pathTail[index];
+		if (character === '%') {
+			const encodedSeparator = pathTail.slice(index, index + 3).toUpperCase();
+			if (encodedSeparator === '%2F' || encodedSeparator === '%2E') {
+				index += 2;
+				continue;
+			}
+			if (encodedSeparator === '%2B') {
+				character = '+';
+				index += 2;
+			} else if (encodedSeparator === '%3D') {
+				character = '=';
+				index += 2;
+			} else {
+				return false;
+			}
+		} else if (character === '/' || character === '.') {
+			continue;
+		}
+
+		if (!/[A-Za-z0-9+/_=-]/.test(character)) return false;
+
+		const previousCount = frequencies.get(character) || 0;
+		if (previousCount > 0) {
+			countLogSum -= previousCount * Math.log2(previousCount);
+		}
+		const nextCount = previousCount + 1;
+		countLogSum += nextCount * Math.log2(nextCount);
+		frequencies.set(character, nextCount);
+		tokenLength += 1;
+		isHexadecimal = isHexadecimal && /^[a-f0-9]$/i.test(character);
+
+		const minimumDistinctCharacters = isHexadecimal ? 12 : 16;
+		if (tokenLength >= 32
+			&& frequencies.size >= minimumDistinctCharacters
+			&& Math.log2(tokenLength) - (countLogSum / tokenLength) >= 3.5) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
 function isHighEntropyPathSegment(value) {
 	return typeof value === 'string'
 		&& value.length >= 12
@@ -107,21 +168,7 @@ function redactSensitiveCredentialPathTokens(text) {
 	return text.replace(
 		/(\/api\/|\/)(session|auth|token|secret|credential|reset|login|oauth)\/((?:%2[EF]|%2B|%3D|[A-Za-z0-9+/_=.-])+)/gi,
 		(_match, apiPrefix, route, pathTail) => {
-			const pathSegments = pathTail.split('/');
-			let joinedToken = '';
-			for (let index = 0; index < pathSegments.length; index += 1) {
-				joinedToken += pathSegments[index];
-				const entropyCandidate = joinedToken
-					.replace(/[/.]/g, '')
-					.replace(/%2F/gi, '')
-					.replace(/%2E/gi, '')
-					.replace(/%2B/gi, '+')
-					.replace(/%3D/gi, '=');
-				if (isHighEntropyToken(entropyCandidate)) {
-					return `${apiPrefix}${route}/[REDACTED]`;
-				}
-				joinedToken += '/';
-			}
+			if (hasHighEntropyCredentialPathPrefix(pathTail)) return `${apiPrefix}${route}/[REDACTED]`;
 			return `${apiPrefix}${route}/${pathTail}`;
 		},
 	);
@@ -137,109 +184,144 @@ function isConfigurationVariableLabel(value, offset, source) {
 }
 
 function getCorrelationApiId(pathname) {
-	const segments = pathname.split(/[?#]/, 1)[0].split('/').filter(Boolean);
-	if (segments[0]?.toLowerCase() !== 'api') return null;
+	const match = /^\/api\/(alerts|jobs)\/([^/?#]+)(?:\/([^/?#]+))?\/?(?=[?#]|$)/i.exec(pathname);
+	if (!match) return null;
 
-	const collection = segments[1]?.toLowerCase();
-	if (collection === 'alerts'
-		&& (segments.length === 3 || (segments.length === 4 && segments[3].toLowerCase() === 'replay'))) {
-		return segments[2];
-	}
+	const collection = match[1].toLowerCase();
+	const action = match[3]?.toLowerCase();
+	if (collection === 'alerts' && (action === undefined || action === 'replay')) return match[2];
 	return collection === 'jobs'
-		&& (segments.length === 3
-			|| (segments.length === 4 && ['cancel', 'retry', 'retry-failed'].includes(segments[3].toLowerCase())))
-		? segments[2]
+		&& (action === undefined || ['cancel', 'retry', 'retry-failed'].includes(action))
+		? match[2]
 		: null;
 }
 
-function isApiPathToken(candidate, offset, source, preserveRelativeApiPath) {
-	if (preserveRelativeApiPath && /^\/api\//i.test(source)) {
-		const pathEnd = source.search(/[?#]/);
-		const pathname = source.slice(0, pathEnd === -1 ? source.length : pathEnd);
-		if (pathEnd === -1 || offset + candidate.length <= pathEnd) {
-			const correlationId = getCorrelationApiId(pathname);
-			return correlationId !== null && (candidate === pathname || candidate === correlationId);
-		}
-	}
-
-	const urlPrefix = source.slice(0, offset).match(/https?:\/\/[^\s"'<>]*$/i)?.[0];
-	if (!urlPrefix) return false;
-
-	const urlStart = offset - urlPrefix.length;
-	const url = source.slice(urlStart).match(/^https?:\/\/[^\s"'<>]+/i)?.[0];
-	if (!url) return false;
-
-	try {
-		const parsed = new URL(url);
-		if (!parsed.pathname.toLowerCase().startsWith('/api/')) return false;
-
+function createUrlContextResolver(source) {
+	const contexts = [];
+	const urlPattern = /https?:\/\/[^\s"'<>]+/gi;
+	let match;
+	while ((match = urlPattern.exec(source)) !== null) {
+		const url = match[0];
+		const urlStart = match.index;
 		const authorityStart = url.indexOf('://') + 3;
+		const authorityDelimiter = url.slice(authorityStart).search(/[/?#]/);
+		const authorityEnd = authorityDelimiter === -1
+			? urlStart + url.length
+			: urlStart + authorityStart + authorityDelimiter;
 		const pathStartInUrl = url.indexOf('/', authorityStart);
 		const pathEndInUrl = url.search(/[?#]/);
 		const pathEnd = urlStart + (pathEndInUrl === -1 ? url.length : pathEndInUrl);
 		const pathStart = pathStartInUrl === -1 ? pathEnd : urlStart + pathStartInUrl;
-		if (offset + candidate.length > pathEnd) return false;
-		const correlationId = getCorrelationApiId(parsed.pathname);
-		if (correlationId === null) return false;
-		if (offset >= pathStart) return candidate === correlationId;
-		return offset + candidate.length >= pathEnd;
-	} catch (_) {
-		return false;
+		let parsed;
+		try {
+			parsed = new URL(url);
+		} catch (_) {
+			parsed = null;
+		}
+
+		contexts.push({
+			start: urlStart,
+			end: urlStart + url.length,
+			authorityEnd,
+			pathStart,
+			pathEnd,
+			correlationId: parsed ? getCorrelationApiId(parsed.pathname) : null,
+			parsed,
+		});
 	}
+
+	let contextIndex = 0;
+	return (offset) => {
+		while (contextIndex < contexts.length && offset >= contexts[contextIndex].end) contextIndex += 1;
+		const context = contexts[contextIndex];
+		return context && offset >= context.start && offset < context.end ? context : null;
+	};
+}
+
+function isApiPathToken(candidate, offset, source, preserveRelativeApiPath, getUrlContextAt) {
+	if (preserveRelativeApiPath && /^\/api\//i.test(source)) {
+		const correlationId = getCorrelationApiId(source);
+		if (correlationId === null) return false;
+		const collectionEnd = source.indexOf('/', 5);
+		const idStart = collectionEnd + 1;
+		const isWholePath = offset === 0
+			&& (source.length === candidate.length || ['?', '#'].includes(source[candidate.length]))
+			&& getCorrelationApiId(candidate) !== null;
+		return isWholePath || (candidate === correlationId && offset === idStart);
+	}
+
+	const urlContext = getUrlContextAt?.(offset);
+	if (!urlContext?.parsed || !urlContext.parsed.pathname.toLowerCase().startsWith('/api/')) return false;
+	if (offset + candidate.length > urlContext.pathEnd || urlContext.correlationId === null) return false;
+	if (offset >= urlContext.pathStart) return candidate === urlContext.correlationId;
+	return offset + candidate.length >= urlContext.pathEnd;
 }
 
 function redactHighEntropyPathSegments(text, { preserveRelativeApiPath = false } = {}) {
-	const redactedSegments = redactSensitiveCredentialPathTokens(text).replace(
+	const pathTokens = redactSensitiveCredentialPathTokens(text);
+	const pathUrlContext = createUrlContextResolver(pathTokens);
+	const redactedSegments = pathTokens.replace(
 		/(?<=\/)[A-Za-z0-9+_-]{32,}={0,2}(?![A-Za-z0-9+/_=-])/g,
 		(candidate, offset, source) => {
-			if (isApiPathToken(candidate, offset, source, preserveRelativeApiPath)) return candidate;
+			if (isApiPathToken(candidate, offset, source, preserveRelativeApiPath, pathUrlContext)) return candidate;
 			return isHighEntropyToken(candidate) ? '[REDACTED]' : candidate;
 		},
 	);
 
+	const redactedUrlContext = createUrlContextResolver(redactedSegments);
 	return redactedSegments.replace(
 		/(?<=\/)([A-Za-z0-9+_-]{12,}(?:\/[A-Za-z0-9+_-]{12,})+)/g,
 		(_match, candidate, offset, source) => {
-			if (isApiPathToken(candidate, offset, source, preserveRelativeApiPath)) return candidate;
+			if (isApiPathToken(candidate, offset, source, preserveRelativeApiPath, redactedUrlContext)) return candidate;
 			if (!candidate.split('/').every(isHighEntropyPathSegment)) return candidate;
 			return isHighEntropyToken(candidate.replaceAll('/', '')) ? '[REDACTED]' : candidate;
 		},
 	);
 }
 
-function isUrlPathSpanningToken(candidate, offset, source) {
+function isUrlPathSpanningToken(candidate, offset, getUrlContextAt) {
 	if (!candidate.includes('/')) return false;
+	const urlContext = getUrlContextAt(offset);
+	return Boolean(urlContext
+		&& urlContext.pathStart < urlContext.pathEnd
+		&& offset < urlContext.pathEnd
+		&& offset + candidate.length > urlContext.pathStart);
+}
 
-	const urlPrefix = source.slice(0, offset).match(/https?:\/\/[^\s"'<>]*$/i)?.[0];
-	if (!urlPrefix) return false;
+function isUrlAuthorityToken(offset, getUrlContextAt) {
+	const urlContext = getUrlContextAt(offset);
+	return Boolean(urlContext && offset < urlContext.authorityEnd);
+}
 
-	const urlStart = offset - urlPrefix.length;
-	const url = source.slice(urlStart).match(/^https?:\/\/[^\s"'<>]+/i)?.[0];
-	if (!url) return false;
-
-	const authorityStart = url.indexOf('://') + 3;
-	const pathStart = url.indexOf('/', authorityStart);
-	const queryStart = url.search(/[?#]/);
-	const pathEnd = queryStart === -1 ? url.length : queryStart;
-	const candidateStart = offset - urlStart;
-	return pathStart !== -1 && candidateStart < pathEnd && candidateStart + candidate.length > pathStart;
+function redactDotDelimitedHighEntropyTokens(text, { preserveRelativeApiPath = false } = {}) {
+	const urlContextAt = createUrlContextResolver(text);
+	return text.replace(
+		/(?<![A-Za-z0-9+_-])[A-Za-z0-9+_-]+(?:\.[A-Za-z0-9+_-]+)+(?![A-Za-z0-9+_=.-])/g,
+		(candidate, offset, source) => {
+			if (isUrlAuthorityToken(offset, urlContextAt)) return candidate;
+			if (isApiPathToken(candidate, offset, source, preserveRelativeApiPath, urlContextAt)) return candidate;
+			return isHighEntropyToken(candidate.replaceAll('.', '')) ? '[REDACTED]' : candidate;
+		},
+	);
 }
 
 function redactHighEntropyTokens(text, {
 	preserveRelativeApiPath = false,
 	preserveConfigurationVariableLabels = false,
 } = {}) {
-	return text.replace(
+	const redactedDotDelimitedTokens = redactDotDelimitedHighEntropyTokens(text, { preserveRelativeApiPath });
+	const urlContextAt = createUrlContextResolver(redactedDotDelimitedTokens);
+	return redactedDotDelimitedTokens.replace(
 		/(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{32,}={0,2}(?![A-Za-z0-9+/_=-])/g,
 		(candidate, offset, source) => {
 			if (preserveConfigurationVariableLabels && isConfigurationVariableLabel(candidate, offset, source)) {
 				return candidate;
 			}
 			// URL path segments are screened separately; do not join ordinary slugs into one token.
-			if (isUrlPathSpanningToken(candidate, offset, source)) return candidate;
+			if (isUrlPathSpanningToken(candidate, offset, urlContextAt)) return candidate;
 
 			// Only alert/job IDs on known routes are safe correlation values.
-			if (isApiPathToken(candidate, offset, source, preserveRelativeApiPath)) return candidate;
+			if (isApiPathToken(candidate, offset, source, preserveRelativeApiPath, urlContextAt)) return candidate;
 			return isHighEntropyToken(candidate) ? '[REDACTED]' : candidate;
 		},
 	);
@@ -333,12 +415,24 @@ function redactString(text, {
 				return `${label}${marker}`;
 			},
 		);
+		const correlationIdValues = [];
+		result = result.replace(
+			/\b((?:(?:original|parent)[_-]?)?(?:alert|job|replay)(?:[_-]?id)?s?\s*[:=]?\s*)([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})(?![a-f0-9-])/gi,
+			(_match, label, value) => {
+				const marker = `__CORRELATION_ID_${correlationIdValues.length}__`;
+				correlationIdValues.push([marker, value]);
+				return `${label}${marker}`;
+			},
+		);
 		result = redactHighEntropyPathSegments(result, { preserveRelativeApiPath: preserveApiPath });
 		result = redactHighEntropyTokens(result, {
 			preserveRelativeApiPath: preserveApiPath,
 			preserveConfigurationVariableLabels,
 		});
 		for (const [marker, value] of requestIdValues) {
+			result = result.replaceAll(marker, value);
+		}
+		for (const [marker, value] of correlationIdValues) {
 			result = result.replaceAll(marker, value);
 		}
 	}
@@ -393,12 +487,13 @@ function normalizeValue(value, seen = new WeakSet(), preserveRequestId = false, 
 
 	if (isPlainObject(value)) {
 		return Object.entries(value).reduce((acc, [key, nestedValue]) => {
+			const preserveCorrelationId = CORRELATION_IDENTIFIER_KEY_PATTERN.test(key) && isUuid(nestedValue);
 			acc[key] = SENSITIVE_KEY_PATTERN.test(key)
 				? '[REDACTED]'
 				: normalizeValue(
 					nestedValue,
 					seen,
-					/^(?:x-)?request[_-]?id$/i.test(key),
+					/^(?:x-)?request[_-]?id$/i.test(key) || preserveCorrelationId,
 					/^path$/i.test(key),
 				);
 			return acc;
@@ -416,12 +511,12 @@ function serializeError(error) {
 	};
 }
 
-function stringifyMessagePart(arg) {
+function stringifyMessagePart(arg, { preserveHighEntropy = false } = {}) {
 	if (arg instanceof Error) {
 		return redactString(arg.message);
 	}
 	if (typeof arg === 'string') {
-		return redactString(arg, { preserveConfigurationVariableLabels: true });
+		return redactString(arg, { preserveHighEntropy, preserveConfigurationVariableLabels: true });
 	}
 	if (typeof arg === 'number' || typeof arg === 'boolean' || typeof arg === 'bigint') {
 		return String(arg);
@@ -440,13 +535,14 @@ function buildLogEntry(level, args) {
 
 	args.forEach((arg, index) => {
 		const prevArgIsLabel = index > 0 && isSensitiveKeyLabel(args[index - 1]);
-		const messagePart = stringifyMessagePart(arg);
+		const preserveCorrelationId = index > 0 && isCorrelationIdLabel(args[index - 1]) && isUuid(arg);
+		const messagePart = stringifyMessagePart(arg, { preserveHighEntropy: preserveCorrelationId });
 
 		if (messagePart !== undefined) {
 			const finalMessagePart = prevArgIsLabel ? '[REDACTED]' : messagePart;
 			messageParts.push(finalMessagePart);
 			if (index > 0 && !(arg instanceof Error)) {
-				const paramValue = prevArgIsLabel ? '[REDACTED]' : normalizeValue(arg);
+				const paramValue = prevArgIsLabel ? '[REDACTED]' : normalizeValue(arg, new WeakSet(), preserveCorrelationId);
 				parameters.push(paramValue);
 			}
 		}
@@ -459,7 +555,7 @@ function buildLogEntry(level, args) {
 		if (isPlainObject(arg)) {
 			Object.assign(attributes, normalizeValue(arg));
 		} else if (index > 0 && messagePart === undefined) {
-			const paramValue = prevArgIsLabel ? '[REDACTED]' : normalizeValue(arg);
+			const paramValue = prevArgIsLabel ? '[REDACTED]' : normalizeValue(arg, new WeakSet(), preserveCorrelationId);
 			parameters.push(paramValue);
 		}
 	});

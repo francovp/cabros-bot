@@ -261,6 +261,30 @@ describe('structured console logging', () => {
 		expect(JSON.stringify(log)).not.toContain(token);
 	});
 
+	it('should redact dot-separated credentials in scalar values', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = ['Qm7_vB2n', 'L8xW4sK9', 'pD3aR6tY', '1uF5cH0zN'].join('.');
+		console.info('provider response', { state: token });
+
+		const log = parseLast(output.info);
+		expect(log.attributes).toEqual({ state: '[REDACTED]' });
+		expect(JSON.stringify(log)).not.toContain(token);
+
+		const shortChunks = ['Qm7v', 'B2nL', '8xW4', 'sK9p', 'D3aR', '6tY1', 'uF5c', 'H0zN'].join('.');
+		console.info('provider response', { state: shortChunks });
+		expect(parseLast(output.info).attributes.state).toBe('[REDACTED]');
+
+		const shortFinalChunk = `${shortChunks}.xyz`;
+		console.info('provider response', { state: shortFinalChunk });
+		expect(parseLast(output.info).attributes.state).toBe('[REDACTED]');
+
+		output.info.mockClear();
+		console.info('provider URL', `https://mcp.example.com?state=${token}`);
+		expect(parseLast(output.info).message).toBe('provider URL https://mcp.example.com?state=[REDACTED]');
+	});
+
 	it('should redact uppercase high-entropy values under non-sensitive keys', () => {
 		configureLogging();
 		output.info.mockClear();
@@ -463,6 +487,47 @@ describe('structured console logging', () => {
 		expect(JSON.stringify(log)).not.toContain(splitToken);
 	});
 
+	it('should bound scanning long sensitive paths with low-diversity segments', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const path = `/api/session/${Array.from({ length: 1000 }, () => 'aaaaaaaaaaaa').join('/')}`;
+		const start = performance.now();
+		console.info('Request completed', { path });
+		const durationMs = performance.now() - start;
+
+		expect(durationMs).toBeLessThan(50);
+		expect(parseLast(output.info).attributes.path).toBe(path);
+	});
+
+	it('should avoid repeated full-path parsing for unrecognized API paths', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = ['Qm7_vB2n', 'L8xW4sK9', 'pD3aR6tY', '1uF5cH0zN'].join('');
+		const path = `/api/unknown/${Array.from({ length: 1500 }, () => token).join('/')}`;
+		const start = performance.now();
+		console.info('Request completed', { path });
+		const durationMs = performance.now() - start;
+
+		expect(durationMs).toBeLessThan(100);
+		expect(JSON.stringify(parseLast(output.info))).not.toContain(token);
+	});
+
+	it('should avoid repeated URL parsing for absolute paths with many tokens', () => {
+		configureLogging();
+		output.info.mockClear();
+
+		const token = ['Qm7_vB2n', 'L8xW4sK9', 'pD3aR6tY', '1uF5cH0zN'].join('');
+		const path = `https://mcp.example.com/api/unknown/${Array.from({ length: 1500 }, () => token).join('/')}`;
+		const start = performance.now();
+		console.info('Request completed', { path });
+		const durationMs = performance.now() - start;
+
+		expect(durationMs).toBeLessThan(100);
+		expect(JSON.stringify(parseLast(output.info))).not.toContain(token);
+	});
+
 	it('should redact high-entropy tokens from unrecognized relative API paths', () => {
 		configureLogging();
 		output.info.mockClear();
@@ -525,6 +590,14 @@ describe('structured console logging', () => {
 		console.info('Request URL', apiUrl);
 		expect(parseLast(output.info).message).toBe(`Request URL ${apiUrl}`);
 
+		const trailingSlashApiPath = `/api/alerts/${makeHighEntropyToken()}/`;
+		console.info('Request completed', { path: trailingSlashApiPath });
+		expect(parseLast(output.info).attributes.path).toBe(trailingSlashApiPath);
+
+		const trailingSlashJobUrl = `https://service.example.com/api/jobs/${makeHighEntropyToken()}/cancel/`;
+		console.info('Request URL', trailingSlashJobUrl);
+		expect(parseLast(output.info).message).toBe(`Request URL ${trailingSlashJobUrl}`);
+
 		console.info(`requestId=${requestId}`);
 		expect(parseLast(output.info).message).toBe(`requestId=${requestId}`);
 
@@ -550,6 +623,27 @@ describe('structured console logging', () => {
 		const requestUrl = 'https://example.com/api/alerts/3f1c8e2a-0b1d-4a7e-9c11-abcdef012345';
 		console.info('Request URL', requestUrl);
 		expect(parseLast(output.info).message).toBe(`Request URL ${requestUrl}`);
+	});
+
+	it('should preserve explicitly labeled UUID alert and job identifiers', () => {
+		configureLogging();
+		output.warn.mockClear();
+
+		const alertId = ['3f1c8e2a-0b1d', '-4a7e-9c11-', 'abcdef012345'].join('');
+		const jobId = ['a5b6c7d8-e9f0', '-4123-9876-', '0123456789ab'].join('');
+		console.warn('[AlertsController] Replay failed for alert:', alertId, 'Firestore unavailable');
+
+		const log = parseLast(output.warn);
+		expect(log.message).toBe(`[AlertsController] Replay failed for alert: ${alertId} Firestore unavailable`);
+		expect(log.parameters).toEqual([alertId, 'Firestore unavailable']);
+
+		console.warn('Job metadata', { jobId });
+		expect(parseLast(output.warn).attributes).toEqual({ jobId });
+
+		console.warn('parentAlertId:', alertId);
+		const parentLog = parseLast(output.warn);
+		expect(parentLog.message).toBe(`parentAlertId: ${alertId}`);
+		expect(parentLog.parameters).toEqual([alertId]);
 	});
 
 	it('should still redact recognized credentials in request-id context', () => {
