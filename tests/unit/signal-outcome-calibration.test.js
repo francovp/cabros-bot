@@ -457,6 +457,47 @@ describe('Signal Outcome Confidence Calibration', () => {
 			expect(Array.isArray(result.buckets)).toBe(true);
 		});
 
+		it('limits the first Firestore page to the requested calibration sample', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const AlertStorageService = require('../../src/services/storage/AlertStorageService');
+			const docs = Array.from({ length: 100 }, (_, index) => ({
+				id: `eligible-${index}`,
+				data: () => ({
+					receivedAt: new Date(Date.now() - index * 1000),
+					source: 'news-monitor',
+					confidenceScore: 0.72,
+					outcomes: { '4h': { status: 'evaluated', return: 1.0, targetHit: true } },
+				}),
+			}));
+			let requestedPageLimit = 0;
+			const mockQuery = {
+				where: jest.fn().mockReturnThis(),
+				orderBy: jest.fn().mockReturnThis(),
+				limit: jest.fn(function(limit) {
+					requestedPageLimit = limit;
+					return this;
+				}),
+				get: jest.fn(async () => ({
+					empty: false,
+					docs: docs.slice(0, requestedPageLimit),
+				})),
+			};
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue(mockQuery),
+			};
+
+			jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue(mockFirestore);
+
+			try {
+				const result = await SignalOutcomeService.getOutcomesCalibration({ window: '4h', limit: 1 });
+				expect(requestedPageLimit).toBe(1);
+				expect(mockQuery.get).toHaveBeenCalledTimes(1);
+				expect(result.totalScoredAlerts).toBe(1);
+			} finally {
+				AlertStorageService.getFirestore.mockRestore();
+			}
+		});
+
 		it('scans until calibration-eligible outcomes meet targetLimit or scan cap is reached', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			const AlertStorageService = require('../../src/services/storage/AlertStorageService');
@@ -775,7 +816,7 @@ describe('Signal Outcome Confidence Calibration', () => {
 				expect(result.available).toBe(false);
 				expect(result.suggestedThresholdRationale).toContain('partial sample');
 				expect(recoveryDocumentsRead).toBe(12210);
-				expect(recoveryQueryCalls).toBeLessThanOrEqual(124);
+				expect(recoveryQueryCalls).toBeLessThanOrEqual(132);
 				for (const [queryKey, documentsRead] of recoveryReadsByQuery.entries()) {
 					const queryBudget = queryKey.endsWith(':explicit')
 						? 2000

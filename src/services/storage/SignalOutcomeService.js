@@ -3375,7 +3375,14 @@ async function getOutcomesCalibration({
 			if (applySourceFilters) {
 				query = applySourceFilters(query);
 			}
-			const pageLimit = Math.min(batchSize, scanLimit - totalScanned);
+			// Bound the first request and any pages after eligible rows have been
+			// found by the remaining result count. Before the first eligible row,
+			// retain bounded scan batches so sparse samples do not require one
+			// sequential Firestore RPC per rejected document.
+			const pageSize = totalScanned === 0 || docs.length > 0
+				? Math.min(batchSize, targetLimit - docs.length)
+				: batchSize;
+			const pageLimit = Math.min(pageSize, scanLimit - totalScanned);
 			query = query.orderBy('receivedAt', 'desc').limit(pageLimit);
 
 			if (lastDoc) {
