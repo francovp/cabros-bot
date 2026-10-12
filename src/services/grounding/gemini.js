@@ -819,7 +819,7 @@ function parseEnrichedAlertResponse(response, sources) {
 			? Math.sign(sentimentScore) * ZERO_SOURCE_SENTIMENT_SCORE_CAP
 			: sentimentScore;
 
-		const hasEvidence = !Array.isArray(sources) || hasStructuralEvidenceInSources(sources);
+		const hasEvidence = Array.isArray(sources) && hasStructuralEvidenceInSources(sources);
 		const rawSetupType = parseOptionalSetupType(parsed.setup_type);
 		const parsedSetupType = hasEvidence ? rawSetupType : undefined;
 		const parsedSetupEvidence = parsedSetupType && typeof parsed.setup_evidence === 'string' && parsed.setup_evidence.trim()

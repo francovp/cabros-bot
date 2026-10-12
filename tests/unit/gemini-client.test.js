@@ -178,10 +178,21 @@ describe('Gemini Service', () => {
 					...mockEnrichedResponse,
 					setup_type: setupType,
 					setup_evidence: `Evidence for ${setupType}`,
-				}));
+			}), [{ title: 'BTC market structure', snippet: 'Price broke above resistance level' }]);
 				expect(result.setup_type).toBe(setupType);
 				expect(result.setup_evidence).toBe(`Evidence for ${setupType}`);
 			}
+		});
+
+		it.each([undefined, null])('should omit setup classification when sources are %p', (sources) => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				setup_type: 'breakout',
+				setup_evidence: 'Price broke above resistance with volume',
+			}), sources);
+
+			expect(result).not.toHaveProperty('setup_type');
+			expect(result).not.toHaveProperty('setup_evidence');
 		});
 
 		it('should omit invalid optional risk metadata without degrading the enrichment', () => {
