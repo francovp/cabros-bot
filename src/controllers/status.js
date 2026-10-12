@@ -477,10 +477,30 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		signalOutcomeWorkerDependency.status = 'disabled';
 	}
 
-	const webhookAuth = dependencyStatus({
-		enabled: true,
-		configured: hasValue(process.env.WEBHOOK_API_KEY),
-	});
+	const webhookAuth = {
+		...dependencyStatus({
+			enabled: true,
+			configured: hasValue(process.env.WEBHOOK_API_KEY),
+		}),
+		scope: 'webhook',
+	};
+
+	const adminApiKey = {
+		...dependencyStatus({
+			enabled: hasValue(process.env.ADMIN_API_KEY),
+			configured: hasValue(process.env.ADMIN_API_KEY),
+		}),
+		scope: 'admin',
+		legacyFallback: hasValue(process.env.WEBHOOK_API_KEY) && !hasValue(process.env.ADMIN_API_KEY),
+	};
+
+	const binanceTradingApiKey = {
+		...dependencyStatus({
+			enabled: hasValue(process.env.BINANCE_TRADING_API_KEY),
+			configured: hasValue(process.env.BINANCE_TRADING_API_KEY),
+		}),
+		scope: 'binance-trading',
+	};
 
 	return {
 		readiness: bootstrapReadiness.getStatus(),
@@ -592,6 +612,8 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			whatsapp,
 			discord,
 			webhookAuth,
+			adminApiKey,
+			binanceTradingApiKey,
 			whatsappCommandBridge: whatsAppCommandBridgeService.getStatus(),
 			whatsappTemplate: getWhatsAppTemplateStatus(),
 			gemini,

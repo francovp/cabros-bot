@@ -3,7 +3,16 @@
 const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const { loadFirebaseAdminCredentials } = require('../services/storage/firebaseAdminCredentials');
-const { isValidApiKey, validateApiKey } = require('./auth');
+const {
+	isAdminApiKeyScoped,
+	isValidAdminApiKey,
+	isValidBinanceTradingApiKey,
+	_isQueryApiKeyPresent,
+	_isQueryAuthSunsetReached,
+	rejectQueryApiKeyAfterSunset,
+	validateApiKey,
+	warnQueryApiKeyDeprecationOnce,
+} = require('./auth');
 const requestDeadline = require('./requestDeadline');
 const { sendErrorFrom } = require('./errorEnvelope');
 
@@ -92,14 +101,48 @@ function getAdminAuthConfig() {
 
 async function validateAdminAccess(req, res, next) {
 	if (!isFirebaseAdminAuthEnabled()) {
-		return validateApiKey(req, res, () => {
+		if (!isAdminApiKeyScoped()) {
+			return validateApiKey(req, res, () => {
+				req.adminRole = ADMIN_OPERATOR;
+				return requestDeadline.guard(req, res, next);
+			});
+		}
+
+		const suppliedApiKey = req.headers['x-api-key']
+			|| (isAdminApiKeyScoped() ? undefined : req.query['api-key']);
+		if (suppliedApiKey !== undefined && isValidAdminApiKey(req)) {
 			req.adminRole = ADMIN_OPERATOR;
-			next();
-		});
+			return requestDeadline.guard(req, res, next);
+		}
+		if (suppliedApiKey !== undefined) {
+			return sendErrorFrom(res, 403, { error: 'Forbidden: Invalid API key' });
+		}
+		return sendErrorFrom(res, 401, { error: 'Unauthorized: Missing API key' });
+	}
+	const expiredLegacyQueryKey = !isAdminApiKeyScoped()
+		&& process.env.WEBHOOK_API_KEY
+		&& _isQueryApiKeyPresent(req)
+		&& _isQueryAuthSunsetReached();
+	const hasApiKeyHeader = Boolean(req.headers['x-api-key']);
+	const hasBearerHeader = typeof req.headers.authorization === 'string'
+		&& /^Bearer\s+\S+$/i.test(req.headers.authorization);
+	if (
+		!isAdminApiKeyScoped()
+		&& process.env.WEBHOOK_API_KEY
+		&& expiredLegacyQueryKey
+		&& !hasApiKeyHeader
+		&& !hasBearerHeader
+		&& rejectQueryApiKeyAfterSunset(req, res)
+	) {
+		return;
 	}
 
-	const suppliedApiKey = req.headers['x-api-key'] || req.query['api-key'];
-	if (suppliedApiKey !== undefined && isValidApiKey(req)) {
+	const suppliedApiKey = req.headers['x-api-key']
+		|| (isAdminApiKeyScoped() || expiredLegacyQueryKey ? undefined : req.query['api-key']);
+	if (suppliedApiKey !== undefined && isValidAdminApiKey(req)) {
+		if (!isAdminApiKeyScoped() && !expiredLegacyQueryKey && _isQueryApiKeyPresent(req)) {
+			warnQueryApiKeyDeprecationOnce(req);
+		}
 		req.adminRole = ADMIN_OPERATOR;
 		return requestDeadline.guard(req, res, next);
 	}
@@ -135,13 +178,39 @@ async function validateAdminAccess(req, res, next) {
 }
 
 function requireConfiguredAdminAccess(req, res, next) {
-	if (!isFirebaseAdminAuthEnabled() && !String(process.env.WEBHOOK_API_KEY || '').trim()) {
+	if (
+		!isFirebaseAdminAuthEnabled()
+		&& !String(process.env.ADMIN_API_KEY || '').trim()
+		&& !String(process.env.WEBHOOK_API_KEY || '').trim()
+	) {
 		return sendErrorFrom(res, 503, {
 			error: 'Admin authentication is not configured',
 			code: 'ADMIN_AUTH_UNAVAILABLE',
 		});
 	}
 	return validateAdminAccess(req, res, next);
+}
+
+function validateBinanceTradingAccess(req, res, next) {
+	const tradingKey = String(process.env.BINANCE_TRADING_API_KEY || '').trim();
+	if (!tradingKey) return validateAdminAccess(req, res, next);
+
+	const suppliedApiKey = req.headers['x-api-key'];
+	if (suppliedApiKey !== undefined && isValidBinanceTradingApiKey(req)) {
+		req.adminRole = ADMIN_OPERATOR;
+		return requestDeadline.guard(req, res, next);
+	}
+	if (suppliedApiKey === undefined || suppliedApiKey === '') {
+		return sendErrorFrom(res, 401, { error: 'Unauthorized: Missing API key' });
+	}
+	return sendErrorFrom(res, 403, { error: 'Forbidden: Invalid API key' });
+}
+
+function requireConfiguredBinanceTradingAccess(req, res, next) {
+	if (String(process.env.BINANCE_TRADING_API_KEY || '').trim()) {
+		return validateBinanceTradingAccess(req, res, next);
+	}
+	return requireConfiguredAdminAccess(req, res, next);
 }
 
 function requireConfiguredSseAccess(req, res, next) {
@@ -167,6 +236,8 @@ module.exports = {
 	isFirebaseAdminAuthEnabled,
 	requireAdminRole,
 	requireConfiguredAdminAccess,
+	requireConfiguredBinanceTradingAccess,
 	requireConfiguredSseAccess,
 	validateAdminAccess,
+	validateBinanceTradingAccess,
 };

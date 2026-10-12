@@ -913,6 +913,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -990,6 +993,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1054,6 +1060,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1109,6 +1118,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -1183,6 +1195,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1255,6 +1270,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1308,6 +1326,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -1393,6 +1414,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1440,6 +1464,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -1501,6 +1528,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -1564,6 +1594,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1603,6 +1636,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -1672,6 +1708,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1715,6 +1754,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -1761,6 +1803,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1803,6 +1848,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1837,6 +1885,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -1884,6 +1935,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -1923,6 +1977,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -2006,6 +2063,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2074,6 +2134,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2138,6 +2201,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2190,6 +2256,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2236,6 +2305,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2275,6 +2347,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -2318,6 +2393,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -2367,6 +2445,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -2419,6 +2500,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -2576,6 +2660,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2638,6 +2725,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2680,6 +2770,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2716,6 +2809,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2751,6 +2847,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -2820,6 +2919,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -2884,6 +2986,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -2953,6 +3058,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -3017,6 +3125,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -3092,6 +3203,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -3110,7 +3224,7 @@
           "Trading"
         ],
         "summary": "Read Binance Spot account balances for allowed trading symbols",
-        "description": "Reads free and locked balances for assets derived from BINANCE_TRADING_ALLOWED_SYMBOLS. The endpoint is read-only, sanitizes sensitive account metadata (never exposes account ID, permissions, or raw payload), and caches responses for a few seconds to avoid rate limit spikes. Requires admin.viewer role or API key.",
+        "description": "Reads free and locked balances for assets derived from BINANCE_TRADING_ALLOWED_SYMBOLS. The endpoint is read-only, sanitizes sensitive account metadata (never exposes account ID, permissions, or raw payload), and caches responses for a few seconds to avoid rate limit spikes. Requires admin.viewer role or API key. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
         "operationId": "getBinanceAccountBalances",
         "parameters": [
           {
@@ -3202,6 +3316,12 @@
         },
         "security": [
           {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -3220,7 +3340,7 @@
           "Trading"
         ],
         "summary": "Preview a Binance Spot order without submitting it",
-        "description": "Returns a BINANCE_ORDER_PREVIEW response with the LOT_SIZE-adjusted quantity, projected notional, estimated maker/taker fees, slippage estimate from a fail-open depth probe (4-second AbortController deadline), and a 5-second expiresAt token. The endpoint is read-only and never calls submitNewOrder. Preview-time validation reuses the same exchange-info filters and Binance order-test filters as POST /api/trading/binance/orders, but cannot be replayed after expiresAt. maxSlippageBps is honored for MARKET BUY orders that include a depth snapshot; wouldExceedBudget is reported when the slippageBps estimate exceeds the supplied budget but no order is rejected. BINANCE_TRADING_MAX_NOTIONAL is enforced — previews above the cap return 403 MAX_NOTIONAL_EXCEEDED.",
+        "description": "Returns a BINANCE_ORDER_PREVIEW response with the LOT_SIZE-adjusted quantity, projected notional, estimated maker/taker fees, slippage estimate from a fail-open depth probe (4-second AbortController deadline), and a 5-second expiresAt token. The endpoint is read-only and never calls submitNewOrder. Preview-time validation reuses the same exchange-info filters and Binance order-test filters as POST /api/trading/binance/orders, but cannot be replayed after expiresAt. maxSlippageBps is honored for MARKET BUY orders that include a depth snapshot; wouldExceedBudget is reported when the slippageBps estimate exceeds the supplied budget but no order is rejected. BINANCE_TRADING_MAX_NOTIONAL is enforced — previews above the cap return 403 MAX_NOTIONAL_EXCEEDED. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
         "operationId": "postBinanceSpotOrderPreview",
         "requestBody": {
           "required": true,
@@ -3400,6 +3520,12 @@
         },
         "security": [
           {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -3418,7 +3544,7 @@
           "Trading"
         ],
         "summary": "Read Binance Spot order status or recent order history",
-        "description": "Reads a single order status by orderId or origClientOrderId, or lists recent orders for an allowed symbol when no specific order identifier is provided.",
+        "description": "Reads a single order status by orderId or origClientOrderId, or lists recent orders for an allowed symbol when no specific order identifier is provided. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
         "operationId": "getBinanceSpotOrders",
         "parameters": [
           {
@@ -3502,6 +3628,12 @@
         },
         "security": [
           {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -3518,7 +3650,7 @@
           "Trading"
         ],
         "summary": "Validate or submit a Binance Spot order",
-        "description": "Live requests require an idempotency key or clientOrderId. Decimal quantities, prices, and quote amounts may be strings to preserve precision. MARKET orders must omit timeInForce. Binance PERCENT_PRICE, PERCENT_PRICE_BY_SIDE, and account-dependent filters such as MAX_POSITION or MAX_NUM_ORDERS use Binance order-test validation before acceptance. Definitive pre-execution or exchange rejections return 400 BINANCE_ORDER_REJECTED; a reconciled order mismatch returns 409 BINANCE_ORDER_CONFLICT; transient order-test failures return retryable 502 BINANCE_VALIDATION_FAILED. Binance execution-unknown code -1006 remains BINANCE_ORDER_STATUS_UNKNOWN.",
+        "description": "Live requests require an idempotency key or clientOrderId. Decimal quantities, prices, and quote amounts may be strings to preserve precision. MARKET orders must omit timeInForce. Binance PERCENT_PRICE, PERCENT_PRICE_BY_SIDE, and account-dependent filters such as MAX_POSITION or MAX_NUM_ORDERS use Binance order-test validation before acceptance. Definitive pre-execution or exchange rejections return 400 BINANCE_ORDER_REJECTED; a reconciled order mismatch returns 409 BINANCE_ORDER_CONFLICT; transient order-test failures return retryable 502 BINANCE_VALIDATION_FAILED. Binance execution-unknown code -1006 remains BINANCE_ORDER_STATUS_UNKNOWN. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
         "operationId": "postBinanceSpotOrder",
         "parameters": [
           {
@@ -3581,6 +3713,12 @@
         },
         "security": [
           {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -3597,7 +3735,7 @@
           "Trading"
         ],
         "summary": "Cancel a resting Binance Spot order",
-        "description": "Cancels a single open or partially filled Binance Spot order using the same admin/feature gates as POST. The body must include the symbol plus exactly one of orderId or origClientOrderId; ambiguous requests return 400 INVALID_ORDER_REQUEST. Already-terminal orders (Binance error -2011, \"Unknown order sent\", or -2013) return 404 ORDER_NOT_FOUND without re-firing at Binance. Definitive rejections return 400 BINANCE_REQUEST_REJECTED; transient provider failures return retryable 502 BINANCE_QUERY_FAILED.",
+        "description": "Cancels a single open or partially filled Binance Spot order using the same admin/feature gates as POST. The body must include the symbol plus exactly one of orderId or origClientOrderId; ambiguous requests return 400 INVALID_ORDER_REQUEST. Already-terminal orders (Binance error -2011, \"Unknown order sent\", or -2013) return 404 ORDER_NOT_FOUND without re-firing at Binance. Definitive rejections return 400 BINANCE_REQUEST_REJECTED; transient provider failures return retryable 502 BINANCE_QUERY_FAILED. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
         "operationId": "deleteBinanceSpotOrder",
         "requestBody": {
           "$ref": "#/components/requestBodies/BinanceOrderCancel"
@@ -3670,6 +3808,12 @@
         },
         "security": [
           {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -3688,7 +3832,7 @@
           "Trading"
         ],
         "summary": "Query Binance Spot order audit trail",
-        "description": "Queries durable audit records for Binance Spot order mutations (submissions, dry runs, rejections, cancellations, and reconciliations). Supports filtering by symbol, status, environment, orderId, and time range with cursor pagination.",
+        "description": "Queries durable audit records for Binance Spot order mutations (submissions, dry runs, rejections, cancellations, and reconciliations). Supports filtering by symbol, status, environment, orderId, and time range with cursor pagination. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
         "operationId": "getBinanceOrderAudit",
         "parameters": [
           {
@@ -3788,6 +3932,12 @@
         },
         "security": [
           {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -3817,6 +3967,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -3845,6 +3998,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -3917,6 +4073,9 @@
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -4003,6 +4162,9 @@
         },
         "security": [
           {
+            "AdminApiKeyHeader": []
+          },
+          {
             "ApiKeyHeader": []
           },
           {
@@ -4021,14 +4183,27 @@
       "ApiKeyHeader": {
         "type": "apiKey",
         "in": "header",
-        "name": "x-api-key"
+        "name": "x-api-key",
+        "description": "Webhook-scope API key (env: WEBHOOK_API_KEY). Authenticates /api/webhook/* and /api/news-monitor. Admin routes accept it only when ADMIN_API_KEY is unset. Binance trading routes accept admin-auth fallback only when BINANCE_TRADING_API_KEY is unset; if that key is configured, WEBHOOK_API_KEY alone is rejected."
       },
       "ApiKeyQuery": {
         "type": "apiKey",
         "in": "query",
         "name": "api-key",
-        "description": "Deprecated (GH-756): legacy compatibility only — query strings may be logged by reverse proxies and access logs. Prefer the x-api-key header. A process-scoped deprecation warning is logged on first use, and a sunset date (API_KEY_QUERY_SUNSET, YYYY-MM-DD UTC) can be set to reject query-parameter auth with 401 API_KEY_QUERY_REMOVED.",
+        "description": "Deprecated (GH-756): legacy compatibility only — query strings may be logged by reverse proxies and access logs. Prefer the x-api-key header. Admin routes accept query credentials only through the WEBHOOK_API_KEY fallback when ADMIN_API_KEY is unset. Binance routes accept query credentials only when BINANCE_TRADING_API_KEY is unset and the admin-auth fallback also accepts the query. A process-scoped deprecation warning is logged on first use, and API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) can reject query auth with 401 API_KEY_QUERY_REMOVED.",
         "x-deprecated": true
+      },
+      "AdminApiKeyHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "Admin/operator-scope API key (env: ADMIN_API_KEY). Authenticates admin read/write surfaces, including alerts, scanner presets, jobs, outcomes, status, capabilities, and replay. When configured, send it only in x-api-key; query credentials are ignored. When unset, admin routes use the legacy WEBHOOK_API_KEY header/query fallback. Binance routes use admin-auth fallback only when BINANCE_TRADING_API_KEY is unset; query fallback additionally requires ADMIN_API_KEY to be unset."
+      },
+      "BinanceTradingApiKeyHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "Binance trading-scope API key (env: BINANCE_TRADING_API_KEY). Authenticates protected /api/trading/binance/* operations, including order reads, audit, preview, balances, submission, and cancellation. When configured, only this header is accepted; query credentials, admin/webhook keys, and Firebase bearer auth are rejected. When unset, Binance routes use admin authentication: Firebase bearer tokens are accepted when enabled, and API-key credentials follow ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset."
       },
       "FirebaseBearerAuth": {
         "type": "http",
@@ -8436,7 +8611,9 @@
         "properties": {
           "success": {
             "type": "boolean",
-            "enum": [false],
+            "enum": [
+              false
+            ],
             "description": "Always false on an error response."
           },
           "error": {
@@ -8446,7 +8623,13 @@
           "code": {
             "type": "string",
             "description": "Machine-readable error code. Standard codes are INVALID_REQUEST, FEATURE_DISABLED, PROVIDER_UNAVAILABLE, PROVIDER_TIMEOUT, DELIVERY_FAILED, STORAGE_UNAVAILABLE and INTERNAL_ERROR; endpoints may return additional specific codes such as NOT_FOUND, RATE_LIMITED, UNAUTHORIZED or MAINTENANCE_MODE.",
-            "examples": ["INVALID_REQUEST", "FEATURE_DISABLED", "PROVIDER_TIMEOUT", "STORAGE_UNAVAILABLE", "INTERNAL_ERROR"]
+            "examples": [
+              "INVALID_REQUEST",
+              "FEATURE_DISABLED",
+              "PROVIDER_TIMEOUT",
+              "STORAGE_UNAVAILABLE",
+              "INTERNAL_ERROR"
+            ]
           },
           "requestId": {
             "type": "string",
@@ -8455,7 +8638,10 @@
           "retryable": {
             "type": "boolean",
             "description": "True when the caller should retry. Derived from the HTTP status: true for 408, 425, 429, 500, 502, 503 and 504; false otherwise. This is the field an automated monitor uses to distinguish a transient provider failure from a permanently disabled feature.",
-            "examples": [false, true]
+            "examples": [
+              false,
+              true
+            ]
           },
           "details": {
             "type": "object",
@@ -11070,22 +11256,49 @@
           "volumeConfirmation": {
             "type": "object",
             "properties": {
-              "confirmed": { "type": ["boolean", "null"] },
-              "decision": { "type": "string", "enum": ["confirm", "deny", "unknown"] },
-              "volumeRatio": { "type": ["number", "null"] },
-              "analysis": { "$ref": "#/components/schemas/JsonObject" }
+              "confirmed": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "decision": {
+                "type": "string",
+                "enum": [
+                  "confirm",
+                  "deny",
+                  "unknown"
+                ]
+              },
+              "volumeRatio": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "analysis": {
+                "$ref": "#/components/schemas/JsonObject"
+              }
             }
           },
           "multiTimeframeAnalysis": {
             "anyOf": [
-              { "$ref": "#/components/schemas/JsonObject" },
-              { "type": "null" }
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              {
+                "type": "null"
+              }
             ],
             "description": "Present only when multi-timeframe analysis was requested and enabled."
           },
           "htfAlignment": {
             "type": "string",
-            "enum": ["aligned", "counter-trend", "unknown"],
+            "enum": [
+              "aligned",
+              "counter-trend",
+              "unknown"
+            ],
             "description": "Present only when multi-timeframe analysis was requested and enabled."
           },
           "requestId": {
@@ -14230,7 +14443,11 @@
           },
           "status": {
             "type": "string",
-            "enum": ["unknown", "ready", "degraded"],
+            "enum": [
+              "unknown",
+              "ready",
+              "degraded"
+            ],
             "description": "unknown before the first page attempt, ready once at least one page landed, degraded when every attempted page failed on every operator channel."
           },
           "telegramAdminChatConfigured": {
@@ -14244,7 +14461,13 @@
           "fallbackChannels": {
             "type": "array",
             "description": "Alternate channel names eligible to carry a page, ordered by observed delivery health. Only channels the operator configured are listed, so a never-configured channel never produces a phantom page.",
-            "items": { "type": "string", "enum": ["whatsapp", "discord"] }
+            "items": {
+              "type": "string",
+              "enum": [
+                "whatsapp",
+                "discord"
+              ]
+            }
           },
           "attempts": {
             "type": "integer",
@@ -14262,11 +14485,28 @@
             "type": "integer",
             "description": "Admin page attempts failed since the last successful page. This is the signal external uptime monitoring can page on."
           },
-          "lastSuccessAt": { "type": "string", "format": "date-time", "nullable": true },
-          "lastFailureAt": { "type": "string", "format": "date-time", "nullable": true },
-          "lastSuccessChannel": { "type": "string", "nullable": true },
-          "lastAttemptChannel": { "type": "string", "nullable": true },
-          "lastErrorCategory": { "type": "string", "nullable": true },
+          "lastSuccessAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastFailureAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true
+          },
+          "lastSuccessChannel": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastAttemptChannel": {
+            "type": "string",
+            "nullable": true
+          },
+          "lastErrorCategory": {
+            "type": "string",
+            "nullable": true
+          },
           "lastError": {
             "type": "string",
             "nullable": true,
@@ -14278,10 +14518,27 @@
             "items": {
               "type": "object",
               "properties": {
-                "pageType": { "type": "string", "enum": ["delivery-failure", "zero-channel"] },
-                "channel": { "type": "string", "enum": ["telegram", "whatsapp", "discord"] },
-                "success": { "type": "integer" },
-                "failure": { "type": "integer" }
+                "pageType": {
+                  "type": "string",
+                  "enum": [
+                    "delivery-failure",
+                    "zero-channel"
+                  ]
+                },
+                "channel": {
+                  "type": "string",
+                  "enum": [
+                    "telegram",
+                    "whatsapp",
+                    "discord"
+                  ]
+                },
+                "success": {
+                  "type": "integer"
+                },
+                "failure": {
+                  "type": "integer"
+                }
               },
               "additionalProperties": false
             }
@@ -14440,7 +14697,10 @@
             "description": "Commands released because they exceeded commandTimeoutMs. The underlying work is not cancelled, so a late reply may still arrive; a rising count means delegated commands are too slow for the bridge."
           },
           "lastCommandTimeoutAt": {
-            "type": ["integer", "null"],
+            "type": [
+              "integer",
+              "null"
+            ],
             "description": "Epoch milliseconds of the most recent command timeout, or null before the first one."
           }
         }

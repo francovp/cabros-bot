@@ -88,6 +88,8 @@ WEBHOOK_API_KEY=your_secret_api_key
 PORT=3000
 ```
 
+`WEBHOOK_API_KEY` authenticates webhook ingest. Set `ADMIN_API_KEY` to scope admin/operator API-key access to a separate header-only credential, and `BINANCE_TRADING_API_KEY` to give Binance trading routes their own header-only credential. For backward compatibility, each surface falls back to the existing credential only while its dedicated key is unset.
+
 Validate your configuration with the built-in diagnostic doctor:
 
 ```bash
@@ -125,7 +127,7 @@ curl "http://localhost:3000/ready?depth=dependencies"
 
 ## API Endpoints Summary
 
-All webhook and mutation endpoints require the `x-api-key` header (configured via `WEBHOOK_API_KEY`). Browser admin endpoints support Firebase ID tokens (`Authorization: Bearer <token>`).
+Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID tokens (`Authorization: Bearer <token>`) or `ADMIN_API_KEY` when configured, with legacy `WEBHOOK_API_KEY` fallback. Binance trading routes accept `BINANCE_TRADING_API_KEY` when configured, otherwise they use admin authentication. Dedicated keys are header-only.
 
 | Method | Path | Description | Documentation |
 | :--- | :--- | :--- | :--- |
