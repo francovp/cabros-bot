@@ -366,6 +366,8 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
 
 `lastRunAt` advancing with a non-zero `lastRunEvaluatedCount` is the evidence that the sweep actually ran. The flag alone proves nothing: it reports what was configured, not what executed.
 
+`GET /api/outcomes/calibration` also needs two `tradingSignalOutcomes` composite indexes when its capped recent sample needs source-specific recovery: `source ASC, receivedAt DESC` and `source ASC, confidenceScoreOrigin ASC, receivedAt DESC`. Deploy them with `firebase deploy --only firestore:indexes --project <project-id>` and wait for both to reach `READY` in Firebase Console before deploying the application change; recovery returns `503 STORAGE_UNAVAILABLE` while a required index is unavailable. See [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomescalibration).
+
 | Variable | Default | Bounds | Purpose |
 | :--- | :--- | :--- | :--- |
 | `ENABLE_SIGNAL_OUTCOME_TRACKING` | `false` | — | Master gate for recording, sweeping and `/api/outcomes`. Environment-only. |

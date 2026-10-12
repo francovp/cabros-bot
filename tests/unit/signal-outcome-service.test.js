@@ -555,7 +555,7 @@ describe('SignalOutcomeService', () => {
 			}
 		});
 
-		it('saves a normalised document when enabled with alert storage', async () => {
+		it('does not infer market-scanner confidence from a technical score', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 
@@ -566,6 +566,7 @@ describe('SignalOutcomeService', () => {
 				price: 50000,
 				side: 'BUY',
 				score: 0.85,
+				confidenceScore: null,
 			});
 
 			expect(resId).not.toBeNull();
@@ -578,9 +579,63 @@ describe('SignalOutcomeService', () => {
 			expect(saved.side).toBe('BUY');
 			expect(saved.price).toBe(50000);
 			expect(saved.score).toBe(0.85);
+			expect(saved.confidenceScore).toBeNull();
+			expect(saved.confidenceScoreOrigin).toBeUndefined();
 			expect(saved.outcomeEvaluated).toBe(false);
 			expect(saved.outcomes['1h']).toBeDefined();
 			expect(saved.outcomes['1h'].status).toBe('pending');
+		});
+
+		it('does not infer scanner-preset confidence from a technical score', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'test-req-scanner-preset',
+				source: 'scanner-preset',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 50000,
+				score: 0.85,
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved.score).toBe(0.85);
+			expect(saved.confidenceScore).toBeNull();
+			expect(saved.confidenceScoreOrigin).toBeUndefined();
+		});
+
+		it('marks explicitly provided scanner-preset confidence for calibration', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'test-req-scanner-preset-explicit-confidence',
+				source: 'scanner-preset',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 50000,
+				score: 0.85,
+				confidenceScore: 0.92,
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved.confidenceScore).toBe(0.92);
+			expect(saved.confidenceScoreOrigin).toBe('explicit');
+		});
+
+		it('marks explicitly provided market-scanner confidence for calibration', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'test-req-explicit-confidence',
+				source: 'market-scanner',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 50000,
+				score: 0.85,
+				confidenceScore: 0.92,
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved.confidenceScore).toBe(0.92);
+			expect(saved.confidenceScoreOrigin).toBe('explicit');
 		});
 
 		it('persists only the configured windows and their labels', async () => {

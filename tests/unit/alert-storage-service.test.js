@@ -1656,19 +1656,21 @@ describe('AlertStorageService', () => {
 		// dependency healthy, and the response message blamed credentials that
 		// were demonstrably working. The suite below pins the four fixes.
 
-		it('declares the composite Firestore index required by the ordered alerts read', () => {
+		it.each([
+			['alerts', 'receivedAt', 'DESCENDING'],
+			['userPriceAlerts', 'status', 'ASCENDING'],
+		])('does not declare a redundant single-field composite for %s.%s', (collectionGroup, fieldPath, order) => {
 			const fs = require('fs');
 			const path = require('path');
 			const indexes = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../firestore.indexes.json'), 'utf8'));
-			// Firestore applies a *free* final `__name__` ASC sort, so ordering by
-			// `__name__` DESC on top of `receivedAt` DESC needs this composite. The
-			// mock makes `orderBy` a no-op, so only this declaration can catch a
-			// missing index.
-			const alertIndex = indexes.indexes.find(index => index.collectionGroup === 'alerts'
-				&& index.fields.some(field => field.fieldPath === 'receivedAt' && field.order === 'DESCENDING')
-				&& index.fields.some(field => field.fieldPath === '__name__' && field.order === 'DESCENDING'));
+			const redundantIndex = indexes.indexes.find(index => index.collectionGroup === collectionGroup
+				&& index.fields.length === 2
+				&& index.fields[0].fieldPath === fieldPath
+				&& index.fields[0].order === order
+				&& index.fields[1].fieldPath === '__name__'
+				&& index.fields[1].order === order);
 
-			expect(alertIndex).toBeDefined();
+			expect(redundantIndex).toBeUndefined();
 		});
 
 		it('classifies a rejected query as failed_precondition and flags the missing index', async () => {

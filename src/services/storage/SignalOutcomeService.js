@@ -23,6 +23,27 @@ const HEARTBEAT_WRITE_TIMEOUT_MS = 5000;
 // Exactly one evaluator may sweep at a time; see acquireSweepLease() (GH-1110).
 const LOCK_COLLECTION_NAME = 'signalOutcomeLocks';
 const LOCK_DOCUMENT_ID = 'singleton';
+const CALIBRATION_NON_SCANNER_SOURCES = ['expanded-analysis', 'news-monitor', 'unknown', 'webhook-alert'];
+const CALIBRATION_SCANNER_SOURCES = ['market-scanner', 'scanner-preset'];
+const CALIBRATION_RECOVERY_NON_SCANNER_SCAN_LIMIT = 1000;
+const CALIBRATION_RECOVERY_EXPLICIT_SCANNER_SCAN_LIMIT = 2000;
+const CALIBRATION_RECOVERY_LEGACY_SCANNER_SCAN_LIMIT = 2105;
+const CALIBRATION_SOURCE_RECOVERY_QUERIES = [
+	...CALIBRATION_NON_SCANNER_SOURCES.map(source => ({
+		applySourceFilters: query => query.where('source', '==', source),
+		maxScannedDocs: CALIBRATION_RECOVERY_NON_SCANNER_SCAN_LIMIT,
+	})),
+	...CALIBRATION_SCANNER_SOURCES.map(source => ({
+		applySourceFilters: query => query.where('source', '==', source).where('confidenceScoreOrigin', '==', 'explicit'),
+		maxScannedDocs: CALIBRATION_RECOVERY_EXPLICIT_SCANNER_SCAN_LIMIT,
+	})),
+	...CALIBRATION_SCANNER_SOURCES.map(source => ({
+		applySourceFilters: query => query.where('source', '==', source),
+		maxScannedDocs: CALIBRATION_RECOVERY_LEGACY_SCANNER_SCAN_LIMIT,
+	})),
+];
+const CALIBRATION_RECOVERY_TOTAL_SCAN_LIMIT = CALIBRATION_SOURCE_RECOVERY_QUERIES
+	.reduce((total, query) => total + query.maxScannedDocs, 0);
 const DEFAULT_LEASE_MS = 120000;
 const MIN_LEASE_MS = 10000;
 const MAX_LEASE_MS = 600000;
@@ -1038,6 +1059,9 @@ async function recordSignalInternal({
 
 		const eligibility = determineEligibility(normSymbolInfo, normAssetClass, entryPrice, equityProviderName, entryPriceReason);
 		const isEligible = eligibility.state === 'supported_provider' || eligibility.state === 'pending_entry_price';
+		const normalizedConfidenceScore = normalizeConfidenceScore(confidenceScore);
+		const isScannerSource = CALIBRATION_SCANNER_SOURCES.includes(source);
+		const confidenceScoreFromLegacyScore = isScannerSource ? null : normalizeConfidenceScore(score);
 
 		const runtimeConfig = getRuntimeConfig();
 		const outcomeWindows = getConfiguredOutcomeWindows(runtimeConfig);
@@ -1119,7 +1143,10 @@ async function recordSignalInternal({
 			timeframe: timeframe ? String(timeframe).toLowerCase() : null,
 			setupType: cleanSetupType,
 			score: typeof score === 'number' && Number.isFinite(score) ? score : null,
-			confidenceScore: normalizeConfidenceScore(confidenceScore) ?? normalizeConfidenceScore(score),
+			confidenceScore: normalizedConfidenceScore ?? confidenceScoreFromLegacyScore,
+			...(isScannerSource && normalizedConfidenceScore !== null
+				? { confidenceScoreOrigin: 'explicit' }
+				: {}),
 			side: normSide,
 			price: entryPrice,
 			observedPrice: entryPrice,
@@ -3104,6 +3131,14 @@ const CALIBRATION_DEFAULT_BUCKETS = [
 
 function getSignalConfidenceScore(doc) {
 	const conf = normalizeConfidenceScore(doc?.confidenceScore);
+	if (CALIBRATION_SCANNER_SOURCES.includes(doc?.source)) {
+		if (doc?.confidenceScoreOrigin === 'explicit') return conf;
+		if (doc?.confidenceScoreOrigin !== undefined && doc?.confidenceScoreOrigin !== null) return null;
+
+		// Legacy rows with a different or unusable score could only have an explicit confidence value.
+		const legacyScore = normalizeConfidenceScore(doc?.score);
+		return conf !== null && (legacyScore === null || legacyScore !== conf) ? conf : null;
+	}
 	if (conf !== null) return conf;
 	const sc = normalizeConfidenceScore(doc?.score);
 	if (sc !== null) return sc;
@@ -3315,88 +3350,159 @@ async function getOutcomesCalibration({
 	const targetWindowKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === targetWindow) || targetWindow;
 
 	const targetLimit = limit || 1000;
-	const batchSize = Math.min(targetLimit, 100);
-	const matchedDocs = [];
-	let lastDoc = null;
-
+	const batchSize = 100;
 	const hasFilters = Boolean(symbol || exchange);
 	const maxScannedDocs = Math.max(targetLimit * 5, 2000);
-	let totalScanned = 0;
+	const scanCalibrationQuery = async (applySourceFilters, scanLimit = maxScannedDocs) => {
+		const docs = [];
+		let lastDoc = null;
+		let totalScanned = 0;
+		let scanCapReached = false;
 
-	while (matchedDocs.length < targetLimit) {
-		if (signal && signal.aborted) {
-			break;
-		}
-
-		let query = firestore
-			.collection(COLLECTION_NAME)
-			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))
-			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo))
-			.orderBy('receivedAt', 'desc')
-			.limit(batchSize);
-
-		if (lastDoc) {
-			query = query.startAfter(lastDoc);
-		}
-
-		let snapshot;
-		try {
-			snapshot = await query.get();
-		} catch (error) {
-			throw createStorageUnavailableError(error);
-		}
-
-		if (!snapshot || snapshot.empty) {
-			break;
-		}
-
-		totalScanned += snapshot.docs.length;
-
-		for (const doc of snapshot.docs) {
-			const docData = doc.data() || {};
-			if (isRetentionExpired(docData)) {
-				continue;
+		while (docs.length < targetLimit) {
+			if (signal && signal.aborted) {
+				break;
 			}
-			if (hasFilters) {
-				const formatted = {
-					...docData,
-					id: doc.id,
-					receivedAt: getDocTimestamp(docData),
-				};
-				if (!matchesOutcomeFilters(formatted, { symbol, exchange, from, to })) {
+			if (totalScanned >= scanLimit) {
+				scanCapReached = true;
+				break;
+			}
+
+			let query = firestore
+				.collection(COLLECTION_NAME)
+				.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))
+				.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo));
+			if (applySourceFilters) {
+				query = applySourceFilters(query);
+			}
+			// Bound the first request and any pages after eligible rows have been
+			// found by the remaining result count. Before the first eligible row,
+			// retain bounded scan batches so sparse samples do not require one
+			// sequential Firestore RPC per rejected document.
+			const pageSize = totalScanned === 0 || docs.length > 0
+				? Math.min(batchSize, targetLimit - docs.length)
+				: batchSize;
+			const pageLimit = Math.min(pageSize, scanLimit - totalScanned);
+			query = query.orderBy('receivedAt', 'desc').limit(pageLimit);
+
+			if (lastDoc) {
+				query = query.startAfter(lastDoc);
+			}
+
+			let snapshot;
+			try {
+				snapshot = await query.get();
+			} catch (error) {
+				throw createStorageUnavailableError(error);
+			}
+
+			if (!snapshot || snapshot.empty) {
+				break;
+			}
+
+			totalScanned += snapshot.docs.length;
+
+			for (const doc of snapshot.docs) {
+				const docData = doc.data() || {};
+				if (isRetentionExpired(docData)) {
 					continue;
+				}
+				if (hasFilters) {
+					const formatted = {
+						...docData,
+						id: doc.id,
+						receivedAt: getDocTimestamp(docData),
+					};
+					if (!matchesOutcomeFilters(formatted, { symbol, exchange, from, to })) {
+						continue;
+					}
+				}
+
+				// Apply limit after selecting calibration-eligible outcomes:
+				// 1. Requested window outcome must be present and evaluated
+				const targetOutcome = docData.outcomes && docData.outcomes[targetWindowKey];
+				if (!targetOutcome || targetOutcome.status !== 'evaluated') {
+					continue;
+				}
+
+				// 2. Must possess a valid normalized confidence score in [0, 1]
+				if (getSignalConfidenceScore(docData) === null) {
+					continue;
+				}
+
+				docs.push(doc);
+				if (docs.length >= targetLimit) {
+					break;
 				}
 			}
 
-			// Apply limit after selecting calibration-eligible outcomes:
-			// 1. Requested window outcome must be present and evaluated
-			const targetOutcome = docData.outcomes && docData.outcomes[targetWindowKey];
-			if (!targetOutcome || targetOutcome.status !== 'evaluated') {
-				continue;
+			if (docs.length >= targetLimit) {
+				break;
 			}
 
-			// 2. Must possess a valid normalized confidence score in [0, 1]
-			if (getSignalConfidenceScore(docData) === null) {
-				continue;
+			if (snapshot.docs.length < pageLimit) {
+				break;
 			}
-
-			matchedDocs.push(doc);
-			if (matchedDocs.length >= targetLimit) {
+			lastDoc = snapshot.docs[snapshot.docs.length - 1];
+			if (totalScanned >= scanLimit) {
+				scanCapReached = true;
 				break;
 			}
 		}
 
-		if (snapshot.docs.length < batchSize || totalScanned >= maxScannedDocs) {
-			break;
-		}
-		lastDoc = snapshot.docs[snapshot.docs.length - 1];
-	}
+		return { docs, scanCapReached, totalScanned };
+	};
 
-	const docs = matchedDocs.map(doc => ({
+	const primaryScan = await scanCalibrationQuery(null);
+	const matchedDocs = new Map(primaryScan.docs.map(doc => [doc.id, doc]));
+	let recoveryIncomplete = false;
+
+	if (primaryScan.scanCapReached && matchedDocs.size < targetLimit && !(signal && signal.aborted)) {
+		let recoveryReadBudgetRemaining = CALIBRATION_RECOVERY_TOTAL_SCAN_LIMIT;
+		for (const recoveryQuery of CALIBRATION_SOURCE_RECOVERY_QUERIES) {
+			if (recoveryReadBudgetRemaining <= 0) {
+				recoveryIncomplete = true;
+				break;
+			}
+
+			const recoveryScan = await scanCalibrationQuery(
+				recoveryQuery.applySourceFilters,
+				Math.min(recoveryQuery.maxScannedDocs, recoveryReadBudgetRemaining),
+			);
+			recoveryReadBudgetRemaining -= recoveryScan.totalScanned;
+			for (const doc of recoveryScan.docs) {
+				matchedDocs.set(doc.id, doc);
+			}
+			if (recoveryScan.scanCapReached) {
+				recoveryIncomplete = true;
+			}
+		}
+		if (recoveryReadBudgetRemaining <= 0 && matchedDocs.size < targetLimit) {
+			recoveryIncomplete = true;
+		}
+	}
+	const docs = Array.from(matchedDocs.values()).map(doc => ({
 		...doc.data(),
 		id: doc.id,
 		receivedAt: getDocTimestamp(doc.data()),
-	}));
+	}))
+		.sort((left, right) => {
+			const leftTime = Date.parse(left.receivedAt || '') || 0;
+			const rightTime = Date.parse(right.receivedAt || '') || 0;
+			const timeDifference = rightTime - leftTime;
+			return timeDifference || String(right.id).localeCompare(String(left.id));
+		})
+		.slice(0, targetLimit);
+
+	if (recoveryIncomplete) {
+		const partialCalibration = computeCalibration(docs, { window, minOutcomes: 20 });
+		return {
+			...partialCalibration,
+			available: false,
+			suggestedThreshold: null,
+			suggestedThresholdRationale: 'Calibration sample is incomplete because a source scan reached its safety limit; counts reflect a partial sample.',
+		};
+	}
 
 	return computeCalibration(docs, { window, minOutcomes: 20 });
 }
