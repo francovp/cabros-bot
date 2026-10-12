@@ -92,17 +92,14 @@ function pickAggregate(window, side, setupType) {
 		? setupType.trim().toLowerCase()
 		: null;
 
-	if (normalizedSetup && windowBucket.bySetupType && windowBucket.bySetupType[normalizedSetup]) {
-		return {
-			aggregate: windowBucket.bySetupType[normalizedSetup],
-			isSetupSpecific: true,
-		};
-	}
 	if (side && windowBucket.bySide && windowBucket.bySide[side]) {
 		return {
 			aggregate: windowBucket.bySide[side],
-			isSetupSpecific: false,
+			isSetupSpecific: Boolean(normalizedSetup),
 		};
+	}
+	if (normalizedSetup) {
+		return null;
 	}
 	if (windowBucket.ALL && typeof windowBucket.ALL === 'object') {
 		return {
@@ -234,6 +231,7 @@ async function getOutcomeAnnotation(context, options = {}) {
 				limit: 1000,
 				exchange: exchange || undefined,
 				symbol,
+				setupType: setupType || undefined,
 				signal: controller.signal,
 			}),
 			timeoutMs,

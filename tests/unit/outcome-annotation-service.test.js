@@ -91,17 +91,17 @@ describe('outcomeAnnotationService', () => {
 		expect(annotation.summary).toContain('W4/L6');
 	});
 
-	test('uses bySetupType aggregate when available and matches requested setup', async () => {
+	test('uses the side aggregate filtered to the requested setup', async () => {
 		getRuntimeConfig.mockReturnValue({ ENABLE_OUTCOME_INFORMED_DELIVERY: true });
 		summarizeOutcomes.mockResolvedValueOnce({
 			available: true,
 			windows: {
 				'30d': {
 					bySide: {
-						BUY: { totalSignals: 20, hitRatePercent: 45, expectancyR: 0.1 },
+						BUY: { totalSignals: 8, hitRatePercent: 75, expectancyR: 1.5, totalWins: 6, totalLosses: 2 },
 					},
 					bySetupType: {
-						breakout: { totalSignals: 8, hitRatePercent: 75, expectancyR: 1.5, totalWins: 6, totalLosses: 2 },
+						breakout: { totalSignals: 16, hitRatePercent: 50, expectancyR: 0.5, totalWins: 8, totalLosses: 8 },
 					},
 				},
 			},
@@ -123,7 +123,49 @@ describe('outcomeAnnotationService', () => {
 		expect(annotation.summary).toContain('hitRate 75%');
 	});
 
-	test('falls back to bySide when setupType is not found in bySetupType without falsely labeling summary', async () => {
+	test('keeps BUY and SELL annotations separate within the requested setup type', async () => {
+		getRuntimeConfig.mockReturnValue({
+			ENABLE_OUTCOME_INFORMED_DELIVERY: true,
+			OUTCOME_ANNOTATION_LOOKBACK_DAYS: 7,
+		});
+		summarizeOutcomes.mockResolvedValue({
+			available: true,
+			windows: {
+				'7d': {
+					bySide: {
+						BUY: { totalSignals: 8, hitRatePercent: 75, expectancyR: 1.5 },
+						SELL: { totalSignals: 8, hitRatePercent: 25, expectancyR: -0.5 },
+					},
+					bySetupType: {
+						breakout: { totalSignals: 16, hitRatePercent: 50, expectancyR: 0.5 },
+					},
+				},
+			},
+		});
+
+		const buyAnnotation = await service.annotate({
+			exchange: 'BINANCE',
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			setupType: 'breakout',
+		});
+		const sellAnnotation = await service.annotate({
+			exchange: 'BINANCE',
+			symbol: 'BTCUSDT',
+			side: 'SELL',
+			setupType: 'breakout',
+		});
+
+		expect(buyAnnotation.hitRatePercent).toBe(75);
+		expect(buyAnnotation.expectancyR).toBe(1.5);
+		expect(sellAnnotation.hitRatePercent).toBe(25);
+		expect(sellAnnotation.expectancyR).toBe(-0.5);
+		for (const [args] of summarizeOutcomes.mock.calls) {
+			expect(args.setupType).toBe('breakout');
+		}
+	});
+
+	test('uses the side aggregate when the filtered summary lacks a setup breakdown', async () => {
 		getRuntimeConfig.mockReturnValue({ ENABLE_OUTCOME_INFORMED_DELIVERY: true });
 		summarizeOutcomes.mockResolvedValueOnce({
 			available: true,
@@ -149,8 +191,8 @@ describe('outcomeAnnotationService', () => {
 		expect(annotation).not.toBeNull();
 		expect(annotation.sampleSize).toBe(15);
 		expect(annotation.hitRatePercent).toBe(50);
-		expect(annotation.setupType).toBeNull();
-		expect(annotation.summary).not.toContain('· breakout');
+		expect(annotation.setupType).toBe('breakout');
+		expect(annotation.summary).toContain('· breakout');
 	});
 
 	test('falls back to the ALL aggregate when the side bucket is missing', async () => {
