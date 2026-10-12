@@ -2382,7 +2382,7 @@ function buildWindowStatsShape(bucket) {
 /**
  * Compute aggregated metrics.
  */
-async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType, status, window, breakdown } = {}) {
+async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType, status, window, breakdown, signal: abortSignal } = {}) {
 	const firestore = AlertStorageService.getFirestore();
 	if (!firestore) {
 		throw createStorageUnavailableError();
@@ -2410,6 +2410,13 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 	const hasFilters = Boolean(symbol || exchange || setupType || status || window);
 
 	while (matchedDocs.length < targetLimit) {
+		if (abortSignal && abortSignal.aborted) {
+			const abortError = abortSignal.reason instanceof Error
+				? abortSignal.reason
+				: new Error('Outcome query aborted');
+			throw abortError;
+		}
+
 		let query = firestore
 			.collection(COLLECTION_NAME)
 			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))

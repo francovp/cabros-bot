@@ -23,6 +23,7 @@ const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { resolveDryRun } = require('../../../../lib/dryRunRequest');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
+const { outcomeAnnotationService, renderAnnotationLine } = require('../../../../services/alerts/outcomeAnnotationService');
 const { crossTimeframeCooldown } = require('../../../../services/alerts/crossTimeframeCooldown');
 const { burstAggregator, buildBurstGroupKey } = require('../../../../services/alerts/burstAggregator');
 const { alertModeration } = require('../../../../services/alerts/alertModeration');
@@ -218,6 +219,66 @@ async function processEnrichment(alert, options) {
 	return enriched;
 }
 
+async function processOutcomeAnnotation(alert, options = {}) {
+	if (!outcomeAnnotationService.isEnabled()) {
+		return null;
+	}
+	if (!alert || typeof alert.text !== 'string') {
+		return null;
+	}
+
+	const parsed = parseTradingViewSignal(alert.text);
+	if (!parsed || !parsed.symbol || !parsed.side) {
+		return null;
+	}
+
+	const setupType = alert.enriched && typeof alert.enriched.setup_type === 'string'
+		? alert.enriched.setup_type
+		: null;
+
+	const timeoutMs = typeof options.timeoutMs === 'number' ? options.timeoutMs : undefined;
+	const annotation = await outcomeAnnotationService.annotate({
+		exchange: parsed.exchange || null,
+		symbol: parsed.symbol,
+		side: parsed.side,
+		setupType,
+	}, timeoutMs !== undefined ? { timeoutMs } : undefined);
+
+	if (annotation && annotation.summary) {
+		const existingExtra = typeof alert.extraText === 'string' && alert.extraText.length > 0
+			? alert.extraText
+			: '';
+		alert.extraText = existingExtra
+			? `${existingExtra}\n${annotation.summary}`
+			: annotation.summary;
+		if (alert.enriched && typeof alert.enriched === 'object') {
+			const existingEnrichedExtra = typeof alert.enriched.extraText === 'string' && alert.enriched.extraText.length > 0
+				? alert.enriched.extraText
+				: '';
+			alert.enriched.extraText = existingEnrichedExtra
+				? `${existingEnrichedExtra}\n${annotation.summary}`
+				: annotation.summary;
+			alert.enriched.outcomeAnnotation = {
+				exchange: annotation.exchange,
+				symbol: annotation.symbol,
+				side: annotation.side,
+				setupType: annotation.setupType,
+				windowLabel: annotation.windowLabel,
+				sampleSize: annotation.sampleSize,
+				hitRatePercent: annotation.hitRatePercent,
+				expectancyR: annotation.expectancyR,
+				totalWins: annotation.totalWins,
+				totalLosses: annotation.totalLosses,
+				summary: annotation.summary,
+			};
+		}
+		alert.outcomeAnnotation = {
+			...annotation,
+		};
+	}
+
+	return annotation;
+}
 function getCooldownDestination(channel, routing = {}) {
 	const defaultTelegramChatId = process.env.TELEGRAM_CHAT_ID;
 	const telegramChatId = routing.telegramChatId || defaultTelegramChatId;
@@ -402,6 +463,8 @@ function postAlert(botOrGetter) {
 			const tokenUsageJSON = tokenUsage.toJSON();
 			tokenUsageJSON.formattedSummary = tokenUsage.formatSummary();
 
+			const outcomeAnnotation = await processOutcomeAnnotation(alert);
+
 			if (dryRun) {
 				console.debug('[Alert] Dry-run mode: skipping delivery and Firestore persistence');
 				return res.json({
@@ -409,6 +472,19 @@ function postAlert(botOrGetter) {
 					dryRun: true,
 					...truncation,
 					enriched,
+					outcomeAnnotation: outcomeAnnotation
+						? {
+							summary: outcomeAnnotation.summary,
+							exchange: outcomeAnnotation.exchange,
+							symbol: outcomeAnnotation.symbol,
+							side: outcomeAnnotation.side,
+							setupType: outcomeAnnotation.setupType,
+							windowLabel: outcomeAnnotation.windowLabel,
+							sampleSize: outcomeAnnotation.sampleSize,
+							hitRatePercent: outcomeAnnotation.hitRatePercent,
+							expectancyR: outcomeAnnotation.expectancyR,
+						}
+						: null,
 					payload: {
 						text: alert.text,
 						enrichedData: alert.enriched || null,
@@ -728,6 +804,21 @@ function postAlert(botOrGetter) {
 				processingTimeMs,
 				tradingViewEnrichmentApplied: Boolean(alert.enriched && alert.enriched.tradingViewEnrichmentApplied === true),
 				tradingViewEnrichmentStatus: alert.tradingViewEnrichmentStatus,
+				outcomeAnnotation: outcomeAnnotation
+					? {
+						exchange: outcomeAnnotation.exchange,
+						symbol: outcomeAnnotation.symbol,
+						side: outcomeAnnotation.side,
+						setupType: outcomeAnnotation.setupType,
+						windowLabel: outcomeAnnotation.windowLabel,
+						sampleSize: outcomeAnnotation.sampleSize,
+						hitRatePercent: outcomeAnnotation.hitRatePercent,
+						expectancyR: outcomeAnnotation.expectancyR,
+						totalWins: outcomeAnnotation.totalWins,
+						totalLosses: outcomeAnnotation.totalLosses,
+						summary: outcomeAnnotation.summary,
+					}
+					: null,
 				suppressedRepeat,
 				suppressionReason,
 				signalClass: alert.signalClass,

@@ -299,6 +299,8 @@ BTC price is at $45,000 - breakout detected!
 }
 ```
 
+**Outcome-informed annotation (GH-587).** When `ENABLE_OUTCOME_INFORMED_DELIVERY=true`, a parseable symbol and side are annotated from bounded historical `SignalOutcomeService` aggregates when the configured lookback and minimum sample yield data. The summary is appended to the alert notification and exposed as nullable `outcomeAnnotation` in the dry-run response and stored alert. The lookup fails open: unavailable storage or a timeout leaves the alert deliverable without an annotation. This phase annotates alerts only; it does not suppress delivery.
+
 **Truncation metadata (GH-637).** `validateAlert()` clips alert text to 4,000 characters
 (plus an ellipsis). When the submitted text exceeds that cap, the 200 response — and the
 `dryRun=true` response — also carries `truncated: true`, `originalLength`, and

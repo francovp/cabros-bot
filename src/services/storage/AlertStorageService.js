@@ -318,6 +318,9 @@ function formatAlertDocument(doc, options = {}) {
 	if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(data.tradingViewEnrichmentStatus)) {
 		docObj.tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
 	}
+	if (data.outcomeAnnotation && typeof data.outcomeAnnotation === 'object') {
+		docObj.outcomeAnnotation = data.outcomeAnnotation;
+	}
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
 		if (VALID_SUPPRESSION_REASONS.has(data.suppressionReason)) {
@@ -2105,6 +2108,7 @@ async function saveAlertInternal(params = {}) {
 		useTradingViewData,
 		tradingViewEnrichmentApplied,
 		tradingViewEnrichmentStatus,
+		outcomeAnnotation,
 		suppressedRepeat,
 		suppressionReason,
 		burstAggregateId,
@@ -2193,6 +2197,34 @@ async function saveAlertInternal(params = {}) {
 		}
 		if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(tradingViewEnrichmentStatus)) {
 			document.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
+		}
+		if (outcomeAnnotation && typeof outcomeAnnotation === 'object') {
+			const sanitizedAnnotation = stripUndefinedFieldsDeep({
+				exchange: typeof outcomeAnnotation.exchange === 'string' ? outcomeAnnotation.exchange : null,
+				symbol: typeof outcomeAnnotation.symbol === 'string' ? outcomeAnnotation.symbol : null,
+				side: typeof outcomeAnnotation.side === 'string' ? outcomeAnnotation.side : null,
+				setupType: typeof outcomeAnnotation.setupType === 'string' ? outcomeAnnotation.setupType : null,
+				windowLabel: typeof outcomeAnnotation.windowLabel === 'string' ? outcomeAnnotation.windowLabel : null,
+				sampleSize: typeof outcomeAnnotation.sampleSize === 'number' && Number.isFinite(outcomeAnnotation.sampleSize)
+					? outcomeAnnotation.sampleSize
+					: null,
+				hitRatePercent: typeof outcomeAnnotation.hitRatePercent === 'number' && Number.isFinite(outcomeAnnotation.hitRatePercent)
+					? outcomeAnnotation.hitRatePercent
+					: null,
+				expectancyR: typeof outcomeAnnotation.expectancyR === 'number' && Number.isFinite(outcomeAnnotation.expectancyR)
+					? outcomeAnnotation.expectancyR
+					: null,
+				totalWins: typeof outcomeAnnotation.totalWins === 'number' && Number.isFinite(outcomeAnnotation.totalWins)
+					? outcomeAnnotation.totalWins
+					: null,
+				totalLosses: typeof outcomeAnnotation.totalLosses === 'number' && Number.isFinite(outcomeAnnotation.totalLosses)
+					? outcomeAnnotation.totalLosses
+					: null,
+				summary: typeof outcomeAnnotation.summary === 'string' ? outcomeAnnotation.summary : null,
+			});
+			if (sanitizedAnnotation && Object.keys(sanitizedAnnotation).length > 0) {
+				document.outcomeAnnotation = sanitizedAnnotation;
+			}
 		}
 		if (suppressedRepeat === true) {
 			document.suppressedRepeat = true;

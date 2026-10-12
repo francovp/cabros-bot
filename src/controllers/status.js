@@ -32,6 +32,7 @@ const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsApp
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const { outcomeAnnotationService } = require('../services/alerts/outcomeAnnotationService');
 const { crossTimeframeCooldown } = require('../services/alerts/crossTimeframeCooldown');
 const { burstAggregator } = require('../services/alerts/burstAggregator');
 const { userPriceAlertService } = require('../services/alerts/UserPriceAlertService');
@@ -548,6 +549,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
+			outcomeInformedDelivery: outcomeAnnotationService.isEnabled(),
 			alertCrossTimeframeSuppression: crossTimeframeCooldown.isEnabled(),
 			alertBurstAggregation: burstAggregator.isEnabled(),
 			alertHtfRender: runtimeConfig.ENABLE_ALERT_HTF_RENDER,
@@ -695,6 +697,10 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			alertSignalRepeatSuppression: {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
+			},
+			outcomeInformedDelivery: {
+				enabled: outcomeAnnotationService.isEnabled(),
+				...outcomeAnnotationService.getStats(),
 			},
 			alertCrossTimeframeSuppression: {
 				enabled: crossTimeframeCooldown.isEnabled(),
