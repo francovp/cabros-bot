@@ -202,6 +202,17 @@ Query empirical confidence calibration feedback metrics comparing news-monitor a
 - `from` - Optional ISO-8601 lower bound timestamp
 - `to` - Optional ISO-8601 upper bound timestamp
 
+**Firestore index prerequisite:** When the recent sample is capped before enough eligible confidence scores are found, calibration runs bounded source-specific recovery queries. Deploy these composites before deploying the application change, then wait for both to reach `READY` in Firebase Console (Firestore → Indexes):
+
+- `tradingSignalOutcomes`: `source ASC`, `receivedAt DESC`
+- `tradingSignalOutcomes`: `source ASC`, `confidenceScoreOrigin ASC`, `receivedAt DESC`
+
+```bash
+firebase deploy --only firestore:indexes --project <project-id>
+```
+
+If recovery needs an index that is missing or still building, `GET /api/outcomes/calibration` returns `503 STORAGE_UNAVAILABLE` until the index is ready.
+
 **Response (200 OK):**
 ```json
 {
