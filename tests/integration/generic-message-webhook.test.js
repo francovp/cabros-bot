@@ -490,6 +490,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 				messageId: 'discord-msg-789',
 				messageIds: ['discord-msg-789'],
 				messageCount: 1,
+				attemptCount: 1,
 			},
 		]);
 		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();

@@ -337,6 +337,7 @@ class DiscordService extends NotificationChannel {
 
 	async send(alert = {}, options = {}) {
 		const startedAt = Date.now();
+		let totalAttempts = 0;
 		try {
 			const overrideUrl = alert.discordWebhookUrl;
 			if (overrideUrl) {
@@ -345,6 +346,7 @@ class DiscordService extends NotificationChannel {
 						success: false,
 						channel: 'discord',
 						error: 'Invalid DISCORD_WEBHOOK_URL override',
+						attemptCount: 0,
 						durationMs: Date.now() - startedAt,
 					};
 				}
@@ -357,12 +359,12 @@ class DiscordService extends NotificationChannel {
 					success: false,
 					channel: 'discord',
 					error: 'Missing DISCORD_WEBHOOK_URL',
+					attemptCount: 0,
 					durationMs: Date.now() - startedAt,
 				};
 			}
 
 			let lastResult = null;
-			let totalAttempts = 0;
 			const tried = new Set();
 			for (let attempt = 0; attempt < candidates.length; attempt += 1) {
 				const url = this.pickNextWebhookUrl();
@@ -372,7 +374,10 @@ class DiscordService extends NotificationChannel {
 				totalAttempts += result.attemptCount || 0;
 				lastResult = result;
 				if (result.success) {
-					return result;
+					return {
+						...result,
+						attemptCount: totalAttempts,
+					};
 				}
 				if (result.statusCode === 429) {
 					return {
@@ -397,6 +402,7 @@ class DiscordService extends NotificationChannel {
 				success: false,
 				channel: 'discord',
 				error: error.message,
+				attemptCount: totalAttempts,
 				durationMs: Date.now() - startedAt,
 			};
 		}
@@ -454,6 +460,7 @@ class DiscordService extends NotificationChannel {
 			messageId: messageIds.join(','),
 			messageIds,
 			messageCount: messageIds.length,
+			attemptCount: totalAttempts,
 			durationMs: Date.now() - startedAt,
 			...(isChunked ? {
 				splitMessageCount: chunks.length,
@@ -571,6 +578,7 @@ class DiscordService extends NotificationChannel {
 						channel: 'discord',
 						error: `Discord webhook ${response.status}: ${errorText}`,
 						statusCode: response.status,
+						attemptCount: attempt,
 					};
 				}
 
@@ -625,6 +633,7 @@ class DiscordService extends NotificationChannel {
 						channel: 'discord',
 						error: signal.reason?.message || signal.reason || 'Operation aborted',
 						aborted: true,
+						attemptCount: attempt,
 					};
 				}
 				if (error && error.name === 'AbortError') {
@@ -632,6 +641,7 @@ class DiscordService extends NotificationChannel {
 						success: false,
 						channel: 'discord',
 						error: 'Discord webhook request timeout',
+						attemptCount: attempt,
 					};
 				}
 
