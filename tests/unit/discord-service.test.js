@@ -82,6 +82,7 @@ describe('DiscordService', () => {
 				messageId: 'discord-msg-123',
 				messageIds: ['discord-msg-123'],
 				messageCount: 1,
+				attemptCount: 1,
 				durationMs: expect.any(Number),
 			});
 			expect(result.durationMs).toBeGreaterThanOrEqual(0);
@@ -111,6 +112,7 @@ describe('DiscordService', () => {
 				messageId: 'discord-msg-override',
 				messageIds: ['discord-msg-override'],
 				messageCount: 1,
+				attemptCount: 1,
 				durationMs: expect.any(Number),
 			});
 			expect(result.durationMs).toBeGreaterThanOrEqual(0);
@@ -123,6 +125,17 @@ describe('DiscordService', () => {
 					signal: expect.any(AbortSignal),
 				}),
 			);
+		});
+
+		it('includes attemptCount on successful notification delivery results (GH-1246)', async () => {
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				json: async () => ({ id: 'discord-msg-gh-1246' }),
+			});
+
+			const result = await service.send({ text: 'Discord alert GH-1246' });
+			expect(result.success).toBe(true);
+			expect(result.attemptCount).toBe(1);
 		});
 
 		it('returns a failed result when the webhook responds with a non-429 error', async () => {
@@ -173,6 +186,7 @@ describe('DiscordService', () => {
 				messageId: 'discord-msg-retried',
 				messageIds: ['discord-msg-retried'],
 				messageCount: 1,
+				attemptCount: 2,
 				durationMs: expect.any(Number),
 			});
 			expect(result.durationMs).toBeGreaterThanOrEqual(0);
@@ -211,6 +225,7 @@ describe('DiscordService', () => {
 				messageId: 'discord-msg-body-retried',
 				messageIds: ['discord-msg-body-retried'],
 				messageCount: 1,
+				attemptCount: 2,
 				durationMs: expect.any(Number),
 			});
 			expect(result.durationMs).toBeGreaterThanOrEqual(0);
@@ -422,6 +437,7 @@ describe('DiscordService', () => {
 				messageId: 'discord-msg-1,discord-msg-2',
 				messageIds: ['discord-msg-1', 'discord-msg-2'],
 				messageCount: 2,
+				attemptCount: 2,
 				durationMs: expect.any(Number),
 			});
 			expect(result.splitMessageCount).toBeGreaterThanOrEqual(2);
@@ -499,6 +515,7 @@ describe('DiscordService', () => {
 
 			expect(result.success).toBe(true);
 			expect(result.messageId).toBe('msg-secondary');
+			expect(result.attemptCount).toBe(2);
 			const calledUrls = global.fetch.mock.calls.map((call) => call[0].split('?')[0]);
 			expect(calledUrls).toContain(PRIMARY);
 			expect(calledUrls).toContain(SECONDARY);
