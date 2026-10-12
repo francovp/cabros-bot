@@ -47,7 +47,7 @@ const {
 	toPositiveFiniteNumber,
 	computeDeterministicRiskReward,
 } = require('../tradingview/riskRewardMath');
-const { deriveAssetContext } = require('../tradingview/parseTradingViewSignal');
+const { deriveAssetContext, parseTradingViewSignal } = require('../tradingview/parseTradingViewSignal');
 const { analyzeSentimentScoreDistribution } = require('../grounding/sentimentDistribution');
 
 function createEmptySignalClassCounts() {
@@ -583,6 +583,11 @@ function createRiskMetadataCoverageBucket() {
 		fields: Object.fromEntries(
 			RISK_METADATA_FIELDS.map(field => [field, { populated: 0, percentage: 0 }]),
 		),
+		directionEchoRate: {
+			echoed: 0,
+			total: 0,
+			percentage: 0,
+		},
 	};
 }
 
@@ -596,6 +601,38 @@ function createTradingViewStatusCounts() {
 	};
 }
 
+function extractAlertSide(data) {
+	if (!data || typeof data !== 'object') {
+		return null;
+	}
+	if (typeof data.side === 'string' && (data.side === 'BUY' || data.side === 'SELL')) {
+		return data.side;
+	}
+	if (data.enrichmentData && typeof data.enrichmentData.side === 'string') {
+		const s = data.enrichmentData.side.toUpperCase();
+		if (s === 'BUY' || s === 'SELL') return s;
+	}
+	if (typeof data.text === 'string' && data.text) {
+		const parsed = parseTradingViewSignal(data.text);
+		if (parsed && (parsed.side === 'BUY' || parsed.side === 'SELL')) {
+			return parsed.side;
+		}
+	}
+	if (data.enrichmentData && typeof data.enrichmentData.sentiment === 'string') {
+		if (data.enrichmentData.sentiment === 'BULLISH') return 'BUY';
+		if (data.enrichmentData.sentiment === 'BEARISH') return 'SELL';
+	}
+	return null;
+}
+
+function isDirectionEcho(side, setupType) {
+	if (!side || !setupType) return false;
+	const normSide = side.toUpperCase();
+	const normSetup = setupType.toLowerCase();
+	return (normSide === 'BUY' && normSetup === 'trend_continuation')
+		|| (normSide === 'SELL' && normSetup === 'reversal');
+}
+
 function isRiskMetadataPopulated(field, value) {
 	if (field === 'setup_type') {
 		return typeof value === 'string' && VALID_SETUP_TYPES.has(value.trim().toLowerCase());
@@ -605,13 +642,20 @@ function isRiskMetadataPopulated(field, value) {
 		|| (typeof value === 'string' && value.trim().length > 0);
 }
 
-function recordRiskMetadataCoverage(bucket, enrichmentData) {
+function recordRiskMetadataCoverage(bucket, enrichmentData, side) {
 	const data = enrichmentData && typeof enrichmentData === 'object' ? enrichmentData : {};
 	bucket.denominator += 1;
 
 	for (const field of RISK_METADATA_FIELDS) {
 		if (isRiskMetadataPopulated(field, data[field])) {
 			bucket.fields[field].populated += 1;
+		}
+	}
+
+	if (isRiskMetadataPopulated('setup_type', data.setup_type) && side) {
+		bucket.directionEchoRate.total += 1;
+		if (isDirectionEcho(side, data.setup_type)) {
+			bucket.directionEchoRate.echoed += 1;
 		}
 	}
 }
@@ -622,6 +666,13 @@ function finalizeRiskMetadataCoverage(bucket) {
 		metric.percentage = bucket.denominator === 0
 			? 0
 			: Number(((metric.populated / bucket.denominator) * 100).toFixed(2));
+	}
+
+	const echo = bucket.directionEchoRate;
+	if (echo) {
+		echo.percentage = echo.total === 0
+			? 0
+			: Number(((echo.echoed / echo.total) * 100).toFixed(2));
 	}
 }
 
@@ -665,11 +716,11 @@ function getPromptProvenanceGroup(coverage, provenance) {
 	return group;
 }
 
-function recordRiskMetadataCoverageByProvenance(coverage, enrichmentData) {
-	recordRiskMetadataCoverage(coverage, enrichmentData);
+function recordRiskMetadataCoverageByProvenance(coverage, enrichmentData, side) {
+	recordRiskMetadataCoverage(coverage, enrichmentData, side);
 	const provenance = normalizePromptProvenance(enrichmentData && enrichmentData.promptProvenance);
 	const group = getPromptProvenanceGroup(coverage, provenance);
-	recordRiskMetadataCoverage(group, enrichmentData);
+	recordRiskMetadataCoverage(group, enrichmentData, side);
 }
 
 function finalizeRiskMetadataCoverageByProvenance(coverage) {
@@ -3158,7 +3209,8 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		if (alertEnriched) {
 			summary.byFeatureFlag.enriched += 1;
 			summary.enrichment.enrichedAlerts += 1;
-			recordRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage, data.enrichmentData);
+			const side = extractAlertSide(data);
+			recordRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage, data.enrichmentData, side);
 			recordEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage, data.enrichmentData);
 
 			const storedScore = readStoredSentimentScore(data.enrichmentData);

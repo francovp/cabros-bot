@@ -78,7 +78,7 @@ Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string 
 
 Return bounded JSON-only analytics for stored alerts without exposing raw alert text or credentials.
 
-Each enriched alert records only safe prompt provenance (`name`, `source`, `label`, and `version`) when a prompt was resolved. The `enrichment.riskMetadataCoverage` block uses enriched alerts as its denominator and reports populated counts/percentages for `invalidation_level`, `target_level`, `setup_type`, and `risk_reward_ratio`. `byPromptProvenance` groups the same metrics by Langfuse/local provenance; legacy records without provenance use `null`. Missing or invalid optional values remain zero coverage and are never synthesized.
+Each enriched alert records only safe prompt provenance (`name`, `source`, `label`, and `version`) when a prompt was resolved. The `enrichment.riskMetadataCoverage` block uses enriched alerts as its denominator and reports populated counts/percentages for `invalidation_level`, `target_level`, `setup_type`, and `risk_reward_ratio`. `byPromptProvenance` groups the same metrics by Langfuse/local provenance; legacy records without provenance use `null`. Missing or invalid optional values remain zero coverage and are never synthesized. `directionEchoRate` counts alerts with both a recognized `setup_type` and a known direction; `echoed` is `BUY` with `trend_continuation` or `SELL` with `reversal`, and its denominator is only alerts with both values available.
 
 Similarly, `enrichment.evidenceCoverage` tracks whether enriched alerts cited grounding sources, reporting `zeroSources`, `oneToTwoSources`, and `threePlusSources` distribution along with `averageSourceCount`, overall and grouped `byPromptProvenance`.
 
@@ -148,6 +148,7 @@ An alert that persisted no real token usage is not attributed to any feature. Pl
           "setup_type": { "populated": 0, "percentage": 0 },
           "risk_reward_ratio": { "populated": 0, "percentage": 0 }
         },
+        "directionEchoRate": { "echoed": 0, "total": 0, "percentage": 0 },
         "byPromptProvenance": [
           {
             "provenance": null,
@@ -157,7 +158,8 @@ An alert that persisted no real token usage is not attributed to any feature. Pl
               "target_level": { "populated": 0, "percentage": 0 },
               "setup_type": { "populated": 0, "percentage": 0 },
               "risk_reward_ratio": { "populated": 0, "percentage": 0 }
-            }
+            },
+            "directionEchoRate": { "echoed": 0, "total": 0, "percentage": 0 }
           }
         ]
       },
