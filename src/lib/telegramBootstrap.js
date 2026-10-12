@@ -52,7 +52,7 @@ async function sendStartupDeploymentNotification({
 		return { sent: false, reason: 'no_admin_chat_configured' };
 	}
 
-	logger.log?.('Telegram Admin Notifications Chat ID:', adminChatId);
+	logger.log?.('Telegram admin notifications destination is configured');
 
 	const isDeploymentEnv = Boolean(
 		process.env.RENDER
