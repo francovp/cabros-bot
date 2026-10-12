@@ -176,6 +176,63 @@ describe('Gemini Service', () => {
 			expect(result).not.toHaveProperty('setup_evidence');
 		});
 
+		it('should omit setup_type when setup_evidence is missing (pairwise requirement)', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				setup_type: 'breakout',
+			}));
+
+			expect(result).not.toHaveProperty('setup_type');
+			expect(result).not.toHaveProperty('setup_evidence');
+		});
+
+		it('should omit setup_type when setup_evidence is empty or only whitespace', () => {
+			const emptyResult = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				setup_type: 'breakout',
+				setup_evidence: '',
+			}));
+			expect(emptyResult).not.toHaveProperty('setup_type');
+			expect(emptyResult).not.toHaveProperty('setup_evidence');
+
+			const whitespaceResult = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				setup_type: 'breakout',
+				setup_evidence: '   \n\t  ',
+			}));
+			expect(whitespaceResult).not.toHaveProperty('setup_type');
+			expect(whitespaceResult).not.toHaveProperty('setup_evidence');
+		});
+
+		it('should omit setup_type when setup_evidence is not a string', () => {
+			for (const invalidEvidence of [null, true, 12345, {}, []]) {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					...mockEnrichedResponse,
+					setup_type: 'breakout',
+					setup_evidence: invalidEvidence,
+				}));
+				expect(result).not.toHaveProperty('setup_type');
+				expect(result).not.toHaveProperty('setup_evidence');
+			}
+		});
+
+		it('should strip setup_type in generateEnrichedAlert when setup_evidence is omitted by the model', async () => {
+			genaiClient.llmCallv2.mockResolvedValue({
+				text: JSON.stringify({
+					...mockEnrichedResponse,
+					setup_type: 'breakout',
+				}),
+			});
+
+			const result = await generateEnrichedAlert({
+				text: 'Bitcoin breaks 83k after a volatile session',
+				searchResults: [],
+			});
+
+			expect(result).not.toHaveProperty('setup_type');
+			expect(result).not.toHaveProperty('setup_evidence');
+		});
+
 		describe('current_price and price_currency parsing (GH-599)', () => {
 			it('accepts a finite positive numeric current_price with a normalized currency code', () => {
 				const result = parseEnrichedAlertResponse(JSON.stringify({

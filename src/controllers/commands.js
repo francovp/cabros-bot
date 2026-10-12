@@ -234,6 +234,23 @@ function sendReadinessWarning(context, warningText, signal) {
 	return Promise.resolve();
 }
 
+/**
+ * Routing merged into a created job's payload.
+ *
+ * Telegram contexts carry no `notificationRouting` and keep `{ telegramChatId }`
+ * unchanged. Issue #886's WhatsApp bridge sets it so a job is delivered to the chat
+ * the command arrived in rather than to a GreenAPI chat id shaped like a Telegram
+ * one. A malformed override is ignored: dropping routing would turn the job into an
+ * unintended broadcast.
+ */
+function resolveJobRouting(context, chatId) {
+	const override = context && context.notificationRouting;
+	if (override && typeof override === 'object' && !Array.isArray(override)) {
+		return { ...override };
+	}
+	return chatId !== undefined && chatId !== null ? { telegramChatId: String(chatId) } : {};
+}
+
 const createTradingViewJobCommand = (type, command, buildPayload) => async (context) => {
 	if (isMaintenanceModeEnabled()) {
 		await sendMaintenanceReply(context);
@@ -255,7 +272,7 @@ const createTradingViewJobCommand = (type, command, buildPayload) => async (cont
 	try {
 		const payload = {
 			...buildPayload(args),
-			...(chatId !== undefined && chatId !== null ? { telegramChatId: String(chatId) } : {}),
+			...resolveJobRouting(context, chatId),
 		};
 		if (typeof jobService.validateJobRequest === 'function') {
 			jobService.validateJobRequest(type, payload);
@@ -531,8 +548,6 @@ const cryptoBotCmd = async (context) => {
 
 const OUTCOMES_COMMAND_LIMIT = 5;
 const OUTCOMES_COMMAND_MAX_SCAN_DOCS = 300;
-const OUTCOME_WINDOW_KEYS = ['1h', '4h', '1D', '1W'];
-const OUTCOME_WINDOW_LABELS = { '1h': '1h', '4h': '4h', '1D': '1D', '1W': '1S' };
 const OUTCOME_EXCHANGE_PATTERN = /^[A-Z0-9_]{1,30}$/;
 const OUTCOME_SYMBOL_PATTERN = /^[A-Z0-9._-]{1,30}$/;
 // Bounded deadline for the outcome store read so a chat command can never hold
@@ -680,16 +695,20 @@ function formatOutcomesMessage(symbol, outcomes) {
 		`*📊 Rendimiento reciente — ${escapeOutcomeText(symbol)}*`,
 		'',
 	];
+	const configuredLabels = typeof signalOutcomeService.getOutcomeWindowLabels === 'function'
+		? signalOutcomeService.getOutcomeWindowLabels()
+		: {};
 	outcomes.slice(0, OUTCOMES_COMMAND_LIMIT).forEach((outcome) => {
 		const sideLabel = outcome.side === 'SELL' ? 'Venta' : 'Compra';
 		const entry = Number.isFinite(outcome.price) ? escapeOutcomeText(outcome.price) : null;
 		const receivedAt = outcome.receivedAt ? String(outcome.receivedAt).slice(0, 10) : '';
 		lines.push(`• ${sideLabel}${entry !== null ? ` @ ${entry}` : ''}${receivedAt ? ` \\(${escapeOutcomeText(receivedAt)}\\)` : ''}`);
 
-		OUTCOME_WINDOW_KEYS.forEach((winKey) => {
+		const windowKeys = Object.keys(outcome.outcomes || {});
+		windowKeys.forEach((winKey) => {
 			const win = outcome.outcomes && outcome.outcomes[winKey];
 			if (!win || win.status !== 'evaluated') return;
-			const label = OUTCOME_WINDOW_LABELS[winKey] || winKey;
+			const label = configuredLabels[winKey] || winKey;
 			const returnPct = Number.isFinite(win.return)
 				? `${escapeOutcomeText(`${win.return >= 0 ? '+' : ''}${win.return.toFixed(2)}%`)}`
 				: 'n/d';
@@ -1112,4 +1131,5 @@ module.exports = {
 	telegramCommandRateLimiter,
 	telegramMaintenanceMode,
 	setWarningReplyTimeoutMsForTest,
+	resolveJobRouting,
 };

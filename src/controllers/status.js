@@ -1,4 +1,5 @@
 const packageJson = require('../../package.json');
+const { sendErrorFrom } = require('../lib/errorEnvelope');
 const sentryService = require('../services/monitoring/SentryService');
 const {
 	scannerPresetService,
@@ -21,18 +22,21 @@ const symbolAnalysisStorageService = require('../services/storage/SymbolAnalysis
 const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
 const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
+const { getAdminPagingStatus } = require('../services/notification/adminPagingStatus');
 const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
 const { firestoreWriteMetricsService, READ_HEALTH } = require('../services/storage/FirestoreWriteMetricsService');
+const { getPromptService } = require('../services/prompts');
 const { signalClassMetrics } = require('../services/alerts/signalClassifier');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsAppService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const { crossTimeframeCooldown } = require('../services/alerts/crossTimeframeCooldown');
+const { burstAggregator } = require('../services/alerts/burstAggregator');
 const { userPriceAlertService } = require('../services/alerts/UserPriceAlertService');
 const { alertModeration } = require('../services/alerts/alertModeration');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
-const { getPromptService } = require('../services/prompts');
 const { getPromptReadiness } = require('../services/prompts/promptReadiness');
 const newsAnalysisStorageService = require('../services/storage/NewsAnalysisStorageService');
 const {
@@ -282,6 +286,10 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
 	const runtimeConfig = remoteConfigService.getRuntimeConfig();
+	const notificationManager = notificationRedriveService.getNotificationManager();
+	const channelStatuses = notificationManager && typeof notificationManager.getChannelStatuses === 'function'
+		? notificationManager.getChannelStatuses()
+		: {};
 	const telegramFlagEnabled = isEnabled(process.env.ENABLE_TELEGRAM_BOT);
 	const telegramEnabled = telegramFlagEnabled && !previewEnvironment;
 	const whatsappEnabled = isEnabled(process.env.ENABLE_WHATSAPP_ALERTS);
@@ -392,6 +400,28 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		}),
 	};
 	const langfuse = getLangfusePromptDependencyStatus(langfusePromptsEnabled);
+	// Configuration/reachability (dependencies.langfuse) says nothing about whether
+	// prompts are actually served remotely. Keep the two facts apart so a 100%
+	// local-fallback regression is visible instead of silent.
+	let langfusePrompts;
+	try {
+		langfusePrompts = getPromptService().getPromptResolutionStatus();
+	} catch (error) {
+		console.warn(`[status] Failed to read prompt-resolution telemetry: ${error.message}`);
+		// Emit the documented fail-open verdict rather than omitting the key: a
+		// consumer reading status.dependencies.langfusePrompts.servingStatus would
+		// otherwise get a TypeError on exactly the path where telemetry is broken.
+		langfusePrompts = {
+			enabled: langfusePromptsEnabled,
+			configured: hasValue(process.env.LANGFUSE_PUBLIC_KEY) && hasValue(process.env.LANGFUSE_SECRET_KEY),
+			ready: false,
+			servingStatus: 'unknown',
+			servingPrompts: false,
+			lastErrorCategory: null,
+			consecutiveFailures: 0,
+			prompts: [],
+		};
+	}
 	const braveSearch = dependencyStatus({
 		enabled: newsMonitorEnabled && forceBraveSearch,
 		configured: hasValue(process.env.BRAVE_SEARCH_API_KEY),
@@ -498,6 +528,9 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
+			alertCrossTimeframeSuppression: crossTimeframeCooldown.isEnabled(),
+			alertBurstAggregation: burstAggregator.isEnabled(),
+			alertHtfRender: runtimeConfig.ENABLE_ALERT_HTF_RENDER,
 			alertModeration: alertModeration.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
 			userPriceAlerts: userPriceAlertService.isEnabled(),
@@ -524,6 +557,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				status: discord.status,
 			},
 		},
+		channelHealth: channelStatuses,
 		// Operator intent, not runtime reachability. Mirrors
 		// NotificationChannel.isConfigured(), which is the enable flag AND the
 		// required credentials — i.e. exactly the `ready` semantics of
@@ -546,6 +580,12 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		},
 		...(deliveryMetricsService.getSnapshot()
 			? { deliveryMetrics: deliveryMetricsService.getSnapshot() }
+			: {}),
+		// Non-secret operator-paging health. Lets an operator tell a working admin path from
+		// a silent one: readiness alone reports "ready" for a channel that is 0/N at runtime.
+		// Channel names and counters only — never tokens, webhook URLs, or chat IDs.
+		...(getAdminPagingStatus()
+			? { adminPaging: getAdminPagingStatus() }
 			: {}),
 		dependencies: {
 			telegram,
@@ -578,6 +618,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				: {}),
 			sentry,
 			langfuse,
+			...(langfusePrompts ? { langfusePrompts } : {}),
 			braveSearch,
 			newsMonitor: {
 				enabled: newsMonitorEnabled,
@@ -606,6 +647,10 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
 				...signalOutcomeWorkerDependency,
+				breakdownBucketCap: signalOutcomeWorkerStatus.breakdownBucketCap,
+				lastBreakdownBucketCount: signalOutcomeWorkerStatus.lastBreakdownBucketCount,
+				lastBreakdownTruncated: signalOutcomeWorkerStatus.lastBreakdownTruncated,
+				breakdownTruncationCount: signalOutcomeWorkerStatus.breakdownTruncationCount,
 				entryPriceSources: signalOutcomeWorkerStatus.entryPriceSources,
 				role: signalOutcomeWorkerStatus.role,
 				running: signalOutcomeWorkerStatus.running,
@@ -628,6 +673,14 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			alertSignalRepeatSuppression: {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
+			},
+			alertCrossTimeframeSuppression: {
+				enabled: crossTimeframeCooldown.isEnabled(),
+				...crossTimeframeCooldown.getStats(),
+			},
+			alertBurstAggregation: {
+				enabled: burstAggregator.isEnabled(),
+				...burstAggregator.getStats(),
 			},
 			alertModeration: {
 				enabled: alertModeration.isEnabled(),
@@ -678,7 +731,7 @@ async function getApiStatus(req, res) {
 		return res.status(200).json(getStatus({ skipTelemetrySync: true }));
 	} catch (error) {
 		console.error('[StatusController] getStatus failed:', error);
-		return res.status(500).json({ error: error.message, code: 'INTERNAL_ERROR' });
+		return sendErrorFrom(res, 500, { error: error.message, code: 'INTERNAL_ERROR' });
 	}
 }
 

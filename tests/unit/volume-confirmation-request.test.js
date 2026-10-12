@@ -22,7 +22,65 @@ describe('volumeConfirmationRequest', () => {
 			symbol: 'F',
 			rawSymbol: 'NYSE:F',
 			timeframe: '4h',
+			includeMultiTimeframe: false,
+			side: null,
+			direction: null,
+			breakoutType: null,
+			tradingRecommendation: null,
 		});
+	});
+
+	it('parses boolean and string variants for includeMultiTimeframe', () => {
+		expect(parseVolumeConfirmationRequest({
+			body: { symbol: 'BINANCE:BTCUSDT', includeMultiTimeframe: true },
+		}).includeMultiTimeframe).toBe(true);
+
+		expect(parseVolumeConfirmationRequest({
+			body: { symbol: 'BINANCE:BTCUSDT', includeMultiTimeframe: 'true' },
+		}).includeMultiTimeframe).toBe(true);
+
+		expect(parseVolumeConfirmationRequest({
+			body: { symbol: 'BINANCE:BTCUSDT', include_multi_timeframe: true },
+		}).includeMultiTimeframe).toBe(true);
+
+		expect(parseVolumeConfirmationRequest({
+			body: { symbol: 'BINANCE:BTCUSDT', includeMultiTimeframe: false },
+		}).includeMultiTimeframe).toBe(false);
+
+		expect(parseVolumeConfirmationRequest({
+			body: { symbol: 'BINANCE:BTCUSDT', includeMultiTimeframe: 'false' },
+		}).includeMultiTimeframe).toBe(false);
+	});
+
+	it('throws VolumeConfirmationRequestError when includeMultiTimeframe is not a boolean', () => {
+		expect(() => parseVolumeConfirmationRequest({
+			body: { symbol: 'BINANCE:BTCUSDT', includeMultiTimeframe: 'not-a-bool' },
+		})).toThrow('includeMultiTimeframe must be a boolean');
+
+		expect(() => parseVolumeConfirmationRequest({
+			body: { symbol: 'BINANCE:BTCUSDT', includeMultiTimeframe: 123 },
+		})).toThrow('includeMultiTimeframe must be a boolean');
+
+		expect(() => parseVolumeConfirmationRequest({
+			body: { symbol: 'BINANCE:BTCUSDT', includeMultiTimeframe: {} },
+		})).toThrow('includeMultiTimeframe must be a boolean');
+	});
+
+	it('parses optional directional hints if supplied in the body', () => {
+		expect(parseVolumeConfirmationRequest({
+			body: {
+				symbol: 'BINANCE:BTCUSDT',
+				side: 'BUY',
+				direction: 'bullish',
+				breakoutType: 'bullish',
+				tradingRecommendation: 'BUY',
+			},
+		})).toEqual(expect.objectContaining({
+			side: 'BUY',
+			direction: 'bullish',
+			breakoutType: 'bullish',
+			tradingRecommendation: 'BUY',
+		}));
 	});
 
 	it('derives confirm and deny decisions from volume_ratio', () => {

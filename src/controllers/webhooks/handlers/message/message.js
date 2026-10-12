@@ -1,8 +1,9 @@
 require('dotenv').config();
+const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const {
 	getNotificationManager,
-	initializeNotificationServices,
+	getOrInitializeNotificationManager,
 	resolveRequestId,
 } = require('../alert/alert');
 const {
@@ -11,17 +12,34 @@ const {
 	parseNotificationRouting,
 	sendWithNotificationRouting,
 	getDeliveredChannels,
+	getRequestedChannels,
+	assertChannelsAvailable,
 } = require('../../../../services/notification/requestRouting');
 const { estimateMessageChunks } = require('../../../../lib/messageHelper');
+const { isRecognisedDryRunValue, resolveDryRun } = require('../../../../lib/dryRunRequest');
+const { STANDARD_ERROR_CODES, sendError } = require('../../../../lib/errorEnvelope');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const remoteConfigService = require('../../../../services/remoteConfig/RemoteConfigService');
 const MAX_MESSAGE_LENGTH = 4000;
 
-function validateMessageRequest(body) {
+function assertRecognisedDryRunFlag(value, source) {
+	if (value === undefined) {
+		return;
+	}
+	if (!isRecognisedDryRunValue(value)) {
+		throw new NotificationRoutingValidationError(
+			`"dryRun" ${source} must be a boolean if provided`,
+			{ field: 'dryRun' },
+		);
+	}
+}
+
+function validateMessageRequest(body, query, maxMessageLength = MAX_MESSAGE_LENGTH) {
 	if (!body || typeof body !== 'object') {
 		throw new NotificationRoutingValidationError('Request body must be a JSON object');
 	}
 
-	const { message, dryValidate } = body;
+	const { message, dryValidate, dryRun } = body;
 
 	if (!message || typeof message !== 'string') {
 		throw new NotificationRoutingValidationError('"message" is required and must be a non-empty string', {
@@ -35,18 +53,25 @@ function validateMessageRequest(body) {
 		});
 	}
 
+	// An unrecognised dryRun value must fail loudly in BOTH locations: silently
+	// treating it as a live request would deliver the message a caller intended
+	// as a probe. The query form carries the same risk as the body form, so it
+	// gets the same guard.
+	assertRecognisedDryRunFlag(dryRun, 'body');
+	assertRecognisedDryRunFlag(query && query.dryRun, 'query');
+
 	const routing = parseNotificationRouting(body);
 
 	const originalLength = message.length;
-	const truncated = originalLength > MAX_MESSAGE_LENGTH;
+	const truncated = originalLength > maxMessageLength;
 	const text = truncated
-		? message.substring(0, MAX_MESSAGE_LENGTH) + '...'
+		? message.substring(0, maxMessageLength) + '...'
 		: message;
 	const deliveredLength = text.length;
 
 	if (truncated) {
 		console.warn(
-			`[MessageWebhook] Message truncated: originalLength=${originalLength}, deliveredLength=${deliveredLength}, max=${MAX_MESSAGE_LENGTH}`,
+			`[MessageWebhook] Message truncated: originalLength=${originalLength}, deliveredLength=${deliveredLength}, max=${maxMessageLength}`,
 		);
 	}
 
@@ -61,12 +86,52 @@ function validateMessageRequest(body) {
 	};
 }
 
+function buildDryRunRoutingPreview(routing) {
+	return {
+		...(routing.channels ? { channels: routing.channels } : {}),
+		...(routing.telegramChatId !== undefined ? { telegramChatId: routing.telegramChatId } : {}),
+		...(routing.telegramThreadId !== undefined ? { telegramThreadId: routing.telegramThreadId } : {}),
+		...(routing.whatsappChatId !== undefined ? { whatsappChatId: routing.whatsappChatId } : {}),
+		// The Discord webhook URL is itself the credential, so the preview reports
+		// only that one was supplied. Same reasoning as the persistence path below.
+		...(routing.discordWebhookUrl !== undefined ? { discordWebhookUrlProvided: true } : {}),
+	};
+}
+
+function buildDryRunResponse(routing, notificationManager, requestId) {
+	const responseBody = {
+		success: true,
+		dryRun: true,
+		estimatedChunks: estimateMessageChunks(routing.originalMessage),
+		requestedChannels: getRequestedChannels(notificationManager, routing, routing.text),
+		deliveredChannels: [],
+		payload: { text: routing.text },
+		routing: buildDryRunRoutingPreview(routing),
+		requestId,
+	};
+
+	// Without a channel subset the request fans out to every enabled channel, so
+	// an empty requestedChannels list must not read as "nothing would be sent".
+	if (!routing.channels) {
+		responseBody.broadcast = true;
+	}
+
+	if (routing.truncated) {
+		responseBody.truncated = true;
+		responseBody.originalLength = routing.originalLength;
+		responseBody.deliveredLength = routing.deliveredLength;
+	}
+
+	return responseBody;
+}
+
 function postMessage(botOrGetter) {
 	return async (req, res) => {
 		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 		try {
-			const routing = validateMessageRequest(req.body);
+			const maxMessageLength = remoteConfigService.getRuntimeConfig().GENERIC_MESSAGE_MAX_LENGTH;
+			const routing = validateMessageRequest(req.body, req.query, maxMessageLength);
 
 			if (routing.dryValidate) {
 				const estimatedChunks = estimateMessageChunks(routing.originalMessage);
@@ -75,6 +140,18 @@ function postMessage(botOrGetter) {
 					dryValidate: true,
 					estimatedChunks,
 				});
+			}
+
+			if (resolveDryRun(req)) {
+				console.debug('[MessageWebhook] Dry-run mode: skipping delivery, idempotency and Firestore persistence');
+				// A preview must not initialize the channel services (that validates
+				// them against their providers), so availability is only asserted when
+				// the channel registry already exists on this process.
+				const notificationManager = getNotificationManager();
+				if (notificationManager) {
+					assertChannelsAvailable(notificationManager, routing);
+				}
+				return res.json(buildDryRunResponse(routing, notificationManager, requestId));
 			}
 
 			const alert = {
@@ -92,12 +169,11 @@ function postMessage(botOrGetter) {
 
 				const bot = typeof botOrGetter === 'function' ? botOrGetter() : (botOrGetter || null);
 				if (bot) {
-					await initializeNotificationServices(bot);
-					notificationManager = getNotificationManager();
+					notificationManager = await getOrInitializeNotificationManager(bot);
 				}
 
 				if (!notificationManager) {
-					return res.status(503).json({
+					return sendErrorFrom(res, 503, {
 						success: false,
 						error: 'Notification services not initialized',
 						requestId,
@@ -173,11 +249,12 @@ function postMessage(botOrGetter) {
 			}).catch(() => {});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
-				return res.status(error.statusCode).json({
+				return sendErrorFrom(res, error.statusCode, {
 					success: false,
 					error: error.message,
-					details: error.details,
+					code: STANDARD_ERROR_CODES.INVALID_REQUEST,
 					requestId,
+					details: error.details,
 				});
 			}
 

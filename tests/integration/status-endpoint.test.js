@@ -14,11 +14,13 @@ const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaMana
 const groundingMetrics = require('../../src/services/grounding/metrics');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
 const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
+const { getPromptService } = require('../../src/services/prompts');
 const { signalClassMetrics } = require('../../src/services/alerts/signalClassifier');
 const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
 const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
 const newsAnalysisStorageService = require('../../src/services/storage/NewsAnalysisStorageService');
 const promptReadiness = require('../../src/services/prompts/promptReadiness');
+const symbolAnalysisStorageService = require('../../src/services/storage/SymbolAnalysisStorageService');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -39,6 +41,7 @@ describe('Status endpoints', () => {
 	let savedTradingViewEnrichmentEvents;
 	let app;
 	let tempDir;
+	let promptStatusSpies = [];
 
 	beforeEach(() => {
 		savedEnv = saveEnv();
@@ -110,6 +113,8 @@ describe('Status endpoints', () => {
 	});
 
 	afterEach(() => {
+		promptStatusSpies.forEach((spy) => spy.mockRestore());
+		promptStatusSpies = [];
 		remoteConfigService._resetForTesting();
 		geminiQuotaManager.resetForTesting();
 		groundingMetrics.resetForTesting();
@@ -662,6 +667,78 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.alertSignalRepeatSuppression.enabled).toBe(true);
 	});
 
+	it('reports alert cross-timeframe suppression as disabled by default', async () => {
+		delete process.env.ENABLE_ALERT_CROSS_TF_SUPPRESSION;
+		delete process.env.ALERT_CROSS_TF_WINDOW_MS;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.alertCrossTimeframeSuppression).toBe(false);
+		expect(response.body.dependencies.alertCrossTimeframeSuppression).toEqual({
+			enabled: false,
+			suppressedCount: expect.any(Number),
+			lastSuppressedAt: null,
+			activeTrackedSignals: 0,
+			windowMs: 60000,
+		});
+	});
+
+	it('reports alert cross-timeframe suppression and its effective window when enabled', async () => {
+		process.env.ENABLE_ALERT_CROSS_TF_SUPPRESSION = 'true';
+		process.env.ALERT_CROSS_TF_WINDOW_MS = '45000';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.alertCrossTimeframeSuppression).toBe(true);
+		expect(response.body.dependencies.alertCrossTimeframeSuppression).toMatchObject({
+			enabled: true,
+			windowMs: 45000,
+			suppressedCount: expect.any(Number),
+			lastSuppressedAt: null,
+			activeTrackedSignals: expect.any(Number),
+		});
+	});
+
+	it('falls back to the default cross-timeframe window for an out-of-range value', async () => {
+		process.env.ENABLE_ALERT_CROSS_TF_SUPPRESSION = 'true';
+		process.env.ALERT_CROSS_TF_WINDOW_MS = '99999999';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.alertCrossTimeframeSuppression.windowMs).toBe(60000);
+	});
+
+	it('reports alert HTF render feature flag as true by default', async () => {
+		delete process.env.ENABLE_ALERT_HTF_RENDER;
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.alertHtfRender).toBe(true);
+	});
+
+	it('reports alert HTF render feature flag as false when disabled', async () => {
+		process.env.ENABLE_ALERT_HTF_RENDER = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.alertHtfRender).toBe(false);
+	});
+
 	it('reports safe Firebase Remote Config load metadata without values and honest readiness', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 
@@ -755,6 +832,171 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.signalOutcomeWorker.enabled).toBe(true);
 	});
 
+	it('separates Langfuse configuration readiness from actual prompt serving', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
+		process.env.LANGFUSE_SECRET_KEY = 'sk-lf-status-secret';
+		process.env.LANGFUSE_PROMPT_LABEL = 'production';
+		process.env.LANGFUSE_PROMPT_CACHE_TTL_SECONDS = '60';
+
+		const { PromptService } = require('../../src/services/prompts');
+		// A real, never-used service yields the honest "configured but serving nothing yet" snapshot.
+		promptStatusSpies.push(
+			jest.spyOn(getPromptService(), 'getPromptResolutionStatus')
+				.mockReturnValue(new PromptService({ logger: { warn: jest.fn(), debug: jest.fn() } }).getPromptResolutionStatus()),
+		);
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		// Configuration/reachability keeps master's prompt-readiness shape (it answers
+		// "is the probe verified", not "were prompts served"). The serving facts live in
+		// dependencies.langfusePrompts below.
+		expect(response.body.featureFlags.langfusePrompts).toBe(true);
+		expect(response.body.dependencies.langfuse).toEqual(expect.objectContaining({
+			enabled: true,
+			configured: true,
+			readiness: 'unverified',
+			failOpen: true,
+		}));
+		// Prompt serving is a separate, honest fact.
+		expect(response.body.dependencies.langfusePrompts).toEqual(expect.objectContaining({
+			enabled: true,
+			configured: true,
+			servingStatus: 'no_traffic',
+			servingPrompts: false,
+			label: 'production',
+			cacheTtlSeconds: 60,
+			totalResolutions: 0,
+			langfuseResolutions: 0,
+			localResolutions: 0,
+			localResolutionRatePercent: null,
+			remoteFetchAttempts: 0,
+			remoteFetchSuccesses: 0,
+			remoteFetchFailures: 0,
+			remoteFetchSuccessRatePercent: null,
+			lastSuccessfulFetchAt: null,
+			lastErrorCategory: null,
+			consecutiveFailures: 0,
+			prompts: [],
+		}));
+		expect(JSON.stringify(response.body.dependencies.langfusePrompts)).not.toContain('sk-lf-status-secret');
+		expect(JSON.stringify(response.body.dependencies.langfusePrompts)).not.toContain('pk-lf-status-public');
+	});
+
+	it('exposes prompt-resolution telemetry on /api/capabilities with per-prompt resolved source', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
+		process.env.LANGFUSE_SECRET_KEY = 'sk-lf-status-secret';
+
+		const { PromptService, PromptKeys } = require('../../src/services/prompts');
+		const service = new PromptService({
+			logger: { warn: jest.fn(), debug: jest.fn() },
+			clientProvider: jest.fn().mockResolvedValue({
+				prompt: {
+					get: jest.fn().mockResolvedValue({
+						version: 12,
+						compile: jest.fn().mockReturnValue([
+							{
+								role: 'system',
+								content: 'Remote system prompt with invalidation_level, target_level, setup_type, risk_reward_ratio. 0.9+ only with corroborating sources, 0.6-0.8 partial.',
+							},
+							{ role: 'user', content: 'Context: {{alertContext}}' },
+						]),
+					}),
+				},
+			}),
+		});
+
+		await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'Bitcoin context' });
+		service.clientProvider = jest.fn().mockRejectedValue(new Error('connection reset sk-leak-me'));
+		await service.getTextPrompt(PromptKeys.MARKET_PRICE_FETCH, { symbol: 'BTCUSDT' });
+
+		promptStatusSpies.push(
+			jest.spyOn(getPromptService(), 'getPromptResolutionStatus')
+				.mockReturnValue(service.getPromptResolutionStatus()),
+		);
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.langfusePrompts).toEqual(expect.objectContaining({
+			enabled: true,
+			configured: true,
+			servingStatus: 'degraded',
+			servingPrompts: true,
+			totalResolutions: 2,
+			langfuseResolutions: 1,
+			localResolutions: 1,
+			localResolutionRatePercent: 50,
+			remoteFetchAttempts: 2,
+			remoteFetchSuccesses: 1,
+			remoteFetchFailures: 1,
+			remoteFetchSuccessRatePercent: 50,
+			lastErrorCategory: 'request_failed',
+			consecutiveFailures: 1,
+		}));
+		expect(response.body.dependencies.langfusePrompts.prompts).toEqual(expect.arrayContaining([
+			expect.objectContaining({ name: 'alert-enrichment', lastSource: 'langfuse', lastLangfuseVersion: 12 }),
+			expect.objectContaining({ name: 'market-price-fetch', lastSource: 'local' }),
+		]));
+		// Raw provider error text must never reach the status payload.
+		expect(JSON.stringify(response.body.dependencies.langfusePrompts)).not.toContain('sk-leak-me');
+	});
+
+	it('surfaces a 100 percent local fallback regression on /api/status', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
+		process.env.LANGFUSE_SECRET_KEY = 'sk-lf-status-secret';
+
+		const { PromptService, PromptKeys } = require('../../src/services/prompts');
+		const service = new PromptService({
+			logger: { warn: jest.fn(), debug: jest.fn() },
+			clientProvider: jest.fn().mockResolvedValue({
+				prompt: {
+					get: jest.fn().mockRejectedValue(new Error('Langfuse prompt not found')),
+				},
+			}),
+		});
+
+		await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'Bitcoin context' });
+		await service.getChatPrompt(PromptKeys.NEWS_ANALYSIS, { symbol: 'BTCUSDT', enrichedContext: 'ctx' });
+
+		promptStatusSpies.push(
+			jest.spyOn(getPromptService(), 'getPromptResolutionStatus')
+				.mockReturnValue(service.getPromptResolutionStatus()),
+		);
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		// Langfuse still reports itself configured/enabled — but the serving fact is
+		// now honest and lives in dependencies.langfusePrompts.
+		expect(response.body.dependencies.langfuse).toEqual(expect.objectContaining({
+			enabled: true,
+			configured: true,
+		}));
+		expect(response.body.dependencies.langfusePrompts).toEqual(expect.objectContaining({
+			// `ready` is the OBSERVED serving verdict, so a deployment serving nothing
+			// from Langfuse must not report ready here - that green light on a
+			// local_fallback state is the regression this block exists to expose.
+			ready: false,
+			servingStatus: 'local_fallback',
+			servingPrompts: false,
+			langfuseResolutions: 0,
+			localResolutions: 2,
+			localResolutionRatePercent: 100,
+			remoteFetchSuccessRatePercent: 0,
+			lastErrorCategory: 'prompt_not_found',
+		}));
+	});
+
 	it('reports dedicated worker role and heartbeat counters', async () => {
 		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 		process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'worker';
@@ -767,6 +1009,10 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.signalOutcomeWorker).toMatchObject({
 			role: 'worker',
 			running: false,
+			breakdownBucketCap: 100,
+			lastBreakdownBucketCount: 0,
+			lastBreakdownTruncated: false,
+			breakdownTruncationCount: 0,
 			lastRunScannedCount: 0,
 			lastRunPendingCount: 0,
 			lastRunErrorCount: 0,
@@ -1255,6 +1501,71 @@ describe('Status endpoints', () => {
 			});
 		} finally {
 			promptReadiness.resetPromptReadinessForTesting();
+		}
+	});
+
+	// Issue #1179 enables symbol-analysis persistence in production. Every Firestore
+	// error in `SymbolAnalysisStorageService` drops the record and still answers the
+	// analysis, so before the proven-readiness change a deployment that had never
+	// persisted an analysis reported the same `ready` verdict as a working one.
+	it('reports symbol analysis storage as unverified while credentials only look valid', async () => {
+		process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
+		symbolAnalysisStorageService.__resetForTesting();
+
+		try {
+			const response = await request(app)
+				.get('/api/capabilities')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.symbolAnalysisStorage).toBe(true);
+			expect(response.body.dependencies.symbolAnalysisStorage).toEqual({
+				enabled: true,
+				configured: true,
+				ready: false,
+				status: 'unverified',
+				readiness: 'unverified',
+				failOpen: true,
+				collection: 'symbolAnalyses',
+				retentionDays: 7,
+				writesAttempted: 0,
+				writesSucceeded: 0,
+				writesFailed: 0,
+				readsAttempted: 0,
+				readsSucceeded: 0,
+				readsFailed: 0,
+				consecutiveFailures: 0,
+				lastWriteAt: null,
+				lastFailureAt: null,
+				lastErrorReason: null,
+			});
+		} finally {
+			symbolAnalysisStorageService.__resetForTesting();
+		}
+	});
+
+	it('reports symbol analysis storage as ephemeral when the gate is off', async () => {
+		delete process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE;
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		symbolAnalysisStorageService.__resetForTesting();
+
+		try {
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.symbolAnalysisStorage).toBe(false);
+			expect(response.body.dependencies.symbolAnalysisStorage).toMatchObject({
+				enabled: false,
+				ready: false,
+				status: 'disabled',
+				writesAttempted: 0,
+				writesSucceeded: 0,
+			});
+		} finally {
+			symbolAnalysisStorageService.__resetForTesting();
 		}
 	});
 
@@ -2721,6 +3032,74 @@ describe('Status endpoints', () => {
 		expect(flagDisabledResponse.body.notificationChannelIntent.configured).toEqual([]);
 		expect(flagDisabledResponse.body.notificationChannelIntent.unconfigured)
 			.toEqual(expect.arrayContaining(['telegram', 'whatsapp', 'discord']));
+	});
+
+	it('exposes non-secret admin-paging health so a silent operator path is visible (#1168)', async () => {
+		const { registerAdminPagingManager, resetAdminPagingManagerForTesting } =
+			require('../../src/services/notification/adminPagingStatus');
+
+		try {
+			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+			process.env.ENABLE_WHATSAPP_ALERTS = 'true';
+			process.env.WHATSAPP_API_URL = 'https://greenapi.example';
+			process.env.WHATSAPP_API_KEY = 'green-key';
+			process.env.WHATSAPP_CHAT_ID = '120363000000000000@g.us';
+
+			const manager = {
+				getAdminPagingStatus: () => ({
+					enabled: true,
+					status: 'degraded',
+					telegramAdminChatConfigured: true,
+					fallbackEnabled: true,
+					fallbackChannels: ['whatsapp'],
+					attempts: 3,
+					successes: 0,
+					failures: 3,
+					consecutiveFailures: 3,
+					lastSuccessAt: null,
+					lastFailureAt: '2026-09-28T04:00:00.000Z',
+					lastSuccessChannel: null,
+					lastAttemptChannel: 'telegram',
+					lastErrorCategory: 'PROVIDER_ERROR',
+					lastError: 'Bad Request: chat not found',
+					byChannel: [{ pageType: 'delivery-failure', channel: 'telegram', success: 0, failure: 3 }],
+				}),
+			};
+			registerAdminPagingManager(manager);
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			// A channel readiness block says "ready"; adminPaging says whether the operator
+			// path is actually landing. Both are needed to see a 0/3 blackout.
+			expect(response.body.adminPaging).toEqual(expect.objectContaining({
+				status: 'degraded',
+				consecutiveFailures: 3,
+				fallbackChannels: ['whatsapp'],
+			}));
+			// Never leak destinations.
+			const serialized = JSON.stringify(response.body.adminPaging);
+			expect(serialized).not.toContain('-100-admin');
+			expect(serialized).not.toContain('120363000000000000@g.us');
+			expect(serialized).not.toContain('green-key');
+		} finally {
+			resetAdminPagingManagerForTesting();
+		}
+	});
+
+	it('omits adminPaging when no NotificationManager has been constructed', async () => {
+		const { resetAdminPagingManagerForTesting } =
+			require('../../src/services/notification/adminPagingStatus');
+		resetAdminPagingManagerForTesting();
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body).not.toHaveProperty('adminPaging');
 	});
 
 	it('waits for the initial notification redrive heartbeat before serializing status', async () => {

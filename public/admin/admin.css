@@ -79,6 +79,8 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .connection-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: .8rem; margin-top: .9rem; }
 .auth-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: .8rem; margin-top: .9rem; }
 .auth-form button { justify-self: start; }
+.auth-form .field, .key-field { min-width: 0; display: grid; gap: .4rem; }
+.auth-form .field-error { grid-column: 1 / -1; margin: 0; color: #aa263b; font-size: .85rem; }
 h2, h3 { margin-top: 0; }
 label { display: grid; gap: .4rem; }
 input, select, textarea { width: 100%; border: 1px solid var(--border-bright); border-radius: .65rem; background: #f8fafb; color: inherit; padding: .65rem .75rem; }
@@ -95,8 +97,11 @@ textarea { resize: vertical; font-family: inherit; }
 .response-error { color: #aa263b; border-color: var(--danger); }
 .destructive-action { background: #fff0f1; border-color: var(--danger); }
 .destructive-action:hover { background: #ffe0e4; }
-.dashboard { display: grid; gap: 1rem; }
-.dashboard-hero { display: flex; align-items: end; justify-content: space-between; gap: 1rem; padding: 1.2rem; border: 1px solid var(--border); border-radius: 1rem; background: #ffffff; }
+/* min-width: 0 on this grid and on its .dashboard-hero/.dashboard-section items is
+   load-bearing: a grid item defaults to min-width auto, so a 36rem chart or a wide table
+   would otherwise widen the page instead of scrolling inside its own box. */
+.dashboard { display: grid; gap: 1rem; min-width: 0; }
+.dashboard-hero { display: flex; align-items: end; justify-content: space-between; gap: 1rem; padding: 1.2rem; border: 1px solid var(--border); border-radius: 1rem; background: #ffffff; min-width: 0; }
 .dashboard-hero h2 { margin: 0; font-size: clamp(1.4rem, 3vw, 2rem); }
 .dashboard-hero p:not(.eyebrow) { max-width: 42rem; margin: .4rem 0 0; color: #596777; }
 .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .8rem; }
@@ -104,7 +109,7 @@ textarea { resize: vertical; font-family: inherit; }
 .metric-label { margin: 0; color: var(--muted); font-size: .78rem; font-weight: 700; }
 .metric-value { display: block; margin: .45rem 0 .3rem; color: #202833; font-size: 1.45rem; overflow-wrap: anywhere; }
 .metric-meta { min-height: 1.2rem; margin: 0; color: #596777; font-size: .78rem; }
-.dashboard-section { display: grid; gap: .7rem; padding: 1rem; border: 1px solid var(--border); border-radius: 1rem; background: #ffffff; }
+.dashboard-section { display: grid; gap: .7rem; padding: 1rem; border: 1px solid var(--border); border-radius: 1rem; background: #ffffff; min-width: 0; }
 .dashboard-section h3 { margin: 0; font-size: .95rem; }
 .status-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .65rem; }
 .status-card { display: flex; align-items: center; justify-content: space-between; gap: .7rem; }
@@ -126,6 +131,21 @@ textarea { resize: vertical; font-family: inherit; }
 .status-misconfigured, .status-unknown { background: #fff4db; color: var(--warning); }
 .status-active { background: #fff4db; color: var(--warning); }
 .status-danger { background: #fff0f1; color: var(--danger); }
+.selftest-actions { display: flex; flex-wrap: wrap; gap: .6rem; }
+.selftest-verdict { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; }
+.selftest-verdict .eyebrow { margin: 0; }
+.selftest-verdict .status-badge { padding: .55rem 1rem; font-size: 1.05rem; letter-spacing: .04em; }
+.selftest-totals { margin: 0; color: #3e4f60; font-size: .95rem; }
+.selftest-notice { margin: 0; padding: .6rem .75rem; border-left: 3px solid var(--warning); border-radius: 0 var(--radius-md) var(--radius-md) 0; background: #fffaf0; color: #6a5312; }
+.selftest-unavailable { margin: 0; font-size: 1rem; }
+.selftest-host { display: grid; gap: .8rem; }
+.selftest-check { display: block; min-width: 0; padding: .85rem 1rem; border: 1px solid var(--border); border-radius: var(--radius-md); background: #ffffff; }
+.selftest-check .section-heading { flex-wrap: wrap; align-items: start; }
+.selftest-check .section-heading > div:first-child { min-width: 0; flex: 1 1 8rem; }
+.selftest-check-meta { display: flex; flex: 0 0 auto; align-items: center; gap: .5rem; }
+.selftest-duration { color: var(--muted); font-family: var(--font-mono); font-size: .75rem; }
+.evidence-list { margin-top: .6rem; padding-top: .6rem; grid-template-columns: minmax(0, 1fr); }
+.evidence-list dt { overflow-wrap: anywhere; }
 .meter { display: flex; align-items: center; gap: .6rem; margin: .2rem 0; }
 .meter .progress-track { flex: 1 1 auto; }
 .meter-label { color: var(--muted); font-size: .76rem; white-space: nowrap; overflow-wrap: anywhere; }
@@ -150,7 +170,22 @@ textarea { resize: vertical; font-family: inherit; }
 @keyframes shimmer { 100% { transform: translateX(100%); } }
 .data-table { width: 100%; border-collapse: collapse; font-size: .85rem; }
 .data-table th, .data-table td { padding: .5rem .65rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+/* `white-space: nowrap` is deliberately absent from this rule. It stays scoped to the
+   scroller below (#952), because a grid item defaults to `min-width: auto`: an unbreakable
+   header on a table that is not inside a `.table-scroll` sets the page's own min-content
+   width instead of panning in a box. Measured on the Outcomes "Performance by window" table
+   before every `.data-table` was wrapped, a global nowrap took page-level horizontal overflow
+   from 0px to 468px at 375px (523px at 320px, 66px at 1024px). */
 .data-table th { color: var(--muted); font-size: .72rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+/* The caption is the table's accessible name and it stays in the DOM for that reason alone:
+   every result table is rendered under a visible heading already, so printing the caption
+   would repeat that text on screen. `position: absolute` (from .visually-hidden) keeps it out
+   of the table's layout, so it cannot widen the box or grow the page's scroll width. */
+.data-table caption { text-align: left; }
+/* Every `.data-table` is rendered inside this scroller by createResultTable(), so the header
+   row pans as one line instead of stacking into tall cells. This selector MUST stay scoped —
+   see the note above. */
+.table-scroll .data-table th { white-space: nowrap; }
 .data-table tr:last-child td { border-bottom: none; }
 .copy-button { padding: .3rem .55rem; border-radius: var(--radius-sm); font-size: .72rem; font-weight: 700; color: var(--muted); }
 .copy-button:hover { color: #202833; }
@@ -242,7 +277,9 @@ cabros-fields, cabros-result { display: block; min-width: 0; }
 .result-entry dd { margin: 0; overflow-wrap: anywhere; }
 .result-value { white-space: pre-wrap; overflow-wrap: anywhere; }
 .result-items { padding-left: 1.3rem; }
-.table-scroll { max-width: 100%; overflow: auto; }
+/* min-width: 0 is load-bearing: a grid item defaults to min-width auto, so a wide table
+   would otherwise widen the page instead of scrolling inside this box. */
+.table-scroll { max-width: 100%; min-width: 0; overflow: auto; }
 .results-table { border-collapse: collapse; width: 100%; font-size: .82rem; }
 .results-table caption { text-align: left; font-weight: 600; padding: .75rem 0; }
 .results-table th, .results-table td { text-align: left; vertical-align: top; padding: .7rem; border-bottom: 1px solid var(--border); min-width: 6rem; max-width: 28rem; overflow-wrap: anywhere; }

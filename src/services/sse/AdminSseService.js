@@ -13,6 +13,7 @@ function resolveRuntimeConfig() {
 const DEFAULT_HEARTBEAT_MS = 30000;
 const DEFAULT_MAX_CLIENT_CONNECTIONS = 5;
 const DEFAULT_MAX_TOTAL_CONNECTIONS = 100;
+const DEFAULT_DRAIN_TIMEOUT_MS = 15000;
 const RETRY_INTERVAL_MS = 5000;
 
 class AdminSseService {
@@ -20,6 +21,7 @@ class AdminSseService {
 		this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? null;
 		this.maxClientConnections = options.maxClientConnections ?? null;
 		this.maxTotalConnections = options.maxTotalConnections ?? null;
+		this.drainTimeoutMs = options.drainTimeoutMs ?? null;
 		this.logger = options.logger || console;
 
 		this.clients = new Map();
@@ -78,6 +80,21 @@ class AdminSseService {
 			return env;
 		}
 		return DEFAULT_MAX_TOTAL_CONNECTIONS;
+	}
+
+	getEffectiveDrainTimeoutMs() {
+		if (Number.isSafeInteger(this.drainTimeoutMs) && this.drainTimeoutMs >= 1000) {
+			return this.drainTimeoutMs;
+		}
+		const remote = resolveRuntimeConfig()?.ADMIN_SSE_DRAIN_TIMEOUT_MS;
+		if (Number.isSafeInteger(remote) && remote >= 1000) {
+			return remote;
+		}
+		const env = Number(process.env.ADMIN_SSE_DRAIN_TIMEOUT_MS);
+		if (Number.isSafeInteger(env) && env >= 1000) {
+			return env;
+		}
+		return DEFAULT_DRAIN_TIMEOUT_MS;
 	}
 
 	getClientCount() {
@@ -144,6 +161,8 @@ class AdminSseService {
 			req,
 			res,
 			connectedAt: new Date().toISOString(),
+			drainTimer: null,
+			drainListener: null,
 		};
 
 		// Set standard SSE response headers
@@ -186,10 +205,58 @@ class AdminSseService {
 		};
 	}
 
+	_clearClientDrainTracking(client) {
+		if (client.drainTimer) {
+			clearTimeout(client.drainTimer);
+			client.drainTimer = null;
+		}
+		if (client.drainListener) {
+			client.res.removeListener('drain', client.drainListener);
+			client.drainListener = null;
+		}
+	}
+
+	_handleWriteResult(clientId, client, writeOk) {
+		if (writeOk) {
+			// Write succeeded without backpressure; clear any pending backpressure timer
+			this._clearClientDrainTracking(client);
+			return;
+		}
+
+		// write() returned false -> stream is backpressured
+		if (client.drainTimer) {
+			// Already waiting for drain on this client
+			return;
+		}
+
+		const timeoutMs = this.getEffectiveDrainTimeoutMs();
+		const drainListener = () => {
+			this._clearClientDrainTracking(client);
+		};
+
+		client.drainListener = drainListener;
+		client.res.once('drain', drainListener);
+
+		client.drainTimer = setTimeout(() => {
+			this.logger.warn?.('[AdminSseService] Evicting client due to persistent write backpressure', {
+				clientId,
+				clientKey: client.clientKey,
+				timeoutMs,
+			});
+			this._clearClientDrainTracking(client);
+			this.removeClient(clientId);
+		}, timeoutMs);
+
+		if (typeof client.drainTimer.unref === 'function') {
+			client.drainTimer.unref();
+		}
+	}
+
 	removeClient(clientId) {
 		const client = this.clients.get(clientId);
 		if (!client) return;
 
+		this._clearClientDrainTracking(client);
 		this.clients.delete(clientId);
 		const clientIds = this.clientKeyCounts.get(client.clientKey);
 		if (clientIds) {
@@ -231,7 +298,8 @@ class AdminSseService {
 				continue;
 			}
 			try {
-				client.res.write(message);
+				const writeOk = client.res.write(message);
+				this._handleWriteResult(clientId, client, writeOk);
 			} catch (error) {
 				this.removeClient(clientId);
 			}
@@ -248,7 +316,8 @@ class AdminSseService {
 				continue;
 			}
 			try {
-				client.res.write(message);
+				const writeOk = client.res.write(message);
+				this._handleWriteResult(clientId, client, writeOk);
 			} catch (error) {
 				this.removeClient(clientId);
 			}
@@ -283,6 +352,7 @@ class AdminSseService {
 	closeAll() {
 		this._stopHeartbeatTimer();
 		for (const [clientId, client] of this.clients.entries()) {
+			this._clearClientDrainTracking(client);
 			try {
 				client.res.write(':closing server shutdown\n\n');
 				client.res.end();

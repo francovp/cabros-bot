@@ -88,6 +88,13 @@ const MAX_ALERT_TEXT_LENGTH = 20000;
 const DEFAULT_ALERT_STORAGE_RETENTION_DAYS = 90;
 const MAX_ALERT_STORAGE_RETENTION_DAYS = 3650;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+// The epoch divides evenly by both HOUR_MS and DAY_MS, so flooring a
+// millisecond timestamp by either width aligns to a UTC hour or UTC midnight.
+const SUMMARY_INTERVALS = Object.freeze({
+	hour: Object.freeze({ ms: HOUR_MS, maxDays: 31 }),
+	day: Object.freeze({ ms: DAY_MS, maxDays: 366 }),
+});
 // ponytail: 24h ceiling rejects stuck-request outliers; raise only with observed legitimate longer handlers.
 const MAX_PROCESSING_TIME_MS = 24 * 60 * 60 * 1000;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
@@ -107,6 +114,9 @@ const VALID_SETUP_TYPES = new Set([
 	'reversal',
 ]);
 const VALID_TRADINGVIEW_ENRICHMENT_STATUSES = new Set(['full', 'partial', 'failed', 'not_applicable']);
+// Closed enum: a suppression reason is only persisted for a marker this build
+// can produce, so an unexpected string can never widen the stored document shape.
+const VALID_SUPPRESSION_REASONS = new Set(['cross_timeframe_duplicate']);
 const FEATURE_TAGS = ['grounding', 'news-analysis', 'expanded-analysis', 'scanner', 'enrichment'];
 const MAX_PERSISTED_SYMBOLS_PER_BATCH = 200;
 
@@ -182,7 +192,8 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS === 'true'
 		|| process.env.ENABLE_TOKEN_COST_BUDGET === 'true'
 		|| rcBudgetEnabled
-		|| process.env.ENABLE_FIRESTORE_ALERT_FEEDBACK === 'true';
+		|| process.env.ENABLE_FIRESTORE_ALERT_FEEDBACK === 'true'
+		|| process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE === 'true';
 }
 
 function getAlertStorageRetentionDays() {
@@ -309,7 +320,11 @@ function formatAlertDocument(doc, options = {}) {
 	}
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
+		if (VALID_SUPPRESSION_REASONS.has(data.suppressionReason)) {
+			docObj.suppressionReason = data.suppressionReason;
+		}
 	}
+	applyBurstAggregationMarkers(docObj, data.burstAggregateId, data.burstSignalCount);
 	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
 		const currentPrice = toPositiveFiniteNumber(data.enrichmentData.current_price);
 		if (currentPrice !== null) {
@@ -1360,6 +1375,34 @@ function addDeliverySummary(summary, deliveryResults) {
 	}
 }
 
+function addBucketDeliverySummary(bucket, deliveryResults) {
+	if (!Array.isArray(deliveryResults)) {
+		return;
+	}
+
+	for (const result of deliveryResults) {
+		if (!result || typeof result !== 'object') {
+			continue;
+		}
+
+		const channel = typeof result.channel === 'string' && result.channel.trim()
+			? result.channel.trim()
+			: 'unknown';
+		if (!bucket.byChannel[channel]) {
+			bucket.byChannel[channel] = { total: 0, success: 0, failure: 0 };
+		}
+
+		bucket.byChannel[channel].total += 1;
+		if (result.success) {
+			bucket.byChannel[channel].success += 1;
+			bucket.success += 1;
+		} else {
+			bucket.byChannel[channel].failure += 1;
+			bucket.failure += 1;
+		}
+	}
+}
+
 function summarizeDeliveryResults(deliveryResults) {
 	if (!Array.isArray(deliveryResults)) {
 		return [];
@@ -1516,11 +1559,31 @@ function calculatePercentileLatency(samples, percentile = 95) {
 	return Math.round(sorted[index]);
 }
 
-function buildSummaryWindow({ from, to, limit }) {
-	const now = new Date();
-	const parsedTo = to ? new Date(to) : now;
-	const maxWindowMs = MAX_SUMMARY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-	let parsedFrom = from ? new Date(from) : new Date(parsedTo.getTime() - (24 * 60 * 60 * 1000));
+function getSummaryIntervalMaxWindowDays(interval) {
+	const config = SUMMARY_INTERVALS[interval];
+	return config ? config.maxDays : null;
+}
+
+function resolveSummaryWindowBounds({ from, to }) {
+	const parsedTo = to ? new Date(to) : new Date();
+	return {
+		from: from ? new Date(from) : new Date(parsedTo.getTime() - DAY_MS),
+		to: parsedTo,
+	};
+}
+
+function buildSummaryWindow({ from, to, limit, interval }) {
+	const { from: requestedFrom, to: parsedTo } = resolveSummaryWindowBounds({ from, to });
+	const intervalConfig = SUMMARY_INTERVALS[interval];
+	const maxDays = intervalConfig ? intervalConfig.maxDays : MAX_SUMMARY_WINDOW_DAYS;
+	const maxWindowMs = maxDays * DAY_MS;
+	let parsedFrom = requestedFrom;
+
+	if (intervalConfig && parsedTo.getTime() - parsedFrom.getTime() > maxWindowMs) {
+		const error = new Error(`Invalid summary window for interval "${interval}". Maximum window is ${maxDays} days.`);
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
 
 	if (parsedTo.getTime() - parsedFrom.getTime() > maxWindowMs) {
 		parsedFrom = new Date(parsedTo.getTime() - maxWindowMs);
@@ -1532,12 +1595,60 @@ function buildSummaryWindow({ from, to, limit }) {
 		throw error;
 	}
 
-	return {
+	const window = {
 		from: parsedFrom.toISOString(),
 		to: parsedTo.toISOString(),
 		limit: clampSummaryLimit(limit),
-		maxDays: MAX_SUMMARY_WINDOW_DAYS,
+		maxDays,
 	};
+	if (intervalConfig) {
+		window.interval = interval;
+	}
+
+	return window;
+}
+
+function buildSummaryBuckets(interval, window, docs) {
+	const { ms: stepMs } = SUMMARY_INTERVALS[interval];
+	const windowFromMs = Date.parse(window.from);
+	const windowToMs = Date.parse(window.to);
+	const firstBucketMs = Math.floor(windowFromMs / stepMs) * stepMs;
+
+	const buckets = [];
+	const indexByStartMs = new Map();
+	for (let startMs = firstBucketMs; startMs <= windowToMs; startMs += stepMs) {
+		const bucket = {
+			bucketStart: new Date(startMs).toISOString(),
+			total: 0,
+			success: 0,
+			failure: 0,
+			byChannel: {},
+		};
+		indexByStartMs.set(startMs, bucket);
+		buckets.push(bucket);
+	}
+
+	for (const doc of docs) {
+		const data = doc.data() || {};
+		const receivedAtMs = getTimestampMillis(data.receivedAt);
+		// The scan range-filters on receivedAt, so every returned document carries
+		// a readable one. An unreadable timestamp is excluded from the series
+		// rather than fabricated into a bucket at a time it did not occur.
+		if (receivedAtMs === null) {
+			continue;
+		}
+
+		const bucketStartMs = Math.floor(receivedAtMs / stepMs) * stepMs;
+		const bucket = indexByStartMs.get(bucketStartMs);
+		if (!bucket) {
+			continue;
+		}
+
+		bucket.total += 1;
+		addBucketDeliverySummary(bucket, data.deliveryResults);
+	}
+
+	return buckets;
 }
 
 function buildExportWindow({ from, to, limit }) {
@@ -1891,6 +2002,25 @@ function emitAlertDeliveryEvents(params, alertId = null) {
 }
 
 /**
+ * Attach the burst-aggregation markers shared by every alert in a collapsed
+ * regime message. Each constituent keeps its own document (so outcome analytics
+ * stay per-symbol) and they are correlated by `burstAggregateId`.
+ *
+ * Bounded and non-secret: a fixed-shape id and a small integer count.
+ */
+function applyBurstAggregationMarkers(target, burstAggregateId, burstSignalCount) {
+	if (!target || typeof target !== 'object') {
+		return;
+	}
+	if (typeof burstAggregateId === 'string' && burstAggregateId.trim()) {
+		target.burstAggregateId = burstAggregateId.trim().slice(0, 64);
+	}
+	if (Number.isFinite(burstSignalCount) && burstSignalCount >= 1) {
+		target.burstSignalCount = Math.trunc(burstSignalCount);
+	}
+}
+
+/**
  * Persist an alert document to Firestore.
  *
  * @param {Object} params
@@ -1904,6 +2034,8 @@ function emitAlertDeliveryEvents(params, alertId = null) {
  * @param {Array}   params.deliveryResults   - Array of SendResult from notificationManager.sendToAll()
  * @param {boolean} params.useTradingViewData - Whether ?useTradingViewData=true was set on the request
  * @param {number}  params.processingTimeMs  - Bounded handler processing duration in milliseconds
+ * @param {string}  [params.burstAggregateId] - Shared id of the regime burst this alert joined
+ * @param {number}  [params.burstSignalCount] - Signals collapsed into the shared burst message
  * @param {string[]} params.symbols - Complete request-level symbol set for multi-symbol reports
  * @param {string}  params.batchId - Stable request-scoped grouping key for batch counting
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
@@ -1923,6 +2055,9 @@ async function saveAlertInternal(params = {}) {
 		tradingViewEnrichmentApplied,
 		tradingViewEnrichmentStatus,
 		suppressedRepeat,
+		suppressionReason,
+		burstAggregateId,
+		burstSignalCount,
 		processingTimeMs,
 		source,
 		eventCategory,
@@ -2011,7 +2146,11 @@ async function saveAlertInternal(params = {}) {
 		if (suppressedRepeat === true) {
 			document.suppressedRepeat = true;
 			document.deliveryResults = [];
+			if (VALID_SUPPRESSION_REASONS.has(suppressionReason)) {
+				document.suppressionReason = suppressionReason;
+			}
 		}
+		applyBurstAggregationMarkers(document, burstAggregateId, burstSignalCount);
 		const normalizedProcessingTimeMs = normalizeProcessingTimeMs(processingTimeMs);
 		if (normalizedProcessingTimeMs !== null) {
 			document.processingTimeMs = normalizedProcessingTimeMs;
@@ -2253,9 +2392,11 @@ async function getAlertById(alertId) {
  * @param {string} params.idempotencyKey
  * @param {Array<string>} params.channels
  * @param {Array} params.deliveryResults
+ * @param {boolean} [params.reEnriched]
+ * @param {Object} [params.enrichmentData]
  * @returns {Promise<string|null>}
  */
-async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryResults }) {
+async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryResults, reEnriched, enrichmentData }) {
 	const firestore = getFirestore();
 	if (!firestore) {
 		if (isEnabled()) {
@@ -2276,6 +2417,8 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 		replayedAt: admin.firestore.FieldValue.serverTimestamp(),
 		expiresAt: buildRetentionExpiryTimestamp(),
 		source: 'alert-replay',
+		...(typeof reEnriched === 'boolean' ? { reEnriched } : {}),
+		...(enrichmentData && typeof enrichmentData === 'object' ? { enrichmentData: stripUndefinedFieldsDeep(sanitizeEnrichmentData(enrichmentData)) } : {}),
 	};
 
 	try {
@@ -2338,6 +2481,8 @@ function formatReplayDocument(doc) {
 		deliverySummary: compactDelivery,
 		replayedAt,
 		attemptId: typeof data.attemptId === 'string' ? data.attemptId : null,
+		...(typeof data.reEnriched === 'boolean' ? { reEnriched: data.reEnriched } : {}),
+		...(data.enrichmentData && typeof data.enrichmentData === 'object' ? { enrichmentData: data.enrichmentData } : {}),
 	};
 }
 
@@ -2853,9 +2998,12 @@ async function batchReplayAlerts(attempts) {
  * @param {string|undefined} params.symbol Optional symbol filter
  * @param {string|undefined} params.eventCategory Optional event category filter
  * @param {string|undefined} params.exchange Optional exchange filter
+ * @param {string|undefined} params.interval Optional `hour`/`day` bucket width. When
+ *        set, adds `summary.buckets` and reports `window.interval`; when omitted the
+ *        response is unchanged. Raises INVALID_REQUEST on a window over the cap.
  * @returns {Promise<Object|null>}
  */
-async function summarizeAlerts({ from, to, limit, source, enriched, symbol, eventCategory, exchange, signalClass } = {}) {
+async function summarizeAlerts({ from, to, limit, source, enriched, symbol, eventCategory, exchange, signalClass, interval } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -2865,7 +3013,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
 	}
 
-	const window = buildSummaryWindow({ from, to, limit });
+	const window = buildSummaryWindow({ from, to, limit, interval });
 	const hasFilters = typeof source === 'string'
 		|| typeof enriched === 'boolean'
 		|| typeof symbol === 'string'
@@ -3100,6 +3248,10 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		}
 	}
 
+	if (SUMMARY_INTERVALS[interval]) {
+		summary.buckets = buildSummaryBuckets(interval, window, docs);
+	}
+
 	return summary;
 }
 
@@ -3113,6 +3265,9 @@ module.exports = {
 	getAlertById,
 	summarizeAlerts,
 	calculatePercentileLatency,
+	resolveSummaryWindowBounds,
+	getSummaryIntervalMaxWindowDays,
+	SUMMARY_INTERVALS,
 	exportAlerts,
 	exportAlertsByIds,
 	getAlertsByIds,

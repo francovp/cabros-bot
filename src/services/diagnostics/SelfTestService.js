@@ -346,7 +346,12 @@ function createSelfTestService({ botOrGetter, getBinanceOrderService } = {}) {
 		};
 	}
 
-	return { run, getLastResult, getStatus };
+	function updateDependencies({ botOrGetter: newBot, getBinanceOrderService: newBinance } = {}) {
+		if (newBot !== undefined) botOrGetter = newBot;
+		if (newBinance !== undefined) getBinanceOrderService = newBinance;
+	}
+
+	return { run, getLastResult, getStatus, updateDependencies };
 }
 
 module.exports = {

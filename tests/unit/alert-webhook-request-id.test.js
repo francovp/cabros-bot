@@ -88,6 +88,36 @@ describe('alert request ID resolution and echo', () => {
 			}));
 		});
 
+		it('forwards invalidation_level, target_level, setup_type, and risk_reward_ratio from alert.enriched to recordSignal (GH-832)', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			enrichAlert.mockResolvedValue({
+				current_price: 65000,
+				invalidation_level: 63000,
+				target_level: 68000,
+				setup_type: 'breakout',
+				risk_reward_ratio: 2.5,
+				tradingViewEnrichmentApplied: true,
+			});
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.recordSignal.mockResolvedValue(null);
+
+			const response = buildResponse();
+			await postAlert({})({
+				headers: {},
+				body: { text: 'BINANCE:BTCUSDT (1h) BUY' },
+				query: { useTradingViewData: 'true' },
+			}, response);
+
+			expect(signalOutcomeService.recordSignal).toHaveBeenCalledWith(expect.objectContaining({
+				invalidationLevel: 63000,
+				targetLevel: 68000,
+				stop: 63000,
+				target: 68000,
+				setupType: 'breakout',
+				riskRewardRatio: 2.5,
+			}));
+		});
+
 		it('normalizes derived quote provenance for Binance fallback prices', async () => {
 			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
 			enrichAlert.mockResolvedValue({
