@@ -138,7 +138,12 @@ function isFirestoreEnabled() {
 	// disagree.
 	return FIRESTORE_READINESS_GATE_KEYS.some((key) => {
 		const remote = resolveRemoteOverride(key);
-		return typeof remote === 'boolean' ? remote : isEnabled(process.env[key]);
+		if (typeof remote === 'boolean') {
+			return remote;
+		}
+		return isEnabled(process.env[key])
+			|| (key === 'ENABLE_FIRESTORE_IDEMPOTENCY'
+				&& isEnabled(process.env.ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE));
 	});
 }
 

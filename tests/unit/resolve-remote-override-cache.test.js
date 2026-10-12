@@ -3,7 +3,7 @@
  * load-bearing, and this suite exists to detect its removal.
  *
  * It lives in its own file because proving the cache requires `jest.resetModules()`
- * plus a counting mock of `RemoteConfigService`, and both of those contaminate
+ * plus a swappable export from `RemoteConfigService`, and both of those contaminate
  * every later test in a shared registry.
  *
  * Why it matters: the storage predicates that call `resolveRemoteOverride()` run on
@@ -30,52 +30,45 @@ describe('resolveRemoteOverride module-resolution cache', () => {
 		jest.dontMock('../../src/services/remoteConfig/RemoteConfigService');
 	});
 
-	function loadWithCountedModule() {
-		let requireCalls = 0;
-		jest.doMock('../../src/services/remoteConfig/RemoteConfigService', () => {
-			requireCalls += 1;
-			return { getRemoteOverride: () => undefined };
-		});
+	function loadWithGetter(getRemoteOverride) {
+		jest.doMock('../../src/services/remoteConfig/RemoteConfigService', () => ({ getRemoteOverride }));
 		jest.resetModules();
 		// eslint-disable-next-line global-require
+		const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+		// eslint-disable-next-line global-require
 		const helper = require('../../src/services/remoteConfig/resolveRemoteOverride');
-		return { helper, count: () => requireCalls };
+		return { helper, remoteConfigService };
 	}
 
 	it('resolves the RemoteConfig module once and reuses that reference', () => {
-		const { helper, count } = loadWithCountedModule();
+		const originalGetter = jest.fn(() => true);
+		const replacementGetter = jest.fn(() => false);
+		const { helper, remoteConfigService } = loadWithGetter(originalGetter);
 		helper.resetRemoteOverrideCacheForTesting();
 
-		helper.resolveRemoteOverride('ENABLE_FIRESTORE_IDEMPOTENCY');
-		expect(count()).toBe(1);
+		expect(helper.resolveRemoteOverride('ENABLE_FIRESTORE_IDEMPOTENCY')).toBe(true);
+		remoteConfigService.getRemoteOverride = replacementGetter;
 
-		// Without the cache this would be 3 — one `require()` per call.
-		helper.resolveRemoteOverride('ENABLE_FIRESTORE_JOB_STORAGE');
-		helper.resolveRemoteOverride('ENABLE_FIRESTORE_ALERT_STORAGE');
-		expect(count()).toBe(1);
+		// A fresh property lookup would now return false. The cached function
+		// reference continues to use the getter captured by the first resolution.
+		expect(helper.resolveRemoteOverride('ENABLE_FIRESTORE_JOB_STORAGE')).toBe(true);
+		expect(originalGetter).toHaveBeenCalledTimes(2);
+		expect(replacementGetter).not.toHaveBeenCalled();
 	});
 
 	it('re-resolves after the cache is explicitly reset', () => {
-		// Jest caches the mocked module in its registry, so counting factory
-		// invocations cannot observe the second resolution. What *is* observable — and
-		// what the cache actually changes — is which `getRemoteOverride` function the
-		// helper holds onto: a cached reference is the original, while an uncached
-		// helper picks up a fresh one after the module registry is cleared.
-		jest.doMock('../../src/services/remoteConfig/RemoteConfigService', () => ({
-			getRemoteOverride: () => undefined,
-		}));
-		jest.resetModules();
-		// eslint-disable-next-line global-require
-		const helper = require('../../src/services/remoteConfig/resolveRemoteOverride');
-
+		const originalGetter = jest.fn(() => true);
+		const replacementGetter = jest.fn(() => false);
+		const { helper, remoteConfigService } = loadWithGetter(originalGetter);
 		helper.resetRemoteOverrideCacheForTesting();
-		helper.resolveRemoteOverride('ENABLE_FIRESTORE_IDEMPOTENCY');
+		expect(helper.resolveRemoteOverride('ENABLE_FIRESTORE_IDEMPOTENCY')).toBe(true);
 
-		// Invalidate the helper's cached module reference without touching its own
-		// module state, then confirm the helper still returns undefined rather than
-		// resolving against a stale or missing module.
+		remoteConfigService.getRemoteOverride = replacementGetter;
+		expect(helper.resolveRemoteOverride('ENABLE_FIRESTORE_IDEMPOTENCY')).toBe(true);
 		helper.resetRemoteOverrideCacheForTesting();
-		expect(helper.resolveRemoteOverride('ENABLE_FIRESTORE_IDEMPOTENCY')).toBeUndefined();
+		expect(helper.resolveRemoteOverride('ENABLE_FIRESTORE_IDEMPOTENCY')).toBe(false);
+		expect(originalGetter).toHaveBeenCalledTimes(2);
+		expect(replacementGetter).toHaveBeenCalledTimes(1);
 	});
 
 	it('forwards the requested key to getRemoteOverride', () => {
