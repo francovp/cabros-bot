@@ -346,6 +346,10 @@ Text containing no configured route key is delivered normally through the reques
 tokens are not treated as symbols. Each delivery result includes the matched `symbol`
 (bare form, so a `NASDAQ:NVDA` route reports `NVDA`).
 
+When the per-alert decision audit is enabled, `decision.dispatch.requestedChannelMode`
+is `symbol_route` for a matching route, `explicit` for request-level `channels`, or
+`broadcast` when the enabled channel set handles the alert.
+
 When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` is enabled and it narrows the
 request-level channel set, every `symbolRoutes` entry is intersected with the same set,
 so a route cannot resurrect a channel that is still in its repeat-suppression cooldown.

@@ -16545,6 +16545,15 @@
                   "type": "string"
                 }
               },
+              "requestedChannelMode": {
+                "type": "string",
+                "enum": [
+                  "explicit",
+                  "symbol_route",
+                  "broadcast"
+                ],
+                "description": "Whether dispatch used request-level channels, a matching symbol route, or the enabled-channel broadcast set."
+              },
               "sentTo": {
                 "type": "array",
                 "items": {

@@ -17,6 +17,7 @@ const {
 	sendWithNotificationRouting,
 	getRequestedChannels,
 	getDeliveredChannels,
+	resolveSymbolRouteDispatches,
 } = require('../../../../services/notification/requestRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
@@ -171,12 +172,14 @@ async function processEnrichment(alert, options) {
 		// Budget telemetry fails open; the provider enablement remains authoritative.
 	}
 	const isTradingViewMcpEnabled = runtimeConfig.ENABLE_TRADINGVIEW_MCP_ENRICHMENT && useTradingViewData;
+	const isTradingViewMcpAttemptEligible = isTradingViewMcpEnabled && hasTradingViewSignal;
+	const enrichmentAttempted = isGeminiEnabled || isTradingViewMcpAttemptEligible;
 	const enrichmentAudit = {
-		attempted: Boolean(isGeminiEnabled || isTradingViewMcpEnabled),
-		provider: isGeminiEnabled && isTradingViewMcpEnabled
+		attempted: Boolean(enrichmentAttempted),
+		provider: isGeminiEnabled && isTradingViewMcpAttemptEligible
 			? 'gemini-grounding+tradingview-mcp'
-			: (isTradingViewMcpEnabled ? 'tradingview-mcp' : (isGeminiEnabled ? 'gemini-grounding' : null)),
-		status: isGeminiEnabled || isTradingViewMcpEnabled ? 'pending' : 'not_attempted',
+			: (isTradingViewMcpAttemptEligible ? 'tradingview-mcp' : (isGeminiEnabled ? 'gemini-grounding' : null)),
+		status: enrichmentAttempted ? 'pending' : (isTradingViewMcpEnabled ? 'not_applicable' : 'not_attempted'),
 		fallbackUsed: false,
 	};
 	alert.decisionEnrichment = enrichmentAudit;
@@ -213,14 +216,16 @@ async function processEnrichment(alert, options) {
 					enrichedAlert.tradingViewEnrichmentApplied = ['full', 'partial'].includes(tradingViewEnrichmentStatus);
 					alert.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
 				}
-				enrichmentAudit.status = alert.tradingViewEnrichmentStatus || 'success';
+				enrichmentAudit.status = isTradingViewMcpAttemptEligible
+					? (alert.tradingViewEnrichmentStatus || 'success')
+					: (isGeminiEnabled ? 'success' : (alert.tradingViewEnrichmentStatus || 'success'));
 				enrichmentAudit.fallbackUsed = enrichmentAudit.status === 'failed';
 				console.debug('[Alert] Enrichment completed, sources:', (enrichedAlert.sources && enrichedAlert.sources.length) || 0);
 			} else {
 				if (isTradingViewMcpEnabled) {
 					alert.tradingViewEnrichmentStatus = hasTradingViewSignal ? 'failed' : 'not_applicable';
 				}
-				enrichmentAudit.status = alert.tradingViewEnrichmentStatus || (enrichmentAudit.attempted ? 'failed' : 'not_attempted');
+				enrichmentAudit.status = enrichmentAudit.attempted ? 'failed' : (alert.tradingViewEnrichmentStatus || 'not_attempted');
 				enrichmentAudit.fallbackUsed = enrichmentAudit.attempted;
 				console.debug('[Alert] Enrichment skipped: alert text did not match enabled providers');
 			}
@@ -228,7 +233,7 @@ async function processEnrichment(alert, options) {
 			if (isTradingViewMcpEnabled) {
 				alert.tradingViewEnrichmentStatus = hasTradingViewSignal ? 'failed' : 'not_applicable';
 			}
-			enrichmentAudit.status = alert.tradingViewEnrichmentStatus || (enrichmentAudit.attempted ? 'failed' : 'not_attempted');
+			enrichmentAudit.status = enrichmentAudit.attempted ? 'failed' : (alert.tradingViewEnrichmentStatus || 'not_attempted');
 			enrichmentAudit.fallbackUsed = enrichmentAudit.attempted;
 			console.warn('[Alert] Enrichment failed, using original text:', error.message);
 		} finally {
@@ -239,7 +244,7 @@ async function processEnrichment(alert, options) {
 	return enriched;
 }
 
-function buildDecisionAudit({ requestId, parsedSignal, enrichment, gates, requestedChannels, deliveredChannels, errors } = {}) {
+function buildDecisionAudit({ requestId, parsedSignal, enrichment, gates, requestedChannels, requestedChannelMode, deliveredChannels, errors } = {}) {
 	if (getRuntimeConfig().ENABLE_ALERT_DECISION_AUDIT !== true) return null;
 	const decision = {
 		parsed: parsedSignal
@@ -272,6 +277,7 @@ function buildDecisionAudit({ requestId, parsedSignal, enrichment, gates, reques
 	if (Array.isArray(requestedChannels) || Array.isArray(deliveredChannels)) {
 		decision.dispatch = {
 			requestedChannels: Array.isArray(requestedChannels) ? requestedChannels.slice(0, 16) : [],
+			...(requestedChannelMode ? { requestedChannelMode } : {}),
 			sentTo: Array.isArray(deliveredChannels) ? deliveredChannels.slice(0, 16) : [],
 		};
 	}
@@ -284,6 +290,11 @@ function buildDecisionAudit({ requestId, parsedSignal, enrichment, gates, reques
 	}
 	if (typeof requestId === 'string' && requestId) decision.requestId = requestId;
 	return decision;
+}
+
+function getRequestedChannelMode(routing = {}, text) {
+	if (resolveSymbolRouteDispatches(text, routing.symbolRoutes, routing)) return 'symbol_route';
+	return Array.isArray(routing.channels) ? 'explicit' : 'broadcast';
 }
 
 function buildCooldownGateAudit(name, requestedChannels, allowedChannels) {
@@ -550,13 +561,16 @@ function postAlert(botOrGetter) {
 
 			if (dryRun) {
 				console.debug('[Alert] Dry-run mode: skipping delivery; decision persistence is opt-in');
-				const dryRunRequestedChannels = Array.isArray(routing.channels) ? routing.channels : [];
+				const dryRunNotificationManager = notificationManager || bootstrapGetInitialized();
+				const dryRunRequestedChannels = getRequestedChannels(dryRunNotificationManager, routing, alert.text);
+				const requestedChannelMode = getRequestedChannelMode(routing, alert.text);
 				const dryRunDecision = buildDecisionAudit({
 					requestId,
 					parsedSignal,
 					enrichment: alert.decisionEnrichment,
 					gates: [{ name: 'dryRun', decision: 'skip', reason: 'dry_run' }],
 					requestedChannels: dryRunRequestedChannels,
+					requestedChannelMode,
 					deliveredChannels: [],
 				});
 				res.json({
@@ -886,6 +900,7 @@ function postAlert(botOrGetter) {
 				enrichment: alert.decisionEnrichment,
 				gates: cooldownGateAudits,
 				requestedChannels,
+				requestedChannelMode: getRequestedChannelMode(routing, alert.text),
 				deliveredChannels,
 			});
 			const processingTimeMs = Math.max(0, Date.now() - startTime);

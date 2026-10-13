@@ -42,6 +42,13 @@ function getDocumentedApiOperations(contract) {
 }
 
 describe('OpenAPI contract', () => {
+	it('documents all decision-audit dispatch channel modes', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+		expect(contract.components.schemas.AlertDecision.properties.dispatch.properties.requestedChannelMode.enum)
+			.toEqual(['explicit', 'symbol_route', 'broadcast']);
+	});
+
 	it('documents the concrete alert detail response including lastReplay', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const operation = contract.paths['/api/alerts/{alertId}'].get;

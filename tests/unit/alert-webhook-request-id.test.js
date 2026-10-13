@@ -44,6 +44,7 @@ const signalOutcomeService = require('../../src/services/storage/SignalOutcomeSe
 const {
 	postAlert,
 	resolveRequestId,
+	initializeNotificationServices,
 	resetNotificationManagerForTesting,
 	getCooldownChannelIdentity,
 } = require('../../src/controllers/webhooks/handlers/alert/alert');
@@ -334,10 +335,11 @@ describe('alert request ID resolution and echo', () => {
 			expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
 		});
 
-		it('persists an opted-in dry-run audit with no delivered channels', async () => {
+		it('persists effective broadcast channels in an opted-in dry-run audit', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			process.env.ENABLE_ALERT_DECISION_AUDIT = 'true';
 			alertStorageService.isEnabled.mockReturnValue(true);
+			await initializeNotificationServices({});
 			const response = buildResponse();
 
 			await postAlert({})({
@@ -348,9 +350,113 @@ describe('alert request ID resolution and echo', () => {
 
 			expect(alertStorageService.saveAlert).toHaveBeenCalledWith(expect.objectContaining({
 				requestId: 'dryrun-audit-42',
+				channels: ['telegram'],
 				decision: expect.objectContaining({
 					gates: [expect.objectContaining({ name: 'dryRun', decision: 'skip' })],
-					dispatch: { requestedChannels: [], sentTo: [] },
+					dispatch: {
+						requestedChannels: ['telegram'],
+						requestedChannelMode: 'broadcast',
+						sentTo: [],
+					},
+				}),
+			}));
+		});
+
+		it('records explicit request-level channel mode in the audit', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.ENABLE_ALERT_DECISION_AUDIT = 'true';
+			alertStorageService.isEnabled.mockReturnValue(true);
+			const response = buildResponse();
+
+			await postAlert({})({
+				headers: {},
+				body: { text: 'BTC alert', channels: ['telegram'] },
+				query: {},
+			}, response);
+
+			expect(alertStorageService.saveAlert).toHaveBeenCalledWith(expect.objectContaining({
+				decision: expect.objectContaining({
+					dispatch: expect.objectContaining({
+						requestedChannels: ['telegram'],
+						requestedChannelMode: 'explicit',
+					}),
+				}),
+			}));
+		});
+
+		it('does not record a TradingView attempt for non-signal text', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			process.env.ENABLE_ALERT_DECISION_AUDIT = 'true';
+			alertStorageService.isEnabled.mockReturnValue(true);
+			enrichAlert.mockResolvedValueOnce(null);
+			const response = buildResponse();
+
+			await postAlert({})({
+				headers: {},
+				body: { text: 'A broad market update without a TradingView signal.' },
+				query: { useTradingViewData: 'true' },
+			}, response);
+
+			expect(alertStorageService.saveAlert).toHaveBeenCalledWith(expect.objectContaining({
+				decision: expect.objectContaining({
+					enrichment: {
+						attempted: false,
+						provider: null,
+						status: 'not_applicable',
+						fallbackUsed: false,
+					},
+				}),
+			}));
+		});
+
+		it('records Gemini success when TradingView is enabled but no signal is present', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.ENABLE_ALERT_DECISION_AUDIT = 'true';
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			alertStorageService.isEnabled.mockReturnValue(true);
+			enrichAlert.mockResolvedValueOnce({ sentiment: 'NEUTRAL', sources: [], truncated: false });
+			const response = buildResponse();
+
+			await postAlert({})({
+				headers: {},
+				body: { text: 'A broad market update without a TradingView signal.' },
+				query: { useTradingViewData: 'true' },
+			}, response);
+
+			expect(alertStorageService.saveAlert).toHaveBeenCalledWith(expect.objectContaining({
+				decision: expect.objectContaining({
+					enrichment: {
+						attempted: true,
+						provider: 'gemini-grounding',
+						status: 'success',
+						fallbackUsed: false,
+					},
+				}),
+			}));
+		});
+
+		it('records symbol-route dispatch mode when a configured symbol route matches', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.ENABLE_ALERT_DECISION_AUDIT = 'true';
+			alertStorageService.isEnabled.mockReturnValue(true);
+			const response = buildResponse();
+
+			await postAlert({})({
+				headers: {},
+				body: {
+					text: 'BINANCE:BTCUSDT breakout confirmed',
+					symbolRoutes: { BTCUSDT: { channels: ['telegram'] } },
+				},
+				query: {},
+			}, response);
+
+			expect(alertStorageService.saveAlert).toHaveBeenCalledWith(expect.objectContaining({
+				decision: expect.objectContaining({
+					dispatch: expect.objectContaining({
+						requestedChannels: ['telegram'],
+						requestedChannelMode: 'symbol_route',
+					}),
 				}),
 			}));
 		});
