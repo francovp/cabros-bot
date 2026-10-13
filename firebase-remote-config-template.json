@@ -469,6 +469,13 @@
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
     },
+    "ENABLE_ALERT_DECISION_AUDIT": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Persist an opt-in bounded decision audit trail for stored webhook alerts",
+      "valueType": "BOOLEAN"
+    },
     "ENABLE_OUTCOME_INFORMED_DELIVERY": {
       "defaultValue": {
         "value": "false"

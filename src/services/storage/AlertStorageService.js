@@ -115,6 +115,12 @@ const VALID_SETUP_TYPES = new Set([
 	'reversal',
 ]);
 const VALID_TRADINGVIEW_ENRICHMENT_STATUSES = new Set(['full', 'partial', 'failed', 'not_applicable']);
+const VALID_DECISION_GATE_DECISIONS = new Set(['allow', 'suppress', 'skip']);
+const MAX_DECISION_DEPTH = 6;
+const MAX_DECISION_OBJECT_KEYS = 32;
+const MAX_DECISION_ARRAY_ITEMS = 32;
+const MAX_DECISION_TEXT_LENGTH = 1000;
+const MAX_DECISION_GATE_COUNT = 16;
 // Closed enum: a suppression reason is only persisted for a marker this build
 // can produce, so an unexpected string can never widen the stored document shape.
 const VALID_SUPPRESSION_REASONS = new Set(['cross_timeframe_duplicate']);
@@ -167,6 +173,109 @@ function isEnabled() {
 		return remote;
 	}
 	return process.env.ENABLE_FIRESTORE_ALERT_STORAGE === 'true';
+}
+
+function isDecisionAuditEnabled() {
+	// Use the request-time Remote Config override when present; otherwise keep the
+	// deployment environment value as the fail-open source of truth.
+	const remote = resolveRemoteOverride('ENABLE_ALERT_DECISION_AUDIT');
+	if (typeof remote === 'boolean') {
+		return remote;
+	}
+	return process.env.ENABLE_ALERT_DECISION_AUDIT === 'true';
+}
+
+function sanitizeDecisionAuditDepth(value, depth = 1) {
+	if (value === null || value === undefined || depth > MAX_DECISION_DEPTH) return undefined;
+	if (typeof value === 'string') {
+		return value.length > MAX_DECISION_TEXT_LENGTH ? value.slice(0, MAX_DECISION_TEXT_LENGTH) : value;
+	}
+	if (typeof value === 'boolean') return value;
+	if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+	if (typeof value !== 'object') return undefined;
+	if (Array.isArray(value)) {
+		return value.slice(0, MAX_DECISION_ARRAY_ITEMS)
+			.map((item) => sanitizeDecisionAuditDepth(item, depth + 1))
+			.filter((item) => item !== undefined);
+	}
+	const proto = Object.getPrototypeOf(value);
+	if (proto !== Object.prototype && proto !== null) return undefined;
+	const result = {};
+	let keyCount = 0;
+	for (const [key, item] of Object.entries(value)) {
+		if (keyCount >= MAX_DECISION_OBJECT_KEYS) break;
+		if (['__proto__', 'constructor', 'prototype'].includes(key)) continue;
+		const sanitized = sanitizeDecisionAuditDepth(item, depth + 1);
+		if (sanitized !== undefined) {
+			result[key.slice(0, 64)] = sanitized;
+			keyCount += 1;
+		}
+	}
+	return result;
+}
+
+function sanitizeDecisionAudit(value) {
+	if (!isDecisionAuditEnabled() || !value || typeof value !== 'object' || Array.isArray(value)) return null;
+	return sanitizeDecisionAuditDepth(value);
+}
+
+function sanitizeDecisionGate(rawGate) {
+	if (!rawGate || typeof rawGate !== 'object' || Array.isArray(rawGate)) return null;
+	const name = typeof rawGate.name === 'string' ? rawGate.name.trim().slice(0, 64) : '';
+	const decision = rawGate.decision;
+	if (!name || !VALID_DECISION_GATE_DECISIONS.has(decision)) return null;
+	const gate = { name, decision };
+	if (typeof rawGate.reason === 'string' && rawGate.reason.trim()) {
+		gate.reason = rawGate.reason.trim().slice(0, MAX_DECISION_TEXT_LENGTH);
+	}
+	if (rawGate.evidence && typeof rawGate.evidence === 'object' && !Array.isArray(rawGate.evidence)) {
+		const evidence = {};
+		for (const [key, value] of Object.entries(rawGate.evidence).slice(0, MAX_DECISION_OBJECT_KEYS)) {
+			if (['__proto__', 'constructor', 'prototype'].includes(key)) continue;
+			if (typeof value === 'string') evidence[key.slice(0, 64)] = value.slice(0, MAX_DECISION_TEXT_LENGTH);
+			else if (typeof value === 'boolean') evidence[key.slice(0, 64)] = value;
+			else if (typeof value === 'number' && Number.isFinite(value)) evidence[key.slice(0, 64)] = value;
+		}
+		if (Object.keys(evidence).length > 0) gate.evidence = evidence;
+	}
+	return gate;
+}
+
+function sanitizeDecisionGates(gates) {
+	if (!Array.isArray(gates)) return [];
+	return gates.slice(0, MAX_DECISION_GATE_COUNT).map(sanitizeDecisionGate).filter(Boolean);
+}
+
+function createDecisionGatesRollup() {
+	return { denominator: 0, gates: [] };
+}
+
+function recordDecisionGatesRollup(rollup, decision) {
+	rollup.denominator += 1;
+	const gates = decision && typeof decision === 'object' && Array.isArray(decision.gates)
+		? sanitizeDecisionGates(decision.gates)
+		: [];
+	for (const gate of gates) {
+		let entry = rollup.gates.find((item) => item.name === gate.name && item.decision === gate.decision);
+		if (!entry) {
+			entry = { name: gate.name, decision: gate.decision, populated: 0, percentage: 0 };
+			rollup.gates.push(entry);
+		}
+		entry.populated += 1;
+	}
+}
+
+function finalizeDecisionGatesRollup(rollup) {
+	if (rollup.denominator <= 0) {
+		rollup.gates = [];
+		return;
+	}
+	for (const entry of rollup.gates) {
+		entry.percentage = Math.round((entry.populated / rollup.denominator) * 10000) / 100;
+	}
+	rollup.gates.sort((left, right) => left.name === right.name
+		? left.decision.localeCompare(right.decision)
+		: left.name.localeCompare(right.name));
 }
 
 function canInitializeFirestore() {
@@ -327,6 +436,10 @@ function formatAlertDocument(doc, options = {}) {
 		if (VALID_SUPPRESSION_REASONS.has(data.suppressionReason)) {
 			docObj.suppressionReason = data.suppressionReason;
 		}
+	}
+	if (isDecisionAuditEnabled()) {
+		const decision = sanitizeDecisionAudit(data.decision);
+		if (decision) docObj.decision = decision;
 	}
 	applyBurstAggregationMarkers(docObj, data.burstAggregateId, data.burstSignalCount);
 	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
@@ -1512,7 +1625,7 @@ function truncateAlertText(text) {
 
 const formatExportEnrichmentData = formatEnrichmentSummary;
 
-function formatExportRecord(doc, { includeText, includeEnrichment } = {}) {
+function formatExportRecord(doc, { includeText, includeEnrichment, includeDecision = false } = {}) {
 	const data = doc.data() || {};
 	const record = {
 		id: doc.id,
@@ -1566,6 +1679,10 @@ function formatExportRecord(doc, { includeText, includeEnrichment } = {}) {
 
 	if (includeEnrichment) {
 		record.enrichmentData = formatExportEnrichmentData(data.enrichmentData, data);
+	}
+	if (includeDecision && isDecisionAuditEnabled()) {
+		const decision = sanitizeDecisionAudit(data.decision);
+		if (decision) record.decision = decision;
 	}
 
 	if (includeText) {
@@ -2130,6 +2247,7 @@ async function saveAlertInternal(params = {}) {
 		discordWebhookUrl,
 		routing,
 		side,
+		decision,
 		alertId: providedAlertId,
 	} = params;
 	if (!isEnabled()) {
@@ -2196,6 +2314,8 @@ async function saveAlertInternal(params = {}) {
 		if (typeof requestId === 'string' && requestId.trim()) {
 			document.requestId = requestId.trim();
 		}
+		const sanitizedDecision = sanitizeDecisionAudit(decision);
+		if (sanitizedDecision) document.decision = sanitizedDecision;
 		if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(tradingViewEnrichmentStatus)) {
 			document.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
 		}
@@ -2816,7 +2936,7 @@ async function getReplayAttemptByIdempotencyKey(alertId, idempotencyKey) {
  * @param {boolean|undefined} params.includeEnrichment Include bounded enrichmentData when true
  * @returns {Promise<{window: Object, alerts: Array}>}
  */
-async function exportAlerts({ from, to, limit, source, enriched, signalClass, includeText = false, includeEnrichment = false } = {}) {
+async function exportAlerts({ from, to, limit, source, enriched, signalClass, includeText = false, includeEnrichment = false, includeDecision = false } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -2880,7 +3000,7 @@ async function exportAlerts({ from, to, limit, source, enriched, signalClass, in
 		}
 	}
 
-	const alerts = docs.map(doc => formatExportRecord(doc, { includeText, includeEnrichment }));
+	const alerts = docs.map(doc => formatExportRecord(doc, { includeText, includeEnrichment, includeDecision }));
 
 	return {
 		window,
@@ -3090,7 +3210,7 @@ async function batchReplayAlerts(attempts) {
  *        response is unchanged. Raises INVALID_REQUEST on a window over the cap.
  * @returns {Promise<Object|null>}
  */
-async function summarizeAlerts({ from, to, limit, source, enriched, symbol, eventCategory, exchange, signalClass, interval } = {}) {
+async function summarizeAlerts({ from, to, limit, source, enriched, symbol, eventCategory, exchange, signalClass, interval, includeDecisionRollup = false } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -3217,6 +3337,9 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		},
 		costByFeature: createFeatureCostSummary(),
 	};
+	if (includeDecisionRollup && isDecisionAuditEnabled()) {
+		summary.decision = { gates: createDecisionGatesRollup() };
+	}
 	const processingLatencySamples = [];
 	const deliveryLatencySamples = [];
 	const channelLatencySamples = {};
@@ -3228,6 +3351,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 
 	for (const doc of docs) {
 		const data = doc.data() || {};
+		if (summary.decision) recordDecisionGatesRollup(summary.decision.gates, data.decision);
 		const alertEnriched = Boolean(data.enriched);
 		const useTradingViewData = Boolean(data.useTradingViewData);
 		const tradingViewEnrichmentApplied = Boolean(data.tradingViewEnrichmentApplied);
@@ -3318,6 +3442,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 
 	finalizeRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage);
 	finalizeEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage);
+	if (summary.decision) finalizeDecisionGatesRollup(summary.decision.gates);
 	summary.enrichment.sentimentCalibration = buildSentimentCalibration(sentimentScores, rawScoreCapCount);
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
 	for (const feature of FEATURE_TAGS) {
@@ -3378,6 +3503,13 @@ module.exports = {
 	INVALID_CURSOR_MESSAGE,
 	parseAlertPaginationCursor,
 	MAX_ALERT_TEXT_LENGTH,
+	isDecisionAuditEnabled,
+	sanitizeDecisionAudit,
+	sanitizeDecisionGates,
+	sanitizeDecisionGate,
+	createDecisionGatesRollup,
+	recordDecisionGatesRollup,
+	finalizeDecisionGatesRollup,
 	MAX_BATCH_REPLAY_LIMIT,
 	MAX_BATCH_DELETE_LIMIT,
 	// Exported for testing

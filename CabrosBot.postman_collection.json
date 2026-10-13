@@ -2599,7 +2599,7 @@
               "name": "Enriched payload",
               "status": "OK",
               "code": 200,
-"body": "{\"success\":true,\"requestId\":\"req-12345\",\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"signalClass\":\"breakout\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.55,\"sentiment_score_raw\":0.85,\"insights\":[\"Volume confirms momentum\"],\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"setup_evidence\":\"Price broke above resistance range with volume confirmation\",\"risk_reward_ratio\":\"2.5:1\",\"tradingViewEnrichmentApplied\":false,\"sources\":[],\"current_price\":83000,\"price_currency\":\"USD\",\"priceSource\":\"gemini-grounding\",\"outcomeAnnotation\":{\"exchange\":\"BINANCE\",\"symbol\":\"BTCUSDT\",\"side\":\"BUY\",\"setupType\":\"breakout\",\"windowLabel\":\"30d\",\"sampleSize\":10,\"hitRatePercent\":40,\"expectancyR\":0.2,\"totalWins\":4,\"totalLosses\":6,\"summary\":\"📊 Historial 30d BUY BINANCE:BTCUSDT · breakout: hitRate 40%, expectancy +0.20R, W4/L6 (n=10)\"}}},\"tokenUsage\":{},\"outcomeAnnotation\":{\"exchange\":\"BINANCE\",\"symbol\":\"BTCUSDT\",\"side\":\"BUY\",\"setupType\":\"breakout\",\"windowLabel\":\"30d\",\"sampleSize\":10,\"hitRatePercent\":40,\"expectancyR\":0.2,\"totalWins\":4,\"totalLosses\":6,\"summary\":\"📊 Historial 30d BUY BINANCE:BTCUSDT · breakout: hitRate 40%, expectancy +0.20R, W4/L6 (n=10)\"}}"
+              "body": "{\"success\":true,\"requestId\":\"req-12345\",\"dryRun\":true,\"enriched\":true,\"payload\":{\"text\":\"Bitcoin breaks above $83,000 with strong volume\",\"signalClass\":\"breakout\",\"enrichedData\":{\"original_text\":\"Bitcoin breaks above $83,000 with strong volume\",\"sentiment\":\"BULLISH\",\"sentiment_score\":0.55,\"sentiment_score_raw\":0.85,\"insights\":[\"Volume confirms momentum\"],\"invalidation_level\":\"$80,000\",\"target_level\":\"$90,000\",\"setup_type\":\"breakout\",\"setup_evidence\":\"Price broke above resistance range with volume confirmation\",\"risk_reward_ratio\":\"2.5:1\",\"tradingViewEnrichmentApplied\":false,\"sources\":[],\"current_price\":83000,\"price_currency\":\"USD\",\"priceSource\":\"gemini-grounding\",\"outcomeAnnotation\":{\"exchange\":\"BINANCE\",\"symbol\":\"BTCUSDT\",\"side\":\"BUY\",\"setupType\":\"breakout\",\"windowLabel\":\"30d\",\"sampleSize\":10,\"hitRatePercent\":40,\"expectancyR\":0.2,\"totalWins\":4,\"totalLosses\":6,\"summary\":\"📊 Historial 30d BUY BINANCE:BTCUSDT · breakout: hitRate 40%, expectancy +0.20R, W4/L6 (n=10)\"}}},\"tokenUsage\":{},\"outcomeAnnotation\":{\"exchange\":\"BINANCE\",\"symbol\":\"BTCUSDT\",\"side\":\"BUY\",\"setupType\":\"breakout\",\"windowLabel\":\"30d\",\"sampleSize\":10,\"hitRatePercent\":40,\"expectancyR\":0.2,\"totalWins\":4,\"totalLosses\":6,\"summary\":\"📊 Historial 30d BUY BINANCE:BTCUSDT · breakout: hitRate 40%, expectancy +0.20R, W4/L6 (n=10)\"}}"
             }
           ]
         },
@@ -8123,6 +8123,148 @@
           ]
         },
         {
+          "name": "GET Alert Analytics Summary (decision rollup)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500&includeDecisionRollup=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "includeDecisionRollup",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "Protected summary request with the opt-in decision.gates[] rollup. The rollup is omitted (not zero) when ENABLE_ALERT_DECISION_AUDIT is false or includeDecisionRollup=true is not supplied. Each gate bucket reports the populated count and percentage of the summary window. Sorted alphabetically by name with ties broken by decision (allow < skip < suppress)."
+          },
+          "response": [
+            {
+              "name": "200 OK - Decision rollup populated",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"success\":true,\"summary\":{\"window\":{\"from\":\"2026-06-06T00:00:00.000Z\",\"to\":\"2026-06-07T00:00:00.000Z\",\"limit\":500,\"maxDays\":31},\"totalAlerts\":2,\"bySource\":{\"webhook\":2},\"byFeatureFlag\":{\"enriched\":0,\"plain\":2,\"tradingViewData\":0,\"withoutTradingViewData\":2},\"enrichment\":{\"enrichedAlerts\":0,\"plainAlerts\":2,\"tradingViewStatusCounts\":{\"full\":0,\"partial\":0,\"failed\":0,\"not_applicable\":2,\"unrecorded\":0},\"riskMetadataCoverage\":{\"denominator\":0,\"fields\":{},\"byPromptProvenance\":[]},\"evidenceCoverage\":{\"denominator\":0,\"zeroSources\":{\"populated\":0,\"percentage\":0},\"oneToTwoSources\":{\"populated\":0,\"percentage\":0},\"threePlusSources\":{\"populated\":0,\"percentage\":0},\"totalSourceCount\":0,\"averageSourceCount\":0,\"byPromptProvenance\":[]},\"tokenUsage\":{\"inputTokens\":0,\"outputTokens\":0,\"totalTokens\":0,\"totalCost\":0}},\"delivery\":{\"totalSuccess\":0,\"totalFailure\":0,\"byChannel\":{}},\"latency\":{\"averageProcessingMs\":null,\"averageDeliveryMs\":null},\"decision\":{\"gates\":{\"denominator\":2,\"gates\":[{\"name\":\"dryRun\",\"decision\":\"skip\",\"populated\":1,\"percentage\":50},{\"name\":\"same-signal-cooldown\",\"decision\":\"suppress\",\"populated\":1,\"percentage\":50}]}},\"shadowModeMetrics\":\"No measurements found\"}}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('success envelope', () => pm.expect(body.success).to.eql(true));",
+                  "if (body.summary.decision) {",
+                  "  pm.test('decision gate rollup is present when enabled', () => pm.expect(body.summary.decision.gates).to.be.an('object'));",
+                  "  pm.test('rollup includes denominator and gate buckets', () => {",
+                  "    pm.expect(body.summary.decision.gates.denominator).to.be.a('number');",
+                  "    pm.expect(body.summary.decision.gates.gates).to.be.an('array');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Alert Analytics Summary (invalid includeDecisionRollup)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/summary?from=2026-06-06T00%3A00%3A00.000Z&to=2026-06-07T00%3A00%3A00.000Z&limit=500&includeDecisionRollup=invalid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "includeDecisionRollup",
+                  "value": "invalid"
+                }
+              ]
+            },
+            "description": "Invalid boolean query value; endpoint returns 400 INVALID_REQUEST."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid includeDecisionRollup",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid includeDecisionRollup flag. Use true or false.\",\n  \"code\": \"INVALID_REQUEST\",\n  \"retryable\": false,\n  \"requestId\": \"req-example\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 400', () => pm.response.to.have.status(400));",
+                  "const body = pm.response.json();",
+                  "pm.test('INVALID_REQUEST envelope is complete', () => {",
+                  "  pm.expect(body.success).to.eql(false);",
+                  "  pm.expect(body.code).to.eql('INVALID_REQUEST');",
+                  "  pm.expect(body.error).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.retryable).to.eql(false);",
+                  "  pm.expect(body.requestId).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "GET Alert Analytics Summary - feature cost attribution",
           "request": {
             "method": "GET",
@@ -8776,6 +8918,240 @@
                 }
               ],
               "body": "{\"id\":\"alert-123\",\"receivedAt\":\"2026-06-06T12:00:00.000Z\",\"source\":\"webhook\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"not_applicable\",\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30,\"totalCost\":0.001}}\n"
+            }
+          ]
+        },
+        {
+          "name": "GET Export Alerts (JSONL - decision audit)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&limit=500&includeDecision=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "jsonl"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "includeDecision",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "Exports bounded stored alerts as JSON Lines with the opt-in per-alert decision audit trail. The decision field is only populated when ENABLE_ALERT_DECISION_AUDIT=true; otherwise the field is omitted from each row. Decision objects are sanitized (bounded depth 6, max 32 keys per object, string leaves <= 1000 chars). The decision.enrichment.providers field records attempted Gemini and TradingView MCP outcomes, including a provider failure when the other provider supplied the fallback."
+          },
+          "response": [
+            {
+              "name": "200 OK - JSONL export with decision",
+              "status": "OK",
+              "code": 200,
+              "body": "{\"id\":\"alert-123\",\"receivedAt\":\"2026-06-06T12:00:00.000Z\",\"source\":\"webhook\",\"enriched\":true,\"useTradingViewData\":true,\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30,\"totalCost\":0.001},\"decision\":{\"requestId\":\"req-1\",\"parsed\":{\"ok\":true,\"exchange\":\"BINANCE\",\"symbol\":\"BTCUSDT\",\"side\":\"BUY\",\"rawTimeframe\":\"1h\",\"timeframe\":\"1h\"},\"enrichment\":{\"attempted\":true,\"provider\":\"gemini-grounding+tradingview-mcp\",\"status\":\"partial\",\"fallbackUsed\":true,\"providers\":{\"gemini\":{\"status\":\"failed\"},\"tradingViewMcp\":{\"status\":\"full\"}}},\"gates\":[],\"dispatch\":{\"requestedChannels\":[\"telegram\"],\"sentTo\":[\"telegram\"],\"requestedChannelMode\":\"symbol_route\"}}}\n"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 200', () => pm.response.to.have.status(200));",
+                  "const lines = pm.response.text().split('\\n').filter((line) => line.trim().length > 0);",
+                  "pm.test('each non-empty JSONL row is valid JSON', () => {",
+                  "  lines.forEach((line) => pm.expect(() => JSON.parse(line)).not.to.throw());",
+                  "});",
+                  "lines.forEach((line, index) => {",
+                  "  const row = JSON.parse(line);",
+                  "  pm.test(`row ${index + 1} has an alert id`, () => pm.expect(row.id).to.be.a('string').and.not.empty);",
+                  "  if (row.decision) {",
+                  "    pm.test(`row ${index + 1} has a decision audit object`, () => pm.expect(row.decision).to.be.an('object'));",
+                  "    if (row.decision.requestId) {",
+                  "      pm.test(`row ${index + 1} has a valid request id`, () => pm.expect(row.decision.requestId).to.be.a('string').and.not.empty);",
+                  "    }",
+                  "    if (row.decision.enrichment && row.decision.enrichment.providers) {",
+                  "      pm.test(`row ${index + 1} has provider outcomes`, () => pm.expect(row.decision.enrichment.providers).to.be.an('object'));",
+                  "    }",
+                  "  }",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Export Alerts (CSV - decision audit opt-in)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/export?format=csv&from=2026-06-06T00%3A00%3A00.000Z&to=2026-06-07T00%3A00%3A00.000Z&limit=500&includeDecision=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "csv"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "includeDecision",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "CSV keeps the decision column absent by default. Set includeDecision=true to include this bounded audit column."
+          },
+          "response": [
+            {
+              "name": "200 OK - CSV export with decision column",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "text/csv; charset=utf-8"
+                }
+              ],
+              "body": "id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,feature,channels,deliveryResults,suppressedRepeat,suppressionReason,tokenUsage,decision,currentPrice,priceCurrency\nalert-123,req-1,2026-06-06T12:00:00.000Z,webhook,unknown,false,false,false,not_applicable,,,,,,,[],false,,\"{\"\"inputTokens\"\":0,\"\"outputTokens\"\":0,\"\"totalTokens\"\":0,\"\"totalCost\"\":0}\",\"{\"\"requestId\"\":\"\"req-1\"\",\"\"gates\"\":[]}\",,\n"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 200', () => pm.response.to.have.status(200));",
+                  "pm.test('returns CSV with opt-in decision column', () => {",
+                  "  pm.expect(pm.response.headers.get('Content-Type')).to.include('text/csv');",
+                  "  pm.expect(pm.response.text().split('\\n')[0]).to.include('decision');",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Export Alerts (invalid includeDecision)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts/export?format=jsonl&from=2026-06-06T00%3A00%3A00.000Z&to=2026-06-07T00%3A00%3A00.000Z&limit=500&includeDecision=invalid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "jsonl"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-06-06T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-06-07T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                },
+                {
+                  "key": "includeDecision",
+                  "value": "invalid"
+                }
+              ]
+            },
+            "description": "Invalid boolean query value; endpoint returns 400 INVALID_REQUEST."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid includeDecision",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid includeDecision flag. Use true or false.\",\n  \"code\": \"INVALID_REQUEST\",\n  \"retryable\": false,\n  \"requestId\": \"req-example\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 400', () => pm.response.to.have.status(400));",
+                  "const body = pm.response.json();",
+                  "pm.test('INVALID_REQUEST envelope is complete', () => {",
+                  "  pm.expect(body.success).to.eql(false);",
+                  "  pm.expect(body.code).to.eql('INVALID_REQUEST');",
+                  "  pm.expect(body.error).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.retryable).to.eql(false);",
+                  "  pm.expect(body.requestId).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
             }
           ]
         },

@@ -42,6 +42,22 @@ function getDocumentedApiOperations(contract) {
 }
 
 describe('OpenAPI contract', () => {
+	it('documents all decision-audit dispatch channel modes', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+		expect(contract.components.schemas.AlertDecision.properties.dispatch.properties.requestedChannelMode.enum)
+			.toEqual(['explicit', 'symbol_route', 'broadcast']);
+	});
+
+	it('documents sanitized per-provider enrichment audit outcomes', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const providers = contract.components.schemas.AlertDecision.properties.enrichment.properties.providers;
+
+		expect(providers.additionalProperties).toBe(false);
+		expect(providers.properties.gemini.properties.status.enum).toEqual(['full', 'partial', 'failed']);
+		expect(providers.properties.tradingViewMcp.properties.status.enum).toEqual(['full', 'partial', 'failed']);
+	});
+
 	it('documents the concrete alert detail response including lastReplay', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const operation = contract.paths['/api/alerts/{alertId}'].get;

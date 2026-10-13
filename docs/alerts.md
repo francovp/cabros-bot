@@ -13,6 +13,8 @@ If alert storage is enabled but Firestore cannot serve the request, they return 
 
 List, summary, and export order by `receivedAt` **and** `FieldPath.documentId()` for deterministic pagination. Firestore sorts `__name__` ascending for free but requires a composite index for the descending direction, so `alerts { receivedAt DESC, __name__ DESC }` must be declared in `firestore.indexes.json` **and** deployed (`firebase deploy --only firestore:indexes`) or those three endpoints answer `503`. Detail reads (`GET /api/alerts/:alertId`) use a document get and need no index.
 
+When `ENABLE_ALERT_DECISION_AUDIT=true`, alert reads can expose a sanitized `decision` object containing the parsed signal, enrichment attempt/result, gate verdicts, requested and delivered channels, and request id. `decision.enrichment.providers` records the `full`, `partial`, or `failed` outcome for each attempted Gemini or TradingView MCP provider; a failed provider stays visible when the other provider supplies a fallback. This metadata is internal to the alert enrichment flow and is excluded from the public enrichment payload. `decision.dispatch.requestedChannelMode` is `explicit` when the request supplied `channels`, `symbol_route` when a configured `symbolRoutes` entry matched the alert, and `broadcast` when the enabled channel set handled the alert. For dry runs, a broadcast channel set is resolved only when the notification manager is already initialized. The sanitizer bounds nested values to depth 6, 32 object keys, 32 array entries, and 1000 characters per string to keep persisted audit data predictable and exclude unbounded provider or request payloads. The default is `false`; only webhook alert records carry this field. The request-time gate is eligible for Firebase Remote Config.
+
 #### GET /api/alerts
 
 List stored alerts ordered by `receivedAt` descending.
@@ -73,6 +75,7 @@ Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string 
 - `source` / `enriched` - Optional filters
 - `includeText` - Optional boolean; raw alert text is excluded unless `true`
 - `includeEnrichment` - Optional boolean; safe bounded projection of `enrichmentData` is excluded unless `true`
+- `includeDecision` - Optional boolean (default: `false`); adds the bounded `decision` object when the audit gate is enabled. For CSV, the `decision` column is absent unless this flag is `true`.
 
 #### GET /api/alerts/summary
 
@@ -95,8 +98,11 @@ Similarly, `enrichment.evidenceCoverage` tracks whether enriched alerts cited gr
 - `eventCategory` - Optional event category filter (e.g. `price_surge`, `price_decline`, `regulatory`). Case-insensitive and matched against `eventCategory`. Up to 64 characters.
 - `signalClass` - Optional signal class filter; repeatable and comma-separated (e.g. `signalClass=breakout&signalClass=reversal` or `signalClass=breakout,reversal`)
 - `interval` - Optional bucket width for the time series: `hour` or `day`. Omit it for the aggregate-only response. See [Time-bucketed series](#time-bucketed-series-interval) below.
+- `includeDecisionRollup` - Optional boolean (default: `false`); adds `summary.decision.gates` when the audit gate is enabled.
 
 The service caps the queried window at 31 days to keep routine operator usage cheap.
+
+The optional decision rollup's `denominator` counts alerts scanned in the summary window. Each gate entry includes its `name`, `decision`, `populated` count, and `percentage` from 0 to 100. The decision section is omitted when it is not requested or the audit gate is disabled.
 
 The summary also returns `costByFeature` for `grounding`, `news-analysis`, `expanded-analysis`, `scanner`, and `enrichment`. Each bucket includes `alerts`, `batches`, `symbols`, `inputTokens`, `outputTokens`, `totalTokens`, and `totalCost`; the feature costs sum to `enrichment.tokenUsage.totalCost` without double-counting. Older records without feature tags are attributed conservatively from their stored source.
 

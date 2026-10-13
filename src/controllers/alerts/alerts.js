@@ -41,6 +41,7 @@ const EXPORT_FIELDS = [
 	'suppressedRepeat',
 	'suppressionReason',
 	'tokenUsage',
+	'decision',
 	'enrichmentData',
 	'text',
 	'currentPrice',
@@ -462,6 +463,14 @@ function summarizeAlerts(req, res) {
 			return sendError(res, 400, interval.error);
 		}
 
+		const includeDecisionRollup = parseBooleanFlag(req.query.includeDecisionRollup, false);
+		if (includeDecisionRollup === null) {
+			return sendErrorFrom(res, 400, {
+				error: 'Invalid includeDecisionRollup flag. Use true or false.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
 		if (interval.value !== undefined) {
 			const maxDays = alertStorageService.getSummaryIntervalMaxWindowDays(interval.value);
 			const bounds = alertStorageService.resolveSummaryWindowBounds({ from: from.value, to: to.value });
@@ -480,6 +489,7 @@ function summarizeAlerts(req, res) {
 			source,
 			enriched,
 		};
+		if (includeDecisionRollup) summaryParams.includeDecisionRollup = true;
 		if (symbol.value !== undefined) {
 			summaryParams.symbol = symbol.value;
 		}
@@ -565,12 +575,16 @@ function buildCsv(alerts, optionsOrIncludeText, maybeIncludeEnrichment) {
 		};
 	const includeText = Boolean(options.includeText);
 	const includeEnrichment = Boolean(options.includeEnrichment);
+	const includeDecision = Boolean(options.includeDecision);
 
 	const fields = EXPORT_FIELDS.filter((field) => {
 		if (field === 'text' && !includeText) {
 			return false;
 		}
 		if (field === 'enrichmentData' && !includeEnrichment) {
+			return false;
+		}
+		if (field === 'decision' && !includeDecision) {
 			return false;
 		}
 		return true;
@@ -644,6 +658,13 @@ function exportAlerts(req, res) {
 				code: 'INVALID_REQUEST',
 			});
 		}
+		const includeDecision = parseBooleanFlag(req.query.includeDecision, false);
+		if (includeDecision === null) {
+			return sendErrorFrom(res, 400, {
+				error: 'Invalid includeDecision flag. Use true or false.',
+				code: 'INVALID_REQUEST',
+			});
+		}
 
 		const source = typeof req.query.source === 'string' && req.query.source.trim()
 			? req.query.source.trim()
@@ -663,6 +684,7 @@ function exportAlerts(req, res) {
 			signalClass: signalClass.value,
 			includeText,
 			includeEnrichment,
+			...(includeDecision ? { includeDecision: true } : {}),
 		});
 
 		const hasReportFilters = Boolean(source) || typeof enriched === 'boolean' || signalClass.value !== undefined;
@@ -683,7 +705,7 @@ function exportAlerts(req, res) {
 
 		if (format === 'csv') {
 			res.type('text/csv; charset=utf-8');
-			return res.status(200).send(`${buildCsv(result.alerts, { includeText, includeEnrichment })}\n`);
+			return res.status(200).send(`${buildCsv(result.alerts, { includeText, includeEnrichment, includeDecision })}\n`);
 		}
 
 		res.type('application/x-ndjson; charset=utf-8');
@@ -1321,7 +1343,6 @@ function batchExportAlerts(req, res) {
 				code: 'INVALID_REQUEST',
 			});
 		}
-
 		const result = await alertStorageService.exportAlertsByIds({
 			alertIds,
 			includeText,

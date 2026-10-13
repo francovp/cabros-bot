@@ -15,6 +15,27 @@ const {
 } = require('../../../../services/tradingview/riskRewardMath');
 const { tokenCostBudgetService } = require('../../../../lib/tokenUsage');
 
+const ENRICHMENT_PROVIDER_OUTCOMES = Symbol.for('cabros-bot.alert.enrichment-provider-outcomes');
+
+function getTradingViewProviderStatus(enrichedAlert, failed) {
+	if (failed) return 'failed';
+	const status = enrichedAlert && enrichedAlert.tradingViewEnrichmentStatus;
+	if (['full', 'partial', 'failed'].includes(status)) return status;
+	if (enrichedAlert && enrichedAlert.tradingViewEnrichmentApplied === true) return 'full';
+	return enrichedAlert ? 'partial' : 'failed';
+}
+
+function attachProviderOutcomes(result, outcomes) {
+	if (!result || typeof result !== 'object' || !Object.keys(outcomes).length) return result;
+	Object.defineProperty(result, ENRICHMENT_PROVIDER_OUTCOMES, {
+		configurable: false,
+		enumerable: false,
+		value: outcomes,
+		writable: false,
+	});
+	return result;
+}
+
 function mergeUnique(first = [], second = [], maxItems = 6) {
 	const result = [];
 	const seen = new Set();
@@ -627,6 +648,12 @@ async function enrichAlert(alert, options = {}) {
 	const isGeminiEnabled = getRuntimeConfig().ENABLE_GEMINI_GROUNDING && !isBudgetExceeded;
 	const shouldUseTradingViewData = options.useTradingViewData === true;
 	const isMcpEnabled = shouldUseTradingViewData && tradingViewMcpService.isEnabled();
+	let geminiStatus = isGeminiEnabled ? 'pending' : 'not_attempted';
+	let tradingViewMcpStatus = isMcpEnabled ? 'pending' : 'not_attempted';
+	const withProviderOutcomes = (result) => attachProviderOutcomes(result, {
+		...(isGeminiEnabled ? { gemini: { status: geminiStatus } } : {}),
+		...(isMcpEnabled ? { tradingViewMcp: { status: tradingViewMcpStatus } } : {}),
+	});
 
 	if (!isGeminiEnabled && !isMcpEnabled) {
 		return null;
@@ -637,19 +664,21 @@ async function enrichAlert(alert, options = {}) {
 	if (isMcpEnabled) {
 		try {
 			mcpEnrichedAlert = await tradingViewMcpService.enrichFromAlertText(text);
+			tradingViewMcpStatus = getTradingViewProviderStatus(mcpEnrichedAlert, false);
 		} catch (error) {
 			mcpEnrichmentFailed = true;
+			tradingViewMcpStatus = 'failed';
 			console.warn('[Alert] TradingView MCP enrichment failed, continuing with grounding flow:', error.message);
 		}
 	}
 
 	if (!isGeminiEnabled) {
-		if (mcpEnrichmentFailed) {
+		if (mcpEnrichmentFailed || !mcpEnrichedAlert) {
 			const fallbackPlan = await deriveFallbackTradePlan(text).catch(() => null);
 			if (fallbackPlan) {
 				const sideSentiment = fallbackPlan.side === 'SELL' ? 'BEARISH' : 'BULLISH';
 				const sideScore = fallbackPlan.side === 'SELL' ? -0.55 : 0.55;
-				return {
+				return withProviderOutcomes({
 					original_text: text,
 					sentiment: sideSentiment,
 					sentiment_score: sideScore,
@@ -665,26 +694,27 @@ async function enrichAlert(alert, options = {}) {
 					sources: [],
 					truncated: false,
 					extraText: '*Model used*: `derived-quote`',
-				};
+				});
 			}
-			throw new Error('TradingView MCP enrichment failed');
+			throw withProviderOutcomes(new Error('TradingView MCP enrichment failed'));
 		}
 		if (mcpEnrichedAlert) {
 			const guarded = applySignCoherenceGuard(mcpEnrichedAlert.sentiment, mcpEnrichedAlert.sentiment_score);
-			return {
+			return withProviderOutcomes({
 				...mcpEnrichedAlert,
 				sentiment: guarded.sentiment,
 				sentiment_score: guarded.sentiment_score,
-			};
+			});
 		}
 		return mcpEnrichedAlert;
 	}
 
 	try {
 		const geminiEnrichedAlert = await enrichWithGemini(text, tokenUsage);
+		geminiStatus = geminiEnrichedAlert ? 'full' : 'failed';
 
 		if (mcpEnrichedAlert) {
-			return mergeEnrichmentData(text, geminiEnrichedAlert, mcpEnrichedAlert, sharedParsedSignal);
+			return withProviderOutcomes(mergeEnrichmentData(text, geminiEnrichedAlert, mcpEnrichedAlert, sharedParsedSignal));
 		}
 
 		if (geminiEnrichedAlert) {
@@ -730,26 +760,27 @@ async function enrichAlert(alert, options = {}) {
 				}
 			}
 
-			return result;
+			return withProviderOutcomes(result);
 		}
 
-		return geminiEnrichedAlert;
+		return withProviderOutcomes(geminiEnrichedAlert);
 	} catch (error) {
+		geminiStatus = 'failed';
 		if (mcpEnrichedAlert) {
 			console.warn('[Alert] Gemini grounding failed, using TradingView MCP enrichment:', error.message);
 			const guarded = applySignCoherenceGuard(mcpEnrichedAlert.sentiment, mcpEnrichedAlert.sentiment_score);
-			return {
+			return withProviderOutcomes({
 				...mcpEnrichedAlert,
 				sentiment: guarded.sentiment,
 				sentiment_score: guarded.sentiment_score,
-			};
+			});
 		}
 
 		const fallbackPlan = await deriveFallbackTradePlan(text).catch(() => null);
 		if (fallbackPlan) {
 			const sideSentiment = fallbackPlan.side === 'SELL' ? 'BEARISH' : 'BULLISH';
 			const sideScore = fallbackPlan.side === 'SELL' ? -0.55 : 0.55;
-			return {
+			return withProviderOutcomes({
 				original_text: text,
 				sentiment: sideSentiment,
 				sentiment_score: sideScore,
@@ -765,14 +796,15 @@ async function enrichAlert(alert, options = {}) {
 				sources: [],
 				truncated: false,
 				extraText: '*Model used*: `derived-quote`',
-			};
+			});
 		}
 
-		throw new Error(`Alert enrichment failed: ${error.message}`);
+		throw withProviderOutcomes(new Error(`Alert enrichment failed: ${error.message}`));
 	}
 }
 
 module.exports = {
 	deriveSearchQuery,
 	enrichAlert,
+	ENRICHMENT_PROVIDER_OUTCOMES,
 };
