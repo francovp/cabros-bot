@@ -137,6 +137,40 @@ describe('Status endpoints', () => {
 		expect(response.body.error).toBe('Unauthorized: Missing API key');
 	});
 
+	it('exposes persistent-write health on both status aliases without provider errors', async () => {
+		const providerMessage = 'credential=super-secret Firestore failure';
+		firestoreWriteMetricsService.recordPersistentWriteFailure(
+			'alertStorage',
+			Object.assign(new Error(providerMessage), { code: 7 }),
+		);
+
+		const status = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		const capabilities = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(status.status).toBe(200);
+		expect(status.body.dependencies.persistentWriteHealth.byDomain.alertStorage).toMatchObject({
+			success: 0,
+			failure: 1,
+			failureRate: 1,
+			lastFailureCategory: 'firestore_permission_denied',
+			status: 'degraded',
+		});
+		expect(status.body.dependencies.persistentWriteHealth.byDomain.newsDedup).toMatchObject({
+			success: 0,
+			failure: 0,
+			status: 'unconfigured',
+		});
+		expect(capabilities.body.dependencies.persistentWriteHealth.byDomain)
+			.toEqual(status.body.dependencies.persistentWriteHealth.byDomain);
+		expect(status.body.dependencies).not.toHaveProperty('firestoreWriteMetrics');
+		expect(status.text).not.toContain(providerMessage);
+		expect(capabilities.text).not.toContain(providerMessage);
+	});
+
 	it('returns machine-readable status on /api/status', async () => {
 		const response = await request(app)
 			.get('/api/status')

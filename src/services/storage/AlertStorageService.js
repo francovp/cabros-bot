@@ -32,6 +32,7 @@ const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./a
 const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
 const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const { fireAndForget } = require('../../lib/fireAndForget');
 const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
 const {
 	classifyFirestoreError,
@@ -2289,9 +2290,12 @@ async function saveAlertInternal(params = {}) {
 		let docRef;
 		if (sanitizedAlertId) {
 			docRef = firestore.collection(COLLECTION_NAME).doc(sanitizedAlertId);
-			await docRef.set(document);
+			const write = await fireAndForget('alertStorage', () => docRef.set(document));
+			if (!write.ok) throw write.error;
 		} else {
-			docRef = await firestore.collection(COLLECTION_NAME).add(document);
+			const write = await fireAndForget('alertStorage', () => firestore.collection(COLLECTION_NAME).add(document));
+			if (!write.ok) throw write.error;
+			docRef = write.value;
 		}
 		console.debug(`[AlertStorageService] Alert stored with ID: ${docRef.id}`);
 		firestoreWriteMetricsService.recordWriteSuccess(WRITE_METRICS_DOMAIN_ALERTS);

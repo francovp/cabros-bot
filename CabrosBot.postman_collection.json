@@ -1073,20 +1073,20 @@
             "status"
           ]
         },
-        "description": "Protected status request exposing the in-memory per-domain Firestore write metrics. counters reset on process restart and the dependencies.firestoreWriteMetrics key is omitted entirely until at least one Firestore write attempt is recorded by AlertStorageService.saveAlert/saveReplayAttempt or JobRepository.save. Mirrors the existing per-channel deliveryMetrics pattern."
+        "description": "Protected status request. dependencies.firestoreWriteMetrics contains the existing alert/replay/job counters and remains omitted until a write is recorded. dependencies.persistentWriteHealth is always present for alertStorage, signalOutcomes, notificationRedrive, and newsDedup; its bounded process-local counters reset on restart and expose only closed error categories, never provider messages."
       },
       "response": [
         {
           "name": "200 OK - firestoreWriteMetrics populated",
           "status": "OK",
           "code": 200,
-          "body": "{\"dependencies\":{\"firestoreWriteMetrics\":{\"window\":{\"startedAt\":\"2026-08-31T22:30:00.000Z\",\"durationMs\":60000},\"writesAttempted\":1247,\"writesSucceeded\":1245,\"writesFailed\":2,\"successRate\":0.9984,\"byDomain\":{\"alerts\":{\"success\":1100,\"failure\":1,\"total\":1101,\"successRate\":0.9991},\"alertReplays\":{\"success\":12,\"failure\":0,\"total\":12,\"successRate\":1},\"jobs\":{\"success\":133,\"failure\":1,\"total\":134,\"successRate\":0.9925}}}}}"
+          "body": "{\"dependencies\":{\"firestoreWriteMetrics\":{\"window\":{\"startedAt\":\"2026-08-31T22:30:00.000Z\",\"durationMs\":60000},\"writesAttempted\":1247,\"writesSucceeded\":1245,\"writesFailed\":2,\"successRate\":0.9984,\"byDomain\":{\"alerts\":{\"success\":1100,\"failure\":1,\"total\":1101,\"successRate\":0.9991},\"alertReplays\":{\"success\":12,\"failure\":0,\"total\":12,\"successRate\":1},\"jobs\":{\"success\":133,\"failure\":1,\"total\":134,\"successRate\":0.9925}}},\"persistentWriteHealth\":{\"window\":{\"startedAt\":\"2026-08-31T22:30:00.000Z\",\"durationMs\":60000},\"byDomain\":{\"alertStorage\":{\"success\":95,\"failure\":5,\"failureRate\":0.05,\"lastSuccessAt\":\"2026-08-31T22:29:57.000Z\",\"lastFailureAt\":\"2026-08-31T22:29:58.000Z\",\"lastFailureCategory\":\"firestore_unavailable\",\"status\":\"degraded\"},\"signalOutcomes\":{\"success\":0,\"failure\":0,\"failureRate\":0,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastFailureCategory\":null,\"status\":\"unconfigured\"},\"notificationRedrive\":{\"success\":12,\"failure\":0,\"failureRate\":0,\"lastSuccessAt\":\"2026-08-31T22:29:55.000Z\",\"lastFailureAt\":null,\"lastFailureCategory\":null,\"status\":\"ok\"},\"newsDedup\":{\"success\":3,\"failure\":0,\"failureRate\":0,\"lastSuccessAt\":\"2026-08-31T22:29:50.000Z\",\"lastFailureAt\":null,\"lastFailureCategory\":null,\"status\":\"ok\"}}}}}"
         },
         {
           "name": "200 OK - firestoreWriteMetrics omitted (before first write)",
           "status": "OK",
           "code": 200,
-          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"firestoreJobStorage\":true},\"dependencies\":{\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"}}}"
+          "body": "{\"service\":{\"name\":\"cabros-bot\",\"version\":\"0.1.0\"},\"featureFlags\":{\"firestoreJobStorage\":true},\"dependencies\":{\"firestoreJobStorage\":{\"enabled\":true,\"configured\":true,\"ready\":true,\"status\":\"ready\"},\"persistentWriteHealth\":{\"window\":{\"startedAt\":\"2026-08-31T22:30:00.000Z\",\"durationMs\":0},\"byDomain\":{\"alertStorage\":{\"success\":0,\"failure\":0,\"failureRate\":0,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastFailureCategory\":null,\"status\":\"unconfigured\"},\"signalOutcomes\":{\"success\":0,\"failure\":0,\"failureRate\":0,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastFailureCategory\":null,\"status\":\"unconfigured\"},\"notificationRedrive\":{\"success\":0,\"failure\":0,\"failureRate\":0,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastFailureCategory\":null,\"status\":\"unconfigured\"},\"newsDedup\":{\"success\":0,\"failure\":0,\"failureRate\":0,\"lastSuccessAt\":null,\"lastFailureAt\":null,\"lastFailureCategory\":null,\"status\":\"unconfigured\"}}}}}"
         },
         {
           "name": "401 Unauthorized (missing API key)",

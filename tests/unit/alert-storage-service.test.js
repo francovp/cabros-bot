@@ -67,6 +67,7 @@ function buildDocSnapshot(id, data) {
 describe('AlertStorageService', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		firestoreWriteMetricsService.resetForTesting();
 		jest.useFakeTimers().setSystemTime(new Date('2026-06-06T12:00:00.000Z'));
 		admin.__resetApps();
 		// Reset the Firestore db singleton between tests
@@ -773,12 +774,14 @@ describe('AlertStorageService', () => {
 
 		it('returns null and logs a warning (does not throw) when add() rejects', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
-			mockAdd.mockRejectedValueOnce(new Error('Quota exceeded'));
+			mockAdd.mockRejectedValueOnce(Object.assign(new Error('Quota exceeded'), { code: 8 }));
 			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
 			const result = await AlertStorageService.saveAlert(buildParams());
 
 			expect(result).toBeNull();
+			expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.alertStorage)
+				.toMatchObject({ success: 0, failure: 1, lastFailureCategory: 'firestore_unavailable' });
 			expect(warnSpy).toHaveBeenCalledWith(
 				expect.stringContaining('[AlertStorageService]'),
 				expect.stringContaining('Quota exceeded'),

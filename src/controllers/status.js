@@ -640,6 +640,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			...(firestoreWriteMetricsService.getReadSnapshot()
 				? { firestoreReadMetrics: firestoreWriteMetricsService.getReadSnapshot() }
 				: {}),
+			persistentWriteHealth: firestoreWriteMetricsService.getPersistentWriteHealthSnapshot(),
 			sentry,
 			langfuse,
 			...(langfusePrompts ? { langfusePrompts } : {}),
