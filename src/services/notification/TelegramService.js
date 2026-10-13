@@ -6,6 +6,7 @@
 const NotificationChannel = require('./NotificationChannel');
 const MarkdownV2Formatter = require('./formatters/markdownV2Formatter');
 const { parseTelegramTopicRoutes, resolveTelegramThreadId } = require('./telegramTopicRouting');
+const sleepWithSignal = require('../../lib/sleepWithSignal');
 
 const DEFAULT_MAX_MESSAGE_LENGTH = 4000;
 const DEFAULT_MAX_RETRIES = 2;
@@ -14,27 +15,6 @@ const DEFAULT_MAX_RETRY_DELAY_MS = 5000;
 const DEFAULT_MAX_TOTAL_RETRY_WAIT_MS = 10000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10000;
 const MARKDOWN_V2_ESCAPE_CHARS = '\\_*[]()~`>#+-=|{}.!<&';
-
-function sleepWithSignal(ms, signal) {
-	if (!signal) {
-		return new Promise(resolve => setTimeout(resolve, ms));
-	}
-	if (signal.aborted) {
-		return Promise.reject(new Error(signal.reason?.message || signal.reason || 'Operation aborted'));
-	}
-	return new Promise((resolve, reject) => {
-		const timeoutId = setTimeout(() => {
-			signal.removeEventListener('abort', onAbort);
-			resolve();
-		}, ms);
-		const onAbort = () => {
-			clearTimeout(timeoutId);
-			signal.removeEventListener('abort', onAbort);
-			reject(new Error(signal.reason?.message || signal.reason || 'Operation aborted'));
-		};
-		signal.addEventListener('abort', onAbort, { once: true });
-	});
-}
 
 function getStatusCode(error) {
 	const rawStatusCode = error?.response?.error_code

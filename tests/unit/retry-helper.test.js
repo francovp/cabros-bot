@@ -152,6 +152,27 @@ describe('retryHelper', () => {
 			expect(result.attemptCount).toBe(0);
 			expect(mockSendFn).not.toHaveBeenCalled();
 		});
+
+		it('should normalize object-valued abort reasons during retry delay', async () => {
+			const controller = new AbortController();
+			const mockSendFn = jest.fn().mockResolvedValue({
+				success: false,
+				channel: 'test',
+				error: 'send failed',
+			});
+			const pendingResult = sendWithRetry(mockSendFn, 3, null, {
+				signal: controller.signal,
+				maxRetryDelayMs: 1000,
+			});
+
+			await Promise.resolve();
+			controller.abort({ message: 'lease lost' });
+
+			const result = await pendingResult;
+
+			expect(result.aborted).toBe(true);
+			expect(result.error).toBe('Operation aborted');
+		});
 	});
 
 	describe('non-retryable results', () => {
