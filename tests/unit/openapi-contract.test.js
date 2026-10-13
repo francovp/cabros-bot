@@ -927,4 +927,14 @@ describe('status dependency contract drift', () => {
 		}
 		expect(properties.lastFailureCategory.enum).toContain(null);
 	});
+
+	it('requires persistent write health in the status schema and includes it in the example', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const dependencies = spec.components.schemas.Status.properties.dependencies;
+		const statusExample = spec.components.responses.StatusResult.content['application/json'].example;
+
+		expect(spec.components.schemas.Status.required).toContain('dependencies');
+		expect(dependencies.required).toContain('persistentWriteHealth');
+		expect(statusExample.dependencies).toHaveProperty('persistentWriteHealth');
+	});
 });
