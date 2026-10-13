@@ -164,8 +164,10 @@ async function getEntryRecord(key) {
 		const now = admin.firestore.Timestamp.now();
 		if (expiresAtMs <= now.toMillis()) {
 			// Expired — delete it asynchronously (fire-and-forget)
-			docRef.delete().catch(err => {
-				console.debug('[NewsDedupStorageService] Failed to delete expired entry:', err.message);
+			fireAndForget('newsDedup', () => docRef.delete()).then(write => {
+				if (!write.ok) {
+					console.debug('[NewsDedupStorageService] Failed to delete expired entry:', write.error.message);
+				}
 			});
 			return null;
 		}
@@ -212,7 +214,7 @@ async function claimEntry(key, ttlMs, claimToken) {
 		const expiresAtMs = now.toMillis() + ttlMs;
 		const expiresAt = admin.firestore.Timestamp.fromMillis(expiresAtMs);
 		const docRef = firestore.collection(COLLECTION_NAME).doc(key);
-		const claimed = await firestore.runTransaction(async transaction => {
+		const write = await fireAndForget('newsDedup', () => firestore.runTransaction(async transaction => {
 			const existing = await transaction.get(docRef);
 			const existingData = existing.exists && existing.data();
 
@@ -228,7 +230,9 @@ async function claimEntry(key, ttlMs, claimToken) {
 				data: claimToken ? { status: 'claiming', claimToken } : { status: 'claiming' },
 			});
 			return true;
-		});
+		}), { shouldRecordSuccess: claimed => claimed === true });
+		if (!write.ok) throw write.error;
+		const claimed = write.value;
 		if (!claimed) {
 			console.debug('[NewsDedupStorageService] Dedup entry already exists during claim:', key);
 			return false;
@@ -344,7 +348,7 @@ async function updateEntry(key, data, options = {}) {
 				data: nextData,
 			});
 			return true;
-		}));
+		}), { shouldRecordSuccess: updated => updated === true });
 		if (!write.ok) throw write.error;
 		return write.value;
 	} catch (error) {
@@ -371,7 +375,7 @@ async function renewEntry(key, ttlMs, claimToken) {
 		const now = admin.firestore.Timestamp.now();
 		const expiresAt = admin.firestore.Timestamp.fromMillis(now.toMillis() + ttlMs);
 		const docRef = firestore.collection(COLLECTION_NAME).doc(key);
-		return await firestore.runTransaction(async transaction => {
+		const write = await fireAndForget('newsDedup', () => firestore.runTransaction(async transaction => {
 			const existing = await transaction.get(docRef);
 			const existingData = existing.exists && existing.data();
 			if (!existing.exists || !existingData?.expiresAt
@@ -390,7 +394,9 @@ async function renewEntry(key, ttlMs, claimToken) {
 				data: existingData.data || null,
 			});
 			return true;
-		});
+		}), { shouldRecordSuccess: renewed => renewed === true });
+		if (!write.ok) throw write.error;
+		return write.value;
 	} catch (error) {
 		console.warn('[NewsDedupStorageService] renewEntry error (fail-open):', error.message);
 		return null;
@@ -410,7 +416,8 @@ async function deleteEntry(key) {
 	}
 
 	try {
-		await firestore.collection(COLLECTION_NAME).doc(key).delete();
+		const write = await fireAndForget('newsDedup', () => firestore.collection(COLLECTION_NAME).doc(key).delete());
+		if (!write.ok) throw write.error;
 		return true;
 	} catch (error) {
 		console.warn('[NewsDedupStorageService] deleteEntry error:', error.message);

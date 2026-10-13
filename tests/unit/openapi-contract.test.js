@@ -917,4 +917,14 @@ describe('status dependency contract drift', () => {
 			expect(enumValues).toContain(category);
 		}
 	});
+
+	it('models persistent write health nulls with OpenAPI 3.1 JSON Schema types', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const properties = spec.components.schemas.PersistentWriteDomainHealth.properties;
+
+		for (const field of ['lastSuccessAt', 'lastFailureAt', 'lastFailureCategory']) {
+			expect(properties[field].type).toEqual(['string', 'null']);
+		}
+		expect(properties.lastFailureCategory.enum).toContain(null);
+	});
 });

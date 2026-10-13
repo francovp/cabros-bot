@@ -16,7 +16,7 @@
 - [x] T006 [US1] Instrument `AlertStorageService.saveAlert()` without changing its existing write metrics or null-on-failure behavior.
 - [x] T007 [US1] Instrument `SignalOutcomeService.recordSignal()` and preserve `ALREADY_EXISTS` idempotency.
 - [x] T008 [US1] Instrument notification dead-letter persistence in `NotificationRedriveService.recordDeliveryResults()` while retaining its 500 ms bound and in-memory fallback.
-- [x] T009 [US1] Instrument news dedup `setEntry()` and `updateEntry()` while retaining their fail-open return behavior.
+- [x] T009 [US1] Instrument all news dedup writes, including `setEntry()`, `updateEntry()`, claims, renewals, explicit deletion, and expired-entry cleanup, while retaining fail-open behavior and excluding no-op transactions from write-success counts.
 - [x] T010 [US1] Add focused tests for success and failure in the four instrumented domains.
 
 ## Phase 3: Status contract and verification

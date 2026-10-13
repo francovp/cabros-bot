@@ -19,6 +19,16 @@ describe('fireAndForget', () => {
 		expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.alertStorage.success).toBe(1);
 	});
 
+	it('preserves a successful result without recording a skipped write', async () => {
+		const result = await fireAndForget('newsDedup', async () => false, {
+			shouldRecordSuccess: value => value === true,
+		});
+
+		expect(result).toEqual({ ok: true, value: false });
+		expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.newsDedup)
+			.toMatchObject({ success: 0, failure: 0, status: 'unconfigured' });
+	});
+
 	it('resolves a synchronous throw as a failure envelope', async () => {
 		const error = new Error('sync failure');
 		const result = await fireAndForget('signalOutcomes', () => { throw error; });

@@ -6,7 +6,7 @@
 - `AlertStorageService.saveAlert()` already records `alerts` write success/failure and is scheduled through `trackBackgroundTask`.
 - `SignalOutcomeService.recordSignal()` is tracked as background work; its internal Firestore create/add catches and converts failures to `null`.
 - `NotificationRedriveService.recordDeliveryResults()` stores dead letters in memory first, then attempts a durable write with a 500 ms bound; failed persistence must not block delivery.
-- `NewsDedupStorageService.setEntry()` and `updateEntry()` catch and swallow persistence errors. `NewsCache.set()` tracks the write and optionally waits for it.
+- `NewsDedupStorageService.setEntry()` and `updateEntry()` catch and swallow persistence errors. The same `newsDedup` domain also owns `claimEntry()`, `renewEntry()`, explicit deletion, and best-effort expired-entry cleanup; lease failures can affect cross-replica alert dedup and must be visible too. Conditional transactions that do not call `transaction.set()` are no-ops, not successful writes.
 - `SentryService.captureEvent()` already supports `external_failure` fingerprints and sanitized tags/extra fields. The new event can use a generic message, the `persistent-write-health` feature tag, domain as channel, Firestore as provider, and the closed category as error code.
 - `/api/capabilities` is served from the same status handler. No route, authentication, environment, Remote Config, or destination changes are needed.
 

@@ -8179,23 +8179,30 @@
             "maximum": 1
           },
           "lastSuccessAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "lastFailureAt": {
-            "type": "string",
-            "format": "date-time",
-            "nullable": true
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           },
           "lastFailureCategory": {
-            "type": "string",
-            "nullable": true,
+            "type": [
+              "string",
+              "null"
+            ],
             "enum": [
               "firestore_permission_denied",
               "firestore_unavailable",
               "firestore_malformed",
-              "unknown"
+              "unknown",
+              null
             ]
           },
           "status": {
