@@ -160,6 +160,8 @@ When `ENABLE_ALERT_SYNTH_BURST_AGGREGATION=true`, `/api/webhook/alert` buffers a
 
 `dependencies.firestoreWriteMetrics` exposes in-memory per-domain Firestore write counters for `AlertStorageService.saveAlert`/`saveReplayAttempt` and `JobRepository.save`. The section is omitted entirely until at least one write has been recorded and resets on process restart, mirroring the existing `deliveryMetrics` pattern. Counters report `writesAttempted`, `writesSucceeded`, `writesFailed`, overall `successRate`, and a per-domain `byDomain` breakdown with sanitized counts so silent persistence failures can be detected without exposing provider responses or credentials.
 
+`dependencies.persistentWriteHealth` is always present and reports bounded process-local success/failure counts for `alertStorage`, `signalOutcomes`, `notificationRedrive`, and `newsDedup`. Each domain is `unconfigured` until a write is observed, `degraded` when the latest 100 attempts fail above 5% or any failure occurred in the last five minutes, and otherwise `ok`. The domain also exposes last-success/failure timestamps and one of four closed failure categories; provider messages and payloads are never returned. Counters reset on process restart. Sustained failures page Sentry once per active domain/category incident after at least 50 attempts and a failure rate above 20%, then re-arm after recovery.
+
 ### Firestore read health (issue #1285)
 
 Write counters alone could not detect a total read-path outage: every alert write could succeed while every ordered stored-alert read was rejected, and `dependencies.firestore.ready` still returned `true` because `configured` only validates credential *shape*.

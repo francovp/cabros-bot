@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const AlertStorageService = require('../storage/AlertStorageService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const { fireAndForget } = require('../../lib/fireAndForget');
 const { signalRepeatCooldown, nextMonotonicGeneration } = require('../alerts/signalRepeatCooldown');
 
 const COLLECTION_NAME = 'notificationDeadLetters';
@@ -614,10 +615,11 @@ class NotificationRedriveService {
 			if (firestore) {
 				try {
 					let timer = null;
-					const write = firestore.collection(COLLECTION_NAME).doc(recordId)
-						.set(sanitizedRecord, { merge: true });
-					const writeOutcome = write.then(() => 'persisted', (error) => {
-							console.warn('[NotificationRedriveService] Failed to persist dead-letter %s in Firestore, kept in-memory:', recordId, error.message);
+					const writeOutcome = fireAndForget('notificationRedrive', () => firestore.collection(COLLECTION_NAME)
+						.doc(recordId).set(sanitizedRecord, { merge: true }))
+						.then((result) => {
+							if (result.ok) return 'persisted';
+							console.warn('[NotificationRedriveService] Failed to persist dead-letter %s in Firestore, kept in-memory:', recordId, result.error.message);
 							return 'failed';
 						});
 					const persisted = await Promise.race([

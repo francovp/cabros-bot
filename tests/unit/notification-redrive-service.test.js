@@ -1,6 +1,7 @@
 const { NotificationRedriveService, notificationRedriveService, calculateBackoffMs, stripUndefinedFieldsDeep } = require('../../src/services/notification/NotificationRedriveService');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const { signalRepeatCooldown } = require('../../src/services/alerts/signalRepeatCooldown');
+const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 const admin = require('firebase-admin');
 
 describe('NotificationRedriveService', () => {
@@ -11,6 +12,7 @@ describe('NotificationRedriveService', () => {
 
 	beforeEach(() => {
 		savedEnv = { ...process.env };
+		firestoreWriteMetricsService.resetForTesting();
 		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
 		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
 		process.env.NOTIFICATION_REDRIVE_INTERVAL_MS = '60000';
@@ -448,6 +450,8 @@ describe('NotificationRedriveService', () => {
 			expect(doc.status).toBe('pending');
 			expect(doc.attemptCount).toBe(0);
 			expect(doc.lastError).toBe('Telegram 500 error');
+			expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.notificationRedrive)
+				.toMatchObject({ success: 1, failure: 0 });
 		});
 
 		it('sanitizes undefined fields before writing to Firestore', async () => {
@@ -469,7 +473,7 @@ describe('NotificationRedriveService', () => {
 			const failingFirestore = {
 				collection: jest.fn(() => ({
 					doc: jest.fn(() => ({
-						set: jest.fn().mockRejectedValue(new Error('Firestore quota exceeded')),
+						set: jest.fn().mockRejectedValue(Object.assign(new Error('Firestore unavailable'), { code: 14 })),
 					})),
 				})),
 			};
@@ -481,6 +485,8 @@ describe('NotificationRedriveService', () => {
 			const recorded = await service.recordDeliveryResults(alert, results);
 			expect(recorded).toHaveLength(1);
 			expect(service.getPendingCount()).toBe(1);
+			expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.notificationRedrive)
+				.toMatchObject({ success: 0, failure: 1, lastFailureCategory: 'firestore_unavailable' });
 		});
 
 		it('terminalizes a late durable enqueue before releasing worker cooldown ownership', async () => {

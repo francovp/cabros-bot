@@ -14,6 +14,8 @@ const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaMana
 const groundingMetrics = require('../../src/services/grounding/metrics');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
 const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
+const persistentWriteHealthSchema = require('../../src/openapi/openapi.json')
+	.components.schemas.PersistentWriteDomainHealth;
 const { getPromptService } = require('../../src/services/prompts');
 const { signalClassMetrics } = require('../../src/services/alerts/signalClassifier');
 const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
@@ -35,6 +37,15 @@ const validFirestoreServiceAccountJson = JSON.stringify({
 });
 
 describe('Status endpoints', () => {
+	function expectNullHealthFieldsAllowedBySchema(domainHealth) {
+		for (const field of ['lastSuccessAt', 'lastFailureAt', 'lastFailureCategory']) {
+			const value = domainHealth[field];
+			const property = persistentWriteHealthSchema.properties[field];
+			expect(property.type).toContain(value === null ? 'null' : 'string');
+			if (property.enum) expect(property.enum).toContain(value);
+		}
+	}
+
 	let savedEnv;
 	let savedTradingViewRuntimeStatus;
 	let savedTradingViewVolumeRuntimeStatus;
@@ -135,6 +146,56 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(401);
 		expect(response.body.error).toBe('Unauthorized: Missing API key');
+	});
+
+	it('exposes persistent-write health on both status aliases without provider errors', async () => {
+		const providerMessage = 'credential=super-secret Firestore failure';
+		firestoreWriteMetricsService.recordPersistentWriteFailure(
+			'alertStorage',
+			Object.assign(new Error(providerMessage), { code: 7 }),
+		);
+
+		const status = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		const capabilities = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(status.status).toBe(200);
+		expect(status.body.dependencies.persistentWriteHealth.byDomain.alertStorage).toMatchObject({
+			success: 0,
+			failure: 1,
+			failureRate: 1,
+			lastFailureCategory: 'firestore_permission_denied',
+			status: 'degraded',
+		});
+		expect(status.body.dependencies.persistentWriteHealth.byDomain.newsDedup).toMatchObject({
+			success: 0,
+			failure: 0,
+			status: 'unconfigured',
+		});
+		expectNullHealthFieldsAllowedBySchema(status.body.dependencies.persistentWriteHealth.byDomain.newsDedup);
+		expect(capabilities.body.dependencies.persistentWriteHealth.byDomain)
+			.toEqual(status.body.dependencies.persistentWriteHealth.byDomain);
+		expect(status.body.dependencies).not.toHaveProperty('firestoreWriteMetrics');
+		expect(status.text).not.toContain(providerMessage);
+		expect(capabilities.text).not.toContain(providerMessage);
+	});
+
+	it('returns healthy persistent-write null fields accepted by the OpenAPI schema', async () => {
+		firestoreWriteMetricsService.recordPersistentWriteSuccess('signalOutcomes');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		const health = response.body.dependencies.persistentWriteHealth.byDomain.signalOutcomes;
+		expect(health.status).toBe('ok');
+		expect(health.lastFailureAt).toBeNull();
+		expect(health.lastFailureCategory).toBeNull();
+		expectNullHealthFieldsAllowedBySchema(health);
 	});
 
 	it('returns machine-readable status on /api/status', async () => {

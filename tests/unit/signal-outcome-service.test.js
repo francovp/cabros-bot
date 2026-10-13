@@ -4,6 +4,7 @@ const admin = require('firebase-admin');
 const SignalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const AlertStorageService = require('../../src/services/storage/AlertStorageService');
 const EquityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
+const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 
 // Shorthand references to mock internals
 const {
@@ -42,6 +43,7 @@ jest.mock('../../src/services/grounding/geminiPriceService', () => ({
 describe('SignalOutcomeService', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		firestoreWriteMetricsService.resetForTesting();
 		mockFetchGeminiPrice.mockResolvedValue(null);
 		admin.__resetApps();
 		admin.__resetCollectionState();
@@ -480,7 +482,31 @@ describe('SignalOutcomeService', () => {
 				expect(documents.get(first).outcomeEvaluated).toBe(true);
 				expect(await SignalOutcomeService.recordSignal({ ...signal, idempotencyKey: 'job-1:expanded:1' })).not.toBe(first);
 				expect(documents.size).toBe(2);
+				expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.signalOutcomes)
+					.toMatchObject({ success: 4, failure: 0 });
 			} finally {
+				storage.mockRestore();
+			}
+		});
+
+		it('records a failed Firestore write while preserving the fail-open null result', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const storage = jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue({
+				collection: () => ({
+					doc: () => ({
+						create: jest.fn().mockRejectedValue(Object.assign(new Error('write rejected'), { code: 14 })),
+					}),
+				}),
+			});
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				await expect(SignalOutcomeService.recordSignal({
+					symbol: 'BINANCE:BTCUSDT', price: 50000, idempotencyKey: 'failed-outcome-write',
+				})).resolves.toBeNull();
+				expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.signalOutcomes)
+					.toMatchObject({ success: 0, failure: 1, lastFailureCategory: 'firestore_unavailable' });
+			} finally {
+				warnSpy.mockRestore();
 				storage.mockRestore();
 			}
 		});

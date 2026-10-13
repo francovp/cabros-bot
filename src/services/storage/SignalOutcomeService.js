@@ -7,6 +7,7 @@ const AlertStorageService = require('./AlertStorageService');
 const equityMarketDataService = require('./EquityMarketDataService');
 const geminiPriceService = require('../grounding/geminiPriceService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const { fireAndForget } = require('../../lib/fireAndForget');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { MainClient } = require('binance');
 const {
@@ -1175,14 +1176,20 @@ async function recordSignalInternal({
 		if (idempotencyKey) {
 			const id = createHash('sha256').update(idempotencyKey).digest('hex');
 			docRef = firestore.collection(COLLECTION_NAME).doc(id);
-			try {
-				await docRef.create(document);
-			} catch (error) {
-				if (error.code !== 6) throw error;
-				// Already recorded: never overwrite a concurrently evaluated outcome.
-			}
+			const write = await fireAndForget('signalOutcomes', async () => {
+				try {
+					return await docRef.create(document);
+				} catch (error) {
+					if (error.code !== 6) throw error;
+					// Already recorded: never overwrite a concurrently evaluated outcome.
+					return null;
+				}
+			});
+			if (!write.ok) throw write.error;
 		} else {
-			docRef = await firestore.collection(COLLECTION_NAME).add(document);
+			const write = await fireAndForget('signalOutcomes', () => firestore.collection(COLLECTION_NAME).add(document));
+			if (!write.ok) throw write.error;
+			docRef = write.value;
 		}
 		console.debug(`[SignalOutcomeService] Signal outcome recorded with ID: ${docRef.id}`);
 		return docRef.id;
