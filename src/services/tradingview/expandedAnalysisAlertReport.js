@@ -789,9 +789,23 @@ function recordExpandedAnalysisOutcomes(analyzedItems, parsed = {}, options = {}
 			const row = buildReportRow({ ...item, side: itemSide });
 			const tech = item.analysis?.technical || item.analysis || {};
 			const closePrice = row.price ?? tech.price_data?.current_price ?? tech.price_data?.close ?? null;
-			const score = item.analysis?.market_sentiment?.overall_rating ?? tech.market_sentiment?.overall_rating ?? null;
-			const rawConfidence = item.analysis?.confidence ?? item.confidence ?? (typeof score === 'number' && score >= 0 && score <= 1 ? score : null);
-			const validConfidence = typeof rawConfidence === 'number' && Number.isFinite(rawConfidence) && rawConfidence >= 0 && rawConfidence <= 1 ? rawConfidence : null;
+			const rawRating = item.analysis?.market_sentiment?.overall_rating ?? tech.market_sentiment?.overall_rating ?? null;
+			let normalizedScore = null;
+			if (typeof rawRating === 'number' && Number.isFinite(rawRating)) {
+				const absRating = Math.abs(rawRating);
+				const magnitude = absRating <= 1
+					? absRating
+					: absRating <= 5
+						? absRating / 5
+						: absRating <= 10
+							? absRating / 10
+							: Math.min(1, absRating / 100);
+				normalizedScore = (itemSide === 'SELL' ? -1 : 1) * Math.min(1, Math.max(0, magnitude));
+			}
+			const rawConfidence = item.analysis?.confidence ?? item.confidence ?? (normalizedScore !== null ? Math.abs(normalizedScore) : null);
+			const validConfidence = typeof rawConfidence === 'number' && Number.isFinite(rawConfidence) && rawConfidence >= 0 && rawConfidence <= 1
+				? rawConfidence
+				: (normalizedScore !== null ? Math.abs(normalizedScore) : null);
 
 			signalOutcomeService.recordSignal({
 				idempotencyKey: options.jobId ? `job:${options.jobId}:expanded-analysis:${index}` : null,
@@ -802,7 +816,7 @@ function recordExpandedAnalysisOutcomes(analyzedItems, parsed = {}, options = {}
 				exchange: item.input.exchange,
 				timeframe,
 				setupType: 'expanded-analysis',
-				score,
+				score: normalizedScore,
 				confidenceScore: validConfidence,
 				side: itemSide,
 				price: typeof closePrice === 'number' ? closePrice : null,

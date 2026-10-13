@@ -9714,6 +9714,7 @@
           "source",
           "side",
           "score",
+          "confidence",
           "price",
           "worstReturn",
           "worstMae"
@@ -9735,7 +9736,16 @@
             "example": "BUY"
           },
           "score": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Signed score aligned with signal direction: positive for BUY, negative for SELL, clamped to [-1, 1]. Legacy records may retain positive values for SELL. Use the confidence field for magnitude-based filtering.",
+            "example": 0.85
+          },
+          "confidence": {
             "type": "number",
+            "description": "Magnitude of the signal's signed score (|score|). Always a non-negative number (>= 0.70 for news-monitor candidates, >= 0.75 for other sources). Consumers can filter on confidence without re-deriving Math.abs() from score.",
             "example": 0.85
           },
           "price": {
