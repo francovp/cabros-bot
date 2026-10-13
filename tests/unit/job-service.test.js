@@ -894,7 +894,8 @@ describe('JobService Unit Tests', () => {
 			expect(recorded.price).toBe(65000);
 			expect(recorded.stop).toBe(65750);
 			expect(recorded.target).toBe(63500);
-			expect(recorded.score).toBe(0.75);
+			expect(recorded.score).toBe(-0.75);
+			expect(recorded.confidenceScore).toBe(0.75);
 
 			recordSpy.mockRestore();
 			signalOutcomeService.isEnabled.mockRestore();

@@ -823,7 +823,7 @@ function recordMarketScannerOutcomes(scanResults, parsed = {}, options = {}) {
 					const itemSide = getScanItemSide(scanResult.scan, item);
 					const itemScore = typeof item._score === 'number' && Number.isFinite(item._score)
 						? (itemSide === 'SELL' ? -1 : 1) * Math.min(100, Math.max(0, item._score)) / 100
-						: null;
+						: (item.changePercent ?? item.indicators?.RSI ?? item.volume_ratio ?? null);
 
 					const atr = pickLevel([item.indicators?.atr, item.indicators?.ATR, item.atr]);
 					const bbLower = pickLevel([item.indicators?.bb_lower, item.indicators?.bollinger_lower, item.indicators?.lower, item.bollinger?.lower, item.bollinger_lower]);
@@ -872,9 +872,7 @@ function recordMarketScannerOutcomes(scanResults, parsed = {}, options = {}) {
 						timeframe,
 						setupType: scanResult.scan,
 						score: itemScore,
-						confidenceScore: typeof item.confidence === 'number' && Number.isFinite(item.confidence) && item.confidence >= 0 && item.confidence <= 1
-							? item.confidence
-							: (itemScore !== null ? Math.abs(itemScore) : null),
+						confidenceScore: typeof item.confidence === 'number' && Number.isFinite(item.confidence) && item.confidence >= 0 && item.confidence <= 1 ? item.confidence : null,
 						side: itemSide,
 						price: validPrice,
 						priceSource: validPrice !== null ? 'tradingview-mcp' : null,
