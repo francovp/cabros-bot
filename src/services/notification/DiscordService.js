@@ -2,6 +2,7 @@ const NotificationChannel = require('./NotificationChannel');
 const WhatsAppMarkdownFormatter = require('./formatters/whatsappMarkdownFormatter');
 const { splitMessageIntoChunks } = require('../../lib/messageHelper');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const sleepWithSignal = require('../../lib/sleepWithSignal');
 
 const DEFAULT_TIMEOUT_MS = 10000;
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -15,27 +16,6 @@ const DEFAULT_MAX_UNHEALTHY_DURATION_MS = 300000;
 const DISCORD_WEBHOOK_HOST_PATTERN = /^(?:[a-z0-9-]+\.)*discord(?:app)?\.com$/i;
 const DISCORD_WEBHOOK_PATH_PATTERN = /^\/api\/webhooks\/\d+\/[A-Za-z0-9_-]+(?:\/.*)?$/;
 const ROTATION_STRATEGIES = new Set(['round-robin', 'random']);
-
-function sleep(ms) {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function sleepWithSignal(ms, signal) {
-	if (!signal) return sleep(ms);
-	if (signal.aborted) return Promise.reject(new Error(signal.reason?.message || signal.reason || 'Operation aborted'));
-	return new Promise((resolve, reject) => {
-		const timeoutId = setTimeout(() => {
-			signal.removeEventListener('abort', onAbort);
-			resolve();
-		}, ms);
-		const onAbort = () => {
-			clearTimeout(timeoutId);
-			signal.removeEventListener('abort', onAbort);
-			reject(new Error(signal.reason?.message || signal.reason || 'Operation aborted'));
-		};
-		signal.addEventListener('abort', onAbort, { once: true });
-	});
-}
 
 function parseEnvInt(envVar, defaultValue) {
 	if (!process.env[envVar]) return defaultValue;
