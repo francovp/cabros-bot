@@ -2560,30 +2560,6 @@ describe('SignalOutcomeService', () => {
 						},
 					},
 				}],
-				['sign-mismatch-sell', {
-					receivedAt: admin.firestore.Timestamp.fromDate(now),
-					requestId: 'req-sign-mismatch-sell',
-					source: 'alert',
-					symbol: 'ETHUSDT',
-					exchange: 'BINANCE',
-					side: 'SELL',
-					score: 0.85,
-					price: 3000,
-					eligibilityState: 'supported_provider',
-					outcomeEvaluated: true,
-					outcomes: {
-						'1h': {
-							status: 'evaluated',
-							targetTime: now.toISOString(),
-							price: 3150,
-							return: -5.0,
-							maxAdverseExcursion: -6.0,
-							targetHit: false,
-							stopHit: true,
-							rMultiple: -1.0,
-						},
-					},
-				}],
 				['null-score', {
 					receivedAt: admin.firestore.Timestamp.fromDate(now),
 					requestId: 'req-null-score',
@@ -2646,6 +2622,51 @@ describe('SignalOutcomeService', () => {
 			}));
 			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('sign-coherence mismatch'));
 			warnSpy.mockRestore();
+		});
+
+		it('preserves legacy unmigrated SELL records with positive scores for backward compatibility', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const map = new Map([
+				['legacy-unsigned-sell', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-legacy-unsigned-sell',
+					source: 'news-monitor',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					side: 'SELL',
+					score: 0.85,
+					price: 3000,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 3150,
+							return: -5.0,
+							maxAdverseExcursion: -6.0,
+							targetHit: false,
+							stopHit: true,
+							rMultiple: -1.0,
+						},
+					},
+				}],
+			]);
+
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, map);
+
+			const res = await SignalOutcomeService.getMetricsSummary();
+			expect(res).not.toBe('No measurements found');
+			expect(res.falsePositiveCandidates).toHaveLength(1);
+			expect(res.falsePositiveCandidates[0]).toEqual(expect.objectContaining({
+				symbol: 'ETHUSDT',
+				side: 'SELL',
+				score: 0.85,
+				confidence: 0.85,
+			}));
 		});
 
 		it('splits window stats by side and setup type with same metric shape as parent window', async () => {

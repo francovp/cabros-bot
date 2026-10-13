@@ -2692,9 +2692,14 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 		const confidence = rawScore !== null ? Math.abs(rawScore) : null;
 		const isHighConfidence = (confidence !== null && confidence >= 0.75)
 			|| (signal.source === 'news-monitor' && confidence !== null && confidence >= 0.7);
-		const hasSideSignCoherence = signal.side === 'BUY' ? (rawScore === null || rawScore >= 0)
-			: signal.side === 'SELL' ? (rawScore === null || rawScore <= 0)
-				: true;
+		// Backward compatibility: Historical records (e.g. news-monitor before score signing)
+		// stored unsigned scores (rawScore > 0) for SELL signals. Treat positive SELL scores as legacy
+		// unversioned records rather than dropping them as sign-incoherent.
+		const isLegacyUnsignedSell = signal.side === 'SELL' && rawScore !== null && rawScore > 0;
+		const hasSideSignCoherence = isLegacyUnsignedSell
+			|| (signal.side === 'BUY' ? (rawScore === null || rawScore >= 0)
+				: signal.side === 'SELL' ? (rawScore === null || rawScore <= 0)
+					: true);
 		if (isHighConfidence && !hasSideSignCoherence) {
 			console.warn(`[signal-outcome] dropping false-positive candidate for ${signal.symbol} (${signal.side}) due to sign-coherence mismatch (score=${rawScore})`);
 		} else if (isHighConfidence && (resolvedReturn < -1 || worstMae < -3)) {
