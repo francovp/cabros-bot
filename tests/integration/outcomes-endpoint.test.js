@@ -52,10 +52,15 @@ describe('Signal Outcomes API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(403);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
 			code: 'FEATURE_DISABLED',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('returns 503 when Firestore is unavailable', async () => {
@@ -68,10 +73,15 @@ describe('Signal Outcomes API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(503);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.',
 			code: 'STORAGE_UNAVAILABLE',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: true,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('returns 400 for invalid query parameters', async () => {
@@ -278,10 +288,15 @@ describe('Signal Outcomes API Integration Tests', () => {
 				.set('x-api-key', 'test-key')
 				.expect(403);
 
-			expect(res.body).toEqual({
+			expect(res.body).toEqual(expect.objectContaining({
 				error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
 				code: 'FEATURE_DISABLED',
-			});
+			}));
+			expect(res.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 503 when Firestore is unavailable', async () => {
@@ -294,10 +309,15 @@ describe('Signal Outcomes API Integration Tests', () => {
 				.set('x-api-key', 'test-key')
 				.expect(503);
 
-			expect(res.body).toEqual({
+			expect(res.body).toEqual(expect.objectContaining({
 				error: 'Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.',
 				code: 'STORAGE_UNAVAILABLE',
-			});
+			}));
+			expect(res.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: true,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 for invalid query parameters', async () => {
@@ -327,6 +347,30 @@ describe('Signal Outcomes API Integration Tests', () => {
 
 			res = await request(app)
 				.get('/api/outcomes/summary?from=2026-08-23T20:00:00.000Z&to=2026-08-23T10:00:00.000Z')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+
+			res = await request(app)
+				.get('/api/outcomes/summary?breakdown=unknown')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+
+			res = await request(app)
+				.get('/api/outcomes/summary?breakdown=symbol&breakdown=setup')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+
+			res = await request(app)
+				.get('/api/outcomes/summary?setupType=breakout&setupType=mean-reversion')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+
+			res = await request(app)
+				.get('/api/outcomes/summary?setupType=')
 				.set('x-api-key', 'test-key')
 				.expect(400);
 			expect(res.body.code).toBe('INVALID_REQUEST');
@@ -379,7 +423,7 @@ describe('Signal Outcomes API Integration Tests', () => {
 			signalOutcomeService.summarizeOutcomes.mockResolvedValue(mockSummary);
 
 			const res = await request(app)
-				.get('/api/outcomes/summary?symbol=BTCUSDT&exchange=BINANCE&status=evaluated&window=1h&limit=10')
+				.get('/api/outcomes/summary?symbol=BTCUSDT&exchange=BINANCE&setupType=breakout&status=evaluated&window=1h&limit=10&breakdown=symbol,setup')
 				.set('x-api-key', 'test-key')
 				.expect(200);
 
@@ -387,6 +431,8 @@ describe('Signal Outcomes API Integration Tests', () => {
 				limit: 10,
 				symbol: 'BTCUSDT',
 				exchange: 'BINANCE',
+				setupType: 'breakout',
+				breakdown: ['symbol', 'setup'],
 				status: 'evaluated',
 				window: '1h',
 				from: undefined,

@@ -6,7 +6,7 @@ const TOPIC_ALIAS_GROUPS = [
 	['news-monitor', 'news', 'news-alert'],
 	['expanded-analysis', 'analysis'],
 	['scanner-preset', 'scanner-presets', 'presets', 'preset'],
-	['generic-message', 'message', 'custom-message'],
+	['generic-message', 'message', 'custom-message', 'webhook-message'],
 	['alert-replay', 'replay'],
 	['tradingview-analysis', 'jobs', 'job'],
 ];

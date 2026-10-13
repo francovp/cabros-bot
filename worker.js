@@ -11,8 +11,11 @@ const { initializeNotificationServices } = require('./src/controllers/webhooks/h
 const { startJobWorker } = require('./src/services/jobs/jobWorker');
 const { notificationRedriveService } = require('./src/services/notification/NotificationRedriveService');
 const { newsMonitorSchedulerService } = require('./src/services/newsMonitorScheduler');
+const { alertSchedulerService } = require('./src/services/scheduler');
+const { userPriceAlertService } = require('./src/services/alerts/UserPriceAlertService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
+const { probeManagedPromptReadiness } = require('./src/services/prompts');
 
 function buildNotificationBot() {
 	if (process.env.ENABLE_TELEGRAM_BOT !== 'true' || !process.env.BOT_TOKEN) {
@@ -37,11 +40,19 @@ async function main() {
 	}
 
 	void remoteConfigService.start();
+	// `newsMonitorSchedulerService` and `alertSchedulerService` below resolve prompts
+	// through the same PromptService, so this process needs the same probe as the
+	// web service or its /api/status verdict would stay `unverified` by design (#1178).
+	void probeManagedPromptReadiness();
 	const bot = buildNotificationBot();
 	await initializeNotificationServices(bot);
 	const runtime = await startJobWorker({ botOrGetter: bot });
 	notificationRedriveService.startWorker({ source: 'worker', unref: false });
 	newsMonitorSchedulerService.startWorker({ source: 'worker' });
+	alertSchedulerService.botGetter = () => bot;
+	alertSchedulerService.startWorker({ source: 'worker' });
+	userPriceAlertService.setBotGetter(() => bot);
+	userPriceAlertService.startWorker({ source: 'worker' });
 	let stopping = false;
 
 	const shutdown = async (signal) => {
@@ -54,6 +65,8 @@ async function main() {
 		try {
 			await notificationRedriveService.stopWorker({ drain: false });
 			await newsMonitorSchedulerService.stopWorker({ drain: true, timeoutMs: shutdownTimeoutMs });
+			await alertSchedulerService.stopWorker({ drain: true, timeoutMs: shutdownTimeoutMs });
+			await userPriceAlertService.stopWorker({ drain: true, timeoutMs: shutdownTimeoutMs });
 			await runtime.stop();
 			await notificationRedriveService.stopWorker({ drain: true });
 			stopNotificationBot(bot, signal);
