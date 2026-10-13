@@ -39,6 +39,47 @@ function collectRequestsAndSavedExamples(items, result = []) {
 }
 
 describe('Postman collection contract', () => {
+	it('adds executable response assertions to each alert decision rollup and export variant', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const names = [
+			'GET Alert Analytics Summary (decision rollup)',
+			'GET Alert Analytics Summary (invalid includeDecisionRollup)',
+			'GET Export Alerts (JSONL - decision audit)',
+			'GET Export Alerts (CSV - decision audit opt-in)',
+			'GET Export Alerts (invalid includeDecision)',
+		];
+
+		for (const name of names) {
+			const item = findItem(collection.item, name);
+			const testScript = item?.event?.find((event) => event.listen === 'test')?.script?.exec?.join('\n') || '';
+			expect(testScript).toContain('pm.test(');
+			expect(testScript).toContain('pm.response.to.have.status(');
+		}
+
+		const summaryScript = findItem(collection.item, names[0]).event.find((event) => event.listen === 'test').script.exec.join('\n');
+		expect(summaryScript).toContain('pm.response.to.have.status(200)');
+		expect(summaryScript).toContain('success');
+		expect(summaryScript).toContain('if (body.summary.decision)');
+		const jsonlScript = findItem(collection.item, names[2]).event.find((event) => event.listen === 'test').script.exec.join('\n');
+		expect(jsonlScript).toContain('pm.response.to.have.status(200)');
+		expect(jsonlScript).toContain('if (row.decision)');
+		expect(jsonlScript).toContain('row.decision.enrichment.providers');
+		const jsonlExample = JSON.parse(findItem(collection.item, names[2]).response.find((response) => response.code === 200).body);
+		expect(jsonlExample.useTradingViewData).toBe(true);
+		expect(jsonlExample.tradingViewEnrichmentApplied).toBe(true);
+		expect(jsonlExample.tradingViewEnrichmentStatus).toBe('full');
+		expect(jsonlExample.decision.enrichment.providers.tradingViewMcp.status).toBe('full');
+		const csvScript = findItem(collection.item, names[3]).event.find((event) => event.listen === 'test').script.exec.join('\n');
+		expect(csvScript).toContain('pm.response.to.have.status(200)');
+		expect(csvScript).toContain('decision');
+		for (const name of [names[1], names[4]]) {
+			const item = findItem(collection.item, name);
+			const testScript = item.event.find((event) => event.listen === 'test').script.exec.join('\n');
+			expect(testScript).toContain('pm.response.to.have.status(400)');
+			expect(testScript).toContain('INVALID_REQUEST');
+		}
+	});
+
 	it('documents Firebase admin configuration and bearer-auth status access', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const config = findItem(collection.item, 'GET Firebase Admin Auth Config');

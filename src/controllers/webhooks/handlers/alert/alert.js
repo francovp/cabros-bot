@@ -1,6 +1,6 @@
 require('dotenv').config();
 const crypto = require('crypto');
-const { enrichAlert } = require('./grounding');
+const { enrichAlert, ENRICHMENT_PROVIDER_OUTCOMES } = require('./grounding');
 const { validateAlert } = require('../../../../lib/validation');
 const { v4: uuidv4 } = require('uuid');
 const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
@@ -37,6 +37,35 @@ const {
 	sendError,
 	STANDARD_ERROR_CODES,
 } = require('../../../../lib/errorEnvelope');
+
+const ENRICHMENT_PROVIDER_STATUSES = new Set(['full', 'partial', 'failed']);
+
+function normalizeProviderOutcomes(outcomes) {
+	if (!outcomes || typeof outcomes !== 'object') return null;
+	const normalized = {};
+	for (const provider of ['gemini', 'tradingViewMcp']) {
+		const status = outcomes[provider] && outcomes[provider].status;
+		if (ENRICHMENT_PROVIDER_STATUSES.has(status)) normalized[provider] = { status };
+	}
+	return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+function applyProviderOutcomes(enrichmentAudit, outcomes) {
+	const providers = normalizeProviderOutcomes(outcomes);
+	if (!providers) return;
+
+	enrichmentAudit.providers = providers;
+	const statuses = Object.values(providers).map((provider) => provider.status);
+	const hasFailure = statuses.includes('failed');
+	const hasSuccess = statuses.some((status) => ['full', 'partial'].includes(status));
+	if (hasFailure && hasSuccess) {
+		enrichmentAudit.status = 'partial';
+		enrichmentAudit.fallbackUsed = true;
+	} else if (hasFailure) {
+		enrichmentAudit.status = 'failed';
+		enrichmentAudit.fallbackUsed = true;
+	}
+}
 
 const {
 	initialize: bootstrapInitialize,
@@ -186,7 +215,7 @@ async function processEnrichment(alert, options) {
 
 	let enriched = false;
 
-	if (isGeminiEnabled || isTradingViewMcpEnabled) {
+	if (isGeminiEnabled || isTradingViewMcpAttemptEligible) {
 		const enrichmentSpan = sentryService.startInactiveSpan({
 			name: 'alerts.enrichment',
 			op: 'alert.enrich',
@@ -196,18 +225,22 @@ async function processEnrichment(alert, options) {
 				'alert.length': alert.text.length,
 				'alert.use_tradingview_data': useTradingViewData,
 				'feature.gemini_grounding': isGeminiEnabled,
-				'feature.tradingview_mcp_enrichment': isTradingViewMcpEnabled,
+				'feature.tradingview_mcp_enrichment': isTradingViewMcpAttemptEligible,
 			},
 		});
 
 		try {
 			console.debug('Starting alert enrichment process');
-			const enrichedAlert = await enrichAlert({ text: alert.text }, { tokenUsage, useTradingViewData, parsedSignal: parsed });
+			const enrichedAlert = await enrichAlert({ text: alert.text }, {
+				tokenUsage,
+				useTradingViewData: isTradingViewMcpAttemptEligible,
+				parsedSignal: parsed,
+			});
 			if (enrichedAlert && typeof enrichedAlert === 'object') {
 				enrichedAlert.tokenUsage = tokenUsage && typeof tokenUsage.toJSON === 'function' ? tokenUsage.toJSON() : null;
 				enriched = true;
 				alert.enriched = enrichedAlert;
-				if (isTradingViewMcpEnabled) {
+				if (isTradingViewMcpAttemptEligible) {
 					const tradingViewEnrichmentStatus = enrichedAlert.tradingViewEnrichmentStatus
 						|| (enrichedAlert.tradingViewEnrichmentApplied === true
 							? 'full'
@@ -220,9 +253,10 @@ async function processEnrichment(alert, options) {
 					? (alert.tradingViewEnrichmentStatus || 'success')
 					: (isGeminiEnabled ? 'success' : (alert.tradingViewEnrichmentStatus || 'success'));
 				enrichmentAudit.fallbackUsed = enrichmentAudit.status === 'failed';
+				applyProviderOutcomes(enrichmentAudit, enrichedAlert[ENRICHMENT_PROVIDER_OUTCOMES]);
 				console.debug('[Alert] Enrichment completed, sources:', (enrichedAlert.sources && enrichedAlert.sources.length) || 0);
 			} else {
-				if (isTradingViewMcpEnabled) {
+				if (isTradingViewMcpAttemptEligible) {
 					alert.tradingViewEnrichmentStatus = hasTradingViewSignal ? 'failed' : 'not_applicable';
 				}
 				enrichmentAudit.status = enrichmentAudit.attempted ? 'failed' : (alert.tradingViewEnrichmentStatus || 'not_attempted');
@@ -230,11 +264,12 @@ async function processEnrichment(alert, options) {
 				console.debug('[Alert] Enrichment skipped: alert text did not match enabled providers');
 			}
 		} catch (error) {
-			if (isTradingViewMcpEnabled) {
+			if (isTradingViewMcpAttemptEligible) {
 				alert.tradingViewEnrichmentStatus = hasTradingViewSignal ? 'failed' : 'not_applicable';
 			}
 			enrichmentAudit.status = enrichmentAudit.attempted ? 'failed' : (alert.tradingViewEnrichmentStatus || 'not_attempted');
 			enrichmentAudit.fallbackUsed = enrichmentAudit.attempted;
+			applyProviderOutcomes(enrichmentAudit, error && error[ENRICHMENT_PROVIDER_OUTCOMES]);
 			console.warn('[Alert] Enrichment failed, using original text:', error.message);
 		} finally {
 			sentryService.endSpan(enrichmentSpan);
@@ -259,11 +294,13 @@ function buildDecisionAudit({ requestId, parsedSignal, enrichment, gates, reques
 			: { ok: false },
 	};
 	if (enrichment && typeof enrichment === 'object') {
+		const providers = normalizeProviderOutcomes(enrichment.providers);
 		decision.enrichment = {
 			attempted: Boolean(enrichment.attempted),
 			provider: typeof enrichment.provider === 'string' ? enrichment.provider : null,
 			status: typeof enrichment.status === 'string' ? enrichment.status : null,
 			fallbackUsed: Boolean(enrichment.fallbackUsed),
+			...(providers ? { providers } : {}),
 		};
 	}
 	if (Array.isArray(gates) && gates.length > 0) {

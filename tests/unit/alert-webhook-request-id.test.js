@@ -2,6 +2,7 @@
 
 jest.mock('../../src/controllers/webhooks/handlers/alert/grounding', () => ({
 	enrichAlert: jest.fn().mockResolvedValue(null),
+	ENRICHMENT_PROVIDER_OUTCOMES: Symbol.for('cabros-bot.alert.enrichment-provider-outcomes'),
 }));
 
 jest.mock('../../src/lib/validation', () => ({
@@ -39,7 +40,7 @@ const alertStorageService = require('../../src/services/storage/AlertStorageServ
 const NotificationManager = require('../../src/services/notification/NotificationManager');
 const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 const sentryService = require('../../src/services/monitoring/SentryService');
-const { enrichAlert } = require('../../src/controllers/webhooks/handlers/alert/grounding');
+const { enrichAlert, ENRICHMENT_PROVIDER_OUTCOMES } = require('../../src/controllers/webhooks/handlers/alert/grounding');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const {
 	postAlert,
@@ -295,11 +296,11 @@ describe('alert request ID resolution and echo', () => {
 			}, response);
 
 			expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
-			requestId: 'middleware-request-42',
-		}));
+				requestId: 'middleware-request-42',
+			}));
 			expect(alertStorageService.saveAlert).toHaveBeenCalledWith(expect.objectContaining({
-			requestId: 'middleware-request-42',
-		}));
+				requestId: 'middleware-request-42',
+			}));
 		});
 
 		it('includes requestId in dry-run response', async () => {
@@ -360,6 +361,7 @@ describe('alert request ID resolution and echo', () => {
 					},
 				}),
 			}));
+			expect(enrichAlert).not.toHaveBeenCalled();
 		});
 
 		it('records explicit request-level channel mode in the audit', async () => {
@@ -388,7 +390,6 @@ describe('alert request ID resolution and echo', () => {
 			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
 			process.env.ENABLE_ALERT_DECISION_AUDIT = 'true';
 			alertStorageService.isEnabled.mockReturnValue(true);
-			enrichAlert.mockResolvedValueOnce(null);
 			const response = buildResponse();
 
 			await postAlert({})({
@@ -407,6 +408,7 @@ describe('alert request ID resolution and echo', () => {
 					},
 				}),
 			}));
+			expect(enrichAlert).not.toHaveBeenCalled();
 		});
 
 		it('records Gemini success when TradingView is enabled but no signal is present', async () => {
@@ -486,6 +488,85 @@ describe('alert request ID resolution and echo', () => {
 			}));
 		});
 
+		it('records provider-specific partial failure when Gemini falls back to TradingView MCP', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.ENABLE_ALERT_DECISION_AUDIT = 'true';
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			alertStorageService.isEnabled.mockReturnValue(true);
+			const enriched = {
+				tradingViewEnrichmentApplied: true,
+				tradingViewEnrichmentStatus: 'full',
+			};
+			Object.defineProperty(enriched, ENRICHMENT_PROVIDER_OUTCOMES, {
+				value: {
+					gemini: { status: 'failed' },
+					tradingViewMcp: { status: 'full' },
+				},
+			});
+			enrichAlert.mockResolvedValueOnce(enriched);
+			const response = buildResponse();
+
+			await postAlert({})({
+				headers: {},
+				body: { text: 'BINANCE:BTCUSDT (1h) BUY' },
+				query: { useTradingViewData: 'true' },
+			}, response);
+
+			expect(alertStorageService.saveAlert).toHaveBeenCalledWith(expect.objectContaining({
+				decision: expect.objectContaining({
+					enrichment: {
+						attempted: true,
+						provider: 'gemini-grounding+tradingview-mcp',
+						status: 'partial',
+						fallbackUsed: true,
+						providers: {
+							gemini: { status: 'failed' },
+							tradingViewMcp: { status: 'full' },
+						},
+					},
+				}),
+			}));
+		});
+
+		it('records both failed provider outcomes when enrichment throws without a fallback', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.ENABLE_ALERT_DECISION_AUDIT = 'true';
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			alertStorageService.isEnabled.mockReturnValue(true);
+			const error = new Error('providers unavailable');
+			Object.defineProperty(error, ENRICHMENT_PROVIDER_OUTCOMES, {
+				value: {
+					gemini: { status: 'failed' },
+					tradingViewMcp: { status: 'failed' },
+				},
+			});
+			enrichAlert.mockRejectedValueOnce(error);
+			const response = buildResponse();
+
+			await postAlert({})({
+				headers: {},
+				body: { text: 'BINANCE:BTCUSDT (1h) BUY' },
+				query: { useTradingViewData: 'true' },
+			}, response);
+
+			expect(alertStorageService.saveAlert).toHaveBeenCalledWith(expect.objectContaining({
+				decision: expect.objectContaining({
+					enrichment: {
+						attempted: true,
+						provider: 'gemini-grounding+tradingview-mcp',
+						status: 'failed',
+						fallbackUsed: true,
+						providers: {
+							gemini: { status: 'failed' },
+							tradingViewMcp: { status: 'failed' },
+						},
+					},
+				}),
+			}));
+		});
+
 		it('records a partial same-signal cooldown when one destination remains allowed', async () => {
 			const text = 'BINANCE:BTCUSDT (1h) BUY';
 			const parsedSignal = parseTradingViewSignal(text);
@@ -504,26 +585,26 @@ describe('alert request ID resolution and echo', () => {
 				)),
 				isIntentionalApiOnly: jest.fn(() => false),
 			}));
-		const response = buildResponse();
+			const response = buildResponse();
 
-		await postAlert({})({
-			headers: {},
-			body: { text, channels: ['telegram', 'whatsapp'] },
-			query: {},
-		}, response);
+			await postAlert({})({
+				headers: {},
+				body: { text, channels: ['telegram', 'whatsapp'] },
+				query: {},
+			}, response);
 
-		const saveArgs = alertStorageService.saveAlert.mock.calls[0][0];
-		const gate = saveArgs.decision.gates.find((entry) => entry.name === 'same-signal-cooldown');
-		expect(gate).toMatchObject({ decision: 'suppress', reason: 'channel_cooldown' });
-		expect(gate.evidence).toEqual({
-			requestedChannels: 'telegram,whatsapp',
-			allowedChannels: 'whatsapp',
-			suppressedChannels: 'telegram',
+			const saveArgs = alertStorageService.saveAlert.mock.calls[0][0];
+			const gate = saveArgs.decision.gates.find((entry) => entry.name === 'same-signal-cooldown');
+			expect(gate).toMatchObject({ decision: 'suppress', reason: 'channel_cooldown' });
+			expect(gate.evidence).toEqual({
+				requestedChannels: 'telegram,whatsapp',
+				allowedChannels: 'whatsapp',
+				suppressedChannels: 'telegram',
+			});
+			expect(saveArgs.decision.dispatch.sentTo).toEqual(['whatsapp']);
+			resetNotificationManagerForTesting();
+			signalRepeatCooldown.reset();
 		});
-		expect(saveArgs.decision.dispatch.sentTo).toEqual(['whatsapp']);
-		resetNotificationManagerForTesting();
-		signalRepeatCooldown.reset();
-	});
 
 		it('includes requestId in Sentry error capture context on unexpected error', async () => {
 			const response = buildResponse();

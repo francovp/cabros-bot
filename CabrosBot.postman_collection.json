@@ -8171,6 +8171,26 @@
               "code": 200,
               "body": "{\"success\":true,\"summary\":{\"window\":{\"from\":\"2026-06-06T00:00:00.000Z\",\"to\":\"2026-06-07T00:00:00.000Z\",\"limit\":500,\"maxDays\":31},\"totalAlerts\":2,\"bySource\":{\"webhook\":2},\"byFeatureFlag\":{\"enriched\":0,\"plain\":2,\"tradingViewData\":0,\"withoutTradingViewData\":2},\"enrichment\":{\"enrichedAlerts\":0,\"plainAlerts\":2,\"tradingViewStatusCounts\":{\"full\":0,\"partial\":0,\"failed\":0,\"not_applicable\":2,\"unrecorded\":0},\"riskMetadataCoverage\":{\"denominator\":0,\"fields\":{},\"byPromptProvenance\":[]},\"evidenceCoverage\":{\"denominator\":0,\"zeroSources\":{\"populated\":0,\"percentage\":0},\"oneToTwoSources\":{\"populated\":0,\"percentage\":0},\"threePlusSources\":{\"populated\":0,\"percentage\":0},\"totalSourceCount\":0,\"averageSourceCount\":0,\"byPromptProvenance\":[]},\"tokenUsage\":{\"inputTokens\":0,\"outputTokens\":0,\"totalTokens\":0,\"totalCost\":0}},\"delivery\":{\"totalSuccess\":0,\"totalFailure\":0,\"byChannel\":{}},\"latency\":{\"averageProcessingMs\":null,\"averageDeliveryMs\":null},\"decision\":{\"gates\":{\"denominator\":2,\"gates\":[{\"name\":\"dryRun\",\"decision\":\"skip\",\"populated\":1,\"percentage\":50},{\"name\":\"same-signal-cooldown\",\"decision\":\"suppress\",\"populated\":1,\"percentage\":50}]}},\"shadowModeMetrics\":\"No measurements found\"}}"
             }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 200', () => pm.response.to.have.status(200));",
+                  "const body = pm.response.json();",
+                  "pm.test('success envelope', () => pm.expect(body.success).to.eql(true));",
+                  "if (body.summary.decision) {",
+                  "  pm.test('decision gate rollup is present when enabled', () => pm.expect(body.summary.decision.gates).to.be.an('object'));",
+                  "  pm.test('rollup includes denominator and gate buckets', () => {",
+                  "    pm.expect(body.summary.decision.gates.denominator).to.be.a('number');",
+                  "    pm.expect(body.summary.decision.gates.gates).to.be.an('array');",
+                  "  });",
+                  "}"
+                ]
+              }
+            }
           ]
         },
         {
@@ -8222,6 +8242,25 @@
               "code": 400,
               "_postman_previewlanguage": "json",
               "body": "{\n  \"success\": false,\n  \"error\": \"Invalid includeDecisionRollup flag. Use true or false.\",\n  \"code\": \"INVALID_REQUEST\",\n  \"retryable\": false,\n  \"requestId\": \"req-example\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 400', () => pm.response.to.have.status(400));",
+                  "const body = pm.response.json();",
+                  "pm.test('INVALID_REQUEST envelope is complete', () => {",
+                  "  pm.expect(body.success).to.eql(false);",
+                  "  pm.expect(body.code).to.eql('INVALID_REQUEST');",
+                  "  pm.expect(body.error).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.retryable).to.eql(false);",
+                  "  pm.expect(body.requestId).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
             }
           ]
         },
@@ -8926,14 +8965,42 @@
                 }
               ]
             },
-            "description": "Exports bounded stored alerts as JSON Lines with the opt-in per-alert decision audit trail. The decision field is only populated when ENABLE_ALERT_DECISION_AUDIT=true; otherwise the field is omitted from each row. Decision objects are sanitized (bounded depth 6, max 32 keys per object, string leaves <= 1000 chars)."
+            "description": "Exports bounded stored alerts as JSON Lines with the opt-in per-alert decision audit trail. The decision field is only populated when ENABLE_ALERT_DECISION_AUDIT=true; otherwise the field is omitted from each row. Decision objects are sanitized (bounded depth 6, max 32 keys per object, string leaves <= 1000 chars). The decision.enrichment.providers field records attempted Gemini and TradingView MCP outcomes, including a provider failure when the other provider supplied the fallback."
           },
           "response": [
             {
               "name": "200 OK - JSONL export with decision",
               "status": "OK",
               "code": 200,
-              "body": "{\"id\":\"alert-123\",\"receivedAt\":\"2026-06-06T12:00:00.000Z\",\"source\":\"webhook\",\"enriched\":true,\"useTradingViewData\":false,\"tradingViewEnrichmentApplied\":false,\"tradingViewEnrichmentStatus\":\"not_applicable\",\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30,\"totalCost\":0.001},\"decision\":{\"requestId\":\"req-1\",\"parsed\":{\"ok\":true,\"exchange\":\"BINANCE\",\"symbol\":\"BTCUSDT\",\"side\":\"BUY\",\"rawTimeframe\":\"1h\",\"timeframe\":\"1h\"},\"enrichment\":{\"attempted\":true,\"provider\":\"gemini-grounding\",\"status\":\"success\",\"fallbackUsed\":false},\"gates\":[],\"dispatch\":{\"requestedChannels\":[\"telegram\"],\"sentTo\":[\"telegram\"],\"requestedChannelMode\":\"symbol_route\"}}}\n"
+              "body": "{\"id\":\"alert-123\",\"receivedAt\":\"2026-06-06T12:00:00.000Z\",\"source\":\"webhook\",\"enriched\":true,\"useTradingViewData\":true,\"tradingViewEnrichmentApplied\":true,\"tradingViewEnrichmentStatus\":\"full\",\"deliveryResults\":[{\"channel\":\"telegram\",\"success\":true,\"messageId\":\"123\",\"errorCode\":null,\"statusCode\":null}],\"tokenUsage\":{\"inputTokens\":10,\"outputTokens\":20,\"totalTokens\":30,\"totalCost\":0.001},\"decision\":{\"requestId\":\"req-1\",\"parsed\":{\"ok\":true,\"exchange\":\"BINANCE\",\"symbol\":\"BTCUSDT\",\"side\":\"BUY\",\"rawTimeframe\":\"1h\",\"timeframe\":\"1h\"},\"enrichment\":{\"attempted\":true,\"provider\":\"gemini-grounding+tradingview-mcp\",\"status\":\"partial\",\"fallbackUsed\":true,\"providers\":{\"gemini\":{\"status\":\"failed\"},\"tradingViewMcp\":{\"status\":\"full\"}}},\"gates\":[],\"dispatch\":{\"requestedChannels\":[\"telegram\"],\"sentTo\":[\"telegram\"],\"requestedChannelMode\":\"symbol_route\"}}}\n"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 200', () => pm.response.to.have.status(200));",
+                  "const lines = pm.response.text().split('\\n').filter((line) => line.trim().length > 0);",
+                  "pm.test('each non-empty JSONL row is valid JSON', () => {",
+                  "  lines.forEach((line) => pm.expect(() => JSON.parse(line)).not.to.throw());",
+                  "});",
+                  "lines.forEach((line, index) => {",
+                  "  const row = JSON.parse(line);",
+                  "  pm.test(`row ${index + 1} has an alert id`, () => pm.expect(row.id).to.be.a('string').and.not.empty);",
+                  "  if (row.decision) {",
+                  "    pm.test(`row ${index + 1} has a decision audit object`, () => pm.expect(row.decision).to.be.an('object'));",
+                  "    if (row.decision.requestId) {",
+                  "      pm.test(`row ${index + 1} has a valid request id`, () => pm.expect(row.decision.requestId).to.be.a('string').and.not.empty);",
+                  "    }",
+                  "    if (row.decision.enrichment && row.decision.enrichment.providers) {",
+                  "      pm.test(`row ${index + 1} has provider outcomes`, () => pm.expect(row.decision.enrichment.providers).to.be.an('object'));",
+                  "    }",
+                  "  }",
+                  "});"
+                ]
+              }
             }
           ]
         },
@@ -8996,6 +9063,21 @@
               ],
               "body": "id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,feature,channels,deliveryResults,suppressedRepeat,suppressionReason,tokenUsage,decision,currentPrice,priceCurrency\nalert-123,req-1,2026-06-06T12:00:00.000Z,webhook,unknown,false,false,false,not_applicable,,,,,,,[],false,,\"{\"\"inputTokens\"\":0,\"\"outputTokens\"\":0,\"\"totalTokens\"\":0,\"\"totalCost\"\":0}\",\"{\"\"requestId\"\":\"\"req-1\"\",\"\"gates\"\":[]}\",,\n"
             }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 200', () => pm.response.to.have.status(200));",
+                  "pm.test('returns CSV with opt-in decision column', () => {",
+                  "  pm.expect(pm.response.headers.get('Content-Type')).to.include('text/csv');",
+                  "  pm.expect(pm.response.text().split('\\n')[0]).to.include('decision');",
+                  "});"
+                ]
+              }
+            }
           ]
         },
         {
@@ -9051,6 +9133,25 @@
               "code": 400,
               "_postman_previewlanguage": "json",
               "body": "{\n  \"success\": false,\n  \"error\": \"Invalid includeDecision flag. Use true or false.\",\n  \"code\": \"INVALID_REQUEST\",\n  \"retryable\": false,\n  \"requestId\": \"req-example\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('responds 400', () => pm.response.to.have.status(400));",
+                  "const body = pm.response.json();",
+                  "pm.test('INVALID_REQUEST envelope is complete', () => {",
+                  "  pm.expect(body.success).to.eql(false);",
+                  "  pm.expect(body.code).to.eql('INVALID_REQUEST');",
+                  "  pm.expect(body.error).to.be.a('string').and.not.empty;",
+                  "  pm.expect(body.retryable).to.eql(false);",
+                  "  pm.expect(body.requestId).to.be.a('string').and.not.empty;",
+                  "});"
+                ]
+              }
             }
           ]
         },

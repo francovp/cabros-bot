@@ -16507,6 +16507,33 @@
               },
               "fallbackUsed": {
                 "type": "boolean"
+              },
+              "providers": {
+                "type": "object",
+                "description": "Sanitized outcome per enrichment provider that was attempted. Failed providers remain visible when another provider supplied the fallback result.",
+                "additionalProperties": false,
+                "properties": {
+                  "gemini": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "status": {
+                        "type": "string",
+                        "enum": ["full", "partial", "failed"]
+                      }
+                    }
+                  },
+                  "tradingViewMcp": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "status": {
+                        "type": "string",
+                        "enum": ["full", "partial", "failed"]
+                      }
+                    }
+                  }
+                }
               }
             }
           },

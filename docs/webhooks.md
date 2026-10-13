@@ -346,9 +346,13 @@ Text containing no configured route key is delivered normally through the reques
 tokens are not treated as symbols. Each delivery result includes the matched `symbol`
 (bare form, so a `NASDAQ:NVDA` route reports `NVDA`).
 
-When the per-alert decision audit is enabled, `decision.dispatch.requestedChannelMode`
-is `symbol_route` for a matching route, `explicit` for request-level `channels`, or
-`broadcast` when the enabled channel set handles the alert.
+When the per-alert decision audit is enabled, `decision.enrichment.providers` records
+the sanitized `full`, `partial`, or `failed` outcome for each attempted Gemini or
+TradingView MCP provider, including a provider failure when the other provider supplied
+the fallback. This internal metadata is excluded from the public enrichment payload.
+`decision.dispatch.requestedChannelMode` is `symbol_route` for a matching route,
+`explicit` for request-level `channels`, or `broadcast` when the enabled channel set
+handles the alert.
 
 When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` is enabled and it narrows the
 request-level channel set, every `symbolRoutes` entry is intersected with the same set,
