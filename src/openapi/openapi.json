@@ -6745,7 +6745,7 @@
         }
       },
       "StatusResult": {
-        "description": "Non-sensitive runtime readiness. featureFlags.newsMonitorClassifier reports whether optional classifier.dev rechecks are enabled. When Firebase Remote Config is enabled, dependencies.firebaseRemoteConfig reports loader metadata only; it never exposes remote parameter values or credentials. dependencies.langfuse reports proven Langfuse prompt readiness: `ready` becomes true only after an observed successful prompt resolution, `status` distinguishes disabled, misconfigured, unverified, ready and degraded, and `lastErrorReason` is a closed enum. Credentials are never returned; only the LANGFUSE_BASE_URL host is.",
+        "description": "Non-sensitive runtime readiness. featureFlags.newsMonitorClassifier reports whether optional classifier.dev rechecks are enabled. When Firebase Remote Config is enabled, dependencies.firebaseRemoteConfig reports loader metadata only; it never exposes remote parameter values or credentials. dependencies.langfuse reports proven Langfuse prompt readiness: `ready` becomes true only after an observed successful prompt resolution, `status` distinguishes disabled, misconfigured, unverified, ready and degraded, and `lastErrorReason` is a closed enum. Credentials are never returned; only the LANGFUSE_BASE_URL host is. dependencies.startupJitter reports effective per-worker startup-jitter bounds without secrets.",
         "content": {
           "application/json": {
             "schema": {
@@ -7097,6 +7097,13 @@
                   "utilizationPct": 0,
                   "alertsSent": 0,
                   "lastResetAt": "2026-03-29T00:00:00.000Z"
+                },
+                "startupJitter": {
+                  "global": 5000,
+                  "signalOutcome": 5000,
+                  "redrive": 5000,
+                  "scannerPreset": 5000,
+                  "remoteConfig": 5000
                 }
               }
             }
@@ -14389,6 +14396,9 @@
               },
               "langfusePrompts": {
                 "$ref": "#/components/schemas/LangfusePromptsDependency"
+              },
+              "startupJitter": {
+                "$ref": "#/components/schemas/StartupJitter"
               }
             }
           }
@@ -16529,7 +16539,11 @@
                     "properties": {
                       "status": {
                         "type": "string",
-                        "enum": ["full", "partial", "failed"]
+                        "enum": [
+                          "full",
+                          "partial",
+                          "failed"
+                        ]
                       }
                     }
                   },
@@ -16539,7 +16553,11 @@
                     "properties": {
                       "status": {
                         "type": "string",
-                        "enum": ["full", "partial", "failed"]
+                        "enum": [
+                          "full",
+                          "partial",
+                          "failed"
+                        ]
                       }
                     }
                   }
@@ -16647,6 +16665,49 @@
                 }
               }
             }
+          }
+        }
+      },
+      "StartupJitter": {
+        "type": "object",
+        "description": "Effective startup-jitter upper bounds in milliseconds for WORKER_STARTUP_JITTER_MS, SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS, NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS, SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS, and REMOTE_CONFIG_REFRESH_JITTER_MS. Each value is clamped to 0-30000 and delays only the first sweep or refresh after process startup.",
+        "required": [
+          "global",
+          "signalOutcome",
+          "redrive",
+          "scannerPreset",
+          "remoteConfig"
+        ],
+        "properties": {
+          "global": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 30000,
+            "description": "Effective WORKER_STARTUP_JITTER_MS upper bound in milliseconds (0-30000)."
+          },
+          "signalOutcome": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 30000,
+            "description": "Effective SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS upper bound in milliseconds (0-30000)."
+          },
+          "redrive": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 30000,
+            "description": "Effective NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS upper bound in milliseconds (0-30000)."
+          },
+          "scannerPreset": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 30000,
+            "description": "Effective SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS upper bound in milliseconds (0-30000)."
+          },
+          "remoteConfig": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 30000,
+            "description": "Effective REMOTE_CONFIG_REFRESH_JITTER_MS upper bound in milliseconds (0-30000). Bootstrap uses environment values; the environment override or a published Remote Config value offsets only the first scheduled refresh."
           }
         }
       }

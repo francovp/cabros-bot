@@ -118,7 +118,7 @@ async function bootstrapApplication() {
 	console.log(now + ' - Running server on port ' + port);
 	if (lifecycle.isShuttingDown()) return;
 
-	void remoteConfigService.start();
+	const remoteConfigStartup = remoteConfigService.start();
 
 	// Proven, bounded and detached: `dependencies.langfuse.ready` on /api/status
 	// needs one observed resolution to flip to true, and without this an idle
@@ -126,37 +126,50 @@ async function bootstrapApplication() {
 	// unpublished-label pair that falls back to the local file forever (#1178).
 	void probeManagedPromptReadiness();
 
-	// Start background signal outcome evaluation worker if enabled
-	SignalOutcomeService.startWorker();
-	// Start background notification redrive worker if enabled
-	notificationRedriveService.startWorker();
-	// Start background scanner preset scheduler if enabled
-	scannerPresetSchedulerService.botGetter = () => bot;
-	scannerPresetSchedulerService.startWorker();
-	// Start background job backlog monitor if enabled
-	jobBacklogService.startMonitor();
-	// Prove broker connectivity at boot so /api/capabilities reports a real queue
-	// verdict on an idle deployment. Without this, readiness only ever became true
-	// as a side effect of the first enqueue, so a correct render-worker cut-over
-	// read as "not_started" and an operator could not tell it apart from a broker
-	// that was configured but unreachable.
-	void jobQueue.probeBrokerReadiness().then((result) => {
-		if (result.skipped) {
-			return;
-		}
-		console.log(
-			`Job queue broker ${result.reachable ? 'reachable' : 'UNREACHABLE'}` +
-			(result.reachable ? '' : ` (lastErrorCode=${result.errorCode})`),
-		);
-	});
-	// Start background user price alert worker if enabled
-	userPriceAlertService.setBotGetter(() => bot);
-	userPriceAlertService.startWorker({ source: 'web' });
-	// Start background news-monitor scheduler if enabled
-	newsMonitorSchedulerService.startWorker({ source: 'web' });
-	// Start background alert scheduler (JSON-defined news + scanner schedules) if enabled
-	alertSchedulerService.botGetter = () => bot;
-	alertSchedulerService.startWorker({ source: 'web' });
+	// Background workers resolve runtime settings only after the first Remote
+	// Config load. This detached wait keeps HTTP and notification bootstrap moving.
+	void remoteConfigStartup
+		.catch((error) => {
+			console.warn('[index] Remote Config startup failed; background workers will use environment/default settings:', error.message);
+		})
+		.then(() => {
+			if (lifecycle.isShuttingDown()) return;
+			// Start background signal outcome evaluation worker if enabled
+			SignalOutcomeService.startWorker();
+			// Start background notification redrive worker if enabled
+			notificationRedriveService.startWorker();
+			// Start background scanner preset scheduler if enabled
+			scannerPresetSchedulerService.botGetter = () => bot;
+			scannerPresetSchedulerService.startWorker();
+			// Start background job backlog monitor if enabled
+			jobBacklogService.startMonitor();
+			// Prove broker connectivity at boot so /api/capabilities reports a real queue
+			// verdict on an idle deployment. Without this, readiness only ever became true
+			// as a side effect of the first enqueue, so a correct render-worker cut-over
+			// read as "not_started" and an operator could not tell it apart from a broker
+			// that was configured but unreachable.
+			void jobQueue.probeBrokerReadiness().then((result) => {
+				if (result.skipped) {
+					return;
+				}
+				console.log(
+					`Job queue broker ${result.reachable ? 'reachable' : 'UNREACHABLE'}` +
+					(result.reachable ? '' : ` (lastErrorCode=${result.errorCode})`),
+				);
+			});
+			// Start background user price alert worker if enabled
+			userPriceAlertService.setBotGetter(() => bot);
+			userPriceAlertService.startWorker({ source: 'web' });
+			// Start background news-monitor scheduler if enabled
+			newsMonitorSchedulerService.startWorker({ source: 'web' });
+			// Start background alert scheduler (JSON-defined news + scanner schedules) if enabled
+			alertSchedulerService.botGetter = () => bot;
+			alertSchedulerService.startWorker({ source: 'web' });
+		})
+		.catch((error) => {
+			bootstrapReadiness.fail(error);
+			console.error('[index] Background worker startup failed:', error.message);
+		});
 	// Start WhatsApp inbound command bridge if enabled
 	if (whatsAppCommandBridgeService.isEnabled()) {
 		whatsAppCommandBridgeService.start();

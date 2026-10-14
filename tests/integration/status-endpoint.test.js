@@ -199,6 +199,10 @@ describe('Status endpoints', () => {
 	});
 
 	it('returns machine-readable status on /api/status', async () => {
+		process.env.WORKER_STARTUP_JITTER_MS = '1000';
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS = '125';
+		remoteConfigService._setRemoteOverridesForTesting({ WORKER_STARTUP_JITTER_MS: 2000 }, Date.now());
 		const response = await request(app)
 			.get('/api/status')
 			.set('x-api-key', 'status-key');
@@ -220,6 +224,13 @@ describe('Status endpoints', () => {
 			}),
 		}));
 		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: true, status: 'ready' });
+		expect(response.body.dependencies.startupJitter).toEqual({
+			global: 2000,
+			signalOutcome: 125,
+			redrive: 2000,
+			scannerPreset: 2000,
+			remoteConfig: 2000,
+		});
 		expect(response.body.dependencies.gemini).toEqual({
 			enabled: true,
 			configured: true,

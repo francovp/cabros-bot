@@ -371,7 +371,23 @@ When signal-outcome tracking is disabled, or when no measurements exist in the r
 - `FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS` - Maximum template-load wait (default: `10000`, maximum: `30000`)
 - `FIREBASE_REMOTE_CONFIG_MAX_AGE_MS` - Maximum age of a successful template before environment/default fallback (default: `3600000`, maximum: `604800000`)
 
-The allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `GENERIC_MESSAGE_MAX_LENGTH` (integer `1`-`20000`, default `4000`), `SIGNAL_OUTCOME_WINDOWS`, `SIGNAL_OUTCOME_WINDOW_LABELS`, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_MAINTENANCE_MODE` (an operational incident-response kill switch), per-chat user preferences (`ENABLE_FIRESTORE_CHAT_PREFERENCES`, `CHAT_PREFERENCES_RETENTION_DAYS` between `1` and `365`, `CHAT_PREFERENCES_CACHE_TTL_MS` between `1000` and `3600000`), and the four Firestore storage gates (`ENABLE_FIRESTORE_ALERT_STORAGE`, `ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_FIRESTORE_JOB_STORAGE`, `ENABLE_FIRESTORE_SCANNER_PRESETS`, all boolean, default `false`). Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, permanent security controls, route/security gates, and Telegram destinations are never read from Remote Config.
+##### Worker startup jitter
+
+These non-secret runtime settings are available through Firebase Remote Config. They delay only each process's first background sweep, refresh, or reconciliation; later intervals and webhook alert delivery are unchanged. Values are integer milliseconds from `0` to `30000`; the default maximum is `5000`. Setting `WORKER_STARTUP_JITTER_MS=0` disables startup jitter globally.
+
+The published template uses `useInAppDefault` for all five settings, so an unset Remote Config value falls through to the in-app schema default or environment. When an operator publishes a value, it is an explicit override even when it equals `5000`. Resolution order is: global environment `0` kill switch, per-worker environment, per-worker Remote Config, global Remote Config, global environment, then the schema default.
+
+The Remote Config bootstrap fetch uses environment values because the published template must load before its values can be read. After bootstrap, `REMOTE_CONFIG_REFRESH_JITTER_MS` resolves through the per-worker environment and Remote Config values, then global Remote Config, global environment, and the schema default; it offsets only the first scheduled refresh.
+
+- `WORKER_STARTUP_JITTER_MS` - Global startup-jitter maximum for background workers
+- `SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS` - Signal outcome worker maximum
+- `NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS` - Notification redrive worker maximum
+- `SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS` - Scanner preset scheduler maximum
+- `REMOTE_CONFIG_REFRESH_JITTER_MS` - Firebase Remote Config refresh maximum
+
+`GET /api/status` and `GET /api/capabilities` expose the effective values at `dependencies.startupJitter` as `global`, `signalOutcome`, `redrive`, `scannerPreset`, and `remoteConfig`.
+
+The allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `GENERIC_MESSAGE_MAX_LENGTH` (integer `1`-`20000`, default `4000`), `SIGNAL_OUTCOME_WINDOWS`, `SIGNAL_OUTCOME_WINDOW_LABELS`, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), the five startup-jitter settings (integer `0`-`30000`, default `5000`), `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_MAINTENANCE_MODE` (an operational incident-response kill switch), per-chat user preferences (`ENABLE_FIRESTORE_CHAT_PREFERENCES`, `CHAT_PREFERENCES_RETENTION_DAYS` between `1` and `365`, `CHAT_PREFERENCES_CACHE_TTL_MS` between `1000` and `3600000`), and the four Firestore storage gates (`ENABLE_FIRESTORE_ALERT_STORAGE`, `ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_FIRESTORE_JOB_STORAGE`, `ENABLE_FIRESTORE_SCANNER_PRESETS`, all boolean, default `false`). Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, permanent security controls, route/security gates, and Telegram destinations are never read from Remote Config.
 
 ##### Storage gates resolve `remote ?? env`, not `env || remote`
 

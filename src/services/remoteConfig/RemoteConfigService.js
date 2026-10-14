@@ -4,6 +4,11 @@ const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 const alertStorageService = require('../storage/AlertStorageService');
 const { parseEntryPriceSources } = require('../../lib/signalOutcomeEntryPriceSources');
+const {
+	applyStartupJitter,
+	getStartupJitterDelayMs,
+	resolveStartupJitterMs,
+} = require('../../lib/startupJitter');
 
 const DEFAULT_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const DEFAULT_LOAD_TIMEOUT_MS = 10 * 1000;
@@ -99,6 +104,11 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_SIGNAL_CLASS_MARKER: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	WORKER_STARTUP_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
+	SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
+	NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
+	SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
+	REMOTE_CONFIG_REFRESH_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
 	ENABLE_ALERT_DECISION_AUDIT: { type: 'boolean', defaultValue: false },
 	ENABLE_OUTCOME_INFORMED_DELIVERY: { type: 'boolean', defaultValue: false },
 	OUTCOME_ANNOTATION_LOOKBACK_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
@@ -172,6 +182,10 @@ let templateVersion = null;
 let lastSuccessfulLoad = null;
 let lastErrorCategory = null;
 let refreshTimer = null;
+let refreshTimeout = null;
+let refreshStartPending = false;
+let refreshStartGeneration = 0;
+let refreshStartAbortController = null;
 let loadingPromise = null;
 let consecutiveFailures = 0;
 const changeListeners = new Set();
@@ -615,21 +629,105 @@ async function loadNow(options = {}) {
 }
 
 async function start() {
-	if (!isEnabled() || refreshTimer) {
+	if (!isEnabled() || refreshTimer || refreshTimeout || refreshStartPending) {
 		return false;
 	}
 
-	await loadNow();
-	refreshTimer = setInterval(() => {
-		void loadNow();
-	}, getRefreshIntervalMs());
-	if (typeof refreshTimer.unref === 'function') {
-		refreshTimer.unref();
+	refreshStartPending = true;
+	const startupGeneration = ++refreshStartGeneration;
+	const startupAbortController = new AbortController();
+	refreshStartAbortController = startupAbortController;
+	const startupJitterMs = resolveStartupJitterMs({
+		envVar: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+		runtimeKey: null,
+		globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+		globalRuntimeKey: null,
+	});
+	if (startupJitterMs > 0) {
+		console.info(`[RemoteConfigService] Applying startup jitter (${startupJitterMs}ms max)`);
+		try {
+			await applyStartupJitter(startupJitterMs, {
+				unref: false,
+				signal: startupAbortController.signal,
+			});
+		} catch (error) {
+			if (!startupAbortController.signal.aborted) {
+				console.warn('[RemoteConfigService] Startup jitter failed:', error.message);
+			}
+		}
 	}
-	return true;
+	if (refreshStartAbortController === startupAbortController) {
+		refreshStartAbortController = null;
+	}
+	if (startupGeneration !== refreshStartGeneration || !isEnabled() || refreshTimer || refreshTimeout) {
+		if (startupGeneration === refreshStartGeneration) {
+			refreshStartPending = false;
+		}
+		return false;
+	}
+
+	try {
+		await loadNow();
+		if (startupGeneration !== refreshStartGeneration || !isEnabled() || refreshTimer || refreshTimeout) {
+			return false;
+		}
+
+		// The bootstrap fetch cannot use a published Remote Config value because
+		// that value does not exist in this process until loadNow() completes.
+		// Use the published setting to offset only the first scheduled refresh.
+		const firstRefreshJitterMs = getStartupJitterDelayMs(resolveStartupJitterMs({
+			envVar: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+			runtimeKey: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+			globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+			globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+			defaultValue: PARAMETER_SCHEMA.REMOTE_CONFIG_REFRESH_JITTER_MS.defaultValue,
+		}));
+		const startPeriodicRefresh = () => {
+			refreshTimeout = null;
+			if (startupGeneration !== refreshStartGeneration || !isEnabled()) {
+				return;
+			}
+			void loadNow();
+			refreshTimer = setInterval(() => {
+				void loadNow();
+			}, getRefreshIntervalMs());
+			if (typeof refreshTimer.unref === 'function') {
+				refreshTimer.unref();
+			}
+		};
+		if (firstRefreshJitterMs > 0) {
+			refreshTimeout = setTimeout(startPeriodicRefresh, getRefreshIntervalMs() + firstRefreshJitterMs);
+			if (typeof refreshTimeout.unref === 'function') {
+				refreshTimeout.unref();
+			}
+		} else {
+			refreshTimer = setInterval(() => {
+				void loadNow();
+			}, getRefreshIntervalMs());
+			if (typeof refreshTimer.unref === 'function') {
+				refreshTimer.unref();
+			}
+		}
+		return true;
+	} finally {
+		if (startupGeneration === refreshStartGeneration) {
+			refreshStartPending = false;
+		}
+	}
 }
 
 function stop() {
+	refreshStartGeneration += 1;
+	refreshStartPending = false;
+	if (refreshStartAbortController) {
+		const startupAbortController = refreshStartAbortController;
+		refreshStartAbortController = null;
+		startupAbortController.abort();
+	}
+	if (refreshTimeout) {
+		clearTimeout(refreshTimeout);
+		refreshTimeout = null;
+	}
 	if (refreshTimer) {
 		clearInterval(refreshTimer);
 		refreshTimer = null;

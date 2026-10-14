@@ -14,6 +14,7 @@ describe('NotificationRedriveService', () => {
 		savedEnv = { ...process.env };
 		firestoreWriteMetricsService.resetForTesting();
 		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		process.env.WORKER_STARTUP_JITTER_MS = '0';
 		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
 		process.env.NOTIFICATION_REDRIVE_INTERVAL_MS = '60000';
 		process.env.NOTIFICATION_REDRIVE_BATCH_LIMIT = '50';
@@ -139,6 +140,7 @@ describe('NotificationRedriveService', () => {
 		}
 		process.env = savedEnv;
 		jest.restoreAllMocks();
+		jest.useRealTimers();
 	});
 
 	describe('configuration and gating', () => {
@@ -1753,6 +1755,77 @@ describe('NotificationRedriveService', () => {
 			service.stopWorker({ drain: false });
 			expect(service.running).toBe(false);
 			jest.useRealTimers();
+		});
+
+		it('keeps standalone startup jitter referenced and cancels it on stop', async () => {
+			jest.useFakeTimers();
+			process.env.WORKER_STARTUP_JITTER_MS = '1000';
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			process.env.NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS = '50';
+			const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+			const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+			const sweepSpy = jest.spyOn(service, 'sweep').mockResolvedValue({ scanned: 0, redriven: 0, errors: 0 });
+
+			try {
+				service.startWorker({ source: 'worker', unref: false, intervalMs: 1000 });
+				expect(setTimeoutSpy.mock.results[0].value.hasRef()).toBe(true);
+				await service.stopWorker({ drain: false });
+				expect(jest.getTimerCount()).toBe(0);
+				await jest.advanceTimersByTimeAsync(50);
+				expect(sweepSpy).not.toHaveBeenCalled();
+			} finally {
+				randomIntSpy.mockRestore();
+			}
+		});
+
+		it('waits for startup jitter before starting the first and periodic redrive sweeps', async () => {
+			jest.useFakeTimers();
+			process.env.WORKER_STARTUP_JITTER_MS = '1000';
+			process.env.NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS = '50';
+			const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+			const setIntervalSpy = jest.spyOn(global, 'setInterval');
+			const sweepSpy = jest.spyOn(service, 'sweep').mockResolvedValue({ scanned: 0, redriven: 0, errors: 0 });
+
+			try {
+				const started = service.startWorker({ intervalMs: 1000 });
+				expect(started).toBe(true);
+				expect(setIntervalSpy).not.toHaveBeenCalled();
+				expect(sweepSpy).not.toHaveBeenCalled();
+
+				await jest.advanceTimersByTimeAsync(50);
+				expect(sweepSpy).toHaveBeenCalledTimes(1);
+				expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+			} finally {
+				await service.stopWorker({ drain: false });
+				randomIntSpy.mockRestore();
+				setIntervalSpy.mockRestore();
+				jest.useRealTimers();
+			}
+		});
+
+		it('waits for startup jitter before seeding worker counters from Firestore', async () => {
+			jest.useFakeTimers();
+			process.env.WORKER_STARTUP_JITTER_MS = '1000';
+			process.env.NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS = '50';
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+			const seedSpy = jest.spyOn(service, 'seedCountersFromHeartbeat').mockResolvedValue();
+			const sweepSpy = jest.spyOn(service, 'sweep').mockResolvedValue({ scanned: 0, redriven: 0, errors: 0 });
+
+			try {
+				const started = service.startWorker({ source: 'worker', intervalMs: 1000 });
+				expect(started).toBe(true);
+				expect(seedSpy).not.toHaveBeenCalled();
+				expect(sweepSpy).not.toHaveBeenCalled();
+
+				await jest.advanceTimersByTimeAsync(50);
+				expect(seedSpy).toHaveBeenCalledTimes(1);
+				expect(sweepSpy).toHaveBeenCalledTimes(1);
+			} finally {
+				await service.stopWorker({ drain: false });
+				randomIntSpy.mockRestore();
+				jest.useRealTimers();
+			}
 		});
 
 		it('does not start worker when role is disabled', () => {

@@ -9,6 +9,7 @@ const geminiPriceService = require('../grounding/geminiPriceService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { fireAndForget } = require('../../lib/fireAndForget');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
 const { MainClient } = require('binance');
 const {
 	parseEntryPriceSources,
@@ -92,6 +93,9 @@ const DEFAULT_OUTCOME_WINDOW_LABELS = Object.freeze({ '1h': '1h', '4h': '4h', '1
 let binanceClient = null;
 let isEvaluating = false;
 let workerTimer = null;
+let workerStartupPending = false;
+let workerStartupGeneration = 0;
+let workerStartupAbortController = null;
 let activeEvaluationPromise = null;
 let shutdownRequested = false;
 let activeIntervalMs = null;
@@ -1961,7 +1965,7 @@ function startWorker(options = {}) {
 	const outcomeWindows = getConfiguredOutcomeWindows();
 	getOutcomeWindowLabels(outcomeWindows);
 
-	if (workerTimer) {
+	if (workerTimer || workerStartupPending) {
 		return true;
 	}
 
@@ -1978,18 +1982,54 @@ function startWorker(options = {}) {
 	activeIntervalMs = intervalMs;
 
 	warnIfLeaseDoesNotOutliveSweepBudget();
-
-	// Trigger initial sweep non-blockingly after server readiness
-	Promise.resolve().then(() => {
-		runScheduledSweep();
+	const startupJitterMs = resolveStartupJitterMs({
+		envVar: 'SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS',
+		runtimeKey: 'SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS',
+		globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+		globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
 	});
-
-	workerTimer = setInterval(runScheduledSweep, intervalMs);
-
-	if (workerTimer && options.unref !== false && typeof workerTimer.unref === 'function') {
-		workerTimer.unref();
+	if (startupJitterMs > 0) {
+		console.info(`[SignalOutcomeService] Applying startup jitter (${startupJitterMs}ms max)`);
 	}
-	void persistWorkerHeartbeat();
+	workerStartupPending = true;
+	const startupGeneration = ++workerStartupGeneration;
+	const startupAbortController = new AbortController();
+	workerStartupAbortController = startupAbortController;
+	const scheduleSweeps = () => {
+		if (startupGeneration !== workerStartupGeneration || shutdownRequested) {
+			return;
+		}
+		if (workerStartupAbortController === startupAbortController) {
+			workerStartupAbortController = null;
+		}
+		workerStartupPending = false;
+		workerTimer = setInterval(runScheduledSweep, intervalMs);
+		if (workerTimer && options.unref !== false && typeof workerTimer.unref === 'function') {
+			workerTimer.unref();
+		}
+		void persistWorkerHeartbeat();
+		// Trigger the initial sweep non-blockingly after server readiness and jitter.
+		Promise.resolve().then(() => {
+			runScheduledSweep();
+		});
+	};
+	if (startupJitterMs > 0) {
+		applyStartupJitter(startupJitterMs, {
+			unref: options.unref !== false,
+			signal: startupAbortController.signal,
+		}).then(scheduleSweeps).catch((error) => {
+			if (workerStartupAbortController === startupAbortController) {
+				workerStartupAbortController = null;
+			}
+			if (!startupAbortController.signal.aborted) {
+				console.warn('[SignalOutcomeService] Startup jitter failed:', error.message);
+			}
+			scheduleSweeps();
+		});
+	} else {
+		workerStartupAbortController = null;
+		scheduleSweeps();
+	}
 
 	return true;
 }
@@ -1999,6 +2039,12 @@ function startWorker(options = {}) {
  */
 function stopWorker(options = {}) {
 	shutdownRequested = true;
+	workerStartupGeneration += 1;
+	if (workerStartupAbortController) {
+		workerStartupAbortController.abort();
+		workerStartupAbortController = null;
+	}
+	workerStartupPending = false;
 	if (workerTimer) {
 		clearInterval(workerTimer);
 		workerTimer = null;
@@ -2043,7 +2089,7 @@ function getWorkerStatus() {
 	return {
 		enabled: isEnabled(),
 		role: getWorkerRole(),
-		running: workerTimer !== null,
+		running: workerTimer !== null || workerStartupPending,
 		shutdownRequested,
 		intervalMs,
 		batchLimit,
@@ -3547,6 +3593,12 @@ function _resetForTesting() {
 	lastEvaluatedDoc = null;
 	isEvaluating = false;
 	shutdownRequested = false;
+	workerStartupGeneration += 1;
+	if (workerStartupAbortController) {
+		workerStartupAbortController.abort();
+		workerStartupAbortController = null;
+	}
+	workerStartupPending = false;
 	activeIntervalMs = null;
 	lastRunAt = null;
 	lastRunDurationMs = null;

@@ -953,4 +953,28 @@ describe('status dependency contract drift', () => {
 		expect(dependencies.required).toContain('persistentWriteHealth');
 		expect(statusExample.dependencies).toHaveProperty('persistentWriteHealth');
 	});
+
+	it('documents bounded startup jitter on the status and capabilities contract', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const startupJitterRef = spec.components.schemas.Status.properties.dependencies.properties.startupJitter;
+		const startupJitter = spec.components.schemas.StartupJitter;
+		const statusExample = spec.components.responses.StatusResult.content['application/json'].example;
+
+		expect(startupJitterRef).toEqual({ $ref: '#/components/schemas/StartupJitter' });
+		expect(startupJitter.required).toEqual(['global', 'signalOutcome', 'redrive', 'scannerPreset', 'remoteConfig']);
+		for (const field of startupJitter.required) {
+			expect(startupJitter.properties[field]).toEqual(expect.objectContaining({
+				type: 'integer',
+				minimum: 0,
+				maximum: 30000,
+			}));
+		}
+		expect(statusExample.dependencies.startupJitter).toEqual({
+			global: 5000,
+			signalOutcome: 5000,
+			redrive: 5000,
+			scannerPreset: 5000,
+			remoteConfig: 5000,
+		});
+	});
 });

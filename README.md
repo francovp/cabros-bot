@@ -215,6 +215,24 @@ A job created from WhatsApp is routed with `channels: ['whatsapp']` and the orig
 
 ## Key Runtime Notes
 
+### Worker Startup Jitter
+
+Background workers wait a random delay in `[0, configured maximum]` before their first sweep, refresh, or reconciliation after startup. Later intervals are unchanged, and webhook requests and alert delivery start without this delay. The default maximum is 5 seconds and every value is bounded to 30 seconds. `WORKER_STARTUP_JITTER_MS=0` disables jitter globally.
+
+The published template uses `useInAppDefault` for all five settings when no remote value is configured. An explicit Remote Config value overrides its fallback even when it equals `5000`; precedence is per-worker environment, per-worker Remote Config, global Remote Config, then global environment and the schema default. `WORKER_STARTUP_JITTER_MS=0` remains the global kill switch.
+
+| Variable | Default | Range | Purpose |
+| :--- | :--- | :--- | :--- |
+| `WORKER_STARTUP_JITTER_MS` | `5000` | `0`–`30000` | Global startup-jitter bound for background workers. |
+| `SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS` | `5000` | `0`–`30000` | Signal outcome worker override. |
+| `NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS` | `5000` | `0`–`30000` | Notification redrive worker override. |
+| `SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS` | `5000` | `0`–`30000` | Scanner preset scheduler override. |
+| `REMOTE_CONFIG_REFRESH_JITTER_MS` | `5000` | `0`–`30000` | Firebase Remote Config refresh override. |
+
+All five settings are non-secret and Firebase Remote Config eligible. `/api/status` and `/api/capabilities` report their effective bounds under `dependencies.startupJitter` (`global`, `signalOutcome`, `redrive`, `scannerPreset`, `remoteConfig`).
+
+The Remote Config bootstrap fetch uses environment values because the published template must load before its values can be read. After bootstrap, the `REMOTE_CONFIG_REFRESH_JITTER_MS` override resolves through per-worker environment, per-worker Remote Config, global Remote Config, global environment, then its schema default; it offsets only the first scheduled refresh.
+
 ### Multi-Channel Notification Dispatch
 Notifications are dispatched concurrently across enabled channels. For Discord, transient rate limits and server errors are retried according to `DISCORD_MAX_RETRIES` and bounded by `DISCORD_MAX_TOTAL_RETRY_WAIT_MS`. Long messages exceeding platform limits are automatically split into sequential chunks with preserved markdown formatting. See [Multi-Channel Alerts Guide](docs/notifications.md).
 

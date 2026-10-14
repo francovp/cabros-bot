@@ -56,6 +56,7 @@ describe('SignalOutcomeService', () => {
 		delete process.env.SIGNAL_OUTCOME_WINDOW_LABELS;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		process.env.WORKER_STARTUP_JITTER_MS = '0';
 		delete process.env.ENABLE_EQUITY_MARKET_DATA;
 		delete process.env.EQUITY_MARKET_DATA_PROVIDER;
 		delete process.env.TWELVE_DATA_API_KEY;
@@ -3533,6 +3534,67 @@ describe('SignalOutcomeService', () => {
 			status = SignalOutcomeService.getWorkerStatus();
 			expect(status.running).toBe(false);
 			expect(status.timerId).toBeNull();
+		});
+
+		it('does not arm the periodic outcome sweep until startup jitter elapses', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.WORKER_STARTUP_JITTER_MS = '1000';
+			process.env.SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS = '50';
+			jest.useFakeTimers();
+			const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+			const setIntervalSpy = jest.spyOn(global, 'setInterval');
+			const getFirestoreSpy = jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue(null);
+
+			try {
+				const started = SignalOutcomeService.startWorker({ intervalMs: 1000 });
+				expect(started).toBe(true);
+				expect(setIntervalSpy).not.toHaveBeenCalled();
+				expect(getFirestoreSpy).not.toHaveBeenCalled();
+
+				await jest.advanceTimersByTimeAsync(49);
+				expect(setIntervalSpy).not.toHaveBeenCalled();
+				expect(getFirestoreSpy).not.toHaveBeenCalled();
+
+				await jest.advanceTimersByTimeAsync(1);
+				expect(setIntervalSpy.mock.calls.filter(([, delay]) => delay === 1000)).toHaveLength(1);
+				expect(getFirestoreSpy).toHaveBeenCalled();
+			} finally {
+				SignalOutcomeService.stopWorker();
+				randomIntSpy.mockRestore();
+				setIntervalSpy.mockRestore();
+				getFirestoreSpy.mockRestore();
+				jest.useRealTimers();
+			}
+		});
+
+		it('keeps standalone startup jitter referenced and cancels it on stop', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'worker';
+			process.env.WORKER_STARTUP_JITTER_MS = '1000';
+			process.env.SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS = '50';
+			jest.useFakeTimers();
+			const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+			const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+			const getFirestoreSpy = jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue(null);
+
+			try {
+				SignalOutcomeService.startWorker({ intervalMs: 1000, source: 'worker', unref: false });
+				const startupTimer = setTimeoutSpy.mock.results[0].value;
+				expect(startupTimer.hasRef()).toBe(true);
+
+				await SignalOutcomeService.stopWorker();
+				expect(jest.getTimerCount()).toBe(0);
+				const callsAfterStop = getFirestoreSpy.mock.calls.length;
+				await jest.advanceTimersByTimeAsync(50);
+				expect(getFirestoreSpy).toHaveBeenCalledTimes(callsAfterStop);
+			} finally {
+				randomIntSpy.mockRestore();
+				setTimeoutSpy.mockRestore();
+				getFirestoreSpy.mockRestore();
+				jest.useRealTimers();
+			}
 		});
 
 		it('prevents overlapping sweeps when an evaluation is in progress', async () => {

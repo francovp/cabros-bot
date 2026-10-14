@@ -114,6 +114,28 @@ describe('Postman collection contract', () => {
 		});
 	});
 
+	it('documents bounded startup jitter in the Get Status response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const jitterExample = findItem(collection.item, 'Get Status - startup jitter');
+
+		expect(JSON.parse(status.response.find((response) => response.code === 200).body).dependencies.startupJitter).toEqual({
+			global: 5000,
+			signalOutcome: 5000,
+			redrive: 5000,
+			scannerPreset: 5000,
+			remoteConfig: 5000,
+		});
+		expect(jitterExample.request.url.raw).toBe('{{baseUrl}}/api/status');
+		expect(JSON.parse(jitterExample.response[0].body).dependencies.startupJitter).toEqual({
+			global: 5000,
+			signalOutcome: 5000,
+			redrive: 5000,
+			scannerPreset: 5000,
+			remoteConfig: 5000,
+		});
+	});
+
 	it('documents alertScheduler feature flag and dependency in the Get Status response example', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');

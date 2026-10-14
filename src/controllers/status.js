@@ -32,6 +32,7 @@ const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsApp
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const { resolveStartupJitterMs } = require('../lib/startupJitter');
 const { outcomeAnnotationService } = require('../services/alerts/outcomeAnnotationService');
 const { crossTimeframeCooldown } = require('../services/alerts/crossTimeframeCooldown');
 const { burstAggregator } = require('../services/alerts/burstAggregator');
@@ -718,6 +719,39 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			alertFeedback: alertFeedbackStorageService.getStatus(),
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
+			startupJitter: (() => {
+				const global = resolveStartupJitterMs({
+					globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+					globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+				});
+				return {
+					global,
+					signalOutcome: resolveStartupJitterMs({
+						envVar: 'SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS',
+						runtimeKey: 'SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS',
+						globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+						globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+					}),
+					redrive: resolveStartupJitterMs({
+						envVar: 'NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS',
+						runtimeKey: 'NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS',
+						globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+						globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+					}),
+					scannerPreset: resolveStartupJitterMs({
+						envVar: 'SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS',
+						runtimeKey: 'SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS',
+						globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+						globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+					}),
+					remoteConfig: resolveStartupJitterMs({
+						envVar: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+						runtimeKey: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+						globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+						globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+					}),
+				};
+			})(),
 			binanceOrderAudit: binanceOrderAuditService.getStatus(),
 			symbolAnalysisStorage: symbolAnalysisStorageService.getStatus(),
 			testAlert: {

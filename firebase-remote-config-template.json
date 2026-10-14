@@ -469,6 +469,41 @@
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
     },
+    "WORKER_STARTUP_JITTER_MS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Global default upper bound in milliseconds for per-process startup jitter (0-30000)",
+      "valueType": "NUMBER"
+    },
+    "SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Startup jitter upper bound in milliseconds for the signal outcome worker (0-30000)",
+      "valueType": "NUMBER"
+    },
+    "NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Startup jitter upper bound in milliseconds for the notification redrive worker (0-30000)",
+      "valueType": "NUMBER"
+    },
+    "SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Startup jitter upper bound in milliseconds for the scanner preset scheduler (0-30000)",
+      "valueType": "NUMBER"
+    },
+    "REMOTE_CONFIG_REFRESH_JITTER_MS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Startup jitter upper bound in milliseconds for Firebase Remote Config refresh (0-30000)",
+      "valueType": "NUMBER"
+    },
     "ENABLE_ALERT_DECISION_AUDIT": {
       "defaultValue": {
         "value": "false"
