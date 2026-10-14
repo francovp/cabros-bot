@@ -137,6 +137,32 @@ describe('NotificationManager admin failure notifications', () => {
 		}));
 	});
 
+	it('routes broadcast and selected-channel sends through shared dispatch without changing deliveries', async () => {
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({ success: true, channel: 'telegram', messageId: 'tg-1' }),
+		};
+		const whatsappService = {
+			name: 'whatsapp',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({ success: true, channel: 'whatsapp', messageId: 'wa-1' }),
+		};
+		const manager = new NotificationManager(telegramService, whatsappService);
+		const sharedDispatch = jest.fn(manager._dispatchToChannels?.bind(manager));
+		manager._dispatchToChannels = sharedDispatch;
+		const alert = { text: 'BTC alert' };
+
+		const broadcastResults = await manager.sendToAll(alert);
+		const selectedResults = await manager.sendToChannels(alert, ['whatsapp']);
+
+		expect(sharedDispatch).toHaveBeenCalledTimes(2);
+		expect(broadcastResults.map(result => result.channel)).toEqual(['telegram', 'whatsapp']);
+		expect(selectedResults.map(result => result.channel)).toEqual(['whatsapp']);
+		expect(telegramService.send).toHaveBeenCalledTimes(1);
+		expect(whatsappService.send).toHaveBeenCalledTimes(2);
+	});
+
 	it('guarantees durationMs is populated and non-negative on all formatted results', async () => {
 		const mockTelegram = {
 			name: 'telegram',
