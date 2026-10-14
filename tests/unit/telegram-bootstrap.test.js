@@ -196,7 +196,8 @@ describe('sendStartupDeploymentNotification', () => {
 			'*Telegram bot deployed from commit [abcdef](https://github.com/francovp/cabros-bot/commit/abcdef) is running*',
 			{ parse_mode: 'MarkdownV2' },
 		);
-		expect(mockLogger.log).toHaveBeenCalledWith('Telegram Admin Notifications Chat ID:', '987654321');
+		expect(mockLogger.log).toHaveBeenCalledWith('Telegram admin notifications destination is configured');
+		expect(mockLogger.log.mock.calls.flat().join(' ')).not.toContain('987654321');
 		expect(mockLogger.log).toHaveBeenCalledWith(
 			'Telegram bot deployed from commit https://github.com/francovp/cabros-bot/commit/abcdef is running',
 		);

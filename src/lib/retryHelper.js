@@ -3,36 +3,15 @@
  * Implements exponential backoff (1s → 2s → 4s) with ±10% jitter
  */
 
+const sleepWithSignal = require('./sleepWithSignal');
+
 /**
  * Sleep for specified milliseconds
  * @param {number} ms - Milliseconds to sleep
  * @returns {Promise<void>}
  */
 function sleep(ms) {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function sleepWithSignal(ms, signal) {
-	if (!signal) {
-		return sleep(ms);
-	}
-
-	if (signal.aborted) {
-		return Promise.reject(createAbortError(signal));
-	}
-
-	return new Promise((resolve, reject) => {
-		const timeoutId = setTimeout(() => {
-			signal.removeEventListener('abort', onAbort);
-			resolve();
-		}, ms);
-		const onAbort = () => {
-			clearTimeout(timeoutId);
-			reject(createAbortError(signal));
-		};
-
-		signal.addEventListener('abort', onAbort, { once: true });
-	});
+	return sleepWithSignal(ms);
 }
 
 /**
@@ -54,6 +33,7 @@ function calculateBackoffDelay(attempt) {
  * @param {Function} sendFn - Async function that returns SendResult or throws
  * @param {number} maxRetries - Maximum retry attempts (default: 3)
  * @param {Object} logger - Logger object with warn() and error() methods (optional)
+ * @param {Object} options - Optional { signal, maxRetryDelayMs }
  * @returns {Promise<Object>} SendResult object after success or max retries exhausted
  */
 async function sendWithRetry(sendFn, maxRetries = 3, logger = null, options = {}) {
@@ -83,6 +63,9 @@ async function sendWithRetry(sendFn, maxRetries = 3, logger = null, options = {}
 
 			// Failure; retry if attempts remain
 			lastResult = result;
+			if (result.retryable === false) {
+				return { ...result, attemptCount: attempt, durationMs };
+			}
 			if (signal && signal.aborted) {
 				return buildAbortedResult(signal, lastResult, totalStartTime, attempt);
 			}
@@ -153,7 +136,7 @@ async function waitForRetryDelay(delayMs, signal, lastResult, totalStartTime, at
 		return null;
 	} catch (error) {
 		if (isAbortError(error, signal)) {
-			return buildAbortedResult(signal, lastResult, totalStartTime, attemptCount, error);
+			return buildAbortedResult(signal, lastResult, totalStartTime, attemptCount, createAbortError(signal));
 		}
 
 		throw error;

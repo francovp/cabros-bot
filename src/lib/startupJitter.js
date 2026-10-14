@@ -20,28 +20,59 @@ const DEFAULT_JITTER_MS = 5000;
  */
 function resolveStartupJitterMs(options = {}) {
 	const envVar = options.envVar || null;
-	const runtimeKey = options.runtimeKey || envVar;
+	const runtimeKey = Object.prototype.hasOwnProperty.call(options, 'runtimeKey')
+		? options.runtimeKey
+		: envVar;
+	const globalEnvVar = options.globalEnvVar || null;
+	const globalRuntimeKey = Object.prototype.hasOwnProperty.call(options, 'globalRuntimeKey')
+		? options.globalRuntimeKey
+		: globalEnvVar;
 	const defaultValue = Number.isFinite(options.defaultValue)
 		? options.defaultValue
 		: DEFAULT_JITTER_MS;
 
-	if (envVar && typeof process.env[envVar] === 'string' && process.env[envVar].trim() !== '') {
-		const parsed = Number.parseInt(process.env[envVar], 10);
-		if (Number.isFinite(parsed)) {
-			return clampJitter(parsed);
+	const readEnvValue = (key) => {
+		if (!key || typeof process.env[key] !== 'string' || process.env[key].trim() === '') {
+			return null;
 		}
+		const parsed = Number(process.env[key].trim());
+		return Number.isSafeInteger(parsed) ? clampJitter(parsed) : null;
+	};
+	const globalEnvValue = globalEnvVar === envVar ? null : readEnvValue(globalEnvVar);
+	// An explicit global zero is the operator's kill switch for jitter.
+	if (globalEnvValue === 0) {
+		return 0;
+	}
+	const workerEnvValue = readEnvValue(envVar);
+	if (workerEnvValue !== null) {
+		return workerEnvValue;
 	}
 
 	if (runtimeKey) {
 		try {
-			const { getRuntimeConfig } = require('../services/remoteConfig/RemoteConfigService');
-			const runtimeValue = getRuntimeConfig()[runtimeKey];
+			const { getRemoteOverride } = require('../services/remoteConfig/RemoteConfigService');
+			const runtimeValue = getRemoteOverride(runtimeKey);
 			if (Number.isFinite(runtimeValue)) {
 				return clampJitter(runtimeValue);
 			}
 		} catch (error) {
-			// Remote config unavailable - fall back to env / default.
+			// Remote Config unavailable - fall back to the global env / default.
 		}
+	}
+
+	if (globalRuntimeKey && globalRuntimeKey !== runtimeKey) {
+		try {
+			const { getRemoteOverride } = require('../services/remoteConfig/RemoteConfigService');
+			const runtimeValue = getRemoteOverride(globalRuntimeKey);
+			if (Number.isFinite(runtimeValue)) {
+				return clampJitter(runtimeValue);
+			}
+		} catch (error) {
+			// Remote Config unavailable - use the supplied default.
+		}
+	}
+	if (globalEnvValue !== null && !options.ignoreGlobalEnvFallback) {
+		return globalEnvValue;
 	}
 
 	return clampJitter(defaultValue);
@@ -57,27 +88,61 @@ function clampJitter(value) {
 	return Math.floor(value);
 }
 
+function getStartupJitterDelayMs(maxJitterMs) {
+	const upper = clampJitter(maxJitterMs);
+	return upper > 0 ? crypto.randomInt(0, upper + 1) : 0;
+}
+
 /**
  * Wait for a per-in-random delay inside `[0, maxJitterMs]`. Returns 0 when
  * jitter is disabled (`maxJitterMs <= 0`) so callers can `await` it without
- * an extra branch. The delay is unref'd so it never blocks shutdown.
+ * an extra branch. The timer is unref'd by default; callers that must keep a
+ * standalone process alive can request a referenced timer and cancel it with
+ * an AbortSignal during shutdown.
  *
  * @param {number} maxJitterMs upper bound in milliseconds (clamped to `[0, 30000]`)
+ * @param {object} [options]
+ * @param {boolean} [options.unref=true] whether to unref the timer
+ * @param {AbortSignal} [options.signal] cancels the wait when aborted
  * @returns {Promise<number>} the actual jitter applied, in milliseconds
  */
-async function applyStartupJitter(maxJitterMs) {
-	const upper = clampJitter(maxJitterMs);
-	if (upper <= 0) {
-		return 0;
-	}
-	const delay = crypto.randomInt(0, upper + 1);
+async function applyStartupJitter(maxJitterMs, options = {}) {
+	const delay = getStartupJitterDelayMs(maxJitterMs);
 	if (delay === 0) {
 		return 0;
 	}
-	await new Promise((resolve) => {
-		const timer = setTimeout(resolve, delay);
-		if (typeof timer.unref === 'function') {
+	const unref = options.unref !== false;
+	const signal = options.signal;
+	const createAbortError = () => {
+		const error = new Error('Startup jitter aborted');
+		error.name = 'AbortError';
+		return error;
+	};
+	if (signal?.aborted) {
+		throw createAbortError();
+	}
+	await new Promise((resolve, reject) => {
+		let timer;
+		const cleanup = () => {
+			signal?.removeEventListener('abort', onAbort);
+		};
+		const onAbort = () => {
+			clearTimeout(timer);
+			cleanup();
+			reject(createAbortError());
+		};
+		timer = setTimeout(() => {
+			cleanup();
+			resolve();
+		}, delay);
+		if (unref && typeof timer.unref === 'function') {
 			timer.unref();
+		}
+		if (signal) {
+			signal.addEventListener('abort', onAbort, { once: true });
+			if (signal.aborted) {
+				onAbort();
+			}
 		}
 	});
 	return delay;
@@ -85,6 +150,7 @@ async function applyStartupJitter(maxJitterMs) {
 
 module.exports = {
 	applyStartupJitter,
+	getStartupJitterDelayMs,
 	resolveStartupJitterMs,
 	clampJitter,
 	MIN_JITTER_MS,

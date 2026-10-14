@@ -9,6 +9,7 @@ const request = require('supertest');
 const { MainClient } = require('binance');
 const { getRoutes } = require('../../src/routes');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
+const { binanceOrderAuditService } = require('../../src/services/trading/BinanceOrderAuditService');
 
 function exchangeInfo() {
 	return {
@@ -469,11 +470,17 @@ describe('Binance orders API', () => {
 			.expect(200);
 
 		expect(status.body.featureFlags.binanceTrading).toBe(true);
+		expect(status.body.featureFlags.binanceOrderAudit).toBe(false);
 		expect(status.body.dependencies.binanceTrading).toMatchObject({
 			enabled: true,
 			configured: true,
 			ready: true,
 			environment: 'testnet',
+		});
+		expect(status.body.dependencies.binanceOrderAudit).toMatchObject({
+			enabled: false,
+			collection: 'binanceOrderAudit',
+			retentionDays: 30,
 		});
 		expect(capabilities.body.dependencies.binanceTrading).toEqual(status.body.dependencies.binanceTrading);
 	});
@@ -822,6 +829,658 @@ describe('Binance orders API', () => {
 				.expect(502);
 
 			expect(response.body.code).toBe('BINANCE_QUERY_FAILED');
+		});
+	});
+
+	describe('audit logging for Binance mutations', () => {
+		let recordMutationSpy;
+
+		beforeEach(() => {
+			recordMutationSpy = jest.spyOn(binanceOrderAuditService, 'recordMutation').mockResolvedValue({});
+		});
+
+		afterEach(() => {
+			recordMutationSpy.mockRestore();
+		});
+
+		it('records an audit log for live order placement', async () => {
+			client.getAvgPrice = jest.fn().mockResolvedValue({ price: '50000.00' });
+			client.submitNewOrder = jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				orderId: 991,
+				clientOrderId: 'cabros-audit-live',
+				transactTime: 1710000000000,
+				price: '0.00000000',
+				origQty: '0.00500000',
+				executedQty: '0.00500000',
+				cummulativeQuoteQty: '250.00000000',
+				status: 'FILLED',
+				timeInForce: 'GTC',
+				type: 'MARKET',
+				side: 'BUY',
+			});
+
+			const response = await request(app)
+				.post('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'MARKET',
+					quantity: 0.005,
+					clientOrderId: 'cabros-audit-live',
+					dryRun: false,
+				})
+				.expect(201);
+
+			expect(response.body.success).toBe(true);
+			expect(recordMutationSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					action: 'PLACE',
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'MARKET',
+					status: 'FILLED',
+					binanceOrderId: 991,
+				}),
+			);
+		});
+
+		it('records an audit log for dry-run order placement', async () => {
+			const response = await request(app)
+				.post('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'LIMIT',
+					quantity: '0.005',
+					price: '50000',
+					dryRun: true,
+				})
+				.expect(200);
+
+			expect(response.body.dryRun).toBe(true);
+			expect(recordMutationSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					action: 'PLACE',
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'LIMIT',
+					dryRun: true,
+					status: 'dry_run',
+				}),
+			);
+		});
+
+		it('records an audit log for order rejection', async () => {
+			client.submitNewOrder = jest.fn().mockRejectedValue(new Error('MIN_NOTIONAL'));
+
+			const response = await request(app)
+				.post('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'MARKET',
+					quantity: '0.00001',
+					dryRun: false,
+				})
+				.expect(400);
+
+			expect(response.body.success).toBe(false);
+			expect(recordMutationSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					action: 'PLACE',
+					symbol: 'BTCUSDT',
+					status: expect.stringMatching(/rejected|MIN_NOTIONAL/i),
+				}),
+			);
+		});
+
+		it('records an audit log for order query reconciliation', async () => {
+			client.getOrder = jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				orderId: 101,
+				clientOrderId: 'cabros-reconcile-1',
+				price: '50000.00000000',
+				origQty: '0.00500000',
+				executedQty: '0.00500000',
+				cummulativeQuoteQty: '250.00000000',
+				status: 'FILLED',
+				timeInForce: 'GTC',
+				type: 'LIMIT',
+				side: 'BUY',
+			});
+
+			const response = await request(app)
+				.get('/api/trading/binance/orders?symbol=BTCUSDT&orderId=101')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(response.body.success).toBe(true);
+			expect(recordMutationSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					action: 'RECONCILE',
+					symbol: 'BTCUSDT',
+					status: 'confirmed',
+					binanceOrderId: 101,
+				}),
+			);
+		});
+
+		it('records an audit log for order cancellation', async () => {
+			client.cancelOrder = jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				orderId: 42,
+				origClientOrderId: 'cabros-cancel-audit',
+				clientOrderId: 'cancel-client-order',
+				price: '50000.00000000',
+				origQty: '0.00500000',
+				executedQty: '0.00000000',
+				cummulativeQuoteQty: '0.00000000',
+				status: 'CANCELED',
+				timeInForce: 'GTC',
+				type: 'LIMIT',
+				side: 'BUY',
+			});
+
+			const response = await request(app)
+				.delete('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', orderId: 42 })
+				.expect(200);
+
+			expect(response.body.success).toBe(true);
+			expect(recordMutationSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					action: 'CANCEL',
+					symbol: 'BTCUSDT',
+					status: 'CANCELED',
+					binanceOrderId: 42,
+					clientOrderId: 'cancel-client-order',
+				}),
+			);
+		});
+
+		it('records clientOrderId and normalized rejected status on cancel rejection', async () => {
+			client.cancelOrder = jest.fn().mockRejectedValue({
+				code: -2011,
+				message: 'Unknown order sent.',
+			});
+
+			const response = await request(app)
+				.delete('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', origClientOrderId: 'my-client-order-123' })
+				.expect(404);
+
+			expect(response.body.success).toBe(false);
+			expect(recordMutationSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					action: 'CANCEL',
+					symbol: 'BTCUSDT',
+					status: 'rejected',
+					errorCode: 'ORDER_NOT_FOUND',
+					clientOrderId: 'my-client-order-123',
+				}),
+			);
+		});
+
+		it('records clientOrderId when using clientOrderId property alias in cancel request', async () => {
+			client.cancelOrder = jest.fn().mockRejectedValue({
+				code: -2011,
+				message: 'Unknown order sent.',
+			});
+
+			const response = await request(app)
+				.delete('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', clientOrderId: 'my-alias-order-456' })
+				.expect(404);
+
+			expect(response.body.success).toBe(false);
+			expect(recordMutationSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					action: 'CANCEL',
+					symbol: 'BTCUSDT',
+					status: 'rejected',
+					errorCode: 'ORDER_NOT_FOUND',
+					clientOrderId: 'my-alias-order-456',
+				}),
+			);
+		});
+
+		it('fails open without failing the order when audit logging rejects', async () => {
+			recordMutationSpy.mockRejectedValue(new Error('Firestore unavailable'));
+			client.getAvgPrice = jest.fn().mockResolvedValue({ price: '50000.00' });
+			client.submitNewOrder = jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				orderId: 992,
+				clientOrderId: 'cabros-audit-failopen',
+				transactTime: 1710000000000,
+				price: '0.00000000',
+				origQty: '0.00500000',
+				executedQty: '0.00500000',
+				cummulativeQuoteQty: '250.00000000',
+				status: 'FILLED',
+				timeInForce: 'GTC',
+				type: 'MARKET',
+				side: 'BUY',
+			});
+
+			const response = await request(app)
+				.post('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.send({
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'MARKET',
+					quantity: 0.005,
+					clientOrderId: 'cabros-audit-failopen',
+					dryRun: false,
+				})
+				.expect(201);
+
+			expect(response.body.success).toBe(true);
+			expect(response.body.order.orderId).toBe(992);
+		});
+	});
+
+	describe('GET /api/trading/binance/orders/audit', () => {
+		it('returns 403 FEATURE_DISABLED when binanceOrderAuditService is disabled', async () => {
+			const isEnabledSpy = jest.spyOn(binanceOrderAuditService, 'isEnabled').mockReturnValue(false);
+
+			const response = await request(app)
+				.get('/api/trading/binance/orders/audit')
+				.set('x-api-key', 'test-key')
+				.expect(403);
+
+			expect(response.body).toEqual(expect.objectContaining({
+				success: false,
+				error: 'Binance order audit trail is disabled',
+				code: 'FEATURE_DISABLED',
+			}));
+			expect(response.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
+
+			isEnabledSpy.mockRestore();
+		});
+
+		it('returns 503 STORAGE_UNAVAILABLE when binanceOrderAuditService is enabled but not configured', async () => {
+			const isEnabledSpy = jest.spyOn(binanceOrderAuditService, 'isEnabled').mockReturnValue(true);
+			const isConfiguredSpy = jest.spyOn(binanceOrderAuditService, 'isConfigured').mockReturnValue(false);
+
+			const response = await request(app)
+				.get('/api/trading/binance/orders/audit')
+				.set('x-api-key', 'test-key')
+				.expect(503);
+
+			expect(response.body).toEqual(expect.objectContaining({
+				success: false,
+				error: 'Binance order audit trail is enabled but Firestore is not configured',
+				code: 'STORAGE_UNAVAILABLE',
+			}));
+			expect(response.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: true,
+				requestId: expect.any(String),
+			}));
+
+			isEnabledSpy.mockRestore();
+			isConfiguredSpy.mockRestore();
+		});
+
+		it('returns 400 INVALID_REQUEST when from date is malformed', async () => {
+			const isEnabledSpy = jest.spyOn(binanceOrderAuditService, 'isEnabled').mockReturnValue(true);
+			const isConfiguredSpy = jest.spyOn(binanceOrderAuditService, 'isConfigured').mockReturnValue(true);
+
+			const response = await request(app)
+				.get('/api/trading/binance/orders/audit?from=invalid-date')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+
+			expect(response.body.code).toBe('INVALID_REQUEST');
+
+			isEnabledSpy.mockRestore();
+			isConfiguredSpy.mockRestore();
+		});
+
+		it('returns 200 with records, audit, and pagination when enabled and configured', async () => {
+			const isEnabledSpy = jest.spyOn(binanceOrderAuditService, 'isEnabled').mockReturnValue(true);
+			const isConfiguredSpy = jest.spyOn(binanceOrderAuditService, 'isConfigured').mockReturnValue(true);
+			const listAuditRecordsSpy = jest.spyOn(binanceOrderAuditService, 'listAuditRecords').mockResolvedValue({
+				records: [
+					{
+						id: 'audit-event-1',
+						orderId: 'audit-event-1',
+						symbol: 'BTCUSDT',
+						side: 'BUY',
+						type: 'LIMIT',
+						status: 'dry_run',
+						dryRun: true,
+						timestamp: '2026-09-10T12:00:00.000Z',
+					},
+				],
+				hasMore: false,
+				nextBefore: null,
+			});
+
+			const response = await request(app)
+				.get('/api/trading/binance/orders/audit?symbol=BTCUSDT&status=dry_run&limit=25')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(response.body.success).toBe(true);
+			expect(response.body.records).toHaveLength(1);
+			expect(response.body.audit).toHaveLength(1);
+			expect(response.body.records[0].symbol).toBe('BTCUSDT');
+			expect(response.body.pagination).toEqual({
+				hasMore: false,
+				limit: 25,
+				nextBefore: null,
+				scanTruncated: false,
+			});
+			expect(listAuditRecordsSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					symbol: 'BTCUSDT',
+					status: 'dry_run',
+					limit: 25,
+				}),
+			);
+
+			isEnabledSpy.mockRestore();
+			isConfiguredSpy.mockRestore();
+			listAuditRecordsSpy.mockRestore();
+		});
+
+		it('returns 400 INVALID_REQUEST when limit is out of range or not an integer', async () => {
+			const isEnabledSpy = jest.spyOn(binanceOrderAuditService, 'isEnabled').mockReturnValue(true);
+			const isConfiguredSpy = jest.spyOn(binanceOrderAuditService, 'isConfigured').mockReturnValue(true);
+
+			const resTooHigh = await request(app)
+				.get('/api/trading/binance/orders/audit?limit=101')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+
+			expect(resTooHigh.body).toEqual(expect.objectContaining({
+				success: false,
+				error: 'limit must be an integer between 1 and 100',
+				code: 'INVALID_REQUEST',
+			}));
+			expect(resTooHigh.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
+
+			const resTooLow = await request(app)
+				.get('/api/trading/binance/orders/audit?limit=0')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+
+			expect(resTooLow.body.code).toBe('INVALID_REQUEST');
+
+			const resInvalid = await request(app)
+				.get('/api/trading/binance/orders/audit?limit=abc')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+
+			expect(resInvalid.body.code).toBe('INVALID_REQUEST');
+
+			isEnabledSpy.mockRestore();
+			isConfiguredSpy.mockRestore();
+		});
+
+		it('records clientOrderId and execution fields on ambiguous order submission audit mutation', async () => {
+			const recordMutationSpy = jest.spyOn(binanceOrderAuditService, 'recordMutation').mockResolvedValue(null);
+
+			client.getOrder.mockRejectedValue(new Error('Order not found'));
+			const timeoutError = new Error('Socket timed out');
+			timeoutError.code = 'ECONNRESET';
+			client.submitNewOrder.mockRejectedValue(timeoutError);
+
+			await request(app)
+				.post('/api/trading/binance/orders')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'audit-ambiguous-test-key')
+				.send({
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'LIMIT',
+					quantity: 0.1,
+					price: 100,
+					timeInForce: 'GTC',
+					dryRun: false,
+				})
+				.expect(503);
+
+			expect(recordMutationSpy).toHaveBeenCalledWith(expect.objectContaining({
+				action: 'PLACE',
+				symbol: 'BTCUSDT',
+				status: 'ambiguous',
+				errorCode: 'BINANCE_ORDER_STATUS_UNKNOWN',
+				clientOrderId: expect.stringMatching(/^cb_/),
+				timeInForce: 'GTC',
+			}));
+
+			recordMutationSpy.mockRestore();
+		});
+	});
+
+	describe('POST /api/trading/binance/orders/preview', () => {
+		it('requires authentication before generating a preview', async () => {
+			const response = await request(app)
+				.post('/api/trading/binance/orders/preview')
+				.send({ symbol: 'BTCUSDT', side: 'BUY', type: 'MARKET', quantity: 0.1 })
+				.expect(401);
+
+			expect(response.body.error).toContain('Missing API key');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('fails closed when the feature is disabled', async () => {
+			process.env.ENABLE_BINANCE_TRADING = 'false';
+
+			const response = await request(app)
+				.post('/api/trading/binance/orders/preview')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', side: 'BUY', type: 'MARKET', quantity: 0.1 })
+				.expect(403);
+
+			expect(response.body.code).toBe('FEATURE_DISABLED');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('returns a preview without touching submitNewOrder', async () => {
+			client.depth = jest.fn().mockResolvedValue({
+				asks: [
+					['100.10', '5'],
+				],
+				limit: 20,
+			});
+
+			const response = await request(app)
+				.post('/api/trading/binance/orders/preview')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', side: 'BUY', type: 'MARKET', quantity: 0.1, maxSlippageBps: 75 })
+				.expect(200);
+
+			expect(response.body.success).toBe(true);
+			expect(response.body.preview).toBe(true);
+			expect(response.body.order.symbol).toBe('BTCUSDT');
+			expect(response.body.adjustedQuantity).toBe('0.1');
+			expect(response.body.feeEstimate.appliedFeeBps).toBe(10);
+			expect(response.body.depthSnapshot.available).toBe(true);
+			expect(client.submitNewOrder).not.toHaveBeenCalled();
+		});
+
+		it('rejects preview with 400 when the order does not match the LOT_SIZE filter', async () => {
+			const response = await request(app)
+				.post('/api/trading/binance/orders/preview')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', side: 'BUY', type: 'LIMIT', quantity: 0.00015, price: 100 })
+				.expect(400);
+
+			expect(response.body.success).toBe(false);
+			expect(response.body.preview).toBe(true);
+			expect(response.body.code).toBe('INVALID_ORDER_REQUEST');
+		});
+
+		it('rejects preview with 403 when the order exceeds the configured maximum notional', async () => {
+			client.getAvgPrice = jest.fn().mockResolvedValue({ price: '5000' });
+
+			const response = await request(app)
+				.post('/api/trading/binance/orders/preview')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BTCUSDT', side: 'BUY', type: 'MARKET', quantity: 0.5 })
+				.expect(403);
+
+			expect(response.body.code).toBe('MAX_NOTIONAL_EXCEEDED');
+		});
+	});
+
+	describe('GET /api/trading/binance/account/balances', () => {
+		it('requires authentication before querying balances', async () => {
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances')
+				.expect(401);
+
+			expect(response.body.error).toContain('Missing API key');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('fails closed when no authentication mechanism is configured', async () => {
+			delete process.env.WEBHOOK_API_KEY;
+			delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
+
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances')
+				.set('x-api-key', 'test-key')
+				.expect(503);
+
+			expect(response.body.code).toBe('ADMIN_AUTH_UNAVAILABLE');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('fails closed when the feature is disabled', async () => {
+			process.env.ENABLE_BINANCE_TRADING = 'false';
+
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances')
+				.set('x-api-key', 'test-key')
+				.expect(403);
+
+			expect(response.body.code).toBe('FEATURE_DISABLED');
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
+		it('returns 200 with balances for allowed assets preserving decimal precision', async () => {
+			client.getAccountInformation = jest.fn().mockResolvedValue({
+				accountType: 'SPOT',
+				balances: [
+					{ asset: 'BTC', free: '1.234567890123456789', locked: '0.000000000000000000' },
+					{ asset: 'USDT', free: '5000.500000000000000000', locked: '100.000000000000000000' },
+					{ asset: 'DOGE', free: '99999.0', locked: '0.0' },
+				],
+			});
+
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances?refresh=true')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(response.body.success).toBe(true);
+			expect(response.body.environment).toBe('testnet');
+			expect(response.body.balances).toEqual([
+				{ asset: 'BTC', free: '1.234567890123456789', locked: '0.000000000000000000' },
+				{ asset: 'USDT', free: '5000.500000000000000000', locked: '100.000000000000000000' },
+			]);
+			expect(response.body.accountType).toBeUndefined();
+		});
+
+		it('supports asset filter query parameter', async () => {
+			client.getAccountInformation = jest.fn().mockResolvedValue({
+				balances: [
+					{ asset: 'BTC', free: '1.0', locked: '0.0' },
+					{ asset: 'USDT', free: '500.0', locked: '0.0' },
+				],
+			});
+
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances?asset=BTC&refresh=true')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(response.body.balances).toHaveLength(1);
+			expect(response.body.balances[0].asset).toBe('BTC');
+			expect(client.getAccountInformation).toHaveBeenCalledTimes(1);
+		});
+
+		it('supports symbol filter query parameter', async () => {
+			client.getAccountInformation = jest.fn().mockResolvedValue({
+				balances: [
+					{ asset: 'BTC', free: '1.0', locked: '0.0' },
+					{ asset: 'USDT', free: '500.0', locked: '0.0' },
+				],
+			});
+
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances?symbol=BTCUSDT&refresh=true')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(response.body.balances).toHaveLength(2);
+			expect(response.body.balances.map((b) => b.asset)).toEqual(['BTC', 'USDT']);
+			expect(client.getAccountInformation).toHaveBeenCalledTimes(1);
+		});
+
+		it('rejects disallowed asset with 400', async () => {
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances?asset=DOGE')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+
+			expect(response.body.code).toBe('INVALID_ORDER_REQUEST');
+		});
+
+		it('rejects disallowed symbol with 400', async () => {
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances?symbol=DOGEUSDT')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+
+			expect(response.body.code).toBe('INVALID_ORDER_REQUEST');
+		});
+
+		it('returns 502 when Binance returns an error or times out without leaking secrets', async () => {
+			client.getAccountInformation = jest.fn().mockRejectedValue(new Error('Network timeout'));
+
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances?refresh=true')
+				.set('x-api-key', 'test-key')
+				.expect(502);
+
+			expect(response.body.code).toBe('BINANCE_BALANCE_QUERY_FAILED');
+			expect(JSON.stringify(response.body)).not.toContain('fake-key');
+			expect(JSON.stringify(response.body)).not.toContain('fake-secret');
+		});
+
+		it('returns 502 when the Binance account call exceeds the configured request timeout', async () => {
+			process.env.BINANCE_TRADING_TIMEOUT_MS = '1';
+			client.getAccountInformation = jest.fn().mockReturnValue(new Promise(() => {}));
+
+			const response = await request(app)
+				.get('/api/trading/binance/account/balances?refresh=true')
+				.set('x-api-key', 'test-key')
+				.expect(502);
+
+			expect(response.body.code).toBe('BINANCE_BALANCE_QUERY_FAILED');
+			expect(JSON.stringify(response.body)).not.toContain('fake-key');
+			expect(JSON.stringify(response.body)).not.toContain('fake-secret');
 		});
 	});
 });
