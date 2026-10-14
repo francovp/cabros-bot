@@ -21,6 +21,7 @@ jest.mock('../../src/services/grounding/genaiClient', () => {
 	};
 });
 const genaiClient = require('../../src/services/grounding/genaiClient');
+const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 jest.mock('../../src/services/inference/azureAiClient', () => ({
 	getAzureAIClient: jest.fn().mockReturnValue({
 		chatCompletion: jest.fn(),
@@ -40,11 +41,13 @@ describe('Gemini Service', () => {
 
 	beforeEach(() => {
 		jest.resetAllMocks();
+		remoteConfigService._resetForTesting();
 		process.env = { ...originalEnv, GEMINI_MODEL_NAME: 'gemini-2.0-flash' };
 		resetSentimentScoreDistribution();
 	});
 
 	afterEach(() => {
+		remoteConfigService._resetForTesting();
 		process.env = originalEnv;
 	});
 
@@ -181,7 +184,7 @@ describe('Gemini Service', () => {
 					...mockEnrichedResponse,
 					setup_type: setupType,
 					setup_evidence: `Evidence for ${setupType}`,
-			}), [{ title: 'BTC market structure', snippet: 'Price broke above resistance level' }]);
+				}), [{ title: 'BTC market structure', snippet: 'Price broke above resistance level' }]);
 				expect(result.setup_type).toBe(setupType);
 				expect(result.setup_evidence).toBe(`Evidence for ${setupType}`);
 			}
@@ -652,6 +655,33 @@ describe('Gemini Service', () => {
 						model: 'gemini-2.5-flash-lite',
 						temperature: 0.2,
 					}),
+				}),
+			);
+		});
+
+		it('uses the Remote Config fallback Gemini model for transient enrichment failures', async () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			remoteConfigService._setRemoteOverridesForTesting({
+				GEMINI_MODEL_NAME: 'remote-primary-model',
+				GEMINI_MODEL_NAME_FALLBACK: 'remote-fallback-model',
+			});
+			genaiClient.llmCallv2
+				.mockRejectedValueOnce(Object.assign(new Error('LLM call failed: 500 INTERNAL'), { status: 500 }))
+				.mockResolvedValueOnce({
+					text: JSON.stringify(mockEnrichedResponse),
+					citations: mockSearchResults,
+					modelUsed: 'remote-fallback-model',
+				});
+
+			await generateEnrichedAlert({
+				text: 'Bitcoin breaks 83k after a volatile session',
+				searchResults: mockSearchResults,
+			});
+
+			expect(genaiClient.llmCallv2).toHaveBeenNthCalledWith(
+				2,
+				expect.objectContaining({
+					opts: expect.objectContaining({ model: 'remote-fallback-model' }),
 				}),
 			);
 		});

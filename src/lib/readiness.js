@@ -192,10 +192,11 @@ function buildGeminiProbe(opts) {
 		if (!hasValue(apiKey)) {
 			return { ready: false, error: 'gemini_api_key_missing' };
 		}
+		const model = resolveRemoteOverride('GEMINI_MODEL_NAME') || process.env.GEMINI_MODEL_NAME;
+		if (!hasValue(model)) {
+			return { ready: false, error: 'gemini_model_name_missing' };
+		}
 		return timed(async () => {
-			const model = process.env.GEMINI_MODEL_NAME_FALLBACK
-				|| process.env.GEMINI_MODEL_NAME
-				|| 'gemini-2.5-flash';
 			const url = 'https://generativelanguage.googleapis.com/v1beta/models/'
 				+ encodeURIComponent(model);
 			// The key travels in a header, never the query string: `fetch` embeds
@@ -208,7 +209,7 @@ function buildGeminiProbe(opts) {
 			// breaks every grounding call — so it is a failure, not a pass.
 			if (!response.ok) {
 				throw new Error('gemini_http_' + response.status
-					+ (response.status === 404 ? ' (check GEMINI_MODEL_NAME_FALLBACK)' : ''));
+					+ (response.status === 404 ? ' (check GEMINI_MODEL_NAME)' : ''));
 			}
 			return { backend: 'gemini' };
 		}, timeoutMs);

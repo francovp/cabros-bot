@@ -92,6 +92,88 @@ describe('readiness utilities', () => {
 });
 
 describe('createReadinessService', () => {
+	it('does not pass readiness with only a published Gemini fallback model', async () => {
+		const restore = setEnv({
+			ENABLE_GEMINI_GROUNDING: 'true',
+			ENABLE_NEWS_MONITOR: 'false',
+			GEMINI_API_KEY: 'gemini-key',
+			GEMINI_MODEL_NAME: undefined,
+			GEMINI_MODEL_NAME_FALLBACK: 'env-fallback-model',
+		});
+		mockRemoteOverrides.GEMINI_MODEL_NAME_FALLBACK = 'published-fallback-model';
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn(async () => ({ ok: true, status: 200 }));
+
+		try {
+			const service = createReadinessService({ timeoutMs: 1500 });
+			const report = await service.collectReadiness();
+
+			expect(report.dependencies.gemini.ready).toBe(false);
+			expect(report.dependencies.gemini.error).toBe('gemini_model_name_missing');
+			expect(global.fetch).not.toHaveBeenCalled();
+		} finally {
+			global.fetch = originalFetch;
+			restore();
+		}
+	});
+
+	it('probes the published Gemini model before the environment fallback', async () => {
+		const restore = setEnv({
+			ENABLE_GEMINI_GROUNDING: 'true',
+			ENABLE_NEWS_MONITOR: 'false',
+			ENABLE_FIREBASE_REMOTE_CONFIG: 'true',
+			GEMINI_API_KEY: 'gemini-key',
+			GEMINI_MODEL_NAME: undefined,
+			GEMINI_MODEL_NAME_FALLBACK: 'env-fallback-model',
+		});
+		mockRemoteOverrides.GEMINI_MODEL_NAME = 'published-model';
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn(async () => ({ ok: true, status: 200 }));
+
+		try {
+			const service = createReadinessService({ timeoutMs: 1500 });
+			const report = await service.collectReadiness();
+
+			expect(report.dependencies.gemini.ready).toBe(true);
+			expect(global.fetch).toHaveBeenCalledWith(
+				'https://generativelanguage.googleapis.com/v1beta/models/published-model',
+				expect.any(Object),
+			);
+		} finally {
+			global.fetch = originalFetch;
+			restore();
+		}
+	});
+
+	it('fails readiness when the published Gemini model is invalid despite a valid env fallback', async () => {
+		const restore = setEnv({
+			ENABLE_GEMINI_GROUNDING: 'true',
+			ENABLE_NEWS_MONITOR: 'false',
+			ENABLE_FIREBASE_REMOTE_CONFIG: 'true',
+			GEMINI_API_KEY: 'gemini-key',
+			GEMINI_MODEL_NAME: undefined,
+			GEMINI_MODEL_NAME_FALLBACK: 'valid-env-fallback',
+		});
+		mockRemoteOverrides.GEMINI_MODEL_NAME = 'invalid-published-model';
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn(async () => ({ ok: false, status: 404 }));
+
+		try {
+			const service = createReadinessService({ timeoutMs: 1500 });
+			const report = await service.collectReadiness();
+
+			expect(report.dependencies.gemini.ready).toBe(false);
+			expect(report.dependencies.gemini.error).toContain('gemini_http_404');
+			expect(global.fetch).toHaveBeenCalledWith(
+				'https://generativelanguage.googleapis.com/v1beta/models/invalid-published-model',
+				expect.any(Object),
+			);
+		} finally {
+			global.fetch = originalFetch;
+			restore();
+		}
+	});
+
 	it('returns ready:false and no per-dep data when every feature flag is off', async () => {
 		const restore = setEnv({
 			ENABLE_FIRESTORE_ALERT_STORAGE: 'false',

@@ -85,13 +85,18 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 
 #### AI Grounding
 
-- `ENABLE_GEMINI_GROUNDING` - Enable Gemini-based alert enrichment (`true` or `false`)
-- `GEMINI_API_KEY` - Google API key for Gemini access
-- `GROUNDING_MODEL_NAME` - Grounding model when Brave Search is not forced (default: `gemini-2.5-flash`)
-- `GROUNDING_MAX_SOURCES` - Maximum grounded sources per alert (default: `3`)
-- `GROUNDING_TIMEOUT_MS` - Grounding request timeout (default: `30000` ms)
-- `GROUNDING_MAX_LENGTH` - Maximum alert text length used in grounding prompts (default: `2000` characters)
+- `ENABLE_GEMINI_GROUNDING` - Enable Gemini-based alert enrichment (`true` or `false`; default: `false`; Remote Config supported)
+- `GEMINI_API_KEY` - Google API key for Gemini access (secret; environment-only)
+- `GEMINI_MODEL_NAME` - Primary Gemini model for alert enrichment (optional; Remote Config supported)
+- `GEMINI_MODEL_NAME_FALLBACK` - Fallback Gemini model for transient enrichment failures (default: `gemini-2.5-flash-lite`; Remote Config supported)
+- `GROUNDING_MODEL_NAME` - Grounding model when Brave Search is not forced (default: `gemini-2.5-flash`; Remote Config supported)
+- `GROUNDING_MAX_SOURCES` - Maximum grounded sources per alert (default: `3`; Remote Config supported)
+- `GROUNDING_TIMEOUT_MS` - Grounding request timeout (default: `30000` ms; Remote Config supported)
+- `GROUNDING_MAX_LENGTH` - Maximum alert text length used in grounding prompts (default: `2000` characters; Remote Config supported)
 - `ALERT_GROUNDING_COALESCE_MS` - Optional equity-alert search coalescing window in milliseconds (default: `0`, disabled; Remote Config supported)
+- `GEMINI_API_KEY` and `BRAVE_SEARCH_API_KEY` are credentials; `BRAVE_SEARCH_ENDPOINT` is an external destination; `FORCE_BRAVE_SEARCH` and `MODEL_PROVIDER` control provider routing. Keep all of them environment-only.
+
+The Remote Config model-selector defaults use the deployment's in-app values, preserving environment configuration until an operator explicitly publishes an override. Blank or invalid model values fall back to the deployment defaults.
 
 #### Token Spend Tracking & Cost Budgeting
 
