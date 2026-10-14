@@ -331,6 +331,74 @@ describe('createReadinessService', () => {
 		}
 	});
 
+	it('routes prefixed grounding and tuned Gemini model resources correctly', async () => {
+		const restore = setEnv({
+			ENABLE_GEMINI_GROUNDING: 'true',
+			ENABLE_NEWS_MONITOR: 'false',
+			GEMINI_API_KEY: 'gemini-key',
+			GEMINI_MODEL_NAME: 'tunedModels/env-primary-model',
+			GROUNDING_MODEL_NAME: 'models/env-grounding-model',
+			FORCE_BRAVE_SEARCH: 'false',
+			MODEL_PROVIDER: 'gemini',
+		});
+		mockRemoteOverrides.GEMINI_MODEL_NAME = 'tunedModels/published-primary-model';
+		mockRemoteOverrides.GROUNDING_MODEL_NAME = 'models/published-grounding-model';
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn(async () => ({
+			ok: true,
+			status: 200,
+			json: async () => ({ state: 'ACTIVE' }),
+		}));
+
+		try {
+			const service = createReadinessService({ timeoutMs: 1500 });
+			const report = await service.collectReadiness();
+
+			expect(report.dependencies.gemini.ready).toBe(true);
+			expect(global.fetch.mock.calls.map(([url]) => url)).toEqual([
+				'https://generativelanguage.googleapis.com/v1beta/models/published-grounding-model',
+				'https://generativelanguage.googleapis.com/v1beta/tunedModels/published-primary-model',
+			]);
+		} finally {
+			global.fetch = originalFetch;
+			restore();
+		}
+	});
+
+	it('fails readiness when a tuned Gemini model is not active', async () => {
+		const restore = setEnv({
+			ENABLE_GEMINI_GROUNDING: 'true',
+			ENABLE_NEWS_MONITOR: 'false',
+			ENABLE_FIREBASE_REMOTE_CONFIG: 'false',
+			GEMINI_API_KEY: 'gemini-key',
+			GEMINI_MODEL_NAME: 'tunedModels/pending-model',
+			FORCE_BRAVE_SEARCH: 'true',
+			BRAVE_SEARCH_API_KEY: 'brave-key',
+			MODEL_PROVIDER: 'gemini',
+		});
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn(async () => ({
+			ok: true,
+			status: 200,
+			json: async () => ({ state: 'CREATING' }),
+		}));
+
+		try {
+			const service = createReadinessService({ timeoutMs: 1500 });
+			const report = await service.collectReadiness();
+
+			expect(report.dependencies.gemini.ready).toBe(false);
+			expect(report.dependencies.gemini.error).toBe('gemini_tuned_model_not_active');
+			expect(global.fetch).toHaveBeenCalledWith(
+				'https://generativelanguage.googleapis.com/v1beta/tunedModels/pending-model',
+				expect.any(Object),
+			);
+		} finally {
+			global.fetch = originalFetch;
+			restore();
+		}
+	});
+
 	it('does not pass readiness with only a published Gemini fallback model', async () => {
 		const restore = setEnv({
 			ENABLE_GEMINI_GROUNDING: 'true',

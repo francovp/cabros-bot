@@ -269,12 +269,18 @@ function buildGeminiProbe(opts) {
 		return timed(async () => {
 			const checkedModels = new Set();
 			for (const { key, value } of requiredModels) {
-				if (checkedModels.has(value)) {
+				const isTunedModel = value.startsWith('tunedModels/');
+				const resourceType = isTunedModel ? 'tunedModels' : 'models';
+				const modelId = value.startsWith('models/') || isTunedModel
+					? value.slice(value.indexOf('/') + 1)
+					: value;
+				const resourceName = resourceType + '/' + modelId;
+				if (checkedModels.has(resourceName)) {
 					continue;
 				}
-				checkedModels.add(value);
-				const url = 'https://generativelanguage.googleapis.com/v1beta/models/'
-					+ encodeURIComponent(value);
+				checkedModels.add(resourceName);
+				const url = 'https://generativelanguage.googleapis.com/v1beta/'
+					+ resourceType + '/' + encodeURIComponent(modelId);
 				// The key travels in a header, never the query string: `fetch` embeds
 				// the failing URL in its own error message and this surface is public.
 				const response = await fetch(url, {
@@ -286,6 +292,17 @@ function buildGeminiProbe(opts) {
 				if (!response.ok) {
 					throw new Error('gemini_http_' + response.status
 						+ (response.status === 404 ? ' (check ' + key + ')' : ''));
+				}
+				if (isTunedModel) {
+					let modelMetadata;
+					try {
+						modelMetadata = await response.json();
+					} catch {
+						throw new Error('gemini_tuned_model_metadata_invalid');
+					}
+					if (modelMetadata?.state !== 'ACTIVE') {
+						throw new Error('gemini_tuned_model_not_active');
+					}
 				}
 			}
 			return { backend: 'gemini' };
