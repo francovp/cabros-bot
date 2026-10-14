@@ -90,11 +90,14 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 - `GEMINI_MODEL_NAME` - Primary Gemini model for alert enrichment (optional; Remote Config supported)
 - `GEMINI_MODEL_NAME_FALLBACK` - Fallback Gemini model for transient enrichment failures (default: `gemini-2.5-flash-lite`; Remote Config supported)
 - `GROUNDING_MODEL_NAME` - Grounding model when Brave Search is not forced (default: `gemini-2.5-flash`; Remote Config supported)
+- `MODEL_PROVIDER` - LLM generation provider (`gemini`, `azure`, `openrouter`, or `cloudflare`; default: `gemini`; environment-only). The configuration doctor validates credentials for the selected provider when grounding or the news monitor is enabled.
 - `GROUNDING_MAX_SOURCES` - Maximum grounded sources per alert (default: `3`; Remote Config supported)
 - `GROUNDING_TIMEOUT_MS` - Grounding request timeout (default: `30000` ms; Remote Config supported)
 - `GROUNDING_MAX_LENGTH` - Maximum alert text length used in grounding prompts (default: `2000` characters; Remote Config supported)
 - `ALERT_GROUNDING_COALESCE_MS` - Optional equity-alert search coalescing window in milliseconds (default: `0`, disabled; Remote Config supported)
 - `GEMINI_API_KEY` and `BRAVE_SEARCH_API_KEY` are credentials; `BRAVE_SEARCH_ENDPOINT` is an external destination; `FORCE_BRAVE_SEARCH` and `MODEL_PROVIDER` control provider routing. Keep all of them environment-only.
+- `FORCE_BRAVE_SEARCH=true` requires `BRAVE_SEARCH_API_KEY`; the configuration doctor and runtime readiness report this missing prerequisite.
+- Configured `AZURE_LLM_ENDPOINT`, `CF_AIG_BASE_URL`, and `BRAVE_SEARCH_ENDPOINT` values must use HTTP or HTTPS; the configuration doctor validates their URL syntax.
 
 The Remote Config model-selector defaults use the deployment's in-app values, preserving environment configuration until an operator explicitly publishes an override. Blank or invalid model values fall back to the deployment defaults.
 

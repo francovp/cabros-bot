@@ -92,6 +92,218 @@ describe('readiness utilities', () => {
 });
 
 describe('createReadinessService', () => {
+	it('probes the grounding model when an alternate LLM provider handles generation', async () => {
+		const restore = setEnv({
+			ENABLE_GEMINI_GROUNDING: 'false',
+			ENABLE_NEWS_MONITOR: 'true',
+			ENABLE_FIREBASE_REMOTE_CONFIG: 'true',
+			GEMINI_API_KEY: 'gemini-key',
+			GEMINI_MODEL_NAME: undefined,
+			GROUNDING_MODEL_NAME: 'env-grounding-model',
+			FORCE_BRAVE_SEARCH: 'false',
+			MODEL_PROVIDER: 'azure',
+			AZURE_LLM_KEY: 'azure-key',
+			AZURE_LLM_MODEL: 'azure-model',
+		});
+		mockRemoteOverrides.GROUNDING_MODEL_NAME = 'published-grounding-model';
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn(async () => ({ ok: true, status: 200 }));
+
+		try {
+			const service = createReadinessService({ timeoutMs: 1500 });
+			const report = await service.collectReadiness();
+
+			expect(report.dependencies.gemini.ready).toBe(true);
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+			expect(global.fetch).toHaveBeenCalledWith(
+				'https://generativelanguage.googleapis.com/v1beta/models/published-grounding-model',
+				expect.any(Object),
+			);
+		} finally {
+			global.fetch = originalFetch;
+			restore();
+		}
+	});
+
+	it('fails readiness when the selected alternate LLM provider is not configured', async () => {
+		const restore = setEnv({
+			ENABLE_GEMINI_GROUNDING: 'true',
+			ENABLE_NEWS_MONITOR: 'false',
+			GEMINI_API_KEY: 'gemini-key',
+			GEMINI_MODEL_NAME: undefined,
+			GROUNDING_MODEL_NAME: 'grounding-model',
+			FORCE_BRAVE_SEARCH: 'false',
+			MODEL_PROVIDER: 'azure',
+			AZURE_LLM_KEY: undefined,
+			AZURE_LLM_MODEL: undefined,
+		});
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn(async () => ({ ok: true, status: 200 }));
+
+		try {
+			const service = createReadinessService({ timeoutMs: 1500 });
+			const report = await service.collectReadiness();
+
+			expect(report.dependencies.gemini.ready).toBe(false);
+			expect(report.dependencies.gemini.error).toBe('azure_not_configured');
+			expect(global.fetch).not.toHaveBeenCalled();
+		} finally {
+			global.fetch = originalFetch;
+			restore();
+		}
+	});
+
+	it('fails readiness when the selected Azure endpoint is malformed', async () => {
+		const restore = setEnv({
+			ENABLE_GEMINI_GROUNDING: 'true',
+			ENABLE_NEWS_MONITOR: 'false',
+			GEMINI_API_KEY: 'gemini-key',
+			GROUNDING_MODEL_NAME: 'grounding-model',
+			FORCE_BRAVE_SEARCH: 'false',
+			MODEL_PROVIDER: 'azure',
+			AZURE_LLM_ENDPOINT: 'not-a-url',
+			AZURE_LLM_KEY: 'azure-key',
+			AZURE_LLM_MODEL: 'azure-model',
+		});
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn(async () => ({ ok: true, status: 200 }));
+
+		try {
+			const service = createReadinessService({ timeoutMs: 1500 });
+			const report = await service.collectReadiness();
+
+			expect(report.dependencies.gemini.ready).toBe(false);
+			expect(report.dependencies.gemini.error).toBe('azure_endpoint_invalid');
+			expect(global.fetch).not.toHaveBeenCalled();
+		} finally {
+			global.fetch = originalFetch;
+			restore();
+		}
+	});
+
+	it('fails readiness when the selected Cloudflare endpoint is malformed', async () => {
+		const restore = setEnv({
+			ENABLE_GEMINI_GROUNDING: 'true',
+			ENABLE_NEWS_MONITOR: 'false',
+			GEMINI_API_KEY: 'gemini-key',
+			FORCE_BRAVE_SEARCH: 'true',
+			BRAVE_SEARCH_API_KEY: 'brave-key',
+			MODEL_PROVIDER: 'cloudflare',
+			CF_AIG_TOKEN: 'cloudflare-token',
+			CF_AIG_BASE_URL: 'not-a-url',
+		});
+
+		try {
+			const service = createReadinessService({ timeoutMs: 1500 });
+			const report = await service.collectReadiness();
+
+			expect(report.dependencies.gemini.ready).toBe(false);
+			expect(report.dependencies.gemini.error).toBe('cloudflare_endpoint_invalid');
+		} finally {
+			restore();
+		}
+	});
+
+	it('fails readiness when forced Brave search has no API key', async () => {
+		const restore = setEnv({
+			ENABLE_GEMINI_GROUNDING: 'true',
+			ENABLE_NEWS_MONITOR: 'false',
+			GEMINI_API_KEY: 'gemini-key',
+			FORCE_BRAVE_SEARCH: 'true',
+			BRAVE_SEARCH_API_KEY: undefined,
+			MODEL_PROVIDER: 'azure',
+			AZURE_LLM_KEY: 'azure-key',
+			AZURE_LLM_MODEL: 'azure-model',
+		});
+
+		try {
+			const service = createReadinessService({ timeoutMs: 1500 });
+			const report = await service.collectReadiness();
+
+			expect(report.dependencies.gemini.ready).toBe(false);
+			expect(report.dependencies.gemini.error).toBe('brave_search_api_key_missing');
+			expect(report.dependencies.gemini.skipped).not.toBe(true);
+		} finally {
+			restore();
+		}
+	});
+
+	it('fails readiness when the forced Brave endpoint is malformed', async () => {
+		const restore = setEnv({
+			ENABLE_GEMINI_GROUNDING: 'true',
+			ENABLE_NEWS_MONITOR: 'false',
+			GEMINI_API_KEY: 'gemini-key',
+			FORCE_BRAVE_SEARCH: 'true',
+			BRAVE_SEARCH_API_KEY: 'brave-key',
+			BRAVE_SEARCH_ENDPOINT: 'not-a-url',
+			MODEL_PROVIDER: 'azure',
+			AZURE_LLM_KEY: 'azure-key',
+			AZURE_LLM_MODEL: 'azure-model',
+		});
+
+		try {
+			const service = createReadinessService({ timeoutMs: 1500 });
+			const report = await service.collectReadiness();
+
+			expect(report.dependencies.gemini.ready).toBe(false);
+			expect(report.dependencies.gemini.error).toBe('brave_search_endpoint_invalid');
+		} finally {
+			restore();
+		}
+	});
+
+	it('fails readiness for an unsupported LLM provider', async () => {
+		const restore = setEnv({
+			ENABLE_GEMINI_GROUNDING: 'true',
+			ENABLE_NEWS_MONITOR: 'false',
+			GEMINI_API_KEY: 'gemini-key',
+			FORCE_BRAVE_SEARCH: 'true',
+			BRAVE_SEARCH_API_KEY: 'brave-key',
+			MODEL_PROVIDER: 'azuer',
+		});
+
+		try {
+			const service = createReadinessService({ timeoutMs: 1500 });
+			const report = await service.collectReadiness();
+
+			expect(report.dependencies.gemini.ready).toBe(false);
+			expect(report.dependencies.gemini.error).toBe('model_provider_invalid');
+			expect(report.dependencies.gemini.skipped).not.toBe(true);
+		} finally {
+			restore();
+		}
+	});
+
+	it('probes both grounding and primary models when Gemini handles search and generation', async () => {
+		const restore = setEnv({
+			ENABLE_GEMINI_GROUNDING: 'true',
+			ENABLE_NEWS_MONITOR: 'false',
+			GEMINI_API_KEY: 'gemini-key',
+			GEMINI_MODEL_NAME: 'env-primary-model',
+			GROUNDING_MODEL_NAME: 'env-grounding-model',
+			FORCE_BRAVE_SEARCH: 'false',
+			MODEL_PROVIDER: 'gemini',
+		});
+		mockRemoteOverrides.GEMINI_MODEL_NAME = 'published-primary-model';
+		mockRemoteOverrides.GROUNDING_MODEL_NAME = 'published-grounding-model';
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn(async () => ({ ok: true, status: 200 }));
+
+		try {
+			const service = createReadinessService({ timeoutMs: 1500 });
+			const report = await service.collectReadiness();
+
+			expect(report.dependencies.gemini.ready).toBe(true);
+			expect(global.fetch.mock.calls.map(([url]) => url)).toEqual([
+				'https://generativelanguage.googleapis.com/v1beta/models/published-grounding-model',
+				'https://generativelanguage.googleapis.com/v1beta/models/published-primary-model',
+			]);
+		} finally {
+			global.fetch = originalFetch;
+			restore();
+		}
+	});
+
 	it('does not pass readiness with only a published Gemini fallback model', async () => {
 		const restore = setEnv({
 			ENABLE_GEMINI_GROUNDING: 'true',
@@ -153,6 +365,8 @@ describe('createReadinessService', () => {
 			GEMINI_API_KEY: 'gemini-key',
 			GEMINI_MODEL_NAME: undefined,
 			GEMINI_MODEL_NAME_FALLBACK: 'valid-env-fallback',
+			FORCE_BRAVE_SEARCH: 'true',
+			BRAVE_SEARCH_API_KEY: 'brave-key',
 		});
 		mockRemoteOverrides.GEMINI_MODEL_NAME = 'invalid-published-model';
 		const originalFetch = global.fetch;
