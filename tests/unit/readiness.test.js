@@ -92,6 +92,33 @@ describe('readiness utilities', () => {
 });
 
 describe('createReadinessService', () => {
+	it('probes Gemini when Remote Config enables grounding while the environment flag is false', async () => {
+		const restore = setEnv({
+			ENABLE_GEMINI_GROUNDING: 'false',
+			ENABLE_NEWS_MONITOR: 'false',
+			ENABLE_FIREBASE_REMOTE_CONFIG: 'true',
+			GEMINI_API_KEY: 'gemini-key',
+			GEMINI_MODEL_NAME: 'env-primary-model',
+			GROUNDING_MODEL_NAME: 'env-grounding-model',
+			FORCE_BRAVE_SEARCH: 'false',
+			MODEL_PROVIDER: 'gemini',
+		});
+		mockRemoteOverrides.ENABLE_GEMINI_GROUNDING = true;
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn(async () => ({ ok: true, status: 200 }));
+
+		try {
+			const service = createReadinessService({ timeoutMs: 1500 });
+			const report = await service.collectReadiness();
+
+			expect(report.dependencies.gemini.ready).toBe(true);
+			expect(global.fetch).toHaveBeenCalled();
+		} finally {
+			global.fetch = originalFetch;
+			restore();
+		}
+	});
+
 	it('probes the grounding model when an alternate LLM provider handles generation', async () => {
 		const restore = setEnv({
 			ENABLE_GEMINI_GROUNDING: 'false',

@@ -686,6 +686,21 @@ describe('Gemini Service', () => {
 			);
 		});
 
+		it('does not retry an alternate provider with the Remote Config Gemini fallback model', async () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			process.env.MODEL_PROVIDER = 'azure';
+			remoteConfigService._setRemoteOverridesForTesting({
+				GEMINI_MODEL_NAME_FALLBACK: 'remote-fallback-model',
+			});
+			genaiClient.llmCallv2.mockRejectedValue(new Error('LLM call failed: 503 UNAVAILABLE'));
+
+			await expect(generateEnrichedAlert({
+				text: 'Bitcoin breaks 83k after a volatile session',
+				searchResults: mockSearchResults,
+			})).rejects.toThrow('503 UNAVAILABLE');
+			expect(genaiClient.llmCallv2).toHaveBeenCalledTimes(1);
+		});
+
 		it('should handle non-English text with preserved language', async () => {
 			genaiClient.llmCallv2.mockResolvedValue({
 				text: JSON.stringify({

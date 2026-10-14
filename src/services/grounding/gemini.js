@@ -14,6 +14,13 @@ const { createSentimentScoreWindow } = require('./sentimentDistribution');
 
 const promptService = getPromptService();
 
+function usesGeminiModelProvider() {
+	const provider = typeof process.env.MODEL_PROVIDER === 'string'
+		? process.env.MODEL_PROVIDER.trim().toLowerCase()
+		: '';
+	return provider === '' || provider === 'gemini';
+}
+
 function getEffectiveGroundingMaxLength() {
 	return getRuntimeConfig().GROUNDING_MAX_LENGTH;
 }
@@ -494,7 +501,9 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 			// Azure client might throw different errors.
 			const errorMessage = primaryError.message || '';
 			const fallbackModelName = getGeminiFallbackModelName();
-			if (getGeminiModelName() && (errorMessage.includes('503') || errorMessage.includes('UNAVAILABLE') || errorMessage.includes('overloaded'))) {
+			if (usesGeminiModelProvider()
+				&& getGeminiModelName()
+				&& (errorMessage.includes('503') || errorMessage.includes('UNAVAILABLE') || errorMessage.includes('overloaded'))) {
 				console.warn('[Gemini] Primary model overloaded, attempting fallback model:', fallbackModelName);
 				try {
 					const fallbackResult = await genaiClient.llmCallv2({
@@ -1031,7 +1040,9 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 			}
 
 			const fallbackModelName = getGeminiFallbackModelName();
-			if (!fallbackModelName || !shouldRetryGeminiWithFallback(error)) {
+			if (!usesGeminiModelProvider()
+				|| !fallbackModelName
+				|| !shouldRetryGeminiWithFallback(error)) {
 				throw error;
 			}
 

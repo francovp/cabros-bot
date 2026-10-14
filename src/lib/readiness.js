@@ -70,7 +70,7 @@ function resolveTimeoutMs(envValue, fallback) {
 }
 
 function isEnabled(value) {
-	return value === 'true';
+	return value === true || value === 'true';
 }
 
 const DEFAULT_CACHE_TTL_MS = 5000;
@@ -196,7 +196,9 @@ function buildFirestoreProbe(deps) {
 function buildGeminiProbe(opts) {
 	const timeoutMs = opts.timeoutMs;
 	return async function probeGemini() {
-		if (!isEnabled(process.env.ENABLE_GEMINI_GROUNDING)
+		const geminiGroundingEnabled = resolveRemoteOverride('ENABLE_GEMINI_GROUNDING')
+			?? process.env.ENABLE_GEMINI_GROUNDING;
+		if (!isEnabled(geminiGroundingEnabled)
 			&& !isEnabled(process.env.ENABLE_NEWS_MONITOR)) {
 			return skippedResult('gemini_disabled');
 		}
@@ -254,7 +256,7 @@ function buildGeminiProbe(opts) {
 			});
 		}
 		const apiKey = process.env.GEMINI_API_KEY;
-		if ((requiredModels.length > 0 || isEnabled(process.env.ENABLE_GEMINI_GROUNDING)) && !hasValue(apiKey)) {
+		if ((requiredModels.length > 0 || isEnabled(geminiGroundingEnabled)) && !hasValue(apiKey)) {
 			return { ready: false, error: 'gemini_api_key_missing' };
 		}
 		if (requiredModels.length === 0) {
