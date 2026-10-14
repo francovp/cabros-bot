@@ -45,10 +45,13 @@ app.use(webhookBodyPaths, express.urlencoded({ extended: false, limit: webhookBo
 app.use(webhookBodyPaths, express.text({ type: 'text/plain', limit: webhookBodySize.textLimit }));
 app.use(webhookBodyPaths, express.json({ limit: webhookBodySize.jsonLimit }));
 app.use(webhookBodyPaths, webhookBodySize.middleware);
-// Preserve the existing default parsers for non-webhook routes.
-app.use(express.urlencoded({ extended: false }));
-app.use(express.text({ type: 'text/plain' }));
-app.use(express.json());
+// Fallback parsers for non-webhook routes. The limit is set explicitly rather
+// than relying on body-parser's implicit 100kb default, so an oversized payload
+// is rejected deterministically instead of tracking an undocumented value.
+const BODY_PARSER_LIMIT = '100kb';
+app.use(express.urlencoded({ extended: false, limit: BODY_PARSER_LIMIT }));
+app.use(express.text({ type: 'text/plain', limit: BODY_PARSER_LIMIT }));
+app.use(express.json({ limit: BODY_PARSER_LIMIT }));
 
 // Use helmet for improved security
 const contentSecurityPolicy = helmet.contentSecurityPolicy.getDefaultDirectives();

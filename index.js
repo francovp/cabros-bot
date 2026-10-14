@@ -56,6 +56,7 @@ const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigSer
 const { probeManagedPromptReadiness } = require('./src/services/prompts');
 const { configureServerTimeouts } = require('./src/lib/serverTimeouts');
 const Sentry = require('@sentry/node');
+const { onError } = require('./src/lib/expressErrorHandler');
 
 const { token, shouldStartTelegramBot } = getTelegramBootstrapConfig();
 bootstrapReadiness.begin({
@@ -81,12 +82,7 @@ registerDebugSentryRoute(app);
 Sentry.setupExpressErrorHandler(app);
 
 // Optional fallthrough error handler
-app.use(function onError(err, req, res, next) {
-	// The error id is attached to `res.sentry` to be returned
-	// and optionally displayed to the user for support.
-	res.statusCode = 500;
-	res.end(res.sentry + '\n');
-});
+app.use(onError);
 
 const lifecycle = createProcessLifecycle({
 	getServer: () => server,
