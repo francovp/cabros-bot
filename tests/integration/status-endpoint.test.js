@@ -818,6 +818,43 @@ describe('Status endpoints', () => {
 		expect(response.body.featureFlags.alertHtfRender).toBe(false);
 	});
 
+	it('reports symbol analysis multi-agent feature flag as false by default', async () => {
+		delete process.env.ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT;
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.symbolAnalysisMultiAgent).toBe(false);
+	});
+
+	it('reports symbol analysis multi-agent feature flag as true when enabled via env', async () => {
+		process.env.ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT = 'true';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.symbolAnalysisMultiAgent).toBe(true);
+	});
+
+	it('reports symbol analysis multi-agent feature flag as true when enabled via remote config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		remoteConfigService._setRemoteOverridesForTesting(
+			{ ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT: true },
+			Date.now()
+		);
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.symbolAnalysisMultiAgent).toBe(true);
+	});
+
 	it('reports safe Firebase Remote Config load metadata without values and honest readiness', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 
