@@ -88,6 +88,8 @@ WEBHOOK_API_KEY=your_secret_api_key
 PORT=3000
 ```
 
+`WEBHOOK_API_KEY` authenticates webhook ingest. Set `ADMIN_API_KEY` to scope admin/operator API-key access to a separate header-only credential, and `BINANCE_TRADING_API_KEY` to give Binance trading routes their own header-only credential. For backward compatibility, each surface falls back to the existing credential only while its dedicated key is unset.
+
 Validate your configuration with the built-in diagnostic doctor:
 
 ```bash
@@ -125,7 +127,7 @@ curl "http://localhost:3000/ready?depth=dependencies"
 
 ## API Endpoints Summary
 
-All webhook and mutation endpoints require the `x-api-key` header (configured via `WEBHOOK_API_KEY`). Browser admin endpoints support Firebase ID tokens (`Authorization: Bearer <token>`).
+Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID tokens (`Authorization: Bearer <token>`) or `ADMIN_API_KEY` when configured, with legacy `WEBHOOK_API_KEY` fallback. Binance trading routes accept `BINANCE_TRADING_API_KEY` when configured, otherwise they use admin authentication. Dedicated keys are header-only.
 
 | Method | Path | Description | Documentation |
 | :--- | :--- | :--- | :--- |
@@ -144,13 +146,25 @@ All webhook and mutation endpoints require the `x-api-key` header (configured vi
 | `GET` | `/api/jobs/:jobId` | Poll background job progress and retrieve result | [Jobs API](docs/jobs.md#get-apijobsjobid) |
 | `POST` | `/api/news-monitor` | Trigger symbol news scanning & event detection | [News Monitoring](docs/news-monitor.md) |
 | `POST` | `/api/trading/binance/orders/preview` | Pre-trade Binance Spot cost & slippage preview | [API Reference](docs/api-reference.md#post-apitradingbinanceorderspreview) |
+| `GET` | `/api/trading/binance/account/balances` | Read-only Binance Spot balances for allowed assets | [API Reference](docs/api-reference.md#get-apitradingbinanceaccountbalances) |
 | `GET` | `/api/alerts` | Query stored alerts with pagination & filtering | [Stored Alerts](docs/alerts.md#get-apialerts) |
 | `GET` | `/api/alerts/summary` | Analytics & delivery success rate metrics | [Stored Alerts](docs/alerts.md#get-apialertssummary) |
 | `POST` | `/api/alerts/:alertId/replay` | Dry-run or live replay of stored alert | [Stored Alerts](docs/alerts.md#post-apialertsalertidreplay) |
 | `GET` | `/api/outcomes` | Query signal outcomes with multi-window returns | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomes) |
-| `GET` | `/api/outcomes/summary` | Expectancy, win rate, and performance summary | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomessummary) |
+| `GET` | `/api/outcomes/summary` | Expectancy, win rate, filters, and optional bounded symbol/setup breakdowns | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomessummary) |
+| `GET`/`POST` | `/api/alert-subscribers` | Manage outbound alert subscriber webhooks with HMAC and SSRF guards | [OpenAPI Spec](/openapi.json) |
 
 Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`.
+
+`dependencies.persistentWriteHealth` is always present on `/api/status` and `/api/capabilities`. It reports process-local success/failure counts for alert storage, signal outcomes, notification redrive, and persistent news dedup. Each domain is `unconfigured` until a write is observed, `degraded` when the latest 100 attempts fail above 5% or a failure occurred in the last five minutes, and otherwise `ok`. Counters reset on process restart; only closed error categories are exposed, never provider messages.
+
+`POST /api/webhook/message` truncates inbound text above `GENERIC_MESSAGE_MAX_LENGTH` (integer, default `4000`, range `1`-`20000`). A fresh valid Firebase Remote Config value takes precedence over the environment value; invalid environment values use the default, while invalid Remote Config values are ignored so the environment/default remains effective. Response truncation metadata remains conditional on clipping.
+
+`ENABLE_ALERT_DECISION_AUDIT` (default `false`) opts stored webhook alerts into a bounded audit of parsing, enrichment, gates, and channel dispatch. It is request-time tunable through Firebase Remote Config. `GET /api/alerts/summary?includeDecisionRollup=true` adds gate counts; `GET /api/alerts/export?includeDecision=true` includes per-alert audit fields, including the CSV column only when explicitly requested. See [Stored Alerts API](docs/alerts.md).
+
+| Variable | Type | Default | Bounds | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `GENERIC_MESSAGE_MAX_LENGTH` | Integer | `4000` | `1`-`20000` | Maximum inbound characters before generic message webhook truncation. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored, leaving the environment/default effective. |
 
 ---
 
@@ -201,6 +215,24 @@ A job created from WhatsApp is routed with `channels: ['whatsapp']` and the orig
 ---
 
 ## Key Runtime Notes
+
+### Worker Startup Jitter
+
+Background workers wait a random delay in `[0, configured maximum]` before their first sweep, refresh, or reconciliation after startup. Later intervals are unchanged, and webhook requests and alert delivery start without this delay. The default maximum is 5 seconds and every value is bounded to 30 seconds. `WORKER_STARTUP_JITTER_MS=0` disables jitter globally.
+
+The published template uses `useInAppDefault` for all five settings when no remote value is configured. An explicit Remote Config value overrides its fallback even when it equals `5000`; precedence is per-worker environment, per-worker Remote Config, global Remote Config, then global environment and the schema default. `WORKER_STARTUP_JITTER_MS=0` remains the global kill switch.
+
+| Variable | Default | Range | Purpose |
+| :--- | :--- | :--- | :--- |
+| `WORKER_STARTUP_JITTER_MS` | `5000` | `0`–`30000` | Global startup-jitter bound for background workers. |
+| `SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS` | `5000` | `0`–`30000` | Signal outcome worker override. |
+| `NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS` | `5000` | `0`–`30000` | Notification redrive worker override. |
+| `SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS` | `5000` | `0`–`30000` | Scanner preset scheduler override. |
+| `REMOTE_CONFIG_REFRESH_JITTER_MS` | `5000` | `0`–`30000` | Firebase Remote Config refresh override. |
+
+All five settings are non-secret and Firebase Remote Config eligible. `/api/status` and `/api/capabilities` report their effective bounds under `dependencies.startupJitter` (`global`, `signalOutcome`, `redrive`, `scannerPreset`, `remoteConfig`).
+
+The Remote Config bootstrap fetch uses environment values because the published template must load before its values can be read. After bootstrap, the `REMOTE_CONFIG_REFRESH_JITTER_MS` override resolves through per-worker environment, per-worker Remote Config, global Remote Config, global environment, then its schema default; it offsets only the first scheduled refresh.
 
 ### Multi-Channel Notification Dispatch
 Notifications are dispatched concurrently across enabled channels. For Discord, transient rate limits and server errors are retried according to `DISCORD_MAX_RETRIES` and bounded by `DISCORD_MAX_TOTAL_RETRY_WAIT_MS`. Long messages exceeding platform limits are automatically split into sequential chunks with preserved markdown formatting. See [Multi-Channel Alerts Guide](docs/notifications.md).
@@ -356,6 +388,8 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
 ```
 
 `lastRunAt` advancing with a non-zero `lastRunEvaluatedCount` is the evidence that the sweep actually ran. The flag alone proves nothing: it reports what was configured, not what executed.
+
+`GET /api/outcomes/calibration` also needs two `tradingSignalOutcomes` composite indexes when its capped recent sample needs source-specific recovery: `source ASC, receivedAt DESC` and `source ASC, confidenceScoreOrigin ASC, receivedAt DESC`. Deploy them with `firebase deploy --only firestore:indexes --project <project-id>` and wait for both to reach `READY` in Firebase Console before deploying the application change; recovery returns `503 STORAGE_UNAVAILABLE` while a required index is unavailable. See [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomescalibration).
 
 | Variable | Default | Bounds | Purpose |
 | :--- | :--- | :--- | :--- |
@@ -552,7 +586,9 @@ Configure it with the repository variables `UPTIME_MONITOR_BASE_URL`, `UPTIME_MO
 
 The secretless monitor above proves only that *something* answers `/healthcheck`. A build months behind `master` answers 200 perfectly, so liveness alone cannot tell you that production is actually running your latest code or that a feature you declared enabled is enabled.
 
-The authenticated layer is `ops/production-smoke-probe.sh`, run every 15 minutes by `.github/workflows/production-smoke-probe.yml`. It asserts `service.commit` equals the latest `master` SHA (exit `5` on a stale deploy), that named dependencies are `ready` (exit `6`), and — with `PRODUCTION_REQUIRE_ENABLED_FLAGS` — that named `featureFlags` are `true` (exit `7`, `FLAG_DISABLED`).
+The authenticated layer is `ops/production-smoke-probe.sh`, run every 15 minutes by `.github/workflows/production-smoke-probe.yml`, which checks the repository out first so the script is present on the runner. It asserts `service.commit` equals the latest `master` SHA (exit `5` on a stale deploy), that named dependencies are `ready` (exit `6`), and — with `PRODUCTION_REQUIRE_ENABLED_FLAGS` — that named `featureFlags` are `true` (exit `7`, `FLAG_DISABLED`). A `401`/`403` from `/api/status` is exit `8`, `AUTH_REJECTED`: production answered and rejected the credential, so rotate the secret rather than treating alerts as undelivered.
+
+Every run resolves to exactly one named outcome (`ok`, `down`, `stale`, `degraded`, `flag_disabled`, `auth_rejected`, `unconfigured`, `script_missing`, `invalid_args`, `unknown`), so a broken CI setup is never reported as a production outage. **The workflow has no paging step** — a non-zero exit fails the scheduled job, and the [external uptime monitor](#external-uptime-monitoring) owns the Telegram page (once on a DOWN transition, once on recovery).
 
 **A flag absent from the deployed build counts as disabled.** The comparison demands the literal string `true`, so an absent key cannot satisfy it and a stale build cannot look compliant — the same shape-is-not-readiness trap this repository has hit repeatedly. The jq default (`// false`) only labels the diagnostic `value=false`; it is not the enforcement point. That distinction matters because a `render.yaml` `value: true` is a *declaration of intent* and production reality is a separate fact — which is how `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` was declared `true` in the Blueprint while production reported `false` (issue #1109).
 
@@ -560,11 +596,13 @@ Set the `PRODUCTION_REQUIRE_ENABLED_FLAGS` repository variable to a comma-separa
 
 ### TradingView Confluence Enrichment
 
-`ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true` are declared `true` in `render.yaml` on the **web service only** (previews off) — and production is **not** yet running them: as of this writing `featureFlags.tradingViewConfluenceEnrichment` reports `false` live (issue #1109), because the enablement needs a Blueprint apply plus a redeploy onto a current build, and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` is inert while its parent gate is off. Treat the Blueprint entry as intent and `/api/status` as reality; the check above is how you tell them apart. Together the flags add an optional `combined_analysis` call to each enriched alert webhook followed by a `multi_timeframe_analysis` call. Both are fail-open: a failure never blocks alert delivery, and it is recorded as a `partial` enrichment rather than a dropped alert.
+`ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true` are declared `true` in `render.yaml` on the **web service only** (previews off). Treat the Blueprint entry as intent and `/api/status` as runtime state. The confluence flag enables an optional `combined_analysis` call; the independent multi-timeframe flag enables `multi_timeframe_analysis`, whether or not confluence is enabled. Both are fail-open: a failure or budget skip never blocks alert delivery and marks the enrichment as `partial`.
 
-`ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` is nested **inside** the confluence gate, so it is inert until confluence enrichment is on — the two flags cannot disagree. Both keys need a web-service declaration in `render.yaml` even though they are only ever read on the web service, because the worker block mirrors them with `fromService` and a mirror whose source is never declared resolves to nothing.
+The two gates can be enabled independently. Both keys need a web-service declaration in `render.yaml` even though they are only read on the web service, because the worker block mirrors them with `fromService` and a mirror whose source is never declared resolves to nothing.
 
-**The enrichment budget decides how much of this actually runs.** `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` (default `12000`) is the ceiling for the whole webhook enrichment path. Whenever volume confirmation *or* confluence is enabled, the base `coin_analysis` call is reserved 75% of it and the optional calls share what remains — a single split, not a cumulative one, so enabling confluence does not shrink the base slice further when volume confirmation is also on. (Note that `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` is **not** declared in `render.yaml`, so which slice production actually reserves is not verifiable from the repository; the single-ternary conclusion above is a property of the code and holds either way.) Both confluence calls share one deadline of `min(8000, remaining budget)`, so with the default budget the second (`multi_timeframe_analysis`) call is commonly cut short and the alert is stored as `tradingViewEnrichmentStatus: "partial"`. Raise `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` (Remote Config eligible, max `120000`) if you want both to complete — but note the webhook request deadline (`REQUEST_TIMEOUT_MS`, default `30000`) bounds the whole request, so the budget cannot usefully exceed it.
+Signals without an exchange use `TRADINGVIEW_MCP_DEFAULT_EXCHANGE` (default `BINANCE`); a fresh Firebase Remote Config value overrides the environment fallback. `TRADINGVIEW_MCP_URL` remains environment-only because it selects the upstream endpoint.
+
+**The enrichment budget decides how much of this actually runs.** `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` (default `12000`) is the ceiling for the whole webhook enrichment path. Whenever volume confirmation, confluence, or multi-timeframe enrichment is enabled, the base `coin_analysis` call is reserved 75% of it and the optional calls share what remains — a single split, not a cumulative one. `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` is **not** declared in `render.yaml`, so which slice production actually reserves is not verifiable from the repository. Optional calls run sequentially; if volume or confluence consumes the remaining budget, a later multi-timeframe call is skipped or cut short and the alert is stored as `tradingViewEnrichmentStatus: "partial"`. Raise `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` (Remote Config eligible, max `120000`) when you need more time for optional calls — but note the webhook request deadline (`REQUEST_TIMEOUT_MS`, default `30000`) bounds the whole request, so the budget cannot usefully exceed it.
 
 **The primary base attempt gets the whole base sub-budget, and retries only run while the remainder can still fund one.** `callCoinAnalysis` is three sequential HTTP hops (`initialize`, `notifications/initialized`, `tools/call`), each bounded by `TRADINGVIEW_MCP_TIMEOUT_MS`, so attempt 1 is sized at `min(TRADINGVIEW_MCP_TIMEOUT_MS, remaining base budget)` rather than a slice of it. A retry is issued only while the residual can still afford a window that completes the tool call — `min(25% of TRADINGVIEW_MCP_TIMEOUT_MS, half the base sub-budget)`. When it cannot, the last real failure is returned immediately: no backoff is paid, and **the declined retry is never charged to the circuit breaker**. That last part matters more than the latency it saves — a client-side deadline is not provider evidence, and counting these as failures opened the breaker against a healthy host and suppressed enrichment for the full `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` (issue #948). A primary attempt that burns its whole viable window is still charged, so a genuinely slow or hung provider still trips the breaker and pages.
 
@@ -582,11 +620,11 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
 - Counters (`attemptedCount`/`appliedCount`/`failedCount`/`skippedNonViableCount`) are **cumulative since process start**; only the percentile basis is bounded, and `sampledCount` reports how many durations back `p50Ms`/`p95Ms`/`maxMs`. So the applied-rate comparison stays valid on a long-lived process.
 - All-zero with `enabled: true` is expected right after a deploy; counters are process-local.
 
-Setting the flag is **necessary but not sufficient**, because the layer is fail-open: a confluence call that fails looks identical in delivery terms to one that was never attempted. `dependencies.tradingViewMcp.enrichment.confluence` reports the observed window — `attemptedCount`, `appliedCount`, `failedCount`, `budgetExhaustedCount`, `lastAppliedAt` and a closed-enum `lastFailureCategory`.
+Enabling either gate is **necessary but not sufficient**, because the layer is fail-open: an optional analysis call that fails looks identical in delivery terms to one that was never attempted. `dependencies.tradingViewMcp.enrichment.confluence` reports the observed window — `attemptedCount`, `appliedCount`, `failedCount`, `budgetExhaustedCount`, `lastAppliedAt` and a closed-enum `lastFailureCategory`. Its `enabled` field reports only the `combined_analysis` gate; independently enabled MTF calls can increment the counters while `enabled` is false.
 
-**These counters are per *call*, not per alert.** One alert enrichment issues up to two confluence calls (`combined_analysis`, then `multi_timeframe_analysis` when multi-timeframe mode is on), so a single alert can move `attemptedCount` by 2. Every issued call records exactly one outcome, which is what makes `appliedCount + failedCount <= attemptedCount` hold — including the budget-starved case, where `combined_analysis` applied, `multi_timeframe_analysis` failed, and the result is `appliedCount + failedCount == attemptedCount`. `budgetExhaustedCount` counts stages skipped because the budget was already spent, which is *not* a call and therefore not an attempt. Do not read these counters as alert counts or compare them 1:1 against `enrichment.alertPath.totalCount`.
+**These counters are per *call*, not per alert.** One alert enrichment can issue `combined_analysis`, `multi_timeframe_analysis`, or both, because their gates are independent; a single alert can move `attemptedCount` by 2. Every issued call records exactly one outcome, which is what makes `appliedCount + failedCount <= attemptedCount` hold — including the budget-starved case, where `combined_analysis` applied, `multi_timeframe_analysis` failed, and the result is `appliedCount + failedCount == attemptedCount`. `budgetExhaustedCount` counts stages skipped because the budget was already spent, which is *not* a call and therefore not an attempt. Do not read these counters as alert counts or compare them 1:1 against `enrichment.alertPath.totalCount`.
 
-Counters are process-local and reset on restart, so `enabled: true` with every counter at `0` is the expected state right after a deploy. `enrichment.alertPath` remains the aggregate over the whole webhook path and cannot attribute an outcome to confluence specifically.
+Counters are process-local and reset on restart, so `enabled: true` with every counter at `0` is the expected state right after a deploy. `enrichment.alertPath` remains the aggregate over the whole webhook path and cannot attribute an outcome to optional analysis specifically.
 
 Verify after the Blueprint is applied:
 

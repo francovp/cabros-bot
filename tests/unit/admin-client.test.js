@@ -300,7 +300,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		elementsById[id] = node;
 		body.append(node);
 	});
-	['overview', 'status', 'diagnostics', 'alerts', 'outcomes', 'presets', 'jobs', 'orders', 'analysis', 'newsMonitor', 'trading', 'playground'].forEach((view) => {
+	['overview', 'status', 'diagnostics', 'alerts', 'outcomes', 'presets', 'subscribers', 'jobs', 'orders', 'analysis', 'newsMonitor', 'trading', 'playground'].forEach((view) => {
 		const button = new FakeElement('button');
 		button.dataset.view = view;
 		body.append(button);
@@ -2494,6 +2494,69 @@ describe('admin browser client', () => {
 		expect(editBtn.title).toBe('Requires admin.operator role');
 		expect(deleteBtn.disabled).toBe(true);
 		expect(deleteBtn.title).toBe('Requires admin.operator role');
+	});
+
+	it('renders dedicated alert subscriber controls and structured fields', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+
+		await selectView(browser, 'subscribers');
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alert-subscribers');
+		const createForm = findForm(browser.elementsById.view, 'POST /api/alert-subscribers');
+		const updateForm = findForm(browser.elementsById.view, 'PATCH /api/alert-subscribers/{id}');
+
+		expect(listForm).toBeDefined();
+		expect(createForm).toBeDefined();
+		expect(updateForm).toBeDefined();
+
+		expect(createForm.elements.url).toBeDefined();
+		expect(createForm.elements.secret).toBeDefined();
+		expect(createForm.elements.description).toBeDefined();
+		expect(createForm.elements.filterSymbols).toBeDefined();
+		expect(createForm.elements.filterSources).toBeDefined();
+		expect(createForm.elements.enabled).toBeDefined();
+	});
+
+	it('renders subscribers as structured cards with HMAC badge, filters, and actions', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/alert-subscribers') {
+					return response({
+						success: true,
+						storage: { mode: 'durable', backend: 'firestore' },
+						subscribers: [
+							{
+								id: 'sub_test_1',
+								url: 'https://example.com/webhook',
+								description: 'Test Webhook Subscriber',
+								enabled: true,
+								hasSecret: true,
+								filter: { symbols: ['BTCUSDT'], sources: ['webhook-alert'] },
+								lastDeliveryStatus: 'success',
+								lastDeliveryAt: '2026-03-30T12:00:00.000Z',
+							},
+						],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+
+		await selectView(browser, 'subscribers');
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alert-subscribers');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('https://example.com/webhook');
+		expect(viewText).toContain('Test Webhook Subscriber');
+		expect(viewText).toContain('HMAC Signed');
+		expect(viewText).toContain('Symbols: BTCUSDT');
+		expect(viewText).toContain('Sources: webhook-alert');
 	});
 
 	it('loads recent jobs with bounded status, type, and limit filters', async () => {
@@ -7035,6 +7098,105 @@ describe('structured analysis forms', () => {
 			// Retry button is also visible on 503 so the operator can retry with same key if desired
 			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
 			expect(retryBtn.hidden).toBe(false);
+		});
+
+		it.each([
+			[400, 'INVALID_REQUEST', 'callbackUrl must be an https URL'],
+			[401, 'INVALID_API_KEY', 'The supplied credentials are invalid.'],
+			[409, 'IDEMPOTENCY_CONFLICT', 'Idempotency key was already used with a different payload.'],
+		])('hides same-key retry after a definitive %i rejection and keeps the server error visible', async (status, code, message) => {
+			const sentKeys = [];
+			let attempts = 0;
+			const browser = createBrowser({
+				fetchImpl: async (url, options) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/jobs/tradingview-analysis') {
+						attempts += 1;
+						sentKeys.push(options.headers['idempotency-key']);
+						if (attempts === 1) {
+							return response({ success: false, error: message, code, retryable: false }, status);
+						}
+						return response({ success: true, jobId: 'job-after-definitive-error' }, 201);
+					}
+					if (url.startsWith('/api/jobs/job-after-definitive-error')) {
+						return response({ success: true, jobId: 'job-after-definitive-error', status: 'pending' });
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(attempts).toBe(1);
+			const firstKey = sentKeys[0];
+			expect(typeof firstKey).toBe('string');
+
+			// The rejection stays readable so the operator can act on what the server said.
+			expect(createForm.textContent).toContain(message);
+			expect(createForm.textContent).toContain(`HTTP ${status}`);
+
+			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
+			expect(retryBtn.hidden).toBe(true);
+
+			// The idempotency middleware caches this rejection, so the same key cannot recover it.
+			await retryBtn.dispatch('click');
+			await flush();
+			expect(attempts).toBe(1);
+			expect(sentKeys.length).toBe(1);
+
+			// Recovery is a fresh submission, which mints a new idempotency key.
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(attempts).toBe(2);
+			expect(sentKeys[1]).not.toBe(firstKey);
+			expect(retryBtn.hidden).toBe(true);
+		});
+
+		it('keeps same-key retry for a retryable 429 rate limit', async () => {
+			const sentKeys = [];
+			let attempts = 0;
+			const browser = createBrowser({
+				fetchImpl: async (url, options) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/jobs/tradingview-analysis') {
+						attempts += 1;
+						sentKeys.push(options.headers['idempotency-key']);
+						if (attempts === 1) {
+							return response({ error: 'Too many requests, please try again later.', retryAfterSeconds: 42 }, 429);
+						}
+						return response({ success: true, jobId: 'job-after-rate-limit' }, 201);
+					}
+					if (url.startsWith('/api/jobs/job-after-rate-limit')) {
+						return response({ success: true, jobId: 'job-after-rate-limit', status: 'pending' });
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			await createForm.dispatch('submit');
+			await flush();
+
+			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
+			expect(retryBtn.hidden).toBe(false);
+			expect(createForm.textContent).toContain('Too many requests, please try again later.');
+
+			await retryBtn.dispatch('click');
+			await flush();
+
+			expect(attempts).toBe(2);
+			expect(sentKeys[1]).toBe(sentKeys[0]);
 		});
 	});
 

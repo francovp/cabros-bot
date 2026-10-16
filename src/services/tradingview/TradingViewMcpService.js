@@ -26,6 +26,7 @@ const {
 	getTakeProfitTarget,
 	getRiskRewardRatio,
 } = require('./expandedAnalysisAlertReport');
+const { hasConfluenceEvidence } = require('./confluenceEvidence');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const alertStorageService = require('../storage/AlertStorageService');
 
@@ -122,10 +123,28 @@ function createBudgetExhaustedError(message) {
 	return error;
 }
 
-function createMcpError(message) {
-	const error = new Error(message);
-	if (TERMINAL_PROVIDER_ERROR_PATTERN.test(message)) {
+function createMcpError(message, options = {}) {
+	const text = String(message);
+	const error = new Error(text);
+	if (Number.isInteger(options.httpStatusCode)) {
+		error.httpStatusCode = options.httpStatusCode;
+	}
+	if (TERMINAL_PROVIDER_ERROR_PATTERN.test(text)) {
 		error.category = 'provider_unavailable';
+		error.retryable = false;
+	} else if (isDeterministicNoDataError(error)) {
+		error.category = 'not_found';
+		error.retryable = false;
+	} else if (options.isToolError || options.isToolResultError || options.category === 'upstream_tool_error') {
+		error.category = 'upstream_tool_error';
+		if (options.retryable === false) {
+			error.retryable = false;
+		}
+	} else if (options.category) {
+		error.category = options.category;
+		if (options.retryable === false) {
+			error.retryable = false;
+		}
 	}
 	return error;
 }
@@ -180,6 +199,9 @@ function createRuntimeStatus({ includeEnrichment = true } = {}) {
 function createEmptyErrorCategoryCounts() {
 	return {
 		circuit_breaker_open: 0,
+		provider_unavailable: 0,
+		upstream_tool_error: 0,
+		not_found: 0,
 		http_5xx: 0,
 		http_4xx: 0,
 		timeout: 0,
@@ -190,6 +212,10 @@ function createEmptyErrorCategoryCounts() {
 
 function getPercentage(value, total) {
 	return total === 0 ? 0 : Number(((value / total) * 100).toFixed(2));
+}
+
+function createToolResultError(errorMessage, options = {}) {
+	return createMcpError(errorMessage, { ...options, isToolResultError: true });
 }
 
 const SETUP_TYPES = new Set(['breakout', 'mean_reversion', 'trend_continuation', 'reversal']);
@@ -276,7 +302,9 @@ class TradingViewMcpService {
 		const runtimeConfig = getRuntimeConfig();
 		const timeoutMs = parseInt(this.config.timeoutMs || runtimeConfig.TRADINGVIEW_MCP_TIMEOUT_MS, 10);
 		const maxRetries = parseInt(this.config.maxRetries || runtimeConfig.TRADINGVIEW_MCP_MAX_RETRIES, 10);
-		const defaultExchange = (this.config.defaultExchange || process.env.TRADINGVIEW_MCP_DEFAULT_EXCHANGE || 'BINANCE').toUpperCase();
+		const defaultExchange = (
+			this.config.defaultExchange || runtimeConfig.TRADINGVIEW_MCP_DEFAULT_EXCHANGE || 'BINANCE'
+		).toUpperCase();
 		const defaultTimeframe = normalizeTradingViewTimeframe(
 			this.config.defaultTimeframe || runtimeConfig.TRADINGVIEW_MCP_DEFAULT_TIMEFRAME || '1h',
 			'1h',
@@ -572,7 +600,7 @@ class TradingViewMcpService {
 		const volumeConfirmationEnabled = getRuntimeConfig().ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
 		const confluenceEnabled = process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT === 'true';
 		const multiTimeframeEnabled = process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME === 'true';
-		const optionalEnrichmentEnabled = volumeConfirmationEnabled || confluenceEnabled;
+		const optionalEnrichmentEnabled = volumeConfirmationEnabled || confluenceEnabled || multiTimeframeEnabled;
 		const baseBudgetMs = budgetDeadlineAt
 			? Math.max(1, Math.floor(budgetMs * (optionalEnrichmentEnabled ? 0.75 : 1)))
 			: null;
@@ -691,7 +719,7 @@ class TradingViewMcpService {
 			} catch (error) {
 				// A "no data for this symbol/venue" answer is deterministic, not
 				// transient (#591): retrying it only burns the enrichment budget.
-				const terminal = isDeterministicNoDataError(error);
+				const terminal = isDeterministicNoDataError(error) || error?.category === 'not_found';
 				// #948: decline the retry when the residual base budget can no longer
 				// fund a window that completes the tool call. Decided on THIS
 				// attempt's own result so `retryable: false` returns the real
@@ -710,6 +738,8 @@ class TradingViewMcpService {
 					success: false,
 					channel: 'tradingview-mcp',
 					error: error.message,
+					...(error && error.category ? { category: error.category } : {}),
+					...(error && Number.isInteger(error.httpStatusCode) ? { httpStatusCode: error.httpStatusCode } : {}),
 					// Carry the structural budget marker out of the abort reason so the
 					// retry/caller chain can still recognise our own deadline (GH-630).
 					...(error && error.mcpBudgetExhausted === true ? { mcpBudgetExhausted: true } : {}),
@@ -717,7 +747,7 @@ class TradingViewMcpService {
 					// A deterministic "no data for this symbol/venue" answer will never
 					// succeed on a retry, so stop the chain here rather than adding a
 					// second stop mechanism - retryHelper already halts on retryable:false.
-					retryable: (terminal || nonViableRetry) ? false : error.category !== 'provider_unavailable',
+					retryable: (terminal || nonViableRetry || error?.retryable === false || error?.category === 'provider_unavailable') ? false : true,
 				};
 			} finally {
 				clearTimeout(attemptTimeoutId);
@@ -736,8 +766,17 @@ class TradingViewMcpService {
 			// Preserve the budget-exhaustion marker across the wrapper message, so the
 			// classifier still recognises our own deadline after the error is re-wrapped.
 			const failure = new Error(`TradingView MCP call failed: ${result.error || 'unknown error'}`);
+			if (result.category) {
+				failure.category = result.category;
+			}
+			if (Number.isInteger(result.httpStatusCode)) {
+				failure.httpStatusCode = result.httpStatusCode;
+			}
 			if (result.mcpBudgetExhausted === true) {
 				failure.mcpBudgetExhausted = true;
+			}
+			if (result.retryable === false) {
+				failure.retryable = false;
 			}
 			throw failure;
 		}
@@ -765,7 +804,9 @@ class TradingViewMcpService {
 							success: false,
 							channel: 'tradingview-mcp',
 							error: error.message,
-							retryable: error.category !== 'provider_unavailable',
+							...(error && error.category ? { category: error.category } : {}),
+							...(error && Number.isInteger(error.httpStatusCode) ? { httpStatusCode: error.httpStatusCode } : {}),
+							retryable: (error?.retryable === false || error?.category === 'provider_unavailable') ? false : true,
 						};
 					}
 				}, 1, this.logger, { signal: AbortSignal.any([controller.signal, budgetController.signal]) });
@@ -786,7 +827,6 @@ class TradingViewMcpService {
 		// The confluence call is wired to BOTH its own per-call timeout AND the overall budget signal
 		// (via AbortSignal.any) so an exhausted enrichment budget cancels it immediately.
 		let confluenceAnalysis = null;
-		let multiTimeframeAnalysis = null;
 		if (confluenceEnabled && !budgetController.signal.aborted) {
 			const remainingBudgetMs = budgetDeadlineAt ? budgetDeadlineAt - Date.now() : cfg.timeoutMs;
 			if (remainingBudgetMs <= 0) {
@@ -810,54 +850,62 @@ class TradingViewMcpService {
 				this._recordConfluenceOutcome({ attempted: true });
 
 				try {
-					try {
-						confluenceAnalysis = await this.callCombinedAnalysis({
-							symbol,
-							exchange,
-							timeframe,
-							signal: combinedSignal,
-						});
-						this._recordConfluenceOutcome({ applied: true });
-						console.debug(`[TradingViewMcpService] Confluence analysis fetched for ${symbol}`);
-					} finally {
-						clearTimeout(confluenceTimeoutId);
-					}
-
-					if (multiTimeframeEnabled) {
-						const remainingMtfBudgetMs = budgetDeadlineAt ? budgetDeadlineAt - Date.now() : cfg.timeoutMs;
-						if (budgetController.signal.aborted || remainingMtfBudgetMs <= 0) {
-							optionalEnrichmentPartial = true;
-							this._recordConfluenceOutcome({ budgetExhausted: true });
-						} else {
-							const mtfTimeoutMs = Math.min(8000, Math.max(1, remainingMtfBudgetMs));
-							const mtfController = new AbortController();
-							const mtfTimeoutId = setTimeout(() => {
-								mtfController.abort(new Error(`TradingView MCP multi-timeframe timeout after ${mtfTimeoutMs}ms`));
-							}, mtfTimeoutMs);
-							const mtfSignal = AbortSignal.any([mtfController.signal, budgetController.signal]);
-							this._recordConfluenceOutcome({ attempted: true });
-							try {
-								multiTimeframeAnalysis = await this.callMultiTimeframeAnalysis({
-									symbol,
-									exchange,
-									signal: mtfSignal,
-								});
-								this._recordConfluenceOutcome({ applied: true });
-								console.debug(`[TradingViewMcpService] Multi-timeframe confluence analysis fetched for ${symbol}`);
-							} finally {
-								clearTimeout(mtfTimeoutId);
-							}
-						}
-					}
+					confluenceAnalysis = await this.callCombinedAnalysis({
+						symbol,
+						exchange,
+						timeframe,
+						signal: combinedSignal,
+					});
+					this._recordConfluenceOutcome({ applied: true });
+					console.debug(`[TradingViewMcpService] Confluence analysis fetched for ${symbol}`);
 				} catch (error) {
 					optionalEnrichmentPartial = true;
 					this._recordConfluenceOutcome({ failed: true, error });
 					this.logger.warn(`[TradingViewMcpService] Confluence enrichment failed for ${symbol} (fail-open): ${error.message}`);
+				} finally {
+					clearTimeout(confluenceTimeoutId);
 				}
 			}
 		} else if (confluenceEnabled) {
 			optionalEnrichmentPartial = true;
 			this._recordConfluenceOutcome({ budgetExhausted: true });
+		}
+
+		// Multi-timeframe enrichment: optional call to multi_timeframe_analysis for higher-timeframe
+		// trend alignment. Gated independently by ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true
+		// so it runs whether or not confluence enrichment is enabled (fail-open: errors do not block
+		// delivery). Respects both the per-call timeout and the overall enrichment budget signal.
+		let multiTimeframeAnalysis = null;
+		if (multiTimeframeEnabled) {
+			const remainingBudgetMs = budgetDeadlineAt ? budgetDeadlineAt - Date.now() : cfg.timeoutMs;
+			if (budgetController.signal.aborted || remainingBudgetMs <= 0) {
+				optionalEnrichmentPartial = true;
+				this._recordConfluenceOutcome({ budgetExhausted: true });
+			} else {
+				const multiTimeframeTimeoutMs = Math.min(8000, Math.max(1, remainingBudgetMs));
+				const multiTimeframeController = new AbortController();
+				const multiTimeframeTimeoutId = setTimeout(() => {
+					multiTimeframeController.abort(new Error(`TradingView MCP multi-timeframe timeout after ${multiTimeframeTimeoutMs}ms`));
+				}, multiTimeframeTimeoutMs);
+				const combinedSignal = AbortSignal.any([multiTimeframeController.signal, budgetController.signal]);
+				this._recordConfluenceOutcome({ attempted: true });
+
+				try {
+					multiTimeframeAnalysis = await this.callMultiTimeframeAnalysis({
+						symbol,
+						exchange,
+						signal: combinedSignal,
+					});
+					this._recordConfluenceOutcome({ applied: true });
+					console.debug(`[TradingViewMcpService] Multi-timeframe confluence analysis fetched for ${symbol}`);
+				} catch (error) {
+					optionalEnrichmentPartial = true;
+					this._recordConfluenceOutcome({ failed: true, error });
+					this.logger.warn(`[TradingViewMcpService] Multi-timeframe enrichment failed for ${symbol} (fail-open): ${error.message}`);
+				} finally {
+					clearTimeout(multiTimeframeTimeoutId);
+				}
+			}
 		}
 
 		cleanBudget();
@@ -879,7 +927,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw createMcpError(normalizedResult.error);
+				throw createToolResultError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -906,13 +954,19 @@ class TradingViewMcpService {
 					success: false,
 					channel: 'tradingview-mcp',
 					error: error.message,
-					retryable: error.category !== 'provider_unavailable',
+					...(error && error.category ? { category: error.category } : {}),
+					...(error && Number.isInteger(error.httpStatusCode) ? { httpStatusCode: error.httpStatusCode } : {}),
+					retryable: (error?.retryable === false || error?.category === 'provider_unavailable') ? false : true,
 				};
 			}
 		}, cfg.maxRetries, this.logger, { signal });
 
 		if (!result.success) {
-			throw new Error(`TradingView MCP call failed for ${raw || `${exchange}:${symbol}`}: ${result.error || 'unknown error'}`);
+			const error = new Error(`TradingView MCP call failed for ${raw || `${exchange}:${symbol}`}: ${result.error || 'unknown error'}`);
+			if (result.category) error.category = result.category;
+			if (Number.isInteger(result.httpStatusCode)) error.httpStatusCode = result.httpStatusCode;
+			if (result.retryable === false) error.retryable = false;
+			throw error;
 		}
 
 		return {
@@ -933,7 +987,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw createMcpError(normalizedResult.error);
+				throw createToolResultError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -953,7 +1007,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw createMcpError(normalizedResult.error);
+				throw createToolResultError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -996,7 +1050,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw createMcpError(normalizedResult.error);
+				throw createToolResultError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -1015,27 +1069,32 @@ class TradingViewMcpService {
 			const result = await sendWithRetry(async () => {
 				try {
 					const rpcResult = await this._callTool(toolName, args, { signal });
+					const normalizedResult = this._unwrapSchemaResult(rpcResult);
+					if (normalizedResult && normalizedResult.error) {
+						throw createToolResultError(normalizedResult.error);
+					}
 					return { success: true, channel: 'tradingview-mcp', data: rpcResult };
 				} catch (error) {
 					return {
 						success: false,
 						channel: 'tradingview-mcp',
 						error: error.message,
-						category: error.category,
-						httpStatusCode: error.httpStatusCode,
+						...(error && error.category ? { category: error.category } : {}),
+						...(error && Number.isInteger(error.httpStatusCode) ? { httpStatusCode: error.httpStatusCode } : {}),
 						// Preserve the structural budget marker so the runtime status
 						// classifier still sees our own deadline, not a provider fault.
 						mcpBudgetExhausted: error.mcpBudgetExhausted === true,
-						retryable: error.category !== 'provider_unavailable',
+						retryable: (error?.retryable === false || error?.category === 'provider_unavailable') ? false : true,
 					};
 				}
 			}, cfg.maxRetries, this.logger, { signal });
 
 			if (!result.success) {
 				const error = new Error(`TradingView MCP scan ${toolName} failed: ${result.error || 'unknown error'}`);
-				error.category = result.category;
-				error.httpStatusCode = result.httpStatusCode;
+				if (result.category) error.category = result.category;
+				if (Number.isInteger(result.httpStatusCode)) error.httpStatusCode = result.httpStatusCode;
 				error.mcpBudgetExhausted = result.mcpBudgetExhausted === true;
+				if (result.retryable === false) error.retryable = false;
 				throw error;
 			}
 
@@ -1120,7 +1179,7 @@ class TradingViewMcpService {
 
 		if (callResult.isError) {
 			const errorMessage = this._extractContentText(callResult) || `TradingView MCP tool ${toolName} returned isError=true`;
-			throw createMcpError(errorMessage);
+			throw createToolResultError(errorMessage);
 		}
 
 		if (callResult.structuredContent && typeof callResult.structuredContent === 'object') {
@@ -1452,7 +1511,7 @@ class TradingViewMcpService {
 		// Confluence insight: append summary line using the .confluence sub-object from combined_analysis.
 		// The MCP payload shape (established in expandedAnalysisAlertReport.js) is:
 		//   confluenceAnalysis.confluence = { recommendation, confidence, signals_agree }
-		if (confluenceAnalysis) {
+		if (confluenceAnalysis && hasConfluenceEvidence(confluenceAnalysis)) {
 			const conf = confluenceAnalysis.confluence;
 			if (conf) {
 				const rec = conf.recommendation || conf.action || null;
@@ -1951,6 +2010,12 @@ class TradingViewMcpService {
 		}
 		if (error && error.category === 'provider_unavailable') {
 			return 'provider_unavailable';
+		}
+		if (error && (error.category === 'upstream_tool_error' || error.category === 'not_found')) {
+			return error.category;
+		}
+		if (isDeterministicNoDataError(error)) {
+			return 'not_found';
 		}
 		if (/circuit breaker/i.test(message)) {
 			return 'circuit_breaker_open';

@@ -4,10 +4,25 @@ const {
 	FINAL_FAILURE_MAX_ATTEMPTS,
 	FINAL_FAILURE_RETRY_DELAY_MS,
 	JOB_QUEUE_RECONCILIATION_INTERVAL_MS,
+	JOB_POLL_DEFAULT_INTERVAL_MS,
 	startJobWorker,
 } = require('../../src/services/jobs/jobWorker');
 
 describe('job worker runtime', () => {
+	const previousJitter = process.env.WORKER_STARTUP_JITTER_MS;
+
+	beforeEach(() => {
+		process.env.WORKER_STARTUP_JITTER_MS = '0';
+	});
+
+	afterAll(() => {
+		if (previousJitter === undefined) {
+			delete process.env.WORKER_STARTUP_JITTER_MS;
+		} else {
+			process.env.WORKER_STARTUP_JITTER_MS = previousJitter;
+		}
+	});
+
 	it('routes queue jobs through JobService and drains the worker once', async () => {
 		const processor = jest.fn();
 		const closeWorker = jest.fn().mockResolvedValue(undefined);
@@ -34,7 +49,96 @@ describe('job worker runtime', () => {
 		expect(closeWorker).toHaveBeenCalledTimes(1);
 	});
 
+	it('uses published global jitter over a non-zero environment value', async () => {
+		const previousJitter = process.env.WORKER_STARTUP_JITTER_MS;
+		const previousRemoteConfigEnabled = process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+		process.env.WORKER_STARTUP_JITTER_MS = '1000';
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+		remoteConfigService._setRemoteOverridesForTesting({ WORKER_STARTUP_JITTER_MS: 2000 });
+		const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(1500);
+		jest.useFakeTimers();
+		let runtime;
+		try {
+			const queue = {
+				isEnabled: () => true,
+				createWorker: jest.fn(() => ({ id: 'worker-remote-jitter' })),
+				closeWorker: jest.fn().mockResolvedValue(undefined),
+			};
+			const service = { processQueuedJob: jest.fn() };
+			runtime = await startJobWorker({ queue, service, workerId: 'worker-remote-jitter' });
+
+			await jest.advanceTimersByTimeAsync(1499);
+			expect(queue.createWorker).not.toHaveBeenCalled();
+			await jest.advanceTimersByTimeAsync(1);
+			await runtime.ready;
+
+			expect(randomIntSpy).toHaveBeenCalledWith(0, 2001);
+			expect(queue.createWorker).toHaveBeenCalledTimes(1);
+		} finally {
+			if (runtime) await runtime.stop();
+			remoteConfigService.stop();
+			remoteConfigService._resetForTesting();
+			jest.useRealTimers();
+			randomIntSpy.mockRestore();
+			if (previousJitter === undefined) delete process.env.WORKER_STARTUP_JITTER_MS;
+			else process.env.WORKER_STARTUP_JITTER_MS = previousJitter;
+			if (previousRemoteConfigEnabled === undefined) delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+			else process.env.ENABLE_FIREBASE_REMOTE_CONFIG = previousRemoteConfigEnabled;
+		}
+	});
+
+	it('returns the runtime before a no-jitter queue worker becomes ready', async () => {
+		const previousJitter = process.env.WORKER_STARTUP_JITTER_MS;
+		const previousRemoteConfigEnabled = process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+		process.env.WORKER_STARTUP_JITTER_MS = '0';
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'false';
+		let resolveQueueReady;
+		const queueReady = new Promise((resolve) => { resolveQueueReady = resolve; });
+		const queue = {
+			isEnabled: () => true,
+			createWorker: jest.fn(() => ({
+				id: 'worker-pending-ready',
+				waitUntilReady: () => queueReady,
+			})),
+			closeWorker: jest.fn().mockResolvedValue(undefined),
+		};
+		const service = { processQueuedJob: jest.fn() };
+		const startPromise = startJobWorker({ queue, service, workerId: 'worker-pending-ready' });
+		let returnedEarly = false;
+		let runtime;
+
+		try {
+			const firstResult = await Promise.race([
+				startPromise.then((value) => ({ returned: true, value })),
+				new Promise((resolve) => setImmediate(() => resolve({ returned: false }))),
+			]);
+			returnedEarly = firstResult.returned;
+			if (returnedEarly) {
+				runtime = firstResult.value;
+				await runtime.stop();
+				expect(queue.closeWorker).toHaveBeenCalledTimes(1);
+			}
+			resolveQueueReady();
+			runtime = runtime || await startPromise;
+			await runtime.ready;
+			if (!returnedEarly) await runtime.stop();
+
+			expect(returnedEarly).toBe(true);
+			expect(queue.closeWorker).toHaveBeenCalledTimes(1);
+		} finally {
+			resolveQueueReady();
+			if (runtime && !returnedEarly) await runtime.stop();
+			if (previousJitter === undefined) delete process.env.WORKER_STARTUP_JITTER_MS;
+			else process.env.WORKER_STARTUP_JITTER_MS = previousJitter;
+			if (previousRemoteConfigEnabled === undefined) delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+			else process.env.ENABLE_FIREBASE_REMOTE_CONFIG = previousRemoteConfigEnabled;
+		}
+	});
+
 	it('schedules durable queued-job reconciliation while the worker is running', async () => {
+		const previousJitter = process.env.WORKER_STARTUP_JITTER_MS;
+		process.env.WORKER_STARTUP_JITTER_MS = '0';
 		jest.useFakeTimers();
 		try {
 			const queue = {
@@ -58,6 +162,165 @@ describe('job worker runtime', () => {
 			expect(service.reconcileQueuedJobs).toHaveBeenCalledTimes(2);
 		} finally {
 			jest.useRealTimers();
+			if (previousJitter === undefined) {
+				delete process.env.WORKER_STARTUP_JITTER_MS;
+			} else {
+				process.env.WORKER_STARTUP_JITTER_MS = previousJitter;
+			}
+		}
+	});
+
+	it('waits for startup jitter before the first and recurring job reconciliation', async () => {
+		const previousJitter = process.env.WORKER_STARTUP_JITTER_MS;
+		process.env.WORKER_STARTUP_JITTER_MS = '50';
+		const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+		jest.useFakeTimers();
+		try {
+			const queue = {
+				isEnabled: () => true,
+				createWorker: jest.fn(() => ({ id: 'worker-1' })),
+				closeWorker: jest.fn().mockResolvedValue(undefined),
+			};
+			const service = {
+				processQueuedJob: jest.fn(),
+				reconcileQueuedJobs: jest.fn().mockResolvedValue(1),
+			};
+
+			const runtime = await startJobWorker({ queue, service, workerId: 'worker-1' });
+			expect(service.reconcileQueuedJobs).not.toHaveBeenCalled();
+			await jest.advanceTimersByTimeAsync(49);
+			expect(service.reconcileQueuedJobs).not.toHaveBeenCalled();
+			await jest.advanceTimersByTimeAsync(1);
+			await Promise.resolve();
+			expect(service.reconcileQueuedJobs).toHaveBeenCalledTimes(1);
+			await runtime.stop();
+		} finally {
+			jest.useRealTimers();
+			randomIntSpy.mockRestore();
+			if (previousJitter === undefined) {
+				delete process.env.WORKER_STARTUP_JITTER_MS;
+			} else {
+				process.env.WORKER_STARTUP_JITTER_MS = previousJitter;
+			}
+		}
+	});
+
+	it('does not create a BullMQ consumer until startup jitter expires', async () => {
+		const previousJitter = process.env.WORKER_STARTUP_JITTER_MS;
+		process.env.WORKER_STARTUP_JITTER_MS = '50';
+		const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+		jest.useFakeTimers();
+		let runtime;
+		try {
+			const worker = { id: 'worker-1', waitUntilReady: jest.fn().mockResolvedValue(undefined) };
+			const queue = {
+				isEnabled: () => true,
+				createWorker: jest.fn(() => worker),
+				closeWorker: jest.fn().mockResolvedValue(undefined),
+			};
+			const service = {
+				processQueuedJob: jest.fn(),
+				reconcileQueuedJobs: jest.fn().mockResolvedValue(1),
+			};
+
+			runtime = await startJobWorker({ queue, service, workerId: 'worker-1' });
+			expect(queue.createWorker).not.toHaveBeenCalled();
+			expect(service.reconcileQueuedJobs).not.toHaveBeenCalled();
+			await jest.advanceTimersByTimeAsync(49);
+			expect(queue.createWorker).not.toHaveBeenCalled();
+			await jest.advanceTimersByTimeAsync(1);
+			await runtime.ready;
+
+			expect(queue.createWorker).toHaveBeenCalledTimes(1);
+			expect(worker.waitUntilReady).toHaveBeenCalledTimes(1);
+			expect(service.reconcileQueuedJobs).toHaveBeenCalledTimes(1);
+		} finally {
+			if (runtime) await runtime.stop();
+			jest.useRealTimers();
+			randomIntSpy.mockRestore();
+			if (previousJitter === undefined) {
+				delete process.env.WORKER_STARTUP_JITTER_MS;
+			} else {
+				process.env.WORKER_STARTUP_JITTER_MS = previousJitter;
+			}
+		}
+	});
+
+	it('delays the first Firestore poll schedule until startup jitter expires', async () => {
+		const previousJitter = process.env.WORKER_STARTUP_JITTER_MS;
+		const previousMode = process.env.JOB_EXECUTION_MODE;
+		process.env.WORKER_STARTUP_JITTER_MS = '50';
+		process.env.JOB_EXECUTION_MODE = 'firestore-poller';
+		const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+		jest.useFakeTimers();
+		const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+		let runtime;
+		try {
+			const repository = { list: jest.fn().mockResolvedValue([]) };
+			runtime = await startJobWorker({ service: { repository }, workerId: 'worker-fp-1', unref: false });
+			expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
+			expect(setTimeoutSpy.mock.results[0].value.hasRef()).toBe(true);
+			expect(setTimeoutSpy.mock.calls[0][1]).toBe(50);
+			await jest.advanceTimersByTimeAsync(49);
+			expect(setTimeoutSpy).toHaveBeenCalledTimes(1);
+			await jest.advanceTimersByTimeAsync(1);
+			expect(setTimeoutSpy).toHaveBeenCalledTimes(2);
+			expect(setTimeoutSpy.mock.calls[1][1]).toBe(JOB_POLL_DEFAULT_INTERVAL_MS);
+			expect(setTimeoutSpy.mock.results[1].value.hasRef()).toBe(true);
+			expect(repository.list).not.toHaveBeenCalled();
+			await runtime.stop();
+			expect(jest.getTimerCount()).toBe(0);
+		} finally {
+			if (runtime) await runtime.stop();
+			jest.useRealTimers();
+			setTimeoutSpy.mockRestore();
+			randomIntSpy.mockRestore();
+			if (previousJitter === undefined) {
+				delete process.env.WORKER_STARTUP_JITTER_MS;
+			} else {
+				process.env.WORKER_STARTUP_JITTER_MS = previousJitter;
+			}
+			if (previousMode === undefined) {
+				delete process.env.JOB_EXECUTION_MODE;
+			} else {
+				process.env.JOB_EXECUTION_MODE = previousMode;
+			}
+		}
+	});
+
+	it('keeps standalone startup jitter referenced and cancels it on stop', async () => {
+		const previousJitter = process.env.WORKER_STARTUP_JITTER_MS;
+		process.env.WORKER_STARTUP_JITTER_MS = '50';
+		const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+		jest.useFakeTimers();
+		const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+		try {
+			const queue = {
+				isEnabled: () => true,
+				createWorker: jest.fn(() => ({ id: 'worker-1' })),
+				closeWorker: jest.fn().mockResolvedValue(undefined),
+			};
+			const service = {
+				processQueuedJob: jest.fn(),
+				reconcileQueuedJobs: jest.fn().mockResolvedValue(1),
+			};
+
+			const runtime = await startJobWorker({ queue, service, workerId: 'worker-1', unref: false });
+			expect(setTimeoutSpy.mock.results[0].value.hasRef()).toBe(true);
+			await runtime.stop();
+			expect(jest.getTimerCount()).toBe(0);
+			await jest.advanceTimersByTimeAsync(50);
+			expect(service.reconcileQueuedJobs).not.toHaveBeenCalled();
+			expect(queue.createWorker).not.toHaveBeenCalled();
+		} finally {
+			setTimeoutSpy.mockRestore();
+			jest.useRealTimers();
+			randomIntSpy.mockRestore();
+			if (previousJitter === undefined) {
+				delete process.env.WORKER_STARTUP_JITTER_MS;
+			} else {
+				process.env.WORKER_STARTUP_JITTER_MS = previousJitter;
+			}
 		}
 	});
 

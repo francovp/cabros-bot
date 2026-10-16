@@ -137,6 +137,7 @@ describe('TradingViewMcpService', () => {
 		delete process.env.ENABLE_MESSAGE_FOOTER_METADATA;
 		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
 		delete process.env.TRADINGVIEW_MCP_URL;
+		delete process.env.TRADINGVIEW_MCP_DEFAULT_EXCHANGE;
 		remoteConfigService._resetForTesting();
 	});
 
@@ -638,6 +639,18 @@ describe('TradingViewMcpService', () => {
 		}));
 	});
 
+	it('uses the Remote Config default exchange over the environment fallback', () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.TRADINGVIEW_MCP_DEFAULT_EXCHANGE = 'NYSE';
+		remoteConfigService._setRemoteOverridesForTesting({
+			TRADINGVIEW_MCP_DEFAULT_EXCHANGE: 'NASDAQ',
+		});
+
+		const service = new TradingViewMcpService();
+
+		expect(service.getConfig().defaultExchange).toBe('NASDAQ');
+	});
+
 	it('keeps environment-derived MCP timing values finite and positive', () => {
 		process.env.TRADINGVIEW_MCP_TIMEOUT_MS = 'not-a-number';
 		process.env.TRADINGVIEW_MCP_MAX_RETRIES = '0';
@@ -935,6 +948,91 @@ describe('TradingViewMcpService', () => {
 		expect(service._getErrorCategory(new Error('TradingView MCP HTTP 408: request timeout'))).toBe('http_4xx');
 	});
 
+	it('keeps non-deterministic tool-body errors retryable', async () => {
+		const service = new TradingViewMcpService({ maxRetries: 3, logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() } });
+		service._callTool = jest.fn().mockResolvedValue({ error: 'Analysis failed: provider returned no data' });
+
+		let error;
+		try {
+			await service.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1h',
+			});
+		} catch (caught) {
+			error = caught;
+		}
+
+		expect(error).toEqual(expect.objectContaining({ category: 'upstream_tool_error' }));
+		expect(error.retryable).toBeUndefined();
+		expect(service._callTool).toHaveBeenCalledTimes(1);
+		expect(service.getStatus().lastErrorCategory).toBe('upstream_tool_error');
+		expect(service.getStatus().errorCategoryCounts.upstream_tool_error).toBe(1);
+	});
+
+	it('does not retry deterministic no-data tool-body failures during enrichment', async () => {
+		const service = new TradingViewMcpService({ maxRetries: 3, logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() } });
+		service._callTool = jest.fn().mockResolvedValue({ error: 'No data found for BTCUSDT on BINANCE' });
+
+		await expect(service.enrichFromAlertText('BTCUSDT(240) pasó a señal de VENTA')).rejects.toThrow('No data found');
+
+		expect(service._callTool).toHaveBeenCalledTimes(1);
+		expect(service.getStatus().lastErrorCategory).toBe('not_found');
+		expect(service.getStatus().errorCategoryCounts.not_found).toBe(1);
+	});
+
+	it('classifies deterministic isError tool responses as terminal', async () => {
+		const service = new TradingViewMcpService({ logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() } });
+		service._rpcRequest = jest
+			.fn()
+			.mockResolvedValueOnce({ sessionId: 'test-session' })
+			.mockResolvedValueOnce({ status: 202 })
+			.mockResolvedValueOnce({
+				rpc: {
+					result: {
+						isError: true,
+						content: [{ type: 'text', text: 'No data found for BTCUSDT on BINANCE' }],
+					},
+				},
+			});
+
+		await expect(service._callTool('coin_analysis', { symbol: 'BTCUSDT' })).rejects.toMatchObject({
+			category: 'not_found',
+			retryable: false,
+		});
+	});
+
+	it('preserves terminal tool error metadata through scanner retries', async () => {
+		const service = new TradingViewMcpService({ maxRetries: 3, logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() } });
+		const error = new Error('No data found for BTCUSDT on BINANCE');
+		error.category = 'not_found';
+		error.retryable = false;
+		service._callTool = jest.fn().mockRejectedValue(error);
+
+		await expect(service.callScanTool('top_gainers')).rejects.toMatchObject({
+			category: 'not_found',
+			retryable: false,
+		});
+
+		expect(service._callTool).toHaveBeenCalledTimes(1);
+		expect(service.getStatus().lastErrorCategory).toBe('not_found');
+		expect(service.getStatus().errorCategoryCounts.not_found).toBe(1);
+	});
+
+	it('rejects parsed scanner error payloads as terminal failures', async () => {
+		const service = new TradingViewMcpService({ maxRetries: 3, logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() } });
+		service._callTool = jest.fn().mockResolvedValue({ error: 'No data found for BTCUSDT on BINANCE' });
+
+		await expect(service.callScanTool('top_gainers')).rejects.toMatchObject({
+			category: 'not_found',
+			retryable: false,
+		});
+
+		expect(service._callTool).toHaveBeenCalledTimes(1);
+		expect(service.getStatus().lastErrorCategory).toBe('not_found');
+		expect(service.getStatus().errorCategoryCounts.not_found).toBe(1);
+	});
+
 	it('classifies provider-level failures as terminal and preserves the HTTP status', async () => {
 		const originalFetch = global.fetch;
 		global.fetch = jest.fn().mockResolvedValue({
@@ -956,6 +1054,7 @@ describe('TradingViewMcpService', () => {
 				lastHttpStatusCode: 503,
 				lastErrorCategory: 'provider_unavailable',
 			}));
+			expect(service.getStatus().errorCategoryCounts.provider_unavailable).toBe(1);
 		} finally {
 			global.fetch = originalFetch;
 		}
@@ -1008,6 +1107,7 @@ describe('TradingViewMcpService', () => {
 			expect(service.getStatus()).toEqual(expect.objectContaining({
 				lastErrorCategory: 'provider_unavailable',
 			}));
+			expect(service.getStatus().errorCategoryCounts.provider_unavailable).toBe(1);
 		} finally {
 			global.fetch = originalFetch;
 		}
@@ -1055,10 +1155,11 @@ describe('TradingViewMcpService', () => {
 				.map(([, init]) => JSON.parse(init.body))
 				.filter((body) => body.method === 'tools/call');
 			expect(toolCalls).toHaveLength(3);
-			// A malformed upstream payload is not classified as a definitive provider outage.
+			// A malformed upstream payload is classified as an upstream tool error.
 			expect(service.getStatus()).toEqual(expect.objectContaining({
-				lastErrorCategory: 'request_failed',
+				lastErrorCategory: 'upstream_tool_error',
 			}));
+			expect(service.getStatus().errorCategoryCounts.upstream_tool_error).toBe(3);
 		} finally {
 			global.fetch = originalFetch;
 		}
@@ -1280,6 +1381,8 @@ describe('TradingViewMcpService', () => {
 				confidence: 81,
 				signals_agree: false,
 			},
+			news: { count: 0, latest: [] },
+			sentiment: { posts_analyzed: 2 },
 		});
 
 		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
@@ -1288,6 +1391,36 @@ describe('TradingViewMcpService', () => {
 		expect(Math.abs(result.sentiment_score)).toBeLessThanOrEqual(0.15);
 		expect(result.insights.join(' ')).toContain('Confluencia contradictoria');
 		expect(result.confluenceData.confluence.recommendation).toBe('SELL');
+	});
+
+	it('does not render or dampen confluence when external evidence is empty', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'true';
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 65000 },
+			market_sentiment: { overall_rating: 4, momentum: 'Bullish' },
+			market_structure: { trend: 'Bullish', trend_score: 4 },
+		});
+		service.callCombinedAnalysis = jest.fn().mockResolvedValue({
+			confluence: {
+				recommendation: 'SELL',
+				confidence: 'HIGH',
+				signals_agree: false,
+			},
+			news: { count: 0, latest: [] },
+			sentiment: { posts_analyzed: 0 },
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(result.sentiment).toBe('BULLISH');
+		expect(result.sentiment_score).toBeGreaterThan(0.15);
+		expect(result.insights.join(' ')).not.toContain('Confluencia');
 	});
 
 	it('fails open to coin analysis when confluence analysis is unavailable', async () => {
@@ -1673,6 +1806,115 @@ describe('TradingViewMcpService', () => {
 		});
 		expect(result.insights).toContain('Multi-timeframe: bullish');
 		expect(result.insights.join(' ')).not.toContain('[object Object]');
+	});
+
+	it('calls multi-timeframe enrichment independently when confluence enrichment is disabled', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'false';
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = 'true';
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 65000 },
+			market_sentiment: { overall_rating: 4, momentum: 'Bullish' },
+			market_structure: { trend: 'Bullish', trend_score: 4 },
+		});
+		service.callCombinedAnalysis = jest.fn();
+		service.callMultiTimeframeAnalysis = jest.fn().mockResolvedValue({
+			alignment: { status: 'bullish', confidence: 81 },
+			recommendation: { action: 'BUY' },
+			confluences: ['Weekly and Daily aligned'],
+		});
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(service.callCombinedAnalysis).not.toHaveBeenCalled();
+		expect(service.callMultiTimeframeAnalysis).toHaveBeenCalledWith(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			exchange: 'BINANCE',
+		}));
+		expect(result.multiTimeframeData).toEqual({
+			alignment: { status: 'bullish', confidence: 81 },
+			recommendation: { action: 'BUY' },
+			confluences: ['Weekly and Daily aligned'],
+		});
+		expect(result.confluenceData).toBeNull();
+		expect(result.insights).toContain('Multi-timeframe: bullish');
+		expect(result.tradingViewEnrichmentApplied).toBe(true);
+	});
+
+	it('skips multi-timeframe enrichment when ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME is not set', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'false';
+		delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME;
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 65000 },
+			market_sentiment: { overall_rating: 4, momentum: 'Bullish' },
+			market_structure: { trend: 'Bullish', trend_score: 4 },
+		});
+		service.callCombinedAnalysis = jest.fn();
+		service.callMultiTimeframeAnalysis = jest.fn();
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(service.callCombinedAnalysis).not.toHaveBeenCalled();
+		expect(service.callMultiTimeframeAnalysis).not.toHaveBeenCalled();
+		expect(result.multiTimeframeData).toBeNull();
+		expect(result.confluenceData).toBeNull();
+	});
+
+	it('marks multi-timeframe enrichment as partial when the overall budget expires before the call', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'false';
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = 'true';
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			enrichmentBudgetMs: 80,
+			logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() },
+		});
+		service.callCoinAnalysis = jest.fn(() => new Promise(resolve => {
+			setTimeout(() => resolve({ price_data: { current_price: 65000 } }), 160);
+		}));
+		service.callMultiTimeframeAnalysis = jest.fn();
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(service.callMultiTimeframeAnalysis).not.toHaveBeenCalled();
+		expect(result.multiTimeframeData).toBeNull();
+		expect(result.tradingViewEnrichmentStatus).toBe('partial');
+	});
+
+	it('marks enrichment as partial when multi-timeframe call fails while confluence is disabled', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'false';
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = 'true';
+		const logger = { warn: jest.fn(), error: jest.fn(), log: jest.fn() };
+		const service = new TradingViewMcpService({
+			maxRetries: 1,
+			defaultExchange: 'BINANCE',
+			defaultTimeframe: '1h',
+			logger,
+		});
+		service.callCoinAnalysis = jest.fn().mockResolvedValue({
+			price_data: { current_price: 65000 },
+			market_sentiment: { overall_rating: 4, momentum: 'Bullish' },
+			market_structure: { trend: 'Bullish', trend_score: 4 },
+		});
+		service.callMultiTimeframeAnalysis = jest.fn().mockRejectedValue(new Error('TradingView MCP HTTP 502: Bad Gateway'));
+
+		const result = await service.enrichFromAlertText('BTCUSDT(240) pasó a señal de COMPRA');
+
+		expect(service.callMultiTimeframeAnalysis).toHaveBeenCalled();
+		expect(result.multiTimeframeData).toBeNull();
+		expect(result.tradingViewEnrichmentStatus).toBe('partial');
+		expect(result.tradingViewEnrichmentApplied).toBe(true);
+		expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Multi-timeframe enrichment failed'));
 	});
 
 	describe('circuit breaker and operator paging', () => {

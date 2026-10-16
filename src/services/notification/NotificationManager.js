@@ -248,6 +248,21 @@ class NotificationManager {
 		return await Promise.all(validationPromises);
 	}
 
+		/**
+   * Get per-channel runtime health (Discord health, future channel telemetry).
+   * Channels without a getStatus() method are skipped.
+   * @returns {Object<string, Object|null>}
+   */
+		getChannelStatuses() {
+			const statuses = {};
+			for (const [name, channel] of this.channels.entries()) {
+				if (channel && typeof channel.getStatus === 'function') {
+					statuses[name] = channel.getStatus();
+				}
+			}
+			return statuses;
+		}
+
 	/**
    * Get list of enabled channel names
    * @returns {Array<string>} Array of enabled channel names
@@ -437,6 +452,14 @@ class NotificationManager {
 		};
 	}
 
+	_isRedriveIneligible(alert, options = {}) {
+		return Boolean(options && options.isRedrive) ||
+			(options && options.redriveEligible === false) ||
+			Boolean(options && options.isProbe) ||
+			Boolean(alert && alert.isProbe) ||
+			Boolean(alert && alert.redriveEligible === false);
+	}
+
 	async notifyAdminOfFailures(alert, results, options = {}) {
 		if (options && options.isRedrive) {
 			return;
@@ -456,7 +479,8 @@ class NotificationManager {
 			return `- ${result.channel}: ${result.error || 'Unknown error'}${metadata.length ? ` (${metadata.join(', ')})` : ''}`;
 		});
 		const requestId = alert && (alert.requestId || alert.correlationId);
-		const redriveContext = notificationRedriveService.isEnabled()
+		const isRedriveIneligible = this._isRedriveIneligible(alert, options);
+		const redriveContext = !isRedriveIneligible && notificationRedriveService.isEnabled()
 			? [`Dead-letters queued for redrive (pending: ${notificationRedriveService.getPendingCount()})`]
 			: [];
 		const message = [
@@ -488,10 +512,11 @@ class NotificationManager {
 		const requestId = alert && (alert.requestId || alert.correlationId);
 		const configuredChannels = this.getConfiguredChannels();
 		const unconfiguredChannels = this.getUnconfiguredChannels();
-		const redriveContext = notificationRedriveService.isEnabled() && configuredChannels.length > 0
+		const isRedriveIneligible = this._isRedriveIneligible(alert, options);
+		const redriveContext = !isRedriveIneligible && notificationRedriveService.isEnabled() && configuredChannels.length > 0
 			? [`Dead-letters queued for redrive (pending: ${notificationRedriveService.getPendingCount()})`]
 			: [];
-		const droppedMessage = configuredChannels.length > 0
+		const droppedMessage = configuredChannels.length > 0 && !isRedriveIneligible
 			? 'Broadcast alerts are being dropped and dead-lettered.'
 			: 'Broadcast alerts are being dropped.';
 		// Operator intent is the difference between "a channel broke" and "a channel was never
@@ -548,17 +573,107 @@ class NotificationManager {
 			return [];
 		}
 
-		const startTime = Date.now();
-		const { parentSpan } = options;
+		return this._dispatchToChannels(alert, channels, options, {
+			dispatchType: 'specific',
+			requestedChannelNames: channelNames,
+			startTime: Date.now(),
+		});
+	}
 
-		console.debug('[NotificationManager] Sending alert to', channels.length, 'specific channel(s):', channels.map(ch => ch.name).join(', '));
+	/**
+	 * Send alert to all enabled channels in parallel
+	 * @param {Object} alert - Alert object with text and optional enriched content
+	 * @returns {Promise<Array>} Array of SendResult objects (one per enabled channel)
+	 */
+	async sendToAll(alert, options = {}) {
+		const enabledChannels = Array.from(this.channels.values()).filter((ch) => ch.isEnabled());
+		const startTime = Date.now();
+
+		if (enabledChannels.length === 0) {
+			if (this.isIntentionalApiOnly()) {
+				console.debug('[NotificationManager] No notification channels enabled (intentional API-only mode)');
+				return [];
+			}
+
+			this.zeroChannelBroadcastCount += 1;
+			notificationRedriveService.incrementZeroChannelBroadcasts();
+			console.warn('[NotificationManager] No notification channels enabled; alert dropped and dead-lettered');
+
+			const totalDurationMs = Date.now() - startTime;
+			const httpContext = options.http || (options.endpoint ? {
+				endpoint: options.endpoint,
+				method: options.method || 'POST',
+				statusCode: 500,
+			} : undefined);
+
+			sentryService.captureExternalFailure({
+				channel: 'none',
+				external: {
+					provider: 'none',
+					attemptCount: 0,
+					durationMs: totalDurationMs,
+					lastErrorMessage: 'No notification channels enabled at broadcast time (zero-channel drop)',
+					lastErrorCode: 'NO_ENABLED_CHANNELS',
+				},
+				http: httpContext,
+			});
+
+		const isRedriveIneligible = this._isRedriveIneligible(alert, options);
+
+		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
+				const candidateChannels = this.getConfiguredChannels();
+				if (candidateChannels.length > 0) {
+					const syntheticResults = candidateChannels.map(channelName => ({
+						channel: channelName,
+						success: false,
+						error: 'No notification channels enabled at broadcast time (zero-channel drop)',
+						statusCode: 0,
+						attemptCount: 1,
+					}));
+
+					trackBackgroundTask(
+						notificationRedriveService.recordDeliveryResults(alert, syntheticResults, options),
+					).catch((error) => {
+						console.warn('[NotificationManager] Failed to record dead-letters for zero-channel broadcast:', error.message);
+					});
+				}
+			}
+
+			trackBackgroundTask(this.notifyAdminOfZeroChannels(alert, options)).catch((error) => {
+				console.error('[NotificationManager] Unexpected zero-channel admin notification failure:', error.message);
+			});
+
+			return [];
+		}
+		return this._dispatchToChannels(alert, enabledChannels, options, {
+			dispatchType: 'all',
+			startTime,
+		});
+	}
+
+	async _dispatchToChannels(alert, channels, options = {}, context = {}) {
+		const {
+			dispatchType = 'all',
+			requestedChannelNames = [],
+			startTime = Date.now(),
+		} = context;
+		const isSpecificDispatch = dispatchType === 'specific';
+		const { parentSpan } = options;
+		console.debug(
+			'[NotificationManager] Sending alert to',
+			channels.length,
+			(isSpecificDispatch ? 'specific' : 'enabled') + ' channel(s):',
+			channels.map(ch => ch.name).join(', '),
+		);
 		const dispatchSpan = sentryService.startInactiveSpan({
-			name: 'notification.send_to_channels',
+			name: isSpecificDispatch ? 'notification.send_to_channels' : 'notification.send_to_all',
 			op: 'notification.dispatch',
 			onlyIfParent: true,
 			parentSpan,
 			attributes: {
-				'notification.requested_channels': channelNames.join(','),
+				...(isSpecificDispatch
+					? { 'notification.requested_channels': requestedChannelNames.join(',') }
+					: { 'notification.enabled_channels': channels.map(ch => ch.name).join(',') }),
 				'notification.enabled_channels_count': channels.length,
 				'alert.enriched': !!(alert && alert.enriched),
 			},
@@ -594,10 +709,14 @@ class NotificationManager {
 						}
 						const channelSignal = options.signalByChannel?.[ch.name];
 						let signal = options.signal;
-						if (channelSignal && signal) {
-							signal = AbortSignal.any([channelSignal, signal]);
-						} else if (channelSignal) {
-							signal = channelSignal;
+						if (isSpecificDispatch) {
+							if (channelSignal && signal) {
+								signal = AbortSignal.any([channelSignal, signal]);
+							} else if (channelSignal) {
+								signal = channelSignal;
+							}
+						} else {
+							signal = channelSignal || options.signal;
 						}
 						return ch.send(alert, {
 							...options,
@@ -693,251 +812,7 @@ class NotificationManager {
 			}
 		}
 
-		const isRedriveIneligible =
-			Boolean(options.isRedrive) ||
-			options.redriveEligible === false ||
-			Boolean(options.isProbe) ||
-			Boolean(alert?.isProbe) ||
-			alert?.redriveEligible === false;
-
-		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
-			const failedResults = formattedResults.filter(result => result && !result.success);
-			if (failedResults.length > 0) {
-				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(alert, formattedResults, options)).catch((error) => {
-					console.warn('[NotificationManager] Failed to record dead-letters for redrive:', error.message);
-				});
-			}
-		}
-
-		trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults, options)).catch((error) => {
-			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
-		});
-
-				this._recordDeliveryMetrics(formattedResults, totalDurationMs);
-
-				console.info('[NotificationManager] Delivery results:', JSON.stringify(formattedResults.map(r => ({
-					channel: r ? r.channel : 'unknown',
-					success: r ? r.success : false,
-					messageId: r ? r.messageId : undefined,
-					error: r ? r.error : undefined,
-				}))));
-
-				return formattedResults;
-			}
-
-			/**
-    * Send alert to all enabled channels in parallel
-    * @param {Object} alert - Alert object with text and optional enriched content
-    * @returns {Promise<Array>} Array of SendResult objects (one per enabled channel)
-    */
-	async sendToAll(alert, options = {}) {
-		const enabledChannels = Array.from(this.channels.values()).filter((ch) => ch.isEnabled());
-		const startTime = Date.now();
-		const { parentSpan } = options;
-
-		if (enabledChannels.length === 0) {
-			if (this.isIntentionalApiOnly()) {
-				console.debug('[NotificationManager] No notification channels enabled (intentional API-only mode)');
-				return [];
-			}
-
-			this.zeroChannelBroadcastCount += 1;
-			notificationRedriveService.incrementZeroChannelBroadcasts();
-			console.warn('[NotificationManager] No notification channels enabled; alert dropped and dead-lettered');
-
-			const totalDurationMs = Date.now() - startTime;
-			const httpContext = options.http || (options.endpoint ? {
-				endpoint: options.endpoint,
-				method: options.method || 'POST',
-				statusCode: 500,
-			} : undefined);
-
-			sentryService.captureExternalFailure({
-				channel: 'none',
-				external: {
-					provider: 'none',
-					attemptCount: 0,
-					durationMs: totalDurationMs,
-					lastErrorMessage: 'No notification channels enabled at broadcast time (zero-channel drop)',
-					lastErrorCode: 'NO_ENABLED_CHANNELS',
-				},
-				http: httpContext,
-			});
-
-		const isRedriveIneligible =
-			Boolean(options.isRedrive) ||
-			options.redriveEligible === false ||
-			Boolean(options.isProbe) ||
-			Boolean(alert?.isProbe) ||
-			alert?.redriveEligible === false;
-
-		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
-				const candidateChannels = this.getConfiguredChannels();
-				if (candidateChannels.length > 0) {
-					const syntheticResults = candidateChannels.map(channelName => ({
-						channel: channelName,
-						success: false,
-						error: 'No notification channels enabled at broadcast time (zero-channel drop)',
-						statusCode: 0,
-						attemptCount: 1,
-					}));
-
-					trackBackgroundTask(
-						notificationRedriveService.recordDeliveryResults(alert, syntheticResults, options),
-					).catch((error) => {
-						console.warn('[NotificationManager] Failed to record dead-letters for zero-channel broadcast:', error.message);
-					});
-				}
-			}
-
-			trackBackgroundTask(this.notifyAdminOfZeroChannels(alert, options)).catch((error) => {
-				console.error('[NotificationManager] Unexpected zero-channel admin notification failure:', error.message);
-			});
-
-			return [];
-		}
-
-		console.debug('[NotificationManager] Sending alert to', enabledChannels.length, 'enabled channel(s):', enabledChannels.map(ch => ch.name).join(', '));
-		const dispatchSpan = sentryService.startInactiveSpan({
-			name: 'notification.send_to_all',
-			op: 'notification.dispatch',
-			onlyIfParent: true,
-			parentSpan,
-			attributes: {
-				'notification.enabled_channels_count': enabledChannels.length,
-				'notification.enabled_channels': enabledChannels.map(ch => ch.name).join(','),
-				'alert.enriched': !!(alert && alert.enriched),
-			},
-		});
-
-		let results;
-		try {
-			const sendPromises = enabledChannels.map((ch) => {
-				const sendSpan = sentryService.startInactiveSpan({
-					name: `notification.send.${ch.name}`,
-					op: 'notification.send',
-					onlyIfParent: true,
-					parentSpan: dispatchSpan,
-					attributes: {
-						'notification.channel': ch.name,
-						'alert.enriched': !!(alert && alert.enriched),
-						'alert.length': alert && alert.text ? alert.text.length : 0,
-					},
-				});
-
-				const channelStartTime = Date.now();
-				return Promise.resolve()
-					.then(async () => {
-						const prefCheck = await this._evaluateChatPreferences(ch, alert, options);
-						if (!prefCheck.deliver) {
-							return {
-								channel: ch.name,
-								success: true,
-								skipped: true,
-								reason: 'PREFERENCE_FILTER',
-								filterReason: prefCheck.reason,
-							};
-						}
-						return ch.send(alert, {
-							...options,
-							signal: options.signalByChannel?.[ch.name] || options.signal,
-						});
-					})
-					.then((value) => ({
-						value,
-						durationMs: Date.now() - channelStartTime,
-					}))
-					.catch((error) => Promise.reject({
-						error,
-						durationMs: Date.now() - channelStartTime,
-					}))
-					.finally(() => {
-						sentryService.endSpan(sendSpan);
-					});
-			});
-
-			results = await Promise.allSettled(sendPromises);
-		} finally {
-			sentryService.endSpan(dispatchSpan);
-		}
-
-		const totalDurationMs = Date.now() - startTime;
-
-		const formattedResults = results.map((r, idx) => {
-			const chName = enabledChannels[idx] ? enabledChannels[idx].name : 'unknown';
-			if (r.status === 'fulfilled') {
-				const val = r.value && r.value.value;
-				const fallbackDuration = (r.value && typeof r.value.durationMs === 'number')
-					? r.value.durationMs
-					: Math.max(Date.now() - startTime, 0);
-
-				if (val && typeof val === 'object') {
-					const item = {
-						channel: chName,
-						...val,
-					};
-					if (typeof item.durationMs !== 'number' || !Number.isFinite(item.durationMs) || item.durationMs < 0) {
-						item.durationMs = fallbackDuration;
-					}
-					return item;
-				}
-				return {
-					success: false,
-					channel: chName,
-					error: 'Channel returned empty response',
-					durationMs: fallbackDuration,
-				};
-			}
-
-			const reasonErr = r.reason && r.reason.error !== undefined ? r.reason.error : r.reason;
-			const fallbackDuration = (r.reason && typeof r.reason.durationMs === 'number')
-				? r.reason.durationMs
-				: Math.max(Date.now() - startTime, 0);
-
-			return {
-				success: false,
-				channel: chName,
-				error: (reasonErr && (reasonErr.message || String(reasonErr))) || 'Unknown error',
-				durationMs: fallbackDuration,
-			};
-		});
-
-		// Report external failures to Sentry (T014)
-		const httpContext = options.http || (options.endpoint ? {
-			endpoint: options.endpoint,
-			method: options.method || 'POST',
-			statusCode: 500,
-		} : undefined);
-
-		for (const result of formattedResults) {
-			if (result && !result.success && result.error) {
-				const providerMap = {
-					telegram: 'telegram-api',
-					whatsapp: 'whatsapp-greenapi',
-					discord: 'discord-webhook',
-				};
-				const provider = providerMap[result.channel] || result.channel;
-
-				sentryService.captureExternalFailure({
-					channel: result.channel,
-					external: {
-						provider,
-						attemptCount: result.attemptCount ?? 1,
-						durationMs: result.durationMs || totalDurationMs,
-						lastErrorMessage: result.error,
-						lastErrorCode: result.statusCode,
-					},
-					http: httpContext,
-				});
-			}
-		}
-
-		const isRedriveIneligible =
-			Boolean(options.isRedrive) ||
-			options.redriveEligible === false ||
-			Boolean(options.isProbe) ||
-			Boolean(alert?.isProbe) ||
-			alert?.redriveEligible === false;
+		const isRedriveIneligible = this._isRedriveIneligible(alert, options);
 
 		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
 			const failedResults = formattedResults.filter(result => result && !result.success);
