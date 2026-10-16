@@ -23,6 +23,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	NEWS_GEMINI_CONCURRENCY: { type: 'number', defaultValue: Infinity, integer: true, min: 1, max: 50 },
 	NEWS_GEMINI_QUOTA_MAX_RETRIES: { type: 'number', defaultValue: 2, integer: true, min: 1, max: 5 },
 	NEWS_GEMINI_QUOTA_RETRY_BASE_MS: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 60000 },
+	NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS: { type: 'number', defaultValue: 1800000, integer: true, min: 1000, max: 86400000 },
 	NEWS_MAX_ALERTS_PER_BATCH: { type: 'number', defaultValue: 10, integer: true, min: 1, max: 50 },
 	NEWS_MAX_ALERTS_PER_WINDOW: { type: 'number', defaultValue: 20, integer: true, min: 1, max: 200 },
 	NEWS_MAX_ALERTS_PER_WINDOW_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1000, max: 3600000 },
@@ -297,6 +298,8 @@ function getEnvironmentConfig() {
 			config[key] = parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES, 2);
 		} else if (key === 'NEWS_GEMINI_QUOTA_RETRY_BASE_MS') {
 			config[key] = parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS, 1000);
+		} else if (key === 'NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS') {
+			config[key] = parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS, 1800000);
 		} else if (key === 'WEBHOOK_IDEMPOTENCY_TTL_MS') {
 			config[key] = parseEnvironmentNumber(process.env[key], schema, schema.defaultValue);
 		} else if (key === 'EQUITY_MARKET_DATA_RPM') {

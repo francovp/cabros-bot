@@ -1003,6 +1003,7 @@ Previously the `domainQuality` tier classifier (`src/services/grounding/domainQu
 - `NEWS_GEMINI_CONCURRENCY` — Max concurrent Gemini-backed symbol analyses. Production policy is `3`; leave unset only for backward-compatible legacy full fan-out.
 - `NEWS_GEMINI_QUOTA_MAX_RETRIES` — Per-symbol retry count for Gemini `429 RESOURCE_EXHAUSTED` errors (default: 2)
 - `NEWS_GEMINI_QUOTA_RETRY_BASE_MS` — Base exponential backoff in milliseconds when provider retry metadata is absent (default: 1000)
+- `NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS` — Maximum process-level Gemini quota cooldown ceiling in milliseconds (default: 1800000 = 30 minutes, bounds: 1000-86400000; Remote Config supported)
 - `NEWS_MAX_ALERTS_PER_BATCH` — Maximum alerts delivered per request (default: 10, bounds: 1-50; Remote Config supported)
 - `NEWS_MAX_ALERTS_PER_WINDOW` — Maximum alerts delivered by the current process during the sliding window (default: 20, bounds: 1-200; Remote Config supported)
 - `NEWS_MAX_ALERTS_PER_WINDOW_MS` — Sliding volume-window duration in milliseconds (default: 300000, bounds: 1000-3600000; Remote Config supported)
