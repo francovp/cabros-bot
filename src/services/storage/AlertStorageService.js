@@ -1385,6 +1385,21 @@ function addTokenUsage(totals, tokenUsage) {
 	totals.outputTokens += getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens);
 	totals.totalTokens += getNumericValue(tokenUsage.totalTokens || tokenUsage.total);
 	totals.totalCost += getNumericValue(tokenUsage.totalCost);
+
+	if (totals.pricing && tokenUsage.pricing && typeof tokenUsage.pricing === 'object') {
+		if (tokenUsage.pricing.unknownModelPricing) {
+			totals.pricing.unknownModelPricing = true;
+		}
+		if (Array.isArray(tokenUsage.pricing.unknownModels)) {
+			const set = new Set(totals.pricing.unknownModels);
+			for (const m of tokenUsage.pricing.unknownModels) {
+				if (typeof m === 'string' && m.trim()) {
+					set.add(m.trim());
+				}
+			}
+			totals.pricing.unknownModels = Array.from(set);
+		}
+	}
 }
 
 function createFeatureCostSummary() {
@@ -1609,6 +1624,14 @@ function summarizeTokenUsage(tokenUsage) {
 				totalCost: getNumericValue(usage.totalCost),
 			}]));
 		if (Object.keys(result.byFeature).length === 0) delete result.byFeature;
+	}
+	if (tokenUsage.pricing && typeof tokenUsage.pricing === 'object') {
+		result.pricing = {
+			unknownModelPricing: Boolean(tokenUsage.pricing.unknownModelPricing),
+			unknownModels: Array.isArray(tokenUsage.pricing.unknownModels)
+				? [...tokenUsage.pricing.unknownModels]
+				: [],
+		};
 	}
 	return result;
 }
@@ -3319,6 +3342,10 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 				outputTokens: 0,
 				totalTokens: 0,
 				totalCost: 0,
+				pricing: {
+					unknownModelPricing: false,
+					unknownModels: [],
+				},
 			},
 		},
 		delivery: {

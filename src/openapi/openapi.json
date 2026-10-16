@@ -9904,6 +9904,34 @@
               "object",
               "null"
             ],
+            "properties": {
+              "inputTokens": {
+                "type": "integer"
+              },
+              "outputTokens": {
+                "type": "integer"
+              },
+              "totalTokens": {
+                "type": "integer"
+              },
+              "totalCost": {
+                "type": "number"
+              },
+              "pricing": {
+                "type": "object",
+                "properties": {
+                  "unknownModelPricing": {
+                    "type": "boolean"
+                  },
+                  "unknownModels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            },
             "additionalProperties": true
           },
           "processingTimeMs": {
@@ -10622,6 +10650,27 @@
               "totalCost": {
                 "type": "number",
                 "example": 0.0035
+              },
+              "pricing": {
+                "type": "object",
+                "description": "Model pricing status and unpriced model list.",
+                "required": [
+                  "unknownModelPricing",
+                  "unknownModels"
+                ],
+                "properties": {
+                  "unknownModelPricing": {
+                    "type": "boolean",
+                    "example": false
+                  },
+                  "unknownModels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "example": []
+                  }
+                }
               }
             }
           }
@@ -10755,6 +10804,34 @@
               "object",
               "null"
             ],
+            "properties": {
+              "inputTokens": {
+                "type": "integer"
+              },
+              "outputTokens": {
+                "type": "integer"
+              },
+              "totalTokens": {
+                "type": "integer"
+              },
+              "totalCost": {
+                "type": "number"
+              },
+              "pricing": {
+                "type": "object",
+                "properties": {
+                  "unknownModelPricing": {
+                    "type": "boolean"
+                  },
+                  "unknownModels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            },
             "additionalProperties": true
           },
           "channels": {

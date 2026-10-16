@@ -2816,6 +2816,56 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		it('aggregates unknownModelPricing and unknownModels in alert enrichment tokenUsage', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-unknown-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						text: 'BINANCE:BTCUSDT',
+						tokenUsage: {
+							inputTokens: 10,
+							outputTokens: 20,
+							totalTokens: 30,
+							totalCost: 0.001,
+							pricing: {
+								unknownModelPricing: true,
+								unknownModels: ['gemini-custom-future-model'],
+							},
+						},
+					}),
+					buildQueryDoc('alert-known-2', {
+						receivedAt: buildTimestamp('2026-06-06T12:01:00.000Z'),
+						source: 'webhook',
+						text: 'BINANCE:ETHUSDT',
+						tokenUsage: {
+							inputTokens: 5,
+							outputTokens: 10,
+							totalTokens: 15,
+							totalCost: 0.0005,
+							pricing: {
+								unknownModelPricing: false,
+								unknownModels: [],
+							},
+						},
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 10,
+			});
+
+			expect(result.enrichment.tokenUsage.pricing).toEqual({
+				unknownModelPricing: true,
+				unknownModels: ['gemini-custom-future-model'],
+			});
+		});
+
 		it('does not attribute a zero-usage plain webhook alert to grounding', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			// The webhook handler always persists `tokenUsage.toJSON()`; with every
@@ -3215,6 +3265,10 @@ describe('AlertStorageService', () => {
 						outputTokens: 20,
 						totalTokens: 30,
 						totalCost: 0.001,
+						pricing: {
+							unknownModelPricing: false,
+							unknownModels: [],
+						},
 					},
 				},
 				delivery: {

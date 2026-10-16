@@ -212,7 +212,11 @@ An alert that persisted no real token usage is not attributed to any feature. Pl
         "inputTokens": 10,
         "outputTokens": 20,
         "totalTokens": 30,
-        "totalCost": 0.001
+        "totalCost": 0.001,
+        "pricing": {
+          "unknownModelPricing": false,
+          "unknownModels": []
+        }
       }
     },
     "delivery": {

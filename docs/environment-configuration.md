@@ -360,7 +360,7 @@ The `shadowModeMetrics` payload (also surfaced as the `X-Shadow-Mode-Metrics` re
 - `windows.<1h|4h|1D|1W>` — the same metric set scoped to a single evaluation window. Each block may include `bySide` (`BUY` / `SELL`) and `bySetupType` sub-blocks when at least one evaluated signal exists for that bucket.
 - `drawdownProxy` — `averageMaxAdverseExcursionPercent` (mean of per-signal worst excursion) and `absoluteMaxAdverseExcursionPercent` (single worst excursion observed).
 - `falsePositiveCandidates` / `falsePositiveCandidatesCount` — up to 5 high-confidence signals (`|score| >= 0.75`, or news-monitor `|score| >= 0.7`) with `return < -1%` or `maxAdverseExcursion < -3%`.
-- `latencyCostMetadata` — `averageProcessingTimeMs` and aggregated `tokenUsage` (numeric-only fields, `inputTokens` / `outputTokens` / `totalCost`).
+- `latencyCostMetadata` — `averageProcessingTimeMs` and aggregated `tokenUsage` (`inputTokens` / `outputTokens` / `totalCost` and `pricing` containing `unknownModelPricing` / `unknownModels`).
 
 When signal-outcome tracking is disabled, or when no measurements exist in the requested window, the field becomes the string sentinel `"No measurements found"` instead of an object payload. The same sentinel is emitted in the `X-Shadow-Mode-Metrics` response header on `GET /api/alerts/export`. Both surfaces honor the same fallback; filtered summaries/exports omit the field entirely because the shadow-mode metrics service has no matching source/enrichment filters.
 
