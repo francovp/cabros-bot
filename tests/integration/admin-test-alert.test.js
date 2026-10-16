@@ -18,11 +18,21 @@ jest.mock('../../src/controllers/webhooks/handlers/alert/alert', () => {
 		...original,
 		getNotificationManager: jest.fn(),
 		initializeNotificationServices: jest.fn(),
+		processEnrichment: jest.fn(),
+	};
+});
+
+jest.mock('../../src/controllers/webhooks/handlers/newsMonitor/urlShortener', () => {
+	const original = jest.requireActual('../../src/controllers/webhooks/handlers/newsMonitor/urlShortener');
+	return {
+		...original,
+		getURLShortener: jest.fn(),
 	};
 });
 
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const alertHandler = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { getURLShortener } = require('../../src/controllers/webhooks/handlers/newsMonitor/urlShortener');
 const { _resetForTesting } = require('../../src/controllers/admin/testAlert');
 const { getRoutes } = require('../../src/routes');
 
@@ -120,6 +130,43 @@ describe('POST /api/admin/test-alert Integration', () => {
 		expect(res.body.formatted.telegram.length).toBeGreaterThan(0);
 		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 		expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
+	});
+
+	it('shortens citation URLs in dry-run previews using configured URL shortener', async () => {
+		const mockShortener = {
+			shortenUrlsParallel: jest.fn().mockResolvedValue({
+				'https://news.example.com/breaking-crypto-report': 'https://tinyurl.com/pr-1156',
+			}),
+		};
+		getURLShortener.mockReturnValue(mockShortener);
+		mockNotificationManager.getEnabledChannels.mockReturnValue(['telegram', 'whatsapp']);
+
+		alertHandler.processEnrichment.mockImplementation(async (alert) => {
+			alert.enriched = {
+				symbol: 'BTCUSDT',
+				original_text: 'Bitcoin Technical Alert',
+				summary: 'Breakout above $70,000 confirmed',
+				citations: [
+					{ title: 'News Source', url: 'https://news.example.com/breaking-crypto-report' },
+				],
+			};
+			return true;
+		});
+
+		const res = await request(app)
+			.post('/api/admin/test-alert')
+			.set('x-api-key', 'secret-operator-key')
+			.send({
+				dryRun: true,
+				includeEnrichment: true,
+				channels: ['whatsapp'],
+			});
+
+		expect(res.status).toBe(200);
+		expect(res.body.ok).toBe(true);
+		expect(mockShortener.shortenUrlsParallel).toHaveBeenCalledWith(['https://news.example.com/breaking-crypto-report']);
+		expect(res.body.formatted.whatsapp.preview).toContain('https://tinyurl.com/pr-1156');
+		expect(res.body.formatted.whatsapp.preview).not.toContain('https://news.example.com/breaking-crypto-report');
 	});
 
 	it('executes live probe alert, persists with source test-alert, and returns delivery results', async () => {
