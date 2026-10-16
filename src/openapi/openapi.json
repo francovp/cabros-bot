@@ -94,6 +94,9 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "503": {
             "description": "Service is not yet ready (bootstrap pending or shutdown draining)",
             "content": {
@@ -234,6 +237,9 @@
               }
             }
           },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "503": {
             "description": "Only `?deep=true` returns 503: one or more enabled notification channels are degraded, or readiness evaluation failed. The `?depth=readiness` variant never returns 503.",
             "content": {
@@ -346,6 +352,9 @@
                 }
               }
             }
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           },
           "503": {
             "description": "At least one considered dependency is unhealthy (fail-closed variant only).",
@@ -554,6 +563,9 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
           "500": {
             "$ref": "#/components/responses/ExpressFallthroughError"
           },
@@ -620,6 +632,12 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "503": {
             "$ref": "#/components/responses/MessageServiceUnavailable"
           }
@@ -676,6 +694,12 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -740,6 +764,12 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "502": {
             "$ref": "#/components/responses/MarketScannerBadGateway"
           },
@@ -785,6 +815,12 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -833,6 +869,12 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           },
           "502": {
             "$ref": "#/components/responses/Error"
@@ -886,6 +928,12 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
           },
           "429": {
             "description": "Rate limited by the 60-second caller cooldown or TEST_ALERT_DAILY_LIMIT.",
@@ -970,6 +1018,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           },
           "503": {
             "description": "Maximum server SSE connection capacity exceeded.",
@@ -1057,6 +1108,9 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -1115,6 +1169,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -1195,6 +1252,9 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -1270,6 +1330,15 @@
           "409": {
             "$ref": "#/components/responses/Error"
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -1329,6 +1398,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
@@ -1417,6 +1489,9 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -1467,6 +1542,15 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -1531,6 +1615,15 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -1597,6 +1690,15 @@
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -1639,6 +1741,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -1710,6 +1815,15 @@
           },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -1805,6 +1919,12 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -1938,6 +2058,12 @@
               }
             }
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           }
@@ -2065,6 +2191,12 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -2201,6 +2333,15 @@
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "502": {
             "$ref": "#/components/responses/Error"
           },
@@ -2255,6 +2396,12 @@
           },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -2562,6 +2709,9 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "503": {
             "$ref": "#/components/responses/NewsMonitorServiceUnavailable"
           }
@@ -2607,6 +2757,12 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           },
           "503": {
             "$ref": "#/components/responses/NewsMonitorServiceUnavailable"
@@ -2662,6 +2818,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -2728,6 +2887,9 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -2775,6 +2937,15 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
@@ -2814,6 +2985,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
@@ -2853,6 +3027,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
@@ -2921,6 +3098,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -3060,6 +3240,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -3302,6 +3485,9 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "502": {
             "description": "Binance balance query failed or timed out",
             "content": {
@@ -3520,6 +3706,15 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "502": {
             "$ref": "#/components/responses/BinanceOrderFailure"
           },
@@ -3628,6 +3823,9 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "502": {
             "$ref": "#/components/responses/BinanceOrderFailure"
           },
@@ -3712,6 +3910,15 @@
                 }
               }
             }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           },
           "502": {
             "$ref": "#/components/responses/BinanceOrderFailure"
@@ -3807,6 +4014,15 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           },
           "502": {
             "$ref": "#/components/responses/BinanceOrderFailure"
@@ -3935,6 +4151,9 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -3972,6 +4191,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
@@ -4004,6 +4226,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
@@ -4164,6 +4389,12 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -5769,17 +6000,42 @@
         }
       },
       "PayloadTooLarge": {
-        "description": "The webhook or news-monitor request body exceeded the configured WEBHOOK_MAX_BODY_SIZE limit (default 256kb). JSON, text/plain, and application/x-www-form-urlencoded body types share the same effective limit.",
+        "description": "The request body exceeded its configured size limit, or a URL-encoded body exceeded Express' 1,000-parameter limit.",
         "content": {
           "application/json": {
             "schema": {
-              "$ref": "#/components/schemas/PayloadTooLarge"
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/PayloadTooLarge"
+                },
+                {
+                  "$ref": "#/components/schemas/ExpressErrorEnvelope"
+                }
+              ]
             },
-            "example": {
-              "success": false,
-              "error": "PAYLOAD_TOO_LARGE",
-              "message": "Request body exceeds maximum size of 256kb",
-              "limit": "256kb"
+            "examples": {
+              "bodySize": {
+                "summary": "Webhook request body exceeded WEBHOOK_MAX_BODY_SIZE",
+                "value": {
+                  "success": false,
+                  "error": "PAYLOAD_TOO_LARGE",
+                  "code": "PAYLOAD_TOO_LARGE",
+                  "requestId": "req-webhook-body-size-001",
+                  "retryable": false,
+                  "message": "Request body exceeds maximum size of 256kb",
+                  "limit": "256kb"
+                }
+              },
+              "urlEncodedParameterLimit": {
+                "summary": "URL-encoded body exceeded Express' parameter limit",
+                "value": {
+                  "success": false,
+                  "error": "Request contains too many URL-encoded parameters",
+                  "code": "PAYLOAD_TOO_LARGE",
+                  "requestId": "req-parameter-limit-001",
+                  "retryable": false
+                }
+              }
             }
           }
         },
@@ -7406,6 +7662,33 @@
             }
           }
         }
+      },
+      "ExpressParserError": {
+        "description": "The request body parser rejected an unsupported charset or content encoding. The request was not processed.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ExpressErrorEnvelope"
+            },
+            "examples": {
+              "unsupportedCharset": {
+                "summary": "Unsupported JSON charset",
+                "value": {
+                  "success": false,
+                  "error": "Request could not be processed",
+                  "code": "INVALID_REQUEST",
+                  "requestId": "req-unsupported-charset-001",
+                  "retryable": false
+                }
+              }
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
       }
     },
     "schemas": {
@@ -8775,7 +9058,10 @@
         "type": "object",
         "required": [
           "success",
-          "error"
+          "error",
+          "code",
+          "requestId",
+          "retryable"
         ],
         "properties": {
           "success": {
@@ -8834,7 +9120,7 @@
       },
       "Error": {
         "type": "object",
-        "description": "Standardized error envelope returned by every /api/* endpoint. Express-level fallthrough errors also include sentryEventId when a Sentry event ID is available. Endpoint-specific fields (jobId, storage, message, details, scanResults, ...) are preserved alongside these fields.",
+        "description": "Standardized error envelope returned by every /api/* endpoint. Express-level fallthrough errors include sentryEventId only when Sentry is active and provides an event ID. Endpoint-specific fields (jobId, storage, message, details, scanResults, ...) are preserved alongside these fields.",
         "required": [
           "success",
           "error",
@@ -8897,24 +9183,9 @@
             "type": "boolean",
             "description": "Present and true when the failure was a Firestore missing-composite-index rejection. Resolved by deploying the composite indexes declared in firestore.indexes.json."
           },
-          "success": {
-            "type": "boolean",
-            "enum": [
-              false
-            ],
-            "description": "Present and false on Express-level fallthrough errors."
-          },
-          "requestId": {
-            "type": "string",
-            "description": "Request correlation ID, matching the X-Request-Id response header."
-          },
-          "retryable": {
-            "type": "boolean",
-            "description": "Present on Express-level fallthrough errors; true for retryable HTTP statuses."
-          },
           "sentryEventId": {
             "type": "string",
-            "description": "Present on Express-level 5xx responses only when Sentry provides an event ID."
+            "description": "Present on Express-level 5xx responses only when Sentry is active and provides an event ID."
           }
         }
       },
@@ -8995,7 +9266,10 @@
         "description": "Structured 413 response returned when a webhook or news-monitor request body (JSON, text/plain, or application/x-www-form-urlencoded) exceeds the WEBHOOK_MAX_BODY_SIZE limit (default 256kb).",
         "required": [
           "success",
-          "error"
+          "error",
+          "code",
+          "requestId",
+          "retryable"
         ],
         "properties": {
           "success": {
@@ -9010,6 +9284,13 @@
               "PAYLOAD_TOO_LARGE"
             ]
           },
+          "code": {
+            "type": "string",
+            "enum": [
+              "PAYLOAD_TOO_LARGE"
+            ],
+            "description": "Machine-readable error code."
+          },
           "message": {
             "type": "string",
             "description": "Human-readable explanation of the size violation."
@@ -9017,6 +9298,17 @@
           "limit": {
             "type": "string",
             "description": "Effective size limit (e.g., `256kb`) the request exceeded, parsed from WEBHOOK_MAX_BODY_SIZE."
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Request correlation ID, echoing the X-Request-Id response header."
+          },
+          "retryable": {
+            "type": "boolean",
+            "enum": [
+              false
+            ],
+            "description": "False because the request must be reduced before retrying."
           }
         }
       },
