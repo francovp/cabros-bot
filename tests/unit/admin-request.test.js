@@ -8,6 +8,7 @@ const {
 	createRequest,
 	operationDefinitions,
 	redactSecret,
+	sanitizeForHistory,
 	validateQuery,
 } = require('../../src/admin/admin-request');
 
@@ -161,6 +162,46 @@ describe('admin client safety', () => {
 		expect(jsonResult).toContain('[REDACTED]');
 		expect(jsonResult).not.toContain(secret);
 		expect(jsonResult).not.toContain(escapedSecret);
+	});
+
+	it('redacts credentials and Discord webhook URLs for history storage (#1159)', () => {
+		expect(sanitizeForHistory(null)).toBeNull();
+		expect(sanitizeForHistory(undefined)).toBeUndefined();
+		expect(sanitizeForHistory('')).toBe('');
+
+		// Key-value credentials
+		const jsonWithKeys = JSON.stringify({
+			apiKey: 'secret-key-1',
+			token: 'secret-token-2',
+			password: 'secret-password-3',
+			authorization: 'Bearer secret-auth-4',
+			discordWebhookUrl: 'https://discord.com/api/webhooks/123456789/token-5',
+			webhookUrl: 'https://discord.com/api/webhooks/987654321/token-6',
+		});
+		const sanitizedKeys = sanitizeForHistory(jsonWithKeys);
+		expect(sanitizedKeys).not.toContain('secret-key-1');
+		expect(sanitizedKeys).not.toContain('secret-token-2');
+		expect(sanitizedKeys).not.toContain('secret-password-3');
+		expect(sanitizedKeys).not.toContain('secret-auth-4');
+		expect(sanitizedKeys).not.toContain('token-5');
+		expect(sanitizedKeys).not.toContain('token-6');
+		expect(sanitizedKeys).not.toContain('123456789');
+		expect(sanitizedKeys).not.toContain('987654321');
+
+		// Standalone Discord webhook URLs (in text or non-credential key)
+		const standaloneDiscord = 'Notice: sent to https://discord.com/api/webhooks/11223344/my-discord-token for review';
+		const sanitizedUrl = sanitizeForHistory(standaloneDiscord);
+		expect(sanitizedUrl).toBe('Notice: sent to https://discord.com/api/webhooks/[REDACTED]/[REDACTED] for review');
+		expect(sanitizedUrl).not.toContain('11223344');
+		expect(sanitizedUrl).not.toContain('my-discord-token');
+
+		// discordapp.com and canary/ptb subdomains
+		expect(sanitizeForHistory('https://discordapp.com/api/webhooks/556677/token-app'))
+			.toBe('https://discordapp.com/api/webhooks/[REDACTED]/[REDACTED]');
+		expect(sanitizeForHistory('https://canary.discord.com/api/webhooks/889900/token-canary?wait=true'))
+			.toBe('https://canary.discord.com/api/webhooks/[REDACTED]/[REDACTED]?wait=true');
+		expect(sanitizeForHistory('https://ptb.discord.com/api/webhooks/334455/token-ptb'))
+			.toBe('https://ptb.discord.com/api/webhooks/[REDACTED]/[REDACTED]');
 	});
 
 	it('keeps confirmations on every sensitive Playground operation', () => {
