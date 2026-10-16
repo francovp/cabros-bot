@@ -3981,7 +3981,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/TradingPositionsResponse"
                 }
               }
             }
@@ -4074,7 +4074,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/TradingPnlSummaryResponse"
                 }
               }
             }
@@ -4164,7 +4164,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/TradingTradesResponse"
                 }
               }
             }
@@ -14560,6 +14560,459 @@
             "description": "Short SHA-256 fingerprint of the preview parameters and expiry."
           }
         }
+      },
+      "TradingPosition": {
+        "type": "object",
+        "required": [
+          "symbol",
+          "qty",
+          "lotCount",
+          "costBasis",
+          "avgEntryPrice",
+          "feesComplete",
+          "alertIds"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string",
+            "example": "BTCUSDT"
+          },
+          "qty": {
+            "type": "string",
+            "example": "0.001"
+          },
+          "lotCount": {
+            "type": "integer",
+            "example": 1
+          },
+          "costBasis": {
+            "type": "string",
+            "example": "60"
+          },
+          "avgEntryPrice": {
+            "type": "string",
+            "example": "60000"
+          },
+          "markPrice": {
+            "type": "string",
+            "nullable": true,
+            "example": "61000"
+          },
+          "unrealizedPnl": {
+            "type": "string",
+            "nullable": true,
+            "example": "1"
+          },
+          "feesComplete": {
+            "type": "boolean",
+            "example": true
+          },
+          "alertIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "TradingPositionsResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "environment",
+          "positions",
+          "count",
+          "unmatchedSellQty",
+          "scanTruncated",
+          "maxScan"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "environment": {
+            "type": "string",
+            "example": "testnet"
+          },
+          "positions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TradingPosition"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "example": 1
+          },
+          "unmatchedSellQty": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "scanTruncated": {
+            "type": "boolean",
+            "example": false
+          },
+          "maxScan": {
+            "type": "integer",
+            "example": 5000
+          }
+        },
+        "additionalProperties": false
+      },
+      "TradingPnlEquityPoint": {
+        "type": "object",
+        "required": [
+          "date",
+          "realizedPnl",
+          "cumulativePnl"
+        ],
+        "properties": {
+          "date": {
+            "type": "string",
+            "example": "2026-10-01"
+          },
+          "realizedPnl": {
+            "type": "string",
+            "example": "20"
+          },
+          "cumulativePnl": {
+            "type": "string",
+            "example": "20"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TradingPnlGroup": {
+        "type": "object",
+        "required": [
+          "key",
+          "tradeCount",
+          "realizedPnl",
+          "costBasisClosed",
+          "totalFees"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "example": "BTCUSDT"
+          },
+          "tradeCount": {
+            "type": "integer",
+            "example": 2
+          },
+          "realizedPnl": {
+            "type": "string",
+            "example": "10"
+          },
+          "costBasisClosed": {
+            "type": "string",
+            "example": "200"
+          },
+          "roiPct": {
+            "type": "string",
+            "nullable": true,
+            "example": "5"
+          },
+          "winRate": {
+            "type": "number",
+            "nullable": true,
+            "example": 0.5
+          },
+          "totalFees": {
+            "type": "string",
+            "example": "0.2"
+          }
+        },
+        "additionalProperties": false
+      },
+      "TradingPnlSummary": {
+        "type": "object",
+        "required": [
+          "tradeCount",
+          "realizedPnl",
+          "costBasisClosed",
+          "totalFees",
+          "maxDrawdown",
+          "feesComplete",
+          "openPositionCount",
+          "equitySeries"
+        ],
+        "properties": {
+          "tradeCount": {
+            "type": "integer",
+            "example": 2
+          },
+          "realizedPnl": {
+            "type": "string",
+            "example": "10"
+          },
+          "costBasisClosed": {
+            "type": "string",
+            "example": "200"
+          },
+          "roiPct": {
+            "type": "string",
+            "nullable": true,
+            "example": "5"
+          },
+          "winRate": {
+            "type": "number",
+            "nullable": true,
+            "example": 0.5
+          },
+          "totalFees": {
+            "type": "string",
+            "example": "0.2"
+          },
+          "unrealizedPnl": {
+            "type": "string",
+            "nullable": true,
+            "example": "0"
+          },
+          "profitFactor": {
+            "type": "string",
+            "nullable": true,
+            "example": "2"
+          },
+          "avgHoldMs": {
+            "type": "integer",
+            "nullable": true,
+            "example": 3600000
+          },
+          "maxDrawdown": {
+            "type": "string",
+            "example": "10"
+          },
+          "feesComplete": {
+            "type": "boolean",
+            "example": true
+          },
+          "openPositionCount": {
+            "type": "integer",
+            "example": 1
+          },
+          "equitySeries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TradingPnlEquityPoint"
+            }
+          },
+          "groupBy": {
+            "type": "string",
+            "example": "origin"
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TradingPnlGroup"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "TradingPnlSummaryResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "environment",
+          "summary",
+          "scanTruncated",
+          "maxScan"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "environment": {
+            "type": "string",
+            "example": "testnet"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/TradingPnlSummary"
+          },
+          "scanTruncated": {
+            "type": "boolean",
+            "example": false
+          },
+          "maxScan": {
+            "type": "integer",
+            "example": 5000
+          }
+        },
+        "additionalProperties": false
+      },
+      "TradingTrade": {
+        "type": "object",
+        "required": [
+          "id",
+          "environment",
+          "symbol",
+          "origin",
+          "setupType",
+          "qty",
+          "entryPrice",
+          "exitPrice",
+          "costBasis",
+          "proceeds",
+          "fees",
+          "feesComplete",
+          "realizedPnl",
+          "entryAt",
+          "exitAt",
+          "holdMs",
+          "alertIds"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "BTCUSDT:1001"
+          },
+          "environment": {
+            "type": "string",
+            "example": "testnet"
+          },
+          "symbol": {
+            "type": "string",
+            "example": "BTCUSDT"
+          },
+          "origin": {
+            "type": "string",
+            "example": "auto_trade"
+          },
+          "setupType": {
+            "type": "string",
+            "example": "breakout"
+          },
+          "exitOrderId": {
+            "type": "string",
+            "nullable": true,
+            "example": "1001"
+          },
+          "qty": {
+            "type": "string",
+            "example": "0.001"
+          },
+          "entryPrice": {
+            "type": "string",
+            "example": "60000"
+          },
+          "exitPrice": {
+            "type": "string",
+            "example": "61000"
+          },
+          "costBasis": {
+            "type": "string",
+            "example": "60"
+          },
+          "proceeds": {
+            "type": "string",
+            "example": "61"
+          },
+          "fees": {
+            "type": "string",
+            "example": "0.06"
+          },
+          "feesComplete": {
+            "type": "boolean",
+            "example": true
+          },
+          "realizedPnl": {
+            "type": "string",
+            "example": "0.94"
+          },
+          "roiPct": {
+            "type": "string",
+            "nullable": true,
+            "example": "1.5667"
+          },
+          "rMultiple": {
+            "type": "string",
+            "nullable": true,
+            "example": "2.5"
+          },
+          "entryAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "exitAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "holdMs": {
+            "type": "integer",
+            "example": 3600000
+          },
+          "alertIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "TradingTradesPagination": {
+        "type": "object",
+        "required": [
+          "limit",
+          "hasMore",
+          "nextCursor"
+        ],
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "example": 50
+          },
+          "hasMore": {
+            "type": "boolean",
+            "example": false
+          },
+          "nextCursor": {
+            "type": "string",
+            "nullable": true,
+            "example": null
+          }
+        },
+        "additionalProperties": false
+      },
+      "TradingTradesResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "environment",
+          "trades",
+          "count",
+          "pagination"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "environment": {
+            "type": "string",
+            "example": "testnet"
+          },
+          "trades": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TradingTrade"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "example": 1
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/TradingTradesPagination"
+          }
+        },
+        "additionalProperties": false
       },
       "Status": {
         "type": "object",

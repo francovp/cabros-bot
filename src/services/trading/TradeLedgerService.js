@@ -259,33 +259,49 @@ class TradeLedgerService {
 			}
 			const collection = firestore.collection(COLLECTION_NAME);
 			const recordedAt = new Date().toISOString();
+			let batchWritten = 0;
+			let batchDuplicates = 0;
+			let batchFailed = 0;
+			let lastFailureAt = null;
+
 			await Promise.all(records.map(async ({ id, data }) => {
-				this.durability.writesAttempted += 1;
 				try {
 					await collection.doc(id).create({ ...data, recordedAt });
-					result.written += 1;
-					this.durability.writesSucceeded += 1;
-					this.durability.consecutiveFailures = 0;
-					this.durability.lastWriteAt = recordedAt;
-					this.durability.lastErrorReason = null;
+					batchWritten += 1;
 					this.metrics.recordWriteSuccess(METRICS_DOMAIN);
 				} catch (error) {
 					if (error?.code === ALREADY_EXISTS || error?.code === 'already-exists') {
-						result.duplicates += 1;
-						this.durability.writesSucceeded += 1;
-						this.durability.consecutiveFailures = 0;
+						batchDuplicates += 1;
 						this.metrics.recordWriteSuccess(METRICS_DOMAIN);
 						return;
 					}
-					result.failed += 1;
-					this.durability.writesFailed += 1;
-					this.durability.consecutiveFailures += 1;
-					this.durability.lastFailureAt = new Date().toISOString();
-					this.durability.lastErrorReason = REASONS.UNAVAILABLE;
+					batchFailed += 1;
+					lastFailureAt = new Date().toISOString();
 					this.metrics.recordWriteFailure(METRICS_DOMAIN);
 					console.warn('[TradeLedgerService] fill write failed', { symbol: data.symbol, code: error?.code ?? null });
 				}
 			}));
+
+			result.written = batchWritten;
+			result.duplicates = batchDuplicates;
+			result.failed = batchFailed;
+
+			this.durability.writesAttempted += records.length;
+			this.durability.writesSucceeded += batchWritten + batchDuplicates;
+			this.durability.writesFailed += batchFailed;
+
+			if (batchWritten > 0) {
+				this.durability.lastWriteAt = recordedAt;
+			}
+
+			if (batchFailed > 0) {
+				this.durability.consecutiveFailures += 1;
+				this.durability.lastFailureAt = lastFailureAt || recordedAt;
+				this.durability.lastErrorReason = REASONS.UNAVAILABLE;
+			} else if (batchWritten > 0 || batchDuplicates > 0) {
+				this.durability.consecutiveFailures = 0;
+				this.durability.lastErrorReason = null;
+			}
 		} catch (error) {
 			console.warn('[TradeLedgerService] recordOrderFills failed:', error?.message || error);
 		}

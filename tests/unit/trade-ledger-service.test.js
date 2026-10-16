@@ -291,6 +291,42 @@ describe('TradeLedgerService', () => {
 		});
 	});
 
+	it('keeps readiness degraded after a partially failed fill batch', async () => {
+		process.env.ENABLE_TRADE_LEDGER = 'true';
+		const mock = createFirestoreMock();
+		const service = new TradeLedgerService({ firestore: mock.firestore });
+
+		let callCount = 0;
+		mock.create.mockImplementation(async () => {
+			callCount += 1;
+			if (callCount === 1) {
+				await new Promise((r) => setTimeout(r, 10));
+				return;
+			}
+			throw new Error('unavailable');
+		});
+
+		const result = await service.recordOrderFills({
+			environment: 'testnet',
+			order: {
+				...ORDER,
+				fills: [
+					{ price: '100', qty: '0.1', commission: '0', tradeId: 101 },
+					{ price: '100', qty: '0.1', commission: '0', tradeId: 102 },
+				],
+			},
+		});
+
+		expect(result).toEqual({ written: 1, duplicates: 0, failed: 1 });
+		expect(service.getStatus()).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			readiness: 'degraded',
+			consecutiveFailures: 1,
+			lastErrorReason: 'firestore_unavailable',
+		});
+	});
+
 	it('records read health metrics on listFills query success and failure', async () => {
 		process.env.ENABLE_TRADE_LEDGER = 'true';
 		const mock = createFirestoreMock();
