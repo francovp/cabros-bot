@@ -139,6 +139,16 @@ describe('Trade Ledger Endpoints (Integration)', () => {
 			expect(res.status).toBe(400);
 			expect(res.body.code).toBe('INVALID_REQUEST');
 		});
+
+		it('accepts ADMIN_API_KEY even when BINANCE_TRADING_API_KEY is configured', async () => {
+			process.env.ADMIN_API_KEY = 'admin-key';
+			process.env.BINANCE_TRADING_API_KEY = 'binance-key';
+			const res = await request(app)
+				.get('/api/trading/positions?environment=testnet')
+				.set('x-api-key', 'admin-key');
+			expect(res.status).toBe(200);
+			expect(res.body.success).toBe(true);
+		});
 	});
 
 	describe('GET /api/trading/positions', () => {

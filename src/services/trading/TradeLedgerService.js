@@ -26,7 +26,7 @@ const DEFAULT_MAX_SCAN = 5000;
 const MIN_MAX_SCAN = 1;
 const MAX_MAX_SCAN = 20000;
 const MARK_PRICE_TIMEOUT_MS = 3000;
-const ORIGINS = new Set(['manual', 'admin_alert', 'auto_trade']);
+const ORIGINS = new Set(['manual', 'admin_alert', 'auto_trade', 'alert']);
 const ENVIRONMENTS = new Set(['testnet', 'demo', 'live']);
 const MARK_PRICE_BASE_URLS = {
 	testnet: 'https://testnet.binance.vision',
@@ -108,6 +108,8 @@ function buildFillRecords({ environment, order, origin = 'manual', alertId = nul
 			let commissionQuote = null;
 			if (commissionAsset && commissionAsset === quoteAsset) commissionQuote = fromUnits(toUnits(commission));
 			else if (commissionAsset && commissionAsset === baseAsset) commissionQuote = multiply(commission, f.price);
+			const fillTime = f.time ?? f.transactTime ?? order.transactTime ?? order.updateTime ?? order.time ?? Date.now();
+			const fillFilledAt = toIso(fillTime);
 			return {
 				id: `${environment}:${symbol}:${f.tradeId}`,
 				data: {
@@ -128,7 +130,7 @@ function buildFillRecords({ environment, order, origin = 'manual', alertId = nul
 					origin: ORIGINS.has(origin) ? origin : 'manual',
 					setupType: typeof setupType === 'string' && setupType ? setupType : null,
 					tradeId: f.tradeId,
-					filledAt,
+					filledAt: fillFilledAt,
 				},
 			};
 		});
@@ -203,21 +205,49 @@ class TradeLedgerService {
 		return result;
 	}
 
-	async listFills({ environment } = {}) {
+	async listFills({ environment, limit, startAfter } = {}) {
 		const firestore = this._getFirestore();
 		if (!firestore) {
 			const error = new Error('Trade ledger storage is unavailable');
 			error.code = 'STORAGE_UNAVAILABLE';
 			throw error;
 		}
-		const maxScan = this.getMaxScan();
-		const snapshot = await firestore.collection(COLLECTION_NAME)
-			.where('environment', '==', environment)
-			.orderBy('filledAt', 'asc')
-			.limit(maxScan)
-			.get();
-		const fills = (snapshot.docs || []).map((doc) => doc.data()).filter((f) => f && f.environment === environment);
-		return { fills, scanTruncated: fills.length >= maxScan, maxScan };
+		const maxScan = limit !== undefined ? limit : this.getMaxScan();
+		const fills = [];
+		const BATCH_SIZE = Math.min(1000, maxScan);
+		let lastDoc = startAfter || null;
+
+		while (fills.length < maxScan) {
+			const fetchLimit = Math.min(BATCH_SIZE, maxScan - fills.length);
+			let query = firestore.collection(COLLECTION_NAME)
+				.where('environment', '==', environment)
+				.orderBy('filledAt', 'asc')
+				.limit(fetchLimit);
+
+			if (lastDoc && typeof query.startAfter === 'function') {
+				query = query.startAfter(lastDoc);
+			}
+
+			const snapshot = await query.get();
+			const docs = snapshot.docs || [];
+			if (docs.length === 0) break;
+
+			for (const doc of docs) {
+				const data = doc.data();
+				if (data && data.environment === environment) {
+					fills.push(data);
+				}
+			}
+			lastDoc = docs[docs.length - 1];
+			if (docs.length < fetchLimit) break;
+		}
+
+		return {
+			fills,
+			scanTruncated: fills.length >= maxScan,
+			maxScan,
+			lastDoc,
+		};
 	}
 
 	/** Fail-open mark prices: symbols whose ticker cannot be fetched are omitted. */

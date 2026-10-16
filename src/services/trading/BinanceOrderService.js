@@ -22,6 +22,7 @@ const CRYPTO_QUOTE_SUFFIXES = ['USDT', 'USDC', 'BUSD', 'FDUSD', 'TUSD', 'BTC', '
 const ALLOWED_ORDER_TYPES = new Set(['MARKET', 'LIMIT']);
 const ALLOWED_SIDES = new Set(['BUY', 'SELL']);
 const ALLOWED_TIME_IN_FORCE = new Set(['GTC', 'IOC', 'FOK']);
+const ALLOWED_ORIGINS = new Set(['manual', 'auto_trade', 'admin_alert', 'alert']);
 const DEFINITIVE_BINANCE_ERROR_CODES = new Set([-1003, -1015, -1021, -1034]);
 const RETRYABLE_BINANCE_ERROR_CODES = new Set([-1001, -1006, -1007]);
 const ACCOUNT_DEPENDENT_FILTERS = new Set([
@@ -119,6 +120,7 @@ async function reconcileOrder(client, symbol, clientOrderId) {
 						commission: t.commission,
 						commissionAsset: t.commissionAsset,
 						tradeId: t.id,
+						time: t.time,
 					}));
 				}
 			} catch {
@@ -366,6 +368,9 @@ function normalizeRequest(body) {
 			throw new BinanceOrderRequestError('origin must be a non-empty string');
 		}
 		origin = body.origin.trim().toLowerCase();
+		if (!ALLOWED_ORIGINS.has(origin)) {
+			throw new BinanceOrderRequestError(`origin must be one of: ${[...ALLOWED_ORIGINS].join(', ')}`);
+		}
 	}
 
 	let alertId;
@@ -948,6 +953,7 @@ function sanitizeFill(fill) {
 		commission: fill.commission,
 		commissionAsset: fill.commissionAsset,
 		tradeId: fill.tradeId,
+		time: fill.time,
 	}).filter(([, value]) => value !== undefined));
 }
 

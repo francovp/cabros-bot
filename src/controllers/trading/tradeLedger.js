@@ -48,6 +48,32 @@ function parseDateParam(val) {
 	return Number.isNaN(parsed) ? undefined : parsed;
 }
 
+async function loadAllFills(environment) {
+	let fills = [];
+	let lastDoc = null;
+	const maxScan = tradeLedgerService.getMaxScan();
+
+	while (true) {
+		const result = await tradeLedgerService.listFills({
+			environment,
+			limit: maxScan,
+			startAfter: lastDoc,
+		});
+		fills = fills.concat(result.fills);
+		if (!result.scanTruncated || result.fills.length === 0) {
+			break;
+		}
+		lastDoc = result.lastDoc;
+		if (!lastDoc) break;
+	}
+
+	return {
+		fills,
+		scanTruncated: false,
+		maxScan,
+	};
+}
+
 async function getPositions(req, res) {
 	if (!validateLedgerReadiness(res)) return;
 	const environment = resolveEnvironment(req.query);
@@ -60,7 +86,7 @@ async function getPositions(req, res) {
 	}
 
 	try {
-		const { fills, scanTruncated, maxScan } = await tradeLedgerService.listFills({ environment });
+		const { fills, scanTruncated, maxScan } = await loadAllFills(environment);
 		const { openLots, unmatchedSellQty } = matchFifo(fills);
 		const symbols = [...new Set(openLots.map((l) => l.symbol))];
 		const markPrices = await tradeLedgerService.fetchMarkPrices(symbols, environment);
@@ -130,7 +156,7 @@ async function getPnlSummary(req, res) {
 	}
 
 	try {
-		const { fills, scanTruncated, maxScan } = await tradeLedgerService.listFills({ environment });
+		const { fills, scanTruncated, maxScan } = await loadAllFills(environment);
 		let { roundTrips, openLots, unmatchedSellQty } = matchFifo(fills);
 
 		if (fromMs !== null || toMs !== null) {
@@ -200,7 +226,7 @@ async function getTrades(req, res) {
 	const cursor = req.query.cursor ? String(req.query.cursor).trim() : null;
 
 	try {
-		const { fills, scanTruncated, maxScan } = await tradeLedgerService.listFills({ environment });
+		const { fills, scanTruncated, maxScan } = await loadAllFills(environment);
 		let { roundTrips } = matchFifo(fills);
 
 		if (symbolFilter) {

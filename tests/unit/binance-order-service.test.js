@@ -2487,6 +2487,20 @@ describe('BinanceOrderService', () => {
 				setupType: '',
 			})).rejects.toMatchObject({ message: 'setupType must be a non-empty string' });
 		});
+
+		it('rejects origin values not in the allowed enum', async () => {
+			const service = createBinanceOrderService();
+
+			await expect(service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: 0.001,
+				price: 50000,
+				dryRun: true,
+				origin: 'invalid_origin',
+			})).rejects.toMatchObject({ message: expect.stringContaining('origin must be one of:') });
+		});
 	});
 });
 

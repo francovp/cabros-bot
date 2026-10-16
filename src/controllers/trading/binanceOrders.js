@@ -11,6 +11,7 @@ const {
 const { getIdempotencyKey } = require('../../lib/idempotency');
 const { binanceOrderAuditService } = require('../../services/trading/BinanceOrderAuditService');
 const { tradeLedgerService } = require('../../services/trading/TradeLedgerService');
+const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 
 async function postBinanceOrder(req, res) {
 	const startTime = Date.now();
@@ -55,14 +56,17 @@ async function postBinanceOrder(req, res) {
 		});
 
 		if (!result.dryRun && result.order) {
-			tradeLedgerService.recordOrderFills({
-				environment: result.environment,
-				order: result.order,
-				origin: req.body?.origin,
-				alertId: req.body?.alertId,
-			}).catch((err) => {
-				console.warn('[BinanceOrdersController] trade ledger fill recording failed:', err?.message || err);
-			});
+			trackBackgroundTask(
+				tradeLedgerService.recordOrderFills({
+					environment: result.environment,
+					order: result.order,
+					origin: req.body?.origin,
+					alertId: req.body?.alertId,
+					setupType: req.body?.setupType,
+				}).catch((err) => {
+					console.warn('[BinanceOrdersController] trade ledger fill recording failed:', err?.message || err);
+				}),
+			);
 		}
 
 		return res.status(result.dryRun ? 200 : 201).json(result);
@@ -165,12 +169,14 @@ async function getBinanceOrders(req, res) {
 		});
 
 		if (result.order && Array.isArray(result.order.fills) && result.order.fills.length > 0) {
-			tradeLedgerService.recordOrderFills({
-				environment: result.environment,
-				order: result.order,
-			}).catch((err) => {
-				console.warn('[BinanceOrdersController] trade ledger fill recording failed on reconcile:', err?.message || err);
-			});
+			trackBackgroundTask(
+				tradeLedgerService.recordOrderFills({
+					environment: result.environment,
+					order: result.order,
+				}).catch((err) => {
+					console.warn('[BinanceOrdersController] trade ledger fill recording failed on reconcile:', err?.message || err);
+				}),
+			);
 		}
 
 		return res.status(200).json(result);

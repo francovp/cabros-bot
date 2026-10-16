@@ -31,13 +31,24 @@ function createFirestoreMock({ createImpl } = {}) {
 		where: jest.fn((field, op, value) => { queryState.where = [field, op, value]; return query; }),
 		orderBy: jest.fn((field, dir) => { queryState.orderBy = [field, dir]; return query; }),
 		limit: jest.fn((n) => { queryState.limit = n; return query; }),
+		startAfter: jest.fn((doc) => { queryState.startAfter = doc; return query; }),
 		get: jest.fn(async () => {
-			const [, , env] = queryState.where;
-			const rows = [...docs.values()]
+			const [, , env] = queryState.where || [];
+			let rows = [...docs.values()]
 				.filter((d) => d.environment === env)
-				.sort((a, b) => b.filledAt.localeCompare(a.filledAt))
-				.slice(0, queryState.limit);
-			return { docs: rows.map((d) => ({ data: () => d })) };
+				.sort((a, b) => a.filledAt.localeCompare(b.filledAt));
+			if (queryState.startAfter) {
+				const afterData = typeof queryState.startAfter.data === 'function' ? queryState.startAfter.data() : queryState.startAfter;
+				const afterId = queryState.startAfter.id;
+				const idx = rows.findIndex((r) => (afterId && `${r.environment}:${r.symbol}:${r.tradeId}` === afterId) || (afterData && r.tradeId === afterData.tradeId));
+				if (idx >= 0) {
+					rows = rows.slice(idx + 1);
+				}
+			}
+			if (queryState.limit !== undefined) {
+				rows = rows.slice(0, queryState.limit);
+			}
+			return { docs: rows.map((d) => ({ id: `${d.environment}:${d.symbol}:${d.tradeId}`, data: () => d })) };
 		}),
 	};
 	return {
@@ -93,6 +104,23 @@ describe('buildFillRecords', () => {
 		const [record] = buildFillRecords({ environment: 'live', order: ORDER, origin: 'hacker' });
 		expect(record.data.origin).toBe('manual');
 	});
+
+	it('preserves documented origin alert and setupType', () => {
+		const [record] = buildFillRecords({ environment: 'live', order: ORDER, origin: 'alert', setupType: 'breakout' });
+		expect(record.data.origin).toBe('alert');
+		expect(record.data.setupType).toBe('breakout');
+	});
+
+	it('preserves trade execution time when present on fills', () => {
+		const orderWithTimes = {
+			...ORDER,
+			fills: [
+				{ price: '100', qty: '0.6', commission: '0.06', commissionAsset: 'USDT', tradeId: 11, time: 1760000000000 },
+			],
+		};
+		const [record] = buildFillRecords({ environment: 'testnet', order: orderWithTimes });
+		expect(record.data.filledAt).toBe(new Date(1760000000000).toISOString());
+	});
 });
 
 describe('TradeLedgerService', () => {
@@ -143,6 +171,20 @@ describe('TradeLedgerService', () => {
 		expect(result.fills).toHaveLength(2);
 		expect(result.fills.every((f) => f.environment === 'testnet')).toBe(true);
 		expect(result.scanTruncated).toBe(true);
+	});
+
+	it('paginates through subsequent fills using startAfter', async () => {
+		process.env.ENABLE_TRADE_LEDGER = 'true';
+		const mock = createFirestoreMock();
+		const service = new TradeLedgerService({ firestore: mock.firestore });
+		await service.recordOrderFills({ environment: 'testnet', order: ORDER });
+		const page1 = await service.listFills({ environment: 'testnet', limit: 2 });
+		expect(page1.fills).toHaveLength(2);
+		expect(page1.scanTruncated).toBe(true);
+
+		const page2 = await service.listFills({ environment: 'testnet', limit: 2, startAfter: page1.lastDoc });
+		expect(page2.fills).toHaveLength(1);
+		expect(page2.scanTruncated).toBe(false);
 	});
 
 	it('falls back to aggregate execution fields when fills array is absent', () => {

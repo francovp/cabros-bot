@@ -13938,6 +13938,12 @@
           },
           "origin": {
             "type": "string",
+            "enum": [
+              "manual",
+              "auto_trade",
+              "admin_alert",
+              "alert"
+            ],
             "description": "Optional provenance origin for the trade ledger (e.g. manual, auto_trade, alert)."
           },
           "alertId": {
