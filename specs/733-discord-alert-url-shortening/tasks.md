@@ -12,7 +12,7 @@
 - [x] T005 Add provider hostname lookalikes and use parsed exact hostnames in `tests/integration/cross-channel-url-shortening.test.js`.
 - [x] T006 Run the focused cross-channel integration suite.
 - [x] T007 Run focused shortener, cross-channel integration, Discord, and notification-bootstrap suites.
-- [ ] T008 Push the review fix, clear applicable PR review threads, and verify CI and OpenClaw deployment evidence.
+- [x] T008 Push the review fix, resolve applicable PR review threads, and verify CI and deployment availability. GitHub CI passed (285 suites, 6,820 tests; CodeQL, gitleaks, and analyzers passed). Firebase Hosting could not create a preview because its channel quota was exhausted (`RESOURCE_EXHAUSTED`), which is non-blocking per the automation instructions. OpenClaw timed out at the PR candidate URL, so live preview and API E2E remain unavailable for post-merge verification.
 
 ## Dependencies
 
