@@ -160,6 +160,8 @@ Unlike equity market data, this feature **does** run a bounded startup probe (5s
 - `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` - Total budget envelope for the synchronous webhook enrichment flow (default: `12000`, valid range: `1000`-`120000`). When exceeded, all in-flight MCP calls are aborted and the enrichment fails open, preventing the alert webhook from being blocked for too long.
 - `TRADINGVIEW_MCP_DEFAULT_EXCHANGE` - Default exchange when not present in signal (default: `BINANCE`; one exchange token starting with a letter or digit and containing letters, digits, `.`, `_`, or `-`); Firebase Remote Config can override this environment fallback
 - `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` - Default timeframe fallback (default: `1D` for `/api/webhook/expanded-analysis-alert`, `1h` for webhook signal enrichment)
+- `ENABLE_TRADINGVIEW_MCP_CACHE` - Enable a bounded, process-local TTL cache for successful identical MCP tool calls (`true` or `false`, default: `false`; Firebase Remote Config eligible)
+- `TRADINGVIEW_MCP_CACHE_TTL_MS` - Cache lifetime in milliseconds (`10000`-`600000`, default: `90000`; Firebase Remote Config eligible)
 - `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` - Enable volume confirmation validation for TradingView alerts (`true` or `false`, default: `false`)
 - `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` - Enable optional `combined_analysis` confluence enrichment for TradingView webhook alerts (`true` or `false`, default: `false`)
 - `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` - Also call `multi_timeframe_analysis` during confluence enrichment (`true` or `false`, default: `false`)

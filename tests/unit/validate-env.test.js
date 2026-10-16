@@ -67,6 +67,7 @@ describe('validate-env', () => {
 	it('reports numeric values outside documented bounds and rejects fractional integers', () => {
 		process.env.TRADINGVIEW_MCP_TIMEOUT_MS = '10';
 		process.env.TRADINGVIEW_MCP_MAX_RETRIES = '1.5';
+		process.env.TRADINGVIEW_MCP_CACHE_TTL_MS = '9999';
 		process.env.GROUNDING_MAX_SOURCES = '0';
 		process.env.REQUEST_TIMEOUT_MS = '500';
 
@@ -75,6 +76,7 @@ describe('validate-env', () => {
 		expect(variables).toEqual(expect.arrayContaining([
 			'TRADINGVIEW_MCP_TIMEOUT_MS',
 			'TRADINGVIEW_MCP_MAX_RETRIES',
+			'TRADINGVIEW_MCP_CACHE_TTL_MS',
 			'GROUNDING_MAX_SOURCES',
 			'REQUEST_TIMEOUT_MS',
 		]));
