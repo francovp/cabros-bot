@@ -19,6 +19,7 @@ const persistentWriteHealthSchema = require('../../src/openapi/openapi.json')
 const { getPromptService } = require('../../src/services/prompts');
 const { signalClassMetrics } = require('../../src/services/alerts/signalClassifier');
 const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
+const { resetAdminAuthReadinessForTesting } = require('../../src/lib/adminAuth');
 const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
 const newsAnalysisStorageService = require('../../src/services/storage/NewsAnalysisStorageService');
 const promptReadiness = require('../../src/services/prompts/promptReadiness');
@@ -131,6 +132,7 @@ describe('Status endpoints', () => {
 		groundingMetrics.resetForTesting();
 		deliveryMetricsService.resetForTesting();
 		firestoreWriteMetricsService.resetForTesting();
+		resetAdminAuthReadinessForTesting();
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
 		tradingViewMcpService.enrichmentEvents = savedTradingViewEnrichmentEvents;
@@ -548,10 +550,11 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.cloudflareAig.enabled).toBe(false);
 	});
 
-	it('reports Cloudflare AI Gateway when enabled', async () => {
+	it('reports Cloudflare AI Gateway as ready only when it is actually the routed provider', async () => {
 		process.env.ENABLE_CLOUDFLARE_AIG = 'true';
 		process.env.CF_AIG_TOKEN = 'cloudflare-token';
 		process.env.CF_AIG_BASE_URL = 'https://gateway.ai.cloudflare.com/v1/xyz/default/compat';
+		process.env.MODEL_PROVIDER = 'cloudflare';
 
 		const response = await request(app)
 			.get('/api/status')
@@ -562,8 +565,124 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.cloudflareAig).toEqual({
 			enabled: true,
 			configured: true,
+			routed: true,
+			provider: 'cloudflare',
 			ready: true,
 			status: 'ready',
+		});
+	});
+
+	it('reports Firebase admin auth as disabled by default', async () => {
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firebaseAdminAuth).toBe(false);
+		expect(response.body.dependencies.adminAuth).toMatchObject({
+			enabled: false,
+			provider: null,
+			signIn: null,
+			verifierConfigured: false,
+			browserConfigConfigured: false,
+			ready: false,
+			status: 'disabled',
+			verificationSuccessCount: 0,
+			verifierUnavailableCount: 0,
+			consecutiveFailures: 0,
+			lastSuccessAt: null,
+			lastUnavailableAt: null,
+		});
+	});
+
+	it('reports Firebase admin auth when enabled but not yet proven by a sign-in', async () => {
+		process.env.ENABLE_FIREBASE_ADMIN_AUTH = 'true';
+		process.env.FIREBASE_WEB_API_KEY = 'web-key';
+		process.env.FIREBASE_AUTH_DOMAIN = 'test-project.firebaseapp.com';
+		process.env.FIREBASE_PROJECT_ID = 'test-project';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firebaseAdminAuth).toBe(true);
+		expect(response.body.dependencies.adminAuth).toMatchObject({
+			enabled: true,
+			provider: 'firebase',
+			signIn: 'email-password',
+			verifierConfigured: true,
+			browserConfigConfigured: true,
+			apiKeyFallbackConfigured: true,
+			ready: false,
+			status: 'unverified',
+		});
+	});
+
+	it('never leaks Firebase Web configuration values through the status payload', async () => {
+		process.env.ENABLE_FIREBASE_ADMIN_AUTH = 'true';
+		process.env.FIREBASE_WEB_API_KEY = 'web-key-that-must-not-leak';
+		process.env.FIREBASE_AUTH_DOMAIN = 'test-project.firebaseapp.com';
+		process.env.FIREBASE_PROJECT_ID = 'test-project';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(JSON.stringify(response.body.dependencies.adminAuth))
+			.not.toContain('web-key-that-must-not-leak');
+		expect(JSON.stringify(response.body.dependencies.adminAuth))
+			.not.toContain('test-project.firebaseapp.com');
+	});
+
+	/**
+	 * Issue #1115: `ENABLE_CLOUDFLARE_AIG` does not select the runtime provider —
+	 * `MODEL_PROVIDER` does. Deriving `ready` from env-var presence alone made the
+	 * documented enablement steps report `ready: true` while `MODEL_PROVIDER=gemini`
+	 * sent 100% of LLM traffic straight to Google and zero requests touched the
+	 * gateway. Credentials present but not routed must not read as ready.
+	 */
+	it('does not report Cloudflare AI Gateway as ready when credentials are present but it is not the routed provider', async () => {
+		process.env.ENABLE_CLOUDFLARE_AIG = 'true';
+		process.env.CF_AIG_TOKEN = 'cloudflare-token';
+		process.env.CF_AIG_BASE_URL = 'https://gateway.ai.cloudflare.com/v1/xyz/default/compat';
+		process.env.MODEL_PROVIDER = 'gemini';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.cloudflareAig).toBe(true);
+		expect(response.body.dependencies.cloudflareAig).toEqual({
+			enabled: true,
+			configured: true,
+			routed: false,
+			provider: 'gemini',
+			ready: false,
+			status: 'inactive',
+		});
+	});
+
+	it('does not report Cloudflare AI Gateway as ready when it is the routed provider but credentials are missing', async () => {
+		process.env.ENABLE_CLOUDFLARE_AIG = 'true';
+		process.env.MODEL_PROVIDER = 'cloudflare';
+		delete process.env.CF_AIG_TOKEN;
+		delete process.env.CF_AIG_BASE_URL;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.cloudflareAig).toEqual({
+			enabled: true,
+			configured: false,
+			routed: true,
+			provider: 'cloudflare',
+			ready: false,
+			status: 'misconfigured',
 		});
 	});
 

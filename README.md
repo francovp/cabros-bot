@@ -238,7 +238,7 @@ The Remote Config bootstrap fetch uses environment values because the published 
 Notifications are dispatched concurrently across enabled channels. For Discord, transient rate limits and server errors are retried according to `DISCORD_MAX_RETRIES` and bounded by `DISCORD_MAX_TOTAL_RETRY_WAIT_MS`. Long messages exceeding platform limits are automatically split into sequential chunks with preserved markdown formatting. See [Multi-Channel Alerts Guide](docs/notifications.md).
 
 ### AI Provider Routing & Grounding
-When configuring AI providers, `MODEL_PROVIDER=cloudflare` selects Cloudflare runtime routing, whereas `ENABLE_CLOUDFLARE_AIG` only exposes Cloudflare readiness in status/capabilities. Gemini Grounding provides web search citations and confidence scores for market alerts. See [AI Grounding & Prompts](docs/ai-grounding.md).
+When configuring AI providers, `MODEL_PROVIDER=cloudflare` selects Cloudflare runtime routing, whereas `ENABLE_CLOUDFLARE_AIG` only exposes Cloudflare readiness in status/capabilities. Because the flag alone does not route traffic, `dependencies.cloudflareAig` reports `provider` and `routed` alongside `ready`: credentials present while another provider is selected yield `ready: false` and `status: "inactive"`, so an operator can never read `ready` as proof that requests traverse the gateway. Gemini Grounding provides web search citations and confidence scores for market alerts. See [AI Grounding & Prompts](docs/ai-grounding.md).
 
 ### Sentiment Score Calibration
 
@@ -478,6 +478,25 @@ Setting the variable is **necessary but not sufficient**, because this layer is 
 `mode`/`backend` keep reporting configured *intent* (`durable`/`firestore`) so the target stays visible while broken, and `failOpen` is always `true`: a degraded deployment still delivers alerts, it just cannot suppress a duplicate after a restart or across replicas. `consecutiveFailures` clears on the next success, so a transient outage self-heals without a restart. Counters are process-local and a status read never counts as a durable attempt.
 
 `expiresAt` on each document is only honoured once Firestore's TTL policy exists, so run `bash ops/configure-operational-collection-retention.sh` once per Firebase project; until then the collection grows without bound. Rollback is `false` plus a redeploy — no code change. See [Environment Configuration](docs/environment-configuration.md#verifying-idempotency-storage-is-actually-durable).
+
+### Firebase Admin Auth Readiness
+`ENABLE_FIREBASE_ADMIN_AUTH=true` lets the `/admin` console authenticate with Firebase ID tokens instead of pasting `WEBHOOK_API_KEY` into the browser. `admin.viewer` authorizes reads, `admin.operator` authorizes mutations, and `verifyIdToken(token, true)` fails closed for expired, revoked, disabled, malformed, or wrong-project tokens. Webhook paths are unaffected and still require the API key.
+
+`GET /api/status` and `GET /api/capabilities` expose `featureFlags.firebaseAdminAuth` (the gate) and a non-sensitive `dependencies.adminAuth` block built by `getAdminAuthStatus()`. `verifierConfigured` reports credential **shape** only — the server holds something it *could* verify with — so `ready` is deliberately **not** derived from it. `ready` requires an observed successful `verifyIdToken()`:
+
+| `status` | Meaning |
+| :--- | :--- |
+| `disabled` | `ENABLE_FIREBASE_ADMIN_AUTH` is not `true`. |
+| `misconfigured` | Enabled, but the server has no verifier credentials. |
+| `unverified` | Configured, but no token has verified yet. Not a failure — and not health. It is the normal state right after every deploy. |
+| `ready` | A Firebase ID token has actually verified. |
+| `degraded` | Defensive, not routine: credential shape is complete but the Firebase Admin SDK could not produce an Auth instance (`ADMIN_AUTH_UNAVAILABLE`). An access decision still fails closed. |
+
+`degraded` is ranked **below** `misconfigured`, so it can only surface while `verifierConfigured` is `true`. A deployment that simply has no verifier credentials reports `misconfigured`, never `degraded`, and never inflates `verifierUnavailableCount` in a state that hides it: the absent-credential case is a configuration verdict, not an outage.
+
+**A rejected bearer token is never recorded.** Expired, revoked, wrong-project and random-garbage tokens are indistinguishable to `verifyIdToken()`, so counting them would let any unauthenticated caller flip the dependency to `degraded` with a single request — turning a monitoring surface into a one-request DoS. Only a verifier that cannot be *reached* degrades the block. A verified token **without** an admin role counts as a success, because the token verified and the role decision is an authorization outcome, not a dependency fault.
+
+`getAdminAuthStatus()` is booleans and counters only — the Firebase Web config stays behind `/admin/auth-config` and is never echoed into a status payload, and `/api/public/status` uses an explicit three-dependency allow-list that does not include this block. Counters are process-local and reset on restart, so `unverified` after a deploy is expected. See [API Reference](docs/api-reference.md#get-apistatus).
 
 ### Durable News-Monitor Analysis Records
 

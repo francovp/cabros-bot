@@ -184,6 +184,17 @@ Implement the following security practices to safeguard endpoints and credential
 - **API Key Fallback Warning**: Using API keys in query parameters is supported for client compatibility but is not recommended due to exposure risk in server logs or proxy middleware.
 - **Authenticated API Requests**: When testing or calling deployed protected endpoints, use the `WEBHOOK_API_KEY` environment variable through the `x-api-key` header. Never expose the value in output, logs, URLs, query strings, or committed files.
 
+### Firebase Admin Auth Readiness Is Proven, Not Shaped (Issue #1134)
+
+`GET /api/status` and `GET /api/capabilities` expose `featureFlags.firebaseAdminAuth` (the `ENABLE_FIREBASE_ADMIN_AUTH` gate) and a non-sensitive `dependencies.adminAuth` block built by `getAdminAuthStatus()` in `src/lib/adminAuth.js`. This is the **fourth** instance of the repo's "shape is not readiness" rule, after `firebaseRemoteConfig.ready` (#598), `equityMarketData.ready` (#1116), and Firestore `readHealth` (#1285) — do not fold `readiness` back into the credential flags.
+
+- `verifierConfigured` is credential **shape** only. `ready` is true only after a `verifyIdToken()` call has actually resolved in this process, so `status` is `disabled` / `misconfigured` / `unverified` / `ready` / `degraded`. `degraded` is defensive and ranked *below* `misconfigured`, so it can only surface while `verifierConfigured` is `true` — a deployment with no verifier credentials reports `misconfigured`, and its `verifierUnavailableCount` must not be read as a live outage. Counters are process-local, so `unverified` is the normal post-deploy state.
+- **A rejected bearer token is never recorded.** `verifyIdToken()` rejects an expired, revoked, wrong-project and random-garbage token indistinguishably. Recording it would let any unauthenticated caller flip the dependency to `degraded` with one request — turning a monitoring surface into a one-request DoS. Only `getFirebaseAuth() === null` (`ADMIN_AUTH_UNAVAILABLE`) degrades it. A verified token *without* an admin role counts as a **success**, because the token verified and the role decision is an authorization outcome.
+- Gate state and knowably-absent credentials take precedence over observed health, and a later success clears `consecutiveFailures` without a restart.
+- The projection is booleans and counters only. The Firebase Web config stays behind `/admin/auth-config` and is never echoed into a status payload; `/api/public/status` uses an explicit three-dependency allow-list and does not include this block.
+
+Coverage: `tests/unit/admin-auth-status.test.js` (state matrix, the rejected-token anti-false-alarm invariant, self-healing, no credential leakage), `tests/integration/status-endpoint.test.js`, `tests/unit/postman-collection.test.js`, and the `AdminAuthDependency` schema in `src/openapi/openapi.json`. The unit suite mocks `firestoreConfig` deliberately — a developer machine holding a well-known gcloud ADC file would otherwise make credential shape true regardless of which variables a test deletes.
+
 ---
 
 ## Environment and runtime behavior (discoverable)
@@ -1750,7 +1761,7 @@ This feature introduces integration of the official `openai` SDK to interact wit
 
 **Configuration**:
 - `MODEL_PROVIDER=cloudflare` — Selects Cloudflare AI Gateway for runtime LLM routing when credentials validate.
-- `ENABLE_CLOUDFLARE_AIG` — Set to `'true'` only to expose Cloudflare readiness in `/api/status` and `/api/capabilities`; it does not select the runtime provider.
+- `ENABLE_CLOUDFLARE_AIG` — Set to `'true'` only to expose Cloudflare readiness in `/api/status` and `/api/capabilities`; it does not select the runtime provider. Issue #1115: `dependencies.cloudflareAig` also reports `provider` (the selected `MODEL_PROVIDER`) and `routed` (`MODEL_PROVIDER === 'cloudflare'`), and `ready` requires all three of enabled, configured, and routed. Credentials present while another provider is selected report `ready: false` / `status: "inactive"` instead of the previous `ready: true`, which let the documented enablement steps claim readiness while every request still went to that provider. Runtime routing additionally swaps Gemini Grounding for OpenAI-compatible chat completions, which carry no GoogleSearch tool and bypass the `GEMINI_MODEL_NAME_FALLBACK` path.
 - `CF_AIG_TOKEN` — Cloudflare API Gateway access token.
 - `CF_AIG_BASE_URL` — Cloudflare gateway compatibility base URL.
 - `CF_AIG_MODEL` — The gateway target model (e.g., `google-ai-studio/gemini-2.5-flash`). Falls back to `google-ai-studio/gemini-2.5-flash` for status reporting and runtime configuration checks.
