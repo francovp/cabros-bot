@@ -2,6 +2,7 @@ const NotificationChannel = require('./NotificationChannel');
 const WhatsAppMarkdownFormatter = require('./formatters/whatsappMarkdownFormatter');
 const { splitMessageIntoChunks } = require('../../lib/messageHelper');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const sleepWithSignal = require('../../lib/sleepWithSignal');
 
 const DEFAULT_TIMEOUT_MS = 10000;
 const DISCORD_MESSAGE_LIMIT = 2000;
@@ -15,27 +16,6 @@ const DEFAULT_MAX_UNHEALTHY_DURATION_MS = 300000;
 const DISCORD_WEBHOOK_HOST_PATTERN = /^(?:[a-z0-9-]+\.)*discord(?:app)?\.com$/i;
 const DISCORD_WEBHOOK_PATH_PATTERN = /^\/api\/webhooks\/\d+\/[A-Za-z0-9_-]+(?:\/.*)?$/;
 const ROTATION_STRATEGIES = new Set(['round-robin', 'random']);
-
-function sleep(ms) {
-	return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function sleepWithSignal(ms, signal) {
-	if (!signal) return sleep(ms);
-	if (signal.aborted) return Promise.reject(new Error(signal.reason?.message || signal.reason || 'Operation aborted'));
-	return new Promise((resolve, reject) => {
-		const timeoutId = setTimeout(() => {
-			signal.removeEventListener('abort', onAbort);
-			resolve();
-		}, ms);
-		const onAbort = () => {
-			clearTimeout(timeoutId);
-			signal.removeEventListener('abort', onAbort);
-			reject(new Error(signal.reason?.message || signal.reason || 'Operation aborted'));
-		};
-		signal.addEventListener('abort', onAbort, { once: true });
-	});
-}
 
 function parseEnvInt(envVar, defaultValue) {
 	if (!process.env[envVar]) return defaultValue;
@@ -93,7 +73,14 @@ class DiscordService extends NotificationChannel {
 			? config.rotationStrategy
 			: 'round-robin';
 		this.logger = config.logger;
-		this.formatter = config.formatter || new WhatsAppMarkdownFormatter();
+		this.urlShortener = config.urlShortener || null;
+		this.formatter = config.formatter || new WhatsAppMarkdownFormatter({
+			logger: this.logger,
+			urlShortener: this.urlShortener,
+		});
+		if (config.formatter && !this.formatter.urlShortener && this.urlShortener) {
+			this.formatter.urlShortener = this.urlShortener;
+		}
 		this.enabled = false;
 		this.rotationIndex = 0;
 		this.healthState = new Map();
@@ -337,6 +324,7 @@ class DiscordService extends NotificationChannel {
 
 	async send(alert = {}, options = {}) {
 		const startedAt = Date.now();
+		let totalAttempts = 0;
 		try {
 			const overrideUrl = alert.discordWebhookUrl;
 			if (overrideUrl) {
@@ -345,6 +333,7 @@ class DiscordService extends NotificationChannel {
 						success: false,
 						channel: 'discord',
 						error: 'Invalid DISCORD_WEBHOOK_URL override',
+						attemptCount: 0,
 						durationMs: Date.now() - startedAt,
 					};
 				}
@@ -357,12 +346,12 @@ class DiscordService extends NotificationChannel {
 					success: false,
 					channel: 'discord',
 					error: 'Missing DISCORD_WEBHOOK_URL',
+					attemptCount: 0,
 					durationMs: Date.now() - startedAt,
 				};
 			}
 
 			let lastResult = null;
-			let totalAttempts = 0;
 			const tried = new Set();
 			for (let attempt = 0; attempt < candidates.length; attempt += 1) {
 				const url = this.pickNextWebhookUrl();
@@ -372,7 +361,10 @@ class DiscordService extends NotificationChannel {
 				totalAttempts += result.attemptCount || 0;
 				lastResult = result;
 				if (result.success) {
-					return result;
+					return {
+						...result,
+						attemptCount: totalAttempts,
+					};
 				}
 				if (result.statusCode === 429) {
 					return {
@@ -397,6 +389,7 @@ class DiscordService extends NotificationChannel {
 				success: false,
 				channel: 'discord',
 				error: error.message,
+				attemptCount: totalAttempts,
 				durationMs: Date.now() - startedAt,
 			};
 		}
@@ -454,6 +447,7 @@ class DiscordService extends NotificationChannel {
 			messageId: messageIds.join(','),
 			messageIds,
 			messageCount: messageIds.length,
+			attemptCount: totalAttempts,
 			durationMs: Date.now() - startedAt,
 			...(isChunked ? {
 				splitMessageCount: chunks.length,
@@ -472,12 +466,13 @@ class DiscordService extends NotificationChannel {
 
 	async formatAlert(alert = {}) {
 		const signalClass = alert.signalClass || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.signalClass : undefined);
+		const session = alert.session || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.session : undefined);
 		if (alert.enriched && typeof alert.enriched === 'object') {
-			return this.formatter.formatEnriched(alert.enriched, { signalClass });
+			return await this.formatter.formatEnriched(alert.enriched, { signalClass, session });
 		}
 
 		return typeof alert.text === 'string'
-			? this.formatter.format(alert.text, { signalClass })
+			? this.formatter.format(alert.text, { signalClass, session })
 			: '';
 	}
 
@@ -571,6 +566,7 @@ class DiscordService extends NotificationChannel {
 						channel: 'discord',
 						error: `Discord webhook ${response.status}: ${errorText}`,
 						statusCode: response.status,
+						attemptCount: attempt,
 					};
 				}
 
@@ -625,6 +621,7 @@ class DiscordService extends NotificationChannel {
 						channel: 'discord',
 						error: signal.reason?.message || signal.reason || 'Operation aborted',
 						aborted: true,
+						attemptCount: attempt,
 					};
 				}
 				if (error && error.name === 'AbortError') {
@@ -632,6 +629,7 @@ class DiscordService extends NotificationChannel {
 						success: false,
 						channel: 'discord',
 						error: 'Discord webhook request timeout',
+						attemptCount: attempt,
 					};
 				}
 

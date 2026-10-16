@@ -366,8 +366,14 @@ function createBurstAggregator(options = {}) {
 
 			let aggregateResults = null;
 			try {
+				const burstSession = members.find((m) => m?.parsedSignal?.session)?.parsedSignal?.session
+					|| members.find((m) => m?.alert?.session)?.alert?.session;
 				aggregateResults = await members[0].deliver({
-					alert: { text: aggregateText, source: 'webhook-alert-burst' },
+					alert: {
+						text: aggregateText,
+						source: 'webhook-alert-burst',
+						...(burstSession ? { session: burstSession } : {}),
+					},
 					dropRepeatCooldown: true,
 				});
 			} catch (error) {
@@ -449,7 +455,7 @@ function createBurstAggregator(options = {}) {
 		}
 	}
 
-	async function dispatch({ parsedSignal, routing, deliver } = {}) {
+	async function dispatch({ parsedSignal, alert, routing, deliver } = {}) {
 		const immediate = async () => {
 			const results = await deliver({});
 			return { results, aggregated: false };
@@ -488,7 +494,7 @@ function createBurstAggregator(options = {}) {
 			return immediate();
 		}
 
-		const member = { parsedSignal, deliver, settled: false };
+		const member = { parsedSignal, alert, deliver, settled: false };
 		const promise = new Promise((resolve, reject) => {
 			member.resolve = resolve;
 			member.reject = reject;

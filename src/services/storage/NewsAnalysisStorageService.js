@@ -11,11 +11,13 @@ const {
 	classifyFirestoreError,
 	isMissingIndexError,
 } = require('./firestoreErrorCategories');
+const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETENTION_DAYS = 30;
 const COLLECTION_NAME = 'news_analysis';
 const WRITE_METRICS_DOMAIN = 'newsAnalysis';
+const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
 
 /**
  * Environment-only, deliberately absent from the Remote Config allow-list exactly
@@ -297,7 +299,7 @@ function getFirestore() {
 function formatAnalysisDoc(doc) {
 	const data = typeof doc.data === 'function' ? doc.data() : (doc || {});
 	const id = doc.id || data.id;
-	return {
+	const formatted = {
 		id,
 		createdAt: getDocTimestamp(data.createdAt),
 		symbol: data.symbol || '',
@@ -310,6 +312,17 @@ function formatAnalysisDoc(doc) {
 		tokens: typeof data.tokens === 'number' ? data.tokens : null,
 		expiresAt: getDocTimestamp(data.expiresAt),
 	};
+
+	if (data.deployment && typeof data.deployment === 'object') {
+		formatted.deployment = {
+			platform: typeof data.deployment.platform === 'string' ? data.deployment.platform : null,
+			gitSha: typeof data.deployment.gitSha === 'string' ? data.deployment.gitSha : null,
+			service: typeof data.deployment.service === 'string' ? data.deployment.service : null,
+			runtimeVersion: typeof data.deployment.runtimeVersion === 'string' ? data.deployment.runtimeVersion : null,
+		};
+	}
+
+	return formatted;
 }
 
 /**
@@ -359,6 +372,7 @@ async function recordAnalysis(record = {}) {
 			tokens,
 			createdAt: admin.firestore.FieldValue.serverTimestamp(),
 			expiresAt: buildRetentionExpiryTimestamp(),
+			deployment: getDeploymentIdentity(),
 		});
 
 		await firestore.collection(COLLECTION_NAME).doc(id).set(dataToSave);
@@ -401,7 +415,7 @@ async function summarizeAnalyses({ from, to, limit = 500, symbol, threshold = 0.
 	const firestore = getFirestore();
 	if (!firestore) {
 		const error = new Error('News analysis storage is enabled but Firestore is unavailable.');
-		error.code = 'STORAGE_UNAVAILABLE';
+		error.code = STORAGE_UNAVAILABLE_CODE;
 		throw error;
 	}
 
@@ -434,11 +448,15 @@ async function summarizeAnalyses({ from, to, limit = 500, symbol, threshold = 0.
 		// Firestore does not merge single-field indexes for an equality filter plus a
 		// sort on another field, and neither the unit double (orderBy is a no-op) nor
 		// the emulator (which auto-creates indexes) can observe a missing declaration.
-		firestoreWriteMetricsService.recordReadFailure(WRITE_METRICS_DOMAIN, classifyFirestoreError(error));
+		const category = classifyFirestoreError(error);
+		const missingIndex = isMissingIndexError(error);
+		firestoreWriteMetricsService.recordReadFailure(WRITE_METRICS_DOMAIN, category);
 		_classifyAndRecordFailure(error);
 		console.warn('[NewsAnalysisStorageService] Failed to read news analyses for summary:', error.message);
 		const storageError = new Error('News analysis storage read failed. See dependencies.newsAnalysisStorage for the classified reason.');
-		storageError.code = 'STORAGE_UNAVAILABLE';
+		storageError.code = STORAGE_UNAVAILABLE_CODE;
+		storageError.category = category;
+		storageError.missingIndex = missingIndex;
 		throw storageError;
 	}
 	firestoreWriteMetricsService.recordReadSuccess(WRITE_METRICS_DOMAIN);
@@ -575,7 +593,7 @@ async function listAnalyses({ from, to, limit = 50, symbol, eventCategory, befor
 	const firestore = getFirestore();
 	if (!firestore) {
 		const error = new Error('News analysis storage is enabled but Firestore is unavailable.');
-		error.code = 'STORAGE_UNAVAILABLE';
+		error.code = STORAGE_UNAVAILABLE_CODE;
 		throw error;
 	}
 
@@ -596,24 +614,27 @@ async function listAnalyses({ from, to, limit = 50, symbol, eventCategory, befor
 	const boundedLimit = Math.min(Math.max(1, limit || 50), 100);
 	query = query.orderBy('createdAt', 'desc');
 
-	if (beforeCursor) {
-		const cursorDoc = await firestore.collection(COLLECTION_NAME).doc(beforeCursor).get();
-		if (cursorDoc && cursorDoc.exists) {
-			query = query.startAfter(cursorDoc);
-		}
-	}
-
 	query = query.limit(boundedLimit);
 	recordReadinessSafely(_recordDurableAttempt);
 	let snapshot;
 	try {
+		if (beforeCursor) {
+			const cursorDoc = await firestore.collection(COLLECTION_NAME).doc(beforeCursor).get();
+			if (cursorDoc && cursorDoc.exists) {
+				query = query.startAfter(cursorDoc);
+			}
+		}
 		snapshot = await query.get();
 	} catch (error) {
-		firestoreWriteMetricsService.recordReadFailure(WRITE_METRICS_DOMAIN, classifyFirestoreError(error));
+		const category = classifyFirestoreError(error);
+		const missingIndex = isMissingIndexError(error);
+		firestoreWriteMetricsService.recordReadFailure(WRITE_METRICS_DOMAIN, category);
 		_classifyAndRecordFailure(error);
 		console.warn('[NewsAnalysisStorageService] Failed to list news analyses:', error.message);
 		const storageError = new Error('News analysis storage read failed. See dependencies.newsAnalysisStorage for the classified reason.');
-		storageError.code = 'STORAGE_UNAVAILABLE';
+		storageError.code = STORAGE_UNAVAILABLE_CODE;
+		storageError.category = category;
+		storageError.missingIndex = missingIndex;
 		throw storageError;
 	}
 	firestoreWriteMetricsService.recordReadSuccess(WRITE_METRICS_DOMAIN);
@@ -648,6 +669,7 @@ module.exports = {
 	getStorageStatus,
 	COLLECTION_NAME,
 	READINESS,
+	STORAGE_UNAVAILABLE_CODE,
 	__resetFirestoreClient,
 	__resetReadinessForTesting: _resetReadinessForTesting,
 };

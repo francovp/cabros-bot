@@ -11,6 +11,7 @@ const {
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('../tradingview/parseTradingViewSignal');
 const { isFirestoreConfigured } = require('../storage/firestoreConfig');
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 
 const COLLECTION_NAME = 'scannerPresets';
 const DEFAULT_SCAN_LIMIT = 5;
@@ -416,6 +417,14 @@ function compareByCreatedAtDesc(a, b) {
 }
 
 function isFirestoreEnabled() {
+	// Issue #721: a published remote value wins over the deployment value, so a
+	// remote `false` disables durable presets even though `render.yaml` pins the
+	// gate to `true` on the web service. `undefined` means no published value,
+	// which is not evidence, so the environment decides.
+	const remote = resolveRemoteOverride('ENABLE_FIRESTORE_SCANNER_PRESETS');
+	if (typeof remote === 'boolean') {
+		return remote;
+	}
 	return process.env.ENABLE_FIRESTORE_SCANNER_PRESETS === 'true';
 }
 

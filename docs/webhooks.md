@@ -19,6 +19,25 @@ Generate an expanded technical-analysis report with TradingView MCP `coin_analys
 
 If `symbols` is empty or omitted, the endpoint falls back to `EXPANDED_ANALYSIS_ALERT_SYMBOLS`. If neither is defined, it returns `400 NO_SYMBOLS`. Symbols must be complete `EXCHANGE:SYMBOL` identifiers; crypto pairs are not normalized automatically.
 
+#### Symbol deduplication
+
+Duplicate entries are collapsed **before** any TradingView MCP call is issued. The per-symbol budget is shared, so N copies of one symbol were N units of work that added no information while shrinking the deadline left for the symbols that were not duplicates — and the generated report repeated the same section once per copy.
+
+- Comparison is **case-insensitive** and uses the **venue the identifier resolves to**, so the probe-verified aliases fold together: `BATS:AAPL`, `NASDAQ:AAPL` and `NASDAQ_DLY:AAPL` are one analysis (`NASDAQ:AAPL`). This is the same closed alias table the outbound calls use, never fuzzy or suffix-shape inference, so venues the MCP server keeps distinct (`FX_IDC`, `SPCFD`, any unlisted venue) are **not** merged.
+- **First occurrence wins** and report ordering follows first-occurrence order. The retained entry keeps the caller's own exchange — alias resolution stays outbound-only, so a collapsed `BATS:AAPL` is still reported and stored as `BATS:AAPL`.
+- `MAX_SYMBOLS` (50) applies to the **deduplicated** list: repeating one symbol does not count against the cap.
+- The collapsed count is reported as `duplicatesRemoved` on the response (and on `GET /api/jobs/{jobId}` for `expanded-analysis` jobs). Compare it with `results.length` to see how many distinct symbols were actually analysed.
+
+```json
+{
+  "symbols": ["BINANCE:BTCUSDT", "binance:btcusdt", "BATS:AAPL", "NASDAQ:AAPL", "NASDAQ:NVDA"]
+}
+```
+
+Runs three analyses (`BINANCE:BTCUSDT`, `BATS:AAPL`, `NASDAQ:NVDA`), reports `duplicatesRemoved: 2`, and produces three report sections.
+
+Deduplication lives in the shared parser, so `POST /api/jobs/tradingview-analysis` (type `expanded-analysis`) inherits it — the job's durable `requestMetadata.symbols` already holds the deduplicated list, and the collapse count is captured there so queue and poller modes report the same value. `POST /api/webhook/symbol-analysis` takes a single `symbol` rather than an array, so it inherits the parser but cannot contain a duplicate.
+
 The endpoint stops analysis at `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` (default 60 seconds, max 120 seconds). If the deadline is reached before any symbol is analyzed, it returns `504 EXPANDED_ANALYSIS_ALERT_TIMEOUT`; completed symbols are returned and remaining symbols are marked with `status: "timeout"`.
 
 **Response:**
@@ -60,12 +79,16 @@ Run TradingView MCP `volume_confirmation_analysis` on demand and return structur
 ```json
 {
   "symbol": "BINANCE:BTCUSDT",
-  "timeframe": "4h"
+  "timeframe": "4h",
+  "includeMultiTimeframe": true,
+  "side": "BUY"
 }
 ```
 
 - `symbol`: Required `EXCHANGE:SYMBOL` identifier.
 - `timeframe`: Optional indicator interval. Defaults to `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` or `1h`.
+- `includeMultiTimeframe`: Optional boolean (default `false`). When `true` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true`, the endpoint adds higher-timeframe analysis and an `htfAlignment` result. The response omits those fields when the request or feature flag disables the analysis. Multi-timeframe failures fail open and retain the volume-confirmation result with `htfAlignment: "unknown"`.
+- `side`, `direction`, `breakoutType`/`breakout_type`, and `tradingRecommendation`/`trading_recommendation`: Optional directional context used to compare a candidate direction with the higher-timeframe result.
 - `dryRun`: Optional. When `true` (or `?dryRun=true`), validates the request and returns the parsed `symbol`/`exchange`/`timeframe` echo with `dryRun: true`, `decision: 'unknown'`, `volumeRatio: null`, and `analysis: null` — no MCP call is made. Useful for validating request shape before paying the ~360s MCP budget.
 
 **Response (JSON):**
@@ -86,6 +109,23 @@ Run TradingView MCP `volume_confirmation_analysis` on demand and return structur
       "volume_strength": "HIGH"
     }
   },
+  "volumeConfirmation": {
+    "confirmed": true,
+    "decision": "confirm",
+    "volumeRatio": 1.7,
+    "analysis": {
+      "symbol": "BINANCE:BTCUSDT",
+      "volume_analysis": {
+        "volume_ratio": 1.7,
+        "volume_strength": "HIGH"
+      }
+    }
+  },
+  "multiTimeframeAnalysis": {
+    "alignment": { "status": "ALIGNED", "confidence": 0.9 },
+    "recommendation": { "action": "BUY" }
+  },
+  "htfAlignment": "aligned",
   "requestId": "req-vol-123",
   "processingTimeMs": 310
 }
@@ -259,6 +299,8 @@ BTC price is at $45,000 - breakout detected!
 }
 ```
 
+**Outcome-informed annotation (GH-587).** When `ENABLE_OUTCOME_INFORMED_DELIVERY=true`, a parseable symbol and side are annotated from bounded historical `SignalOutcomeService` aggregates when the configured lookback and minimum sample yield data. The summary is appended to the alert notification and exposed as nullable `outcomeAnnotation` in the dry-run response and stored alert. The lookup fails open: unavailable storage or a timeout leaves the alert deliverable without an annotation. This phase annotates alerts only; it does not suppress delivery.
+
 **Truncation metadata (GH-637).** `validateAlert()` clips alert text to 4,000 characters
 (plus an ellipsis). When the submitted text exceeds that cap, the 200 response — and the
 `dryRun=true` response — also carries `truncated: true`, `originalLength`, and
@@ -303,6 +345,14 @@ Text containing no configured route key is delivered normally through the reques
 `channels` or the enabled-channel broadcast — indicator words and other uppercase
 tokens are not treated as symbols. Each delivery result includes the matched `symbol`
 (bare form, so a `NASDAQ:NVDA` route reports `NVDA`).
+
+When the per-alert decision audit is enabled, `decision.enrichment.providers` records
+the sanitized `full`, `partial`, or `failed` outcome for each attempted Gemini or
+TradingView MCP provider, including a provider failure when the other provider supplied
+the fallback. This internal metadata is excluded from the public enrichment payload.
+`decision.dispatch.requestedChannelMode` is `symbol_route` for a matching route,
+`explicit` for request-level `channels`, or `broadcast` when the enabled channel set
+handles the alert.
 
 When `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` is enabled and it narrows the
 request-level channel set, every `symbolRoutes` entry is intersected with the same set,

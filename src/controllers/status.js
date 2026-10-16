@@ -1,4 +1,5 @@
 const packageJson = require('../../package.json');
+const { sendErrorFrom } = require('../lib/errorEnvelope');
 const sentryService = require('../services/monitoring/SentryService');
 const {
 	scannerPresetService,
@@ -6,9 +7,11 @@ const {
 } = require('../services/scannerPresets');
 const { newsMonitorSchedulerService } = require('../services/newsMonitorScheduler');
 const { alertSchedulerService } = require('../services/scheduler');
+const { alertSubscriberService } = require('../services/subscribers/AlertSubscriberService');
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const alertFeedbackStorageService = require('../services/storage/AlertFeedbackStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
+const { resolveRemoteOverride } = require('../services/remoteConfig/resolveRemoteOverride');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
 const { jobQueue } = require('../services/jobs/JobQueue');
 const equityMarketDataService = require('../services/storage/EquityMarketDataService');
@@ -30,6 +33,8 @@ const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsApp
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const { resolveStartupJitterMs } = require('../lib/startupJitter');
+const { outcomeAnnotationService } = require('../services/alerts/outcomeAnnotationService');
 const { crossTimeframeCooldown } = require('../services/alerts/crossTimeframeCooldown');
 const { burstAggregator } = require('../services/alerts/burstAggregator');
 const { userPriceAlertService } = require('../services/alerts/UserPriceAlertService');
@@ -63,6 +68,17 @@ const DEFAULT_CF_AIG_MODEL = 'google-ai-studio/gemini-2.5-flash';
 
 function isEnabled(value) {
 	return value === 'true';
+}
+
+/**
+ * Resolve a Firestore storage gate the way the storage services do (issue #721):
+ * a published Remote Config value wins, and its absence falls back to the
+ * environment. `/api/status` reporting `process.env` would describe a gate the
+ * services are not actually evaluating.
+ */
+function resolveStorageGate(key) {
+	const remote = resolveRemoteOverride(key);
+	return typeof remote === 'boolean' ? remote : isEnabled(process.env[key]);
 }
 
 function hasValue(value) {
@@ -327,9 +343,14 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		tradingViewMcpEnrichmentEnabled
 		|| marketScannerEnabled
 		|| observedTradingViewMcpStatus.lastCheckedAt !== null;
-	const firestoreEnabled = isEnabled(process.env.ENABLE_FIRESTORE_ALERT_STORAGE);
-	const firestoreScannerPresetsEnabled = isEnabled(process.env.ENABLE_FIRESTORE_SCANNER_PRESETS);
-	const firestoreJobStorageEnabled = isEnabled(process.env.ENABLE_FIRESTORE_JOB_STORAGE)
+	// Issue #721: report the gate that actually runs, not the raw environment value.
+	// These gates are runtime-resolved, so a published remote value is what the
+	// services evaluate — reporting `process.env` here would tell an operator their
+	// toggle failed (or that it worked) when the opposite is true.
+	const firestoreEnabled = resolveStorageGate('ENABLE_FIRESTORE_ALERT_STORAGE');
+	const firestoreScannerPresetsEnabled = resolveStorageGate('ENABLE_FIRESTORE_SCANNER_PRESETS');
+	const firestoreAlertSubscribersEnabled = resolveStorageGate('ENABLE_FIRESTORE_ALERT_SUBSCRIBERS');
+	const firestoreJobStorageEnabled = resolveStorageGate('ENABLE_FIRESTORE_JOB_STORAGE')
 		|| firestoreEnabled;
 	const sentryEnabled = isEnabled(process.env.ENABLE_SENTRY);
 	const langfusePromptsEnabled = isEnabled(process.env.ENABLE_LANGFUSE_PROMPTS);
@@ -490,10 +511,30 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		signalOutcomeWorkerDependency.status = 'disabled';
 	}
 
-	const webhookAuth = dependencyStatus({
-		enabled: true,
-		configured: hasValue(process.env.WEBHOOK_API_KEY),
-	});
+	const webhookAuth = {
+		...dependencyStatus({
+			enabled: true,
+			configured: hasValue(process.env.WEBHOOK_API_KEY),
+		}),
+		scope: 'webhook',
+	};
+
+	const adminApiKey = {
+		...dependencyStatus({
+			enabled: hasValue(process.env.ADMIN_API_KEY),
+			configured: hasValue(process.env.ADMIN_API_KEY),
+		}),
+		scope: 'admin',
+		legacyFallback: hasValue(process.env.WEBHOOK_API_KEY) && !hasValue(process.env.ADMIN_API_KEY),
+	};
+
+	const binanceTradingApiKey = {
+		...dependencyStatus({
+			enabled: hasValue(process.env.BINANCE_TRADING_API_KEY),
+			configured: hasValue(process.env.BINANCE_TRADING_API_KEY),
+		}),
+		scope: 'binance-trading',
+	};
 
 	return {
 		readiness: bootstrapReadiness.getStatus(),
@@ -518,6 +559,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
 			firestoreAlertStorage: firestoreEnabled,
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
+			firestoreAlertSubscribers: firestoreAlertSubscribersEnabled,
 			firestoreJobStorage: firestoreJobStorageEnabled,
 			firestoreNewsAnalysis: newsAnalysisStorageService.isEnabled(),
 			firestoreChatPreferences: chatPreferenceService.isEnabled(),
@@ -541,17 +583,22 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
+			outcomeInformedDelivery: outcomeAnnotationService.isEnabled(),
 			alertCrossTimeframeSuppression: crossTimeframeCooldown.isEnabled(),
 			alertBurstAggregation: burstAggregator.isEnabled(),
+			alertHtfRender: runtimeConfig.ENABLE_ALERT_HTF_RENDER,
 			alertModeration: alertModeration.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
 			userPriceAlerts: userPriceAlertService.isEnabled(),
 			alertFeedback: alertFeedbackStorageService.isEnabled(),
 			symbolAnalysisStorage: symbolAnalysisStorageService.isEnabled(),
+			symbolAnalysisMultiAgent: runtimeConfig.ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT,
+			apiOnlyMode: runtimeConfig.ENABLE_API_ONLY_MODE,
 			whatsappTemplateMode: !!process.env.WHATSAPP_TEMPLATE_NAME,
 			testAlert: isTestAlertEnabled(),
 			tokenCostBudget: tokenCostBudgetService.isEnabled(),
 			signalClassMarker: signalClassMarkerEnabled,
+			equitySessionTag: runtimeConfig.ENABLE_EQUITY_SESSION_TAG,
 			maintenanceMode: isMaintenanceModeEnabled(),
 			telegramCommandAuth: telegramCommandAuth.getStatus().enabled,
 		},
@@ -604,6 +651,8 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			whatsapp,
 			discord,
 			webhookAuth,
+			adminApiKey,
+			binanceTradingApiKey,
 			whatsappCommandBridge: whatsAppCommandBridgeService.getStatus(),
 			whatsappTemplate: getWhatsAppTemplateStatus(),
 			gemini,
@@ -628,6 +677,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			...(firestoreWriteMetricsService.getReadSnapshot()
 				? { firestoreReadMetrics: firestoreWriteMetricsService.getReadSnapshot() }
 				: {}),
+			persistentWriteHealth: firestoreWriteMetricsService.getPersistentWriteHealthSnapshot(),
 			sentry,
 			langfuse,
 			...(langfusePrompts ? { langfusePrompts } : {}),
@@ -651,6 +701,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			firebaseRemoteConfig: remoteConfigStatus,
 			chatPreferences: chatPreferenceService.getStatus(),
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
+			alertSubscribers: alertSubscriberService.getStorageStatus(),
 			newsAnalysisStorage: newsAnalysisStorageService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
 			userPriceAlertWorker: userPriceAlertService.getStatus(),
@@ -659,6 +710,10 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
 				...signalOutcomeWorkerDependency,
+				breakdownBucketCap: signalOutcomeWorkerStatus.breakdownBucketCap,
+				lastBreakdownBucketCount: signalOutcomeWorkerStatus.lastBreakdownBucketCount,
+				lastBreakdownTruncated: signalOutcomeWorkerStatus.lastBreakdownTruncated,
+				breakdownTruncationCount: signalOutcomeWorkerStatus.breakdownTruncationCount,
 				entryPriceSources: signalOutcomeWorkerStatus.entryPriceSources,
 				role: signalOutcomeWorkerStatus.role,
 				running: signalOutcomeWorkerStatus.running,
@@ -682,6 +737,10 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
 			},
+			outcomeInformedDelivery: {
+				enabled: outcomeAnnotationService.isEnabled(),
+				...outcomeAnnotationService.getStats(),
+			},
 			alertCrossTimeframeSuppression: {
 				enabled: crossTimeframeCooldown.isEnabled(),
 				...crossTimeframeCooldown.getStats(),
@@ -697,6 +756,39 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			alertFeedback: alertFeedbackStorageService.getStatus(),
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
+			startupJitter: (() => {
+				const global = resolveStartupJitterMs({
+					globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+					globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+				});
+				return {
+					global,
+					signalOutcome: resolveStartupJitterMs({
+						envVar: 'SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS',
+						runtimeKey: 'SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS',
+						globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+						globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+					}),
+					redrive: resolveStartupJitterMs({
+						envVar: 'NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS',
+						runtimeKey: 'NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS',
+						globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+						globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+					}),
+					scannerPreset: resolveStartupJitterMs({
+						envVar: 'SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS',
+						runtimeKey: 'SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS',
+						globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+						globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+					}),
+					remoteConfig: resolveStartupJitterMs({
+						envVar: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+						runtimeKey: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+						globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+						globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+					}),
+				};
+			})(),
 			binanceOrderAudit: binanceOrderAuditService.getStatus(),
 			symbolAnalysisStorage: symbolAnalysisStorageService.getStatus(),
 			testAlert: {
@@ -739,7 +831,7 @@ async function getApiStatus(req, res) {
 		return res.status(200).json(getStatus({ skipTelemetrySync: true }));
 	} catch (error) {
 		console.error('[StatusController] getStatus failed:', error);
-		return res.status(500).json({ error: error.message, code: 'INTERNAL_ERROR' });
+		return sendErrorFrom(res, 500, { error: error.message, code: 'INTERNAL_ERROR' });
 	}
 }
 

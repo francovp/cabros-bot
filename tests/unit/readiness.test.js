@@ -1,5 +1,11 @@
 'use strict';
 
+const mockRemoteOverrides = {};
+
+jest.mock('../../src/services/remoteConfig/resolveRemoteOverride', () => ({
+	resolveRemoteOverride: jest.fn((key) => mockRemoteOverrides[key]),
+}));
+
 const {
 	createReadinessService,
 	resolveTimeoutMs,
@@ -10,6 +16,12 @@ const {
 	timed,
 	skippedResult,
 } = require('../../src/lib/readiness');
+
+beforeEach(() => {
+	for (const key of Object.keys(mockRemoteOverrides)) {
+		delete mockRemoteOverrides[key];
+	}
+});
 
 function setEnv(map) {
 	const previous = {};
@@ -297,6 +309,48 @@ describe('createReadinessService', () => {
 			expect(report.dependencies.firestore.skipped).toBeUndefined();
 			expect(report.dependencies.firestore.enabled).toBe(true);
 			expect(report.dependencies.firestore.error).toBe('firestore_not_configured');
+		} finally {
+			restore();
+		}
+	});
+
+	it('keeps Firestore readiness enabled for the legacy idempotency environment alias', async () => {
+		const restore = setEnv({
+			ENABLE_FIRESTORE_ALERT_STORAGE: 'false',
+			ENABLE_FIRESTORE_IDEMPOTENCY: 'false',
+			ENABLE_FIRESTORE_SCANNER_PRESETS: 'false',
+			ENABLE_FIRESTORE_JOB_STORAGE: 'false',
+			ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE: 'true',
+		});
+		try {
+			const service = createReadinessService({
+				timeoutMs: 1500,
+				isFirestoreConfigured: () => false,
+				getFirestoreClient: () => null,
+			});
+			const report = await service.collectReadiness();
+			expect(report.dependencies.firestore.enabled).toBe(true);
+			expect(report.dependencies.firestore.skipped).toBeUndefined();
+			expect(report.dependencies.firestore.error).toBe('firestore_not_configured');
+		} finally {
+			restore();
+		}
+	});
+
+	it('lets published idempotency false override the legacy environment alias in readiness', async () => {
+		const restore = setEnv({
+			ENABLE_FIRESTORE_ALERT_STORAGE: 'false',
+			ENABLE_FIRESTORE_IDEMPOTENCY: 'false',
+			ENABLE_FIRESTORE_SCANNER_PRESETS: 'false',
+			ENABLE_FIRESTORE_JOB_STORAGE: 'false',
+			ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE: 'true',
+		});
+		mockRemoteOverrides.ENABLE_FIRESTORE_IDEMPOTENCY = false;
+		try {
+			const service = createReadinessService({ timeoutMs: 1500 });
+			const report = await service.collectReadiness();
+			expect(report.dependencies.firestore.skipped).toBe(true);
+			expect(report.dependencies.firestore.enabled).toBe(false);
 		} finally {
 			restore();
 		}

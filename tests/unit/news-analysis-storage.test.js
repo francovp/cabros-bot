@@ -347,6 +347,30 @@ describe('NewsAnalysisStorageService', () => {
 			expect(result.analyses).toHaveLength(2);
 			expect(result.nextCursor).toBeTruthy();
 		});
+
+		it('wraps cursor document lookup failure into STORAGE_UNAVAILABLE (#1301)', async () => {
+			mockDocGet.mockRejectedValueOnce(new Error('cursor read error'));
+
+			await expect(NewsAnalysisStorageService.listAnalyses({ beforeCursor: 'cursor-123' })).rejects.toMatchObject({
+				code: NewsAnalysisStorageService.STORAGE_UNAVAILABLE_CODE,
+			});
+
+			const status = NewsAnalysisStorageService.getStorageStatus();
+			expect(status.operationsFailed).toBe(1);
+			expect(status.lastErrorReason).toBe('unknown_error');
+		});
+
+		it('wraps list query get failure into STORAGE_UNAVAILABLE (#1301)', async () => {
+			mockGet.mockRejectedValueOnce(new Error('list query error'));
+
+			await expect(NewsAnalysisStorageService.listAnalyses({})).rejects.toMatchObject({
+				code: NewsAnalysisStorageService.STORAGE_UNAVAILABLE_CODE,
+			});
+
+			const status = NewsAnalysisStorageService.getStorageStatus();
+			expect(status.operationsFailed).toBe(1);
+			expect(status.lastErrorReason).toBe('unknown_error');
+		});
 	});
 
 	describe('production enablement (#1180)', () => {

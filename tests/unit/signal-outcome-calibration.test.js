@@ -176,6 +176,80 @@ describe('Signal Outcome Confidence Calibration', () => {
 			expect(b.targetHitRate).toBe(1);
 		});
 
+		it('excludes market-scanner technical scores and legacy unproven confidence from calibration', () => {
+			const docs = Array.from({ length: 20 }, (_, i) => ({
+				id: `market-scanner-${i}`,
+				source: 'market-scanner',
+				score: 0.85,
+				confidenceScore: i < 10 ? null : 0.85,
+				outcomeEvaluated: true,
+				outcomes: {
+					'4h': { status: 'evaluated', return: 1.5, targetHit: true },
+				},
+			}));
+
+			const result = SignalOutcomeService.computeCalibration(docs);
+
+			expect(result.available).toBe(false);
+			expect(result.totalScoredAlerts).toBe(0);
+		});
+
+		it('excludes scanner-preset technical scores from calibration', () => {
+			const docs = Array.from({ length: 20 }, (_, i) => ({
+				id: `scanner-preset-${i}`,
+				source: 'scanner-preset',
+				score: 0.85,
+				confidenceScore: 0.85,
+				outcomes: {
+					'4h': { status: 'evaluated', return: 1.5, targetHit: true },
+				},
+			}));
+
+			const result = SignalOutcomeService.computeCalibration(docs);
+
+			expect(result.available).toBe(false);
+			expect(result.totalScoredAlerts).toBe(0);
+		});
+
+		it('keeps legacy market-scanner confidence when stored values prove it was explicit', () => {
+			const docs = Array.from({ length: 20 }, (_, i) => ({
+				id: `market-scanner-proven-${i}`,
+				source: 'market-scanner',
+				score: i < 7 ? null : i < 14 ? 2 : 0.85,
+				confidenceScore: 0.72,
+				outcomeEvaluated: true,
+				outcomes: {
+					'4h': { status: 'evaluated', return: 1.5, targetHit: true },
+				},
+			}));
+
+			const result = SignalOutcomeService.computeCalibration(docs);
+
+			expect(result.available).toBe(true);
+			expect(result.totalScoredAlerts).toBe(20);
+			expect(result.buckets.find((bucket) => bucket.range === '0.70-0.75').count).toBe(20);
+		});
+
+		it('includes market-scanner confidence only when its explicit provenance is recorded', () => {
+			const docs = Array.from({ length: 20 }, (_, i) => ({
+				id: `market-scanner-explicit-${i}`,
+				source: 'market-scanner',
+				score: 0.85,
+				confidenceScore: 0.82,
+				confidenceScoreOrigin: 'explicit',
+				outcomeEvaluated: true,
+				outcomes: {
+					'4h': { status: 'evaluated', return: 1.5, targetHit: true },
+				},
+			}));
+
+			const result = SignalOutcomeService.computeCalibration(docs);
+
+			expect(result.available).toBe(true);
+			expect(result.totalScoredAlerts).toBe(20);
+			expect(result.buckets.find((bucket) => bucket.range === '0.80-0.85').count).toBe(20);
+		});
+
 		it('returns suggestedThreshold: null when no bucket reaches 50% target hit rate', () => {
 			const docs = Array.from({ length: 25 }, (_, i) => ({
 				id: `doc-${i}`,
@@ -383,6 +457,47 @@ describe('Signal Outcome Confidence Calibration', () => {
 			expect(Array.isArray(result.buckets)).toBe(true);
 		});
 
+		it('limits the first Firestore page to the requested calibration sample', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const AlertStorageService = require('../../src/services/storage/AlertStorageService');
+			const docs = Array.from({ length: 100 }, (_, index) => ({
+				id: `eligible-${index}`,
+				data: () => ({
+					receivedAt: new Date(Date.now() - index * 1000),
+					source: 'news-monitor',
+					confidenceScore: 0.72,
+					outcomes: { '4h': { status: 'evaluated', return: 1.0, targetHit: true } },
+				}),
+			}));
+			let requestedPageLimit = 0;
+			const mockQuery = {
+				where: jest.fn().mockReturnThis(),
+				orderBy: jest.fn().mockReturnThis(),
+				limit: jest.fn(function(limit) {
+					requestedPageLimit = limit;
+					return this;
+				}),
+				get: jest.fn(async () => ({
+					empty: false,
+					docs: docs.slice(0, requestedPageLimit),
+				})),
+			};
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue(mockQuery),
+			};
+
+			jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue(mockFirestore);
+
+			try {
+				const result = await SignalOutcomeService.getOutcomesCalibration({ window: '4h', limit: 1 });
+				expect(requestedPageLimit).toBe(1);
+				expect(mockQuery.get).toHaveBeenCalledTimes(1);
+				expect(result.totalScoredAlerts).toBe(1);
+			} finally {
+				AlertStorageService.getFirestore.mockRestore();
+			}
+		});
+
 		it('scans until calibration-eligible outcomes meet targetLimit or scan cap is reached', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			const AlertStorageService = require('../../src/services/storage/AlertStorageService');
@@ -447,6 +562,405 @@ describe('Signal Outcome Confidence Calibration', () => {
 				const result = await SignalOutcomeService.getOutcomesCalibration({ window: '4h', limit: 2 });
 				// Only eligible docs (doc-eligible-1 and doc-eligible-2) were selected, ignoring pending and unscored
 				expect(result.totalScoredAlerts).toBe(2);
+			} finally {
+				AlertStorageService.getFirestore.mockRestore();
+			}
+		});
+
+		it('recovers independent source cohorts and legacy explicit scanner confidence after the global scan cap', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const AlertStorageService = require('../../src/services/storage/AlertStorageService');
+			const invalidScannerDocs = Array.from({ length: 2000 }, (_, index) => ({
+				id: `scanner-score-only-${index}`,
+				data: () => ({
+					receivedAt: new Date(Date.now() - index * 1000),
+					source: 'market-scanner',
+					score: 0.85,
+					confidenceScore: 0.85,
+					outcomes: { '4h': { status: 'evaluated', return: 1.0, targetHit: true } },
+				}),
+			}));
+			const legacyMarketScannerDocs = Array.from({ length: 5 }, (_, index) => ({
+				id: `scanner-legacy-explicit-${index}`,
+				data: () => ({
+					receivedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000 - index * 1000),
+					source: 'market-scanner',
+					score: null,
+					confidenceScore: 0.72,
+					outcomes: { '4h': { status: 'evaluated', return: 1.5, targetHit: true } },
+				}),
+			}));
+			const legacyScannerPresetDocs = Array.from({ length: 5 }, (_, index) => ({
+				id: `scanner-preset-legacy-explicit-${index}`,
+				data: () => ({
+					receivedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000 - index * 1000),
+					source: 'scanner-preset',
+					score: 0.85,
+					confidenceScore: 0.72,
+					outcomes: { '4h': { status: 'evaluated', return: 1.5, targetHit: true } },
+				}),
+			}));
+			const nonScannerDocs = Array.from({ length: 20 }, (_, index) => ({
+				id: `news-monitor-${index}`,
+				data: () => ({
+					receivedAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000 - index * 1000),
+					source: 'news-monitor',
+					confidenceScore: 0.72,
+					outcomes: { '4h': { status: 'evaluated', return: 1.5, targetHit: true } },
+				}),
+			}));
+			const explicitScannerDocs = Array.from({ length: 20 }, (_, index) => ({
+				id: `scanner-explicit-${index}`,
+				data: () => ({
+					receivedAt: new Date(Date.now() - 60 * 60 * 1000 - index * 1000),
+					source: 'market-scanner',
+					score: 0.85,
+					confidenceScore: 0.72,
+					confidenceScoreOrigin: 'explicit',
+					outcomes: { '4h': { status: 'evaluated', return: 1.5, targetHit: true } },
+				}),
+			}));
+			const explicitScannerPresetDocs = Array.from({ length: 10 }, (_, index) => ({
+				id: `scanner-preset-explicit-${index}`,
+				data: () => ({
+					receivedAt: new Date(Date.now() - 60 * 60 * 1000 - index * 1000),
+					source: 'scanner-preset',
+					score: 0.85,
+					confidenceScore: 0.72,
+					confidenceScoreOrigin: 'explicit',
+					outcomes: { '4h': { status: 'evaluated', return: 1.5, targetHit: true } },
+				}),
+			}));
+
+			const queryFilters = [];
+			const mockFirestore = {
+				collection: jest.fn().mockImplementation(() => {
+					const filters = [];
+					let cursor = null;
+					let queryLimit = 0;
+					return {
+						where: jest.fn(function(field, operator, value) {
+							filters.push({ field, operator, value });
+							return this;
+						}),
+						orderBy: jest.fn().mockReturnThis(),
+						limit: jest.fn(function(limit) {
+							queryLimit = limit;
+							return this;
+						}),
+						startAfter: jest.fn(function(doc) {
+							cursor = doc;
+							return this;
+						}),
+						get: jest.fn(async () => {
+							queryFilters.push(filters);
+							const sourceFilter = filters.find(filter => filter.field === 'source');
+							const originFilter = filters.find(filter => filter.field === 'confidenceScoreOrigin');
+							let docs;
+							if (!sourceFilter) {
+								docs = invalidScannerDocs;
+							} else if (sourceFilter.value === 'news-monitor') {
+								docs = nonScannerDocs;
+							} else if (sourceFilter.value === 'market-scanner' && originFilter?.value === 'explicit') {
+								docs = explicitScannerDocs;
+							} else if (sourceFilter.value === 'scanner-preset' && originFilter?.value === 'explicit') {
+								docs = explicitScannerPresetDocs;
+							} else if (sourceFilter.value === 'market-scanner') {
+								docs = [...invalidScannerDocs, ...legacyMarketScannerDocs];
+							} else if (sourceFilter.value === 'scanner-preset') {
+								docs = [...legacyScannerPresetDocs, ...explicitScannerPresetDocs];
+							} else {
+								docs = [];
+							}
+							const start = cursor ? docs.findIndex(doc => doc.id === cursor.id) + 1 : 0;
+							const page = docs.slice(Math.max(start, 0), Math.max(start, 0) + queryLimit);
+							return { empty: page.length === 0, docs: page };
+						}),
+					};
+				}),
+			};
+
+			jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue(mockFirestore);
+
+			try {
+				const result = await SignalOutcomeService.getOutcomesCalibration({ window: '4h', limit: 50 });
+				expect(result.available).toBe(true);
+				expect(result.totalScoredAlerts).toBe(50);
+				expect(queryFilters.some(filters => filters.some(filter => filter.field === 'source' && filter.operator === 'in'))).toBe(false);
+				for (const source of ['expanded-analysis', 'news-monitor', 'unknown', 'webhook-alert', 'market-scanner', 'scanner-preset']) {
+					expect(queryFilters.some(filters => filters.some(filter => filter.field === 'source' && filter.operator === '==' && filter.value === source))).toBe(true);
+				}
+				expect(queryFilters.some(filters => filters.some(filter => filter.field === 'source' && filter.value === 'scanner-preset')
+					&& filters.some(filter => filter.field === 'confidenceScoreOrigin' && filter.value === 'explicit'))).toBe(true);
+			} finally {
+				AlertStorageService.getFirestore.mockRestore();
+			}
+		});
+
+		it('fails closed when any source recovery query fails after a capped primary scan', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const AlertStorageService = require('../../src/services/storage/AlertStorageService');
+			const primaryDocs = Array.from({ length: 2000 }, (_, index) => ({
+				id: `primary-${index}`,
+				data: () => ({
+					receivedAt: new Date(Date.now() - index * 1000),
+					source: 'news-monitor',
+					confidenceScore: index < 20 ? 0.72 : null,
+					outcomes: { '4h': { status: 'evaluated', return: 1.0, targetHit: true } },
+				}),
+			}));
+			let globalPage = 0;
+			const mockFirestore = {
+				collection: jest.fn().mockImplementation(() => {
+					const filters = [];
+					return {
+						where: jest.fn(function(field, operator, value) {
+							filters.push({ field, operator, value });
+							return this;
+						}),
+						orderBy: jest.fn().mockReturnThis(),
+						limit: jest.fn().mockReturnThis(),
+						startAfter: jest.fn().mockReturnThis(),
+						get: jest.fn(async () => {
+							if (filters.some(filter => filter.field === 'source')) {
+								throw new Error('recovery index unavailable');
+							}
+							const start = globalPage * 100;
+							globalPage += 1;
+							const docs = primaryDocs.slice(start, start + 100);
+							return { empty: docs.length === 0, docs };
+						}),
+					};
+				}),
+			};
+
+			jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue(mockFirestore);
+
+			try {
+				await expect(SignalOutcomeService.getOutcomesCalibration({ window: '4h', limit: 40 }))
+					.rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
+			} finally {
+				AlertStorageService.getFirestore.mockRestore();
+			}
+		});
+
+		it('bounds the total documents read by source recovery scans', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const AlertStorageService = require('../../src/services/storage/AlertStorageService');
+			const makeDocs = (prefix, source, confidenceScoreOrigin, count = 3000) => Array.from({ length: count }, (_, index) => ({
+				id: `${prefix}-${index}`,
+				data: () => ({
+					receivedAt: new Date(Date.now() - index * 1000),
+					source,
+					confidenceScore: confidenceScoreOrigin ? 0.72 : 0.8,
+					...(confidenceScoreOrigin ? { confidenceScoreOrigin } : { score: 0.5 }),
+					outcomes: { '4h': { status: 'pending' } },
+				}),
+			}));
+			const primaryDocs = makeDocs('primary', 'market-scanner', null, 2000);
+			const recoveryDocs = new Map();
+			for (const source of ['expanded-analysis', 'news-monitor', 'unknown', 'webhook-alert']) {
+				recoveryDocs.set(`${source}:legacy`, makeDocs(source, source, null));
+			}
+			for (const source of ['market-scanner', 'scanner-preset']) {
+				recoveryDocs.set(`${source}:explicit`, makeDocs(`${source}-explicit`, source, 'explicit'));
+				recoveryDocs.set(`${source}:legacy`, makeDocs(`${source}-legacy`, source, null));
+			}
+
+			let recoveryDocumentsRead = 0;
+			let recoveryQueryCalls = 0;
+			const recoveryReadsByQuery = new Map();
+			const mockFirestore = {
+				collection: jest.fn().mockImplementation(() => {
+					const filters = [];
+					let cursor = null;
+					let queryLimit = 0;
+					return {
+						where: jest.fn(function(field, operator, value) {
+							filters.push({ field, operator, value });
+							return this;
+						}),
+						orderBy: jest.fn().mockReturnThis(),
+						limit: jest.fn(function(value) {
+							queryLimit = value;
+							return this;
+						}),
+						startAfter: jest.fn(function(doc) {
+							cursor = doc;
+							return this;
+						}),
+						get: jest.fn(async () => {
+							const sourceFilter = filters.find(filter => filter.field === 'source');
+							const originFilter = filters.find(filter => filter.field === 'confidenceScoreOrigin');
+							const docs = sourceFilter
+								? recoveryDocs.get(`${sourceFilter.value}:${originFilter?.value || 'legacy'}`) || []
+								: primaryDocs;
+							const start = cursor ? docs.findIndex(doc => doc.id === cursor.id) + 1 : 0;
+							const page = docs.slice(Math.max(start, 0), Math.max(start, 0) + queryLimit);
+							if (sourceFilter) {
+								const key = `${sourceFilter.value}:${originFilter?.value || 'legacy'}`;
+								recoveryQueryCalls += 1;
+								recoveryDocumentsRead += page.length;
+								recoveryReadsByQuery.set(key, (recoveryReadsByQuery.get(key) || 0) + page.length);
+							}
+							return { empty: page.length === 0, docs: page };
+						}),
+					};
+				}),
+			};
+
+			jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue(mockFirestore);
+
+			try {
+				const result = await SignalOutcomeService.getOutcomesCalibration({ window: '4h', limit: 1 });
+				expect(result.available).toBe(false);
+				expect(result.suggestedThresholdRationale).toContain('partial sample');
+				expect(recoveryDocumentsRead).toBe(12210);
+				expect(recoveryQueryCalls).toBeLessThanOrEqual(132);
+				for (const [queryKey, documentsRead] of recoveryReadsByQuery.entries()) {
+					const queryBudget = queryKey.endsWith(':explicit')
+						? 2000
+						: ['market-scanner:legacy', 'scanner-preset:legacy'].includes(queryKey) ? 2105 : 1000;
+					expect(documentsRead).toBeLessThanOrEqual(queryBudget);
+				}
+				expect(recoveryReadsByQuery.size).toBe(8);
+			} finally {
+				AlertStorageService.getFirestore.mockRestore();
+			}
+		});
+
+		it('reports partial counts and suppresses a threshold when a source scan reaches its cap', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const AlertStorageService = require('../../src/services/storage/AlertStorageService');
+			const primaryDocs = Array.from({ length: 2000 }, (_, index) => ({
+				id: `primary-partial-${index}`,
+				data: () => ({
+					receivedAt: new Date(Date.now() - index * 1000),
+					source: 'news-monitor',
+					confidenceScore: index < 20 ? 0.72 : null,
+					outcomes: { '4h': { status: 'evaluated', return: 1.0, targetHit: true } },
+				}),
+			}));
+			const cappedSourceDocs = Array.from({ length: 1000 }, (_, index) => ({
+				id: `expanded-unscored-${index}`,
+				data: () => ({
+					receivedAt: new Date(Date.now() - index * 1000),
+					source: 'expanded-analysis',
+					confidenceScore: null,
+					outcomes: { '4h': { status: 'evaluated', return: 1.0, targetHit: true } },
+				}),
+			}));
+			let globalPage = 0;
+			let recoveryPage = 0;
+			const mockFirestore = {
+				collection: jest.fn().mockImplementation(() => {
+					const filters = [];
+					return {
+						where: jest.fn(function(field, operator, value) {
+							filters.push({ field, operator, value });
+							return this;
+						}),
+						orderBy: jest.fn().mockReturnThis(),
+						limit: jest.fn().mockReturnThis(),
+						startAfter: jest.fn().mockReturnThis(),
+						get: jest.fn(async () => {
+							const sourceFilter = filters.find(filter => filter.field === 'source');
+							if (sourceFilter?.value === 'expanded-analysis') {
+								const start = recoveryPage * 100;
+								recoveryPage += 1;
+								const docs = cappedSourceDocs.slice(start, start + 100);
+								return { empty: docs.length === 0, docs };
+							}
+							if (sourceFilter) return { empty: true, docs: [] };
+							const start = globalPage * 100;
+							globalPage += 1;
+							const docs = primaryDocs.slice(start, start + 100);
+							return { empty: docs.length === 0, docs };
+						}),
+					};
+				}),
+			};
+
+			jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue(mockFirestore);
+
+			try {
+				const result = await SignalOutcomeService.getOutcomesCalibration({ window: '4h', limit: 40 });
+				expect(result.available).toBe(false);
+				expect(result.totalScoredAlerts).toBe(20);
+				expect(result.buckets.find(bucket => bucket.range === '0.70-0.75').count).toBe(20);
+				expect(result.suggestedThreshold).toBeNull();
+				expect(result.suggestedThresholdRationale).toContain('partial sample');
+			} finally {
+				AlertStorageService.getFirestore.mockRestore();
+			}
+		});
+
+		it('accepts a source scan that fills its requested sample on the cap boundary', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const AlertStorageService = require('../../src/services/storage/AlertStorageService');
+			const primaryDocs = Array.from({ length: 2000 }, (_, index) => ({
+				id: `primary-score-only-${index}`,
+				data: () => ({
+					receivedAt: new Date(Date.now() - index * 1000),
+					source: 'market-scanner',
+					score: 0.85,
+					confidenceScore: 0.85,
+					outcomes: { '4h': { status: 'evaluated', return: 1.0, targetHit: true } },
+				}),
+			}));
+			const explicitScannerDocs = Array.from({ length: 2000 }, (_, index) => ({
+				id: `explicit-scanner-${index}`,
+				data: () => ({
+					receivedAt: new Date(Date.now() - index * 1000),
+					source: 'market-scanner',
+					score: 0.85,
+					confidenceScore: 0.72,
+					confidenceScoreOrigin: 'explicit',
+					outcomes: { '4h': { status: index < 1980 ? 'pending' : 'evaluated', return: 1.0, targetHit: true } },
+				}),
+			}));
+			const queryFilters = [];
+			const mockFirestore = {
+				collection: jest.fn().mockImplementation(() => {
+					const filters = [];
+					let cursor = null;
+					let queryLimit = 0;
+					return {
+						where: jest.fn(function(field, operator, value) {
+							filters.push({ field, operator, value });
+							return this;
+						}),
+						orderBy: jest.fn().mockReturnThis(),
+						limit: jest.fn(function(limit) {
+							queryLimit = limit;
+							return this;
+						}),
+						startAfter: jest.fn(function(doc) {
+							cursor = doc;
+							return this;
+						}),
+						get: jest.fn(async () => {
+							queryFilters.push(filters);
+							const sourceFilter = filters.find(filter => filter.field === 'source');
+							const originFilter = filters.find(filter => filter.field === 'confidenceScoreOrigin');
+							const docs = !sourceFilter
+								? primaryDocs
+								: (sourceFilter.value === 'market-scanner' && originFilter?.value === 'explicit' ? explicitScannerDocs : []);
+							const start = cursor ? docs.findIndex(doc => doc.id === cursor.id) + 1 : 0;
+							const page = docs.slice(Math.max(start, 0), Math.max(start, 0) + queryLimit);
+							return { empty: page.length === 0, docs: page };
+						}),
+					};
+				}),
+			};
+
+			jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue(mockFirestore);
+
+			try {
+				const result = await SignalOutcomeService.getOutcomesCalibration({ window: '4h', limit: 20 });
+				expect(result.available).toBe(true);
+				expect(result.totalScoredAlerts).toBe(20);
+				expect(queryFilters.some(filters => filters.some(filter => filter.field === 'confidenceScoreOrigin' && filter.value === 'explicit'))).toBe(true);
 			} finally {
 				AlertStorageService.getFirestore.mockRestore();
 			}

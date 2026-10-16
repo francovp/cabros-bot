@@ -61,20 +61,6 @@
       ]
     },
     {
-      "collectionGroup": "alerts",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "receivedAt",
-          "order": "DESCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "DESCENDING"
-        }
-      ]
-    },
-    {
       "collectionGroup": "alertReplays",
       "queryScope": "COLLECTION",
       "fields": [
@@ -191,20 +177,6 @@
       ]
     },
     {
-      "collectionGroup": "userPriceAlerts",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "status",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "__name__",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
       "collectionGroup": "news_analysis",
       "queryScope": "COLLECTION",
       "fields": [
@@ -275,6 +247,38 @@
         {
           "fieldPath": "leaseUntil",
           "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "tradingSignalOutcomes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "source",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "receivedAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "tradingSignalOutcomes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "source",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "confidenceScoreOrigin",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "receivedAt",
+          "order": "DESCENDING"
         }
       ]
     }
