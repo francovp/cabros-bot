@@ -1069,4 +1069,24 @@ describe('status dependency contract drift', () => {
 			remoteConfig: 5000,
 		});
 	});
+
+	it('documents deployment provenance identity on stored alerts and rollup on alert summary (issue #1169)', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const storedAlert = spec.components.schemas.StoredAlert;
+		const alertSummary = spec.components.schemas.AlertSummary;
+		const deploymentIdentity = spec.components.schemas.DeploymentIdentity;
+		const deploymentSummaryItem = spec.components.schemas.DeploymentSummaryItem;
+
+		expect(storedAlert.properties.deployment).toEqual({ $ref: '#/components/schemas/DeploymentIdentity' });
+		expect(alertSummary.properties.deployments).toEqual({
+			type: 'array',
+			description: expect.any(String),
+			items: { $ref: '#/components/schemas/DeploymentSummaryItem' },
+		});
+		expect(deploymentIdentity.properties).toHaveProperty('platform');
+		expect(deploymentIdentity.properties).toHaveProperty('gitSha');
+		expect(deploymentIdentity.properties).toHaveProperty('service');
+		expect(deploymentIdentity.properties).toHaveProperty('runtimeVersion');
+		expect(deploymentSummaryItem.required).toEqual(expect.arrayContaining(['count', 'lastSeen']));
+	});
 });

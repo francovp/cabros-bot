@@ -50,6 +50,7 @@ const {
 } = require('../tradingview/riskRewardMath');
 const { deriveAssetContext, parseTradingViewSignal } = require('../tradingview/parseTradingViewSignal');
 const { analyzeSentimentScoreDistribution } = require('../grounding/sentimentDistribution');
+const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
 
 function createEmptySignalClassCounts() {
 	return {
@@ -483,6 +484,14 @@ function formatAlertDocument(doc, options = {}) {
 		if (typeof data.originalLength === 'number' && Number.isFinite(data.originalLength)) {
 			docObj.originalLength = data.originalLength;
 		}
+	}
+	if (data.deployment && typeof data.deployment === 'object') {
+		docObj.deployment = {
+			platform: typeof data.deployment.platform === 'string' ? data.deployment.platform : null,
+			gitSha: typeof data.deployment.gitSha === 'string' ? data.deployment.gitSha : null,
+			service: typeof data.deployment.service === 'string' ? data.deployment.service : null,
+			runtimeVersion: typeof data.deployment.runtimeVersion === 'string' ? data.deployment.runtimeVersion : null,
+		};
 	}
 	return docObj;
 }
@@ -2329,6 +2338,7 @@ async function saveAlertInternal(params = {}) {
 			source: typeof source === 'string' && source.trim() ? source.trim() : 'webhook',
 			useTradingViewData: Boolean(useTradingViewData),
 			tradingViewEnrichmentApplied: Boolean(tradingViewEnrichmentApplied),
+			deployment: getDeploymentIdentity(),
 		};
 		if (truncated) {
 			document.truncated = true;
@@ -2647,6 +2657,7 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 		replayedAt: admin.firestore.FieldValue.serverTimestamp(),
 		expiresAt: buildRetentionExpiryTimestamp(),
 		source: 'alert-replay',
+		deployment: getDeploymentIdentity(),
 		...(typeof reEnriched === 'boolean' ? { reEnriched } : {}),
 		...(enrichmentData && typeof enrichmentData === 'object' ? { enrichmentData: stripUndefinedFieldsDeep(sanitizeEnrichmentData(enrichmentData)) } : {}),
 	};
@@ -3363,6 +3374,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 			byChannel: {},
 		},
 		costByFeature: createFeatureCostSummary(),
+		deployments: [],
 	};
 	if (includeDecisionRollup && isDecisionAuditEnabled()) {
 		summary.decision = { gates: createDecisionGatesRollup() };
@@ -3375,6 +3387,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 	// Cross-document state so multi-symbol / multi-document requests are not
 	// counted once per stored document.
 	const batchState = { seenBatches: new Set(), seenSymbols: new Map() };
+	const deploymentRollup = new Map();
 
 	for (const doc of docs) {
 		const data = doc.data() || {};
@@ -3383,6 +3396,47 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		const useTradingViewData = Boolean(data.useTradingViewData);
 		const tradingViewEnrichmentApplied = Boolean(data.tradingViewEnrichmentApplied);
 		const tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
+
+		const dep = data.deployment && typeof data.deployment === 'object' ? data.deployment : null;
+		const platform = (dep && typeof dep.platform === 'string' && dep.platform.trim())
+			? dep.platform.trim()
+			: (dep && dep.platform === null ? null : 'unknown');
+		const gitSha = (dep && typeof dep.gitSha === 'string' && dep.gitSha.trim())
+			? dep.gitSha.trim()
+			: null;
+		const service = (dep && typeof dep.service === 'string' && dep.service.trim())
+			? dep.service.trim()
+			: (dep && dep.service === null ? null : (platform === 'unknown' ? null : 'cabros-bot'));
+		const runtimeVersion = (dep && typeof dep.runtimeVersion === 'string' && dep.runtimeVersion.trim())
+			? dep.runtimeVersion.trim()
+			: null;
+
+		const depKey = `${platform || 'null'}::${gitSha || 'null'}::${service || 'null'}`;
+		const receivedAtMs = getTimestampMillis(data.receivedAt || data.createdAt);
+		const docTimestamp = receivedAtMs !== null
+			? new Date(receivedAtMs).toISOString()
+			: (typeof data.receivedAt === 'string' ? data.receivedAt : null);
+
+		if (!deploymentRollup.has(depKey)) {
+			deploymentRollup.set(depKey, {
+				platform,
+				gitSha,
+				service,
+				runtimeVersion,
+				count: 0,
+				lastSeen: docTimestamp,
+			});
+		}
+		const depEntry = deploymentRollup.get(depKey);
+		depEntry.count += 1;
+		if (docTimestamp) {
+			if (!depEntry.lastSeen || docTimestamp > depEntry.lastSeen) {
+				depEntry.lastSeen = docTimestamp;
+			}
+		}
+		if (!depEntry.runtimeVersion && runtimeVersion) {
+			depEntry.runtimeVersion = runtimeVersion;
+		}
 
 		summary.totalAlerts += 1;
 		incrementCounter(summary.bySource, data.source);
@@ -3491,6 +3545,15 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 	if (SUMMARY_INTERVALS[interval]) {
 		summary.buckets = buildSummaryBuckets(interval, window, docs);
 	}
+
+	summary.deployments = Array.from(deploymentRollup.values())
+		.sort((a, b) => {
+			const timeA = a.lastSeen || '';
+			const timeB = b.lastSeen || '';
+			if (timeB !== timeA) return timeB.localeCompare(timeA);
+			return b.count - a.count;
+		})
+		.slice(0, 50);
 
 	return summary;
 }

@@ -333,6 +333,12 @@ describe('AlertStorageService', () => {
 				source: 'webhook',
 				useTradingViewData: true,
 				tradingViewEnrichmentApplied: false,
+				deployment: expect.objectContaining({
+					platform: expect.any(String),
+					gitSha: expect.any(String),
+					service: 'cabros-bot',
+					runtimeVersion: expect.any(String),
+				}),
 			});
 		});
 
@@ -462,6 +468,12 @@ describe('AlertStorageService', () => {
 				useTradingViewData: false,
 				tradingViewEnrichmentApplied: false,
 				processingTimeMs: 120,
+				deployment: expect.objectContaining({
+					platform: expect.any(String),
+					gitSha: expect.any(String),
+					service: 'cabros-bot',
+					runtimeVersion: expect.any(String),
+				}),
 			});
 		});
 
@@ -1832,6 +1844,28 @@ describe('AlertStorageService', () => {
 			expect(result).toMatchObject({
 				id: 'alert-with-req-id',
 				requestId: 'req-observable-123',
+			});
+		});
+
+		it('returns deployment identity when present on the document', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocGet.mockResolvedValueOnce(buildDocSnapshot('alert-with-dep', {
+				receivedAt: buildTimestamp('2026-06-06T10:30:00.000Z'),
+				text: 'Stored alert with deployment',
+				deployment: {
+					platform: 'render',
+					gitSha: 'abcdef1234567890abcdef1234567890abcdef12',
+					service: 'cabros-bot-worker',
+					runtimeVersion: '1.2.3',
+				},
+			}));
+
+			const result = await AlertStorageService.getAlertById('alert-with-dep');
+			expect(result.deployment).toEqual({
+				platform: 'render',
+				gitSha: 'abcdef1234567890abcdef1234567890abcdef12',
+				service: 'cabros-bot-worker',
+				runtimeVersion: '1.2.3',
 			});
 		});
 
@@ -3279,6 +3313,16 @@ describe('AlertStorageService', () => {
 						whatsapp: { total: 1, success: 1, failure: 0 },
 					},
 				},
+				deployments: [
+					{
+						count: 2,
+						gitSha: null,
+						lastSeen: '2026-06-06T12:00:00.000Z',
+						platform: 'unknown',
+						runtimeVersion: null,
+						service: null,
+					},
+				],
 				scanner: {
 					totalRuns: 0,
 					errorCategoryCounts: {
@@ -3302,6 +3346,71 @@ describe('AlertStorageService', () => {
 				},
 			});
 			expect(JSON.stringify(result)).not.toContain('raw alert text');
+		});
+
+		it('aggregates deployments by platform, gitSha, and service, sorting by lastSeen descending', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-1', {
+						receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+						source: 'webhook',
+						symbol: 'BTCUSDT',
+						deployment: {
+							platform: 'railway',
+							gitSha: 'sha-old',
+							service: 'cabros-bot',
+							runtimeVersion: '0.1.0',
+						},
+					}),
+					buildQueryDoc('alert-2', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						symbol: 'ETHUSDT',
+						deployment: {
+							platform: 'railway',
+							gitSha: 'sha-new',
+							service: 'cabros-bot',
+							runtimeVersion: '0.1.0',
+						},
+					}),
+					buildQueryDoc('alert-3', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						source: 'webhook',
+						symbol: 'SOLUSDT',
+						deployment: {
+							platform: 'railway',
+							gitSha: 'sha-old',
+							service: 'cabros-bot',
+							runtimeVersion: '0.1.0',
+						},
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+			});
+
+			expect(result.deployments).toHaveLength(2);
+			expect(result.deployments[0]).toEqual({
+				platform: 'railway',
+				gitSha: 'sha-new',
+				service: 'cabros-bot',
+				runtimeVersion: '0.1.0',
+				count: 1,
+				lastSeen: '2026-06-06T12:00:00.000Z',
+			});
+			expect(result.deployments[1]).toEqual({
+				platform: 'railway',
+				gitSha: 'sha-old',
+				service: 'cabros-bot',
+				runtimeVersion: '0.1.0',
+				count: 2,
+				lastSeen: '2026-06-06T11:00:00.000Z',
+			});
 		});
 
 		it('excludes expired alerts from summaries', async () => {

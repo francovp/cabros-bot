@@ -15,6 +15,7 @@ const {
 	parseEntryPriceSources,
 	getEntryPriceSourceChains: buildEntryPriceSourceChains,
 } = require('../../lib/signalOutcomeEntryPriceSources');
+const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
 
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 
@@ -1174,6 +1175,7 @@ async function recordSignalInternal({
 			eligibilityReason: eligibility.reason || null,
 			outcomeEvaluated: !isEligible,
 			outcomes,
+			deployment: getDeploymentIdentity(),
 		};
 
 		let docRef;
@@ -3045,6 +3047,15 @@ function formatOutcomeDocument(doc) {
 			observedPrice: typeof data.observedPrice === 'number' && Number.isFinite(data.observedPrice) ? data.observedPrice : null,
 			tradablePrice: typeof data.tradablePrice === 'number' && Number.isFinite(data.tradablePrice) ? data.tradablePrice : null,
 		});
+	}
+
+	if (data.deployment && typeof data.deployment === 'object') {
+		formatted.deployment = {
+			platform: typeof data.deployment.platform === 'string' ? data.deployment.platform : null,
+			gitSha: typeof data.deployment.gitSha === 'string' ? data.deployment.gitSha : null,
+			service: typeof data.deployment.service === 'string' ? data.deployment.service : null,
+			runtimeVersion: typeof data.deployment.runtimeVersion === 'string' ? data.deployment.runtimeVersion : null,
+		};
 	}
 
 	return formatted;
