@@ -459,6 +459,7 @@ describe('Alert Handler', () => {
 			invalidation_level: '$65000',
 			target_level: '$70000',
 			setup_type: 'trend_continuation',
+			setup_evidence: 'Higher highs and 20 EMA trend support',
 			risk_reward_ratio: 2,
 			sources: [{ title: 'Source 1', url: 'https://example.com' }],
 			truncated: false,
@@ -477,6 +478,7 @@ describe('Alert Handler', () => {
 		expect(result.invalidation_level).toBe('$65000');
 		expect(result.target_level).toBe('$70000');
 		expect(result.setup_type).toBe('trend_continuation');
+		expect(result.setup_evidence).toBe('Higher highs and 20 EMA trend support');
 		expect(result.risk_reward_ratio).toBe(2);
 		expect(result.sources).toEqual([{ title: 'Source 1', url: 'https://example.com' }]);
 		expect(result.extraText).toContain('*Model used*: `gemini-2.5-flash`');
@@ -497,6 +499,7 @@ describe('Alert Handler', () => {
 			invalidation_level: 94,
 			target_level: 112,
 			setup_type: 'trend_continuation',
+			setup_evidence: 'Higher highs and 20 EMA trend support',
 			risk_reward_ratio: 2,
 		});
 		groundAlert.mockResolvedValue({
@@ -511,6 +514,7 @@ describe('Alert Handler', () => {
 			invalidation_level: 94,
 			target_level: 112,
 			setup_type: 'trend_continuation',
+			setup_evidence: 'Higher highs and 20 EMA trend support',
 			risk_reward_ratio: 2,
 		}));
 
@@ -530,11 +534,13 @@ describe('Alert Handler', () => {
 			insights: ['Gemini insight'],
 			sources: [],
 			setup_type: 'breakout',
+			setup_evidence: 'Range breakout on heavy volume',
 		});
 
 		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
 
 		expect(result.setup_type).toBe('breakout');
+		expect(result.setup_evidence).toBe('Range breakout on heavy volume');
 		expect(result).not.toHaveProperty('invalidation_level');
 		expect(result).not.toHaveProperty('target_level');
 		expect(result).not.toHaveProperty('risk_reward_ratio');
