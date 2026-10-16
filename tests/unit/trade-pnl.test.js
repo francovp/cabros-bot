@@ -184,6 +184,31 @@ describe('summarize', () => {
 		expect(byDay.groups.map((g) => g.key)).toEqual(['2026-10-01', '2026-10-02']);
 	});
 
+	it('attributes realized trades to their opening lots rather than closing order origin', () => {
+		const autoBuyManualSell = [
+			fill({ side: 'BUY', price: '100', qty: '1', quoteQty: '100', tradeId: 10, binanceOrderId: '10', origin: 'auto_trade' }),
+			fill({ side: 'SELL', price: '120', qty: '1', quoteQty: '120', tradeId: 11, binanceOrderId: '11', origin: 'manual', filledAt: '2026-10-03T01:00:00.000Z' }),
+		];
+		const { roundTrips } = matchFifo(autoBuyManualSell);
+		expect(roundTrips).toHaveLength(1);
+		expect(roundTrips[0].origin).toBe('auto_trade');
+		const byOrigin = summarize({ roundTrips, positions: [], groupBy: 'origin' });
+		expect(byOrigin.groups.map((g) => [g.key, g.realizedPnl])).toEqual([['auto_trade', '20']]);
+	});
+
+	it('assigns mixed origin when a closing order spans lots with different origins', () => {
+		const mixedFills = [
+			fill({ side: 'BUY', price: '100', qty: '1', quoteQty: '100', tradeId: 20, binanceOrderId: '20', origin: 'auto_trade' }),
+			fill({ side: 'BUY', price: '100', qty: '1', quoteQty: '100', tradeId: 21, binanceOrderId: '21', origin: 'manual' }),
+			fill({ side: 'SELL', price: '110', qty: '2', quoteQty: '220', tradeId: 22, binanceOrderId: '22', origin: 'manual', filledAt: '2026-10-03T02:00:00.000Z' }),
+		];
+		const { roundTrips } = matchFifo(mixedFills);
+		expect(roundTrips).toHaveLength(1);
+		expect(roundTrips[0].origin).toBe('mixed');
+		const byOrigin = summarize({ roundTrips, positions: [], groupBy: 'origin' });
+		expect(byOrigin.groups.map((g) => [g.key, g.realizedPnl])).toEqual([['mixed', '20']]);
+	});
+
 	it('returns null ROI and profit factor when there is no denominator', () => {
 		const summary = summarize({ roundTrips: [], positions: [] });
 		expect(summary.roiPct).toBeNull();

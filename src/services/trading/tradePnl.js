@@ -147,7 +147,7 @@ function matchFifo(fills = []) {
 				symbol: f.symbol,
 				environment: f.environment,
 				exitOrderId: f.binanceOrderId ?? null,
-				origin: f.origin || 'manual',
+				exitOrigin: f.origin || 'manual',
 				qty: 0n,
 				costBasis: 0n,
 				entryGross: 0n,
@@ -158,6 +158,7 @@ function matchFifo(fills = []) {
 				entryMs: Infinity,
 				exitMs: 0,
 				alertIds: new Set(),
+				origins: new Set(),
 				setupType: null,
 				invalidationLevel: null,
 			};
@@ -179,6 +180,7 @@ function matchFifo(fills = []) {
 			trip.feesComplete = trip.feesComplete && piece.lot.feesComplete;
 			trip.entryMs = Math.min(trip.entryMs, piece.lot.filledMs);
 			if (piece.lot.alertId) trip.alertIds.add(piece.lot.alertId);
+			if (piece.lot.origin) trip.origins.add(piece.lot.origin);
 			trip.setupType = trip.setupType || piece.lot.setupType;
 			trip.invalidationLevel = trip.invalidationLevel ?? piece.lot.invalidationLevel;
 		}
@@ -207,6 +209,14 @@ function matchFifo(fills = []) {
 }
 
 function formatTrip(trip) {
+	let origin;
+	if (trip.origins && trip.origins.size === 1) {
+		origin = [...trip.origins][0];
+	} else if (trip.origins && trip.origins.size > 1) {
+		origin = 'mixed';
+	} else {
+		origin = trip.origin || trip.exitOrigin || 'manual';
+	}
 	const realized = trip.proceeds - trip.costBasis;
 	const entryPrice = div(trip.entryGross, trip.qty);
 	const exitPrice = div(trip.exitGross, trip.qty);
@@ -219,7 +229,7 @@ function formatTrip(trip) {
 		id: trip.id,
 		environment: trip.environment,
 		symbol: trip.symbol,
-		origin: trip.origin,
+		origin,
 		setupType: trip.setupType || 'unknown',
 		exitOrderId: trip.exitOrderId,
 		qty: fromUnits(trip.qty),
