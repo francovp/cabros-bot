@@ -522,6 +522,94 @@ describe('DiscordService', () => {
 			expect(calledUrls).toContain(SECONDARY);
 		});
 
+		it('formats the alert once while failing over across webhooks', async () => {
+			const formatter = {
+				formatEnriched: jest.fn().mockResolvedValue('formatted alert'),
+			};
+			service = new DiscordService({ logger: mockLogger, formatter });
+			await service.validate();
+			global.fetch.mockReset();
+			global.fetch = jest.fn().mockImplementation(async (url) => {
+				if (url.startsWith(PRIMARY)) {
+					return { ok: false, status: 503, text: async () => 'service unavailable' };
+				}
+				return { ok: true, status: 200, json: async () => ({ id: 'msg-secondary' }) };
+			});
+
+			const result = await service.send({ enriched: { original_text: 'alert' } });
+
+			expect(result.success).toBe(true);
+			expect(formatter.formatEnriched).toHaveBeenCalledTimes(1);
+			expect(global.fetch).toHaveBeenCalledTimes(2);
+		});
+
+		it('passes the cancellation signal into formatting and stops before webhook delivery', async () => {
+			const controller = new AbortController();
+			const urlShortener = {
+				shortenUrlsParallel: jest.fn(async () => {
+					controller.abort(new Error('caller cancelled'));
+					return {};
+				}),
+			};
+			service = new DiscordService({ logger: mockLogger, urlShortener });
+			await service.validate();
+			global.fetch.mockReset();
+
+			const result = await service.send({
+				enriched: {
+					original_text: 'alert',
+					sources: [{ title: 'source', url: 'https://example.com/source' }],
+				},
+			}, { signal: controller.signal });
+
+			expect(urlShortener.shortenUrlsParallel).toHaveBeenCalledWith(
+				['https://example.com/source'],
+				{ signal: controller.signal },
+			);
+			expect(result).toMatchObject({ success: false, aborted: true });
+			expect(global.fetch).not.toHaveBeenCalled();
+		});
+
+		it('stops webhook failover when a candidate aborts', async () => {
+			service = new DiscordService({ logger: mockLogger, maxUnhealthyDurationMs: 60000 });
+			await service.validate();
+			global.fetch.mockReset();
+			const controller = new AbortController();
+			global.fetch = jest.fn().mockImplementation(async (url) => {
+				if (url.startsWith(PRIMARY)) {
+					controller.abort(new Error('caller cancelled'));
+					return { ok: false, status: 503, text: async () => 'service unavailable' };
+				}
+				return { ok: true, status: 200, json: async () => ({ id: 'unexpected-fallback' }) };
+			});
+
+			const result = await service.send({ text: 'alert' }, { signal: controller.signal });
+
+			expect(result).toMatchObject({ success: false, aborted: true });
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+			expect(global.fetch.mock.calls[0][0]).toContain('/111/primary');
+		});
+
+		it('keeps a confirmed webhook delivery successful if cancellation arrives afterward', async () => {
+			service = new DiscordService({ logger: mockLogger, maxUnhealthyDurationMs: 60000 });
+			await service.validate();
+			global.fetch.mockReset();
+			const controller = new AbortController();
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => {
+					controller.abort(new Error('late cancellation'));
+					return { id: 'confirmed-delivery' };
+				},
+			});
+
+			const result = await service.send({ text: 'alert' }, { signal: controller.signal });
+
+			expect(result).toMatchObject({ success: true, messageId: 'confirmed-delivery' });
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+		});
+
 		it('marks a failing webhook unhealthy and avoids it on the next attempt', async () => {
 			service = new DiscordService({
 				logger: mockLogger,
