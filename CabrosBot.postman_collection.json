@@ -15226,6 +15226,24 @@
         },
         {
           "name": "GET Trading Positions",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"positions response has success and positions array\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.positions).to.be.an(\"array\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
           "request": {
             "method": "GET",
             "header": [
@@ -15277,7 +15295,83 @@
           ]
         },
         {
+          "name": "GET Trading Positions (invalid environment)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"error code is INVALID_REQUEST\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "An invalid environment is rejected with 400 INVALID_REQUEST.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/positions?environment=invalid_env",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "positions"
+              ],
+              "query": [
+                {
+                  "key": "environment",
+                  "value": "invalid_env",
+                  "description": "Invalid environment value"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Invalid Environment",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid environment: invalid_env. Must be one of: testnet, demo, live\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
           "name": "GET Trading PnL Summary",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"pnl summary response has summary object\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.summary).to.be.an(\"object\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
           "request": {
             "method": "GET",
             "header": [
@@ -15335,7 +15429,87 @@
           ]
         },
         {
+          "name": "GET Trading PnL Summary (invalid groupBy)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"error code is INVALID_REQUEST\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "An unsupported groupBy value is rejected with 400 INVALID_REQUEST.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/pnl/summary?environment=testnet&groupBy=invalid_group",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "pnl",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "environment",
+                  "value": "testnet"
+                },
+                {
+                  "key": "groupBy",
+                  "value": "invalid_group"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Invalid groupBy",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid groupBy parameter. Must be one of: symbol, origin, setupType, day\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
           "name": "GET Trading Trades",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"trades response has trades array\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.trades).to.be.an(\"array\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
           "request": {
             "method": "GET",
             "header": [
@@ -15382,6 +15556,67 @@
               "status": "Forbidden",
               "code": 403,
               "body": "{\n  \"success\": false,\n  \"error\": \"Trade ledger is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Trading Trades (invalid limit)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"error code is INVALID_REQUEST\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "A limit outside 1..100 is rejected with 400 INVALID_REQUEST.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/trades?environment=testnet&limit=500",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "trades"
+              ],
+              "query": [
+                {
+                  "key": "environment",
+                  "value": "testnet"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Invalid Limit",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"limit must be an integer between 1 and 100\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         }

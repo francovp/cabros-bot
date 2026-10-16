@@ -346,7 +346,14 @@ class TradeLedgerService {
 			this.durability.lastErrorReason = REASONS.UNAVAILABLE;
 			const category = classifyFirestoreError(error);
 			this.metrics.recordReadFailure(METRICS_DOMAIN, category);
-			throw error;
+			if (error?.code === 'STORAGE_UNAVAILABLE') {
+				throw error;
+			}
+			const storageError = new Error('Trade ledger storage is unavailable');
+			storageError.code = 'STORAGE_UNAVAILABLE';
+			storageError.category = category;
+			storageError.cause = error;
+			throw storageError;
 		}
 
 		return {

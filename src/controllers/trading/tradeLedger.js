@@ -76,6 +76,13 @@ async function getPositions(req, res) {
 			maxScan,
 		});
 	} catch (error) {
+		if (error?.code === 'STORAGE_UNAVAILABLE') {
+			return res.status(503).json({
+				success: false,
+				error: error.message || 'Trade ledger storage is unavailable',
+				code: 'STORAGE_UNAVAILABLE',
+			});
+		}
 		console.error('[TradeLedgerController] getPositions failed:', error);
 		sentryService.captureRuntimeError({
 			channel: 'trade-ledger-controller',
@@ -158,6 +165,13 @@ async function getPnlSummary(req, res) {
 			maxScan,
 		});
 	} catch (error) {
+		if (error?.code === 'STORAGE_UNAVAILABLE') {
+			return res.status(503).json({
+				success: false,
+				error: error.message || 'Trade ledger storage is unavailable',
+				code: 'STORAGE_UNAVAILABLE',
+			});
+		}
 		console.error('[TradeLedgerController] getPnlSummary failed:', error);
 		sentryService.captureRuntimeError({
 			channel: 'trade-ledger-controller',
@@ -236,6 +250,13 @@ async function getTrades(req, res) {
 			},
 		});
 	} catch (error) {
+		if (error?.code === 'STORAGE_UNAVAILABLE') {
+			return res.status(503).json({
+				success: false,
+				error: error.message || 'Trade ledger storage is unavailable',
+				code: 'STORAGE_UNAVAILABLE',
+			});
+		}
 		console.error('[TradeLedgerController] getTrades failed:', error);
 		sentryService.captureRuntimeError({
 			channel: 'trade-ledger-controller',

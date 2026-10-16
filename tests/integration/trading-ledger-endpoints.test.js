@@ -149,6 +149,19 @@ describe('Trade Ledger Endpoints (Integration)', () => {
 			expect(res.status).toBe(200);
 			expect(res.body.success).toBe(true);
 		});
+
+		it('returns 503 STORAGE_UNAVAILABLE when storage query fails', async () => {
+			const { tradeLedgerService } = require('../../src/services/trading/TradeLedgerService');
+			const err = new Error('Trade ledger storage is unavailable');
+			err.code = 'STORAGE_UNAVAILABLE';
+			tradeLedgerService.listFills.mockRejectedValueOnce(err);
+
+			const res = await request(app)
+				.get('/api/trading/positions?environment=testnet')
+				.set('x-api-key', 'test-api-key');
+			expect(res.status).toBe(503);
+			expect(res.body.code).toBe('STORAGE_UNAVAILABLE');
+		});
 	});
 
 	describe('GET /api/trading/positions', () => {
