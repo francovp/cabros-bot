@@ -1983,10 +1983,10 @@ describe('admin browser client', () => {
 		const sourceOptions = find(listForm, (node) => node.tagName === 'DATALIST');
 		expect(sourceOptions.attributes.id).toBe('alert-source-options');
 		const sourceValues = sourceOptions.children.map((option) => option.value);
-		expect(sourceValues).toEqual(expect.arrayContaining([
-			'', 'webhook', 'webhook-alert', 'webhook-message', 'news-monitor',
-			'alert-replay', 'market-scanner', 'expanded-analysis',
-		]));
+		expect(sourceValues).toEqual([
+			'', 'webhook-alert', 'webhook-message', 'webhook', 'news-monitor',
+			'market-scanner', 'expanded-analysis', 'test-alert',
+		]);
 		const enrichedValues = enrichedSelect.children.map((option) => option.value);
 		expect(enrichedValues).toEqual(['', 'true', 'false']);
 	});

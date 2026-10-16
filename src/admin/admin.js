@@ -2487,13 +2487,13 @@ const createAlertListForm = () => {
 	const sourceOptions = element('datalist', { attributes: { id: 'alert-source-options' } });
 	[
 		['', 'All sources'],
-		['webhook', 'Webhook'],
 		['webhook-alert', 'Webhook alert'],
 		['webhook-message', 'Webhook message'],
+		['webhook', 'Webhook (legacy)'],
 		['news-monitor', 'News monitor'],
-		['alert-replay', 'Alert replay'],
 		['market-scanner', 'Market scanner'],
 		['expanded-analysis', 'Expanded analysis'],
+		['test-alert', 'Test alert'],
 	].forEach(([value, text]) => {
 		const option = element('option', { text });
 		option.value = value;
