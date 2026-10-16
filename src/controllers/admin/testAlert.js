@@ -232,9 +232,10 @@ function postTestAlert(botOrGetter, deps = {}) {
 
 		// Channel formatting
 		const liveWhatsAppService = notificationManager?.channels?.get?.('whatsapp');
+		const liveDiscordService = notificationManager?.channels?.get?.('discord');
 		const activeUrlShortener = deps.urlShortener !== undefined
 			? deps.urlShortener
-			: (liveWhatsAppService?.urlShortener || getURLShortener());
+			: (liveWhatsAppService?.urlShortener || liveDiscordService?.urlShortener || getURLShortener());
 
 		const telegramFormatter = (deps && deps.telegramFormatter) || new MarkdownV2Formatter();
 		const whatsappFormatter = (deps && deps.whatsappFormatter)
