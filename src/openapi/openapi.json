@@ -41,6 +41,10 @@
     },
     {
       "name": "Operations"
+    },
+    {
+      "name": "Alert subscribers",
+      "description": "Outbound webhook subscribers for real-time alert dispatch with HMAC signing and SSRF protection"
     }
   ],
   "paths": {
@@ -4416,6 +4420,355 @@
         ],
         "x-admin-role": "admin.operator"
       }
+    },
+    "/api/alert-subscribers": {
+      "get": {
+        "tags": [
+          "Alert subscribers"
+        ],
+        "summary": "List alert subscribers",
+        "operationId": "listAlertSubscribers",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AlertSubscriberResult"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      },
+      "post": {
+        "tags": [
+          "Alert subscribers"
+        ],
+        "summary": "Create an alert subscriber",
+        "operationId": "createAlertSubscriber",
+        "requestBody": {
+          "$ref": "#/components/requestBodies/AlertSubscriber"
+        },
+        "responses": {
+          "201": {
+            "$ref": "#/components/responses/AlertSubscriberResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/alert-subscribers/{id}": {
+      "get": {
+        "tags": [
+          "Alert subscribers"
+        ],
+        "summary": "Get an alert subscriber by ID",
+        "operationId": "getAlertSubscriber",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Alert subscriber ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AlertSubscriberResult"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      },
+      "put": {
+        "tags": [
+          "Alert subscribers"
+        ],
+        "summary": "Replace an alert subscriber",
+        "operationId": "replaceAlertSubscriber",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Alert subscriber ID"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/AlertSubscriber"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AlertSubscriberResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      },
+      "patch": {
+        "tags": [
+          "Alert subscribers"
+        ],
+        "summary": "Update an alert subscriber",
+        "operationId": "updateAlertSubscriber",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Alert subscriber ID"
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/AlertSubscriberUpdate"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AlertSubscriberResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      },
+      "delete": {
+        "tags": [
+          "Alert subscribers"
+        ],
+        "summary": "Delete an alert subscriber",
+        "operationId": "deleteAlertSubscriber",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Alert subscriber ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AlertSubscriberResult"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/alert-subscribers/{id}/test": {
+      "post": {
+        "tags": [
+          "Alert subscribers"
+        ],
+        "summary": "Send test ping to an alert subscriber",
+        "operationId": "testAlertSubscriber",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Alert subscriber ID"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/AlertSubscriberTestResult"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
     }
   },
   "components": {
@@ -5623,6 +5976,45 @@
                 "scanner",
                 "news"
               ]
+            }
+          }
+        }
+      },
+      "AlertSubscriber": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AlertSubscriberInput"
+            },
+            "example": {
+              "url": "https://example.com/alerts/webhook",
+              "secret": "my-signing-secret",
+              "description": "Discord webhook bridge",
+              "filter": {
+                "symbols": [
+                  "BTCUSDT",
+                  "ETHUSDT"
+                ],
+                "sources": [
+                  "webhook-alert"
+                ]
+              },
+              "enabled": true
+            }
+          }
+        }
+      },
+      "AlertSubscriberUpdate": {
+        "required": true,
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AlertSubscriberInput"
+            },
+            "example": {
+              "description": "Updated Discord webhook bridge",
+              "enabled": false
             }
           }
         }
@@ -7687,6 +8079,36 @@
         "headers": {
           "X-Request-Id": {
             "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
+      },
+      "AlertSubscriberResult": {
+        "description": "Alert subscriber response",
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AlertSubscriberResponse"
+            }
+          }
+        }
+      },
+      "AlertSubscriberTestResult": {
+        "description": "Alert subscriber test dispatch response",
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/AlertSubscriberTestResponse"
+            }
           }
         }
       }
@@ -17102,6 +17524,229 @@
             "minimum": 0,
             "maximum": 30000,
             "description": "Effective REMOTE_CONFIG_REFRESH_JITTER_MS upper bound in milliseconds (0-30000). Bootstrap uses environment values; the environment override or a published Remote Config value offsets only the first scheduled refresh."
+          }
+        }
+      },
+      "AlertSubscriber": {
+        "type": "object",
+        "required": [
+          "id",
+          "url",
+          "enabled",
+          "hasSecret",
+          "createdAt",
+          "updatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "description": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "hasSecret": {
+            "type": "boolean"
+          },
+          "filter": {
+            "type": "object",
+            "properties": {
+              "symbols": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "enriched": {
+                "type": "boolean"
+              },
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastDeliveryAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "lastDeliveryStatus": {
+            "type": "string"
+          }
+        }
+      },
+      "AlertSubscriberInput": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "secret": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "filter": {
+            "type": "object",
+            "properties": {
+              "symbols": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "enriched": {
+                "type": "boolean"
+              },
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "AlertSubscriberStorage": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "mode",
+          "backend",
+          "collection"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "durable",
+              "ephemeral"
+            ]
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ]
+          },
+          "failOpen": {
+            "type": "boolean"
+          },
+          "collection": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer"
+          },
+          "activeCount": {
+            "type": "integer"
+          }
+        }
+      },
+      "AlertSubscriberResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "storage"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/AlertSubscriberStorage"
+          },
+          "subscriber": {
+            "$ref": "#/components/schemas/AlertSubscriber"
+          },
+          "subscribers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AlertSubscriber"
+            }
+          }
+        }
+      },
+      "AlertSubscriberTestResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "delivery"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "success": {
+                "type": "boolean"
+              },
+              "statusCode": {
+                "type": "integer"
+              },
+              "attempts": {
+                "type": "integer"
+              },
+              "error": {
+                "type": "string"
+              },
+              "durationMs": {
+                "type": "integer"
+              }
+            }
           }
         }
       }

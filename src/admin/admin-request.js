@@ -19,6 +19,8 @@
 		'POST /api/jobs/{jobId}/cancel': 'Cancel this job?',
 		'POST /api/jobs/{jobId}/retry': 'Retry this job?',
 		'POST /api/jobs/{jobId}/retry-failed': 'Retry failed items for this job?',
+		'DELETE /api/alert-subscribers/{id}': 'Delete this alert subscriber webhook?',
+		'POST /api/alert-subscribers/{id}/test': 'Send test webhook ping to this subscriber?',
 	};
 
 	const hasJsonBody = (body) => body !== undefined && body !== null

@@ -7,6 +7,7 @@ const {
 } = require('../services/scannerPresets');
 const { newsMonitorSchedulerService } = require('../services/newsMonitorScheduler');
 const { alertSchedulerService } = require('../services/scheduler');
+const { alertSubscriberService } = require('../services/subscribers/AlertSubscriberService');
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const alertFeedbackStorageService = require('../services/storage/AlertFeedbackStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
@@ -318,6 +319,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	// toggle failed (or that it worked) when the opposite is true.
 	const firestoreEnabled = resolveStorageGate('ENABLE_FIRESTORE_ALERT_STORAGE');
 	const firestoreScannerPresetsEnabled = resolveStorageGate('ENABLE_FIRESTORE_SCANNER_PRESETS');
+	const firestoreAlertSubscribersEnabled = resolveStorageGate('ENABLE_FIRESTORE_ALERT_SUBSCRIBERS');
 	const firestoreJobStorageEnabled = resolveStorageGate('ENABLE_FIRESTORE_JOB_STORAGE')
 		|| firestoreEnabled;
 	const sentryEnabled = isEnabled(process.env.ENABLE_SENTRY);
@@ -527,6 +529,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
 			firestoreAlertStorage: firestoreEnabled,
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
+			firestoreAlertSubscribers: firestoreAlertSubscribersEnabled,
 			firestoreJobStorage: firestoreJobStorageEnabled,
 			firestoreNewsAnalysis: newsAnalysisStorageService.isEnabled(),
 			firestoreChatPreferences: chatPreferenceService.isEnabled(),
@@ -666,6 +669,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			firebaseRemoteConfig: remoteConfigStatus,
 			chatPreferences: chatPreferenceService.getStatus(),
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
+			alertSubscribers: alertSubscriberService.getStorageStatus(),
 			newsAnalysisStorage: newsAnalysisStorageService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
 			userPriceAlertWorker: userPriceAlertService.getStatus(),
