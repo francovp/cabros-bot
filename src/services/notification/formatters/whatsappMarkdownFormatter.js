@@ -126,9 +126,13 @@ class WhatsAppMarkdownFormatter {
 		}
 
 		// Citations
-		if (citations && citations.length > 0) {
+		const citationList = (citations && citations.length > 0)
+			? citations
+			: (Array.isArray(enriched.sources) ? enriched.sources : []);
+
+		if (citationList && citationList.length > 0) {
 			// Extract URLs for shortening if URL shortener is available
-			const urls = citations.map(c => c.url).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
+			const urls = citationList.map(c => c.url).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
 
 			let shortenedMap = {};
 			if (this.urlShortener && urls.length > 0) {
@@ -142,7 +146,7 @@ class WhatsAppMarkdownFormatter {
 			}
 
 			message += '\n\n*Sources*';
-			citations.forEach(({ title = '', url = '' }) => {
+			citationList.forEach(({ title = '', url = '' }) => {
 				const cleanTitle = title.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1');
 				if (shortenedMap[url]) {
 					message += `\n- ${cleanTitle}: ${shortenedMap[url]}`;
@@ -274,9 +278,13 @@ class WhatsAppMarkdownFormatter {
 		}
 
 		// Sources
-		if (sources.length > 0) {
+		const sourceList = (sources && sources.length > 0)
+			? sources
+			: (Array.isArray(enriched.citations) ? enriched.citations : []);
+
+		if (sourceList && sourceList.length > 0) {
 			// Extract URLs for shortening if URL shortener is available
-			const urls = sources.map(c => c.url).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
+			const urls = sourceList.map(c => c.url).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
 
 			let shortenedMap = {};
 			if (this.urlShortener && urls.length > 0) {
@@ -292,7 +300,7 @@ class WhatsAppMarkdownFormatter {
 			}
 
 			message += '\n\n*Sources*';
-			sources.forEach(({ title = '', url = '' }) => {
+			sourceList.forEach(({ title = '', url = '' }) => {
 				const cleanTitle = title.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1');
 				if (shortenedMap[url]) {
 					message += `\n- ${cleanTitle}: ${shortenedMap[url]}`;
