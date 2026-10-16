@@ -139,10 +139,30 @@ describe('TradeLedgerService', () => {
 		await service.recordOrderFills({ environment: 'live', order: ORDER });
 		const result = await service.listFills({ environment: 'testnet' });
 		expect(mock.queryState.where).toEqual(['environment', '==', 'testnet']);
-		expect(mock.queryState.orderBy).toEqual(['filledAt', 'desc']);
+		expect(mock.queryState.orderBy).toEqual(['filledAt', 'asc']);
 		expect(result.fills).toHaveLength(2);
 		expect(result.fills.every((f) => f.environment === 'testnet')).toBe(true);
 		expect(result.scanTruncated).toBe(true);
+	});
+
+	it('falls back to aggregate execution fields when fills array is absent', () => {
+		const records = buildFillRecords({
+			environment: 'testnet',
+			order: {
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				orderId: 88,
+				clientOrderId: 'cabros-test-1',
+				status: 'FILLED',
+				executedQty: '0.00200000',
+				cummulativeQuoteQty: '100.00',
+			},
+		});
+		expect(records).toHaveLength(1);
+		expect(records[0].data.qty).toBe('0.002');
+		expect(records[0].data.price).toBe('50000');
+		expect(records[0].data.quoteQty).toBe('100');
+		expect(records[0].data.binanceOrderId).toBe('88');
 	});
 
 	it('falls back to the default scan bound on invalid values', () => {

@@ -108,7 +108,24 @@ async function reconcileOrder(client, symbol, clientOrderId) {
 	if (!clientOrderId || typeof client.getOrder !== 'function') return null;
 
 	try {
-		return await client.getOrder({ symbol, origClientOrderId: clientOrderId });
+		const order = await client.getOrder({ symbol, origClientOrderId: clientOrderId });
+		if (order && !order.fills && typeof client.getAccountTradeList === 'function' && Number(order.executedQty) > 0) {
+			try {
+				const trades = await client.getAccountTradeList({ symbol, orderId: order.orderId });
+				if (Array.isArray(trades) && trades.length > 0) {
+					order.fills = trades.map((t) => ({
+						price: t.price,
+						qty: t.qty,
+						commission: t.commission,
+						commissionAsset: t.commissionAsset,
+						tradeId: t.id,
+					}));
+				}
+			} catch {
+				// fail-open: keep order without extra trade list query
+			}
+		}
+		return order;
 	} catch (error) {
 		if (isOrderNotFoundError(error)) return null;
 		throw new BinanceOrderServiceError(

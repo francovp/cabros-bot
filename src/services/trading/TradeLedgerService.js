@@ -71,15 +71,36 @@ function toIso(value) {
  * Normalize the fills of a FULL Binance order response into ledger records.
  * Pure: returns `[{ id, data }]`, with no `undefined` values in `data`.
  */
-function buildFillRecords({ environment, order, origin = 'manual', alertId = null } = {}) {
-	if (!order || !Array.isArray(order.fills) || order.fills.length === 0) return [];
+function buildFillRecords({ environment, order, origin = 'manual', alertId = null, setupType = null } = {}) {
+	if (!order) return [];
 	const symbol = String(order.symbol || '').toUpperCase();
 	const side = String(order.side || '').toUpperCase();
 	if (!symbol || (side !== 'BUY' && side !== 'SELL')) return [];
 	const { baseAsset, quoteAsset } = deriveSymbolAssets(symbol);
 	const filledAt = toIso(order.transactTime ?? order.updateTime ?? order.time ?? Date.now());
 
-	return order.fills
+	let rawFills = Array.isArray(order.fills) ? order.fills : [];
+	if (rawFills.length === 0) {
+		const executedUnits = toUnits(order.executedQty ?? order.executed_qty);
+		const quoteUnits = toUnits(order.cummulativeQuoteQty ?? order.cummulative_quote_qty ?? order.cumulativeQuoteQty);
+		if (executedUnits !== null && executedUnits > 0n) {
+			const price = (quoteUnits !== null && quoteUnits > 0n)
+				? fromUnits((quoteUnits * SCALE) / executedUnits)
+				: (order.price ? String(order.price) : null);
+			if (price) {
+				rawFills = [{
+					tradeId: order.orderId !== undefined && order.orderId !== null ? String(order.orderId) : (order.clientOrderId || 'reconciled'),
+					price,
+					qty: fromUnits(executedUnits),
+					commission: '0',
+					commissionAsset: null,
+				}];
+			}
+		}
+	}
+	if (rawFills.length === 0) return [];
+
+	return rawFills
 		.filter((f) => f && f.tradeId !== undefined && f.tradeId !== null && toUnits(f.qty) !== null && toUnits(f.price) !== null)
 		.map((f) => {
 			const commission = toUnits(f.commission) !== null ? String(f.commission) : '0';
@@ -105,6 +126,7 @@ function buildFillRecords({ environment, order, origin = 'manual', alertId = nul
 					clientOrderId: order.clientOrderId ? String(order.clientOrderId) : null,
 					alertId: typeof alertId === 'string' && alertId ? alertId : null,
 					origin: ORIGINS.has(origin) ? origin : 'manual',
+					setupType: typeof setupType === 'string' && setupType ? setupType : null,
 					tradeId: f.tradeId,
 					filledAt,
 				},
@@ -191,7 +213,7 @@ class TradeLedgerService {
 		const maxScan = this.getMaxScan();
 		const snapshot = await firestore.collection(COLLECTION_NAME)
 			.where('environment', '==', environment)
-			.orderBy('filledAt', 'desc')
+			.orderBy('filledAt', 'asc')
 			.limit(maxScan)
 			.get();
 		const fills = (snapshot.docs || []).map((doc) => doc.data()).filter((f) => f && f.environment === environment);
