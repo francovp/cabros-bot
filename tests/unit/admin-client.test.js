@@ -2026,6 +2026,51 @@ describe('admin browser client', () => {
 		expect(activeFilters.textContent).toContain('enriched=true');
 	});
 
+	it('restores alert filter controls and summary from the URL', async () => {
+		const search = '?view=alerts&alerts.list.source=webhook-message&alerts.list.enriched=false&alerts.list.before=cursor-2';
+		const browser = createBrowser({
+			location: { search },
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		const activeFilters = find(listForm, (node) => node.className === 'active-filters');
+		const clearButton = findButton(listForm, 'Clear filters');
+
+		expect(listForm.elements.source.value).toBe('webhook-message');
+		expect(listForm.elements.enriched.value).toBe('false');
+		expect(listForm.elements.before.value).toBe('cursor-2');
+		expect(activeFilters.textContent).toBe('Active filters: source=webhook-message, enriched=false');
+		expect(clearButton.disabled).toBe(false);
+		expect(browser.location.search).toBe(search);
+	});
+
+	it('removes restored alert filters and cursor from the URL when cleared', async () => {
+		const browser = createBrowser({
+			location: {
+				search: '?view=alerts&alerts.list.source=news-monitor&alerts.list.enriched=false&alerts.list.before=cursor-2',
+			},
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		const clearButton = findButton(listForm, 'Clear filters');
+		expect(clearButton.disabled).toBe(false);
+
+		await clearButton.dispatch('click');
+		await flush();
+
+		expect(listForm.elements.source.value).toBe('');
+		expect(listForm.elements.enriched.value).toBe('');
+		expect(listForm.elements.before.value).toBe('');
+		const params = new URLSearchParams(browser.location.search);
+		['alerts.list.source', 'alerts.list.enriched', 'alerts.list.before'].forEach((key) => {
+			expect(params.has(key)).toBe(false);
+		});
+	});
+
 	it('clears all filter selections when the Clear filters button is clicked', async () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
