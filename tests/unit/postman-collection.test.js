@@ -39,6 +39,25 @@ function collectRequestsAndSavedExamples(items, result = []) {
 }
 
 describe('Postman collection contract', () => {
+	it('documents webhook-message alert filtering with a matching response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'GET List Alerts (webhook-message)');
+		const customSource = findItem(collection.item, 'GET List Alerts (custom source)');
+		const invalid = findItem(collection.item, 'GET List Alerts (invalid include - 400 Bad Request)');
+
+		expect(item).toBeDefined();
+		expect(item.request.url.raw).toBe('{{baseUrl}}/api/alerts?limit=10&source=webhook-message');
+		expect(item.request.body).toBeUndefined();
+		const response = item.response.find((example) => example.code === 200);
+		expect(JSON.parse(response.body).alerts[0].source).toBe('webhook-message');
+
+		expect(customSource).toBeDefined();
+		expect(customSource.request.url.raw).toBe('{{baseUrl}}/api/alerts?limit=10&source=webhook-signal');
+		expect(JSON.parse(customSource.response.find((example) => example.code === 200).body).alerts[0].source)
+			.toBe('webhook-signal');
+		expect(invalid.response[0].code).toBe(400);
+	});
+
 	it('adds executable response assertions to each alert decision rollup and export variant', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const names = [

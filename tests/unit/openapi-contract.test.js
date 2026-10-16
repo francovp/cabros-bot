@@ -79,6 +79,20 @@ describe('OpenAPI contract', () => {
 		expect(fs.existsSync(contractPath)).toBe(true);
 	});
 
+	it('documents stored alert sources as open strings', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const sourceParameter = contract.components.parameters.Source;
+		const storedSource = contract.components.schemas.StoredAlert.properties.source;
+
+		expect(sourceParameter.schema.enum).toBeUndefined();
+		expect(sourceParameter.example).toBe('webhook-alert');
+		expect(sourceParameter.description).toContain('Custom source values are also accepted as exact filters');
+		expect(sourceParameter.description).toContain('/api/webhook/message');
+		expect(storedSource.enum).toBeUndefined();
+		expect(storedSource.description).toContain('webhook-message');
+		expect(storedSource.description).toMatch(/custom source strings may also be stored/i);
+	});
+
 	it('documents per-symbol alert routing and symbol-scoped results', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const alertRequest = contract.components.schemas.AlertRequest;

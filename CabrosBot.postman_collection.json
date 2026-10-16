@@ -8063,6 +8063,122 @@
           ]
         },
         {
+          "name": "GET List Alerts (webhook-message)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?limit=10&source=webhook-message",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "source",
+                  "value": "webhook-message"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK - Webhook message alerts list",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"message-alert-123\",\n      \"receivedAt\": \"2026-06-06T12:00:00.000Z\",\n      \"text\": \"Deployment maintenance starts in 15 minutes.\",\n      \"source\": \"webhook-message\",\n      \"enriched\": false,\n      \"enrichmentData\": null,\n      \"tokenUsage\": null,\n      \"channels\": [\n        \"telegram\"\n      ],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"456\"\n        }\n      ]\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 10,\n    \"nextBefore\": null\n  }\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns only persisted webhook-message alerts', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    var body = pm.response.json();",
+                  "    pm.expect(body.success).to.eql(true);",
+                  "    pm.expect(body.alerts.every(function (alert) { return alert.source === 'webhook-message'; })).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET List Alerts (custom source)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alerts?limit=10&source=webhook-signal",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alerts"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "source",
+                  "value": "webhook-signal"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK - custom source alerts list",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "body": "{\n  \"success\": true,\n  \"alerts\": [\n    {\n      \"id\": \"signal-alert-123\",\n      \"receivedAt\": \"2026-06-06T12:00:00.000Z\",\n      \"text\": \"BINANCE:BTCUSDT bullish signal\",\n      \"source\": \"webhook-signal\",\n      \"enriched\": false,\n      \"enrichmentData\": null,\n      \"tokenUsage\": null,\n      \"channels\": [\n        \"telegram\"\n      ],\n      \"deliveryResults\": [\n        {\n          \"channel\": \"telegram\",\n          \"success\": true,\n          \"messageId\": \"456\"\n        }\n      ]\n    }\n  ],\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 10,\n    \"nextBefore\": null\n  }\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Returns only the requested custom source', function () {",
+                  "    pm.response.to.have.status(200);",
+                  "    var body = pm.response.json();",
+                  "    pm.expect(body.success).to.eql(true);",
+                  "    pm.expect(body.alerts.every(function (alert) { return alert.source === 'webhook-signal'; })).to.eql(true);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "GET List Alerts (symbol, exchange, eventCategory)",
           "request": {
             "method": "GET",

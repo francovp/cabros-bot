@@ -5108,17 +5108,10 @@
         "name": "source",
         "in": "query",
         "schema": {
-          "type": "string",
-          "enum": [
-            "webhook",
-            "news-monitor",
-            "market-scanner",
-            "expanded-analysis",
-            "test-alert"
-          ]
+          "type": "string"
         },
-        "example": "webhook",
-        "description": "Stored alert source filter. webhook covers /api/webhook/alert; news-monitor covers /api/news-monitor deliveries; market-scanner covers delivered /api/webhook/market-scanner-alert reports; expanded-analysis covers delivered /api/webhook/expanded-analysis-alert reports; test-alert covers /api/admin/test-alert verification probes."
+        "example": "webhook-alert",
+        "description": "Stored alert source filter. Common sources are webhook-alert (default for /api/webhook/alert), webhook (storage fallback for producers that omit source), webhook-message (/api/webhook/message), news-monitor, market-scanner, expanded-analysis, and test-alert. Custom source values are also accepted as exact filters."
       },
       "Enriched": {
         "name": "enriched",
@@ -10730,7 +10723,7 @@
       },
       "StoredAlert": {
         "type": "object",
-        "description": "Stored alert document. The `source` field identifies the producing flow (webhook, news-monitor, market-scanner, expanded-analysis, test-alert). When the report text exceeded the 20,000-character storage cap, `truncated: true` and `originalLength` are populated so consumers and replay can flag the loss; replay will redeliver only the truncated text.",
+        "description": "Stored alert document. The `source` field identifies the producing flow; common values are webhook-alert, webhook-message, webhook (storage fallback), news-monitor, market-scanner, expanded-analysis, and test-alert, while custom source strings may also be stored. When the report text exceeded the 20,000-character storage cap, `truncated: true` and `originalLength` are populated so consumers and replay can flag the loss; replay will redeliver only the truncated text.",
         "properties": {
           "id": {
             "type": "string"
@@ -10849,13 +10842,8 @@
           },
           "source": {
             "type": "string",
-            "enum": [
-              "webhook",
-              "news-monitor",
-              "market-scanner",
-              "expanded-analysis",
-              "test-alert"
-            ]
+            "example": "webhook-alert",
+            "description": "Source supplied by the alert producer. Common sources include webhook-alert, webhook-message, webhook, news-monitor, market-scanner, expanded-analysis, and test-alert; custom source strings may also be stored."
           },
           "useTradingViewData": {
             "type": "boolean"
