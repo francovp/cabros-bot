@@ -154,23 +154,37 @@ describe('event bus alert flow', () => {
 		});
 
 		it('a slow async subscriber does not delay the HTTP response', async () => {
+			let releaseSubscriber;
+			const subscriberBlocked = new Promise((resolve) => {
+				releaseSubscriber = resolve;
+			});
+			let subscriberFinished = false;
 			const slow = jest.fn(async () => {
-				await new Promise((resolve) => setTimeout(resolve, 250));
+				await subscriberBlocked;
+				subscriberFinished = true;
 			});
 			eventBus.on(EVENT_NAMES.ALERT_DELIVERED, slow);
 
-			const start = Date.now();
+			// The invariant under test is an ordering one: the response settles
+			// while the subscriber is still pending. Asserting that directly keeps
+			// the subscriber blocked until after the response arrives, which is
+			// deterministic. An `elapsed < 200ms` wall-clock assertion measured the
+			// runner's load rather than the emit path and failed spuriously on a busy
+			// CI machine even though the subscriber was never awaited.
 			const response = await request(app)
 				.post('/api/stub-alert')
 				.set('x-api-key', 'integration-test-key')
 				.send({ alertId: 'e2e-3', text: 'third alert' })
 				.expect(200);
-			const elapsed = Date.now() - start;
 
 			expect(response.body.success).toBe(true);
-			// Synchronous emit path — even if the subscriber schedules an
-			// async tail, the response is sent before it resolves.
-			expect(elapsed).toBeLessThan(200);
+			expect(slow).toHaveBeenCalledTimes(1);
+			expect(subscriberFinished).toBe(false);
+
+			// Release so the test cannot pass by the subscriber never running.
+			releaseSubscriber();
+			await new Promise((resolve) => setImmediate(resolve));
+			expect(subscriberFinished).toBe(true);
 		});
 	});
 });

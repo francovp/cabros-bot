@@ -406,6 +406,61 @@ describe('News dedup persistence state — race safety (issue #871)', () => {
 			expect(durableData().usageClaimToken).toBe(otherToken);
 		});
 
+		it('renews a live claim so a slow save cannot outlive the lease', async () => {
+			await primeCacheEntry();
+			await cache.markOriginalPersistState('BTCUSDT', EventCategory.PRICE_SURGE, 'none');
+			const token = await cache.claimUsageOwnership('BTCUSDT', EventCategory.PRICE_SURGE);
+			const originalDeadline = durableData().usageClaimExpiresAt;
+
+			// A persist that outlives the lease lets another replica reclaim the
+			// state and write a second document with the same token usage.
+			await storage.updateEntry(KEY, {
+				usageClaimExpiresAt: Date.now() - 1,
+			}, { mergeFields: ['usageClaimExpiresAt'] });
+			cache.cache.get(KEY).data.usageClaimExpiresAt = Date.now() - 1;
+
+			const renewed = await cache.renewUsageOwnership('BTCUSDT', EventCategory.PRICE_SURGE, token);
+
+			expect(renewed).toBe(true);
+			expect(durableData().usageClaimExpiresAt).toBeGreaterThan(Date.now());
+			expect(durableData().usageClaimExpiresAt).toBeGreaterThanOrEqual(originalDeadline);
+			// Ownership is unchanged: only the deadline moves.
+			expect(durableData().usageClaimToken).toBe(token);
+			expect(durableData().originalPersistedState).toBe('claimed');
+		});
+
+		it('refuses to renew a claim this replica does not own', async () => {
+			await primeCacheEntry();
+			await cache.markOriginalPersistState('BTCUSDT', EventCategory.PRICE_SURGE, 'none');
+			await cache.claimUsageOwnership('BTCUSDT', EventCategory.PRICE_SURGE);
+			const otherToken = 'replica-b-token';
+			await storage.updateEntry(KEY, {
+				usageClaimToken: otherToken,
+				usageClaimExpiresAt: Date.now() + 60_000,
+			}, { mergeFields: ['usageClaimToken', 'usageClaimExpiresAt'] });
+
+			const renewed = await cache.renewUsageOwnership('BTCUSDT', EventCategory.PRICE_SURGE, 'stale-token');
+
+			expect(renewed).toBe(false);
+			expect(durableData().usageClaimToken).toBe(otherToken);
+		});
+
+		it('never lets a failed renewal fail the surrounding alert delivery', async () => {
+			await primeCacheEntry();
+			await cache.markOriginalPersistState('BTCUSDT', EventCategory.PRICE_SURGE, 'none');
+			const token = await cache.claimUsageOwnership('BTCUSDT', EventCategory.PRICE_SURGE);
+			const deadlineBefore = durableData().usageClaimExpiresAt;
+			mockRunTransaction.mockImplementationOnce(async () => {
+				throw new Error('firestore unavailable');
+			});
+
+			await expect(
+				cache.renewUsageOwnership('BTCUSDT', EventCategory.PRICE_SURGE, token),
+			).resolves.toBe(false);
+			// A storage fault must not fabricate a renewed deadline.
+			expect(durableData().usageClaimExpiresAt).toBe(deadlineBefore);
+		});
+
 		it('never lets a guarded write fail the surrounding alert delivery', async () => {
 			await primeCacheEntry();
 			await cache.markOriginalPersistState('BTCUSDT', EventCategory.PRICE_SURGE, 'none');

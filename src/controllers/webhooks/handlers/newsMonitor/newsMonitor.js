@@ -24,6 +24,7 @@ const newsAnalysisStorageService = require('../../../../services/storage/NewsAna
 const { isNewsMonitorPaused, getNewsMonitorPauseState } = require('./pauseState');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { resolveDryRun } = require('../../../../lib/dryRunRequest');
+const { trackBackgroundTask } = require('../../../../lib/backgroundTaskTracker');
 
 class NewsMonitorHandler {
 	constructor() {
@@ -189,102 +190,137 @@ class NewsMonitorHandler {
 			// Failures are caught and logged — delivery is never blocked by storage.
 			if (!dryRun && alertStorageService.isEnabled()) {
 				const requestedChannels = response.requestedChannels || [];
-				for (const result of analysisResults || []) {
-					if (!result || !result.alert) {
-						continue;
-					}
-
-					const isCachedRedelivery = result.status === AnalysisStatus.CACHED
-						&& Array.isArray(result.attemptedDeliveryResults)
-						&& result.attemptedDeliveryResults.some((delivery) => delivery && delivery.success === true);
-					const currentDeliveryResults = isCachedRedelivery
-						? result.attemptedDeliveryResults
-						: (result.deliveryResults || []);
-					if (result.status !== AnalysisStatus.ANALYZED && !isCachedRedelivery) {
-						continue;
-					}
-					if (!currentDeliveryResults.some((delivery) => delivery && delivery.success === true)) {
-						continue;
-					}
-
-					const persistSymbol = result.alert.symbol || result.symbol;
-					const persistCategory = result.alert.eventCategory;
-					if (!isCachedRedelivery) {
-					// 'pending' closes the double-count window while the write is in flight;
-					// a failed outcome ('none') lets the next redelivery own it. Awaited so
-					// the durable terminal state can never be buried by this write landing
-					// late, and guarded so it cannot overwrite a terminal state another
-					// replica already committed.
-						await this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'pending', {
-							allowedCurrentStates: ['none', 'pending'],
-						}).catch(err => console.warn('[NewsMonitor] Failed to record pending storage state:', err.message));
-					}
-					// Fallback redeliveries embed usage only when they win the ownership
-					// claim (process-local and cross-replica atomic), so concurrent
-					// channel expansions cannot duplicate it.
-					const usageClaimToken = isCachedRedelivery
-						? await this.cache.claimUsageOwnership(persistSymbol, persistCategory)
-						: null;
-					const usageClaimed = !isCachedRedelivery || usageClaimToken !== null;
-					const includeUsage = usageClaimed;
-					alertStorageService.saveAlert({
-						text: result.alert.text || '',
-						symbol: result.alert.symbol || result.symbol,
-						// All documents from one request share requestId, so the summary
-						// counts this request as a single batch with its full symbol set.
-						symbols: symbolsToAnalyze,
-						batchId: requestId,
-						requestId,
-						exchange: result.alert.marketContext && result.alert.marketContext.source === 'binance' ? 'BINANCE' : undefined,
-						enriched: Boolean(result.alert.enriched),
-						enrichmentData: result.alert.enriched || null,
-						tokenUsage: includeUsage ? ((result.alert.enriched && result.alert.enriched.tokenUsage) || null) : null,
-						channels: requestedChannels,
-						deliveryResults: currentDeliveryResults,
-						source: 'news-monitor',
-						eventCategory: persistCategory,
-						confidence: result.alert.confidence,
-						sentimentScore: result.alert.sentimentScore,
-						dedupStatus: isCachedRedelivery ? 'cached' : 'fresh',
-						telegramChatId: routing.telegramChatId,
-						telegramThreadId: routing.telegramThreadId,
-						whatsappChatId: routing.whatsappChatId,
-						discordWebhookUrl: routing.discordWebhookUrl,
-						processingTimeMs: result.totalDurationMs,
-					}).then((savedId) => {
-						const terminalState = savedId ? 'owned' : 'none';
-						if (isCachedRedelivery) {
-							if (!usageClaimed) {
-								return undefined;
-							}
-							return this.cache.markOriginalPersistState(
-								persistSymbol,
-								persistCategory,
-								terminalState,
-								{ allowedCurrentStates: ['claimed'], claimToken: usageClaimToken },
-							);
+				// The whole ordered pending-state -> saveAlert -> terminal-state
+				// sequence is registered as ONE background task. The response is
+				// already finished by this point, so nothing else keeps the
+				// process alive: a SIGTERM arriving during the awaited pending
+				// transaction would otherwise let waitForBackgroundTasks() observe
+				// an empty set and complete shutdown before saveAlert() was ever
+				// scheduled, losing the stored alert and its usage data.
+				trackBackgroundTask((async () => {
+					for (const result of analysisResults || []) {
+						if (!result || !result.alert) {
+							continue;
 						}
-						return this.cache.markOriginalPersistState(
-							persistSymbol,
-							persistCategory,
-							terminalState,
-							{ allowedCurrentStates: ['pending', 'none'] },
-						);
-					}).catch((err) => {
-						if (isCachedRedelivery) {
-							if (usageClaimed) {
-								this.cache.releaseUsageOwnershipClaim(persistSymbol, persistCategory, usageClaimToken)
-									.catch(markErr => console.warn('[NewsMonitor] Failed to release usage claim:', markErr.message));
-							}
-						} else {
-							this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'none', {
-								allowedCurrentStates: ['pending', 'none'],
-							})
-								.catch(markErr => console.warn('[NewsMonitor] Failed to record failed storage state:', markErr.message));
+
+						const isCachedRedelivery = result.status === AnalysisStatus.CACHED
+							&& Array.isArray(result.attemptedDeliveryResults)
+							&& result.attemptedDeliveryResults.some((delivery) => delivery && delivery.success === true);
+						const currentDeliveryResults = isCachedRedelivery
+							? result.attemptedDeliveryResults
+							: (result.deliveryResults || []);
+						if (result.status !== AnalysisStatus.ANALYZED && !isCachedRedelivery) {
+							continue;
 						}
-						console.warn('[NewsMonitor] Failed to persist alert to storage:', err.message);
-					});
-				}
+						if (!currentDeliveryResults.some((delivery) => delivery && delivery.success === true)) {
+							continue;
+						}
+
+						const persistSymbol = result.alert.symbol || result.symbol;
+						const persistCategory = result.alert.eventCategory;
+						if (!isCachedRedelivery) {
+						// 'pending' closes the double-count window while the write is in flight;
+						// a failed outcome ('none') lets the next redelivery own it. Awaited so
+						// the durable terminal state can never be buried by this write landing
+						// late, and guarded so it cannot overwrite a terminal state another
+						// replica already committed.
+							await this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'pending', {
+								allowedCurrentStates: ['none', 'pending'],
+							}).catch(err => console.warn('[NewsMonitor] Failed to record pending storage state:', err.message));
+						}
+						// Fallback redeliveries embed usage only when they win the ownership
+						// claim (process-local and cross-replica atomic), so concurrent
+						// channel expansions cannot duplicate it.
+						const usageClaimToken = isCachedRedelivery
+							? await this.cache.claimUsageOwnership(persistSymbol, persistCategory)
+							: null;
+						const usageClaimed = !isCachedRedelivery || usageClaimToken !== null;
+						const includeUsage = usageClaimed;
+						// The Firestore write below has no application deadline, so a slow
+						// save could outlive the fixed usage-claim lease and let another
+						// replica reclaim the state and persist a second document carrying
+						// the same usage. Renew the claim while the write is in flight; a
+						// crashed owner stops renewing and is reclaimed within the lease.
+						// Only cached redeliveries hold a claim token — fresh writes use
+						// the 'pending' state (no lease) and must not start a renewal timer.
+						const usageClaimRenewInterval = usageClaimToken
+							? setInterval(() => {
+								this.cache.renewUsageOwnership(persistSymbol, persistCategory, usageClaimToken)
+									.catch(() => {});
+							}, this.cache.getUsageClaimRenewIntervalMs())
+							: null;
+						if (usageClaimRenewInterval && typeof usageClaimRenewInterval.unref === 'function') {
+							usageClaimRenewInterval.unref();
+						}
+						try {
+							const savedId = await alertStorageService.saveAlert({
+								text: result.alert.text || '',
+								symbol: result.alert.symbol || result.symbol,
+								// All documents from one request share requestId, so the summary
+								// counts this request as a single batch with its full symbol set.
+								symbols: symbolsToAnalyze,
+								batchId: requestId,
+								requestId,
+								exchange: result.alert.marketContext && result.alert.marketContext.source === 'binance' ? 'BINANCE' : undefined,
+								enriched: Boolean(result.alert.enriched),
+								enrichmentData: result.alert.enriched || null,
+								tokenUsage: includeUsage ? ((result.alert.enriched && result.alert.enriched.tokenUsage) || null) : null,
+								channels: requestedChannels,
+								deliveryResults: currentDeliveryResults,
+								source: 'news-monitor',
+								eventCategory: persistCategory,
+								confidence: result.alert.confidence,
+								sentimentScore: result.alert.sentimentScore,
+								dedupStatus: isCachedRedelivery ? 'cached' : 'fresh',
+								telegramChatId: routing.telegramChatId,
+								telegramThreadId: routing.telegramThreadId,
+								whatsappChatId: routing.whatsappChatId,
+								discordWebhookUrl: routing.discordWebhookUrl,
+								processingTimeMs: result.totalDurationMs,
+							});
+							const terminalState = savedId ? 'owned' : 'none';
+							if (isCachedRedelivery) {
+								if (!usageClaimed) {
+									continue;
+								}
+								await this.cache.markOriginalPersistState(
+									persistSymbol,
+									persistCategory,
+									terminalState,
+									{ allowedCurrentStates: ['claimed'], claimToken: usageClaimToken },
+								);
+							} else {
+								await this.cache.markOriginalPersistState(
+									persistSymbol,
+									persistCategory,
+									terminalState,
+									{ allowedCurrentStates: ['pending', 'none'] },
+								);
+							}
+						} catch (err) {
+							if (isCachedRedelivery) {
+								if (usageClaimed) {
+									await this.cache.releaseUsageOwnershipClaim(persistSymbol, persistCategory, usageClaimToken)
+										.catch(markErr => console.warn('[NewsMonitor] Failed to release usage claim:', markErr.message));
+								}
+							} else {
+								await this.cache.markOriginalPersistState(persistSymbol, persistCategory, 'none', {
+									allowedCurrentStates: ['pending', 'none'],
+								})
+									.catch(markErr => console.warn('[NewsMonitor] Failed to record failed storage state:', markErr.message));
+							}
+							console.warn('[NewsMonitor] Failed to persist alert to storage:', err.message);
+						} finally {
+							if (usageClaimRenewInterval) {
+								clearInterval(usageClaimRenewInterval);
+							}
+						}
+					}
+				})()).catch((err) => {
+					// Fail-open: one unusable result must not abort the remaining
+					// results in the same batch, nor surface after the response.
+					console.warn('[NewsMonitor] Failed to run alert persistence pass:', err.message);
+				});
 			}
 
 			// Fire-and-forget: persist analysis results to Firestore

@@ -21,6 +21,7 @@ const { randomUUID } = require('node:crypto');
 const DELIVERY_LOCK_TTL_MS = 30_000;
 const DELIVERY_LOCK_RENEW_INTERVAL_MS = 10_000;
 const USAGE_CLAIM_LEASE_MS = 120_000;
+const USAGE_CLAIM_RENEW_INTERVAL_MS = 30_000;
 const USAGE_CLAIM_STATE = 'claimed';
 const USAGE_CLAIM_TOKEN_FIELD = 'usageClaimToken';
 const USAGE_CLAIM_EXPIRES_FIELD = 'usageClaimExpiresAt';
@@ -640,6 +641,78 @@ class NewsCache {
 	}
 
 	/**
+	 * Extend a usage-ownership claim that is still being persisted.
+	 *
+	 * The claim lease is a fixed deadline, but the Firestore `add()` that
+	 * follows it has no application-level deadline. A save that outlives the
+	 * lease would otherwise let another replica reclaim the state and persist
+	 * a SECOND document carrying the same token usage — the token-pinned
+	 * terminal write would then be refused, but the duplicate alert document
+	 * is already written and `/api/alerts/summary` double-counts. Renewing
+	 * keeps the claim alive for as long as the write is genuinely in flight,
+	 * while a crashed owner still releases it within USAGE_CLAIM_LEASE_MS
+	 * because a dead process cannot renew.
+	 *
+	 * Only the deadline is extended; the claim state and owner token are
+	 * untouched, and the write is token-pinned so a replica that lost the
+	 * claim can never resurrect it. Fail-open on storage errors.
+	 *
+	 * Returns false for a refused write and for a storage fault alike:
+	 * updateEntry() swallows Firestore errors, so the two are not
+	 * distinguishable here. Callers must treat renewal as best-effort.
+	 *
+	 * @param {string} symbol
+	 * @param {string} eventCategory
+	 * @param {string} claimToken - Token returned by claimUsageOwnership
+	 * @returns {Promise<boolean>} true when the durable deadline was extended
+	 */
+	async renewUsageOwnership(symbol, eventCategory, claimToken) {
+		const key = this.generateKey(symbol, eventCategory);
+		const entry = this.cache.get(key);
+		if (!entry || this.isExpired(entry)) {
+			return false;
+		}
+		if (!claimToken || entry.data[USAGE_CLAIM_TOKEN_FIELD] !== claimToken) {
+			return false;
+		}
+		const claimExpiresAt = Date.now() + USAGE_CLAIM_LEASE_MS;
+		if (!newsDedupStorageService.isEnabled() || !newsDedupStorageService.isReady()) {
+			entry.data = { ...entry.data, [USAGE_CLAIM_EXPIRES_FIELD]: claimExpiresAt };
+			return true;
+		}
+		try {
+			const renewed = await newsDedupStorageService.updateEntry(
+				key,
+				{ [USAGE_CLAIM_EXPIRES_FIELD]: claimExpiresAt },
+				{
+					mergeFields: [USAGE_CLAIM_EXPIRES_FIELD],
+					expectedField: 'originalPersistedState',
+					expectedValues: [USAGE_CLAIM_STATE],
+					expectedTokenField: USAGE_CLAIM_TOKEN_FIELD,
+					expectedToken: claimToken,
+				},
+			);
+			if (renewed) {
+				entry.data = { ...entry.data, [USAGE_CLAIM_EXPIRES_FIELD]: claimExpiresAt };
+			}
+			return renewed;
+		} catch (error) {
+			console.warn('[NewsCache] Usage-ownership renewal failed (fail-open):', error.message);
+			return false;
+		}
+	}
+
+	/**
+	 * Return the interval callers use to keep a usage claim alive while the
+	 * alert document is being persisted.
+	 *
+	 * @returns {number}
+	 */
+	getUsageClaimRenewIntervalMs() {
+		return USAGE_CLAIM_RENEW_INTERVAL_MS;
+	}
+
+	/**
 	 * Release a claim acquired via claimUsageOwnership after its record
 	 * failed to persist, restoring 'none' so a later redelivery can own it.
 	 *
@@ -1043,4 +1116,5 @@ module.exports = {
 	NewsCache,
 	parseNewsCacheTtlHours,
 	USAGE_CLAIM_LEASE_MS,
+	USAGE_CLAIM_RENEW_INTERVAL_MS,
 };
