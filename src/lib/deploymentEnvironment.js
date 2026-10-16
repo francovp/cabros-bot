@@ -76,9 +76,6 @@ function getDeploymentPlatform(env = process.env) {
 	if (!env || typeof env !== 'object') {
 		return null;
 	}
-	if (typeof env.DEPLOYMENT_PLATFORM === 'string' && env.DEPLOYMENT_PLATFORM.trim()) {
-		return env.DEPLOYMENT_PLATFORM.trim().toLowerCase();
-	}
 	if (env.RENDER === 'true' || env.RENDER_SERVICE_ID || env.RENDER_SERVICE_NAME) {
 		return 'render';
 	}
@@ -91,7 +88,7 @@ function getDeploymentPlatform(env = process.env) {
 	if (env.NODE_ENV === 'test') {
 		return 'test';
 	}
-	if (env === process.env || env.NODE_ENV || env.PWD || env.HOME || env.USER || env.PORT) {
+	if (env === process.env || env.NODE_ENV || env.PORT) {
 		return 'local';
 	}
 	return null;
@@ -109,15 +106,7 @@ function getDeploymentService(env = process.env) {
 	return typeof service === 'string' && service.trim() ? service.trim() : 'cabros-bot';
 }
 
-function getRuntimeVersion(env = process.env) {
-	if (env && typeof env === 'object') {
-		if (typeof env.APP_VERSION === 'string' && env.APP_VERSION.trim()) {
-			return env.APP_VERSION.trim();
-		}
-		if (typeof env.npm_package_version === 'string' && env.npm_package_version.trim()) {
-			return env.npm_package_version.trim();
-		}
-	}
+function getRuntimeVersion() {
 	return (packageJsonMetadata && typeof packageJsonMetadata.version === 'string')
 		? packageJsonMetadata.version
 		: null;

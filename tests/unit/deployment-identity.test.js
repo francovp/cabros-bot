@@ -68,9 +68,9 @@ describe('deploymentIdentity', () => {
 		});
 	});
 
-	it('supports explicit DEPLOYMENT_PLATFORM override', () => {
+	it('detects local platform when NODE_ENV or PORT is set', () => {
 		const env = {
-			DEPLOYMENT_PLATFORM: 'local',
+			NODE_ENV: 'development',
 			GIT_COMMIT: '1234567',
 			SERVICE_NAME: 'test-service',
 		};
