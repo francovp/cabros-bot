@@ -25,6 +25,7 @@ const {
 } = require('../../../../services/notification/requestRouting');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
 const newsAnalysisStorageService = require('../../../../services/storage/NewsAnalysisStorageService');
+const { isFirestoreErrorCategory } = require('../../../../services/storage/firestoreErrorCategories');
 const { isNewsMonitorPaused, getNewsMonitorPauseState } = require('./pauseState');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { resolveDryRun } = require('../../../../lib/dryRunRequest');
@@ -549,11 +550,18 @@ class NewsMonitorHandler {
 					code: 'FEATURE_DISABLED',
 				});
 			}
-			if (error && error.code === 'STORAGE_UNAVAILABLE') {
-				return sendErrorFrom(res, 503, {
-					error: error.message,
+			if (error && (error.code === 'STORAGE_UNAVAILABLE' || isFirestoreErrorCategory(error?.category) || error?.name === 'FirebaseError')) {
+				const body = {
+					error: error.message || 'News analysis storage is unavailable.',
 					code: 'STORAGE_UNAVAILABLE',
-				});
+				};
+				if (isFirestoreErrorCategory(error?.category)) {
+					body.category = error.category;
+				}
+				if (error?.missingIndex === true) {
+					body.missingIndex = true;
+				}
+				return sendErrorFrom(res, 503, body);
 			}
 			console.error('[NewsMonitor] Error in handleSummary:', error);
 			return sendErrorFrom(res, 500, {
@@ -637,11 +645,18 @@ class NewsMonitorHandler {
 					code: 'FEATURE_DISABLED',
 				});
 			}
-			if (error && error.code === 'STORAGE_UNAVAILABLE') {
-				return sendErrorFrom(res, 503, {
-					error: error.message,
+			if (error && (error.code === 'STORAGE_UNAVAILABLE' || isFirestoreErrorCategory(error?.category) || error?.name === 'FirebaseError')) {
+				const body = {
+					error: error.message || 'News analysis storage is unavailable.',
 					code: 'STORAGE_UNAVAILABLE',
-				});
+				};
+				if (isFirestoreErrorCategory(error?.category)) {
+					body.category = error.category;
+				}
+				if (error?.missingIndex === true) {
+					body.missingIndex = true;
+				}
+				return sendErrorFrom(res, 503, body);
 			}
 			console.error('[NewsMonitor] Error in handleListAnalyses:', error);
 			return sendErrorFrom(res, 500, {
