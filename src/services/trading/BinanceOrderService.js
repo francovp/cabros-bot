@@ -1287,6 +1287,9 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 						dryRun: false,
 						environment: config.environment,
 						order: sanitizeOrderResponse(existingOrder),
+						origin: order.origin,
+						alertId: order.alertId,
+						setupType: order.setupType,
 					};
 				}
 			}
@@ -1366,6 +1369,9 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 					dryRun: true,
 					environment: config.environment,
 					order: orderParams,
+					origin: order.origin,
+					alertId: order.alertId,
+					setupType: order.setupType,
 				};
 			}
 
@@ -1377,6 +1383,9 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 					dryRun: false,
 					environment: config.environment,
 					order: sanitizeOrderResponse(response || {}),
+					origin: order.origin,
+					alertId: order.alertId,
+					setupType: order.setupType,
 				};
 			} catch (error) {
 				if (isDefinitiveBinanceRejection(error)) {

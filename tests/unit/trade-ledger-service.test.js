@@ -187,7 +187,7 @@ describe('TradeLedgerService', () => {
 		expect(page2.scanTruncated).toBe(false);
 	});
 
-	it('falls back to aggregate execution fields when fills array is absent', () => {
+	it('does not synthesize approximate fills when fills array is absent', () => {
 		const records = buildFillRecords({
 			environment: 'testnet',
 			order: {
@@ -200,11 +200,131 @@ describe('TradeLedgerService', () => {
 				cummulativeQuoteQty: '100.00',
 			},
 		});
-		expect(records).toHaveLength(1);
-		expect(records[0].data.qty).toBe('0.002');
-		expect(records[0].data.price).toBe('50000');
-		expect(records[0].data.quoteQty).toBe('100');
-		expect(records[0].data.binanceOrderId).toBe('88');
+		expect(records).toEqual([]);
+	});
+
+	it('tracks observed readiness states and durability counters', async () => {
+		delete process.env.ENABLE_TRADE_LEDGER;
+		const mock = createFirestoreMock();
+		const metrics = new FirestoreWriteMetricsService();
+		const service = new TradeLedgerService({ firestore: mock.firestore, metrics });
+
+		// 1. disabled
+		expect(service.getStatus()).toMatchObject({
+			enabled: false,
+			configured: true,
+			ready: false,
+			status: 'disabled',
+		});
+
+		// 2. misconfigured
+		process.env.ENABLE_TRADE_LEDGER = 'true';
+		const unconfiguredService = new TradeLedgerService({ firestore: null, metrics });
+		expect(unconfiguredService.getStatus()).toMatchObject({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+
+		// 3. unverified (configured but no successful write observed)
+		expect(service.getStatus()).toMatchObject({
+			enabled: true,
+			configured: true,
+			ready: false,
+			status: 'unverified',
+			readiness: 'unverified',
+			writesAttempted: 0,
+			writesSucceeded: 0,
+			writesFailed: 0,
+			readsAttempted: 0,
+			readsSucceeded: 0,
+			readsFailed: 0,
+		});
+
+		// 4. ready (verified once write succeeds)
+		await service.recordOrderFills({ environment: 'testnet', order: ORDER });
+		expect(service.getStatus()).toMatchObject({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			readiness: 'verified',
+			writesAttempted: 3,
+			writesSucceeded: 3,
+			writesFailed: 0,
+			consecutiveFailures: 0,
+		});
+
+		// 5. degraded on write failure
+		mock.create.mockRejectedValueOnce(new Error('unavailable'));
+		await service.recordOrderFills({
+			environment: 'testnet',
+			order: {
+				...ORDER,
+				fills: [{ price: '100', qty: '0.1', commission: '0', tradeId: 99 }],
+			},
+		});
+		expect(service.getStatus()).toMatchObject({
+			enabled: true,
+			configured: true,
+			ready: false,
+			status: 'degraded',
+			readiness: 'degraded',
+			consecutiveFailures: 1,
+			lastErrorReason: 'firestore_unavailable',
+		});
+
+		// 6. self-heal on next successful write
+		await service.recordOrderFills({
+			environment: 'testnet',
+			order: {
+				...ORDER,
+				fills: [{ price: '100', qty: '0.1', commission: '0', tradeId: 100 }],
+			},
+		});
+		expect(service.getStatus()).toMatchObject({
+			ready: true,
+			status: 'ready',
+			readiness: 'verified',
+			consecutiveFailures: 0,
+		});
+	});
+
+	it('records read health metrics on listFills query success and failure', async () => {
+		process.env.ENABLE_TRADE_LEDGER = 'true';
+		const mock = createFirestoreMock();
+		const metrics = new FirestoreWriteMetricsService();
+		const service = new TradeLedgerService({ firestore: mock.firestore, metrics });
+
+		await service.listFills({ environment: 'testnet' });
+		expect(metrics.getReadSnapshot().byDomain.trades).toMatchObject({ success: 1, failure: 0 });
+		expect(service.getStatus()).toMatchObject({
+			readsAttempted: 1,
+			readsSucceeded: 1,
+			readsFailed: 0,
+		});
+
+		// Read failure records metrics and degrades
+		mock.firestore.collection = jest.fn(() => ({
+			where: () => ({
+				orderBy: () => ({
+					limit: () => ({
+						get: jest.fn().mockRejectedValue(new Error('failed_precondition: query requires an index')),
+					}),
+				}),
+			}),
+		}));
+
+		await expect(service.listFills({ environment: 'testnet' })).rejects.toThrow();
+		expect(metrics.getReadSnapshot().byDomain.trades).toMatchObject({ success: 1, failure: 1 });
+		expect(service.getStatus()).toMatchObject({
+			readsAttempted: 2,
+			readsSucceeded: 1,
+			readsFailed: 1,
+			consecutiveFailures: 1,
+			status: 'degraded',
+		});
 	});
 
 	it('falls back to the default scan bound on invalid values', () => {

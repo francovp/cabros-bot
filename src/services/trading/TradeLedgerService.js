@@ -13,6 +13,10 @@
  * endpoint's status code or body.
  */
 
+const {
+	classifyFirestoreError,
+	FIRESTORE_ERROR_CATEGORIES,
+} = require('../storage/firestoreErrorCategories');
 const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 const AlertStorageService = require('../storage/AlertStorageService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
@@ -35,6 +39,17 @@ const MARK_PRICE_BASE_URLS = {
 };
 const SCALE = 10n ** 18n;
 const ALREADY_EXISTS = 6;
+
+const READINESS = Object.freeze({
+	UNVERIFIED: 'unverified',
+	VERIFIED: 'verified',
+	DEGRADED: 'degraded',
+});
+
+const REASONS = Object.freeze({
+	UNINITIALIZED: 'firestore_not_initialized',
+	UNAVAILABLE: 'firestore_unavailable',
+});
 
 function isEnabled() {
 	return process.env.ENABLE_TRADE_LEDGER === 'true';
@@ -77,32 +92,19 @@ function buildFillRecords({ environment, order, origin = 'manual', alertId = nul
 	const side = String(order.side || '').toUpperCase();
 	if (!symbol || (side !== 'BUY' && side !== 'SELL')) return [];
 	const { baseAsset, quoteAsset } = deriveSymbolAssets(symbol);
-	const filledAt = toIso(order.transactTime ?? order.updateTime ?? order.time ?? Date.now());
 
-	let rawFills = Array.isArray(order.fills) ? order.fills : [];
-	if (rawFills.length === 0) {
-		const executedUnits = toUnits(order.executedQty ?? order.executed_qty);
-		const quoteUnits = toUnits(order.cummulativeQuoteQty ?? order.cummulative_quote_qty ?? order.cumulativeQuoteQty);
-		if (executedUnits !== null && executedUnits > 0n) {
-			const price = (quoteUnits !== null && quoteUnits > 0n)
-				? fromUnits((quoteUnits * SCALE) / executedUnits)
-				: (order.price ? String(order.price) : null);
-			if (price) {
-				rawFills = [{
-					tradeId: order.orderId !== undefined && order.orderId !== null ? String(order.orderId) : (order.clientOrderId || 'reconciled'),
-					price,
-					qty: fromUnits(executedUnits),
-					commission: '0',
-					commissionAsset: null,
-				}];
-			}
-		}
-	}
+	const rawFills = Array.isArray(order.fills) ? order.fills : [];
 	if (rawFills.length === 0) return [];
 
+	const normalizedOrigin = typeof origin === 'string' ? origin.trim().toLowerCase() : 'manual';
+	const safeOrigin = ORIGINS.has(normalizedOrigin) ? normalizedOrigin : 'manual';
+	const safeAlertId = typeof alertId === 'string' && alertId.trim() ? alertId.trim() : null;
+	const safeSetupType = typeof setupType === 'string' && setupType.trim() ? setupType.trim().toLowerCase() : null;
+
 	return rawFills
-		.filter((f) => f && f.tradeId !== undefined && f.tradeId !== null && toUnits(f.qty) !== null && toUnits(f.price) !== null)
+		.filter((f) => f && (f.tradeId !== undefined && f.tradeId !== null || f.id !== undefined && f.id !== null) && toUnits(f.qty) !== null && toUnits(f.price) !== null)
 		.map((f) => {
+			const tradeId = f.tradeId !== undefined && f.tradeId !== null ? f.tradeId : f.id;
 			const commission = toUnits(f.commission) !== null ? String(f.commission) : '0';
 			const commissionAsset = f.commissionAsset ? String(f.commissionAsset).toUpperCase() : null;
 			let commissionQuote = null;
@@ -111,7 +113,7 @@ function buildFillRecords({ environment, order, origin = 'manual', alertId = nul
 			const fillTime = f.time ?? f.transactTime ?? order.transactTime ?? order.updateTime ?? order.time ?? Date.now();
 			const fillFilledAt = toIso(fillTime);
 			return {
-				id: `${environment}:${symbol}:${f.tradeId}`,
+				id: `${environment}:${symbol}:${tradeId}`,
 				data: {
 					environment,
 					symbol,
@@ -126,10 +128,10 @@ function buildFillRecords({ environment, order, origin = 'manual', alertId = nul
 					commissionQuote,
 					binanceOrderId: order.orderId !== undefined && order.orderId !== null ? String(order.orderId) : null,
 					clientOrderId: order.clientOrderId ? String(order.clientOrderId) : null,
-					alertId: typeof alertId === 'string' && alertId ? alertId : null,
-					origin: ORIGINS.has(origin) ? origin : 'manual',
-					setupType: typeof setupType === 'string' && setupType ? setupType : null,
-					tradeId: f.tradeId,
+					alertId: safeAlertId,
+					origin: safeOrigin,
+					setupType: safeSetupType,
+					tradeId,
 					filledAt: fillFilledAt,
 				},
 			};
@@ -141,6 +143,19 @@ class TradeLedgerService {
 		this.firestore = options.firestore || null;
 		this.metrics = options.metrics || firestoreWriteMetricsService;
 		this.fetchImpl = options.fetchImpl || ((...args) => fetch(...args));
+		this.durability = {
+			writesAttempted: 0,
+			writesSucceeded: 0,
+			writesFailed: 0,
+			readsAttempted: 0,
+			readsSucceeded: 0,
+			readsFailed: 0,
+			consecutiveFailures: 0,
+			lastWriteAt: null,
+			lastReadAt: null,
+			lastFailureAt: null,
+			lastErrorReason: null,
+		};
 	}
 
 	isEnabled() {
@@ -155,17 +170,69 @@ class TradeLedgerService {
 		return getMaxScan();
 	}
 
+	_resolveReadiness() {
+		if (this.durability.consecutiveFailures > 0) {
+			return READINESS.DEGRADED;
+		}
+		if (this.durability.writesSucceeded > 0) {
+			return READINESS.VERIFIED;
+		}
+		return READINESS.UNVERIFIED;
+	}
+
 	getStatus() {
 		const enabled = this.isEnabled();
 		const configured = this.isConfigured();
+		const readiness = this._resolveReadiness();
+
+		let status;
+		if (!enabled) {
+			status = 'disabled';
+		} else if (!configured) {
+			status = 'misconfigured';
+		} else if (readiness === READINESS.DEGRADED) {
+			status = 'degraded';
+		} else if (readiness === READINESS.VERIFIED) {
+			status = 'ready';
+		} else {
+			status = READINESS.UNVERIFIED;
+		}
+
 		return {
 			enabled,
 			configured,
-			ready: enabled && configured,
-			status: !enabled ? 'disabled' : configured ? 'ready' : 'misconfigured',
+			ready: status === 'ready',
+			status,
+			readiness,
+			failOpen: true,
 			collection: COLLECTION_NAME,
 			maxScan: this.getMaxScan(),
+			writesAttempted: this.durability.writesAttempted,
+			writesSucceeded: this.durability.writesSucceeded,
+			writesFailed: this.durability.writesFailed,
+			readsAttempted: this.durability.readsAttempted,
+			readsSucceeded: this.durability.readsSucceeded,
+			readsFailed: this.durability.readsFailed,
+			consecutiveFailures: this.durability.consecutiveFailures,
+			lastWriteAt: this.durability.lastWriteAt,
+			lastReadAt: this.durability.lastReadAt,
+			lastFailureAt: this.durability.lastFailureAt,
+			lastErrorReason: this.durability.lastErrorReason,
 		};
+	}
+
+	__resetReadinessForTesting() {
+		this.durability.writesAttempted = 0;
+		this.durability.writesSucceeded = 0;
+		this.durability.writesFailed = 0;
+		this.durability.readsAttempted = 0;
+		this.durability.readsSucceeded = 0;
+		this.durability.readsFailed = 0;
+		this.durability.consecutiveFailures = 0;
+		this.durability.lastWriteAt = null;
+		this.durability.lastReadAt = null;
+		this.durability.lastFailureAt = null;
+		this.durability.lastErrorReason = null;
 	}
 
 	_getFirestore() {
@@ -180,21 +247,41 @@ class TradeLedgerService {
 			const records = buildFillRecords(params);
 			if (records.length === 0) return result;
 			const firestore = this._getFirestore();
-			if (!firestore) return result;
+			if (!firestore) {
+				this.durability.writesAttempted += records.length;
+				this.durability.writesFailed += records.length;
+				this.durability.consecutiveFailures += 1;
+				this.durability.lastFailureAt = new Date().toISOString();
+				this.durability.lastErrorReason = REASONS.UNINITIALIZED;
+				result.failed += records.length;
+				this.metrics.recordWriteFailure(METRICS_DOMAIN);
+				return result;
+			}
 			const collection = firestore.collection(COLLECTION_NAME);
 			const recordedAt = new Date().toISOString();
 			await Promise.all(records.map(async ({ id, data }) => {
+				this.durability.writesAttempted += 1;
 				try {
 					await collection.doc(id).create({ ...data, recordedAt });
 					result.written += 1;
+					this.durability.writesSucceeded += 1;
+					this.durability.consecutiveFailures = 0;
+					this.durability.lastWriteAt = recordedAt;
+					this.durability.lastErrorReason = null;
 					this.metrics.recordWriteSuccess(METRICS_DOMAIN);
 				} catch (error) {
 					if (error?.code === ALREADY_EXISTS || error?.code === 'already-exists') {
 						result.duplicates += 1;
+						this.durability.writesSucceeded += 1;
+						this.durability.consecutiveFailures = 0;
 						this.metrics.recordWriteSuccess(METRICS_DOMAIN);
 						return;
 					}
 					result.failed += 1;
+					this.durability.writesFailed += 1;
+					this.durability.consecutiveFailures += 1;
+					this.durability.lastFailureAt = new Date().toISOString();
+					this.durability.lastErrorReason = REASONS.UNAVAILABLE;
 					this.metrics.recordWriteFailure(METRICS_DOMAIN);
 					console.warn('[TradeLedgerService] fill write failed', { symbol: data.symbol, code: error?.code ?? null });
 				}
@@ -206,8 +293,14 @@ class TradeLedgerService {
 	}
 
 	async listFills({ environment, limit, startAfter } = {}) {
+		this.durability.readsAttempted += 1;
 		const firestore = this._getFirestore();
 		if (!firestore) {
+			this.durability.readsFailed += 1;
+			this.durability.consecutiveFailures += 1;
+			this.durability.lastFailureAt = new Date().toISOString();
+			this.durability.lastErrorReason = REASONS.UNINITIALIZED;
+			this.metrics.recordReadFailure(METRICS_DOMAIN, FIRESTORE_ERROR_CATEGORIES.UNINITIALIZED);
 			const error = new Error('Trade ledger storage is unavailable');
 			error.code = 'STORAGE_UNAVAILABLE';
 			throw error;
@@ -217,29 +310,43 @@ class TradeLedgerService {
 		const BATCH_SIZE = Math.min(1000, maxScan);
 		let lastDoc = startAfter || null;
 
-		while (fills.length < maxScan) {
-			const fetchLimit = Math.min(BATCH_SIZE, maxScan - fills.length);
-			let query = firestore.collection(COLLECTION_NAME)
-				.where('environment', '==', environment)
-				.orderBy('filledAt', 'asc')
-				.limit(fetchLimit);
+		try {
+			while (fills.length < maxScan) {
+				const fetchLimit = Math.min(BATCH_SIZE, maxScan - fills.length);
+				let query = firestore.collection(COLLECTION_NAME)
+					.where('environment', '==', environment)
+					.orderBy('filledAt', 'asc')
+					.limit(fetchLimit);
 
-			if (lastDoc && typeof query.startAfter === 'function') {
-				query = query.startAfter(lastDoc);
-			}
-
-			const snapshot = await query.get();
-			const docs = snapshot.docs || [];
-			if (docs.length === 0) break;
-
-			for (const doc of docs) {
-				const data = doc.data();
-				if (data && data.environment === environment) {
-					fills.push(data);
+				if (lastDoc && typeof query.startAfter === 'function') {
+					query = query.startAfter(lastDoc);
 				}
+
+				const snapshot = await query.get();
+				const docs = snapshot.docs || [];
+				if (docs.length === 0) break;
+
+				for (const doc of docs) {
+					const data = doc.data();
+					if (data && data.environment === environment) {
+						fills.push(data);
+					}
+				}
+				lastDoc = docs[docs.length - 1];
+				if (docs.length < fetchLimit) break;
 			}
-			lastDoc = docs[docs.length - 1];
-			if (docs.length < fetchLimit) break;
+			this.durability.readsSucceeded += 1;
+			this.durability.consecutiveFailures = 0;
+			this.durability.lastReadAt = new Date().toISOString();
+			this.metrics.recordReadSuccess(METRICS_DOMAIN);
+		} catch (error) {
+			this.durability.readsFailed += 1;
+			this.durability.consecutiveFailures += 1;
+			this.durability.lastFailureAt = new Date().toISOString();
+			this.durability.lastErrorReason = REASONS.UNAVAILABLE;
+			const category = classifyFirestoreError(error);
+			this.metrics.recordReadFailure(METRICS_DOMAIN, category);
+			throw error;
 		}
 
 		return {

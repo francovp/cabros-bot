@@ -60,9 +60,9 @@ async function postBinanceOrder(req, res) {
 				tradeLedgerService.recordOrderFills({
 					environment: result.environment,
 					order: result.order,
-					origin: req.body?.origin,
-					alertId: req.body?.alertId,
-					setupType: req.body?.setupType,
+					origin: result.origin,
+					alertId: result.alertId,
+					setupType: result.setupType,
 				}).catch((err) => {
 					console.warn('[BinanceOrdersController] trade ledger fill recording failed:', err?.message || err);
 				}),
