@@ -30,7 +30,9 @@ const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const { fireAndForget } = require('../../lib/fireAndForget');
 const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
 const {
 	classifyFirestoreError,
@@ -46,7 +48,7 @@ const {
 	toPositiveFiniteNumber,
 	computeDeterministicRiskReward,
 } = require('../tradingview/riskRewardMath');
-const { deriveAssetContext } = require('../tradingview/parseTradingViewSignal');
+const { deriveAssetContext, parseTradingViewSignal } = require('../tradingview/parseTradingViewSignal');
 const { analyzeSentimentScoreDistribution } = require('../grounding/sentimentDistribution');
 
 function createEmptySignalClassCounts() {
@@ -87,6 +89,13 @@ const MAX_ALERT_TEXT_LENGTH = 20000;
 const DEFAULT_ALERT_STORAGE_RETENTION_DAYS = 90;
 const MAX_ALERT_STORAGE_RETENTION_DAYS = 3650;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+// The epoch divides evenly by both HOUR_MS and DAY_MS, so flooring a
+// millisecond timestamp by either width aligns to a UTC hour or UTC midnight.
+const SUMMARY_INTERVALS = Object.freeze({
+	hour: Object.freeze({ ms: HOUR_MS, maxDays: 31 }),
+	day: Object.freeze({ ms: DAY_MS, maxDays: 366 }),
+});
 // ponytail: 24h ceiling rejects stuck-request outliers; raise only with observed legitimate longer handlers.
 const MAX_PROCESSING_TIME_MS = 24 * 60 * 60 * 1000;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
@@ -106,6 +115,15 @@ const VALID_SETUP_TYPES = new Set([
 	'reversal',
 ]);
 const VALID_TRADINGVIEW_ENRICHMENT_STATUSES = new Set(['full', 'partial', 'failed', 'not_applicable']);
+const VALID_DECISION_GATE_DECISIONS = new Set(['allow', 'suppress', 'skip']);
+const MAX_DECISION_DEPTH = 6;
+const MAX_DECISION_OBJECT_KEYS = 32;
+const MAX_DECISION_ARRAY_ITEMS = 32;
+const MAX_DECISION_TEXT_LENGTH = 1000;
+const MAX_DECISION_GATE_COUNT = 16;
+// Closed enum: a suppression reason is only persisted for a marker this build
+// can produce, so an unexpected string can never widen the stored document shape.
+const VALID_SUPPRESSION_REASONS = new Set(['cross_timeframe_duplicate']);
 const FEATURE_TAGS = ['grounding', 'news-analysis', 'expanded-analysis', 'scanner', 'enrichment'];
 const MAX_PERSISTED_SYMBOLS_PER_BATCH = 200;
 
@@ -146,7 +164,118 @@ let db = null;
 let lastRetentionWarningValue = null;
 
 function isEnabled() {
+	// Issue #721: a published remote value wins over the deployment value, so a
+	// remote `false` can disable durable storage despite the `render.yaml` pin.
+	// `undefined` means "no published value" — Remote Config off, stale, or the key
+	// absent — which is not evidence, so the environment decides.
+	const remote = resolveRemoteOverride('ENABLE_FIRESTORE_ALERT_STORAGE');
+	if (typeof remote === 'boolean') {
+		return remote;
+	}
 	return process.env.ENABLE_FIRESTORE_ALERT_STORAGE === 'true';
+}
+
+function isDecisionAuditEnabled() {
+	// Use the request-time Remote Config override when present; otherwise keep the
+	// deployment environment value as the fail-open source of truth.
+	const remote = resolveRemoteOverride('ENABLE_ALERT_DECISION_AUDIT');
+	if (typeof remote === 'boolean') {
+		return remote;
+	}
+	return process.env.ENABLE_ALERT_DECISION_AUDIT === 'true';
+}
+
+function sanitizeDecisionAuditDepth(value, depth = 1) {
+	if (value === null || value === undefined || depth > MAX_DECISION_DEPTH) return undefined;
+	if (typeof value === 'string') {
+		return value.length > MAX_DECISION_TEXT_LENGTH ? value.slice(0, MAX_DECISION_TEXT_LENGTH) : value;
+	}
+	if (typeof value === 'boolean') return value;
+	if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+	if (typeof value !== 'object') return undefined;
+	if (Array.isArray(value)) {
+		return value.slice(0, MAX_DECISION_ARRAY_ITEMS)
+			.map((item) => sanitizeDecisionAuditDepth(item, depth + 1))
+			.filter((item) => item !== undefined);
+	}
+	const proto = Object.getPrototypeOf(value);
+	if (proto !== Object.prototype && proto !== null) return undefined;
+	const result = {};
+	let keyCount = 0;
+	for (const [key, item] of Object.entries(value)) {
+		if (keyCount >= MAX_DECISION_OBJECT_KEYS) break;
+		if (['__proto__', 'constructor', 'prototype'].includes(key)) continue;
+		const sanitized = sanitizeDecisionAuditDepth(item, depth + 1);
+		if (sanitized !== undefined) {
+			result[key.slice(0, 64)] = sanitized;
+			keyCount += 1;
+		}
+	}
+	return result;
+}
+
+function sanitizeDecisionAudit(value) {
+	if (!isDecisionAuditEnabled() || !value || typeof value !== 'object' || Array.isArray(value)) return null;
+	return sanitizeDecisionAuditDepth(value);
+}
+
+function sanitizeDecisionGate(rawGate) {
+	if (!rawGate || typeof rawGate !== 'object' || Array.isArray(rawGate)) return null;
+	const name = typeof rawGate.name === 'string' ? rawGate.name.trim().slice(0, 64) : '';
+	const decision = rawGate.decision;
+	if (!name || !VALID_DECISION_GATE_DECISIONS.has(decision)) return null;
+	const gate = { name, decision };
+	if (typeof rawGate.reason === 'string' && rawGate.reason.trim()) {
+		gate.reason = rawGate.reason.trim().slice(0, MAX_DECISION_TEXT_LENGTH);
+	}
+	if (rawGate.evidence && typeof rawGate.evidence === 'object' && !Array.isArray(rawGate.evidence)) {
+		const evidence = {};
+		for (const [key, value] of Object.entries(rawGate.evidence).slice(0, MAX_DECISION_OBJECT_KEYS)) {
+			if (['__proto__', 'constructor', 'prototype'].includes(key)) continue;
+			if (typeof value === 'string') evidence[key.slice(0, 64)] = value.slice(0, MAX_DECISION_TEXT_LENGTH);
+			else if (typeof value === 'boolean') evidence[key.slice(0, 64)] = value;
+			else if (typeof value === 'number' && Number.isFinite(value)) evidence[key.slice(0, 64)] = value;
+		}
+		if (Object.keys(evidence).length > 0) gate.evidence = evidence;
+	}
+	return gate;
+}
+
+function sanitizeDecisionGates(gates) {
+	if (!Array.isArray(gates)) return [];
+	return gates.slice(0, MAX_DECISION_GATE_COUNT).map(sanitizeDecisionGate).filter(Boolean);
+}
+
+function createDecisionGatesRollup() {
+	return { denominator: 0, gates: [] };
+}
+
+function recordDecisionGatesRollup(rollup, decision) {
+	rollup.denominator += 1;
+	const gates = decision && typeof decision === 'object' && Array.isArray(decision.gates)
+		? sanitizeDecisionGates(decision.gates)
+		: [];
+	for (const gate of gates) {
+		let entry = rollup.gates.find((item) => item.name === gate.name && item.decision === gate.decision);
+		if (!entry) {
+			entry = { name: gate.name, decision: gate.decision, populated: 0, percentage: 0 };
+			rollup.gates.push(entry);
+		}
+		entry.populated += 1;
+	}
+}
+
+function finalizeDecisionGatesRollup(rollup) {
+	if (rollup.denominator <= 0) {
+		rollup.gates = [];
+		return;
+	}
+	for (const entry of rollup.gates) {
+		entry.percentage = Math.round((entry.populated / rollup.denominator) * 10000) / 100;
+	}
+	rollup.gates.sort((left, right) => left.name === right.name
+		? left.decision.localeCompare(right.decision)
+		: left.name.localeCompare(right.name));
 }
 
 function canInitializeFirestore() {
@@ -173,7 +302,8 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS === 'true'
 		|| process.env.ENABLE_TOKEN_COST_BUDGET === 'true'
 		|| rcBudgetEnabled
-		|| process.env.ENABLE_FIRESTORE_ALERT_FEEDBACK === 'true';
+		|| process.env.ENABLE_FIRESTORE_ALERT_FEEDBACK === 'true'
+		|| process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE === 'true';
 }
 
 function getAlertStorageRetentionDays() {
@@ -298,9 +428,20 @@ function formatAlertDocument(doc, options = {}) {
 	if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(data.tradingViewEnrichmentStatus)) {
 		docObj.tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
 	}
+	if (data.outcomeAnnotation && typeof data.outcomeAnnotation === 'object') {
+		docObj.outcomeAnnotation = data.outcomeAnnotation;
+	}
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
+		if (VALID_SUPPRESSION_REASONS.has(data.suppressionReason)) {
+			docObj.suppressionReason = data.suppressionReason;
+		}
 	}
+	if (isDecisionAuditEnabled()) {
+		const decision = sanitizeDecisionAudit(data.decision);
+		if (decision) docObj.decision = decision;
+	}
+	applyBurstAggregationMarkers(docObj, data.burstAggregateId, data.burstSignalCount);
 	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
 		const currentPrice = toPositiveFiniteNumber(data.enrichmentData.current_price);
 		if (currentPrice !== null) {
@@ -559,6 +700,11 @@ function createRiskMetadataCoverageBucket() {
 		fields: Object.fromEntries(
 			RISK_METADATA_FIELDS.map(field => [field, { populated: 0, percentage: 0 }]),
 		),
+		directionEchoRate: {
+			echoed: 0,
+			total: 0,
+			percentage: 0,
+		},
 	};
 }
 
@@ -572,6 +718,38 @@ function createTradingViewStatusCounts() {
 	};
 }
 
+function extractAlertSide(data) {
+	if (!data || typeof data !== 'object') {
+		return null;
+	}
+	if (typeof data.side === 'string' && (data.side === 'BUY' || data.side === 'SELL')) {
+		return data.side;
+	}
+	if (data.enrichmentData && typeof data.enrichmentData.side === 'string') {
+		const s = data.enrichmentData.side.toUpperCase();
+		if (s === 'BUY' || s === 'SELL') return s;
+	}
+	if (typeof data.text === 'string' && data.text) {
+		const parsed = parseTradingViewSignal(data.text);
+		if (parsed && (parsed.side === 'BUY' || parsed.side === 'SELL')) {
+			return parsed.side;
+		}
+	}
+	if (data.enrichmentData && typeof data.enrichmentData.sentiment === 'string') {
+		if (data.enrichmentData.sentiment === 'BULLISH') return 'BUY';
+		if (data.enrichmentData.sentiment === 'BEARISH') return 'SELL';
+	}
+	return null;
+}
+
+function isDirectionEcho(side, setupType) {
+	if (!side || !setupType) return false;
+	const normSide = side.toUpperCase();
+	const normSetup = setupType.toLowerCase();
+	return (normSide === 'BUY' && normSetup === 'trend_continuation')
+		|| (normSide === 'SELL' && normSetup === 'reversal');
+}
+
 function isRiskMetadataPopulated(field, value) {
 	if (field === 'setup_type') {
 		return typeof value === 'string' && VALID_SETUP_TYPES.has(value.trim().toLowerCase());
@@ -581,13 +759,20 @@ function isRiskMetadataPopulated(field, value) {
 		|| (typeof value === 'string' && value.trim().length > 0);
 }
 
-function recordRiskMetadataCoverage(bucket, enrichmentData) {
+function recordRiskMetadataCoverage(bucket, enrichmentData, side) {
 	const data = enrichmentData && typeof enrichmentData === 'object' ? enrichmentData : {};
 	bucket.denominator += 1;
 
 	for (const field of RISK_METADATA_FIELDS) {
 		if (isRiskMetadataPopulated(field, data[field])) {
 			bucket.fields[field].populated += 1;
+		}
+	}
+
+	if (isRiskMetadataPopulated('setup_type', data.setup_type) && side) {
+		bucket.directionEchoRate.total += 1;
+		if (isDirectionEcho(side, data.setup_type)) {
+			bucket.directionEchoRate.echoed += 1;
 		}
 	}
 }
@@ -598,6 +783,13 @@ function finalizeRiskMetadataCoverage(bucket) {
 		metric.percentage = bucket.denominator === 0
 			? 0
 			: Number(((metric.populated / bucket.denominator) * 100).toFixed(2));
+	}
+
+	const echo = bucket.directionEchoRate;
+	if (echo) {
+		echo.percentage = echo.total === 0
+			? 0
+			: Number(((echo.echoed / echo.total) * 100).toFixed(2));
 	}
 }
 
@@ -641,11 +833,11 @@ function getPromptProvenanceGroup(coverage, provenance) {
 	return group;
 }
 
-function recordRiskMetadataCoverageByProvenance(coverage, enrichmentData) {
-	recordRiskMetadataCoverage(coverage, enrichmentData);
+function recordRiskMetadataCoverageByProvenance(coverage, enrichmentData, side) {
+	recordRiskMetadataCoverage(coverage, enrichmentData, side);
 	const provenance = normalizePromptProvenance(enrichmentData && enrichmentData.promptProvenance);
 	const group = getPromptProvenanceGroup(coverage, provenance);
-	recordRiskMetadataCoverage(group, enrichmentData);
+	recordRiskMetadataCoverage(group, enrichmentData, side);
 }
 
 function finalizeRiskMetadataCoverageByProvenance(coverage) {
@@ -1351,6 +1543,34 @@ function addDeliverySummary(summary, deliveryResults) {
 	}
 }
 
+function addBucketDeliverySummary(bucket, deliveryResults) {
+	if (!Array.isArray(deliveryResults)) {
+		return;
+	}
+
+	for (const result of deliveryResults) {
+		if (!result || typeof result !== 'object') {
+			continue;
+		}
+
+		const channel = typeof result.channel === 'string' && result.channel.trim()
+			? result.channel.trim()
+			: 'unknown';
+		if (!bucket.byChannel[channel]) {
+			bucket.byChannel[channel] = { total: 0, success: 0, failure: 0 };
+		}
+
+		bucket.byChannel[channel].total += 1;
+		if (result.success) {
+			bucket.byChannel[channel].success += 1;
+			bucket.success += 1;
+		} else {
+			bucket.byChannel[channel].failure += 1;
+			bucket.failure += 1;
+		}
+	}
+}
+
 function summarizeDeliveryResults(deliveryResults) {
 	if (!Array.isArray(deliveryResults)) {
 		return [];
@@ -1405,7 +1625,7 @@ function truncateAlertText(text) {
 
 const formatExportEnrichmentData = formatEnrichmentSummary;
 
-function formatExportRecord(doc, { includeText, includeEnrichment } = {}) {
+function formatExportRecord(doc, { includeText, includeEnrichment, includeDecision = false } = {}) {
 	const data = doc.data() || {};
 	const record = {
 		id: doc.id,
@@ -1460,6 +1680,10 @@ function formatExportRecord(doc, { includeText, includeEnrichment } = {}) {
 	if (includeEnrichment) {
 		record.enrichmentData = formatExportEnrichmentData(data.enrichmentData, data);
 	}
+	if (includeDecision && isDecisionAuditEnabled()) {
+		const decision = sanitizeDecisionAudit(data.decision);
+		if (decision) record.decision = decision;
+	}
 
 	if (includeText) {
 		record.text = truncateAlertText(data.text);
@@ -1507,11 +1731,31 @@ function calculatePercentileLatency(samples, percentile = 95) {
 	return Math.round(sorted[index]);
 }
 
-function buildSummaryWindow({ from, to, limit }) {
-	const now = new Date();
-	const parsedTo = to ? new Date(to) : now;
-	const maxWindowMs = MAX_SUMMARY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-	let parsedFrom = from ? new Date(from) : new Date(parsedTo.getTime() - (24 * 60 * 60 * 1000));
+function getSummaryIntervalMaxWindowDays(interval) {
+	const config = SUMMARY_INTERVALS[interval];
+	return config ? config.maxDays : null;
+}
+
+function resolveSummaryWindowBounds({ from, to }) {
+	const parsedTo = to ? new Date(to) : new Date();
+	return {
+		from: from ? new Date(from) : new Date(parsedTo.getTime() - DAY_MS),
+		to: parsedTo,
+	};
+}
+
+function buildSummaryWindow({ from, to, limit, interval }) {
+	const { from: requestedFrom, to: parsedTo } = resolveSummaryWindowBounds({ from, to });
+	const intervalConfig = SUMMARY_INTERVALS[interval];
+	const maxDays = intervalConfig ? intervalConfig.maxDays : MAX_SUMMARY_WINDOW_DAYS;
+	const maxWindowMs = maxDays * DAY_MS;
+	let parsedFrom = requestedFrom;
+
+	if (intervalConfig && parsedTo.getTime() - parsedFrom.getTime() > maxWindowMs) {
+		const error = new Error(`Invalid summary window for interval "${interval}". Maximum window is ${maxDays} days.`);
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
 
 	if (parsedTo.getTime() - parsedFrom.getTime() > maxWindowMs) {
 		parsedFrom = new Date(parsedTo.getTime() - maxWindowMs);
@@ -1523,12 +1767,60 @@ function buildSummaryWindow({ from, to, limit }) {
 		throw error;
 	}
 
-	return {
+	const window = {
 		from: parsedFrom.toISOString(),
 		to: parsedTo.toISOString(),
 		limit: clampSummaryLimit(limit),
-		maxDays: MAX_SUMMARY_WINDOW_DAYS,
+		maxDays,
 	};
+	if (intervalConfig) {
+		window.interval = interval;
+	}
+
+	return window;
+}
+
+function buildSummaryBuckets(interval, window, docs) {
+	const { ms: stepMs } = SUMMARY_INTERVALS[interval];
+	const windowFromMs = Date.parse(window.from);
+	const windowToMs = Date.parse(window.to);
+	const firstBucketMs = Math.floor(windowFromMs / stepMs) * stepMs;
+
+	const buckets = [];
+	const indexByStartMs = new Map();
+	for (let startMs = firstBucketMs; startMs <= windowToMs; startMs += stepMs) {
+		const bucket = {
+			bucketStart: new Date(startMs).toISOString(),
+			total: 0,
+			success: 0,
+			failure: 0,
+			byChannel: {},
+		};
+		indexByStartMs.set(startMs, bucket);
+		buckets.push(bucket);
+	}
+
+	for (const doc of docs) {
+		const data = doc.data() || {};
+		const receivedAtMs = getTimestampMillis(data.receivedAt);
+		// The scan range-filters on receivedAt, so every returned document carries
+		// a readable one. An unreadable timestamp is excluded from the series
+		// rather than fabricated into a bucket at a time it did not occur.
+		if (receivedAtMs === null) {
+			continue;
+		}
+
+		const bucketStartMs = Math.floor(receivedAtMs / stepMs) * stepMs;
+		const bucket = indexByStartMs.get(bucketStartMs);
+		if (!bucket) {
+			continue;
+		}
+
+		bucket.total += 1;
+		addBucketDeliverySummary(bucket, data.deliveryResults);
+	}
+
+	return buckets;
 }
 
 function buildExportWindow({ from, to, limit }) {
@@ -1882,6 +2174,25 @@ function emitAlertDeliveryEvents(params, alertId = null) {
 }
 
 /**
+ * Attach the burst-aggregation markers shared by every alert in a collapsed
+ * regime message. Each constituent keeps its own document (so outcome analytics
+ * stay per-symbol) and they are correlated by `burstAggregateId`.
+ *
+ * Bounded and non-secret: a fixed-shape id and a small integer count.
+ */
+function applyBurstAggregationMarkers(target, burstAggregateId, burstSignalCount) {
+	if (!target || typeof target !== 'object') {
+		return;
+	}
+	if (typeof burstAggregateId === 'string' && burstAggregateId.trim()) {
+		target.burstAggregateId = burstAggregateId.trim().slice(0, 64);
+	}
+	if (Number.isFinite(burstSignalCount) && burstSignalCount >= 1) {
+		target.burstSignalCount = Math.trunc(burstSignalCount);
+	}
+}
+
+/**
  * Persist an alert document to Firestore.
  *
  * @param {Object} params
@@ -1895,6 +2206,8 @@ function emitAlertDeliveryEvents(params, alertId = null) {
  * @param {Array}   params.deliveryResults   - Array of SendResult from notificationManager.sendToAll()
  * @param {boolean} params.useTradingViewData - Whether ?useTradingViewData=true was set on the request
  * @param {number}  params.processingTimeMs  - Bounded handler processing duration in milliseconds
+ * @param {string}  [params.burstAggregateId] - Shared id of the regime burst this alert joined
+ * @param {number}  [params.burstSignalCount] - Signals collapsed into the shared burst message
  * @param {string[]} params.symbols - Complete request-level symbol set for multi-symbol reports
  * @param {string}  params.batchId - Stable request-scoped grouping key for batch counting
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
@@ -1913,7 +2226,11 @@ async function saveAlertInternal(params = {}) {
 		useTradingViewData,
 		tradingViewEnrichmentApplied,
 		tradingViewEnrichmentStatus,
+		outcomeAnnotation,
 		suppressedRepeat,
+		suppressionReason,
+		burstAggregateId,
+		burstSignalCount,
 		processingTimeMs,
 		source,
 		eventCategory,
@@ -1930,6 +2247,7 @@ async function saveAlertInternal(params = {}) {
 		discordWebhookUrl,
 		routing,
 		side,
+		decision,
 		alertId: providedAlertId,
 	} = params;
 	if (!isEnabled()) {
@@ -1996,13 +2314,47 @@ async function saveAlertInternal(params = {}) {
 		if (typeof requestId === 'string' && requestId.trim()) {
 			document.requestId = requestId.trim();
 		}
+		const sanitizedDecision = sanitizeDecisionAudit(decision);
+		if (sanitizedDecision) document.decision = sanitizedDecision;
 		if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(tradingViewEnrichmentStatus)) {
 			document.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
+		}
+		if (outcomeAnnotation && typeof outcomeAnnotation === 'object') {
+			const sanitizedAnnotation = stripUndefinedFieldsDeep({
+				exchange: typeof outcomeAnnotation.exchange === 'string' ? outcomeAnnotation.exchange : null,
+				symbol: typeof outcomeAnnotation.symbol === 'string' ? outcomeAnnotation.symbol : null,
+				side: typeof outcomeAnnotation.side === 'string' ? outcomeAnnotation.side : null,
+				setupType: typeof outcomeAnnotation.setupType === 'string' ? outcomeAnnotation.setupType : null,
+				windowLabel: typeof outcomeAnnotation.windowLabel === 'string' ? outcomeAnnotation.windowLabel : null,
+				sampleSize: typeof outcomeAnnotation.sampleSize === 'number' && Number.isFinite(outcomeAnnotation.sampleSize)
+					? outcomeAnnotation.sampleSize
+					: null,
+				hitRatePercent: typeof outcomeAnnotation.hitRatePercent === 'number' && Number.isFinite(outcomeAnnotation.hitRatePercent)
+					? outcomeAnnotation.hitRatePercent
+					: null,
+				expectancyR: typeof outcomeAnnotation.expectancyR === 'number' && Number.isFinite(outcomeAnnotation.expectancyR)
+					? outcomeAnnotation.expectancyR
+					: null,
+				totalWins: typeof outcomeAnnotation.totalWins === 'number' && Number.isFinite(outcomeAnnotation.totalWins)
+					? outcomeAnnotation.totalWins
+					: null,
+				totalLosses: typeof outcomeAnnotation.totalLosses === 'number' && Number.isFinite(outcomeAnnotation.totalLosses)
+					? outcomeAnnotation.totalLosses
+					: null,
+				summary: typeof outcomeAnnotation.summary === 'string' ? outcomeAnnotation.summary : null,
+			});
+			if (sanitizedAnnotation && Object.keys(sanitizedAnnotation).length > 0) {
+				document.outcomeAnnotation = sanitizedAnnotation;
+			}
 		}
 		if (suppressedRepeat === true) {
 			document.suppressedRepeat = true;
 			document.deliveryResults = [];
+			if (VALID_SUPPRESSION_REASONS.has(suppressionReason)) {
+				document.suppressionReason = suppressionReason;
+			}
 		}
+		applyBurstAggregationMarkers(document, burstAggregateId, burstSignalCount);
 		const normalizedProcessingTimeMs = normalizeProcessingTimeMs(processingTimeMs);
 		if (normalizedProcessingTimeMs !== null) {
 			document.processingTimeMs = normalizedProcessingTimeMs;
@@ -2058,9 +2410,12 @@ async function saveAlertInternal(params = {}) {
 		let docRef;
 		if (sanitizedAlertId) {
 			docRef = firestore.collection(COLLECTION_NAME).doc(sanitizedAlertId);
-			await docRef.set(document);
+			const write = await fireAndForget('alertStorage', () => docRef.set(document));
+			if (!write.ok) throw write.error;
 		} else {
-			docRef = await firestore.collection(COLLECTION_NAME).add(document);
+			const write = await fireAndForget('alertStorage', () => firestore.collection(COLLECTION_NAME).add(document));
+			if (!write.ok) throw write.error;
+			docRef = write.value;
 		}
 		console.debug(`[AlertStorageService] Alert stored with ID: ${docRef.id}`);
 		firestoreWriteMetricsService.recordWriteSuccess(WRITE_METRICS_DOMAIN_ALERTS);
@@ -2244,9 +2599,11 @@ async function getAlertById(alertId) {
  * @param {string} params.idempotencyKey
  * @param {Array<string>} params.channels
  * @param {Array} params.deliveryResults
+ * @param {boolean} [params.reEnriched]
+ * @param {Object} [params.enrichmentData]
  * @returns {Promise<string|null>}
  */
-async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryResults }) {
+async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryResults, reEnriched, enrichmentData }) {
 	const firestore = getFirestore();
 	if (!firestore) {
 		if (isEnabled()) {
@@ -2267,6 +2624,8 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 		replayedAt: admin.firestore.FieldValue.serverTimestamp(),
 		expiresAt: buildRetentionExpiryTimestamp(),
 		source: 'alert-replay',
+		...(typeof reEnriched === 'boolean' ? { reEnriched } : {}),
+		...(enrichmentData && typeof enrichmentData === 'object' ? { enrichmentData: stripUndefinedFieldsDeep(sanitizeEnrichmentData(enrichmentData)) } : {}),
 	};
 
 	try {
@@ -2329,6 +2688,8 @@ function formatReplayDocument(doc) {
 		deliverySummary: compactDelivery,
 		replayedAt,
 		attemptId: typeof data.attemptId === 'string' ? data.attemptId : null,
+		...(typeof data.reEnriched === 'boolean' ? { reEnriched: data.reEnriched } : {}),
+		...(data.enrichmentData && typeof data.enrichmentData === 'object' ? { enrichmentData: data.enrichmentData } : {}),
 	};
 }
 
@@ -2575,7 +2936,7 @@ async function getReplayAttemptByIdempotencyKey(alertId, idempotencyKey) {
  * @param {boolean|undefined} params.includeEnrichment Include bounded enrichmentData when true
  * @returns {Promise<{window: Object, alerts: Array}>}
  */
-async function exportAlerts({ from, to, limit, source, enriched, signalClass, includeText = false, includeEnrichment = false } = {}) {
+async function exportAlerts({ from, to, limit, source, enriched, signalClass, includeText = false, includeEnrichment = false, includeDecision = false } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -2639,7 +3000,7 @@ async function exportAlerts({ from, to, limit, source, enriched, signalClass, in
 		}
 	}
 
-	const alerts = docs.map(doc => formatExportRecord(doc, { includeText, includeEnrichment }));
+	const alerts = docs.map(doc => formatExportRecord(doc, { includeText, includeEnrichment, includeDecision }));
 
 	return {
 		window,
@@ -2844,9 +3205,12 @@ async function batchReplayAlerts(attempts) {
  * @param {string|undefined} params.symbol Optional symbol filter
  * @param {string|undefined} params.eventCategory Optional event category filter
  * @param {string|undefined} params.exchange Optional exchange filter
+ * @param {string|undefined} params.interval Optional `hour`/`day` bucket width. When
+ *        set, adds `summary.buckets` and reports `window.interval`; when omitted the
+ *        response is unchanged. Raises INVALID_REQUEST on a window over the cap.
  * @returns {Promise<Object|null>}
  */
-async function summarizeAlerts({ from, to, limit, source, enriched, symbol, eventCategory, exchange, signalClass } = {}) {
+async function summarizeAlerts({ from, to, limit, source, enriched, symbol, eventCategory, exchange, signalClass, interval, includeDecisionRollup = false } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -2856,7 +3220,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
 	}
 
-	const window = buildSummaryWindow({ from, to, limit });
+	const window = buildSummaryWindow({ from, to, limit, interval });
 	const hasFilters = typeof source === 'string'
 		|| typeof enriched === 'boolean'
 		|| typeof symbol === 'string'
@@ -2973,6 +3337,9 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		},
 		costByFeature: createFeatureCostSummary(),
 	};
+	if (includeDecisionRollup && isDecisionAuditEnabled()) {
+		summary.decision = { gates: createDecisionGatesRollup() };
+	}
 	const processingLatencySamples = [];
 	const deliveryLatencySamples = [];
 	const channelLatencySamples = {};
@@ -2984,6 +3351,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 
 	for (const doc of docs) {
 		const data = doc.data() || {};
+		if (summary.decision) recordDecisionGatesRollup(summary.decision.gates, data.decision);
 		const alertEnriched = Boolean(data.enriched);
 		const useTradingViewData = Boolean(data.useTradingViewData);
 		const tradingViewEnrichmentApplied = Boolean(data.tradingViewEnrichmentApplied);
@@ -3001,7 +3369,8 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		if (alertEnriched) {
 			summary.byFeatureFlag.enriched += 1;
 			summary.enrichment.enrichedAlerts += 1;
-			recordRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage, data.enrichmentData);
+			const side = extractAlertSide(data);
+			recordRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage, data.enrichmentData, side);
 			recordEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage, data.enrichmentData);
 
 			const storedScore = readStoredSentimentScore(data.enrichmentData);
@@ -3073,6 +3442,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 
 	finalizeRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage);
 	finalizeEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage);
+	if (summary.decision) finalizeDecisionGatesRollup(summary.decision.gates);
 	summary.enrichment.sentimentCalibration = buildSentimentCalibration(sentimentScores, rawScoreCapCount);
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
 	for (const feature of FEATURE_TAGS) {
@@ -3091,16 +3461,26 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		}
 	}
 
+	if (SUMMARY_INTERVALS[interval]) {
+		summary.buckets = buildSummaryBuckets(interval, window, docs);
+	}
+
 	return summary;
 }
 
 module.exports = {
 	isEnabled,
+	// Exported so the firebase-admin bootstrap gate can be asserted directly
+	// (issue #721). It is re-evaluated per call, never cached.
+	canInitializeFirestore,
 	saveAlert,
 	listAlerts,
 	getAlertById,
 	summarizeAlerts,
 	calculatePercentileLatency,
+	resolveSummaryWindowBounds,
+	getSummaryIntervalMaxWindowDays,
+	SUMMARY_INTERVALS,
 	exportAlerts,
 	exportAlertsByIds,
 	getAlertsByIds,
@@ -3123,6 +3503,13 @@ module.exports = {
 	INVALID_CURSOR_MESSAGE,
 	parseAlertPaginationCursor,
 	MAX_ALERT_TEXT_LENGTH,
+	isDecisionAuditEnabled,
+	sanitizeDecisionAudit,
+	sanitizeDecisionGates,
+	sanitizeDecisionGate,
+	createDecisionGatesRollup,
+	recordDecisionGatesRollup,
+	finalizeDecisionGatesRollup,
 	MAX_BATCH_REPLAY_LIMIT,
 	MAX_BATCH_DELETE_LIMIT,
 	// Exported for testing

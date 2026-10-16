@@ -36,6 +36,17 @@ class FakeElement {
 		});
 	}
 
+	// `children` is a plain array here but a live HTMLCollection in the browser, so
+	// anything array-only (Array#pop) type-checks in tests and throws in Chrome.
+	// This getter is what keeps the live feed's trim honest.
+	get lastElementChild() {
+		return this.children[this.children.length - 1] || null;
+	}
+
+	get firstChild() {
+		return this.children[0] || null;
+	}
+
 	append(...nodes) {
 		nodes.forEach((node) => {
 			const selectFirstOption = this.tagName === 'SELECT' && this.children.length === 0;
@@ -54,13 +65,33 @@ class FakeElement {
 		this.append(...nodes);
 	}
 
+	// Present because the console calls prepend() and falls back to an array
+	// unshift() without it. That fallback leaves parentNode unset, which makes a
+	// later lastElementChild.remove() a silent no-op and hangs the live feed's
+	// trim loop. Modelling prepend keeps the fake on the browser's code path.
+	prepend(...nodes) {
+		nodes.reverse().forEach((node) => {
+			node.parentNode = this;
+			this.children.unshift(node);
+		});
+	}
+
 	addEventListener(type, listener) {
 		(this.listeners[type] ||= []).push(listener);
 	}
 
+	// Returns the dispatched event so a test can assert `defaultPrevented`. That flag
+	// is the only proxy for "the form did not navigate" here: the fake cannot perform
+	// a native GET, and an unhandled submit is exactly how a password would reach the
+	// URL.
 	async dispatch(type) {
-		const event = { preventDefault() {} };
+		const event = {
+			type,
+			defaultPrevented: false,
+			preventDefault() { this.defaultPrevented = true; },
+		};
 		for (const listener of this.listeners[type] || []) await listener(event);
+		return event;
 	}
 
 	setAttribute(name, value) {
@@ -81,6 +112,18 @@ class FakeElement {
 	}
 
 	select() {}
+
+	// The credential forms lean on the browser's own constraints, and the fake
+	// dispatches `submit` directly rather than routing through a browser, so the
+	// double has to enforce them or every "invalid submit" assertion is vacuous.
+	// Values are NOT trimmed: a browser's `required` accepts '   ', and a double
+	// stricter than the browser would hide exactly that gap in production code.
+	checkValidity() {
+		const value = String(this.value == null ? '' : this.value);
+		if (this.required && value === '') return false;
+		if (this.type === 'email' && value !== '' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) return false;
+		return true;
+	}
 
 	querySelector(selector) {
 		const results = this.querySelectorAll(selector);
@@ -188,23 +231,76 @@ const idleStreamResponse = () => ({
 	},
 });
 
+// A stream whose chunks are pushed by the test, so an SSE subscriber can be fed
+// real `event:`/`data:` frames and then observed to stop receiving them.
+const createControllableStream = () => {
+	const encoder = new TextEncoder();
+	const pending = [];
+	let notify = null;
+	return {
+		response: () => ({
+			ok: true,
+			status: 200,
+			headers: { get: () => null },
+			body: {
+				getReader: () => ({
+					read: () => new Promise((resolve) => {
+						if (pending.length) {
+							const chunk = pending.shift();
+							resolve({ done: false, value: chunk });
+							return;
+						}
+						notify = () => {
+							notify = null;
+							if (pending.length) resolve({ done: false, value: pending.shift() });
+						};
+					}),
+				}),
+			},
+		}),
+		emit: (eventType, data) => {
+			pending.push(encoder.encode(`event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`));
+			const wake = notify;
+			notify = null;
+			if (wake) wake();
+		},
+	};
+};
+
 function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', firebase, location = {} }) {
 	const body = new FakeElement('body');
 	const elementsById = {};
 	[
-		'legacy-connection', 'firebase-auth', 'auth-form', 'auth-email', 'auth-password', 'sign-in', 'sign-out',
-		'auth-state', 'api-key', 'key-state', 'save-key', 'clear-key', 'connection-form', 'view', 'view-status',
-		'sse-status', 'sse-label',
-	].forEach((id) => {
-		const tag = id === 'api-key' ? 'input' : id === 'connection-form' ? 'form'
-			: id === 'view' ? 'section' : id === 'view-status' ? 'p' : id === 'auth-form' ? 'div' : id.endsWith('key') ? 'button' : 'p';
+		['legacy-connection', 'section', {}],
+		['firebase-auth', 'section', {}],
+		['auth-form', 'form', {}],
+		['auth-email', 'input', { type: 'email', name: 'email', required: true, autocomplete: 'username' }],
+		['auth-password', 'input', { type: 'password', name: 'password', required: true, autocomplete: 'current-password' }],
+		['auth-credentials-error', 'p', { role: 'alert', hidden: true }],
+		['sign-in', 'button', { type: 'submit' }],
+		['sign-out', 'button', { type: 'button' }],
+		['auth-state', 'p', {}],
+		['api-key', 'input', { type: 'password', name: 'apiKey', required: true, autocomplete: 'off' }],
+		['key-state', 'p', {}],
+		['save-key', 'button', { type: 'submit' }],
+		['clear-key', 'button', { type: 'button' }],
+		['connection-form', 'form', {}],
+		['view', 'section', {}],
+		['view-status', 'p', { role: 'status' }],
+		['sse-status', 'div', { role: 'status' }],
+		['sse-label', 'span', {}],
+		['console-shell', 'div', {}],
+		['toggle-sidebar', 'button', { type: 'button' }],
+	].forEach(([id, tag, attributes]) => {
 		const node = new FakeElement(tag);
 		node.id = id;
-		node.hidden = false;
+		node.hidden = attributes.hidden === true;
+		Object.assign(node, attributes);
+		node.attributes = { ...attributes };
 		elementsById[id] = node;
 		body.append(node);
 	});
-	['overview', 'status', 'alerts', 'outcomes', 'presets', 'jobs', 'orders', 'analysis', 'playground'].forEach((view) => {
+	['overview', 'status', 'diagnostics', 'alerts', 'outcomes', 'presets', 'jobs', 'orders', 'analysis', 'newsMonitor', 'trading', 'playground'].forEach((view) => {
 		const button = new FakeElement('button');
 		button.dataset.view = view;
 		body.append(button);
@@ -224,6 +320,9 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 			if (tag === 'a') node.click = () => downloads.push({ href: node.href, download: node.download });
 			return node;
 		},
+		// Deliberately does not assert the SVG namespace, unlike admin-charts.test.js: this fake only
+		// needs the nodes to be walkable by the same findAll the other DOM assertions use.
+		createElementNS: (_namespaceURI, tag) => new FakeElement(tag),
 		getElementById: (id) => elementsById[id],
 		querySelectorAll: (selector) => body.querySelectorAll(selector),
 		addEventListener: (type, listener) => { documentListeners[type] = listener; },
@@ -304,10 +403,19 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		},
 	};
 	context.window.fetch = context.fetch;
-	vm.runInNewContext(
-		fs.readFileSync(path.join(__dirname, '../../src/admin/admin.js'), 'utf8'),
-		context,
-	);
+	// admin-charts.js, admin-diagnostics.js and admin-newsmonitor.js are evaluated in the
+	// browser context, not require()d into Node: they build nodes through the ambient
+	// `document`, which only exists inside this vm, and they publish their APIs onto the
+	// shared `window` object that admin.js reads. Order mirrors the deferred <script> order
+	// in index.html.
+	[
+		'admin-charts.js',
+		'admin-diagnostics.js',
+		'admin-newsmonitor.js',
+		'admin.js',
+	].forEach((relative) => {
+		vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../src/admin', relative), 'utf8'), context);
+	});
 	documentListeners.DOMContentLoaded();
 
 	const dispatchPopState = async () => {
@@ -363,7 +471,7 @@ describe('admin browser client', () => {
 		});
 		await flush();
 		browser.elementsById['api-key'].value = 'test-key';
-		await browser.elementsById['save-key'].dispatch('click');
+		await browser.elementsById['connection-form'].dispatch('submit');
 		await flush();
 		expect(browser.context.fetch.mock.calls.map(([url]) => url)).toContain('/api/admin/events');
 
@@ -382,7 +490,7 @@ describe('admin browser client', () => {
 		});
 		await flush();
 		browser.elementsById['api-key'].value = 'test-key';
-		await browser.elementsById['save-key'].dispatch('click');
+		await browser.elementsById['connection-form'].dispatch('submit');
 		await flush();
 
 		expect(browser.elementsById['sse-label'].textContent).toBe('Unavailable');
@@ -400,7 +508,7 @@ describe('admin browser client', () => {
 		});
 		await flush();
 		browser.elementsById['api-key'].value = 'test-key';
-		await browser.elementsById['save-key'].dispatch('click');
+		await browser.elementsById['connection-form'].dispatch('submit');
 		await flush();
 
 		expect([...browser.timerDelays.values()]).toContain(2500);
@@ -429,7 +537,7 @@ describe('admin browser client', () => {
 		});
 		await flush();
 		browser.elementsById['api-key'].value = 'test-key';
-		await browser.elementsById['save-key'].dispatch('click');
+		await browser.elementsById['connection-form'].dispatch('submit');
 		await flush();
 
 		// The only armed timer must be the handshake deadline: the request is
@@ -456,7 +564,7 @@ describe('admin browser client', () => {
 		});
 		await flush();
 		browser.elementsById['api-key'].value = 'test-key';
-		await browser.elementsById['save-key'].dispatch('click');
+		await browser.elementsById['connection-form'].dispatch('submit');
 		await flush();
 
 		expect(browser.elementsById['sse-label'].textContent).toBe('Live');
@@ -491,7 +599,7 @@ describe('admin browser client', () => {
 		});
 		await flush();
 		browser.elementsById['api-key'].value = 'test-key';
-		await browser.elementsById['save-key'].dispatch('click');
+		await browser.elementsById['connection-form'].dispatch('submit');
 		await flush();
 		expect([...browser.timerDelays.values()]).toEqual([15000]);
 
@@ -750,6 +858,57 @@ describe('admin browser client', () => {
 		expect(view.textContent).toContain('Last poll');
 		expect(view.textContent).toContain('Last error detailpoll failed');
 		expect(view.textContent).toContain('Last error at');
+	});
+
+	it('renders durable storage readiness counters so an operator can tell unverified from misconfigured', async () => {
+		const status = {
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: { symbolAnalysisStorage: true },
+			dependencies: {
+				symbolAnalysisStorage: {
+					enabled: true,
+					configured: true,
+					ready: false,
+					status: 'unverified',
+					readiness: 'unverified',
+					failOpen: true,
+					collection: 'symbolAnalyses',
+					retentionDays: 7,
+					writesAttempted: 0,
+					writesSucceeded: 0,
+					writesFailed: 0,
+					readsAttempted: 2,
+					readsSucceeded: 2,
+					readsFailed: 0,
+					consecutiveFailures: 0,
+					lastWriteAt: null,
+					lastFailureAt: null,
+					lastErrorReason: null,
+				},
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'status');
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Symbol analysis storage');
+		expect(view.textContent).toContain('Readinessunverified');
+		expect(view.textContent).toContain('Fail opentrue');
+		expect(view.textContent).toContain('CollectionsymbolAnalyses');
+		expect(view.textContent).toContain('Retention (days)7');
+		expect(view.textContent).toContain('Writes attempted0');
+		expect(view.textContent).toContain('Writes succeeded0');
+		expect(view.textContent).toContain('Reads attempted2');
+		expect(view.textContent).toContain('Reads succeeded2');
 	});
 
 	it('includes nested profiling health in dependency attention', async () => {
@@ -1333,13 +1492,13 @@ describe('admin browser client', () => {
 		expect(browser.elementsById['legacy-connection'].hidden).toBe(false);
 		expect(browser.elementsById.view.textContent).toContain('Sign in');
 		browser.elementsById['api-key'].value = 'webhook-key';
-		await browser.elementsById['save-key'].dispatch('click');
+		await browser.elementsById['connection-form'].dispatch('submit');
 		expect(browser.storage.has('cabros-admin-api-key')).toBe(false);
 		expect(browser.elementsById['key-state'].textContent).toContain('in memory');
 
 		browser.elementsById['auth-email'].value = 'operator@example.com';
 		browser.elementsById['auth-password'].value = 'password';
-		await browser.elementsById['sign-in'].dispatch('click');
+		await browser.elementsById['auth-form'].dispatch('submit');
 		await flush();
 
 		const statusViewButton = find(browser.body, (node) => node.dataset.view === 'status');
@@ -1363,6 +1522,303 @@ describe('admin browser client', () => {
 		expect(browser.elementsById['api-key'].value).toBe('');
 	});
 
+	// #951: both credential paths are real forms, so Enter submits them and the
+	// browser owns constraint validation. The fake dispatches `submit` directly, so
+	// the structural assertions below plus FakeElement#checkValidity carry the part
+	// a real browser would do for free.
+	describe('credential entry forms', () => {
+		const AUTH_CONFIG = {
+			enabled: true,
+			configured: true,
+			config: { apiKey: 'public-key', authDomain: 'cabros.firebaseapp.com', projectId: 'cabros' },
+		};
+
+		const firebaseBrowser = (attempt) => {
+			let authStateChanged;
+			const user = {
+				getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+				getIdTokenResult: jest.fn().mockResolvedValue({ claims: { roles: ['admin.operator'] } }),
+			};
+			const auth = {
+				setPersistence: jest.fn().mockResolvedValue(undefined),
+				onAuthStateChanged: jest.fn((listener) => {
+					authStateChanged = listener;
+					listener(null);
+					return jest.fn();
+				}),
+				signInWithEmailAndPassword: jest.fn(async (email, password) => {
+					await attempt(email, password);
+					await authStateChanged(user);
+				}),
+				signOut: jest.fn().mockResolvedValue(undefined),
+			};
+			const browser = createBrowser({
+				firebase: { initializeApp: jest.fn(), auth: jest.fn(() => auth) },
+				fetchImpl: async (url) => {
+					if (url === '/admin/auth-config') return response(AUTH_CONFIG);
+					if (url === '/openapi.json') return response(contract);
+					return response({});
+				},
+			});
+			return { auth, browser };
+		};
+
+		it('declares both credential controls as native forms', () => {
+			const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
+			const authForm = shell.match(/<form id="auth-form"[\s\S]*?<\/form>/)[0];
+			const legacyForm = shell.match(/<form id="connection-form"[\s\S]*?<\/form>/)[0];
+
+			expect(shell).not.toMatch(/<form[^>]*\bnovalidate/);
+			expect(authForm).toMatch(/<label for="auth-email">/);
+			expect(authForm).toMatch(/id="auth-email"[^>]*name="email"[^>]*type="email"[^>]*autocomplete="username"[^>]*required/);
+			expect(authForm).toMatch(/<label for="auth-password">/);
+			expect(authForm).toMatch(/id="auth-password"[^>]*name="password"[^>]*type="password"[^>]*autocomplete="current-password"[^>]*required/);
+			expect(authForm).toMatch(/id="auth-email"[^>]*aria-describedby="auth-credentials-error"/);
+			expect(authForm).toMatch(/id="auth-password"[^>]*aria-describedby="auth-credentials-error"/);
+			expect(authForm).toMatch(/id="auth-credentials-error"[^>]*role="alert"/);
+			expect(authForm).toMatch(/<button id="sign-in"[^>]*type="submit"/);
+
+			expect(legacyForm).toMatch(/<label for="api-key">/);
+			expect(legacyForm).toMatch(/id="api-key"[^>]*name="apiKey"[^>]*required[^>]*aria-describedby="key-state"/);
+			expect(legacyForm).toMatch(/<button id="save-key"[^>]*type="submit"/);
+			expect(shell).not.toMatch(/type="button">(?:Sign in|Use key)/);
+		});
+
+		it('submits exactly once from either credential field', async () => {
+			const { auth, browser } = firebaseBrowser(async () => {});
+			await flush();
+
+			// A submit-type button is what makes Enter work, and no keydown handler
+			// may swallow the key before the browser's implicit submission.
+			expect(browser.elementsById['sign-in'].type).toBe('submit');
+			expect(browser.elementsById['auth-email'].listeners.keydown).toBeUndefined();
+			expect(browser.elementsById['auth-password'].listeners.keydown).toBeUndefined();
+
+			browser.elementsById['auth-email'].value = 'operator@example.com';
+			browser.elementsById['auth-password'].value = 'secret';
+			await browser.elementsById['auth-form'].dispatch('submit');
+			await flush();
+
+			expect(auth.signInWithEmailAndPassword).toHaveBeenCalledTimes(1);
+			expect(auth.signInWithEmailAndPassword).toHaveBeenCalledWith('operator@example.com', 'secret');
+		});
+
+		it('rejects blank and malformed credential input before calling the SDK', async () => {
+			const { auth, browser } = firebaseBrowser(async () => {});
+			await flush();
+			const error = browser.elementsById['auth-credentials-error'];
+
+			browser.elementsById['auth-email'].value = 'operator@example.com';
+			await browser.elementsById['auth-form'].dispatch('submit');
+			expect(auth.signInWithEmailAndPassword).not.toHaveBeenCalled();
+			expect(error.hidden).toBe(false);
+			expect(error.textContent).toContain('Enter an email address and password');
+			expect(browser.elementsById['auth-email'].attributes['aria-invalid']).toBe('true');
+			expect(browser.elementsById['auth-password'].attributes['aria-invalid']).toBe('true');
+
+			browser.elementsById['auth-password'].value = 'super-secret';
+			browser.elementsById['auth-email'].value = 'not-an-email';
+			await browser.elementsById['auth-form'].dispatch('submit');
+			expect(auth.signInWithEmailAndPassword).not.toHaveBeenCalled();
+			expect(error.textContent).not.toContain('not-an-email');
+			expect(error.textContent).not.toContain('super-secret');
+		});
+
+		it('associates a rejected sign-in with the credentials without echoing them', async () => {
+			const { auth, browser } = firebaseBrowser(async () => { throw new Error('auth/invalid-credential'); });
+			await flush();
+			const error = browser.elementsById['auth-credentials-error'];
+
+			browser.elementsById['auth-email'].value = 'operator@example.com';
+			browser.elementsById['auth-password'].value = 'hunter2-super-secret';
+			await browser.elementsById['auth-form'].dispatch('submit');
+			await flush();
+
+			expect(auth.signInWithEmailAndPassword).toHaveBeenCalledTimes(1);
+			expect(error.hidden).toBe(false);
+			expect(error.textContent).toContain('Sign-in failed');
+			expect(error.textContent).not.toContain('hunter2-super-secret');
+			expect(error.textContent).not.toContain('operator@example.com');
+			expect(browser.elementsById['auth-email'].attributes['aria-invalid']).toBe('true');
+			expect(browser.elementsById['auth-password'].attributes['aria-invalid']).toBe('true');
+		});
+
+		it('clears the rejected credential state when the operator edits a field', async () => {
+			const { auth, browser } = firebaseBrowser(async () => {});
+			await flush();
+			const error = browser.elementsById['auth-credentials-error'];
+
+			browser.elementsById['auth-email'].value = 'not-an-email';
+			await browser.elementsById['auth-form'].dispatch('submit');
+			expect(error.hidden).toBe(false);
+
+			browser.elementsById['auth-email'].value = 'operator@example.com';
+			await browser.elementsById['auth-email'].dispatch('input');
+			expect(error.hidden).toBe(true);
+			expect(error.textContent).toBe('');
+			expect(browser.elementsById['auth-email'].attributes['aria-invalid']).toBeUndefined();
+			expect(browser.elementsById['auth-password'].attributes['aria-invalid']).toBeUndefined();
+
+			browser.elementsById['auth-password'].value = 'secret';
+			await browser.elementsById['auth-form'].dispatch('submit');
+			await flush();
+			expect(auth.signInWithEmailAndPassword).toHaveBeenCalledTimes(1);
+		});
+
+		it('saves a non-empty legacy key on submit and never puts it in a URL', async () => {
+			const requests = [];
+			const browser = createBrowser({
+				fetchImpl: async (url, options) => {
+					if (url === '/openapi.json') return response(contract);
+					requests.push([url, options]);
+					if (url === '/api/admin/events') return idleStreamResponse();
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'session-secret';
+			await browser.elementsById['connection-form'].dispatch('submit');
+			await flush();
+
+			expect(browser.storage.get('cabros-admin-api-key')).toBe('session-secret');
+			expect(browser.elementsById['key-state'].textContent).toContain('saved for this browser session');
+			expect(browser.elementsById['api-key'].attributes['aria-invalid']).toBeUndefined();
+			expect(requests.map(([url]) => url)).toContain('/api/admin/events');
+			expect(requests.every(([url]) => !url.includes('session-secret'))).toBe(true);
+		});
+
+		it('refuses to save an empty legacy key and reports it on the control', async () => {
+			const requests = [];
+			const browser = createBrowser({
+				fetchImpl: async (url, options) => {
+					if (url === '/openapi.json') return response(contract);
+					requests.push([url, options]);
+					return response({});
+				},
+			});
+			await flush();
+			await browser.elementsById['connection-form'].dispatch('submit');
+			await flush();
+
+			expect(browser.storage.has('cabros-admin-api-key')).toBe(false);
+			expect(browser.elementsById['key-state'].textContent).toContain('Enter an API key');
+			expect(browser.elementsById['key-state'].className).toBe('response-error');
+			expect(browser.elementsById['api-key'].attributes['aria-invalid']).toBe('true');
+			expect(requests.map(([url]) => url)).not.toContain('/api/admin/events');
+
+			// An all-whitespace key is refused by saveKey() itself. Native `required`
+			// accepts '   ', so this is production logic doing the work, not the double.
+			browser.elementsById['api-key'].value = '   ';
+			const whitespaceSubmit = await browser.elementsById['connection-form'].dispatch('submit');
+			await flush();
+			expect(whitespaceSubmit.defaultPrevented).toBe(true);
+			expect(browser.storage.has('cabros-admin-api-key')).toBe(false);
+			expect(browser.elementsById['key-state'].textContent).toContain('Enter an API key');
+			expect(requests.map(([url]) => url)).not.toContain('/api/admin/events');
+
+			browser.elementsById['api-key'].value = 'session-secret';
+			await browser.elementsById['api-key'].dispatch('input');
+			expect(browser.elementsById['api-key'].attributes['aria-invalid']).toBeUndefined();
+			await browser.elementsById['connection-form'].dispatch('submit');
+			await flush();
+			expect(browser.storage.get('cabros-admin-api-key')).toBe('session-secret');
+		});
+
+		// #951 round 1: both forms are real <form> elements with no action, so a submit
+		// that is not handled performs a native GET and writes the credentials into the
+		// URL, browser history and any upstream proxy access log. The listener must exist
+		// before the card is revealed, and readiness gates the SDK call rather than the
+		// listener — /admin/auth-config fails open to { enabled: true, configured: false }.
+		it('never lets a credential form navigate, before or without Firebase readiness', async () => {
+			let releasePersistence;
+			const persistencePending = new Promise((resolve) => { releasePersistence = resolve; });
+			let authStateChanged;
+			const auth = {
+				setPersistence: jest.fn(() => persistencePending),
+				onAuthStateChanged: jest.fn((listener) => {
+					authStateChanged = listener;
+					listener(null);
+					return jest.fn();
+				}),
+				signInWithEmailAndPassword: jest.fn(async () => {
+					await authStateChanged({
+						getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+						getIdTokenResult: jest.fn().mockResolvedValue({ claims: { roles: ['admin.operator'] } }),
+					});
+				}),
+				signOut: jest.fn().mockResolvedValue(undefined),
+			};
+			const browser = createBrowser({
+				firebase: {
+					initializeApp: jest.fn(),
+					// Auth.Persistence is what makes setupFirebaseAuth await setPersistence,
+					// which is the window this test submits inside.
+					auth: Object.assign(jest.fn(() => auth), { Auth: { Persistence: { NONE: 'none' } } }),
+				},
+				fetchImpl: async (url) => {
+					if (url === '/admin/auth-config') return response(AUTH_CONFIG);
+					if (url === '/openapi.json') return response(contract);
+					return response({});
+				},
+			});
+			await flush();
+
+			// The card is revealed while the SDK bootstrap is still in flight.
+			expect(browser.elementsById['auth-form'].hidden).toBe(false);
+			browser.elementsById['auth-email'].value = 'operator@example.com';
+			browser.elementsById['auth-password'].value = 'PlaintextSecret123!';
+			const duringLoad = await browser.elementsById['auth-form'].dispatch('submit');
+			await flush();
+			expect(duringLoad.defaultPrevented).toBe(true);
+			expect(auth.signInWithEmailAndPassword).not.toHaveBeenCalled();
+			expect(browser.elementsById['auth-credentials-error'].textContent).toContain('not available yet');
+
+			releasePersistence();
+			await flush();
+			const afterReady = await browser.elementsById['auth-form'].dispatch('submit');
+			await flush();
+			expect(afterReady.defaultPrevented).toBe(true);
+			expect(auth.signInWithEmailAndPassword).toHaveBeenCalledTimes(1);
+		});
+
+		it('withholds the credential form entirely when Firebase auth is unconfigured', async () => {
+			const auth = { auth: jest.fn() };
+			const browser = createBrowser({
+				firebase: { initializeApp: jest.fn(), auth: jest.fn(() => auth) },
+				fetchImpl: async (url) => {
+					// loadAuthConfig() falls back to this shape on any timeout or error.
+					if (url === '/admin/auth-config') return response({ enabled: true, configured: false });
+					return response({});
+				},
+			});
+			await flush();
+
+			expect(browser.elementsById['firebase-auth'].hidden).toBe(false);
+			expect(browser.elementsById['auth-form'].hidden).toBe(true);
+			expect(browser.elementsById['auth-state'].textContent).toContain('unavailable');
+
+			browser.elementsById['auth-email'].value = 'operator@example.com';
+			browser.elementsById['auth-password'].value = 'PlaintextSecret123!';
+			const submit = await browser.elementsById['auth-form'].dispatch('submit');
+			await flush();
+			expect(submit.defaultPrevented).toBe(true);
+			expect(auth.auth).not.toHaveBeenCalled();
+		});
+
+		it('never lets the legacy key form navigate', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => (url === '/openapi.json' ? response(contract) : response({})),
+			});
+			await flush();
+
+			browser.elementsById['api-key'].value = 'session-secret';
+			const submit = await browser.elementsById['connection-form'].dispatch('submit');
+			await flush();
+			expect(submit.defaultPrevented).toBe(true);
+			expect(browser.storage.get('cabros-admin-api-key')).toBe('session-secret');
+		});
+	});
+
 	it('uses the current session key, redacts output, and cancels before dispatch', async () => {
 		const events = [];
 		const browser = createBrowser({
@@ -1378,7 +1834,7 @@ describe('admin browser client', () => {
 		});
 		await flush();
 		browser.elementsById['api-key'].value = 'current-secret';
-		await browser.elementsById['save-key'].dispatch('click');
+		await browser.elementsById['connection-form'].dispatch('submit');
 
 		await selectView(browser, 'status');
 		const refreshButton = findButton(browser.elementsById.view, 'Refresh status');
@@ -2019,7 +2475,7 @@ describe('admin browser client', () => {
 
 		browser.elementsById['auth-email'].value = 'viewer@example.com';
 		browser.elementsById['auth-password'].value = 'password';
-		await browser.elementsById['sign-in'].dispatch('click');
+		await browser.elementsById['auth-form'].dispatch('submit');
 		await flush();
 
 		await selectView(browser, 'presets');
@@ -4145,7 +4601,7 @@ describe('admin browser client', () => {
 		await flush();
 		browser.elementsById['auth-email'].value = 'operator@example.com';
 		browser.elementsById['auth-password'].value = 'password';
-		await browser.elementsById['sign-in'].dispatch('click');
+		await browser.elementsById['auth-form'].dispatch('submit');
 		await flush();
 		await selectView(browser, 'jobs');
 
@@ -4860,7 +5316,9 @@ describe('admin browser client', () => {
 
 	it('keeps navigation icons as inline SVG instead of platform glyphs', () => {
 		const shell = fs.readFileSync(path.join(__dirname, '../../src/admin/index.html'), 'utf8');
-		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(9);
+		const navItems = shell.match(/<button data-view="/g) || [];
+		expect(shell.match(/<svg class="nav-icon"/g)).toHaveLength(navItems.length);
+		expect(navItems.length).toBeGreaterThan(0);
 		expect(shell).not.toMatch(/[⌂◈◉◇◌✦▷]/);
 	});
 
@@ -5141,7 +5599,7 @@ describe('admin browser client', () => {
 
 		const listForm = findForm(browser.elementsById.view, 'Load recent orders');
 		listForm.elements.symbol.value = 'BTCUSDT';
-		await expect(listForm.dispatch('submit')).resolves.toBeUndefined();
+		await listForm.dispatch('submit');
 		await flush();
 
 		expect(listForm.textContent).toContain('not-a-timestamp');
@@ -5331,6 +5789,794 @@ describe('admin browser client', () => {
 		listForm.elements.symbol.value = 'ETHUSDT';
 		await listForm.elements.symbol.dispatch('input');
 		expect(listForm.textContent).toContain('Environment: —');
+	});
+});
+
+describe('news monitor operations view', () => {
+	const RUNNING = { paused: false, pausedAt: null, reason: null };
+	const PAUSED = {
+		paused: true,
+		pausedAt: '2026-09-04T06:00:00.000Z',
+		reason: 'Gemini quota exhausted',
+	};
+	// Shaped exactly like NewsAnalysisStorageService.summarizeAnalyses(): the bySymbol count
+	// key is `totalAnalyses`, the byEventCategory one is `total`, confidence arrives as
+	// `averageConfidence`, and there is no top-level alertRatePercent at all. A fixture
+	// invented from the old OpenAPI schema is what let this view ship rendering zeros.
+	const SUMMARY = {
+		success: true,
+		totalAnalyses: 4,
+		totalAlertsSent: 2,
+		bySymbol: {
+			BTCUSDT: { totalAnalyses: 2, alertsSent: 2, averageConfidence: 0.84 },
+			ETHUSDT: { totalAnalyses: 2, alertsSent: 0, averageConfidence: 0.52 },
+		},
+		byEventCategory: {
+			price_surge: { total: 3, alertsSent: 2, averageConfidence: 0.73 },
+			none: { total: 1, alertsSent: 0, averageConfidence: 0.41 },
+		},
+		falsePositiveProxy: { threshold: 0.7, totalEvaluated: 2, noFollowupCount: 1, ratePercent: 50 },
+		window: { from: '2026-09-03T00:00:00.000Z', to: '2026-09-05T00:00:00.000Z', limit: 500 },
+	};
+	const ANALYSES = {
+		success: true,
+		analyses: [
+			{
+				id: 'a1', createdAt: '2026-09-04T05:00:00.000Z', symbol: 'BTCUSDT', eventCategory: 'none',
+				sentiment: 0.12, confidence: 0.41, headline: 'Nothing moved', alertSent: false,
+				promptVersion: null, tokens: 120, expiresAt: '2026-10-04T05:00:00.000Z',
+			},
+		],
+		nextCursor: null,
+	};
+
+	const newsMonitorRoutes = (overrides = {}) => {
+		const calls = [];
+		const impl = async (url, options = {}) => {
+			const [path, search = ''] = String(url).split('?');
+			calls.push({ path, search, method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : undefined });
+			if (path === '/openapi.json') return response(contract);
+			if (path === '/api/news-monitor/status') return response(RUNNING);
+			if (path === '/api/news-monitor/summary') return response(SUMMARY);
+			if (path === '/api/news-monitor/analyses') return response(ANALYSES);
+			return response({});
+		};
+		const { handler, ...rest } = overrides;
+		return { calls, fetchImpl: handler || impl, ...rest };
+	};
+
+	const openNewsMonitor = async (overrides = {}) => {
+		const setup = newsMonitorRoutes(overrides);
+		const browser = createBrowser(setup);
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'newsMonitor');
+		await flush();
+		return { browser, ...setup };
+	};
+
+	const stateSection = (browser) => find(browser.elementsById.view, (node) => node.className.includes('dashboard-section')
+		&& node.textContent.startsWith('Monitor state'));
+	const stateBadge = (browser) => find(stateSection(browser), (node) => node.className.includes('status-badge'));
+	// SVG nodes arrive from the chart kit through setAttribute('class'), so the class
+	// attribute has to be read alongside the className property.
+	const hasClass = (node, className) => Boolean(node.className && node.className.includes(className))
+		|| Boolean(node.attributes && node.attributes.class && node.attributes.class.includes(className));
+
+	it('renders a running state card that does not read as a warning', async () => {
+		const { browser } = await openNewsMonitor();
+		const view = browser.elementsById.view;
+		const section = stateSection(browser);
+
+		expect(stateBadge(browser).textContent).toBe('Running');
+		expect(stateBadge(browser).className).toContain('status-ready');
+		expect(section.className).not.toContain('banner-error');
+		expect(section.textContent).toContain('Running normally');
+		expect(view.textContent).not.toContain('No news alerts are being produced');
+		expect(section.textContent).toContain('—');
+	});
+
+	it('renders a paused state card as a warning with the reason and pause time', async () => {
+		const { browser } = await openNewsMonitor({
+			handler: async (url, options = {}) => {
+				if (url === '/openapi.json') return response(contract);
+				if (String(url).startsWith('/api/news-monitor/status')) return response(PAUSED);
+				if (String(url).startsWith('/api/news-monitor/summary')) return response(SUMMARY);
+				if (String(url).startsWith('/api/news-monitor/analyses')) return response(ANALYSES);
+				return response({}, options.status || 200);
+			},
+		});
+		const view = browser.elementsById.view;
+		const section = stateSection(browser);
+
+		expect(stateBadge(browser).textContent).toBe('Paused');
+		expect(stateBadge(browser).className).toContain('status-danger');
+		expect(section.className).toContain('banner-error');
+		expect(section.textContent).toContain('No news alerts are being produced');
+		expect(section.textContent).toContain('Background sweeps skip execution');
+		expect(section.textContent).toContain('Gemini quota exhausted');
+		const pausedAtValue = findAll(section, (node) => node.tagName === 'DD')[0];
+		expect(pausedAtValue.textContent).toContain('ago');
+		expect(findAll(pausedAtValue, (node) => node.className.includes('timestamp'))[0].attributes.title)
+			.toContain('2026');
+	});
+
+	// The pause response echoes the request reason back, so only a re-read whose reason
+	// differs can prove the card renders the monitor's own state.
+	it('pauses with the typed reason after confirming, then re-reads status instead of trusting the response', async () => {
+		const confirmations = [];
+		const seen = [];
+		const browser = createBrowser({
+			confirm: (message) => {
+				confirmations.push(message);
+				return true;
+			},
+			fetchImpl: async (url, options = {}) => {
+				const [path] = String(url).split('?');
+				seen.push(`${options.method || 'GET'} ${path}`);
+				if (path === '/openapi.json') return response(contract);
+				if (path === '/api/news-monitor/status') {
+					// The pause response echoes the request back; only the re-read proves the
+					// card is showing the monitor's own state.
+					return response(seen.filter((entry) => entry.endsWith('status')).length > 1 ? PAUSED : RUNNING);
+				}
+				if (path === '/api/news-monitor/pause') {
+					return response({ message: 'News monitor analysis paused', paused: true, pausedAt: '2026-09-04T05:00:00.000Z', reason: 'Gemini quota exhausted' });
+				}
+				if (path === '/api/news-monitor/summary') return response(SUMMARY);
+				if (path === '/api/news-monitor/analyses') return response(ANALYSES);
+				return response({}, options.status || 200);
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'newsMonitor');
+		await flush();
+		expect(stateBadge(browser).textContent).toBe('Running');
+
+		const reason = find(browser.elementsById.view, (node) => node.name === 'news-monitor-pause-reason');
+		reason.value = 'Gemini quota exhausted';
+		await findButton(browser.elementsById.view, 'Pause news monitor').dispatch('click');
+		await flush();
+
+		expect(confirmations).toHaveLength(1);
+		expect(confirmations[0]).toContain('Pause the news monitor?');
+		expect(seen).toContain('POST /api/news-monitor/pause');
+		const pauseCall = browser.helperCalls.find((call) => call.path === '/api/news-monitor/pause');
+		expect(pauseCall.body).toEqual({ reason: 'Gemini quota exhausted' });
+		// Ordering, not presence: a refetch that ran before the mutation would also match.
+		expect(seen.lastIndexOf('POST /api/news-monitor/pause')).toBeLessThan(seen.lastIndexOf('GET /api/news-monitor/status'));
+		expect(stateBadge(browser).textContent).toBe('Paused');
+		expect(stateSection(browser).textContent).toContain('Gemini quota exhausted');
+	});
+
+	it('sends no reason key when the pause reason is left blank, and resumes after confirming', async () => {
+		const confirmations = [];
+		const seen = [];
+		const { browser } = await openNewsMonitor({
+			confirm: (message) => {
+				confirmations.push(message);
+				return true;
+			},
+			handler: async (url, options = {}) => {
+				const [path] = String(url).split('?');
+				seen.push(`${options.method || 'GET'} ${path}`);
+				if (path === '/openapi.json') return response(contract);
+				if (path === '/api/news-monitor/status') {
+					return response(seen.filter((entry) => entry.endsWith('resume')).length > 0 ? RUNNING : PAUSED);
+				}
+				if (path === '/api/news-monitor/pause') return response({ message: 'paused', paused: true, pausedAt: '2026-09-04T05:00:00.000Z', reason: null });
+				if (path === '/api/news-monitor/resume') return response({ message: 'resumed', paused: false, resumedAt: '2026-09-04T07:00:00.000Z', wasPaused: true });
+				if (path === '/api/news-monitor/summary') return response(SUMMARY);
+				if (path === '/api/news-monitor/analyses') return response(ANALYSES);
+				return response({}, options.status || 200);
+			},
+		});
+		expect(stateBadge(browser).textContent).toBe('Paused');
+
+		await findButton(browser.elementsById.view, 'Pause news monitor').dispatch('click');
+		await flush();
+		const pauseCall = browser.helperCalls.find((call) => call.path === '/api/news-monitor/pause');
+		expect(pauseCall).toBeDefined();
+		expect(pauseCall.body).toEqual({});
+		confirmations.length = 0;
+
+		await findButton(browser.elementsById.view, 'Resume news monitor').dispatch('click');
+		await flush();
+		expect(confirmations).toHaveLength(1);
+		expect(confirmations[0]).toContain('Resume the news monitor?');
+		expect(seen).toContain('POST /api/news-monitor/resume');
+		expect(seen.lastIndexOf('POST /api/news-monitor/resume')).toBeLessThan(seen.lastIndexOf('GET /api/news-monitor/status'));
+		expect(stateBadge(browser).textContent).toBe('Running');
+	});
+
+	it('does not send pause or resume when the operator declines the confirmation', async () => {
+		const dispatched = [];
+		const { browser } = await openNewsMonitor({
+			confirm: () => false,
+			handler: async (url, options = {}) => {
+				dispatched.push(String(url).split('?')[0]);
+				if (url === '/openapi.json') return response(contract);
+				if (String(url).startsWith('/api/news-monitor/status')) return response(RUNNING);
+				if (String(url).startsWith('/api/news-monitor/summary')) return response(SUMMARY);
+				if (String(url).startsWith('/api/news-monitor/analyses')) return response(ANALYSES);
+				return response({}, options.status || 200);
+			},
+		});
+		await findButton(browser.elementsById.view, 'Pause news monitor').dispatch('click');
+		await flush();
+		await findButton(browser.elementsById.view, 'Resume news monitor').dispatch('click');
+		await flush();
+		// The request is built before the dialog opens, so only the dispatch proves nothing
+		// was sent.
+		expect(dispatched).not.toContain('/api/news-monitor/pause');
+		expect(dispatched).not.toContain('/api/news-monitor/resume');
+		expect(stateBadge(browser).textContent).toBe('Running');
+	});
+
+	it('maps the summary onto KPI cards and derives the alert rate from the counts it does carry', async () => {
+		const { browser } = await openNewsMonitor();
+		const view = browser.elementsById.view;
+		const cards = () => findAll(view, (node) => node.className.includes('metric-card'));
+
+		expect(cards()).toHaveLength(4);
+		expect(cards()[0].textContent).toContain('Analyses4');
+		expect(cards()[1].textContent).toContain('Alerts sent2');
+		// The payload has no alertRatePercent, so the KPI must be computed from the counts:
+		// 2 of 4 is 50%, not the fabricated 0% a missing field used to render.
+		expect(cards()[2].textContent).toContain('Alert rate50%');
+		expect(cards()[2].textContent).toContain('50% of analyses became alerts');
+		expect(cards()[2].textContent).toContain('(2 of 4)');
+		expect(cards()[3].textContent).toContain('False-positive proxy50%');
+		expect(cards()[3].textContent).toContain('1 of 2 delivered alerts had no follow-up within 24h');
+
+		expect(view.textContent).toContain('Analyses by symbol');
+		expect(view.textContent).toContain('BTCUSDT');
+		expect(view.textContent).toContain('ETHUSDT');
+		expect(view.textContent).toContain('Analyses by event category');
+		expect(view.textContent).toContain('price_surge');
+		// barChart from #1288 renders an accessible <svg>, not a bare table.
+		expect(findAll(view, (node) => node.tagName === 'SVG' && hasClass(node, 'chart-bar-svg')).length).toBeGreaterThan(0);
+		// Two symbols is enough for a sparkline on the KPI card.
+		expect(findAll(view, (node) => node.tagName === 'SVG' && hasClass(node, 'chart-sparkline-svg')).length).toBeGreaterThan(0);
+	});
+
+	it('reads the breakdown volumes the service actually returns, sorted by volume', async () => {
+		const { browser } = await openNewsMonitor();
+		const view = browser.elementsById.view;
+		const symbolRows = () => findAll(view, (node) => node.className.includes('table-scroll')
+			&& node.attributes['aria-label'] === 'Analyses by symbol');
+		const categoryRows = () => findAll(view, (node) => node.className.includes('table-scroll')
+			&& node.attributes['aria-label'] === 'Analyses by event category');
+
+		// `totalAnalyses` / `total` are the real count keys; reading a nonexistent `count`
+		// rendered every volume as 0 and made every bar width zero.
+		expect(symbolRows()[0].textContent).toContain('BTCUSDT');
+		expect(symbolRows()[0].textContent).toContain('2');
+		expect(symbolRows()[0].textContent).toContain('100%');
+		expect(symbolRows()[0].textContent).toContain('0.84');
+		expect(symbolRows()[0].textContent).not.toContain('0.00');
+		// price_surge has 3 analyses against none's 1, so it must lead despite sorting
+		// alphabetically later.
+		const categoryCells = findAll(categoryRows()[0], (node) => node.tagName === 'TD').map((node) => node.textContent);
+		expect(categoryCells.slice(0, 4)).toEqual(['price_surge', '3', '2', '66.67%']);
+
+		// A zero-width bar is what a 0 volume produced; the chart must now carry real values.
+		const barWidths = findAll(view, (node) => node.tagName === 'RECT').map((node) => node.attributes.width);
+		expect(barWidths.some((width) => Number(width) > 0)).toBe(true);
+		expect(find(view, (node) => node.tagName === 'SVG' && hasClass(node, 'chart-bar-svg')).attributes['aria-label'])
+			.toMatch(/Analyses by symbol.*high 2 at BTCUSDT/);
+	});
+
+	it('renders the false-positive threshold as a 0-1 confidence fraction, not a percentage', async () => {
+		const { browser } = await openNewsMonitor();
+		const view = browser.elementsById.view;
+		const proxy = find(view, (node) => node.textContent.startsWith('False-positive proxy') && node.className.includes('dashboard-section'));
+		const terms = findAll(proxy, (node) => node.tagName === 'DT').map((node) => node.textContent);
+		const values = findAll(proxy, (node) => node.tagName === 'DD').map((node) => node.textContent);
+
+		expect(values[terms.indexOf('Threshold')]).toBe('0.70');
+		expect(proxy.textContent).not.toContain('0.7%');
+		// ratePercent is genuinely a percentage and must keep its sign.
+		expect(values[terms.indexOf('Rate')]).toBe('50%');
+	});
+
+	it('names the window as empty rather than implying a zero alert rate', async () => {
+		const { browser } = await openNewsMonitor({
+			handler: async (url) => {
+				if (String(url).startsWith('/openapi.json')) return response(contract);
+				if (String(url).startsWith('/api/news-monitor/status')) return response(RUNNING);
+				if (String(url).startsWith('/api/news-monitor/summary')) {
+					return response({
+						success: true,
+						totalAnalyses: 0,
+						totalAlertsSent: 0,
+						bySymbol: {},
+						byEventCategory: {},
+						falsePositiveProxy: { threshold: 0.7, totalEvaluated: 0, noFollowupCount: 0, ratePercent: 0 },
+						window: {},
+					});
+				}
+				if (String(url).startsWith('/api/news-monitor/analyses')) return response(ANALYSES);
+				return response({});
+			},
+		});
+		const view = browser.elementsById.view;
+		const cards = () => findAll(view, (node) => node.className.includes('metric-card'));
+		expect(cards()[2].textContent).toContain('No analyses recorded in this window');
+		expect(cards()[2].textContent).not.toContain('0% of analyses became alerts');
+		expect(view.textContent).toContain('No analyses recorded in this window.');
+	});
+
+	it('formats an absent percentage as an em dash rather than as 0%', () => {
+		const { formatPercent } = require('../../src/admin/admin-newsmonitor');
+		// Number(null), Number(undefined) and Number('') are all 0, so an unguarded coercion
+		// printed a real-looking 0% for a measurement that was never taken.
+		expect(formatPercent(null)).toBe('—');
+		expect(formatPercent(undefined)).toBe('—');
+		expect(formatPercent('')).toBe('—');
+		// A reported zero is still a zero and must keep reading as one.
+		expect(formatPercent(0)).toBe('0%');
+		expect(formatPercent(50)).toBe('50%');
+	});
+
+	it('renders an explicit empty state when no analyses match the filters', async () => {
+		const { browser } = await openNewsMonitor({
+			handler: async (url) => {
+				if (String(url).startsWith('/openapi.json')) return response(contract);
+				if (String(url).startsWith('/api/news-monitor/status')) return response(RUNNING);
+				if (String(url).startsWith('/api/news-monitor/summary')) return response(SUMMARY);
+				if (String(url).startsWith('/api/news-monitor/analyses')) {
+					return response({ success: true, analyses: [], nextCursor: null });
+				}
+				return response({});
+			},
+		});
+		const view = browser.elementsById.view;
+		expect(view.textContent).not.toContain('No recorded analyses match these filters.');
+		await findForm(view, '/api/news-monitor/analyses').dispatch('submit');
+		await flush();
+		expect(view.textContent).toContain('No recorded analyses match these filters.');
+		expect(view.textContent).not.toContain('No analyses requested yet.');
+	});
+
+	it('renders recorded analyses and pages forward with the server cursor', async () => {
+		const requested = [];
+		const { browser } = await openNewsMonitor({
+			handler: async (url) => {
+				const [path, search = ''] = String(url).split('?');
+				if (path === '/openapi.json') return response(contract);
+				if (path === '/api/news-monitor/status') return response(RUNNING);
+				if (path === '/api/news-monitor/summary') return response(SUMMARY);
+				if (path === '/api/news-monitor/analyses') {
+					requested.push(search);
+					return search.includes('before=c2')
+						? response({ success: true, analyses: [{ ...ANALYSES.analyses[0], id: 'a2', symbol: 'ETHUSDT' }], nextCursor: null })
+						: response({ ...ANALYSES, nextCursor: 'c2' });
+				}
+				return response({});
+			},
+		});
+		const view = browser.elementsById.view;
+		const form = findForm(view, '/api/news-monitor/analyses');
+		await form.dispatch('submit');
+		await flush();
+
+		expect(view.textContent).toContain('BTCUSDT');
+		expect(find(view, (node) => node.tagName === 'DIV' && node.attributes['aria-label'] === 'Recorded news analyses (1)')).toBeDefined();
+		expect(requested[0]).toContain('limit=50');
+		expect(requested[0]).toContain('from=');
+		expect(requested[0]).toContain('to=');
+		expect(findButton(view, 'Previous page').disabled).toBe(true);
+		expect(findButton(view, 'Next page').disabled).toBe(false);
+
+		await findButton(view, 'Next page').dispatch('click');
+		await flush();
+		expect(requested.some((entry) => entry.includes('before=c2'))).toBe(true);
+		expect(view.textContent).toContain('ETHUSDT');
+		expect(findButton(view, 'Next page').disabled).toBe(true);
+		expect(findButton(view, 'Previous page').disabled).toBe(false);
+
+		await findButton(view, 'Previous page').dispatch('click');
+		await flush();
+		expect(view.textContent).toContain('BTCUSDT');
+		expect(findButton(view, 'Previous page').disabled).toBe(true);
+	});
+
+	it('renders the Analyzed column from createdAt as a timestamp, never as an em dash', async () => {
+		const { browser } = await openNewsMonitor();
+		const view = browser.elementsById.view;
+		const form = findForm(view, '/api/news-monitor/analyses');
+		await form.dispatch('submit');
+		await flush();
+
+		const table = find(view, (node) => node.tagName === 'DIV' && node.attributes['aria-label'] === 'Recorded news analyses (1)');
+		const headers = findAll(table, (node) => node.tagName === 'TH').map((node) => node.textContent);
+		expect(headers).toContain('Analyzed');
+		const cells = findAll(findAll(table, (node) => node.tagName === 'TR')[1], (node) => node.tagName === 'TD')
+			.map((node) => node.textContent);
+		// The record carries createdAt; reading analyzedAt rendered a permanent em dash.
+		expect(cells[5]).toContain('ago');
+		const analyzedCell = findAll(findAll(table, (node) => node.tagName === 'TR')[1], (node) => node.tagName === 'TD')[5];
+		expect(findAll(analyzedCell, (node) => node.className.includes('timestamp'))[0].attributes.title)
+			.toContain('2026');
+		// The category is a string, not a number: formatting it as a fraction blanked it to
+		// an em dash, which is the same "unreadable value" failure as the Analyzed column.
+		expect(cells[1]).toBe('none');
+	});
+
+	it('renders an analyses record with a populated event category', async () => {
+		const { browser } = await openNewsMonitor({
+			handler: async (url) => {
+				const [path] = String(url).split('?');
+				if (path === '/openapi.json') return response(contract);
+				if (path === '/api/news-monitor/status') return response(RUNNING);
+				if (path === '/api/news-monitor/summary') return response(SUMMARY);
+				if (path === '/api/news-monitor/analyses') {
+					return response({
+						success: true,
+						analyses: [{ ...ANALYSES.analyses[0], eventCategory: 'price_surge' }],
+						nextCursor: null,
+					});
+				}
+				return response({});
+			},
+		});
+		const view = browser.elementsById.view;
+		await findForm(view, '/api/news-monitor/analyses').dispatch('submit');
+		await flush();
+		const table = find(view, (node) => node.tagName === 'DIV' && node.attributes['aria-label'] === 'Recorded news analyses (1)');
+		const cells = findAll(findAll(table, (node) => node.tagName === 'TR')[1], (node) => node.tagName === 'TD')
+			.map((node) => node.textContent);
+		expect(cells[1]).toBe('price_surge');
+		expect(cells[3]).toBe('0.41');
+	});
+
+	it('clears the cursor chain when a filter changes so paging cannot skip rows', async () => {
+		const requested = [];
+		const { browser } = await openNewsMonitor({
+			handler: async (url) => {
+				const [path, search = ''] = String(url).split('?');
+				if (path === '/openapi.json') return response(contract);
+				if (path === '/api/news-monitor/status') return response(RUNNING);
+				if (path === '/api/news-monitor/summary') return response(SUMMARY);
+				if (path === '/api/news-monitor/analyses') {
+					requested.push(search);
+					return response({ ...ANALYSES, nextCursor: 'c2' });
+				}
+				return response({});
+			},
+		});
+		const view = browser.elementsById.view;
+		const form = findForm(view, '/api/news-monitor/analyses');
+		await form.dispatch('submit');
+		await flush();
+		expect(findButton(view, 'Next page').disabled).toBe(false);
+
+		const symbol = find(view, (node) => node.name === 'symbol');
+		symbol.value = 'BTCUSDT';
+		await symbol.dispatch('input');
+
+		expect(findButton(view, 'Next page').disabled).toBe(true);
+		expect(findButton(view, 'Previous page').disabled).toBe(true);
+		await form.dispatch('submit');
+		await flush();
+		const last = requested[requested.length - 1];
+		expect(last).toContain('symbol=BTCUSDT');
+		expect(last).not.toContain('before=');
+	});
+
+	it('reports the paused state as a named action instead of a generic failure', async () => {
+		const pausedBody = {
+			error: 'News monitor analysis is temporarily paused.',
+			code: 'NEWS_MONITOR_PAUSED',
+			paused: true,
+			pausedAt: '2026-09-04T06:00:00.000Z',
+			reason: 'Gemini quota exhausted',
+			requestId: 'req-1',
+		};
+		const { browser } = await openNewsMonitor({
+			handler: async (url) => {
+				if (String(url).startsWith('/openapi.json')) return response(contract);
+				if (String(url).startsWith('/api/news-monitor/status')) return response(RUNNING);
+				if (String(url).startsWith('/api/news-monitor/summary')) return response(pausedBody, 503);
+				if (String(url).startsWith('/api/news-monitor/analyses')) return response(ANALYSES);
+				return response({});
+			},
+		});
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('The news monitor is paused');
+		expect(view.textContent).toContain('resume to continue');
+		expect(view.textContent).toContain('Recorded reason: Gemini quota exhausted');
+	});
+
+	it('reports an unread pause state as unknown instead of as running', async () => {
+		const { browser } = await openNewsMonitor({
+			handler: async (url, options = {}) => {
+				if (url === '/openapi.json') return response(contract);
+				if (String(url).startsWith('/api/news-monitor/status')) return response({ error: 'Unauthorized', code: 'INVALID_API_KEY' }, 401);
+				if (String(url).startsWith('/api/news-monitor/summary')) return response({ error: 'Unauthorized' }, 401);
+				return response({}, options.status || 200);
+			},
+		});
+		const view = browser.elementsById.view;
+		expect(stateBadge(browser).textContent).toBe('Unavailable');
+		expect(stateBadge(browser).className).toContain('status-misconfigured');
+		expect(stateSection(browser).textContent).toContain('could not be read');
+		expect(view.textContent).toContain('Delivery analytics unavailable.');
+		expect(view.textContent).not.toContain('Running normally');
+		expect(view.textContent).not.toContain('Loading delivery analytics…');
+	});
+
+	it('clears the breakdowns when a summary read fails after a good one', async () => {
+		// The previous window's charts and tables are the dangerous part here: left in place
+		// they sit directly beside "Delivery analytics unavailable." and read as current.
+		let failSummary = false;
+		const { browser } = await openNewsMonitor({
+			handler: async (url) => {
+				if (String(url).startsWith('/openapi.json')) return response(contract);
+				if (String(url).startsWith('/api/news-monitor/status')) return response(RUNNING);
+				if (String(url).startsWith('/api/news-monitor/summary')) {
+					return failSummary ? response({ error: 'Unavailable' }, 503) : response(SUMMARY);
+				}
+				return response({});
+			},
+		});
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Analyses by symbol');
+		expect(view.textContent).toContain('BTCUSDT');
+
+		failSummary = true;
+		const summaryForm = find(view, (node) => node.tagName === 'FORM' && node.textContent.includes('Load analytics'));
+		await summaryForm.dispatch('submit');
+		await flush();
+
+		expect(view.textContent).toContain('Delivery analytics unavailable.');
+		expect(view.textContent).not.toContain('BTCUSDT');
+		expect(view.textContent).not.toContain('Analyses by event category');
+		expect(view.textContent).not.toContain('price_surge');
+		expect(view.textContent).toContain('Breakdown unavailable');
+	});
+
+	it('claims nothing about the monitor before any status read has happened', async () => {
+		// No API key and no Firebase session: the pause state was never read, so the card
+		// used to render the healthy branch — a green RUNNING badge on a monitor that might
+		// have been paused for months.
+		const dispatched = [];
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				dispatched.push(String(url).split('?')[0]);
+				return url === '/openapi.json' ? response(contract) : response({});
+			},
+		});
+		await flush();
+		await browser.dispatchPopState();
+		browser.location.search = '?view=newsMonitor';
+		await browser.dispatchPopState();
+		await flush();
+
+		const view = browser.elementsById.view;
+		expect(dispatched).not.toContain('/api/news-monitor/status');
+		expect(stateBadge(browser).textContent).toBe('Unavailable');
+		expect(view.textContent).not.toContain('Running normally');
+		expect(view.textContent).not.toContain('Background sweeps and manual analysis requests are accepted');
+		expect(view.textContent).toContain('Enter an API key or sign in to load the news monitor state.');
+	});
+
+	it('deep-links the news monitor view and its filter scopes', async () => {
+		const browser = createBrowser({ fetchImpl: async (url) => (url === '/openapi.json' ? response(contract) : response(RUNNING)) });
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await browser.dispatchPopState();
+		browser.location.search = '?view=newsMonitor&newsMonitor.analyses.symbol=BTCUSDT';
+		await browser.dispatchPopState();
+		await flush();
+
+		expect(browser.titleHistory[browser.titleHistory.length - 1]).toContain('News monitor');
+		const view = browser.elementsById.view;
+		expect(view.textContent).toContain('Recorded analyses');
+		expect(find(view, (node) => node.name === 'symbol').value).toBe('BTCUSDT');
+	});
+});
+
+// Issue #952. Every operational result table used to be a bare <table> with a header <tr>
+// appended straight onto it: no caption, no thead/tbody, no `scope`, and no scroll
+// container, so a nine-column outcomes table either compressed into wrapped fragments or
+// set the page's own min-content width. A screen reader got no table name and no header
+// relationship at all.
+describe('result table semantics and narrow-viewport layout (#952)', () => {
+	const hasClass = (node, name) => String(node.className || '').split(/\s+/).includes(name);
+	const dataTables = (root) => findAll(root, (node) => node.tagName === 'TABLE' && hasClass(node, 'data-table'));
+
+	// The contract every rendered table has to satisfy. Asserted per view rather than on a
+	// single fixture so a new call site cannot ship without it: the point of #952 is that
+	// this holds for *every* `.data-table`, not for the one table that was measured.
+	const expectAccessibleTables = (root) => {
+		const tables = dataTables(root);
+		expect(tables.length).toBeGreaterThan(0);
+
+		tables.forEach((table) => {
+			const captions = findAll(table, (node) => node.tagName === 'CAPTION');
+			expect(captions).toHaveLength(1);
+			expect(captions[0].textContent.trim().length).toBeGreaterThan(0);
+
+			const theads = findAll(table, (node) => node.tagName === 'THEAD');
+			const tbodies = findAll(table, (node) => node.tagName === 'TBODY');
+			expect(theads).toHaveLength(1);
+			expect(tbodies).toHaveLength(1);
+			// A <tr> that is a direct child of <table> is neither header nor body content,
+			// which is exactly the structure the bare renderer produced.
+			expect(findAll(table, (node) => node.tagName === 'TR' && node.parentNode === table)).toHaveLength(0);
+
+			const headers = findAll(theads[0], (node) => node.tagName === 'TH');
+			expect(headers.length).toBeGreaterThan(0);
+			headers.forEach((header) => expect(header.attributes.scope).toBe('col'));
+			// Column count is the invariant that catches a dropped or reordered column.
+			expect(headers).toHaveLength(findAll(tbodies[0], (node) => node.tagName === 'TD')[0]?.children.length || headers.length);
+
+			// The scroller is what keeps an unbreakable header from widening the page, so a
+			// table outside one is a regression even though every other assertion passes.
+			expect(hasClass(table.parentNode, 'table-scroll')).toBe(true);
+			expect(table.parentNode.attributes.role).toBe('region');
+			expect(table.parentNode.attributes.tabindex).toBe('0');
+			expect(table.parentNode.attributes['aria-label']).toBe(captions[0].textContent);
+		});
+
+		return tables;
+	};
+
+	const alertsSummaryPayload = (overrides = {}) => ({
+		success: true,
+		summary: {
+			totalAlerts: 4,
+			window: {},
+			delivery: { totalSuccess: 3, totalFailure: 1, byChannel: { telegram: { total: 3, success: 2, failure: 1 } } },
+			enrichment: {
+				enrichedAlerts: 4,
+				plainAlerts: 0,
+				riskMetadataCoverage: { denominator: 4, fields: { target_level: { populated: 2, percentage: 50 } } },
+				sentimentCalibration: {
+					sampleCount: 97, evaluated: true, saturated: false, reason: null,
+					min: 0.3, max: 0.9, p10: 0.4, p50: 0.5, p90: 0.6, spread: 0.2,
+					topBandCount: 1, topBandShare: 0.01, distinctValueCount: 40, bucketCount: 6,
+					rawScoreCapCount: 3,
+					buckets: [{ lowerBound: 0.3, upperBound: 0.5, count: 12 }, { lowerBound: 0.5, upperBound: 0.7, count: 85 }],
+				},
+				tokenUsage: {},
+			},
+		},
+		...overrides,
+	});
+
+	const outcomesSummaryPayload = () => ({
+		success: true,
+		summary: {
+			totalSignalsReceived: 40,
+			totalSignalsEvaluated: 30,
+			expectancyR: 0.42,
+			averageReturnPercent: 1.3,
+			averageMfePercent: 2.4,
+			averageMaePercent: -0.7,
+			windows: {
+				'1h': {
+					totalSignals: 40, hitRatePercent: 50, targetHitRatePercent: 40, stopHitRatePercent: 10,
+					expectancyR: 0.3, averageReturnPercent: 1.0, averageMfePercent: 2.0, averageMaePercent: -0.4,
+				},
+			},
+		},
+	});
+
+	it('gives the nine-column outcomes table a caption, scoped headers and a scroll region', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/outcomes/summary')) return response(outcomesSummaryPayload());
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'outcomes');
+		const form = findForm(browser.elementsById.view, 'GET /api/outcomes/summary');
+		await form.dispatch('submit');
+		await flush();
+
+		const tables = expectAccessibleTables(form);
+		const performance = tables.find((table) => findAll(table, (node) => node.tagName === 'CAPTION')[0].textContent === 'Performance by window');
+		expect(performance).toBeDefined();
+
+		// Column order and the header labels themselves are the operator-facing contract;
+		// only the surrounding structure may change.
+		expect(findAll(findAll(performance, (node) => node.tagName === 'THEAD')[0], (node) => node.tagName === 'TH').map((node) => node.textContent))
+			.toEqual(['Window', 'Evaluated', 'Hit rate', 'Target hit', 'Stop hit', 'Exp (R)', 'Avg return', 'Avg MFE', 'Avg MAE']);
+		expect(findAll(findAll(performance, (node) => node.tagName === 'TBODY')[0], (node) => node.tagName === 'TD').map((node) => node.textContent))
+			.toEqual(['1h', '40', '50%', '40%', '10%', '+0.3R', '+1%', '+2%', '-0.4%']);
+	});
+
+	it('gives every alert-analytics table a caption and scoped headers', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts/summary')) return response(alertsSummaryPayload());
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+		const form = findForm(browser.elementsById.view, 'GET /api/alerts/summary');
+		await form.dispatch('submit');
+		await flush();
+
+		const captions = expectAccessibleTables(form).map((table) => findAll(table, (node) => node.tagName === 'CAPTION')[0].textContent);
+		// Delivery, risk coverage and the sentiment histogram are three separate renderers;
+		// leaving one out is the regression this sweep exists to catch.
+		expect(captions).toEqual(expect.arrayContaining(['Delivery by channel', 'Risk metadata coverage', 'Sentiment score buckets']));
+
+		const channelTable = dataTables(form).find((table) => findAll(table, (node) => node.tagName === 'CAPTION')[0].textContent === 'Delivery by channel');
+		expect(findAll(findAll(channelTable, (node) => node.tagName === 'THEAD')[0], (node) => node.tagName === 'TH').map((node) => node.textContent))
+			.toEqual(['Channel', 'Total', 'Success', 'Failure']);
+		expect(findAll(findAll(channelTable, (node) => node.tagName === 'TBODY')[0], (node) => node.tagName === 'TD').map((node) => node.textContent))
+			.toEqual(['Telegram', '3', '2', '1']);
+	});
+
+	it('gives the job symbol and scanner result tables a caption and scoped headers', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({
+					success: true,
+					jobId: 'job-tables',
+					status: 'completed',
+					results: [{ symbol: 'BTCUSDT', status: 'ok', price: 123.4, rsi: 55.2 }],
+					scanResults: [{
+						scan: 'top_gainers',
+						status: 'completed',
+						scores: [{ symbol: 'ETHUSDT', score: 88, reason: 'volume', trendConfluence: { status: 'aligned', direction: 'up', confidence: 70 } }],
+					}],
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+		const form = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		form.elements['path-jobId'].value = 'job-tables';
+		await form.dispatch('submit');
+		await flush();
+
+		const captions = expectAccessibleTables(form).map((table) => findAll(table, (node) => node.tagName === 'CAPTION')[0].textContent);
+		expect(captions).toEqual(expect.arrayContaining(['Symbol results', 'top_gainers scores']));
+
+		const symbolTable = dataTables(form).find((table) => findAll(table, (node) => node.tagName === 'CAPTION')[0].textContent === 'Symbol results');
+		expect(findAll(findAll(symbolTable, (node) => node.tagName === 'THEAD')[0], (node) => node.tagName === 'TH').map((node) => node.textContent))
+			.toEqual(['Symbol', 'Status', 'Price', 'RSI']);
+		expect(findAll(findAll(symbolTable, (node) => node.tagName === 'TBODY')[0], (node) => node.tagName === 'TD').map((node) => node.textContent))
+			.toEqual(['BTCUSDT', 'ok', '123.4', '55.2']);
+	});
+
+	it('keeps the empty symbol-result and error states intact', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				return response({
+					success: true,
+					jobId: 'job-empty',
+					status: 'failed',
+					// Rows without a symbol and a status are the shape that made the bare
+					// renderer emit a header with no body; the section must still disappear.
+					results: [{ price: 1 }],
+					scanResults: [{ scan: 'top_losers', status: 'timeout' }],
+				});
+			},
+		});
+		await flush();
+		await selectView(browser, 'jobs');
+		const form = findForm(browser.elementsById.view, 'GET /api/jobs/{jobId}');
+		form.elements['path-jobId'].value = 'job-empty';
+		await form.dispatch('submit');
+		await flush();
+
+		expect(form.textContent).not.toContain('Symbol results');
+		expect(form.textContent).toContain('This scan did not complete');
+		expect(dataTables(form)).toHaveLength(0);
 	});
 });
 
@@ -5789,6 +7035,105 @@ describe('structured analysis forms', () => {
 			// Retry button is also visible on 503 so the operator can retry with same key if desired
 			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
 			expect(retryBtn.hidden).toBe(false);
+		});
+
+		it.each([
+			[400, 'INVALID_REQUEST', 'callbackUrl must be an https URL'],
+			[401, 'INVALID_API_KEY', 'The supplied credentials are invalid.'],
+			[409, 'IDEMPOTENCY_CONFLICT', 'Idempotency key was already used with a different payload.'],
+		])('hides same-key retry after a definitive %i rejection and keeps the server error visible', async (status, code, message) => {
+			const sentKeys = [];
+			let attempts = 0;
+			const browser = createBrowser({
+				fetchImpl: async (url, options) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/jobs/tradingview-analysis') {
+						attempts += 1;
+						sentKeys.push(options.headers['idempotency-key']);
+						if (attempts === 1) {
+							return response({ success: false, error: message, code, retryable: false }, status);
+						}
+						return response({ success: true, jobId: 'job-after-definitive-error' }, 201);
+					}
+					if (url.startsWith('/api/jobs/job-after-definitive-error')) {
+						return response({ success: true, jobId: 'job-after-definitive-error', status: 'pending' });
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(attempts).toBe(1);
+			const firstKey = sentKeys[0];
+			expect(typeof firstKey).toBe('string');
+
+			// The rejection stays readable so the operator can act on what the server said.
+			expect(createForm.textContent).toContain(message);
+			expect(createForm.textContent).toContain(`HTTP ${status}`);
+
+			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
+			expect(retryBtn.hidden).toBe(true);
+
+			// The idempotency middleware caches this rejection, so the same key cannot recover it.
+			await retryBtn.dispatch('click');
+			await flush();
+			expect(attempts).toBe(1);
+			expect(sentKeys.length).toBe(1);
+
+			// Recovery is a fresh submission, which mints a new idempotency key.
+			await createForm.dispatch('submit');
+			await flush();
+
+			expect(attempts).toBe(2);
+			expect(sentKeys[1]).not.toBe(firstKey);
+			expect(retryBtn.hidden).toBe(true);
+		});
+
+		it('keeps same-key retry for a retryable 429 rate limit', async () => {
+			const sentKeys = [];
+			let attempts = 0;
+			const browser = createBrowser({
+				fetchImpl: async (url, options) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/jobs/tradingview-analysis') {
+						attempts += 1;
+						sentKeys.push(options.headers['idempotency-key']);
+						if (attempts === 1) {
+							return response({ error: 'Too many requests, please try again later.', retryAfterSeconds: 42 }, 429);
+						}
+						return response({ success: true, jobId: 'job-after-rate-limit' }, 201);
+					}
+					if (url.startsWith('/api/jobs/job-after-rate-limit')) {
+						return response({ success: true, jobId: 'job-after-rate-limit', status: 'pending' });
+					}
+					return response({ success: true, jobs: [] });
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-session-key';
+			await selectView(browser, 'jobs');
+			await flush();
+
+			const createForm = findForm(browser.elementsById.view, 'POST /api/jobs/tradingview-analysis');
+			await createForm.dispatch('submit');
+			await flush();
+
+			const retryBtn = find(createForm, (node) => node.tagName === 'BUTTON' && node.textContent.includes('Retry submission'));
+			expect(retryBtn.hidden).toBe(false);
+			expect(createForm.textContent).toContain('Too many requests, please try again later.');
+
+			await retryBtn.dispatch('click');
+			await flush();
+
+			expect(attempts).toBe(2);
+			expect(sentKeys[1]).toBe(sentKeys[0]);
 		});
 	});
 
@@ -6776,7 +8121,7 @@ describe('structured analysis forms', () => {
 
 			browser.elementsById['auth-email'].value = 'ops@example.com';
 			browser.elementsById['auth-password'].value = 'password';
-			await browser.elementsById['sign-in'].dispatch('click');
+			await browser.elementsById['auth-form'].dispatch('submit');
 			await flush();
 
 			expect(requests).toContain('/openapi.json');
@@ -6828,6 +8173,900 @@ describe('structured analysis forms', () => {
 			expect(requests.some((url) => url.startsWith('https://cabros-bot-production.up.railway.app/'))).toBe(true);
 			expect(browser.location.search).toContain('backend=https%3A%2F%2Fcabros-bot-production.up.railway.app');
 			expect(browser.location.search).toContain('view=outcomes');
+		});
+	});
+
+	describe('trading dashboard', () => {
+		const TRADING_WINDOWS_FOR_TEST = ['1h', '4h', '1D', '1W'];
+		// Faithful to SignalOutcomeService.summarizeOutcomes(): the four per-window
+		// averages live under windows[<window>], never at the top level. The
+		// per-window values are deliberately distinct so the pooled "All windows"
+		// figures (hit rate 59.00, return +1.30) differ both from any single window
+		// (1D is 65.00 / +1.25) and from an unweighted mean of the four
+		// percentages (63.75 / +1.44), so a wrong pooling weight cannot pass.
+		const outcomeSummary = (overrides = {}) => ({
+			success: true,
+			summary: {
+				available: true,
+				totalSignalsReceived: 40,
+				totalSignalsEligible: 36,
+				totalSignalsEvaluated: 30,
+				totalSignalsPending: 4,
+				totalSignalsUnavailable: 2,
+				coveragePercent: 75,
+				isCoverageComplete: false,
+				expectancyR: 0.42,
+				targetHitRatePercent: 55,
+				stopHitRatePercent: 21,
+				populationNote: 'Metrics represent 30 evaluated signals out of 40 total received signals (75% coverage).',
+				exchangeBreakdown: {},
+				providerBreakdown: {},
+				entryPriceSourceBreakdown: {},
+				eligibilityBreakdown: {},
+				windows: {
+					'1h': { totalSignals: 40, hitRatePercent: 50, averageReturnPercent: 1.0, averageMfePercent: 2.0, averageMaePercent: -0.4 },
+					'4h': { totalSignals: 30, hitRatePercent: 60, averageReturnPercent: 1.5, averageMfePercent: 2.4, averageMaePercent: -0.6 },
+					'1D': { totalSignals: 20, hitRatePercent: 65, averageReturnPercent: 1.25, averageMfePercent: 2.6, averageMaePercent: -0.9 },
+					'1W': { totalSignals: 10, hitRatePercent: 80, averageReturnPercent: 2.0, averageMfePercent: 3.0, averageMaePercent: -1.1 },
+				},
+				drawdownProxy: { averageMaxAdverseExcursionPercent: -0.63, absoluteMaxAdverseExcursionPercent: -1.1 },
+				falsePositiveCandidatesCount: 0,
+				falsePositiveCandidates: [],
+				latencyCostMetadata: { averageProcessingTimeMs: 120, tokenUsage: { inputTokens: 0, outputTokens: 0, totalCost: 0 } },
+				...overrides,
+			},
+		});
+
+		const statusPayload = (binance = {}) => ({
+			success: true,
+			service: { name: 'cabros-bot', environment: 'production' },
+			featureFlags: { binanceTrading: true, signalOutcomeTracking: true },
+			dependencies: {
+				binanceTrading: {
+					enabled: true,
+					configured: true,
+					ready: true,
+					status: 'ready',
+					environment: 'testnet',
+					allowedSymbols: ['BTCUSDT'],
+					maxNotionalConfigured: true,
+					...binance,
+				},
+			},
+		});
+
+		const outcomeRecord = ({ id, symbol, setupType, receivedAt, win, source = 'webhook' }) => ({
+			id,
+			receivedAt,
+			source,
+			symbol,
+			exchange: 'BINANCE',
+			setupType,
+			side: 'BUY',
+			outcomeEvaluated: true,
+			outcomes: { '1D': { status: 'evaluated', return: win, rMultiple: win / 2 } },
+		});
+
+		const outcomeList = (records) => ({
+			success: true,
+			outcomes: records,
+			pagination: { hasMore: false, limit: 100, nextBefore: null },
+		});
+
+		const defaultOutcomes = [
+			outcomeRecord({ id: 'o1', symbol: 'BTCUSDT', setupType: 'breakout', receivedAt: '2026-10-01T10:00:00.000Z', win: 3 }),
+			outcomeRecord({ id: 'o2', symbol: 'BTCUSDT', setupType: 'breakout', receivedAt: '2026-10-01T18:00:00.000Z', win: -1 }),
+			outcomeRecord({ id: 'o3', symbol: 'ETHUSDT', setupType: 'trend_continuation', receivedAt: '2026-10-02T09:00:00.000Z', win: 2 }),
+		];
+
+		// Stands in for the trade-ledger contract (#1275) so the panel's pending and populated
+		// states can both be exercised without that API shipping first.
+		const contractWithLedger = {
+			...contract,
+			paths: { ...contract.paths, '/api/trading/ledger/summary': { get: { operationId: 'getTradeLedger', responses: {} } } },
+		};
+
+		const createTradingBrowser = ({
+			outcomes = defaultOutcomes,
+			summary = outcomeSummary(),
+			summaryStatus = 200,
+			audit = { success: true, records: [], audit: [], pagination: { hasMore: false, limit: 20, nextBefore: null } },
+			status = statusPayload(),
+			ledger,
+			firebase,
+			authEnabled = false,
+			contract: apiContract = contract,
+		} = {}) => createBrowser({
+			firebase,
+			fetchImpl: async (url) => {
+				if (url === '/admin/auth-config') {
+					return response({
+						enabled: authEnabled,
+						configured: authEnabled,
+						config: { apiKey: 'public-key', authDomain: 'cabros.firebaseapp.com', projectId: 'cabros' },
+					});
+				}
+				if (url === '/openapi.json') return response(apiContract);
+				if (url.startsWith('/api/outcomes/summary')) {
+					// Mirror the server instead of matching on startsWith: an empty
+					// `?window=` is a 400 there (parseWindow('') is null), so a console
+					// that forgets to filter the empty select option fails here.
+					const sent = new URL(url, 'https://console.test').searchParams;
+					if (sent.has('window') && sent.get('window') === '') {
+						return response({ error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.', code: 'INVALID_REQUEST' }, 400);
+					}
+					return response(typeof summary === 'function' ? summary(url) : summary, summaryStatus);
+				}
+				if (url.startsWith('/api/outcomes')) return response(outcomeList(outcomes));
+				if (url.startsWith('/api/trading/binance/orders/audit')) return response(audit);
+				if (url.startsWith('/api/status')) return response(status);
+				if (ledger) return ledger(url);
+				return response({});
+			},
+		});
+
+		const tradingView = (browser) => browser.elementsById.view;
+		const kpiCards = (root) => findAll(root, (node) => node.className.includes('trading-kpi'));
+		const hasClass = (node, name) => String(node.className || '').split(/\s+/).includes(name);
+		const quickControlButtons = (root) => findAll(root, (node) => node.tagName === 'BUTTON' && hasClass(node, 'quick-control'));
+		const kpiText = (root, label) => {
+			const card = kpiCards(root).find((node) => node.textContent.includes(label));
+			return card ? card.textContent : null;
+		};
+
+		it('keeps the summary fixture aligned with the published OutcomesSummary schema', () => {
+			const declared = new Set(Object.keys(contract.components.schemas.OutcomesSummary.properties));
+			const declaredWindow = new Set(Object.keys(contract.components.schemas.WindowStats.properties));
+			const summary = outcomeSummary().summary;
+
+			Object.keys(summary).forEach((key) => {
+				expect(declared.has(key)).toBe(true);
+			});
+			Object.entries(summary.windows).forEach(([windowKey, block]) => {
+				expect(TRADING_WINDOWS_FOR_TEST).toContain(windowKey);
+				Object.keys(block).forEach((key) => {
+					expect(declaredWindow.has(key)).toBe(true);
+				});
+			});
+			// The regression this guards: the console read four names the service
+			// never returns, and only a fixture that invented them kept it green.
+			expect(declared.has('winRatePercent')).toBe(false);
+			expect(declared.has('averageReturnPercent')).toBe(false);
+		});
+
+		it('renders paper P&L KPIs from the window block, not names the API never returns', async () => {
+			const browser = createTradingBrowser();
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			expect(kpiText(view, 'Signals recorded')).toContain('40');
+			// Pooled across all four windows, weighted by each window's own
+			// denominator. 63.75 is the unweighted mean of the same percentages.
+			expect(kpiText(view, 'Hit rate')).toContain('59.00%');
+			expect(kpiText(view, 'Average return')).toContain('+1.30%');
+			expect(kpiText(view, 'Expectancy')).toContain('+0.42R');
+			expect(kpiText(view, 'Coverage')).toContain('75%');
+			expect(kpiText(view, 'Hit rate')).not.toContain('63.75');
+			expect(kpiText(view, 'MFE / MAE')).toContain('2.34% / -0.63%');
+			expect(kpiCards(view).length).toBeGreaterThanOrEqual(6);
+		});
+
+		it('does not 400 its own request when the default All windows filter is selected', async () => {
+			const requests = [];
+			const browser = createTradingBrowser({
+				summary: (url) => {
+					requests.push(url);
+					return outcomeSummary();
+				},
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			const summaryRequest = requests.find((url) => url.startsWith('/api/outcomes/summary'));
+			expect(summaryRequest).toBeTruthy();
+			expect(new URL(summaryRequest, 'https://console.test').searchParams.has('window')).toBe(false);
+			expect(view.textContent).not.toMatch(/HTTP 400/);
+			expect(view.textContent).not.toMatch(/invalid filter/i);
+			expect(kpiText(view, 'Hit rate')).toContain('59.00%');
+		});
+
+		it('reads the selected window block when a window is chosen', async () => {
+			const requests = [];
+			const browser = createTradingBrowser({
+				summary: (url) => {
+					requests.push(url);
+					return outcomeSummary();
+				},
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const windowSelect = findAll(tradingView(browser), (node) => node.name === 'window')[0];
+			windowSelect.value = '1D';
+			await findAll(tradingView(browser), (node) => node.tagName === 'FORM')[0].dispatch('submit');
+			await flush();
+
+			const summaryRequest = requests.filter((url) => url.startsWith('/api/outcomes/summary')).pop();
+			expect(new URL(summaryRequest, 'https://console.test').searchParams.get('window')).toBe('1D');
+			const view = tradingView(browser);
+			// 1D's own figures, not the pooled ones.
+			expect(kpiText(view, 'Hit rate')).toContain('65.00%');
+			expect(kpiText(view, 'Average return')).toContain('+1.25%');
+			expect(kpiText(view, 'Hit rate')).not.toContain('59.00');
+			expect(kpiText(view, 'MFE / MAE')).toContain('2.60% / -0.90%');
+			expect(view.textContent).toContain('1D window');
+		});
+
+		it('blames the console request, not a feature flag, when the summary filter is rejected', async () => {
+			const browser = createTradingBrowser({
+				summary: { error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.', code: 'INVALID_REQUEST' },
+				summaryStatus: 400,
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			expect(view.textContent).toMatch(/invalid filter/i);
+			expect(view.textContent).not.toMatch(/may be disabled/i);
+			expect(view.textContent).not.toMatch(/ENABLE_SIGNAL_OUTCOME_TRACKING/);
+		});
+
+		it('treats a 503 summary as a dependency state rather than a disabled feature', async () => {
+			const browser = createTradingBrowser({
+				summary: { error: 'Storage unavailable', code: 'STORAGE_UNAVAILABLE' },
+				summaryStatus: 503,
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			expect(view.textContent).toMatch(/temporarily unavailable/i);
+			expect(view.textContent).not.toMatch(/ENABLE_SIGNAL_OUTCOME_TRACKING/);
+		});
+
+		it('keeps the paper vs real panel with a named state when the summary fails', async () => {
+			const browser = createTradingBrowser({
+				summary: { error: 'Storage unavailable', code: 'STORAGE_UNAVAILABLE' },
+				summaryStatus: 503,
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const compare = findAll(tradingView(browser), (node) => node.className.includes('paper-vs-real-panel'))[0];
+
+			expect(compare).toBeTruthy();
+			expect(compare.textContent).toMatch(/temporarily unavailable/i);
+		});
+
+		it('labels every KPI card with its environment provenance', async () => {
+			const browser = createTradingBrowser();
+			await flush();
+			await selectView(browser, 'trading');
+			const cards = kpiCards(tradingView(browser));
+
+			expect(cards.length).toBeGreaterThan(0);
+			const allowedProvenance = ['Paper · signals', 'Measured', 'Not measured', 'Environment: testnet'];
+			cards.forEach((card) => {
+				const badges = findAll(card, (node) => hasClass(node, 'trading-kpi-badge'));
+				expect(badges).toHaveLength(1);
+				expect(allowedProvenance).toContain(badges[0].textContent);
+			});
+			expect(tradingView(browser).textContent).toContain('Environment: testnet');
+		});
+
+		it('renders an empty state instead of an error when the trade ledger API is not available yet', async () => {
+			const browser = createTradingBrowser({
+				ledger: async () => response({ success: false, error: 'Trading ledger is disabled', code: 'FEATURE_DISABLED' }, 403),
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			const panel = findAll(view, (node) => node.className.includes('real-pnl-panel'))[0];
+			expect(panel).toBeTruthy();
+			expect(panel.textContent).toMatch(/not available/i);
+			expect(panel.textContent).toMatch(/trade ledger/i);
+			expect(view.textContent).not.toContain('undefined');
+			expect(view.textContent).not.toMatch(/NaN/);
+		});
+
+		it('never renders a fabricated zero for metrics the ledger does not provide yet', async () => {
+			const browser = createTradingBrowser({
+				ledger: async () => response({ success: false, error: 'Trading ledger is disabled', code: 'FEATURE_DISABLED' }, 403),
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const panel = findAll(tradingView(browser), (node) => node.className.includes('real-pnl-panel'))[0];
+
+			['Realized P&L', 'Unrealized P&L', 'ROI', 'Profit factor', 'Fees', 'Avg hold'].forEach((label) => {
+				expect(panel.textContent).toContain(label);
+				expect(panel.textContent).not.toMatch(new RegExp(`${label}[^—]*\\$?0(\\.0+)?\\b`));
+			});
+		});
+
+		it('renders the unavailable state for a 503 without raising an error', async () => {
+			const browser = createTradingBrowser({
+				contract: contractWithLedger,
+				ledger: async () => response({ success: false, error: 'Storage unavailable', code: 'STORAGE_UNAVAILABLE' }, 503),
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const panel = findAll(tradingView(browser), (node) => node.className.includes('real-pnl-panel'))[0];
+
+			expect(panel.textContent).toMatch(/unavailable/i);
+			expect(panel.className).not.toContain('response-error');
+		});
+
+		it('fills the real-money panel from a ledger response once the contract ships it', async () => {
+			const browser = createTradingBrowser({
+				contract: contractWithLedger,
+				ledger: async () => response({
+					success: true,
+					realizedPnl: 412.55,
+					unrealizedPnl: -18.2,
+					roiPercent: 7.4,
+					profitFactor: 1.92,
+					feesPaid: 9.81,
+					averageHoldMinutes: 96,
+					openExposure: 250,
+				}),
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const panel = findAll(tradingView(browser), (node) => hasClass(node, 'real-pnl-panel'))[0];
+
+			expect(panel.textContent).toContain('412.55');
+			expect(panel.textContent).toContain('7.4');
+			expect(panel.textContent).not.toMatch(/not deployed/);
+		});
+
+		it('gives every chart an accessible text alternative and a data table', async () => {
+			const browser = createTradingBrowser();
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+			const charts = findAll(view, (node) => node.tagName === 'SVG' && node.attributes.role === 'img');
+
+			expect(charts.length).toBeGreaterThanOrEqual(2);
+			charts.forEach((chart) => expect(chart.attributes['aria-label']).toBeTruthy());
+			expect(findAll(view, (node) => node.tagName === 'TABLE').length).toBeGreaterThanOrEqual(2);
+		});
+
+		it('plots real values on the curve instead of an empty axis', async () => {
+			const browser = createTradingBrowser();
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			// A non-finite accumulator reaches the chart kit as null and renders an empty
+			// plot, which still satisfies an aria-label assertion. The painted polyline is
+			// the only proof the cumulative series actually carries values.
+			const labels = findAll(view, (node) => node.tagName === 'SVG' && node.attributes.role === 'img')
+				.map((chart) => chart.attributes['aria-label']);
+			expect(labels.some((label) => label.includes('no plottable values'))).toBe(false);
+			expect(labels.some((label) => /high [+-]?\d/.test(label))).toBe(true);
+			expect(findAll(view, (node) => node.tagName === 'POLYLINE').length).toBeGreaterThan(0);
+			expect(view.textContent).not.toMatch(/NaN|Infinity/);
+		});
+
+		it('states plainly that the curve is signal returns rather than account equity', async () => {
+			const browser = createTradingBrowser();
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			expect(view.textContent).toMatch(/not account equity/i);
+			expect(view.textContent).toMatch(/paper/i);
+		});
+
+		it('groups attribution by symbol and by setup type', async () => {
+			const browser = createTradingBrowser();
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+			const bySymbol = findAll(view, (node) => node.className.includes('attribution-symbols'))[0];
+			const bySetup = findAll(view, (node) => node.className.includes('attribution-setups'))[0];
+
+			expect(bySymbol.textContent).toContain('BTCUSDT');
+			expect(bySymbol.textContent).toContain('ETHUSDT');
+			expect(bySetup.textContent).toContain('breakout');
+			expect(bySetup.textContent).toContain('trend_continuation');
+		});
+
+		it('shows an empty state when no outcomes have been evaluated', async () => {
+			const browser = createTradingBrowser({ outcomes: [] });
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			expect(view.textContent).toMatch(/no evaluated signals/i);
+			expect(findAll(view, (node) => node.className === 'svg' && node.attributes.role === 'img').length).toBe(0);
+		});
+
+		it('hides every mutation control from an admin.viewer role', async () => {
+			let authStateChanged;
+			const user = {
+				getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+				getIdTokenResult: jest.fn().mockResolvedValue({ claims: { roles: ['admin.viewer'] } }),
+			};
+			const auth = {
+				setPersistence: jest.fn().mockResolvedValue(undefined),
+				onAuthStateChanged: jest.fn((listener) => {
+					authStateChanged = listener;
+					listener(null);
+					return jest.fn();
+				}),
+				signInWithEmailAndPassword: jest.fn(async () => {
+					await authStateChanged(user);
+					return { user };
+				}),
+				signOut: jest.fn().mockResolvedValue(undefined),
+			};
+			const browser = createTradingBrowser({
+				firebase: { initializeApp: jest.fn(), auth: jest.fn(() => auth) },
+				authEnabled: true,
+			});
+			await flush();
+			browser.elementsById['auth-email'].value = 'viewer@example.com';
+			browser.elementsById['auth-password'].value = 'secret';
+			await browser.elementsById['auth-form'].dispatch('submit');
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			const controls = quickControlButtons(view);
+			expect(controls.map((control) => control.textContent)).toEqual(['Load order audit']);
+			expect(view.textContent).not.toMatch(/Pause news monitor|Resume news monitor|Run self-test|Send test alert|Retry job/);
+		});
+
+		it('exposes quick controls to an operator and keeps destructive confirmations', async () => {
+			const browser = createTradingBrowser();
+			await flush();
+			await selectView(browser, 'trading');
+			const view = tradingView(browser);
+
+			const controls = quickControlButtons(view);
+			expect(controls.length).toBe(5);
+			const pause = findButton(view, 'Pause news monitor');
+			const confirmations = [];
+			browser.context.window.confirm = (message) => {
+				confirmations.push(message);
+				return false;
+			};
+			await pause.dispatch('click');
+			await flush();
+			expect(confirmations.some((message) => /pause/i.test(message))).toBe(true);
+		});
+
+		it('renders the recent order audit in the operations rail', async () => {
+			const browser = createTradingBrowser({
+				audit: {
+					success: true,
+					records: [{
+						id: 'audit-1',
+						orderId: 'local-1',
+						action: 'submit',
+						status: 'FILLED',
+						symbol: 'BTCUSDT',
+						side: 'BUY',
+						environment: 'testnet',
+						timestamp: '2026-10-01T10:00:00.000Z',
+						operator: 'operator@example.com',
+					}],
+					audit: [],
+					pagination: { hasMore: false, limit: 20, nextBefore: null },
+				},
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			const rail = findAll(tradingView(browser), (node) => node.className.includes('ops-rail'))[0];
+
+			expect(rail.textContent).toContain('BTCUSDT');
+			expect(rail.textContent).toContain('FILLED');
+			expect(rail.textContent).toContain('testnet');
+		});
+
+		it('streams SSE events into the live feed and unsubscribes when the view is left', async () => {
+			const stream = createControllableStream();
+			const browser = createBrowser({
+				storedKey: 'test-key',
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/admin/events') return stream.response();
+					if (url.startsWith('/api/outcomes/summary')) return response(outcomeSummary());
+					if (url.startsWith('/api/outcomes')) return response(outcomeList(defaultOutcomes));
+					if (url.startsWith('/api/status')) return response(statusPayload());
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await browser.elementsById['connection-form'].dispatch('submit');
+			await flush();
+			await selectView(browser, 'trading');
+			// Exact match: an `includes('live-feed')` probe also matches the wrapping
+			// `live-feed-panel` section, whose children are a heading plus the feed.
+			const feed = findAll(tradingView(browser), (node) => node.className === 'live-feed')[0];
+
+			expect(feed).toBeTruthy();
+			expect(feed.textContent).toMatch(/no events yet/i);
+
+			await stream.emit('alert-delivered', { symbol: 'BTCUSDT', channels: ['telegram'] });
+			await flush();
+			expect(feed.textContent).toContain('BTCUSDT');
+			expect(feed.children.length).toBe(1);
+
+			// MAX_ROWS is 40, so the trim is only reachable past that. The old
+			// `feed.children.pop()` threw a TypeError in Chrome because an
+			// HTMLCollection has no pop(); the array-backed fake DOM accepted it,
+			// which is why this needed a real-browser check to find.
+			for (let index = 0; index < 55; index += 1) {
+				await stream.emit('alert-delivered', { symbol: `SYM${index}` });
+			}
+			await flush();
+			expect(feed.children.length).toBe(40);
+			expect(feed.textContent).toContain('SYM54');
+			expect(feed.textContent).not.toContain('BTCUSDT');
+
+			await selectView(browser, 'overview');
+			await stream.emit('delivery-failure', { symbol: 'ETHUSDT', channel: 'whatsapp', error: 'boom' });
+			await flush();
+			expect(feed.children.length).toBe(40);
+		});
+	});
+
+	describe('Diagnostics self-test view', () => {
+		const selfTestResult = (overrides = {}) => ({
+			status: 'fail',
+			summary: { pass: 2, warn: 1, fail: 1, skipped: 1 },
+			checks: [
+				{ id: 'telegram.bot_info', status: 'pass', message: 'Bot @cabros_bot is up', durationMs: 12, evidence: { id: 4242 } },
+				{ id: 'auth.api_key', status: 'pass', message: 'API key is configured', durationMs: 0 },
+				{ id: 'gemini.grounding', status: 'warn', message: 'Grounding returned 0 sources', durationMs: 3100, evidence: { sources: [], attempts: 2 } },
+				{ id: 'firestore.collections', status: 'fail', message: 'Firestore read failed: permission_denied', durationMs: 4980, evidence: { reason: 'permission_denied', retryable: false } },
+				{ id: 'binance.trading', status: 'skipped', message: 'ENABLE_BINANCE_TRADING is not enabled', durationMs: 0 },
+			],
+			service: { name: 'cabros-crypto-bot', version: '1.2.3', commit: 'abc1234', uptimeSec: 90061, nodeVersion: 'v24.18.0' },
+			startedAt: '2026-10-05T02:00:00.000Z',
+			finishedAt: '2026-10-05T02:00:09.000Z',
+			durationMs: 9000,
+			requestId: 'selftest-request-1',
+			cached: true,
+			...overrides,
+		});
+
+		const diagnosticsBrowser = (fetchImpl, options = {}) => {
+			const requests = [];
+			const browser = createBrowser({
+				storedKey: 'selftest-key',
+				...options,
+				fetchImpl: async (url, requestOptions) => {
+					requests.push([url, requestOptions]);
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return fetchImpl(url, requestOptions);
+				},
+			});
+			return { browser, requests };
+		};
+
+		it('leads with the overall status badge and names service identity and timings', async () => {
+			const { browser } = diagnosticsBrowser(async () => response(selfTestResult()));
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const view = browser.elementsById.view;
+			const badges = findAll(view, (node) => node.className.includes('status-badge'));
+			expect(badges[0].textContent).toBe('Fail');
+			expect(badges[0].className).toContain('status-danger');
+			expect(view.textContent).toContain('cabros-crypto-bot');
+			expect(view.textContent).toContain('v24.18.0');
+			expect(view.textContent).toContain('Started');
+			expect(view.textContent).toContain('Finished');
+			expect(view.textContent).toContain('9000 ms');
+		});
+
+		it('sorts failing and unknown checks before passing and skipped ones', async () => {
+			const { browser } = diagnosticsBrowser(async () => response(selfTestResult({
+				checks: [
+					{ id: 'channels.enabled', status: 'pass', message: 'Telegram enabled', durationMs: 1 },
+					{ id: 'service.metadata', status: 'skipped', message: 'No metadata', durationMs: 0 },
+					{ id: 'telegram.bot_info', status: 'unknown', message: 'Bot handle not resolved', durationMs: 7 },
+					{ id: 'auth.api_key', status: 'pass', message: 'API key configured', durationMs: 0 },
+					{ id: 'gemini.grounding', status: 'fail', message: 'Grounding unreachable', durationMs: 5000 },
+				],
+			})));
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const renderedIds = findAll(browser.elementsById.view, (node) => node.className === 'mono-line')
+				.map((node) => node.textContent);
+			expect(renderedIds).toEqual([
+				'gemini.grounding',
+				'telegram.bot_info',
+				'auth.api_key',
+				'channels.enabled',
+				'service.metadata',
+			]);
+		});
+
+		it('renders nested evidence as a readable definition list', async () => {
+			const { browser } = diagnosticsBrowser(async () => response(selfTestResult({
+				status: 'warn',
+				checks: [
+					{
+						id: 'telegram.env',
+						status: 'pass',
+						message: 'Bot is up',
+						durationMs: 42,
+						evidence: {
+							chatId: -1001234,
+							topicRoutes: { webhookSignal: 7, newsMonitor: 11 },
+							allowedChatIds: ['-1001234', '-1009999'],
+							nested: { deep: { value: true } },
+						},
+					},
+				],
+			})));
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const view = browser.elementsById.view;
+			const evidenceList = find(view, (node) => node.tagName === 'DL' && node.className.includes('evidence-list'));
+			expect(evidenceList).toBeDefined();
+			expect(evidenceList.textContent).toContain('Chat Id');
+			expect(evidenceList.textContent).toContain('-1001234');
+			expect(evidenceList.textContent).toContain('Topic Routes');
+			expect(evidenceList.textContent).toContain('Allowed Chat Ids');
+			expect(evidenceList.textContent).toContain('Nested');
+			expect(evidenceList.textContent).toContain('Value');
+			expect(evidenceList.textContent).not.toContain('{"');
+			expect(evidenceList.textContent).not.toContain('":');
+		});
+
+		it('says in words when the result is cached or expired', async () => {
+			const { browser } = diagnosticsBrowser(async () => response(selfTestResult({ expired: true })));
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const notice = browser.elementsById.view.textContent;
+			expect(notice).toContain('Cached result');
+			expect(notice).toContain('no longer current');
+			expect(notice).toContain('Run self-test');
+		});
+
+		it('says in words when the result is a fresh cached read', async () => {
+			const { browser } = diagnosticsBrowser(async () => response(selfTestResult({ cached: true })));
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const notice = browser.elementsById.view.textContent;
+			expect(notice).toContain('Cached result');
+			expect(notice).not.toContain('no longer current');
+		});
+
+		it('confirms before running and shows the fresh result without a cached notice', async () => {
+			const confirmations = [];
+			const { browser, requests } = diagnosticsBrowser(async (url) => {
+				if (url === '/api/selftest/run') return response(selfTestResult({ cached: false, status: 'pass' }));
+				return response(selfTestResult());
+			}, {
+				confirm: (message) => {
+					confirmations.push(message);
+					return true;
+				},
+			});
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const runButton = findButton(browser.elementsById.view, 'Run self-test');
+			expect(runButton).toBeDefined();
+			expect(requests.some(([url]) => url === '/api/selftest/run')).toBe(false);
+
+			await runButton.dispatch('click');
+			await flush();
+
+			expect(confirmations).toHaveLength(1);
+			expect(confirmations[0]).toContain('outbound checks');
+			expect(requests.at(-1)[0]).toBe('/api/selftest/run');
+			expect(browser.elementsById.view.textContent).toContain('Pass');
+			expect(browser.elementsById.view.textContent).not.toContain('Cached result');
+			expect(runButton.disabled).toBe(false);
+		});
+
+		it('never dispatches the run when the operator declines the confirmation', async () => {
+			const { browser, requests } = diagnosticsBrowser(async () => response(selfTestResult()), {
+				confirm: () => false,
+			});
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const runButton = findButton(browser.elementsById.view, 'Run self-test');
+			await runButton.dispatch('click');
+			await flush();
+
+			expect(requests.some(([url]) => url === '/api/selftest/run')).toBe(false);
+		});
+
+		it('leaves the loaded report untouched when the operator declines the run confirmation', async () => {
+			const { browser } = diagnosticsBrowser(async () => response(selfTestResult()), {
+				confirm: () => false,
+			});
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const view = browser.elementsById.view;
+			expect(findAll(view, (node) => node.className === 'mono-line')).toHaveLength(5);
+
+			await findButton(view, 'Run self-test').dispatch('click');
+			await flush();
+
+			// sendRequest resolves with undefined for an HTTP failure and for a declined
+			// confirm alike. Collapsing the two replaced a five-check Fail verdict with an
+			// "Unavailable" report while the sibling response block still read HTTP 200.
+			expect(findAll(view, (node) => node.textContent === 'Unavailable')).toHaveLength(0);
+			expect(findAll(view, (node) => node.className === 'mono-line')).toHaveLength(5);
+			expect(view.textContent).toContain('Firestore read failed: permission_denied');
+			expect(view.textContent).toContain('Self-test verdict');
+			expect(view.textContent).not.toContain('Treat this as unknown, not as a pass');
+			expect(findAll(view, (node) => node.className.includes('status-badge'))[0].textContent).toBe('Fail');
+		});
+
+		it('still repaints the report when the refresh is dispatched and then fails', async () => {
+			let reads = 0;
+			const { browser } = diagnosticsBrowser(async (url) => {
+				if (url === '/api/selftest' && (reads += 1) > 1) throw new TypeError('Failed to fetch');
+				return response(selfTestResult());
+			});
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const view = browser.elementsById.view;
+			expect(findAll(view, (node) => node.className === 'mono-line')).toHaveLength(5);
+
+			await findButton(view, 'Refresh report').dispatch('click');
+			await flush();
+
+			// An attempted request that failed is new evidence about the endpoint, unlike a
+			// declined dialog, so the report is allowed to change.
+			expect(findAll(view, (node) => node.textContent === 'Unavailable')).toHaveLength(1);
+			expect(findAll(view, (node) => node.className === 'mono-line')).toHaveLength(0);
+		});
+
+		it('locks the run button while the request is in flight', async () => {
+			let releaseRun;
+			const runPending = new Promise((resolve) => { releaseRun = resolve; });
+			const { browser } = diagnosticsBrowser(async (url) => {
+				if (url === '/api/selftest/run') {
+					await runPending;
+					return response(selfTestResult({ cached: false }));
+				}
+				return response(selfTestResult());
+			}, { confirm: () => true });
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const runButton = findButton(browser.elementsById.view, 'Run self-test');
+			await runButton.dispatch('click');
+			expect(runButton.disabled).toBe(true);
+
+			releaseRun();
+			await flush();
+			expect(runButton.disabled).toBe(false);
+		});
+
+		it('states plainly when no self-test has been run yet', async () => {
+			const { browser } = diagnosticsBrowser(async () => response({
+				status: 'unknown',
+				message: 'No self-test has been run yet. POST /api/selftest/run to trigger one.',
+				requestId: 'selftest-request-empty',
+				cached: false,
+			}));
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const view = browser.elementsById.view;
+			expect(view.textContent).toContain('No self-test has been run yet');
+			expect(view.textContent).toContain('Unknown');
+			expect(findAll(view, (node) => node.className === 'mono-line')).toHaveLength(0);
+		});
+
+		it('states plainly when the self-test endpoint is unavailable', async () => {
+			const { browser } = diagnosticsBrowser(async (url) => {
+				if (url === '/api/selftest') {
+					return response({ error: 'Self-test is not available in this deployment.', code: 'FEATURE_DISABLED', requestId: 'r-1' }, 503);
+				}
+				return response({});
+			});
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const view = browser.elementsById.view;
+			expect(view.textContent).toContain('Self-test is not available in this deployment.');
+			expect(view.textContent).toContain('unavailable');
+			expect(findAll(view, (node) => node.className === 'mono-line')).toHaveLength(0);
+		});
+
+		it('renders a degraded suite without pretending it passed', async () => {
+			const { browser } = diagnosticsBrowser(async () => response(selfTestResult({
+				status: 'warn',
+				summary: { pass: 1, warn: 2, fail: 0, skipped: 1 },
+				checks: [
+					{ id: 'tradingview_mcp.endpoint', status: 'warn', message: 'MCP handshake slow', durationMs: 4800 },
+					{ id: 'channels.enabled', status: 'warn', message: 'Admin Telegram delivery at 0%', durationMs: 2 },
+					{ id: 'auth.api_key', status: 'pass', message: 'API key is configured', durationMs: 0 },
+					{ id: 'binance.trading', status: 'skipped', message: 'ENABLE_BINANCE_TRADING is not enabled', durationMs: 0 },
+				],
+			})));
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			const view = browser.elementsById.view;
+			const badges = findAll(view, (node) => node.className.includes('status-badge'));
+			expect(badges[0].textContent).toBe('Warning');
+			expect(badges[0].className).toContain('status-active');
+			expect(view.textContent).toContain('MCP handshake slow');
+			expect(view.textContent).toContain('Admin Telegram delivery at 0%');
+		});
+
+		it('keeps the admin.viewer read and admin.operator run roles distinct', async () => {
+			const dispatched = [];
+			let authStateChanged;
+			const user = {
+				getIdToken: jest.fn().mockResolvedValue('firebase-token'),
+				getIdTokenResult: jest.fn().mockResolvedValue({ claims: { roles: ['admin.viewer'] } }),
+			};
+			const auth = {
+				setPersistence: jest.fn().mockResolvedValue(undefined),
+				onAuthStateChanged: jest.fn((listener) => {
+					authStateChanged = listener;
+					listener(null);
+					return jest.fn();
+				}),
+				signInWithEmailAndPassword: jest.fn(async () => {
+					await authStateChanged(user);
+					return { user };
+				}),
+				signOut: jest.fn().mockResolvedValue(undefined),
+			};
+			const browser = createBrowser({
+				firebase: { initializeApp: jest.fn(), auth: jest.fn(() => auth) },
+				confirm: () => true,
+				fetchImpl: async (url) => {
+					if (url === '/admin/auth-config') {
+						return response({ enabled: true, configured: true, config: {
+							apiKey: 'public-key', authDomain: 'cabros.firebaseapp.com', projectId: 'cabros',
+						} });
+					}
+					if (url.endsWith('/openapi.json')) return response(contract);
+					dispatched.push(url);
+					return response(selfTestResult());
+				},
+			});
+			await flush();
+			browser.elementsById['auth-email'].value = 'viewer@example.com';
+			browser.elementsById['auth-password'].value = 'password';
+			await browser.elementsById['auth-form'].dispatch('submit');
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			expect(dispatched).toContain('/api/selftest');
+
+			const runButton = findButton(browser.elementsById.view, 'Run self-test');
+			await runButton.dispatch('click');
+			await flush();
+
+			expect(dispatched).not.toContain('/api/selftest/run');
+			expect(browser.elementsById.view.textContent).toContain('admin role cannot perform');
+		});
+
+		it('renders safely when the diagnostics module failed to load', async () => {
+			const { browser } = diagnosticsBrowser(async () => response(selfTestResult()));
+			delete browser.context.window.CabrosAdminDiagnostics;
+			await flush();
+			await selectView(browser, 'diagnostics');
+
+			expect(browser.elementsById.view.textContent).toContain('Diagnostics module unavailable');
+			expect(browser.titleHistory.at(-1)).toContain('Diagnostics');
 		});
 	});
 

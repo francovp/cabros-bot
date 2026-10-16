@@ -42,23 +42,42 @@ function isOperatorAuthorized(context) {
 }
 
 async function answerCallback(context, text) {
+	if (!context || typeof context.answerCbQuery !== 'function') return;
 	try {
-		await context.answerCbQuery(text, { show_alert: false });
+		await withCallbackTimeout(
+			() => context.answerCbQuery(text, { show_alert: false }),
+			null,
+			CALLBACK_STORAGE_TIMEOUT_MS,
+			'Telegram callback answerCbQuery timed out',
+			'TELEGRAM_CALLBACK_TIMEOUT',
+		);
 	} catch (error) {
 		console.warn('[telegramAlertActions] Failed to answer callback:', error.message);
 	}
 }
 
 async function replyToUser(context, text) {
-	if (typeof context.reply !== 'function') return;
+	if (!context || typeof context.reply !== 'function') return;
 	try {
-		await context.reply(text);
+		await withCallbackTimeout(
+			() => context.reply(text),
+			null,
+			CALLBACK_STORAGE_TIMEOUT_MS,
+			'Telegram callback reply timed out',
+			'TELEGRAM_REPLY_TIMEOUT',
+		);
 	} catch (error) {
 		console.warn('[telegramAlertActions] Failed to send callback result:', error.message);
 	}
 }
 
-function withCallbackTimeout(operation, onLateResult) {
+function withCallbackTimeout(
+	operation,
+	onLateResult,
+	timeoutMs = CALLBACK_STORAGE_TIMEOUT_MS,
+	errorMessage = 'Telegram callback storage operation timed out',
+	errorCode = 'TELEGRAM_CALLBACK_STORAGE_TIMEOUT',
+) {
 	let timeoutId;
 	let timedOut = false;
 	const operationPromise = Promise.resolve().then(operation);
@@ -70,10 +89,10 @@ function withCallbackTimeout(operation, onLateResult) {
 	const timeoutPromise = new Promise((resolve, reject) => {
 		timeoutId = setTimeout(() => {
 			timedOut = true;
-			const error = new Error('Telegram callback storage operation timed out');
-			error.code = 'TELEGRAM_CALLBACK_STORAGE_TIMEOUT';
+			const error = new Error(errorMessage);
+			error.code = errorCode;
 			reject(error);
-		}, CALLBACK_STORAGE_TIMEOUT_MS);
+		}, timeoutMs);
 	});
 
 	return Promise.race([
@@ -465,35 +484,33 @@ async function handleVote(context, parsed, storeEntry) {
 
 	if (alertFeedbackStorageService && typeof alertFeedbackStorageService.isEnabled === 'function' && alertFeedbackStorageService.isEnabled()) {
 		try {
-			await alertFeedbackStorageService.saveFeedback({
+			await withCallbackTimeout(() => alertFeedbackStorageService.saveFeedback({
 				alertId: storeEntry.alertId,
 				chatId: String(senderId ?? context?.update?.callbackQuery?.message?.chat?.id ?? 'unknown'),
 				verdict: side,
 				source: 'webhook-alert',
-			});
+			}));
 		} catch (error) {
 			console.warn('[telegramAlertActions] Failed to persist feedback:', error.message);
 		}
 	}
 
-	await context.answerCbQuery(side === 'up' ? '👍 Gracias por tu feedback' : '👎 Gracias por tu feedback', { show_alert: false });
+	await answerCallback(context, side === 'up' ? '👍 Gracias por tu feedback' : '👎 Gracias por tu feedback');
 }
 
 async function handleAlertAction(context) {
-	const callbackData = context.update && context.update.callbackQuery
-		? context.update.callbackQuery.data
-		: null;
+	const callbackData = context?.update?.callbackQuery?.data ?? null;
 	if (!callbackData) {
-		await context.answerCbQuery('Acción no reconocida', { show_alert: false });
+		await answerCallback(context, 'Acción no reconocida');
 		return;
 	}
 	if (!ACTION_CALLBACK_REGEX.test(callbackData)) {
-		await context.answerCbQuery('Acción no reconocida', { show_alert: false });
+		await answerCallback(context, 'Acción no reconocida');
 		return;
 	}
 	const parsed = parseCallbackData(callbackData);
 	if (!parsed) {
-		await context.answerCbQuery('Acción no reconocida', { show_alert: false });
+		await answerCallback(context, 'Acción no reconocida');
 		return;
 	}
 	if (parsed.action === getActionCodes().ACTION_REPLAY) {
@@ -512,7 +529,7 @@ async function handleAlertAction(context) {
 		await handleVote(context, parsed, { alertId: parsed.alertId });
 		return;
 	}
-	await context.answerCbQuery('Acción no soportada', { show_alert: false });
+	await answerCallback(context, 'Acción no soportada');
 }
 
 function registerAlertActionHandlers(bot) {
@@ -541,4 +558,7 @@ module.exports = {
 	CALLBACK_STORAGE_TIMEOUT_MS,
 	recordQualityFeedback,
 	getRecordedQualityFeedback,
+	answerCallback,
+	replyToUser,
+	withCallbackTimeout,
 };

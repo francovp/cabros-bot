@@ -47,6 +47,29 @@ const SETUP_TYPES = new Set([
 	'reversal',
 ]);
 
+const STRUCTURAL_KEYWORDS_REGEX = /\b(trend|tendencia|uptrend|downtrend|alcista|bajista|breakout|ruptura|revers|mean[-_\s]?reversion|support|soporte|resistance|resistencia|range|rango|channel|canal|pullback|consolidat|momentum|bounce|rebote|structure|estructura|moving\s+average|promedio\s+m[oó]vil|rsi|macd|bollinger|atr|volatility|volatilidad|level|nivel|pivot)\b/i;
+
+function hasStructuralEvidenceInSources(sources) {
+	if (!Array.isArray(sources) || sources.length === 0) {
+		return false;
+	}
+	return sources.some(source => {
+		if (!source) return false;
+		if (typeof source === 'string') {
+			return STRUCTURAL_KEYWORDS_REGEX.test(source);
+		}
+		const text = [
+			source.title,
+			source.snippet,
+			source.text,
+			source.content,
+			source.description,
+			source.summary,
+		].filter(Boolean).join(' ');
+		return STRUCTURAL_KEYWORDS_REGEX.test(text);
+	});
+}
+
 function parseOptionalRiskValue(value) {
 	if (typeof value === 'number' && Number.isFinite(value)) {
 		return value;
@@ -527,6 +550,24 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 
 		return analysisResult;
 	} catch (error) {
+		const isBudgetError = error?.code === 'TOKEN_BUDGET_EXCEEDED'
+			|| (typeof error?.message === 'string' && error.message.includes('TOKEN_BUDGET_EXCEEDED'));
+
+		if (isBudgetError) {
+			console.warn('[Gemini][analyzeNewsForSymbol] Daily token cost budget exceeded during analysis, returning fallback analysis');
+			return {
+				event_category: EventCategory.NONE,
+				event_significance: 0,
+				sentiment_score: 0,
+				headline: 'Token cost budget ceiling reached',
+				description: 'Skipping news analysis due to daily token cost budget ceiling.',
+				confidence: 0,
+				promptVersion: 'fallback-budget',
+				sources: [],
+				budgetExceeded: true,
+			};
+		}
+
 		console.error('[Gemini] News analysis failed:', error.message);
 		throw error;
 	}
@@ -1067,10 +1108,12 @@ function parseEnrichedAlertResponse(response, sources) {
 			? Math.sign(sentimentScore) * ZERO_SOURCE_SENTIMENT_SCORE_CAP
 			: sentimentScore;
 
-		const parsedSetupType = parseOptionalSetupType(parsed.setup_type);
-		const parsedSetupEvidence = parsedSetupType && typeof parsed.setup_evidence === 'string' && parsed.setup_evidence.trim()
+		const hasEvidence = Array.isArray(sources) && hasStructuralEvidenceInSources(sources);
+		const rawSetupType = parseOptionalSetupType(parsed.setup_type);
+		const parsedSetupEvidence = hasEvidence && rawSetupType && typeof parsed.setup_evidence === 'string' && parsed.setup_evidence.trim()
 			? parsed.setup_evidence.trim()
 			: undefined;
+		const parsedSetupType = parsedSetupEvidence ? rawSetupType : undefined;
 
 		const parsedSentimentScoreEvidence = typeof parsed.sentiment_score_evidence === 'string' && parsed.sentiment_score_evidence.trim()
 			? parsed.sentiment_score_evidence.trim().substring(0, MAX_SENTIMENT_SCORE_EVIDENCE_LENGTH)

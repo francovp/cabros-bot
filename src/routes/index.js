@@ -45,6 +45,7 @@ const {
 	deleteBinanceOrder,
 	getBinanceOrderAudit,
 	postBinanceOrderPreview,
+	getBinanceAccountBalances,
 } = require('../controllers/trading/binanceOrders');
 const { postTestAlert } = require('../controllers/admin/testAlert');
 const { handleSseStream } = require('../controllers/admin/sseEvents');
@@ -54,6 +55,7 @@ const {
 	ADMIN_VIEWER,
 	requireAdminRole,
 	requireConfiguredAdminAccess,
+	requireConfiguredBinanceTradingAccess,
 	requireConfiguredSseAccess,
 	validateAdminAccess,
 } = require('../lib/adminAuth');
@@ -65,8 +67,8 @@ function getRoutes(botOrGetter) {
 	const adminRead = [validateAdminAccess, requireAdminRole(ADMIN_VIEWER)];
 	const adminWrite = [validateAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
 	const sseRead = [requireConfiguredSseAccess, requireAdminRole(ADMIN_VIEWER)];
-	const binanceOrderRead = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_VIEWER)];
-	const binanceOrderWrite = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
+	const binanceOrderRead = [requireConfiguredBinanceTradingAccess, requireAdminRole(ADMIN_VIEWER)];
+	const binanceOrderWrite = [requireConfiguredBinanceTradingAccess, requireAdminRole(ADMIN_OPERATOR)];
 	router.post('/webhook/alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postAlert(botOrGetter));
 	router.post('/webhook/message', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postMessage(botOrGetter));
 	router.post('/webhook/expanded-analysis-alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
@@ -119,6 +121,7 @@ function getRoutes(botOrGetter) {
 	router.get('/trading/binance/orders', ...binanceOrderRead, getBinanceOrders);
 	router.get('/trading/binance/orders/audit', ...binanceOrderRead, getBinanceOrderAudit);
 	router.post('/trading/binance/orders/preview', ...binanceOrderRead, postBinanceOrderPreview);
+	router.get('/trading/binance/account/balances', ...binanceOrderRead, getBinanceAccountBalances);
 	router.post('/trading/binance/orders', ...binanceOrderWrite, idempotencyMiddleware, postBinanceOrder);
 	router.delete('/trading/binance/orders', ...binanceOrderWrite, deleteBinanceOrder);
 

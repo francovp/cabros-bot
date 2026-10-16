@@ -620,6 +620,73 @@ describe('BinanceOrderAuditService', () => {
 			expect(result.records[0].status).toBe('FILLED');
 		});
 
+		it('matches cancellation audit records by orderId (clientOrderId) and status=rejected', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });
+
+			queryChain.get.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					{
+						id: 'cancel-audit-1',
+						data: () => ({
+							orderId: 'cancel-audit-1',
+							action: 'CANCEL',
+							symbol: 'BTCUSDT',
+							status: 'rejected',
+							errorCode: 'ORDER_NOT_FOUND',
+							clientOrderId: 'client-cancel-777',
+							timestamp: '2026-09-10T12:00:00.000Z',
+						}),
+					},
+					{
+						id: 'other-audit-2',
+						data: () => ({
+							orderId: 'other-audit-2',
+							action: 'CANCEL',
+							symbol: 'BTCUSDT',
+							status: 'CANCELED',
+							clientOrderId: 'other-cancel-888',
+							timestamp: '2026-09-10T11:00:00.000Z',
+						}),
+					},
+				],
+			});
+
+			const byOrderId = await service.listAuditRecords({
+				orderId: 'client-cancel-777',
+				limit: 10,
+			});
+			expect(byOrderId.records).toHaveLength(1);
+			expect(byOrderId.records[0].clientOrderId).toBe('client-cancel-777');
+
+			queryChain.get.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					{
+						id: 'cancel-audit-1',
+						data: () => ({
+							orderId: 'cancel-audit-1',
+							action: 'CANCEL',
+							symbol: 'BTCUSDT',
+							status: 'rejected',
+							errorCode: 'ORDER_NOT_FOUND',
+							clientOrderId: 'client-cancel-777',
+							timestamp: '2026-09-10T12:00:00.000Z',
+						}),
+					},
+				],
+			});
+
+			const byRejected = await service.listAuditRecords({
+				status: 'rejected',
+				limit: 10,
+			});
+			expect(byRejected.records).toHaveLength(1);
+			expect(byRejected.records[0].status).toBe('rejected');
+			expect(byRejected.records[0].errorCode).toBe('ORDER_NOT_FOUND');
+		});
+
 		it('excludes expired documents where expiresAt is in the past', async () => {
 			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
 			process.env.FIREBASE_SERVICE_ACCOUNT_JSON = JSON.stringify({ project_id: 'test' });

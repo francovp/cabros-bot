@@ -638,7 +638,12 @@ describe('Idempotency Service & Middleware', () => {
 
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2.statusCode).toBe(409);
+			// The middleware now emits the standard error envelope, which adds
+			// success/retryable/requestId on top of the original {error, code}.
 			expect(JSON.parse(res2._getData())).toEqual({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
 				error: 'Idempotency key was reused with a different payload',
 				code: 'IDEMPOTENCY_CONFLICT',
 			});
@@ -666,7 +671,12 @@ describe('Idempotency Service & Middleware', () => {
 
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2.statusCode).toBe(409);
+			// The middleware now emits the standard error envelope, which adds
+			// success/retryable/requestId on top of the original {error, code}.
 			expect(JSON.parse(res2._getData())).toEqual({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
 				error: 'Idempotency key was reused with a different payload',
 				code: 'IDEMPOTENCY_CONFLICT',
 			});
@@ -694,6 +704,9 @@ describe('Idempotency Service & Middleware', () => {
 				expect(next2).not.toHaveBeenCalled();
 				expect(res2.statusCode).toBe(429);
 				expect(JSON.parse(res2._getData())).toEqual({
+					success: false,
+					retryable: true,
+					requestId: expect.any(String),
 					error: 'Server is currently processing too many requests with idempotency keys',
 					code: 'IDEMPOTENCY_LIMIT_EXCEEDED',
 				});
@@ -808,7 +821,12 @@ describe('Idempotency Service & Middleware', () => {
 
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2.statusCode).toBe(409);
+			// The middleware now emits the standard error envelope, which adds
+			// success/retryable/requestId on top of the original {error, code}.
 			expect(JSON.parse(res2._getData())).toEqual({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
 				error: 'Idempotency key was reused with a different payload',
 				code: 'IDEMPOTENCY_CONFLICT',
 			});
@@ -837,7 +855,12 @@ describe('Idempotency Service & Middleware', () => {
 
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2.statusCode).toBe(409);
+			// The middleware now emits the standard error envelope, which adds
+			// success/retryable/requestId on top of the original {error, code}.
 			expect(JSON.parse(res2._getData())).toEqual({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
 				error: 'Idempotency key was reused with a different payload',
 				code: 'IDEMPOTENCY_CONFLICT',
 			});

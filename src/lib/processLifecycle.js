@@ -91,6 +91,7 @@ function createProcessLifecycle(options = {}) {
 		stopRemoteConfig = () => undefined,
 		stopTelegramHealthProbe = () => undefined,
 		shutdownNewsMonitor = () => undefined,
+		flushAlertBurstWindows = () => undefined,
 		closeAllSseConnections = () => undefined,
 		flushSentry = () => undefined,
 		timeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
@@ -185,6 +186,11 @@ function createProcessLifecycle(options = {}) {
 				// from starting; the drain below still waits for a probe already in
 				// flight, and now runs before the bot itself is torn down.
 				const backlogMonitorCleanup = safelyRun(logger, 'job backlog monitor', () => stopJobBacklogMonitor({ drain: true }));
+				// Alert burst windows hold webhook requests open for up to
+				// ALERT_BURST_WINDOW_MS, so a shutdown landing mid-window would
+				// otherwise strand held alerts with no timer left to release them.
+				// Flush while the bot and channels are still up.
+				await safelyRun(logger, 'alert burst windows', () => flushAlertBurstWindows());
 				const telegramCleanup = safelyRun(logger, 'Telegram bot', stopBot);
 				const bootstrapCleanup = safelyRun(logger, 'application bootstrap', getBootstrapPromise);
 				await closeServer(server, logger);

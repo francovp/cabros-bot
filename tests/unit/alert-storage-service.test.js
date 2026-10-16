@@ -67,6 +67,7 @@ function buildDocSnapshot(id, data) {
 describe('AlertStorageService', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		firestoreWriteMetricsService.resetForTesting();
 		jest.useFakeTimers().setSystemTime(new Date('2026-06-06T12:00:00.000Z'));
 		admin.__resetApps();
 		// Reset the Firestore db singleton between tests
@@ -773,12 +774,14 @@ describe('AlertStorageService', () => {
 
 		it('returns null and logs a warning (does not throw) when add() rejects', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
-			mockAdd.mockRejectedValueOnce(new Error('Quota exceeded'));
+			mockAdd.mockRejectedValueOnce(Object.assign(new Error('Quota exceeded'), { code: 8 }));
 			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
 			const result = await AlertStorageService.saveAlert(buildParams());
 
 			expect(result).toBeNull();
+			expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.alertStorage)
+				.toMatchObject({ success: 0, failure: 1, lastFailureCategory: 'firestore_unavailable' });
 			expect(warnSpy).toHaveBeenCalledWith(
 				expect.stringContaining('[AlertStorageService]'),
 				expect.stringContaining('Quota exceeded'),
@@ -1656,19 +1659,21 @@ describe('AlertStorageService', () => {
 		// dependency healthy, and the response message blamed credentials that
 		// were demonstrably working. The suite below pins the four fixes.
 
-		it('declares the composite Firestore index required by the ordered alerts read', () => {
+		it.each([
+			['alerts', 'receivedAt', 'DESCENDING'],
+			['userPriceAlerts', 'status', 'ASCENDING'],
+		])('does not declare a redundant single-field composite for %s.%s', (collectionGroup, fieldPath, order) => {
 			const fs = require('fs');
 			const path = require('path');
 			const indexes = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../firestore.indexes.json'), 'utf8'));
-			// Firestore applies a *free* final `__name__` ASC sort, so ordering by
-			// `__name__` DESC on top of `receivedAt` DESC needs this composite. The
-			// mock makes `orderBy` a no-op, so only this declaration can catch a
-			// missing index.
-			const alertIndex = indexes.indexes.find(index => index.collectionGroup === 'alerts'
-				&& index.fields.some(field => field.fieldPath === 'receivedAt' && field.order === 'DESCENDING')
-				&& index.fields.some(field => field.fieldPath === '__name__' && field.order === 'DESCENDING'));
+			const redundantIndex = indexes.indexes.find(index => index.collectionGroup === collectionGroup
+				&& index.fields.length === 2
+				&& index.fields[0].fieldPath === fieldPath
+				&& index.fields[0].order === order
+				&& index.fields[1].fieldPath === '__name__'
+				&& index.fields[1].order === order);
 
-			expect(alertIndex).toBeDefined();
+			expect(redundantIndex).toBeUndefined();
 		});
 
 		it('classifies a rejected query as failed_precondition and flags the missing index', async () => {
@@ -1914,6 +1919,34 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		it('persists reEnriched flag and sanitized enrichmentData when provided', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const idempotencyKey = 'replay/key-enrich';
+			const enrichmentData = {
+				current_price: 65000,
+				setup_type: 'breakout',
+				unsupportedUndefined: undefined,
+			};
+
+			const result = await AlertStorageService.saveReplayAttempt({
+				alertId: 'alert-123',
+				idempotencyKey,
+				channels: ['telegram'],
+				deliveryResults: [{ channel: 'telegram', success: true }],
+				reEnriched: true,
+				enrichmentData,
+			});
+
+			expect(result).toBeDefined();
+			const document = mockDocSet.mock.calls[0][0];
+			expect(document.reEnriched).toBe(true);
+			expect(document.enrichmentData).toEqual({
+				current_price: 65000,
+				setup_type: 'breakout',
+			});
+			expect(document.enrichmentData).not.toHaveProperty('unsupportedUndefined');
+		});
+
 		it('records a failed replay write when Firestore initialization is unavailable', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockInitializeApp.mockImplementationOnce(() => {
@@ -2012,6 +2045,29 @@ describe('AlertStorageService', () => {
 
 			expect(result.replays[0].id).toBe('1700000000000_uuid');
 			expect(result.replays[0].id).not.toContain('full-hash');
+		});
+
+		it('includes reEnriched and enrichmentData in formatted replay document when present', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-1_hash_ts_uuid', {
+						alertId: 'alert-1',
+						idempotencyKeyHash: 'test-hash-prefix',
+						attemptId: 'ts_uuid',
+						channels: ['telegram'],
+						deliveryResults: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+						replayedAt: buildTimestamp('2026-06-06T12:34:56.000Z'),
+						reEnriched: true,
+						enrichmentData: { current_price: 65000 },
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.listReplayAttempts({ limit: 1 });
+			expect(result.replays[0].reEnriched).toBe(true);
+			expect(result.replays[0].enrichmentData).toEqual({ current_price: 65000 });
 		});
 
 		it('applies the composite before cursor to the Firestore query', async () => {
@@ -3094,6 +3150,11 @@ describe('AlertStorageService', () => {
 							setup_type: { populated: 0, percentage: 0 },
 							risk_reward_ratio: { populated: 0, percentage: 0 },
 						},
+						directionEchoRate: {
+							echoed: 0,
+							total: 0,
+							percentage: 0,
+						},
 						byPromptProvenance: [
 							{
 								provenance: null,
@@ -3103,6 +3164,11 @@ describe('AlertStorageService', () => {
 									target_level: { populated: 0, percentage: 0 },
 									setup_type: { populated: 0, percentage: 0 },
 									risk_reward_ratio: { populated: 0, percentage: 0 },
+								},
+								directionEchoRate: {
+									echoed: 0,
+									total: 0,
+									percentage: 0,
 								},
 							},
 						],
@@ -3580,6 +3646,11 @@ describe('AlertStorageService', () => {
 					setup_type: { populated: 1, percentage: 50 },
 					risk_reward_ratio: { populated: 1, percentage: 50 },
 				},
+				directionEchoRate: {
+					echoed: 0,
+					total: 0,
+					percentage: 0,
+				},
 				byPromptProvenance: [
 					{
 						provenance: {
@@ -3595,6 +3666,11 @@ describe('AlertStorageService', () => {
 							target_level: { populated: 1, percentage: 100 },
 							setup_type: { populated: 1, percentage: 100 },
 							risk_reward_ratio: { populated: 1, percentage: 100 },
+						},
+						directionEchoRate: {
+							echoed: 0,
+							total: 0,
+							percentage: 0,
 						},
 					},
 					{
@@ -3612,8 +3688,73 @@ describe('AlertStorageService', () => {
 							setup_type: { populated: 0, percentage: 0 },
 							risk_reward_ratio: { populated: 0, percentage: 0 },
 						},
+						directionEchoRate: {
+							echoed: 0,
+							total: 0,
+							percentage: 0,
+						},
 					},
 				],
+			});
+		});
+
+		it('calculates directionEchoRate accurately for BUY/trend_continuation and SELL/reversal', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					// 1. BUY + trend_continuation -> echoed
+					buildQueryDoc('alert-echo-buy', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						enriched: true,
+						side: 'BUY',
+						enrichmentData: {
+							setup_type: 'trend_continuation',
+							promptProvenance: { name: 'alert-enrichment', source: 'langfuse', label: 'production', version: 1 },
+						},
+					}),
+					// 2. SELL + reversal -> echoed
+					buildQueryDoc('alert-echo-sell', {
+						receivedAt: buildTimestamp('2026-06-06T12:01:00.000Z'),
+						enriched: true,
+						text: 'BINANCE:ETHUSDT(60) pasó a señal de VENTA',
+						enrichmentData: {
+							setup_type: 'reversal',
+							promptProvenance: { name: 'alert-enrichment', source: 'langfuse', label: 'production', version: 1 },
+						},
+					}),
+					// 3. BUY + breakout -> not echoed
+					buildQueryDoc('alert-non-echo', {
+						receivedAt: buildTimestamp('2026-06-06T12:02:00.000Z'),
+						enriched: true,
+						side: 'BUY',
+						enrichmentData: {
+							setup_type: 'breakout',
+							promptProvenance: { name: 'alert-enrichment', source: 'langfuse', label: 'production', version: 1 },
+						},
+					}),
+					// 4. Alert without setup_type -> ignored in directionEchoRate
+					buildQueryDoc('alert-no-setup', {
+						receivedAt: buildTimestamp('2026-06-06T12:03:00.000Z'),
+						enriched: true,
+						side: 'BUY',
+						enrichmentData: {
+							promptProvenance: { name: 'alert-enrichment', source: 'langfuse', label: 'production', version: 1 },
+						},
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+			});
+
+			expect(result.enrichment.riskMetadataCoverage.directionEchoRate).toEqual({
+				echoed: 2,
+				total: 3,
+				percentage: 66.67,
 			});
 		});
 
@@ -4164,6 +4305,321 @@ describe('AlertStorageService', () => {
 
 			expect(result.latency.averageDeliveryMs).toBeNull();
 			expect(result.latency.byChannel).toEqual({});
+		});
+
+		// ── Time-bucketed series (issue #1287) ─────────────────────────────────
+		// The series is built from the same bounded cursor scan as the aggregates,
+		// so `sum(bucket.total) === totalAlerts` is guaranteed rather than coincidental.
+
+		it('keeps the controller accepted-interval list identical to the implemented intervals', () => {
+			const { VALID_SUMMARY_INTERVALS } = require('../../src/controllers/alerts/alerts');
+
+			// The controller owns request validation and keeps its own list so a
+			// partial module mock cannot break route loading. That makes the two
+			// lists a drift risk, so it is asserted rather than assumed.
+			expect([...VALID_SUMMARY_INTERVALS].sort()).toEqual(
+				Object.keys(AlertStorageService.SUMMARY_INTERVALS).sort(),
+			);
+		});
+
+		it('omits summary.buckets and window.interval entirely when interval is not requested', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						deliveryResults: [{ channel: 'telegram', success: true }],
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+			});
+
+			expect(result).not.toHaveProperty('buckets');
+			expect(result.window).toEqual({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+				maxDays: 31,
+			});
+			// Byte-for-byte regression: the key set and its order must not move.
+			expect(Object.keys(result.window)).toEqual(['from', 'to', 'limit', 'maxDays']);
+		});
+
+		it('buckets hourly with gapless zero-filled buckets ascending by bucketStart', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-late', {
+						receivedAt: buildTimestamp('2026-06-06T02:30:00.000Z'),
+						deliveryResults: [
+							{ channel: 'telegram', success: true },
+							{ channel: 'whatsapp', success: false },
+						],
+					}),
+					buildQueryDoc('alert-early', {
+						receivedAt: buildTimestamp('2026-06-06T00:15:00.000Z'),
+						deliveryResults: [{ channel: 'telegram', success: true }],
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-06T03:00:00.000Z',
+				limit: 200,
+				interval: 'hour',
+			});
+
+			expect(result.window).toEqual({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-06T03:00:00.000Z',
+				limit: 200,
+				maxDays: 31,
+				interval: 'hour',
+			});
+			// 01:00 has no alerts and must still appear so a chart has no gaps.
+			expect(result.buckets).toEqual([
+				{
+					bucketStart: '2026-06-06T00:00:00.000Z',
+					total: 1,
+					success: 1,
+					failure: 0,
+					byChannel: { telegram: { total: 1, success: 1, failure: 0 } },
+				},
+				{
+					bucketStart: '2026-06-06T01:00:00.000Z',
+					total: 0,
+					success: 0,
+					failure: 0,
+					byChannel: {},
+				},
+				{
+					bucketStart: '2026-06-06T02:00:00.000Z',
+					total: 1,
+					success: 1,
+					failure: 1,
+					byChannel: {
+						telegram: { total: 1, success: 1, failure: 0 },
+						whatsapp: { total: 1, success: 0, failure: 1 },
+					},
+				},
+				{
+					bucketStart: '2026-06-06T03:00:00.000Z',
+					total: 0,
+					success: 0,
+					failure: 0,
+					byChannel: {},
+				},
+			]);
+			expect(Object.keys(result.buckets[0])).toEqual([
+				'bucketStart',
+				'total',
+				'success',
+				'failure',
+				'byChannel',
+			]);
+		});
+
+		it('buckets daily on UTC midnight boundaries and widens the window cap to 366 days', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-day-1', {
+						receivedAt: buildTimestamp('2026-01-15T18:00:00.000Z'),
+						deliveryResults: [{ channel: 'discord', success: true }],
+					}),
+					buildQueryDoc('alert-day-3', {
+						receivedAt: buildTimestamp('2026-01-17T06:00:00.000Z'),
+						deliveryResults: [{ channel: 'discord', success: false }],
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-01-15T00:00:00.000Z',
+				to: '2026-01-18T00:00:00.000Z',
+				limit: 500,
+				interval: 'day',
+			});
+
+			expect(result.window.maxDays).toBe(366);
+			expect(result.window.interval).toBe('day');
+			expect(result.buckets.map(b => b.bucketStart)).toEqual([
+				'2026-01-15T00:00:00.000Z',
+				'2026-01-16T00:00:00.000Z',
+				'2026-01-17T00:00:00.000Z',
+				'2026-01-18T00:00:00.000Z',
+			]);
+			expect(result.buckets[1]).toEqual({
+				bucketStart: '2026-01-16T00:00:00.000Z',
+				total: 0,
+				success: 0,
+				failure: 0,
+				byChannel: {},
+			});
+			expect(result.buckets[3].total).toBe(0);
+		});
+
+		it('produces an all-zero bucket series for an empty window rather than an empty array', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValue({ empty: true, docs: [] });
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-06T05:00:00.000Z',
+				limit: 200,
+				interval: 'hour',
+			});
+
+			expect(result.totalAlerts).toBe(0);
+			expect(result.buckets).toHaveLength(6);
+			for (const bucket of result.buckets) {
+				expect(bucket).toEqual({
+					bucketStart: expect.any(String),
+					total: 0,
+					success: 0,
+					failure: 0,
+					byChannel: {},
+				});
+			}
+			expect(result.buckets.map(b => b.bucketStart)).toEqual([
+				'2026-06-06T00:00:00.000Z',
+				'2026-06-06T01:00:00.000Z',
+				'2026-06-06T02:00:00.000Z',
+				'2026-06-06T03:00:00.000Z',
+				'2026-06-06T04:00:00.000Z',
+				'2026-06-06T05:00:00.000Z',
+			]);
+		});
+
+		it('keeps bucket totals equal to totalAlerts and bucket success/failure equal to the channel sums', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-1', {
+						receivedAt: buildTimestamp('2026-06-06T00:10:00.000Z'),
+						deliveryResults: [
+							{ channel: 'telegram', success: true },
+							{ channel: 'whatsapp', success: false },
+						],
+					}),
+					buildQueryDoc('alert-2', {
+						receivedAt: buildTimestamp('2026-06-06T00:20:00.000Z'),
+						deliveryResults: [{ channel: 'telegram', success: false }],
+					}),
+					buildQueryDoc('alert-3', {
+						receivedAt: buildTimestamp('2026-06-06T01:20:00.000Z'),
+						deliveryResults: [],
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-06T02:00:00.000Z',
+				limit: 200,
+				interval: 'hour',
+			});
+
+			// `total` counts alerts, not delivery results, so a delivery-less alert counts.
+			expect(result.totalAlerts).toBe(3);
+			expect(result.buckets.reduce((sum, b) => sum + b.total, 0)).toBe(result.totalAlerts);
+			expect(result.buckets.reduce((sum, b) => sum + b.success, 0)).toBe(result.delivery.totalSuccess);
+			expect(result.buckets.reduce((sum, b) => sum + b.failure, 0)).toBe(result.delivery.totalFailure);
+			for (const bucket of result.buckets) {
+				const channels = Object.values(bucket.byChannel);
+				expect(bucket.success).toBe(channels.reduce((sum, c) => sum + c.success, 0));
+				expect(bucket.failure).toBe(channels.reduce((sum, c) => sum + c.failure, 0));
+			}
+		});
+
+		it('applies the alert filters to the buckets, not only to the totals', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-webhook', {
+						receivedAt: buildTimestamp('2026-06-06T00:10:00.000Z'),
+						source: 'webhook',
+						enriched: true,
+						deliveryResults: [{ channel: 'telegram', success: true }],
+					}),
+					buildQueryDoc('alert-news', {
+						receivedAt: buildTimestamp('2026-06-06T00:20:00.000Z'),
+						source: 'news-monitor',
+						enriched: false,
+						deliveryResults: [{ channel: 'telegram', success: true }],
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-06T01:00:00.000Z',
+				limit: 200,
+				interval: 'hour',
+				source: 'webhook',
+			});
+
+			expect(result.totalAlerts).toBe(1);
+			expect(result.buckets[0].total).toBe(1);
+			expect(result.buckets.reduce((sum, b) => sum + b.total, 0)).toBe(1);
+		});
+
+		it('rejects an hourly window wider than 31 days instead of silently narrowing it', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			await expect(AlertStorageService.summarizeAlerts({
+				from: '2026-01-01T00:00:00.000Z',
+				to: '2026-03-01T00:00:00.000Z',
+				limit: 200,
+				interval: 'hour',
+			})).rejects.toMatchObject({
+				code: 'INVALID_REQUEST',
+				message: expect.stringContaining('interval "hour"'),
+			});
+			// Validated before the scan, so an over-cap request spends no read.
+			expect(mockGet).not.toHaveBeenCalled();
+		});
+
+		it('rejects a daily window wider than 366 days', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			await expect(AlertStorageService.summarizeAlerts({
+				from: '2024-01-01T00:00:00.000Z',
+				to: '2026-06-01T00:00:00.000Z',
+				limit: 200,
+				interval: 'day',
+			})).rejects.toMatchObject({
+				code: 'INVALID_REQUEST',
+				message: expect.stringContaining('366 days'),
+			});
+			expect(mockGet).not.toHaveBeenCalled();
+		});
+
+		it('keeps the aggregate-only narrowing contract when no interval is requested', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValue({ empty: true, docs: [] });
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-01-01T00:00:00.000Z',
+				to: '2026-03-01T00:00:00.000Z',
+				limit: 200,
+			});
+
+			// Aggregate-only requests keep the pre-existing silent narrowing.
+			expect(result.window.from).toBe('2026-01-29T00:00:00.000Z');
+			expect(result.window.maxDays).toBe(31);
+			expect(result).not.toHaveProperty('buckets');
 		});
 	});
 

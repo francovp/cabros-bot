@@ -298,6 +298,37 @@ Some text after...`;
 			await expect(analyzeNewsForSymbol('BTCUSDT', 'Context')).rejects.toThrow('API error');
 		});
 
+		it('should fail open to neutral analysis when llmCallv2 throws TOKEN_BUDGET_EXCEEDED code', async () => {
+			const budgetError = new Error('Daily token cost budget exceeded');
+			budgetError.code = 'TOKEN_BUDGET_EXCEEDED';
+			budgetError.status = 429;
+			genaiClient.llmCallv2.mockRejectedValue(budgetError);
+
+			const result = await analyzeNewsForSymbol('BTCUSDT', 'Context');
+
+			expect(result).toBeDefined();
+			expect(result.event_category).toBe(EventCategory.NONE);
+			expect(result.event_significance).toBe(0);
+			expect(result.sentiment_score).toBe(0);
+			expect(result.confidence).toBe(0);
+			expect(result.headline).toBe('Token cost budget ceiling reached');
+			expect(result.description).toBe('Skipping news analysis due to daily token cost budget ceiling.');
+			expect(result.promptVersion).toBe('fallback-budget');
+			expect(result.sources).toEqual([]);
+			expect(result.budgetExceeded).toBe(true);
+		});
+
+		it('should fail open to neutral analysis when llmCallv2 throws message containing TOKEN_BUDGET_EXCEEDED', async () => {
+			const budgetError = new Error('TOKEN_BUDGET_EXCEEDED: Daily LLM token cost budget exceeded');
+			genaiClient.llmCallv2.mockRejectedValue(budgetError);
+
+			const result = await analyzeNewsForSymbol('BTCUSDT', 'Context');
+
+			expect(result).toBeDefined();
+			expect(result.event_category).toBe(EventCategory.NONE);
+			expect(result.budgetExceeded).toBe(true);
+		});
+
 		it('should handle fallback when Gemini response cannot be parsed', async () => {
 			genaiClient.llmCallv2.mockResolvedValue({
 				text: 'Invalid response format',

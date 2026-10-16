@@ -7,7 +7,7 @@
 #
 # Usage:
 #   ./get-pr-deployment-url.sh <PR_NUMBER>
-#   ./get-pr-deployment-url.sh production   → https://cabros-bot-production.up.railway.app
+#   ./get-pr-deployment-url.sh production   → https://cabros-crypto-bot-telegram.onrender.com
 #   ./get-pr-deployment-url.sh <PR_NUMBER> --details
 #
 # Output:
@@ -33,7 +33,7 @@
 #
 # Environment:
 #   REPO            — GitHub repository slug (default: francovp/cabros-bot)
-#   PRODUCTION_URL  — Override the production URL (default: https://cabros-bot-production.up.railway.app)
+#   PRODUCTION_URL  — Override the production URL (default: https://cabros-crypto-bot-telegram.onrender.com)
 
 set -euo pipefail
 
@@ -69,7 +69,7 @@ if [ -z "$PR_NUMBER" ]; then
 fi
 
 REPO="${REPO:-francovp/cabros-bot}"
-PRODUCTION_URL="${PRODUCTION_URL:-https://cabros-bot-production.up.railway.app}"
+PRODUCTION_URL="${PRODUCTION_URL:-https://cabros-crypto-bot-telegram.onrender.com}"
 RAILWAY_FALLBACK_URL="https://cabros-bot-cabros-bot-pr-${PR_NUMBER}.up.railway.app"
 
 # Switch to francovp user for gh commands; restore on exit
