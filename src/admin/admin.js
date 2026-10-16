@@ -3050,11 +3050,16 @@ const renderAlertSummaryBlocks = (data) => {
 	if (fields.length) {
 		const section = element('section', { className: 'dashboard-section' });
 		section.append(element('h3', { text: 'Risk metadata coverage' }));
+		const coverageRows = fields.map(([field, info]) => [field, info, coverage.denominator]);
+		if (coverage.directionEchoRate && typeof coverage.directionEchoRate === 'object') {
+			const echo = asObject(coverage.directionEchoRate);
+			coverageRows.push(['directionEchoRate', { populated: echo.echoed, percentage: echo.percentage }, echo.total]);
+		}
 		section.append(createResultTable('Risk metadata coverage', [
 			['Field', ([field]) => displayLabel(field)],
-			['Populated', ([, info]) => `${formatJobValue(asObject(info).populated)} / ${formatJobValue(coverage.denominator)}`],
+			['Populated', ([, info, denominator]) => `${formatJobValue(asObject(info).populated)} / ${formatJobValue(denominator)}`],
 			['Coverage', ([, info]) => `${formatJobValue(asObject(info).percentage)}%`],
-		], fields).scroll);
+		], coverageRows).scroll);
 		wrap.append(section);
 	}
 	return wrap;
@@ -3340,7 +3345,7 @@ const createOutcomeCard = (outcome) => {
 	}
 
 	const outcomesMap = asObject(outcome && outcome.outcomes);
-	const windowKeys = ['1h', '4h', '1D', '1W'];
+	const windowKeys = Object.keys(outcomesMap);
 	const windowsGrid = element('div', { className: 'outcome-windows-grid' });
 	windowKeys.forEach((winKey) => {
 		const win = outcomesMap[winKey] || outcomesMap[winKey.toLowerCase()] || null;

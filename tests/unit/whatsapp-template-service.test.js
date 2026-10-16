@@ -7,6 +7,7 @@
 
 const WhatsAppService = require('../../src/services/notification/WhatsAppService');
 const { getWhatsAppTemplateStatus } = require('../../src/services/notification/WhatsAppService');
+const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
 const BASE_ENV = {
 	ENABLE_WHATSAPP_ALERTS: 'true',
@@ -127,6 +128,24 @@ describe('WhatsAppService._extractTemplateParams', () => {
 		expect(params[0]).toEqual({ default: 'news-monitor' });
 		expect(params[1]).toEqual({ default: 'SELL' });
 		restoreEnv(savedEnv);
+	});
+
+	it('uses a fresh Remote Config override for WHATSAPP_TEMPLATE_PARAM_ORDER', () => {
+		remoteConfigService._resetForTesting();
+		const { svc, savedEnv } = buildService({
+			ENABLE_FIREBASE_REMOTE_CONFIG: 'true',
+			WHATSAPP_TEMPLATE_PARAM_ORDER: undefined,
+		});
+
+		try {
+			remoteConfigService._setRemoteOverridesForTesting({ WHATSAPP_TEMPLATE_PARAM_ORDER: 'action,source' });
+			const params = svc._extractTemplateParams({ enriched: { action: 'SELL' }, source: 'news-monitor' });
+
+			expect(params).toEqual([{ default: 'SELL' }, { default: 'news-monitor' }]);
+		} finally {
+			remoteConfigService._resetForTesting();
+			restoreEnv(savedEnv);
+		}
 	});
 
 	it('handles null/undefined alert gracefully (never throws)', () => {
@@ -404,7 +423,7 @@ describe('getWhatsAppTemplateStatus', () => {
 describe('WhatsAppService._sanitizeText (template error body)', () => {
 	it('redacts apiKey from template error body', () => {
 		const { svc, savedEnv } = buildService({});
-		const sensitive = `error: bad request, key=test-api-key, template not found`;
+		const sensitive = 'error: bad request, key=test-api-key, template not found';
 		const sanitized = svc._sanitizeText(sensitive);
 		expect(sanitized).not.toContain('test-api-key');
 		expect(sanitized).toContain('[REDACTED]');

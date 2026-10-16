@@ -102,47 +102,34 @@
 - ±10% jitter prevents thundering herd on exponential backoff
 - All retries logged at WARN/ERROR level
 
-### Stored Alerts Return 503 STORAGE_UNAVAILABLE
+### Firestore Reads Return 503 STORAGE_UNAVAILABLE
 
-Symptom: `GET /api/alerts`, `/api/alerts/summary`, `/api/alerts/export`, and replay all answer `503`, while `/api/status` reports Firestore as healthy and `firestoreWriteMetrics` shows a perfect success rate. That combination means **the write path works and the read queries are being rejected** — it is not a credentials problem, despite what older response text suggested.
+Firestore reads and writes exercise different operations. Successful writes or a healthy aggregate status do not identify why a particular read failed. Start with the sanitized `category` in the 503 response and the corresponding `[AlertStorageService]` log entry; the provider's raw message is kept out of responses.
 
-1. **Read the `category` on the 503 body.** It is a closed, sanitized enum and is the fastest discriminator:
+| `category` | What it indicates | Next step |
+| :--- | :--- | :--- |
+| `failed_precondition` with `missingIndex: true` | Firestore rejected a query because it needs an index | Identify the failing query and audit the declared indexes below |
+| `uninitialized` | The Firestore client could not be constructed | Check credential source and project configuration |
+| `permission_denied` | Firestore denied the configured service account | Check the account's IAM permissions |
+| `unauthenticated` | Firestore rejected credentials at call time | Check credential validity and runtime identity |
+| `unavailable` / `deadline_exceeded` | The backend could not complete the request | Check provider reachability and retry behavior |
+| `resource_exhausted` | A quota or concurrency limit was reached | Check quotas and back off |
+| `not_found`, `invalid_argument`, `aborted`, `internal`, `unknown_error` | A different operation or provider failure | Use the category and service logs to investigate; do not infer an index problem |
 
-   | `category` | What it means | Fix |
-   | :--- | :--- | :--- |
-   | `failed_precondition` (+ `missingIndex: true`) | Firestore refused the *query* because no index backs it | Deploy the declared composite indexes (see below) |
-   | `uninitialized` | The Firestore client never built | Check `FIREBASE_SERVICE_ACCOUNT_JSON` / `GOOGLE_APPLICATION_CREDENTIALS` and `FIREBASE_PROJECT_ID` |
-   | `permission_denied` | IAM or `firestore.rules` rejected the call | Check the service account's roles and the rules file |
-   | `unauthenticated` | Credentials missing, expired, or revoked | Rotate the service-account key |
-   | `unavailable` / `deadline_exceeded` | Backend unreachable | Usually transient; retry |
-   | `resource_exhausted` | Quota or rate limit | Back off, then check quotas |
+`dependencies.firestore.readHealth` on `/api/status` is an aggregate signal: `degraded` means a tracked Firestore read failed, while `unknown` is not evidence of health. It does not identify which operation failed. A `GET /api/alerts/:alertId` request is a document lookup and does not need a composite index; if even a nonexistent id returns `503` instead of `404`, deploying indexes will not fix that failure.
 
-2. **Check `dependencies.firestore.readHealth` on `/api/status`.** `degraded` forces `ready: false` and `status: "degraded"`, which is the authoritative signal that the read path — not the credentials — is broken. `unknown` means no read has been attempted yet, which is *not* evidence of health.
+For a confirmed missing-index error, use the repository helper. It audits every declared composite index against Firestore REST state; `--apply` deploys the default database indexes and waits for `READY`:
 
-3. **Missing composite index (the usual cause).** Stored-alert reads order by `receivedAt` **and** `FieldPath.documentId()` so pagination has a deterministic tie-breaker. Firestore applies a free final `__name__` **ascending** sort, so ordering `__name__` **descending** requires the composite index `alerts { receivedAt DESC, __name__ DESC }` declared in `firestore.indexes.json`. Adding the declaration to the file does **not** create it in the live project — audit and deploy it with the repo helper, which is dry-run by default:
+```bash
+pnpm run deploy:firestore:indexes                 # audit only
+pnpm run deploy:firestore:indexes -- --apply      # deploy, then wait for READY
+```
 
-   ```bash
-   pnpm run deploy:firestore:indexes                 # audit only, exits 1 if not ready
-   pnpm run deploy:firestore:indexes -- --apply      # deploy, then wait for READY
-   ```
+The audit exits `0` when all declared indexes are `READY`, `1` when an index is missing or still building, and `2` when it cannot read the full index listing authoritatively. Exit `2` is an operational or authentication error, not proof that indexes are missing. The helper checks REST build state; `firebase firestore:indexes` lists index definitions but does not expose that state. Composite builds are asynchronous, so do not treat a successful deploy command alone as proof of readiness.
 
-   Composite indexes build asynchronously and a query is rejected until the build reaches `READY`, so the helper polls the Firestore REST API for each index's build state and exits non-zero until every declared index is `READY`. Do **not** confirm with `firebase firestore:indexes`: that command routes its output through `makeIndexSpec()`, which projects each index down to its field list and **drops `state`**, so it cannot distinguish `READY` from `CREATING` — which is precisely how a completed deploy leaves every read returning `503`.
+The stored-alert list's `receivedAt DESC` plus document-id tie-breaker is served by Firestore's automatic single-field index; it does not require an `alerts` composite. Signal-outcome calibration recovery uses two declared composites on `tradingSignalOutcomes`: `source ASC, receivedAt DESC` and `source ASC, confidenceScoreOrigin ASC, receivedAt DESC`. Use the helper to audit or deploy them before relying on the calibration query. See [Signal Outcomes](signal-outcomes.md#get-apioutcomescalibration).
 
-   Read the exit code precisely: **0** = every declared index `READY`, **1** = at least one missing or still building (this is the actionable state), **2** = the listing could not be read authoritatively — unauthenticated, a truncated page, or an unreadable template. Exit 2 is *not* "the indexes are missing"; it means the tool refuses to guess, so fix auth and re-run rather than creating indexes.
-
-   The audit reads the database resource to apply edition-specific index defaults, so the ADC identity needs `datastore.databases.get` and `datastore.indexes.list`; `--apply` also needs Firebase CLI index-deployment permissions.
-
-   `--apply` deploys only the default database and `firestore.indexes.json` selected by `firebase.json`; custom `--database` and `--indexes` values are dry-run only. Deployment and REST auditing use the same Application Default Credentials from `FIREBASE_SERVICE_ACCOUNT_JSON`, `GOOGLE_APPLICATION_CREDENTIALS`, or the runtime ADC provider. The helper ignores the local Firebase CLI login store and `FIREBASE_TOKEN` so the two phases cannot silently run as different identities.
-
-   The Firebase CLI subprocess is bounded to 10 minutes; a stalled deploy exits `2` as an operational error. Repeated pagination tokens are treated as an incomplete listing and also exit `2`, because the audit cannot safely claim a partial index list is complete.
-
-4. **`GET /api/alerts/:alertId` does not need an index — so a `503` there is a different fault.** A detail read is a document get by id, which requires no composite index. If it answers `503`, the cause is **not** the missing-index fault above: read the `category` on the body and act on it (`uninitialized` / `unauthenticated` / `permission_denied` mean the client or its credentials are the problem; `unavailable` / `deadline_exceeded` is usually transient). Note that `GET /api/alerts/zzz-not-real` must answer `404`, never `503` — if it answers `503` the failure happens before any document lookup, so the client itself is unusable. Deploying indexes will not fix that case.
-
-5. **Confirm the read path with `/ready`.** `GET /ready?depth=dependencies` executes the same indexed read (bounded to one document) and fails closed with `503` while it is broken, so it can be used as an external alert signal. `GET /api/alerts/summary` and `GET /api/alerts` reproduce the fault directly.
-
-6. **Do not chase credentials for a `failed_precondition`.** If `firestoreWriteMetrics` shows writes succeeding, the credential is demonstrably valid; the rejection is per-query.
-
-> The provider's own message (which contains the project/database path and the index definition) is written to the log only and is never returned in a response body or a status payload. Grep the logs for `[AlertStorageService]` with the `category` to find the exact provider detail.
+The audit needs `datastore.databases.get` and `datastore.indexes.list`; `--apply` also needs Firebase CLI index-deployment permissions. Deployment and REST auditing use the same Application Default Credentials from `FIREBASE_SERVICE_ACCOUNT_JSON`, `GOOGLE_APPLICATION_CREDENTIALS`, or the runtime ADC provider. `--apply` targets the default database and the indexes selected by `firebase.json`; custom `--database` and `--indexes` values are dry-run only. The CLI subprocess is bounded to 10 minutes. The helper exits `2` for a timed-out deploy or repeated pagination token because it cannot claim an authoritative result.
 
 ### Configured Firebase Credentials Rejected at Startup
 

@@ -67,6 +67,7 @@ function buildDocSnapshot(id, data) {
 describe('AlertStorageService', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		firestoreWriteMetricsService.resetForTesting();
 		jest.useFakeTimers().setSystemTime(new Date('2026-06-06T12:00:00.000Z'));
 		admin.__resetApps();
 		// Reset the Firestore db singleton between tests
@@ -773,12 +774,14 @@ describe('AlertStorageService', () => {
 
 		it('returns null and logs a warning (does not throw) when add() rejects', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
-			mockAdd.mockRejectedValueOnce(new Error('Quota exceeded'));
+			mockAdd.mockRejectedValueOnce(Object.assign(new Error('Quota exceeded'), { code: 8 }));
 			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
 			const result = await AlertStorageService.saveAlert(buildParams());
 
 			expect(result).toBeNull();
+			expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.alertStorage)
+				.toMatchObject({ success: 0, failure: 1, lastFailureCategory: 'firestore_unavailable' });
 			expect(warnSpy).toHaveBeenCalledWith(
 				expect.stringContaining('[AlertStorageService]'),
 				expect.stringContaining('Quota exceeded'),
@@ -1656,19 +1659,21 @@ describe('AlertStorageService', () => {
 		// dependency healthy, and the response message blamed credentials that
 		// were demonstrably working. The suite below pins the four fixes.
 
-		it('declares the composite Firestore index required by the ordered alerts read', () => {
+		it.each([
+			['alerts', 'receivedAt', 'DESCENDING'],
+			['userPriceAlerts', 'status', 'ASCENDING'],
+		])('does not declare a redundant single-field composite for %s.%s', (collectionGroup, fieldPath, order) => {
 			const fs = require('fs');
 			const path = require('path');
 			const indexes = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../firestore.indexes.json'), 'utf8'));
-			// Firestore applies a *free* final `__name__` ASC sort, so ordering by
-			// `__name__` DESC on top of `receivedAt` DESC needs this composite. The
-			// mock makes `orderBy` a no-op, so only this declaration can catch a
-			// missing index.
-			const alertIndex = indexes.indexes.find(index => index.collectionGroup === 'alerts'
-				&& index.fields.some(field => field.fieldPath === 'receivedAt' && field.order === 'DESCENDING')
-				&& index.fields.some(field => field.fieldPath === '__name__' && field.order === 'DESCENDING'));
+			const redundantIndex = indexes.indexes.find(index => index.collectionGroup === collectionGroup
+				&& index.fields.length === 2
+				&& index.fields[0].fieldPath === fieldPath
+				&& index.fields[0].order === order
+				&& index.fields[1].fieldPath === '__name__'
+				&& index.fields[1].order === order);
 
-			expect(alertIndex).toBeDefined();
+			expect(redundantIndex).toBeUndefined();
 		});
 
 		it('classifies a rejected query as failed_precondition and flags the missing index', async () => {
@@ -3145,6 +3150,11 @@ describe('AlertStorageService', () => {
 							setup_type: { populated: 0, percentage: 0 },
 							risk_reward_ratio: { populated: 0, percentage: 0 },
 						},
+						directionEchoRate: {
+							echoed: 0,
+							total: 0,
+							percentage: 0,
+						},
 						byPromptProvenance: [
 							{
 								provenance: null,
@@ -3154,6 +3164,11 @@ describe('AlertStorageService', () => {
 									target_level: { populated: 0, percentage: 0 },
 									setup_type: { populated: 0, percentage: 0 },
 									risk_reward_ratio: { populated: 0, percentage: 0 },
+								},
+								directionEchoRate: {
+									echoed: 0,
+									total: 0,
+									percentage: 0,
 								},
 							},
 						],
@@ -3631,6 +3646,11 @@ describe('AlertStorageService', () => {
 					setup_type: { populated: 1, percentage: 50 },
 					risk_reward_ratio: { populated: 1, percentage: 50 },
 				},
+				directionEchoRate: {
+					echoed: 0,
+					total: 0,
+					percentage: 0,
+				},
 				byPromptProvenance: [
 					{
 						provenance: {
@@ -3646,6 +3666,11 @@ describe('AlertStorageService', () => {
 							target_level: { populated: 1, percentage: 100 },
 							setup_type: { populated: 1, percentage: 100 },
 							risk_reward_ratio: { populated: 1, percentage: 100 },
+						},
+						directionEchoRate: {
+							echoed: 0,
+							total: 0,
+							percentage: 0,
 						},
 					},
 					{
@@ -3663,8 +3688,73 @@ describe('AlertStorageService', () => {
 							setup_type: { populated: 0, percentage: 0 },
 							risk_reward_ratio: { populated: 0, percentage: 0 },
 						},
+						directionEchoRate: {
+							echoed: 0,
+							total: 0,
+							percentage: 0,
+						},
 					},
 				],
+			});
+		});
+
+		it('calculates directionEchoRate accurately for BUY/trend_continuation and SELL/reversal', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					// 1. BUY + trend_continuation -> echoed
+					buildQueryDoc('alert-echo-buy', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						enriched: true,
+						side: 'BUY',
+						enrichmentData: {
+							setup_type: 'trend_continuation',
+							promptProvenance: { name: 'alert-enrichment', source: 'langfuse', label: 'production', version: 1 },
+						},
+					}),
+					// 2. SELL + reversal -> echoed
+					buildQueryDoc('alert-echo-sell', {
+						receivedAt: buildTimestamp('2026-06-06T12:01:00.000Z'),
+						enriched: true,
+						text: 'BINANCE:ETHUSDT(60) pasó a señal de VENTA',
+						enrichmentData: {
+							setup_type: 'reversal',
+							promptProvenance: { name: 'alert-enrichment', source: 'langfuse', label: 'production', version: 1 },
+						},
+					}),
+					// 3. BUY + breakout -> not echoed
+					buildQueryDoc('alert-non-echo', {
+						receivedAt: buildTimestamp('2026-06-06T12:02:00.000Z'),
+						enriched: true,
+						side: 'BUY',
+						enrichmentData: {
+							setup_type: 'breakout',
+							promptProvenance: { name: 'alert-enrichment', source: 'langfuse', label: 'production', version: 1 },
+						},
+					}),
+					// 4. Alert without setup_type -> ignored in directionEchoRate
+					buildQueryDoc('alert-no-setup', {
+						receivedAt: buildTimestamp('2026-06-06T12:03:00.000Z'),
+						enriched: true,
+						side: 'BUY',
+						enrichmentData: {
+							promptProvenance: { name: 'alert-enrichment', source: 'langfuse', label: 'production', version: 1 },
+						},
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+			});
+
+			expect(result.enrichment.riskMetadataCoverage.directionEchoRate).toEqual({
+				echoed: 2,
+				total: 3,
+				percentage: 66.67,
 			});
 		});
 

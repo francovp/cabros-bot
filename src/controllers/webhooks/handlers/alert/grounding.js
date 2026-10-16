@@ -15,6 +15,27 @@ const {
 } = require('../../../../services/tradingview/riskRewardMath');
 const { tokenCostBudgetService } = require('../../../../lib/tokenUsage');
 
+const ENRICHMENT_PROVIDER_OUTCOMES = Symbol.for('cabros-bot.alert.enrichment-provider-outcomes');
+
+function getTradingViewProviderStatus(enrichedAlert, failed) {
+	if (failed) return 'failed';
+	const status = enrichedAlert && enrichedAlert.tradingViewEnrichmentStatus;
+	if (['full', 'partial', 'failed'].includes(status)) return status;
+	if (enrichedAlert && enrichedAlert.tradingViewEnrichmentApplied === true) return 'full';
+	return enrichedAlert ? 'partial' : 'failed';
+}
+
+function attachProviderOutcomes(result, outcomes) {
+	if (!result || typeof result !== 'object' || !Object.keys(outcomes).length) return result;
+	Object.defineProperty(result, ENRICHMENT_PROVIDER_OUTCOMES, {
+		configurable: false,
+		enumerable: false,
+		value: outcomes,
+		writable: false,
+	});
+	return result;
+}
+
 function mergeUnique(first = [], second = [], maxItems = 6) {
 	const result = [];
 	const seen = new Set();
@@ -138,6 +159,7 @@ function isUsableRiskBlock(value = {}) {
 }
 
 function selectRiskMetadata(gemini, mcp) {
+	const mcpApplied = hasAppliedMcpLevels(mcp);
 	const mcpComplete = hasCompleteRiskMetadata(mcp);
 	const heuristicMcp = mcpComplete && isHeuristicRiskBlock(mcp);
 	const source = [
@@ -145,8 +167,8 @@ function selectRiskMetadata(gemini, mcp) {
 		isUsableRiskBlock(gemini) ? gemini : null,
 		heuristicMcp ? mcp : null,
 	].find(Boolean) || null;
-	const setupType = pickSetupType(gemini.setup_type, mcp.setup_type);
-	const setupEvidence = setupType && (setupType === gemini.setup_type ? gemini.setup_evidence : mcp.setup_evidence);
+	const setupType = pickSetupType(mcpApplied ? mcp.setup_type : undefined, gemini.setup_type);
+	const setupEvidence = setupType && (setupType === gemini.setup_type ? gemini.setup_evidence : (mcpApplied ? mcp.setup_evidence : undefined));
 	if (!source) {
 		return {
 			...(setupType ? { setup_type: setupType } : {}),
@@ -178,12 +200,17 @@ function selectRiskMetadata(gemini, mcp) {
 // (status failed/undefined or enrichment never ran), and are provenance-tagged so
 // downstream consumers can distinguish provider quality.
 function hasAppliedMcpLevels(mcp = {}) {
+	if (!mcp) return false;
 	const status = mcp.tradingViewEnrichmentStatus;
 	if (status === 'full' || status === 'partial') {
 		return true;
 	}
 
-	return mcp.tradingViewEnrichmentApplied === true && status !== 'failed';
+	if (mcp.tradingViewEnrichmentApplied === true && status !== 'failed') {
+		return true;
+	}
+
+	return hasCompleteRiskMetadata(mcp) && status !== 'failed';
 }
 
 function buildMergedTechnicalLevels(gemini = {}, mcp = {}) {
@@ -425,7 +452,8 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched, parsedSignal = n
 						invalidation_level: fallback.invalidation_level,
 						target_level: fallback.target_level,
 						risk_reward_ratio: fallback.risk_reward_ratio,
-						setup_type: optionalRiskMetadata.setup_type || fallback.setup_type,
+						...(optionalRiskMetadata.setup_type || fallback.setup_type ? { setup_type: optionalRiskMetadata.setup_type || fallback.setup_type } : {}),
+						...(optionalRiskMetadata.setup_evidence ? { setup_evidence: optionalRiskMetadata.setup_evidence } : {}),
 					};
 					// Unconditional, not `if (!levelsSource)`. This branch REPLACED the
 					// selected block's levels with levels derived from the MCP quote, so the
@@ -620,6 +648,12 @@ async function enrichAlert(alert, options = {}) {
 	const isGeminiEnabled = getRuntimeConfig().ENABLE_GEMINI_GROUNDING && !isBudgetExceeded;
 	const shouldUseTradingViewData = options.useTradingViewData === true;
 	const isMcpEnabled = shouldUseTradingViewData && tradingViewMcpService.isEnabled();
+	let geminiStatus = isGeminiEnabled ? 'pending' : 'not_attempted';
+	let tradingViewMcpStatus = isMcpEnabled ? 'pending' : 'not_attempted';
+	const withProviderOutcomes = (result) => attachProviderOutcomes(result, {
+		...(isGeminiEnabled ? { gemini: { status: geminiStatus } } : {}),
+		...(isMcpEnabled ? { tradingViewMcp: { status: tradingViewMcpStatus } } : {}),
+	});
 
 	if (!isGeminiEnabled && !isMcpEnabled) {
 		return null;
@@ -630,19 +664,21 @@ async function enrichAlert(alert, options = {}) {
 	if (isMcpEnabled) {
 		try {
 			mcpEnrichedAlert = await tradingViewMcpService.enrichFromAlertText(text);
+			tradingViewMcpStatus = getTradingViewProviderStatus(mcpEnrichedAlert, false);
 		} catch (error) {
 			mcpEnrichmentFailed = true;
+			tradingViewMcpStatus = 'failed';
 			console.warn('[Alert] TradingView MCP enrichment failed, continuing with grounding flow:', error.message);
 		}
 	}
 
 	if (!isGeminiEnabled) {
-		if (mcpEnrichmentFailed) {
+		if (mcpEnrichmentFailed || !mcpEnrichedAlert) {
 			const fallbackPlan = await deriveFallbackTradePlan(text).catch(() => null);
 			if (fallbackPlan) {
 				const sideSentiment = fallbackPlan.side === 'SELL' ? 'BEARISH' : 'BULLISH';
 				const sideScore = fallbackPlan.side === 'SELL' ? -0.55 : 0.55;
-				return {
+				return withProviderOutcomes({
 					original_text: text,
 					sentiment: sideSentiment,
 					sentiment_score: sideScore,
@@ -653,31 +689,32 @@ async function enrichAlert(alert, options = {}) {
 					invalidation_level: fallbackPlan.invalidation_level,
 					target_level: fallbackPlan.target_level,
 					risk_reward_ratio: fallbackPlan.risk_reward_ratio,
-					setup_type: fallbackPlan.setup_type,
+					...(fallbackPlan.setup_type ? { setup_type: fallbackPlan.setup_type } : {}),
 					levelsSource: 'derived-quote',
 					sources: [],
 					truncated: false,
 					extraText: '*Model used*: `derived-quote`',
-				};
+				});
 			}
-			throw new Error('TradingView MCP enrichment failed');
+			throw withProviderOutcomes(new Error('TradingView MCP enrichment failed'));
 		}
 		if (mcpEnrichedAlert) {
 			const guarded = applySignCoherenceGuard(mcpEnrichedAlert.sentiment, mcpEnrichedAlert.sentiment_score);
-			return {
+			return withProviderOutcomes({
 				...mcpEnrichedAlert,
 				sentiment: guarded.sentiment,
 				sentiment_score: guarded.sentiment_score,
-			};
+			});
 		}
 		return mcpEnrichedAlert;
 	}
 
 	try {
 		const geminiEnrichedAlert = await enrichWithGemini(text, tokenUsage);
+		geminiStatus = geminiEnrichedAlert ? 'full' : 'failed';
 
 		if (mcpEnrichedAlert) {
-			return mergeEnrichmentData(text, geminiEnrichedAlert, mcpEnrichedAlert, sharedParsedSignal);
+			return withProviderOutcomes(mergeEnrichmentData(text, geminiEnrichedAlert, mcpEnrichedAlert, sharedParsedSignal));
 		}
 
 		if (geminiEnrichedAlert) {
@@ -715,7 +752,7 @@ async function enrichAlert(alert, options = {}) {
 							invalidation_level: fallbackPlan.invalidation_level,
 							target_level: fallbackPlan.target_level,
 							risk_reward_ratio: fallbackPlan.risk_reward_ratio,
-							setup_type: result.setup_type || fallbackPlan.setup_type,
+							...(result.setup_type || fallbackPlan.setup_type ? { setup_type: result.setup_type || fallbackPlan.setup_type } : {}),
 							levelsSource: 'derived-quote',
 						};
 						delete result.price_currency;
@@ -723,26 +760,27 @@ async function enrichAlert(alert, options = {}) {
 				}
 			}
 
-			return result;
+			return withProviderOutcomes(result);
 		}
 
-		return geminiEnrichedAlert;
+		return withProviderOutcomes(geminiEnrichedAlert);
 	} catch (error) {
+		geminiStatus = 'failed';
 		if (mcpEnrichedAlert) {
 			console.warn('[Alert] Gemini grounding failed, using TradingView MCP enrichment:', error.message);
 			const guarded = applySignCoherenceGuard(mcpEnrichedAlert.sentiment, mcpEnrichedAlert.sentiment_score);
-			return {
+			return withProviderOutcomes({
 				...mcpEnrichedAlert,
 				sentiment: guarded.sentiment,
 				sentiment_score: guarded.sentiment_score,
-			};
+			});
 		}
 
 		const fallbackPlan = await deriveFallbackTradePlan(text).catch(() => null);
 		if (fallbackPlan) {
 			const sideSentiment = fallbackPlan.side === 'SELL' ? 'BEARISH' : 'BULLISH';
 			const sideScore = fallbackPlan.side === 'SELL' ? -0.55 : 0.55;
-			return {
+			return withProviderOutcomes({
 				original_text: text,
 				sentiment: sideSentiment,
 				sentiment_score: sideScore,
@@ -753,19 +791,20 @@ async function enrichAlert(alert, options = {}) {
 				invalidation_level: fallbackPlan.invalidation_level,
 				target_level: fallbackPlan.target_level,
 				risk_reward_ratio: fallbackPlan.risk_reward_ratio,
-				setup_type: fallbackPlan.setup_type,
+				...(fallbackPlan.setup_type ? { setup_type: fallbackPlan.setup_type } : {}),
 				levelsSource: 'derived-quote',
 				sources: [],
 				truncated: false,
 				extraText: '*Model used*: `derived-quote`',
-			};
+			});
 		}
 
-		throw new Error(`Alert enrichment failed: ${error.message}`);
+		throw withProviderOutcomes(new Error(`Alert enrichment failed: ${error.message}`));
 	}
 }
 
 module.exports = {
 	deriveSearchQuery,
 	enrichAlert,
+	ENRICHMENT_PROVIDER_OUTCOMES,
 };

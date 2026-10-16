@@ -27,7 +27,59 @@ function collectRequestItems(items, result = []) {
 	return result;
 }
 
+function collectRequestsAndSavedExamples(items, result = []) {
+	for (const item of items) {
+		if (item.request) result.push(item.request);
+		for (const response of item.response || []) {
+			if (response.originalRequest) result.push(response.originalRequest);
+		}
+		if (Array.isArray(item.item)) collectRequestsAndSavedExamples(item.item, result);
+	}
+	return result;
+}
+
 describe('Postman collection contract', () => {
+	it('adds executable response assertions to each alert decision rollup and export variant', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const names = [
+			'GET Alert Analytics Summary (decision rollup)',
+			'GET Alert Analytics Summary (invalid includeDecisionRollup)',
+			'GET Export Alerts (JSONL - decision audit)',
+			'GET Export Alerts (CSV - decision audit opt-in)',
+			'GET Export Alerts (invalid includeDecision)',
+		];
+
+		for (const name of names) {
+			const item = findItem(collection.item, name);
+			const testScript = item?.event?.find((event) => event.listen === 'test')?.script?.exec?.join('\n') || '';
+			expect(testScript).toContain('pm.test(');
+			expect(testScript).toContain('pm.response.to.have.status(');
+		}
+
+		const summaryScript = findItem(collection.item, names[0]).event.find((event) => event.listen === 'test').script.exec.join('\n');
+		expect(summaryScript).toContain('pm.response.to.have.status(200)');
+		expect(summaryScript).toContain('success');
+		expect(summaryScript).toContain('if (body.summary.decision)');
+		const jsonlScript = findItem(collection.item, names[2]).event.find((event) => event.listen === 'test').script.exec.join('\n');
+		expect(jsonlScript).toContain('pm.response.to.have.status(200)');
+		expect(jsonlScript).toContain('if (row.decision)');
+		expect(jsonlScript).toContain('row.decision.enrichment.providers');
+		const jsonlExample = JSON.parse(findItem(collection.item, names[2]).response.find((response) => response.code === 200).body);
+		expect(jsonlExample.useTradingViewData).toBe(true);
+		expect(jsonlExample.tradingViewEnrichmentApplied).toBe(true);
+		expect(jsonlExample.tradingViewEnrichmentStatus).toBe('full');
+		expect(jsonlExample.decision.enrichment.providers.tradingViewMcp.status).toBe('full');
+		const csvScript = findItem(collection.item, names[3]).event.find((event) => event.listen === 'test').script.exec.join('\n');
+		expect(csvScript).toContain('pm.response.to.have.status(200)');
+		expect(csvScript).toContain('decision');
+		for (const name of [names[1], names[4]]) {
+			const item = findItem(collection.item, name);
+			const testScript = item.event.find((event) => event.listen === 'test').script.exec.join('\n');
+			expect(testScript).toContain('pm.response.to.have.status(400)');
+			expect(testScript).toContain('INVALID_REQUEST');
+		}
+	});
+
 	it('documents Firebase admin configuration and bearer-auth status access', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const config = findItem(collection.item, 'GET Firebase Admin Auth Config');
@@ -59,6 +111,28 @@ describe('Postman collection contract', () => {
 			hits: 0,
 			misses: 0,
 			failures: 0,
+		});
+	});
+
+	it('documents bounded startup jitter in the Get Status response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const jitterExample = findItem(collection.item, 'Get Status - startup jitter');
+
+		expect(JSON.parse(status.response.find((response) => response.code === 200).body).dependencies.startupJitter).toEqual({
+			global: 5000,
+			signalOutcome: 5000,
+			redrive: 5000,
+			scannerPreset: 5000,
+			remoteConfig: 5000,
+		});
+		expect(jitterExample.request.url.raw).toBe('{{baseUrl}}/api/status');
+		expect(JSON.parse(jitterExample.response[0].body).dependencies.startupJitter).toEqual({
+			global: 5000,
+			signalOutcome: 5000,
+			redrive: 5000,
+			scannerPreset: 5000,
+			remoteConfig: 5000,
 		});
 	});
 
@@ -182,6 +256,37 @@ describe('Postman collection contract', () => {
 		expect(oversized.request.body.raw).toContain('{{oversizedWebhookPadding}}');
 		expect(oversized.request.body.raw).not.toContain('{{$padString}}');
 
+	});
+
+	it('documents expanded-analysis symbol deduplication as an internally consistent variant (#874)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const variant = findItem(collection.item, 'POST Expanded Analysis Alert (duplicate symbols)');
+
+		expect(variant).toBeDefined();
+
+		const requested = JSON.parse(variant.request.body.raw).symbols;
+		expect(requested.length).toBeGreaterThan(2);
+
+		const [ok, tooMany] = variant.response;
+		expect(ok.code).toBe(200);
+		expect(tooMany.code).toBe(400);
+
+		const okBody = JSON.parse(ok.body);
+		expect(okBody.success).toBe(true);
+		expect(okBody.results.map((result) => result.symbol)).toEqual([
+			'BINANCE:BTCUSDT',
+			'BATS:AAPL',
+			'NASDAQ:NVDA',
+		]);
+		expect(okBody.results).toHaveLength(3);
+		expect(okBody.summary.total).toBe(okBody.results.length);
+
+		// The documented count must equal submitted minus analysed, so the example
+		// cannot drift away from the body it documents.
+		expect(okBody.duplicatesRemoved).toBe(requested.length - okBody.results.length);
+		expect(okBody.duplicatesRemoved).toBeGreaterThan(0);
+
+		expect(JSON.parse(tooMany.body).error).toContain('Too many symbols requested');
 	});
 
 	it('uses distinct demo keys for middleware-backed scanner requests', () => {
@@ -719,6 +824,15 @@ describe('Postman collection contract', () => {
 		const exportClassInvalid = findItem(collection.item, 'GET Export Alerts (invalid signalClass - 400 Bad Request)');
 		expect(exportClassInvalid).toBeDefined();
 		expect(exportClassInvalid.response[0].code).toBe(400);
+	});
+
+	it('documents symbol analysis multi-agent state in status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		expect(JSON.parse(status.response[0].body).featureFlags.symbolAnalysisMultiAgent).toBe(false);
+		expect(JSON.parse(capabilities.response[0].body).featureFlags.symbolAnalysisMultiAgent).toBe(false);
 	});
 
 	it('documents notificationRedrive and zeroChannelBroadcasts in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
@@ -1281,6 +1395,30 @@ describe('Postman collection contract', () => {
 	});
 });
 
+describe('alert analytics summary examples (issue #731)', () => {
+	it('documents complete schema-conforming outcome breakdown responses', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const contract = JSON.parse(fs.readFileSync(
+			path.join(__dirname, '../../src/openapi/openapi.json'), 'utf8'));
+		const required = contract.components.schemas.OutcomesSummary.required;
+		const direct = findItem(collection.item, 'GET Summarize Signal Outcomes (breakdowns)');
+		const alertSummary = findItem(collection.item, 'GET Alert Analytics Summary (outcome breakdowns)');
+		expect(direct).toBeDefined();
+		expect(alertSummary).toBeDefined();
+		const directExample = direct.response.find((response) => response.name === '200 Success (breakdowns)');
+		const shadowExample = alertSummary.response.find((response) => response.name === '200 OK - Shadow mode breakdowns');
+		expect(directExample).toBeDefined();
+		expect(shadowExample).toBeDefined();
+
+		const directSummary = JSON.parse(directExample.body).summary;
+		const shadowMetrics = JSON.parse(shadowExample.body).summary.shadowModeMetrics;
+		expect(Object.keys(directSummary)).toEqual(expect.arrayContaining([...required, 'available']));
+		expect(directSummary.available).toBe(true);
+		expect(Object.keys(shadowMetrics)).toEqual(expect.arrayContaining(required));
+		expect(shadowMetrics).not.toHaveProperty('available');
+	});
+});
+
 describe('news-monitor stop/target example (GH-712)', () => {
 	it('POST News Monitor success example includes a populated stop/target alert', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
@@ -1338,14 +1476,33 @@ describe('news-monitor stop/target example (GH-712)', () => {
 			const body = JSON.parse(response.body);
 			const confluence = body.dependencies.tradingViewMcp.enrichment.confluence;
 
-			expect(confluence.enabled).toBe(true);
-			expect(body.featureFlags.tradingViewConfluenceEnrichment).toBe(true);
+			expect(confluence.enabled).toBe(body.featureFlags.tradingViewConfluenceEnrichment);
+			expect(typeof confluence.enabled).toBe('boolean');
 			expect(allowedFailureCategories).toContain(confluence.lastFailureCategory);
 			expect(confluence.appliedCount + confluence.failedCount)
 				.toBeLessThanOrEqual(confluence.attemptedCount);
 			expect(response.body).not.toContain('combined_analysis failed');
 			expect(response.body).not.toContain('projects/');
 		}
+	});
+
+	it('Get Status documents MTF-only telemetry with the confluence gate disabled', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - confluence enrichment counters');
+		const example = item.response.find((response) => /multi-timeframe-only/i.test(response.name));
+		expect(example).toBeDefined();
+
+		const body = JSON.parse(example.body);
+		const confluence = body.dependencies.tradingViewMcp.enrichment.confluence;
+		expect(body.featureFlags.tradingViewConfluenceEnrichment).toBe(false);
+		expect(body.featureFlags.tradingViewConfluenceMultiTimeframe).toBe(true);
+		expect(confluence).toMatchObject({
+			enabled: false,
+			attemptedCount: 1,
+			appliedCount: 1,
+			failedCount: 0,
+			budgetExhaustedCount: 0,
+		});
 	});
 
 	it('Get Status - confluence enrichment counters asserts the block is separate from alertPath', () => {
@@ -1410,6 +1567,50 @@ describe('news-monitor stop/target example (GH-712)', () => {
 		// Two calls per alert with multi-timeframe on, so the window cannot be 1:1 with alerts.
 		expect(confluence.attemptedCount).toBeGreaterThan(enrichment.alertPath.totalCount);
 		expect(confluence.appliedCount + confluence.failedCount).toBeLessThanOrEqual(confluence.attemptedCount);
+	});
+});
+
+describe('scoped API key Postman examples', () => {
+	it('documents header-only dedicated keys and uses the scoped variable on each surface', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const alert = findItem(collection.item, 'POST Send Alert');
+		const order = findItem(collection.item, 'POST Binance order (dry-run LIMIT)');
+		const balances = findItem(collection.item, 'GET Binance Account Balances');
+		const invalidAdminQuery = findItem(collection.item, 'GET Status (dedicated key query rejected)');
+		const invalidTradingQuery = findItem(collection.item, 'GET Binance Orders (dedicated key query rejected)');
+
+		expect(findHeader(status, 'x-api-key').value).toBe('{{adminApiKey}}');
+		expect(findHeader(alert, 'x-api-key').value).toBe('{{apiKey}}');
+		expect(findHeader(order, 'x-api-key').value).toBe('{{binanceTradingApiKey}}');
+		expect(findHeader(balances, 'x-api-key').value).toBe('{{binanceTradingApiKey}}');
+
+		for (const example of [invalidAdminQuery, invalidTradingQuery]) {
+			expect(example.request.url.raw).toContain('api-key=not-a-valid-key');
+			expect(example.request.header).not.toEqual(expect.arrayContaining([
+				expect.objectContaining({ key: 'x-api-key' }),
+			]));
+			expect(example.response[0].code).toBe(401);
+		}
+		expect(invalidAdminQuery.response[0].body).toContain('ADMIN_AUTH_REQUIRED');
+	});
+
+	it('uses the matching scoped variable for every API request and saved response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		for (const request of collectRequestsAndSavedExamples(collection.item)) {
+			const rawUrl = request.url?.raw || '';
+			if (!rawUrl.includes('/api/')) continue;
+			const header = (request.header || []).find((entry) => entry.key.toLowerCase() === 'x-api-key');
+			if (!header) continue;
+
+			const pathname = new URL(rawUrl.replace('{{baseUrl}}', 'https://placeholder.invalid')).pathname;
+			const expected = pathname.startsWith('/api/webhook/') || pathname === '/api/news-monitor'
+				? '{{apiKey}}'
+				: pathname.startsWith('/api/trading/binance/')
+					? '{{binanceTradingApiKey}}'
+					: '{{adminApiKey}}';
+			expect(header.value).toBe(expected);
+		}
 	});
 });
 

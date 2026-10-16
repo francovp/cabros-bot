@@ -5,9 +5,9 @@
  *
  * The load-bearing behaviour is that a declared-but-not-live (or live-but-still
  * CREATING) composite index is reported as not ready and drives a non-zero exit
- * status. That is the whole point of the tool: a deploy that "succeeded" while
- * every stored-alert read is still rejected with FAILED_PRECONDITION is the
- * exact failure this issue documents.
+ * status. This verifies the repository's index deployment and audit workflow;
+ * it does not assert that a missing alerts index caused the read outage linked
+ * to issue #1285.
  */
 
 const fs = require('fs');
@@ -47,6 +47,15 @@ const REPLAYS_INDEX = {
 		{ fieldPath: 'alertId', order: 'ASCENDING' },
 		{ fieldPath: 'replayedAt', order: 'DESCENDING' },
 		{ fieldPath: '__name__', order: 'DESCENDING' },
+	],
+};
+
+const OUTCOME_SOURCE_INDEX = {
+	collectionGroup: 'tradingSignalOutcomes',
+	queryScope: 'COLLECTION',
+	fields: [
+		{ fieldPath: 'source', order: 'ASCENDING' },
+		{ fieldPath: 'receivedAt', order: 'DESCENDING' },
 	],
 };
 
@@ -219,14 +228,14 @@ describe('deploy-firestore-indexes', () => {
 			fs.rmSync(tempDir, { recursive: true, force: true });
 		});
 
-		it('reads the composite indexes the repository actually declares', () => {
+		it('reads representative composite indexes declared by the repository', () => {
 			const declared = readDeclaredIndexes(
 				path.resolve(__dirname, '../../firestore.indexes.json'),
 			);
 
 			expect(declared.length).toBeGreaterThan(0);
-			expect(declared).toContainEqual(ALERTS_INDEX);
 			expect(declared).toContainEqual(REPLAYS_INDEX);
+			expect(declared).toContainEqual(OUTCOME_SOURCE_INDEX);
 		});
 
 		it('preserves configured field modes when auditing template indexes', () => {
@@ -549,6 +558,7 @@ describe('deploy-firestore-indexes', () => {
 			}],
 			['invalid state', (index) => ({ ...index, state: 'UNKNOWN' })],
 			['unsupported DISABLED state', (index) => ({ ...index, state: 'DISABLED' })],
+			['unknown top-level property', (index) => ({ ...index, futureIndexOption: true })],
 			['unknown field property', (index) => ({
 				...index,
 				fields: [{ ...index.fields[0], bogus: true }, ...index.fields.slice(1)],

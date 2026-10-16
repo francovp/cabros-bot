@@ -2,7 +2,7 @@ const {
 	normalizeTradingViewTimeframe,
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('./parseTradingViewSignal');
-const { rankScannerItems, resolveTrendConfluence } = require('./marketScannerScoring');
+const { rankScannerItems, resolveTrendConfluence, numberOrNull } = require('./marketScannerScoring');
 const { SCANNER_ERROR_CATEGORY_DISPLAY, isScannerErrorCategory } = require('./marketScannerErrorCategories');
 
 const SUPPORTED_SCAN_TYPES = new Set([
@@ -764,13 +764,6 @@ function formatNumber(value, decimals) {
 	return value.toFixed(decimals);
 }
 
-function numberOrNull(value) {
-	if (value === null || value === undefined) {
-		return null;
-	}
-	const number = Number(value);
-	return Number.isFinite(number) ? number : null;
-}
 
 function formatScannerErrorLine(scanResult = {}) {
 	const baseMessage = typeof scanResult.error === 'string' ? scanResult.error : 'Unknown error';
@@ -828,7 +821,9 @@ function recordMarketScannerOutcomes(scanResults, parsed = {}, options = {}) {
 				for (const [itemIndex, item] of preparedItems.entries()) {
 					const closePrice = item.indicators?.close ?? null;
 					const itemSide = getScanItemSide(scanResult.scan, item);
-					const itemScore = item.changePercent ?? item.indicators?.RSI ?? item.volume_ratio ?? null;
+					const itemScore = typeof item._score === 'number' && Number.isFinite(item._score)
+						? (itemSide === 'SELL' ? -1 : 1) * Math.min(100, Math.max(0, item._score)) / 100
+						: (item.changePercent ?? item.indicators?.RSI ?? item.volume_ratio ?? null);
 
 					const atr = pickLevel([item.indicators?.atr, item.indicators?.ATR, item.atr]);
 					const bbLower = pickLevel([item.indicators?.bb_lower, item.indicators?.bollinger_lower, item.indicators?.lower, item.bollinger?.lower, item.bollinger_lower]);

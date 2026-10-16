@@ -42,6 +42,22 @@ function getDocumentedApiOperations(contract) {
 }
 
 describe('OpenAPI contract', () => {
+	it('documents all decision-audit dispatch channel modes', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+		expect(contract.components.schemas.AlertDecision.properties.dispatch.properties.requestedChannelMode.enum)
+			.toEqual(['explicit', 'symbol_route', 'broadcast']);
+	});
+
+	it('documents sanitized per-provider enrichment audit outcomes', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const providers = contract.components.schemas.AlertDecision.properties.enrichment.properties.providers;
+
+		expect(providers.additionalProperties).toBe(false);
+		expect(providers.properties.gemini.properties.status.enum).toEqual(['full', 'partial', 'failed']);
+		expect(providers.properties.tradingViewMcp.properties.status.enum).toEqual(['full', 'partial', 'failed']);
+	});
+
 	it('documents the concrete alert detail response including lastReplay', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const operation = contract.paths['/api/alerts/{alertId}'].get;
@@ -138,6 +154,14 @@ describe('OpenAPI contract', () => {
 		const unauthenticatedOperations = new Set([
 			'GET /api/public/status',
 		]);
+		const binanceTradingOperations = new Set([
+			'GET /api/trading/binance/orders',
+			'GET /api/trading/binance/orders/audit',
+			'POST /api/trading/binance/orders/preview',
+			'GET /api/trading/binance/account/balances',
+			'POST /api/trading/binance/orders',
+			'DELETE /api/trading/binance/orders',
+		]);
 
 		for (const operation of operations) {
 			const operationKey = `${operation.method || 'UNKNOWN'} ${operation.path || ''}`;
@@ -146,9 +170,30 @@ describe('OpenAPI contract', () => {
 				continue;
 			}
 			const expected = [{ ApiKeyHeader: [] }, { ApiKeyQuery: [] }];
+			if (binanceTradingOperations.has(operationKey)) {
+				expected.unshift({ BinanceTradingApiKeyHeader: [] }, { AdminApiKeyHeader: [] });
+			} else if (firebaseAdminOperations.has(operationKey)) {
+				expected.unshift({ AdminApiKeyHeader: [] });
+			}
 			if (firebaseAdminOperations.has(operationKey)) expected.push({ FirebaseBearerAuth: [] });
 			expect(operation.security).toEqual(expected);
 		}
+	});
+
+	it('documents dedicated admin and Binance API keys as header-only credentials', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+		expect(contract.components.securitySchemes.AdminApiKeyHeader).toEqual(expect.objectContaining({
+			type: 'apiKey',
+			in: 'header',
+			name: 'x-api-key',
+		}));
+		expect(contract.components.securitySchemes.BinanceTradingApiKeyHeader).toEqual(expect.objectContaining({
+			type: 'apiKey',
+			in: 'header',
+			name: 'x-api-key',
+		}));
 	});
 
 	it('marks Firebase-backed admin operations with viewer or operator roles', () => {
@@ -227,6 +272,21 @@ describe('OpenAPI contract', () => {
 				enum: ['No measurements found'],
 			},
 			{ $ref: '#/components/schemas/OutcomesSummary' },
+		]));
+	});
+
+	it('keeps the availability flag required only on the direct outcomes summary response', () => {
+		if (!fs.existsSync(contractPath)) return;
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const outcomesSummary = contract.components.schemas.OutcomesSummary;
+		const directSummary = contract.components.responses.OutcomesSummaryResult
+			.content['application/json'].schema.properties.summary;
+
+		expect(outcomesSummary.properties).toHaveProperty('available');
+		expect(outcomesSummary.required).not.toContain('available');
+		expect(directSummary.allOf).toEqual(expect.arrayContaining([
+			{ $ref: '#/components/schemas/OutcomesSummary' },
+			{ type: 'object', required: ['available'] },
 		]));
 	});
 
@@ -760,6 +820,35 @@ describe('status dependency contract drift', () => {
 			.map(([key]) => key);
 	}
 
+	it('documents multi-timeframe-only calls in confluence-family telemetry', () => {
+		const enrichment = contract.components.schemas.TradingViewMcpRuntimeStatus
+			.properties.enrichment;
+		const confluence = enrichment.properties.confluence;
+
+		expect(enrichment.description).toContain('multi_timeframe_analysis');
+		expect(confluence.properties.enabled.description).toContain('combined_analysis');
+		expect(confluence.properties.attemptedCount.description).toContain('multi_timeframe_analysis');
+		expect(confluence.examples).toEqual(expect.arrayContaining([
+			expect.objectContaining({
+				enabled: false,
+				attemptedCount: 1,
+				appliedCount: 1,
+				failedCount: 0,
+			}),
+		]));
+
+		const collection = JSON.parse(fs.readFileSync(postmanPath, 'utf8'));
+		const item = collectRequestLeaves(collection.item)
+			.find((request) => request.name === 'Get Status - confluence enrichment counters');
+		const mtfOnlyExample = item.response.find((response) => /multi-timeframe-only/i.test(response.name));
+		expect(mtfOnlyExample).toBeDefined();
+		const body = JSON.parse(mtfOnlyExample.body);
+		expect(body.featureFlags.tradingViewConfluenceEnrichment).toBe(false);
+		expect(body.featureFlags.tradingViewConfluenceMultiTimeframe).toBe(true);
+		expect(body.dependencies.tradingViewMcp.enrichment.confluence)
+			.toMatchObject({ enabled: false, attemptedCount: 1, appliedCount: 1, failedCount: 0 });
+	});
+
 	it('documents at least one named dependency schema to guard against', () => {
 		expect(documentedDependencyKeys().length).toBeGreaterThan(0);
 	});
@@ -843,5 +932,49 @@ describe('status dependency contract drift', () => {
 		for (const category of ['load_failed', 'template_not_published', 'invalid_value', 'stale', 'timeout']) {
 			expect(enumValues).toContain(category);
 		}
+	});
+
+	it('models persistent write health nulls with OpenAPI 3.1 JSON Schema types', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const properties = spec.components.schemas.PersistentWriteDomainHealth.properties;
+
+		for (const field of ['lastSuccessAt', 'lastFailureAt', 'lastFailureCategory']) {
+			expect(properties[field].type).toEqual(['string', 'null']);
+		}
+		expect(properties.lastFailureCategory.enum).toContain(null);
+	});
+
+	it('requires persistent write health in the status schema and includes it in the example', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const dependencies = spec.components.schemas.Status.properties.dependencies;
+		const statusExample = spec.components.responses.StatusResult.content['application/json'].example;
+
+		expect(spec.components.schemas.Status.required).toContain('dependencies');
+		expect(dependencies.required).toContain('persistentWriteHealth');
+		expect(statusExample.dependencies).toHaveProperty('persistentWriteHealth');
+	});
+
+	it('documents bounded startup jitter on the status and capabilities contract', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const startupJitterRef = spec.components.schemas.Status.properties.dependencies.properties.startupJitter;
+		const startupJitter = spec.components.schemas.StartupJitter;
+		const statusExample = spec.components.responses.StatusResult.content['application/json'].example;
+
+		expect(startupJitterRef).toEqual({ $ref: '#/components/schemas/StartupJitter' });
+		expect(startupJitter.required).toEqual(['global', 'signalOutcome', 'redrive', 'scannerPreset', 'remoteConfig']);
+		for (const field of startupJitter.required) {
+			expect(startupJitter.properties[field]).toEqual(expect.objectContaining({
+				type: 'integer',
+				minimum: 0,
+				maximum: 30000,
+			}));
+		}
+		expect(statusExample.dependencies.startupJitter).toEqual({
+			global: 5000,
+			signalOutcome: 5000,
+			redrive: 5000,
+			scannerPreset: 5000,
+			remoteConfig: 5000,
+		});
 	});
 });

@@ -1360,6 +1360,9 @@ const symbolTokenUsage = new TokenUsageTracker('news-analysis');
 
 			if (meetsConviction) {
 				const side = (sentimentScore > 0) ? 'BUY' : 'SELL';
+				const outcomeScore = typeof alert.confidence === 'number' && Number.isFinite(alert.confidence)
+					? (side === 'SELL' ? -1 : 1) * Math.abs(alert.confidence)
+					: null;
 				const stop = (alert.marketContext && typeof alert.marketContext.stop === 'number')
 					? alert.marketContext.stop
 					: (typeof alert.stop === 'number' ? alert.stop : null);
@@ -1377,8 +1380,8 @@ const symbolTokenUsage = new TokenUsageTracker('news-analysis');
 					exchange: alert.marketContext && alert.marketContext.source === 'binance' ? 'BINANCE' : 'UNKNOWN',
 					timeframe: null,
 					setupType: 'news-alert',
-					score: alert.confidence,
-					confidenceScore: alert.confidence,
+					score: outcomeScore,
+					confidenceScore: typeof alert.confidence === 'number' && Number.isFinite(alert.confidence) ? Math.abs(alert.confidence) : null,
 					side,
 					price: alert.marketContext ? alert.marketContext.price : null,
 					priceSource: alert.marketContext ? alert.marketContext.source : null,

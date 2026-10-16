@@ -4,16 +4,16 @@
 /**
  * Audits and deploys the composite indexes declared in `firestore.indexes.json`.
  *
- * Why this exists (issue #1285): the stored-alert read paths order by
- * `receivedAt` **and** `FieldPath.documentId()`. Firestore applies only a *free*
- * final `__name__` **ascending** sort and never merges single-field indexes, so
- * the descending tie-breaker needs the composite index
- * `alerts { receivedAt DESC, __name__ DESC }`. A declaration in
- * `firestore.indexes.json` is the *repository template of record only* — it does
- * not create anything in the live project. Adding it to the file and merging is
- * therefore not a fix, and reading is still rejected with FAILED_PRECONDITION
- * until someone runs the deploy. This script makes that step runnable and
- * auditable instead of folklore.
+ * This is general index deployment and audit tooling. A declaration in
+ * `firestore.indexes.json` is the repository template of record; it does not
+ * create anything in the live project, and a successful deploy command does not
+ * prove that every index has reached `READY`.
+ *
+ * PR #1310 was initially motivated by issue #1285, but later production
+ * evidence ruled out a missing composite index: a document lookup for a
+ * nonexistent alert also returns 503. This script does not resolve that read
+ * failure; keep the issue open until its root cause is fixed and production
+ * reads are verified.
  *
  * Two properties matter more than convenience here:
  *
@@ -24,14 +24,12 @@
  *    `unique` and **drops `state`**. Composite indexes also build asynchronously
  *    and a query is rejected until the build reaches `READY`. So the CLI command
  *    the existing runbook tells you to "confirm with" structurally cannot
- *    distinguish READY from CREATING — which is how a completed deploy still
- *    leaves every read returning 503. The raw REST collection returns `state`,
+ *    distinguish READY from CREATING. The raw REST collection returns `state`,
  *    so that is what this script reads.
  *
  * 2. **Dry-run by default, and it exits non-zero while a required index is not
- *    READY.** A deploy command that reports success while the read path is still
- *    broken is exactly the failure mode this issue documents, so readiness is
- *    the exit condition, not the exit code of the CLI call.
+ *    READY.** Readiness is the exit condition, not only the deploy command's
+ *    exit code.
  *
  * Credentials are resolved in the same order the runtime uses
  * (`FIREBASE_SERVICE_ACCOUNT_JSON` → `GOOGLE_APPLICATION_CREDENTIALS` → ADC) and
@@ -74,6 +72,18 @@ const INDEX_DECLARATION_PROPERTIES = new Set([
 	'density',
 	'multikey',
 	'fields',
+]);
+const LIVE_INDEX_PROPERTIES = new Set([
+	'name',
+	'queryScope',
+	'apiScope',
+	'fields',
+	'state',
+	'density',
+	'multikey',
+	'shardCount',
+	'unique',
+	'searchIndexOptions',
 ]);
 const INDEX_FIELD_PROPERTIES = new Set(['fieldPath', 'order', 'arrayConfig', 'searchConfig', 'vectorConfig']);
 const SEARCH_CONFIG_PROPERTIES = new Set(['textSpec', 'geoSpec']);
@@ -403,10 +413,10 @@ function formatIndexField(field) {
 }
 
 function isValidLiveIndex(index, project, database) {
-	if (!index || typeof index !== 'object' || Array.isArray(index)) return false;
+	if (!index || typeof index !== 'object' || Array.isArray(index)
+		|| !hasOnlyProperties(index, LIVE_INDEX_PROPERTIES)) return false;
 	const parsedName = parseIndexResourceName(index.name, project, database);
-	if (!parsedName || (index.collectionGroup !== undefined
-		&& index.collectionGroup !== parsedName.collectionGroup)) return false;
+	if (!parsedName) return false;
 	if (!INDEX_QUERY_SCOPES.has(index.queryScope)) return false;
 	if (!Array.isArray(index.fields) || index.fields.length === 0 || !index.fields.every(isValidIndexField)) {
 		return false;

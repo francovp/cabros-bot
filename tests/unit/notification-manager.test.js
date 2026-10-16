@@ -137,6 +137,32 @@ describe('NotificationManager admin failure notifications', () => {
 		}));
 	});
 
+	it('routes broadcast and selected-channel sends through shared dispatch without changing deliveries', async () => {
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({ success: true, channel: 'telegram', messageId: 'tg-1' }),
+		};
+		const whatsappService = {
+			name: 'whatsapp',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn().mockResolvedValue({ success: true, channel: 'whatsapp', messageId: 'wa-1' }),
+		};
+		const manager = new NotificationManager(telegramService, whatsappService);
+		const sharedDispatch = jest.fn(manager._dispatchToChannels?.bind(manager));
+		manager._dispatchToChannels = sharedDispatch;
+		const alert = { text: 'BTC alert' };
+
+		const broadcastResults = await manager.sendToAll(alert);
+		const selectedResults = await manager.sendToChannels(alert, ['whatsapp']);
+
+		expect(sharedDispatch).toHaveBeenCalledTimes(2);
+		expect(broadcastResults.map(result => result.channel)).toEqual(['telegram', 'whatsapp']);
+		expect(selectedResults.map(result => result.channel)).toEqual(['whatsapp']);
+		expect(telegramService.send).toHaveBeenCalledTimes(1);
+		expect(whatsappService.send).toHaveBeenCalledTimes(2);
+	});
+
 	it('guarantees durationMs is populated and non-negative on all formatted results', async () => {
 		const mockTelegram = {
 			name: 'telegram',
@@ -376,6 +402,54 @@ describe('NotificationManager admin failure notifications', () => {
 			telegramChatId: '-100-admin',
 			text: expect.stringContaining('Dead-letters queued for redrive (pending: 1)'),
 		}));
+		notificationRedriveService.resetForTesting();
+	});
+
+	it('does not include dead-letters queued claim in admin failure page for probe deliveries (isProbe: true)', async () => {
+		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn()
+				.mockResolvedValueOnce({ success: false, channel: 'telegram', error: 'Delivery failure' })
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'admin-page-1' }),
+		};
+
+		const manager = new NotificationManager(telegramService);
+		await manager.sendToChannels({ text: 'Probe check' }, ['telegram'], { isProbe: true });
+		await waitForBackgroundTasks();
+
+		expect(notificationRedriveService.getPendingCount()).toBe(0);
+		expect(telegramService.send).toHaveBeenCalledTimes(2);
+		const adminMessage = telegramService.send.mock.calls[1][0].text;
+		expect(adminMessage).toContain('Notification delivery failure');
+		expect(adminMessage).not.toContain('Dead-letters queued for redrive');
+		notificationRedriveService.resetForTesting();
+	});
+
+	it('does not include dead-letters queued claim in admin failure page when alert has redriveEligible: false', async () => {
+		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '-100-admin';
+		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+
+		const telegramService = {
+			name: 'telegram',
+			isEnabled: jest.fn(() => true),
+			send: jest.fn()
+				.mockResolvedValueOnce({ success: false, channel: 'telegram', error: 'Delivery failure' })
+				.mockResolvedValueOnce({ success: true, channel: 'telegram', messageId: 'admin-page-2' }),
+		};
+
+		const manager = new NotificationManager(telegramService);
+		await manager.sendToAll({ text: 'Non-redrive alert', redriveEligible: false });
+		await waitForBackgroundTasks();
+
+		expect(notificationRedriveService.getPendingCount()).toBe(0);
+		expect(telegramService.send).toHaveBeenCalledTimes(2);
+		const adminMessage = telegramService.send.mock.calls[1][0].text;
+		expect(adminMessage).toContain('Notification delivery failure');
+		expect(adminMessage).not.toContain('Dead-letters queued for redrive');
 		notificationRedriveService.resetForTesting();
 	});
 

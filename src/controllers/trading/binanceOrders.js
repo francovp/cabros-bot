@@ -1,6 +1,7 @@
 'use strict';
 
 const sentryService = require('../../services/monitoring/SentryService');
+const { sendErrorFrom } = require('../../lib/errorEnvelope');
 const {
 	BinanceOrderRequestError,
 	BinanceOrderServiceError,
@@ -85,7 +86,7 @@ async function postBinanceOrder(req, res) {
 			}).catch((err) => {
 				console.warn('[BinanceOrdersController] audit logging failed:', err?.message || err);
 			});
-			return res.status(error.statusCode || 400).json({
+			return sendErrorFrom(res, error.statusCode || 400, {
 				success: false,
 				error: error.message,
 				code: error.code,
@@ -123,7 +124,7 @@ async function postBinanceOrder(req, res) {
 				statusCode: 502,
 			},
 		});
-		return res.status(502).json({
+		return sendErrorFrom(res, 502, {
 			success: false,
 			error: 'Binance order request failed',
 			code: 'BINANCE_ORDER_FAILED',
@@ -170,7 +171,7 @@ async function getBinanceOrders(req, res) {
 			}).catch((err) => {
 				console.warn('[BinanceOrdersController] audit logging failed:', err?.message || err);
 			});
-			return res.status(error.statusCode || 400).json({
+			return sendErrorFrom(res, error.statusCode || 400, {
 				success: false,
 				error: error.message,
 				code: error.code,
@@ -187,7 +188,7 @@ async function getBinanceOrders(req, res) {
 				statusCode: 502,
 			},
 		});
-		return res.status(502).json({
+		return sendErrorFrom(res, 502, {
 			success: false,
 			error: 'Binance order query failed',
 			code: 'BINANCE_ORDER_QUERY_FAILED',
@@ -223,6 +224,7 @@ async function deleteBinanceOrder(req, res) {
 			status: result.order?.status || 'CANCELED',
 			environment: result.environment,
 			binanceOrderId: result.order?.orderId ?? req.body?.orderId ?? null,
+			clientOrderId: result.order?.clientOrderId ?? req.body?.origClientOrderId ?? req.body?.clientOrderId ?? null,
 			response: result,
 			processingMs,
 		}).catch((err) => {
@@ -232,6 +234,7 @@ async function deleteBinanceOrder(req, res) {
 		return res.status(200).json(result);
 	} catch (error) {
 		const processingMs = Date.now() - startTime;
+		const clientOrderId = error.clientOrderId ?? req.body?.origClientOrderId ?? req.body?.clientOrderId ?? null;
 		if (error instanceof BinanceOrderRequestError || error instanceof BinanceOrderServiceError) {
 			console.warn('[BinanceOrdersController] order cancel rejected', { code: error.code });
 			binanceOrderAuditService.recordMutation({
@@ -243,15 +246,17 @@ async function deleteBinanceOrder(req, res) {
 				type: null,
 				quantity: null,
 				price: null,
-				status: error.code || 'REJECTED',
+				status: 'rejected',
+				errorCode: error.code,
 				environment: error.environment,
 				binanceOrderId: req.body?.orderId ?? null,
+				clientOrderId,
 				response: { error: error.message, code: error.code },
 				processingMs,
 			}).catch((err) => {
 				console.warn('[BinanceOrdersController] audit logging failed:', err?.message || err);
 			});
-			return res.status(error.statusCode || 400).json({
+			return sendErrorFrom(res, error.statusCode || 400, {
 				success: false,
 				error: error.message,
 				code: error.code,
@@ -268,8 +273,10 @@ async function deleteBinanceOrder(req, res) {
 			type: null,
 			quantity: null,
 			price: null,
-			status: 'FAILED',
+			status: 'failed',
+			errorCode: 'BINANCE_ORDER_CANCEL_FAILED',
 			binanceOrderId: req.body?.orderId ?? null,
+			clientOrderId,
 			response: { error: error.message, code: 'BINANCE_ORDER_CANCEL_FAILED' },
 			processingMs,
 		}).catch((err) => {
@@ -284,7 +291,7 @@ async function deleteBinanceOrder(req, res) {
 				statusCode: 502,
 			},
 		});
-		return res.status(502).json({
+		return sendErrorFrom(res, 502, {
 			success: false,
 			error: 'Binance cancel request failed',
 			code: 'BINANCE_ORDER_CANCEL_FAILED',
@@ -294,7 +301,7 @@ async function deleteBinanceOrder(req, res) {
 
 async function getBinanceOrderAudit(req, res) {
 	if (!binanceOrderAuditService.isEnabled()) {
-		return res.status(403).json({
+		return sendErrorFrom(res, 403, {
 			success: false,
 			error: 'Binance order audit trail is disabled',
 			code: 'FEATURE_DISABLED',
@@ -302,7 +309,7 @@ async function getBinanceOrderAudit(req, res) {
 	}
 
 	if (!binanceOrderAuditService.isConfigured()) {
-		return res.status(503).json({
+		return sendErrorFrom(res, 503, {
 			success: false,
 			error: 'Binance order audit trail is enabled but Firestore is not configured',
 			code: 'STORAGE_UNAVAILABLE',
@@ -313,7 +320,7 @@ async function getBinanceOrderAudit(req, res) {
 	if (req.query.limit !== undefined) {
 		const parsed = Number(req.query.limit);
 		if (!Number.isInteger(parsed) || parsed < 1 || parsed > 100) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				success: false,
 				error: 'limit must be an integer between 1 and 100',
 				code: 'INVALID_REQUEST',
@@ -338,7 +345,7 @@ async function getBinanceOrderAudit(req, res) {
 	const effectiveTo = to || endDate;
 
 	if (effectiveFrom && Number.isNaN(Date.parse(effectiveFrom))) {
-		return res.status(400).json({
+		return sendErrorFrom(res, 400, {
 			success: false,
 			error: 'Invalid from date parameter',
 			code: 'INVALID_REQUEST',
@@ -346,7 +353,7 @@ async function getBinanceOrderAudit(req, res) {
 	}
 
 	if (effectiveTo && Number.isNaN(Date.parse(effectiveTo))) {
-		return res.status(400).json({
+		return sendErrorFrom(res, 400, {
 			success: false,
 			error: 'Invalid to date parameter',
 			code: 'INVALID_REQUEST',
@@ -383,7 +390,7 @@ async function getBinanceOrderAudit(req, res) {
 		});
 	} catch (error) {
 		if (error.code === 'INVALID_REQUEST') {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				success: false,
 				error: error.message || 'Invalid request parameters',
 				code: 'INVALID_REQUEST',
@@ -391,7 +398,7 @@ async function getBinanceOrderAudit(req, res) {
 		}
 
 		if (error.code === 'ABORTED' || error.name === 'AbortError') {
-			return res.status(499).json({
+			return sendErrorFrom(res, 499, {
 				success: false,
 				error: 'Request was aborted',
 				code: 'ABORTED',
@@ -399,7 +406,7 @@ async function getBinanceOrderAudit(req, res) {
 		}
 
 		if (error.code === 'STORAGE_UNAVAILABLE') {
-			return res.status(503).json({
+			return sendErrorFrom(res, 503, {
 				success: false,
 				error: error.message || 'Audit storage unavailable',
 				code: 'STORAGE_UNAVAILABLE',
@@ -417,7 +424,7 @@ async function getBinanceOrderAudit(req, res) {
 			},
 		});
 
-		return res.status(500).json({
+		return sendErrorFrom(res, 500, {
 			success: false,
 			error: 'Failed to retrieve Binance order audit logs',
 			code: 'INTERNAL_ERROR',
@@ -443,7 +450,7 @@ async function postBinanceOrderPreview(req, res) {
 	} catch (error) {
 		if (error instanceof BinanceOrderRequestError || error instanceof BinanceOrderServiceError) {
 			console.warn('[BinanceOrdersController] order preview rejected', { code: error.code });
-			return res.status(error.statusCode || 400).json({
+			return sendErrorFrom(res, error.statusCode || 400, {
 				success: false,
 				error: error.message,
 				code: error.code,
@@ -461,7 +468,7 @@ async function postBinanceOrderPreview(req, res) {
 				statusCode: 502,
 			},
 		});
-		return res.status(502).json({
+		return sendErrorFrom(res, 502, {
 			success: false,
 			error: 'Binance order preview failed',
 			code: 'BINANCE_PREVIEW_FAILED',

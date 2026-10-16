@@ -506,14 +506,18 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 	}
 
 	_triggerThresholdAlert(type, config, utilizationPct) {
+		if (type !== 'limit' && type !== 'warning') {
+			return Promise.resolve();
+		}
+
 		const firestore = this._getFirestore();
-		if (!firestore || typeof firestore.runTransaction !== 'function') {
+		if (!firestore || typeof firestore.runTransaction !== 'function' || typeof firestore.collection !== 'function') {
 			if (type === 'limit') {
 				if (this.limitAlertSent) return Promise.resolve();
 				this.limitAlertSent = true;
 				this.alertsSent++;
 				console.error(`[TokenCostBudget] Hard limit reached: daily token spend $${this.dailySpendUsd.toFixed(4)} reached 100% of daily budget $${config.budgetUsd.toFixed(2)}. Blocking new LLM calls.`);
-				return Promise.resolve(this._sendAdminNotification('limit', {
+				const promise = Promise.resolve(this._sendAdminNotification('limit', {
 					dailySpendUsd: this.dailySpendUsd,
 					budgetUsd: config.budgetUsd,
 					utilizationPct,
@@ -526,12 +530,19 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 					this.limitAlertSent = false;
 					this.alertsSent = Math.max(0, this.alertsSent - 1);
 				});
+				try {
+					const { trackBackgroundTask } = require('./backgroundTaskTracker');
+					if (typeof trackBackgroundTask === 'function') {
+						trackBackgroundTask(promise);
+					}
+				} catch (_) {}
+				return promise;
 			} else if (type === 'warning') {
 				if (this.warningAlertSent) return Promise.resolve();
 				this.warningAlertSent = true;
 				this.alertsSent++;
 				console.warn(`[TokenCostBudget] Warning: daily token spend $${this.dailySpendUsd.toFixed(4)} reached ${utilizationPct.toFixed(1)}% of daily budget $${config.budgetUsd.toFixed(2)} (threshold ${config.warnThresholdPct}%)`);
-				return Promise.resolve(this._sendAdminNotification('warning', {
+				const promise = Promise.resolve(this._sendAdminNotification('warning', {
 					dailySpendUsd: this.dailySpendUsd,
 					budgetUsd: config.budgetUsd,
 					utilizationPct,
@@ -545,6 +556,13 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 					this.warningAlertSent = false;
 					this.alertsSent = Math.max(0, this.alertsSent - 1);
 				});
+				try {
+					const { trackBackgroundTask } = require('./backgroundTaskTracker');
+					if (typeof trackBackgroundTask === 'function') {
+						trackBackgroundTask(promise);
+					}
+				} catch (_) {}
+				return promise;
 			}
 			return Promise.resolve();
 		}
@@ -568,6 +586,25 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 				updatedAt: new Date().toISOString(),
 			}, { merge: true });
 			return true;
+		}).catch(async (err) => {
+			console.warn(`[TokenCostBudget] Error in atomic alert claim transaction: ${err.message}`);
+			this.alertsSent++;
+			try {
+				const delivered = await this._sendAdminNotification(type, {
+					dailySpendUsd: this.dailySpendUsd,
+					budgetUsd: config.budgetUsd,
+					utilizationPct,
+					warnThresholdPct: config.warnThresholdPct,
+				});
+				if (delivered === false) {
+					this[fieldName] = false;
+					this.alertsSent = Math.max(0, this.alertsSent - 1);
+				}
+			} catch (_) {
+				this[fieldName] = false;
+				this.alertsSent = Math.max(0, this.alertsSent - 1);
+			}
+			return false;
 		}).then(async (claimed) => {
 			if (!claimed) {
 				return;
@@ -595,24 +632,6 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 					await this._releaseAlertClaimAtomically('warning');
 				}
 			}
-		}).catch(async (err) => {
-			console.warn(`[TokenCostBudget] Error in atomic alert claim transaction: ${err.message}`);
-			this.alertsSent++;
-			try {
-				const delivered = await this._sendAdminNotification(type, {
-					dailySpendUsd: this.dailySpendUsd,
-					budgetUsd: config.budgetUsd,
-					utilizationPct,
-					warnThresholdPct: config.warnThresholdPct,
-				});
-				if (delivered === false) {
-					this[fieldName] = false;
-					this.alertsSent = Math.max(0, this.alertsSent - 1);
-				}
-			} catch (_) {
-				this[fieldName] = false;
-				this.alertsSent = Math.max(0, this.alertsSent - 1);
-			}
 		});
 
 		try {
@@ -621,6 +640,8 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 				trackBackgroundTask(claimPromise);
 			}
 		} catch (_) {}
+
+		return claimPromise;
 	}
 
 	async _syncSharedSpend() {
