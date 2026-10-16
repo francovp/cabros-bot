@@ -30,11 +30,20 @@ jest.mock('../../src/services/notification/DiscordService', () => {
 	mockModule.send = jest.fn();
 	return mockModule;
 });
+jest.mock('../../src/services/grounding/grounding', () => ({
+	groundAlert: jest.fn().mockResolvedValue({
+		sentiment: 'BULLISH',
+		sentiment_score: 0.8,
+		insights: ['Momentum alcista detectado en BTCUSDT'],
+		sources: [{ title: 'CryptoNews', url: 'https://example.com' }],
+	}),
+}));
 jest.mock('../../src/lib/validation', () => ({
 	validateAlert: jest.fn((text) => ({ text })),
 }));
 
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const { groundAlert } = require('../../src/services/grounding/grounding');
 const NotificationManager = require('../../src/services/notification/NotificationManager');
 const alertModule = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { waitForBackgroundTasks, resetForTesting: resetTasksForTesting } = require('../../src/lib/backgroundTaskTracker');
@@ -120,6 +129,30 @@ describe('Inline keyboard markup on /api/webhook/alert', () => {
 			undefined,
 			replyMarkup,
 		);
+	});
+
+	it('omits details button when enrichment is unrenderable or absent', async () => {
+		groundAlert.mockResolvedValueOnce({
+			sentiment: 'NEUTRAL',
+			sentiment_score: 0,
+			insights: [],
+			sources: [],
+		});
+		const app = buildApp();
+		const response = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-api-key')
+			.send({ text: 'BINANCE:BTCUSDT' });
+		await new Promise((resolve) => setImmediate(resolve));
+
+		expect(response.status).toBe(200);
+		expect(editMessageReplyMarkupMock).toHaveBeenCalledTimes(1);
+		const replyMarkup = editMessageReplyMarkupMock.mock.calls[0][3];
+		const callbackActions = replyMarkup.inline_keyboard
+			.flat()
+			.map((button) => button.callback_data.split(':')[0]);
+		expect(callbackActions).toEqual(expect.arrayContaining(['r', 'x', 'vu', 'vd']));
+		expect(callbackActions).not.toContain('d');
 	});
 
 	it('does not attach a keyboard when durable alert storage fails', async () => {
