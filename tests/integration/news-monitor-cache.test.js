@@ -6,7 +6,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices, getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, getNotificationManager, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { getCacheInstance } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
 
 /**
@@ -55,6 +55,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 
 		// Mock Gemini for symbol analysis
 		const gemini = require('../../src/services/grounding/gemini');
@@ -81,6 +82,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		global.fetch = mockFetch;
 
 		// Initialize notification services
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		// Initialize cache and news monitor
@@ -1102,6 +1104,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		it('should re-deliver cached alerts when a later request specifies a different discordWebhookUrl', async () => {
 			process.env.ENABLE_DISCORD_ALERTS = 'true';
 			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
+			resetNotificationManagerForTesting();
 			await initializeNotificationServices(mockBot);
 			const webhookA = 'https://discord.com/api/webhooks/123/abc';
 			const webhookB = 'https://discord.com/api/webhooks/456/def';
@@ -1145,6 +1148,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		it('should not re-deliver when a cached request uses the exact same discordWebhookUrl override', async () => {
 			process.env.ENABLE_DISCORD_ALERTS = 'true';
 			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
+			resetNotificationManagerForTesting();
 			await initializeNotificationServices(mockBot);
 			const webhookA = 'https://discord.com/api/webhooks/123/abc';
 

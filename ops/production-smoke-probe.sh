@@ -17,10 +17,25 @@
 #   0   probe succeeded (service reachable + healthy + commit matches)
 #   2   AUTH_BLOCKED — WEBHOOK_API_KEY missing or empty
 #   3   HEALTHCHECK_FAILED — /healthcheck did not return HTTP 200
-#   4   STATUS_UNREACHABLE — /api/status request failed or returned non-JSON
+#   4   STATUS_UNREACHABLE — /api/status failed, returned non-JSON, or returned
+#                            a non-200 other than 401/403
 #   5   COMMIT_MISMATCH — service.commit != expected commit (stale deploy)
 #   6   DEGRADED_DEPENDENCY — at least one required dependency degraded
 #   7   FLAG_DISABLED — at least one required feature flag is not true
+#   8   AUTH_REJECTED — /api/status returned 401/403: the server answered and
+#                       rejected this credential, so the secret is rotated or
+#                       mismatched. NOT a production outage
+#
+# The distinction between exit 4 and exit 8 is load-bearing. Exit 4 means
+# production did not answer us, which is a genuine outage; exit 8 means
+# production answered and rejected us, which is a CI/secret problem. Collapsing
+# the two would report "alerts are not being delivered" while they are — the
+# workflow classifies them as different outcomes (`down` vs `auth_rejected`)
+# precisely so neither is mistaken for the other.
+#
+# AUTH_REJECTED takes 8, not 7, because issue #1360 already shipped 7 as
+# FLAG_DISABLED; renumbering a published enum would break its documented
+# contract, so this code takes the next free slot instead.
 #
 # Usage:
 #   ops/production-smoke-probe.sh \
@@ -121,12 +136,23 @@ STATUS_URL="${BASE_URL}${STATUS_PATH}"
 PROBE_TMPDIR="$(mktemp -d -t cabros-probe-XXXXXX)"
 trap 'rm -rf "$PROBE_TMPDIR"' EXIT
 
+# A failed transfer makes curl exit non-zero *and* still emit its --write-out
+# code, so the `|| echo '000'` fallback appends a second 000 and the outage
+# renders as "HTTP 000000". Anything not exactly three digits collapses to 000.
+normalize_http_code() {
+	if [[ ! "$1" =~ ^[0-9]{3}$ ]]; then
+		printf '000'
+		return
+	fi
+	printf '%s' "$1"
+}
+
 # Step 1: /healthcheck must return HTTP 200. Use -o /dev/null so the body is
 # not echoed to job summaries.
-HEALTHCHECK_HTTP="$(printf 'x-api-key: %s\n' "$WEBHOOK_API_KEY" | \
+HEALTHCHECK_HTTP="$(normalize_http_code "$(printf 'x-api-key: %s\n' "$WEBHOOK_API_KEY" | \
 	curl --silent --show-error --max-time "$PROBE_TIMEOUT" \
 		--write-out '%{http_code}' --output "$PROBE_TMPDIR/healthcheck.body" \
-		-H 'accept: application/json' -H @- "$HEALTHCHECK_URL" || echo '000')"
+		-H 'accept: application/json' -H @- "$HEALTHCHECK_URL" || echo '000')")"
 
 if [[ "$HEALTHCHECK_HTTP" != "200" ]]; then
 	echo "HEALTHCHECK_FAILED: $HEALTHCHECK_PATH returned HTTP $HEALTHCHECK_HTTP (probed $BASE_URL)." >&2
@@ -134,10 +160,24 @@ if [[ "$HEALTHCHECK_HTTP" != "200" ]]; then
 fi
 
 # Step 2: /api/status returns the deployment commit and dependency status.
-STATUS_HTTP="$(printf 'x-api-key: %s\n' "$WEBHOOK_API_KEY" | \
+STATUS_HTTP="$(normalize_http_code "$(printf 'x-api-key: %s\n' "$WEBHOOK_API_KEY" | \
 	curl --silent --show-error --max-time "$PROBE_TIMEOUT" \
 		--write-out '%{http_code}' --output "$PROBE_TMPDIR/status.json" \
-		-H 'accept: application/json' -H @- "$STATUS_URL" || echo '000')"
+		-H 'accept: application/json' -H @- "$STATUS_URL" || echo '000')")"
+
+# A 401/403 means the server is up and answering — it is rejecting *this*
+# credential, so the WEBHOOK_API_KEY secret has been rotated or never matched.
+# That is a CI/secret problem and must not share exit 4 with real reachability
+# failures, or the workflow would classify a rotated key as `down` and an
+# operator would read "alerts are not being delivered" while they are.
+#
+# /healthcheck deliberately has no equivalent branch: it is unauthenticated by
+# design, so a 401/403 there is a gateway/server response rather than a
+# credential failure and stays a genuine HEALTHCHECK_FAILED.
+if [[ "$STATUS_HTTP" == "401" || "$STATUS_HTTP" == "403" ]]; then
+	echo "AUTH_REJECTED: $STATUS_PATH returned HTTP $STATUS_HTTP; the WEBHOOK_API_KEY secret does not match the server (probed $BASE_URL)." >&2
+	exit 8
+fi
 
 if [[ "$STATUS_HTTP" != "200" ]]; then
 	echo "STATUS_UNREACHABLE: $STATUS_PATH returned HTTP $STATUS_HTTP (probed $BASE_URL)." >&2

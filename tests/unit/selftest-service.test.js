@@ -1,5 +1,17 @@
 'use strict';
 
+const mockRemoteOverrides = {};
+const firestoreGateKeys = [
+	'ENABLE_FIRESTORE_ALERT_STORAGE',
+	'ENABLE_FIRESTORE_JOB_STORAGE',
+	'ENABLE_FIRESTORE_SCANNER_PRESETS',
+	'ENABLE_FIRESTORE_IDEMPOTENCY',
+];
+
+jest.mock('../../src/services/remoteConfig/resolveRemoteOverride', () => ({
+	resolveRemoteOverride: jest.fn((key) => mockRemoteOverrides[key]),
+}));
+
 const { createSelfTestService, RESULT_TTL_MS } = require('../../src/services/diagnostics/SelfTestService');
 
 function resetEnv() {
@@ -11,6 +23,10 @@ function resetEnv() {
 	delete process.env.GEMINI_API_KEY;
 	delete process.env.TRADINGVIEW_MCP_URL;
 	delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+	delete process.env.ENABLE_FIRESTORE_IDEMPOTENCY;
+	delete process.env.ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE;
+	delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
+	delete process.env.ENABLE_FIRESTORE_SCANNER_PRESETS;
 	delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 	delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
 	delete process.env.ENABLE_BINANCE_TRADING;
@@ -26,6 +42,9 @@ function resetEnv() {
 describe('SelfTestService', () => {
 	beforeEach(() => {
 		resetEnv();
+		for (const key of Object.keys(mockRemoteOverrides)) {
+			delete mockRemoteOverrides[key];
+		}
 	});
 
 	it('reports a full pass when all env vars are configured and the bot is live', async () => {
@@ -74,6 +93,55 @@ describe('SelfTestService', () => {
 		expect(gemini.status).toBe('skipped');
 		expect(tv.status).toBe('skipped');
 		expect(binance.status).toBe('skipped');
+	});
+
+	it.each(firestoreGateKeys)('enables the Firestore diagnostic when remote %s overrides a disabled environment gate', async (key) => {
+		process.env[key] = 'false';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{}';
+		mockRemoteOverrides[key] = true;
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'firestore.collections' });
+
+		expect(result.checks[0]).toMatchObject({ id: 'firestore.collections', status: 'pass' });
+	});
+
+	it.each(firestoreGateKeys)('skips the Firestore diagnostic when remote false overrides enabled %s', async (key) => {
+		process.env[key] = 'true';
+		mockRemoteOverrides[key] = false;
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'firestore.collections' });
+
+		expect(result.checks[0]).toMatchObject({
+			id: 'firestore.collections',
+			status: 'skipped',
+			message: 'No Firestore feature is enabled',
+		});
+	});
+
+	it('uses the legacy idempotency environment alias when no remote value is published', async () => {
+		process.env.ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{}';
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'firestore.collections' });
+
+		expect(result.checks[0]).toMatchObject({ id: 'firestore.collections', status: 'pass' });
+	});
+
+	it('lets a published idempotency false override the legacy environment alias', async () => {
+		process.env.ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE = 'true';
+		mockRemoteOverrides.ENABLE_FIRESTORE_IDEMPOTENCY = false;
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'firestore.collections' });
+
+		expect(result.checks[0]).toMatchObject({
+			id: 'firestore.collections',
+			status: 'skipped',
+			message: 'No Firestore feature is enabled',
+		});
 	});
 
 	it('fails Gemini grounding when enabled without API key', async () => {
@@ -191,5 +259,27 @@ describe('SelfTestService', () => {
 		} finally {
 			Date.now = clock;
 		}
+	});
+
+	it('updates dependencies when updateDependencies is called', async () => {
+		process.env.BOT_TOKEN = 't';
+		process.env.TELEGRAM_CHAT_ID = 'c';
+		process.env.WEBHOOK_API_KEY = 'k';
+		process.env.RATE_LIMIT_MAX = '1';
+		process.env.RATE_LIMIT_WINDOW_MS = '1';
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+
+		// Initially uninitialized / null bot
+		const svc = createSelfTestService();
+		const initialResult = await svc.run({ only: 'telegram.bot_info' });
+		expect(initialResult.checks[0].status).toBe('skipped');
+
+		// Update with live bot
+		const fakeBot = { botInfo: { id: 1, username: 'updated_bot' } };
+		svc.updateDependencies({ botOrGetter: () => fakeBot });
+
+		const updatedResult = await svc.run({ only: 'telegram.bot_info' });
+		expect(updatedResult.checks[0].status).toBe('pass');
+		expect(updatedResult.checks[0].message).toContain('updated_bot');
 	});
 });

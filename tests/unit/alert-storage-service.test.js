@@ -67,6 +67,7 @@ function buildDocSnapshot(id, data) {
 describe('AlertStorageService', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		firestoreWriteMetricsService.resetForTesting();
 		jest.useFakeTimers().setSystemTime(new Date('2026-06-06T12:00:00.000Z'));
 		admin.__resetApps();
 		// Reset the Firestore db singleton between tests
@@ -283,15 +284,6 @@ describe('AlertStorageService', () => {
 			expect(mockAdd).not.toHaveBeenCalled();
 		});
 
-		it('does not save alerts when only signal outcome tracking is enabled', async () => {
-			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
-
-			const result = await AlertStorageService.saveAlert(buildParams());
-
-			expect(result).toBeNull();
-			expect(mockAdd).not.toHaveBeenCalled();
-		});
-
 		it('calls collection("alerts").add() with correctly shaped document', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			const docId = 'abc123';
@@ -332,6 +324,12 @@ describe('AlertStorageService', () => {
 				source: 'webhook',
 				useTradingViewData: true,
 				tradingViewEnrichmentApplied: false,
+				deployment: expect.objectContaining({
+					platform: expect.any(String),
+					gitSha: expect.any(String),
+					service: expect.any(String),
+					runtimeVersion: expect.any(String),
+				}),
 			});
 		});
 
@@ -348,6 +346,22 @@ describe('AlertStorageService', () => {
 			expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({
 				symbol: 'ETHUSDT',
 				exchange: 'BINANCE',
+			}));
+		});
+
+		it('persists session tag when explicitly provided or derived from equity exchange', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'doc-session-equity' });
+
+			await AlertStorageService.saveAlert(buildParams({
+				text: 'NASDAQ:AAPL(60) COMPRA',
+				session: 'regular',
+			}));
+
+			expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({
+				symbol: 'AAPL',
+				exchange: 'NASDAQ',
+				session: 'regular',
 			}));
 		});
 
@@ -461,6 +475,12 @@ describe('AlertStorageService', () => {
 				useTradingViewData: false,
 				tradingViewEnrichmentApplied: false,
 				processingTimeMs: 120,
+				deployment: expect.objectContaining({
+					platform: expect.any(String),
+					gitSha: expect.any(String),
+					service: expect.any(String),
+					runtimeVersion: expect.any(String),
+				}),
 			});
 		});
 
@@ -773,12 +793,14 @@ describe('AlertStorageService', () => {
 
 		it('returns null and logs a warning (does not throw) when add() rejects', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
-			mockAdd.mockRejectedValueOnce(new Error('Quota exceeded'));
+			mockAdd.mockRejectedValueOnce(Object.assign(new Error('Quota exceeded'), { code: 8 }));
 			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
 			const result = await AlertStorageService.saveAlert(buildParams());
 
 			expect(result).toBeNull();
+			expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.alertStorage)
+				.toMatchObject({ success: 0, failure: 1, lastFailureCategory: 'firestore_unavailable' });
 			expect(warnSpy).toHaveBeenCalledWith(
 				expect.stringContaining('[AlertStorageService]'),
 				expect.stringContaining('Quota exceeded'),
@@ -1656,19 +1678,21 @@ describe('AlertStorageService', () => {
 		// dependency healthy, and the response message blamed credentials that
 		// were demonstrably working. The suite below pins the four fixes.
 
-		it('declares the composite Firestore index required by the ordered alerts read', () => {
+		it.each([
+			['alerts', 'receivedAt', 'DESCENDING'],
+			['userPriceAlerts', 'status', 'ASCENDING'],
+		])('does not declare a redundant single-field composite for %s.%s', (collectionGroup, fieldPath, order) => {
 			const fs = require('fs');
 			const path = require('path');
 			const indexes = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../firestore.indexes.json'), 'utf8'));
-			// Firestore applies a *free* final `__name__` ASC sort, so ordering by
-			// `__name__` DESC on top of `receivedAt` DESC needs this composite. The
-			// mock makes `orderBy` a no-op, so only this declaration can catch a
-			// missing index.
-			const alertIndex = indexes.indexes.find(index => index.collectionGroup === 'alerts'
-				&& index.fields.some(field => field.fieldPath === 'receivedAt' && field.order === 'DESCENDING')
-				&& index.fields.some(field => field.fieldPath === '__name__' && field.order === 'DESCENDING'));
+			const redundantIndex = indexes.indexes.find(index => index.collectionGroup === collectionGroup
+				&& index.fields.length === 2
+				&& index.fields[0].fieldPath === fieldPath
+				&& index.fields[0].order === order
+				&& index.fields[1].fieldPath === '__name__'
+				&& index.fields[1].order === order);
 
-			expect(alertIndex).toBeDefined();
+			expect(redundantIndex).toBeUndefined();
 		});
 
 		it('classifies a rejected query as failed_precondition and flags the missing index', async () => {
@@ -1827,6 +1851,28 @@ describe('AlertStorageService', () => {
 			expect(result).toMatchObject({
 				id: 'alert-with-req-id',
 				requestId: 'req-observable-123',
+			});
+		});
+
+		it('returns deployment identity when present on the document', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockDocGet.mockResolvedValueOnce(buildDocSnapshot('alert-with-dep', {
+				receivedAt: buildTimestamp('2026-06-06T10:30:00.000Z'),
+				text: 'Stored alert with deployment',
+				deployment: {
+					platform: 'render',
+					gitSha: 'abcdef1234567890abcdef1234567890abcdef12',
+					service: 'cabros-bot-worker',
+					runtimeVersion: '1.2.3',
+				},
+			}));
+
+			const result = await AlertStorageService.getAlertById('alert-with-dep');
+			expect(result.deployment).toEqual({
+				platform: 'render',
+				gitSha: 'abcdef1234567890abcdef1234567890abcdef12',
+				service: 'cabros-bot-worker',
+				runtimeVersion: '1.2.3',
 			});
 		});
 
@@ -2811,6 +2857,56 @@ describe('AlertStorageService', () => {
 			});
 		});
 
+		it('aggregates unknownModelPricing and unknownModels in alert enrichment tokenUsage', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-unknown-1', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						text: 'BINANCE:BTCUSDT',
+						tokenUsage: {
+							inputTokens: 10,
+							outputTokens: 20,
+							totalTokens: 30,
+							totalCost: 0.001,
+							pricing: {
+								unknownModelPricing: true,
+								unknownModels: ['gemini-custom-future-model'],
+							},
+						},
+					}),
+					buildQueryDoc('alert-known-2', {
+						receivedAt: buildTimestamp('2026-06-06T12:01:00.000Z'),
+						source: 'webhook',
+						text: 'BINANCE:ETHUSDT',
+						tokenUsage: {
+							inputTokens: 5,
+							outputTokens: 10,
+							totalTokens: 15,
+							totalCost: 0.0005,
+							pricing: {
+								unknownModelPricing: false,
+								unknownModels: [],
+							},
+						},
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 10,
+			});
+
+			expect(result.enrichment.tokenUsage.pricing).toEqual({
+				unknownModelPricing: true,
+				unknownModels: ['gemini-custom-future-model'],
+			});
+		});
+
 		it('does not attribute a zero-usage plain webhook alert to grounding', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			// The webhook handler always persists `tokenUsage.toJSON()`; with every
@@ -3145,6 +3241,11 @@ describe('AlertStorageService', () => {
 							setup_type: { populated: 0, percentage: 0 },
 							risk_reward_ratio: { populated: 0, percentage: 0 },
 						},
+						directionEchoRate: {
+							echoed: 0,
+							total: 0,
+							percentage: 0,
+						},
 						byPromptProvenance: [
 							{
 								provenance: null,
@@ -3154,6 +3255,11 @@ describe('AlertStorageService', () => {
 									target_level: { populated: 0, percentage: 0 },
 									setup_type: { populated: 0, percentage: 0 },
 									risk_reward_ratio: { populated: 0, percentage: 0 },
+								},
+								directionEchoRate: {
+									echoed: 0,
+									total: 0,
+									percentage: 0,
 								},
 							},
 						],
@@ -3200,7 +3306,12 @@ describe('AlertStorageService', () => {
 						outputTokens: 20,
 						totalTokens: 30,
 						totalCost: 0.001,
+						pricing: {
+							unknownModelPricing: false,
+							unknownModels: [],
+						},
 					},
+					costEstimateUsd: 0.001,
 				},
 				delivery: {
 					totalSuccess: 2,
@@ -3210,6 +3321,16 @@ describe('AlertStorageService', () => {
 						whatsapp: { total: 1, success: 1, failure: 0 },
 					},
 				},
+				deployments: [
+					{
+						count: 2,
+						gitSha: null,
+						lastSeen: '2026-06-06T12:00:00.000Z',
+						platform: 'unknown',
+						runtimeVersion: null,
+						service: null,
+					},
+				],
 				scanner: {
 					totalRuns: 0,
 					errorCategoryCounts: {
@@ -3233,6 +3354,71 @@ describe('AlertStorageService', () => {
 				},
 			});
 			expect(JSON.stringify(result)).not.toContain('raw alert text');
+		});
+
+		it('aggregates deployments by platform, gitSha, and service, sorting by lastSeen descending', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('alert-1', {
+						receivedAt: buildTimestamp('2026-06-06T10:00:00.000Z'),
+						source: 'webhook',
+						symbol: 'BTCUSDT',
+						deployment: {
+							platform: 'railway',
+							gitSha: 'sha-old',
+							service: 'cabros-bot',
+							runtimeVersion: '0.1.0',
+						},
+					}),
+					buildQueryDoc('alert-2', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						source: 'webhook',
+						symbol: 'ETHUSDT',
+						deployment: {
+							platform: 'railway',
+							gitSha: 'sha-new',
+							service: 'cabros-bot',
+							runtimeVersion: '0.1.0',
+						},
+					}),
+					buildQueryDoc('alert-3', {
+						receivedAt: buildTimestamp('2026-06-06T11:00:00.000Z'),
+						source: 'webhook',
+						symbol: 'SOLUSDT',
+						deployment: {
+							platform: 'railway',
+							gitSha: 'sha-old',
+							service: 'cabros-bot',
+							runtimeVersion: '0.1.0',
+						},
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+			});
+
+			expect(result.deployments).toHaveLength(2);
+			expect(result.deployments[0]).toEqual({
+				platform: 'railway',
+				gitSha: 'sha-new',
+				service: 'cabros-bot',
+				runtimeVersion: '0.1.0',
+				count: 1,
+				lastSeen: '2026-06-06T12:00:00.000Z',
+			});
+			expect(result.deployments[1]).toEqual({
+				platform: 'railway',
+				gitSha: 'sha-old',
+				service: 'cabros-bot',
+				runtimeVersion: '0.1.0',
+				count: 2,
+				lastSeen: '2026-06-06T11:00:00.000Z',
+			});
 		});
 
 		it('excludes expired alerts from summaries', async () => {
@@ -3631,6 +3817,11 @@ describe('AlertStorageService', () => {
 					setup_type: { populated: 1, percentage: 50 },
 					risk_reward_ratio: { populated: 1, percentage: 50 },
 				},
+				directionEchoRate: {
+					echoed: 0,
+					total: 0,
+					percentage: 0,
+				},
 				byPromptProvenance: [
 					{
 						provenance: {
@@ -3646,6 +3837,11 @@ describe('AlertStorageService', () => {
 							target_level: { populated: 1, percentage: 100 },
 							setup_type: { populated: 1, percentage: 100 },
 							risk_reward_ratio: { populated: 1, percentage: 100 },
+						},
+						directionEchoRate: {
+							echoed: 0,
+							total: 0,
+							percentage: 0,
 						},
 					},
 					{
@@ -3663,8 +3859,73 @@ describe('AlertStorageService', () => {
 							setup_type: { populated: 0, percentage: 0 },
 							risk_reward_ratio: { populated: 0, percentage: 0 },
 						},
+						directionEchoRate: {
+							echoed: 0,
+							total: 0,
+							percentage: 0,
+						},
 					},
 				],
+			});
+		});
+
+		it('calculates directionEchoRate accurately for BUY/trend_continuation and SELL/reversal', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					// 1. BUY + trend_continuation -> echoed
+					buildQueryDoc('alert-echo-buy', {
+						receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+						enriched: true,
+						side: 'BUY',
+						enrichmentData: {
+							setup_type: 'trend_continuation',
+							promptProvenance: { name: 'alert-enrichment', source: 'langfuse', label: 'production', version: 1 },
+						},
+					}),
+					// 2. SELL + reversal -> echoed
+					buildQueryDoc('alert-echo-sell', {
+						receivedAt: buildTimestamp('2026-06-06T12:01:00.000Z'),
+						enriched: true,
+						text: 'BINANCE:ETHUSDT(60) pasó a señal de VENTA',
+						enrichmentData: {
+							setup_type: 'reversal',
+							promptProvenance: { name: 'alert-enrichment', source: 'langfuse', label: 'production', version: 1 },
+						},
+					}),
+					// 3. BUY + breakout -> not echoed
+					buildQueryDoc('alert-non-echo', {
+						receivedAt: buildTimestamp('2026-06-06T12:02:00.000Z'),
+						enriched: true,
+						side: 'BUY',
+						enrichmentData: {
+							setup_type: 'breakout',
+							promptProvenance: { name: 'alert-enrichment', source: 'langfuse', label: 'production', version: 1 },
+						},
+					}),
+					// 4. Alert without setup_type -> ignored in directionEchoRate
+					buildQueryDoc('alert-no-setup', {
+						receivedAt: buildTimestamp('2026-06-06T12:03:00.000Z'),
+						enriched: true,
+						side: 'BUY',
+						enrichmentData: {
+							promptProvenance: { name: 'alert-enrichment', source: 'langfuse', label: 'production', version: 1 },
+						},
+					}),
+				],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z',
+				to: '2026-06-07T00:00:00.000Z',
+				limit: 200,
+			});
+
+			expect(result.enrichment.riskMetadataCoverage.directionEchoRate).toEqual({
+				echoed: 2,
+				total: 3,
+				percentage: 66.67,
 			});
 		});
 

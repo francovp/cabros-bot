@@ -3,6 +3,13 @@
 jest.mock('binance', () => ({ MainClient: jest.fn() }));
 
 const mockPlaceOrder = jest.fn();
+const mockReserveAutoTrade = jest.fn();
+const mockFinishAutoTrade = jest.fn();
+
+jest.mock('../../src/services/trading/AutoTradeReservationService', () => ({
+	reserveAutoTrade: (...args) => mockReserveAutoTrade(...args),
+	finishAutoTrade: (...args) => mockFinishAutoTrade(...args),
+}));
 
 jest.mock('../../src/services/trading/BinanceOrderService', () => ({
 	binanceOrderService: { placeOrder: (...args) => mockPlaceOrder(...args) },
@@ -22,6 +29,7 @@ const {
 	getAutoTradeConfig,
 	__resetForTesting,
 } = require('../../src/services/trading/AlertSignalRouter');
+const { waitForBackgroundTasks } = require('../../src/lib/backgroundTaskTracker');
 
 const TRADING_ENV_KEYS = [
 	'ENABLE_AUTO_TRADE',
@@ -55,6 +63,10 @@ beforeEach(() => {
 	};
 
 	mockPlaceOrder.mockReset();
+	mockReserveAutoTrade.mockReset();
+	mockFinishAutoTrade.mockReset();
+	mockReserveAutoTrade.mockResolvedValue({ state: 'reserved' });
+	mockFinishAutoTrade.mockResolvedValue(true);
 	mockPlaceOrder.mockResolvedValue({
 		success: true,
 		dryRun: true,
@@ -93,6 +105,7 @@ function buyParsed(overrides = {}) {
 	return {
 		exchange: 'BINANCE',
 		symbol: 'BTCUSDT',
+		rawTimeframe: '1H',
 		timeframe: '1h',
 		side: 'BUY',
 		...(overrides || {}),
@@ -165,6 +178,22 @@ describe('deriveOrderIntent', () => {
 		expect(intent.skip).toBe('SENTIMENT_BELOW_THRESHOLD');
 	});
 
+	it('rejects a bearish score for a BUY signal', () => {
+		const intent = deriveOrderIntent({
+			alert: buyAlert({ enriched: { sentiment_score: -0.9 } }),
+			parsed: buyParsed(),
+			config,
+		});
+		expect(intent.skip).toBe('SENTIMENT_DIRECTION_MISMATCH');
+	});
+
+	it('rejects a missing score even when the configured threshold is zero', () => {
+		const alert = buyAlert();
+		delete alert.enriched.sentiment_score;
+		const intent = deriveOrderIntent({ alert, parsed: buyParsed(), config: { ...config, minAbsSentiment: 0 } });
+		expect(intent.skip).toBe('SENTIMENT_SCORE_REQUIRED');
+	});
+
 	it('refuses to guess a side when the signal was not parsed', () => {
 		const intent = deriveOrderIntent({ alert: buyAlert(), parsed: { symbol: 'BTCUSDT' }, config });
 		expect(intent.skip).toBe('NO_PARSED_SIDE');
@@ -233,6 +262,17 @@ describe('routeAlertToOrder', () => {
 		expect(mockPlaceOrder).not.toHaveBeenCalled();
 	});
 
+	it('refuses a live order when the raw timeframe normalizes to a supported fallback', async () => {
+		enableLiveAutoTrade();
+		const result = await routeAlertToOrder({
+			alert: buyAlert(),
+			parsed: buyParsed({ rawTimeframe: '3M', timeframe: '1h' }),
+			requestId: 'r1',
+		});
+		expect(result.reason).toBe('UNKNOWN_TIMEFRAME_CANNOT_DEDUPLICATE');
+		expect(mockPlaceOrder).not.toHaveBeenCalled();
+	});
+
 	it('refuses a live order when process-wide repeat suppression is off', async () => {
 		enableLiveAutoTrade();
 		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'false';
@@ -246,10 +286,98 @@ describe('routeAlertToOrder', () => {
 		mockPlaceOrder.mockResolvedValue({
 			success: true, dryRun: false, environment: 'testnet', order: { orderId: 222 },
 		});
-		const result = await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), requestId: 'r1' });
-		expect(result.executed).toBe(true);
-		expect(result.dryRun).toBe(false);
+		const result = await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), signalId: 'bar-123', requestId: 'r1' });
+		expect(result).toMatchObject({ executed: false, reason: 'ORDER_PENDING' });
+		await waitForBackgroundTasks();
 		expect(mockPlaceOrder.mock.calls[0][0].dryRun).toBe(false);
+		expect(mockReserveAutoTrade).toHaveBeenCalledTimes(1);
+		expect(mockFinishAutoTrade).toHaveBeenCalledWith(expect.any(Object), 'submitted', { orderId: 222 });
+	});
+
+	it.each([['D', '1D'], ['W', '1W'], ['M', '1M']])('accepts a canonical %s live timeframe', async (rawTimeframe, timeframe) => {
+		enableLiveAutoTrade();
+		const result = await routeAlertToOrder({
+			alert: buyAlert(), parsed: buyParsed({ rawTimeframe, timeframe }), signalId: `bar-${rawTimeframe}`,
+		});
+		expect(result.reason).toBe('ORDER_PENDING');
+		expect(mockReserveAutoTrade).toHaveBeenCalledWith(`bar-${rawTimeframe}`, expect.any(String), {
+			cooldownKey: `autotrade|BINANCE|BTCUSDT|${timeframe.toLowerCase()}|BUY`,
+			cooldownMs: expect.any(Number),
+		});
+		await waitForBackgroundTasks();
+	});
+
+	it('honors a shared cooldown reservation from another replica', async () => {
+		enableLiveAutoTrade();
+		mockReserveAutoTrade.mockResolvedValue({ state: 'cooldown' });
+		const result = await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), signalId: 'bar-124' });
+		expect(result.reason).toBe('COOLDOWN_ACTIVE');
+		expect(mockPlaceOrder).not.toHaveBeenCalled();
+	});
+
+	it('requires a stable occurrence ID for live execution', async () => {
+		enableLiveAutoTrade();
+		const result = await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), requestId: 'r1' });
+		expect(result.reason).toBe('SIGNAL_ID_REQUIRED');
+		expect(mockPlaceOrder).not.toHaveBeenCalled();
+	});
+
+	it('refuses live Binance execution for a signal from another exchange', async () => {
+		enableLiveAutoTrade();
+		const result = await routeAlertToOrder({
+			alert: buyAlert(), parsed: buyParsed({ exchange: 'COINBASE' }), signalId: 'bar-123',
+		});
+		expect(result.reason).toBe('EXCHANGE_NOT_SUPPORTED');
+		expect(mockReserveAutoTrade).not.toHaveBeenCalled();
+		expect(mockPlaceOrder).not.toHaveBeenCalled();
+	});
+
+	it('does not resubmit an occurrence reserved by another replica', async () => {
+		enableLiveAutoTrade();
+		mockReserveAutoTrade.mockResolvedValue({ state: 'duplicate', status: 'pending' });
+		const result = await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), signalId: 'bar-123' });
+		expect(result.reason).toBe('SIGNAL_ALREADY_RESERVED');
+		expect(mockPlaceOrder).not.toHaveBeenCalled();
+	});
+
+	it('uses distinct Binance client-order keys for later occurrences', async () => {
+		enableLiveAutoTrade();
+		await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), signalId: 'bar-123' });
+		await waitForBackgroundTasks();
+		__resetForTesting();
+		await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), signalId: 'bar-124' });
+		await waitForBackgroundTasks();
+		const keys = mockPlaceOrder.mock.calls.map((call) => call[1].idempotencyKey);
+		expect(new Set(keys).size).toBe(2);
+	});
+
+	it('responds while Binance submission is still pending', async () => {
+		enableLiveAutoTrade();
+		let finish;
+		mockPlaceOrder.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+		const result = await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), signalId: 'bar-123' });
+		expect(result.reason).toBe('ORDER_PENDING');
+		finish({ success: true, dryRun: false, order: { orderId: 222 } });
+		await waitForBackgroundTasks();
+	});
+
+	it('retains an ambiguous live reservation for reconciliation', async () => {
+		enableLiveAutoTrade();
+		mockPlaceOrder.mockRejectedValue(Object.assign(new Error('execution unknown'), { code: 'BINANCE_ORDER_STATUS_UNKNOWN' }));
+		const result = await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), signalId: 'bar-123' });
+		expect(result.reason).toBe('ORDER_PENDING');
+		await waitForBackgroundTasks();
+		expect(mockFinishAutoTrade).toHaveBeenCalledWith(expect.any(Object), 'unknown', {
+			errorCode: 'BINANCE_ORDER_STATUS_UNKNOWN',
+		});
+	});
+
+	it('fails closed when Firestore cannot reserve the occurrence', async () => {
+		enableLiveAutoTrade();
+		mockReserveAutoTrade.mockResolvedValue({ state: 'unavailable' });
+		const result = await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), signalId: 'bar-123' });
+		expect(result.reason).toBe('DURABLE_RESERVATION_UNAVAILABLE');
+		expect(mockPlaceOrder).not.toHaveBeenCalled();
 	});
 
 	it('suppresses a duplicate signal within the cooldown window', async () => {

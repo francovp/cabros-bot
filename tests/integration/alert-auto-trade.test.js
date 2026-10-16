@@ -6,6 +6,12 @@ jest.mock('../../src/services/trading/BinanceOrderService', () => ({
 }));
 
 const mockPlaceOrder = jest.fn();
+const mockReserveAutoTrade = jest.fn();
+const mockFinishAutoTrade = jest.fn();
+jest.mock('../../src/services/trading/AutoTradeReservationService', () => ({
+	reserveAutoTrade: (...args) => mockReserveAutoTrade(...args),
+	finishAutoTrade: (...args) => mockFinishAutoTrade(...args),
+}));
 const mockBinanceConfig = {
 	enabled: true,
 	configured: true,
@@ -26,6 +32,7 @@ const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { enrichAlert } = require('../../src/controllers/webhooks/handlers/alert/grounding');
+const { waitForBackgroundTasks } = require('../../src/lib/backgroundTaskTracker');
 
 function saveEnv() {
 	return { ...process.env };
@@ -76,6 +83,10 @@ describe('Alert auto-trade endpoint wiring', () => {
 		jest.clearAllMocks();
 		enrichAlert.mockReset();
 		mockPlaceOrder.mockReset();
+		mockReserveAutoTrade.mockReset();
+		mockFinishAutoTrade.mockReset();
+		mockReserveAutoTrade.mockResolvedValue({ state: 'reserved' });
+		mockFinishAutoTrade.mockResolvedValue(true);
 		mockBinanceConfig.enabled = true;
 		mockBinanceConfig.configured = true;
 		mockBinanceConfig.allowedSymbols = ['BTCUSDT'];
@@ -157,6 +168,46 @@ describe('Alert auto-trade endpoint wiring', () => {
 		expect(orderBody).toMatchObject({ symbol: 'BTCUSDT', side: 'BUY', type: 'MARKET', dryRun: true });
 	});
 
+	it('accepts the body-only autoTrade flag', async () => {
+		process.env.ENABLE_AUTO_TRADE = 'true';
+		const response = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: 'BINANCE:BTCUSDT(1h) COMPRA', autoTrade: true })
+			.expect(200);
+		expect(response.body.autoTrade).toMatchObject({ requested: true, executed: true, dryRun: true });
+		expect(mockPlaceOrder).toHaveBeenCalledTimes(1);
+	});
+
+	it('rejects a malformed body autoTrade flag before delivery or trading', async () => {
+		process.env.ENABLE_AUTO_TRADE = 'true';
+		const response = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: 'BINANCE:BTCUSDT(1h) COMPRA', autoTrade: 'yes' })
+			.expect(400);
+		expect(response.body.error).toBe('INVALID_AUTO_TRADE_FLAG');
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+		expect(mockPlaceOrder).not.toHaveBeenCalled();
+	});
+
+	it('passes the body signalId to the durable live reservation', async () => {
+		process.env.ENABLE_AUTO_TRADE = 'true';
+		process.env.AUTO_TRADE_DRY_RUN = 'false';
+		process.env.ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION = 'true';
+		mockPlaceOrder.mockResolvedValue({ success: true, dryRun: false, order: { orderId: 4242 } });
+		const response = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({ text: 'BINANCE:BTCUSDT(1h) COMPRA', autoTrade: true, signalId: 'bar-123' })
+			.expect(200);
+		expect(response.body.autoTrade).toMatchObject({ reason: 'ORDER_PENDING', executed: false });
+		expect(mockReserveAutoTrade).toHaveBeenCalledWith('bar-123', expect.any(String), {
+			cooldownKey: 'autotrade|BINANCE|BTCUSDT|1h|BUY', cooldownMs: 3600000,
+		});
+		await waitForBackgroundTasks();
+	});
+
 	it('still delivers the alert when the order bridge rejects the signal', async () => {
 		process.env.ENABLE_AUTO_TRADE = 'true';
 		enrichAlert.mockResolvedValue({ ...BULLISH_ENRICHMENT, sentiment_score: 0.05 });
@@ -172,7 +223,9 @@ describe('Alert auto-trade endpoint wiring', () => {
 			executed: false,
 			reason: 'SENTIMENT_BELOW_THRESHOLD',
 		});
-		expect(mockTelegramSendMessage).toHaveBeenCalled();
+		expect(response.body.results).toEqual(expect.arrayContaining([
+			expect.objectContaining({ channel: 'telegram', success: true }),
+		]));
 		expect(mockPlaceOrder).not.toHaveBeenCalled();
 	});
 
@@ -188,6 +241,8 @@ describe('Alert auto-trade endpoint wiring', () => {
 
 		expect(response.body.success).toBe(true);
 		expect(response.body.autoTrade).toMatchObject({ executed: false, reason: 'ORDER_FAILED' });
-		expect(mockTelegramSendMessage).toHaveBeenCalled();
+		expect(response.body.results).toEqual(expect.arrayContaining([
+			expect.objectContaining({ channel: 'telegram', success: true }),
+		]));
 	});
 });

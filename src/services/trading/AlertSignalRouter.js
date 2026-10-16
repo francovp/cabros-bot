@@ -2,6 +2,9 @@
 
 const { binanceOrderService, getConfig } = require('./BinanceOrderService');
 const { TIMEFRAME_BAR_MS } = require('../alerts/signalRepeatCooldown');
+const { TIMEFRAME_MAP } = require('../tradingview/parseTradingViewSignal');
+const { reserveAutoTrade, finishAutoTrade } = require('./AutoTradeReservationService');
+const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const sentryService = require('../monitoring/SentryService');
 
 const DEFAULT_MAX_NOTIONAL = 100;
@@ -54,8 +57,7 @@ function getAutoTradeConfig() {
 		maxNotional: readFloatEnv('AUTO_TRADE_MAX_NOTIONAL', DEFAULT_MAX_NOTIONAL, { min: 1e-8, max: 1000000 }),
 		minAbsSentiment: readFloatEnv('AUTO_TRADE_MIN_ABS_SENTIMENT', DEFAULT_MIN_ABS_SENTIMENT, { min: 0, max: 1 }),
 		cooldownBars: readIntEnv('AUTO_TRADE_COOLDOWN_BARS', DEFAULT_COOLDOWN_BARS, { min: 1, max: 10 }),
-		// Repeat suppression is the mechanism that prevents duplicate live orders,
-		// so it must be on before any non-dry-run submission is allowed.
+		// Preserve the alert repeat-suppression defense in depth for live mode.
 		requireRepeatSuppression: readBoolEnv('ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION', false),
 	};
 }
@@ -120,10 +122,12 @@ function deriveOrderIntent({ alert, parsed, config }) {
 	const side = parsed && typeof parsed.side === 'string' ? parsed.side.trim().toUpperCase() : '';
 	if (side !== 'BUY' && side !== 'SELL') return { skip: 'NO_PARSED_SIDE' };
 
-	const rawScore = typeof enriched.sentiment_score === 'number' && Number.isFinite(enriched.sentiment_score)
-		? enriched.sentiment_score
-		: 0;
+	const rawScore = enriched.sentiment_score;
+	if (typeof rawScore !== 'number' || !Number.isFinite(rawScore)) return { skip: 'SENTIMENT_SCORE_REQUIRED' };
 	if (Math.abs(rawScore) < config.minAbsSentiment) return { skip: 'SENTIMENT_BELOW_THRESHOLD' };
+	if ((side === 'BUY' && rawScore <= 0) || (side === 'SELL' && rawScore >= 0)) {
+		return { skip: 'SENTIMENT_DIRECTION_MISMATCH' };
+	}
 
 	if (side === 'SELL') {
 		// No balance/holdings lookup exists, so a SELL cannot be sized safely and
@@ -164,7 +168,7 @@ function deriveOrderIntent({ alert, parsed, config }) {
  * Fail-open by contract: never throws, so the calling webhook alert handler can
  * keep delivering notifications regardless of trading state.
  */
-async function routeAlertToOrder({ alert, parsed, requestId }) {
+async function routeAlertToOrder({ alert, parsed, requestId, signalId }) {
 	if (!isEnabled()) {
 		return { executed: false, reason: 'AUTO_TRADE_DISABLED' };
 	}
@@ -181,29 +185,35 @@ async function routeAlertToOrder({ alert, parsed, requestId }) {
 	}
 
 	const { symbol, side, order } = intent;
+	if (!config.dryRun && parsed.exchange !== 'BINANCE') {
+		return { executed: false, reason: 'EXCHANGE_NOT_SUPPORTED' };
+	}
 
 	if (!binanceConfig.allowedSymbols.includes(symbol)) {
 		return { executed: false, reason: 'SYMBOL_NOT_ALLOWED' };
 	}
 
-	const timeframe = parsed && typeof parsed.timeframe === 'string' ? parsed.timeframe.trim().toLowerCase() : '';
+	const timeframe = parsed && typeof parsed.timeframe === 'string' ? parsed.timeframe.trim() : '';
 	if (!config.dryRun) {
 		// A live order is only safe when we can bound duplicate submissions.
 		// The auto-trade cooldown is expressed in bars, so an unresolvable
 		// timeframe means no dedup window at all.
-		if (!Number.isFinite(TIMEFRAME_BAR_MS[timeframe])) {
+		if (!parsed || !parsed.rawTimeframe || TIMEFRAME_MAP[parsed.rawTimeframe] !== parsed.timeframe
+			|| !Number.isFinite(TIMEFRAME_BAR_MS[timeframe])) {
 			return { executed: false, reason: 'UNKNOWN_TIMEFRAME_CANNOT_DEDUPLICATE' };
 		}
-		// Defense in depth: the process-wide alert repeat suppression is a second,
-		// independent dedup layer. Without it a notification retry storm could
-		// drive repeated live submissions for the same signal.
+		// Alert repeat suppression remains a defense in depth layer; the
+		// Firestore transaction below is authoritative across all replicas.
 		if (!config.requireRepeatSuppression) {
 			return { executed: false, reason: 'LIVE_ORDER_REQUIRES_REPEAT_SUPPRESSION' };
+		}
+		if (typeof signalId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(signalId)) {
+			return { executed: false, reason: 'SIGNAL_ID_REQUIRED' };
 		}
 	}
 
 	const cooldownKey = buildAutoTradeKey({ exchange: parsed.exchange, symbol, timeframe, side });
-	if (cooldownKey && isInCooldown(cooldownKey, config.cooldownBars)) {
+	if (config.dryRun && cooldownKey && isInCooldown(cooldownKey, config.cooldownBars)) {
 		return { executed: false, reason: 'COOLDOWN_ACTIVE' };
 	}
 
@@ -214,10 +224,41 @@ async function routeAlertToOrder({ alert, parsed, requestId }) {
 	// reconcile-before-submit path in placeOrder() would never match — letting a
 	// retried alert submit a second live order.
 	//
-	// Keying on exchange|symbol|timeframe|side means retries of the same signal
-	// collapse onto one Binance clientOrderId, and a genuinely new signal on the
-	// same key correctly reconciles against the prior order instead of stacking.
-	const idempotencyKey = `auto-trade:${cooldownKey || symbol}`;
+	// Live keys also include the signal occurrence. A later valid signal can
+	// submit a distinct order while retries reconcile against the same client ID.
+	const idempotencyKey = `auto-trade:${config.dryRun ? '' : `${signalId}:`}${cooldownKey || symbol}`;
+
+	if (!config.dryRun) {
+		const fingerprint = JSON.stringify({
+			exchange: parsed.exchange || 'BINANCE', symbol, timeframe, side,
+			quoteOrderQty: order.quoteOrderQty, environment: binanceConfig.environment,
+		});
+		const reservation = await reserveAutoTrade(signalId, fingerprint, {
+			cooldownKey, cooldownMs: config.cooldownBars * TIMEFRAME_BAR_MS[timeframe],
+		});
+		if (reservation.state === 'unavailable') return { executed: false, reason: 'DURABLE_RESERVATION_UNAVAILABLE' };
+		if (reservation.state === 'conflict') return { executed: false, reason: 'SIGNAL_ID_CONFLICT' };
+		if (reservation.state === 'duplicate') return { executed: false, reason: 'SIGNAL_ALREADY_RESERVED' };
+		if (reservation.state === 'cooldown') return { executed: false, reason: 'COOLDOWN_ACTIVE' };
+		if (reservation.state !== 'reserved') return { executed: false, reason: 'DURABLE_RESERVATION_UNAVAILABLE' };
+
+		// The durable claim is committed before Binance work starts. The task is
+		// tracked for shutdown; retries see the claim even after a process crash.
+		const submission = (async () => {
+			try {
+				const result = await binanceOrderService.placeOrder(order, { idempotencyKey });
+				await finishAutoTrade(reservation, 'submitted', { orderId: result?.order?.orderId });
+				console.info('[AlertSignalRouter] live auto-trade submitted', { symbol, side, requestId, orderId: result?.order?.orderId });
+			} catch (error) {
+				const status = error?.code === 'BINANCE_ORDER_STATUS_UNKNOWN' ? 'unknown' : 'failed';
+				await finishAutoTrade(reservation, status, { errorCode: error?.code });
+				console.warn('[AlertSignalRouter] live auto-trade failed', { symbol, side, requestId, code: error?.code });
+				sentryService.captureRuntimeError({ channel: 'alert-signal-router', error });
+			}
+		})();
+		trackBackgroundTask(submission);
+		return { executed: false, reason: 'ORDER_PENDING', symbol, side, dryRun: false };
+	}
 
 	try {
 		const result = await binanceOrderService.placeOrder(order, { idempotencyKey });
