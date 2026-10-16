@@ -255,6 +255,17 @@ describe('Postman collection contract', () => {
 		expect(script).toContain('pm.variables.set(\'oversizedWebhookPadding\'');
 		expect(oversized.request.body.raw).toContain('{{oversizedWebhookPadding}}');
 		expect(oversized.request.body.raw).not.toContain('{{$padString}}');
+		expect(oversized.request.header).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'x-request-id', value: 'req-webhook-body-size-001' }),
+		]));
+		expect(oversized.response[0].header).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'X-Request-Id', value: 'req-webhook-body-size-001' }),
+		]));
+		expect(JSON.parse(oversized.response[0].body)).toEqual(expect.objectContaining({
+			code: 'PAYLOAD_TOO_LARGE',
+			requestId: 'req-webhook-body-size-001',
+			retryable: false,
+		}));
 
 	});
 
@@ -808,6 +819,65 @@ describe('Postman collection contract', () => {
 			error: 'Malformed JSON request body',
 			requestId: expect.any(String),
 		}));
+		const malformedJsonTests = (malformedJsonAlert.event || [])
+			.filter((event) => event.listen === 'test')
+			.flatMap((event) => event.script.exec)
+			.join('\n');
+		expect(malformedJsonTests).toContain('pm.test');
+		expect(malformedJsonTests).toContain('Malformed JSON returns structured 400');
+		expect(malformedJsonTests).toContain('pm.response.to.have.status(400)');
+		expect(malformedJsonTests).toContain('body.code).to.eql(\'INVALID_REQUEST\')');
+
+		const unsupportedCharset = findItem(collection.item, 'POST Send Alert (unsupported JSON charset - 415)');
+		expect(unsupportedCharset).toBeDefined();
+		expect(unsupportedCharset.request.header).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'Content-Type', value: 'application/json; charset=unsupported-charset' }),
+		]));
+		expect(unsupportedCharset.response[0].code).toBe(415);
+		expect(JSON.parse(unsupportedCharset.response[0].body)).toEqual(expect.objectContaining({
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		}));
+		const unsupportedCharsetTests = unsupportedCharset.event
+			.filter((event) => event.listen === 'test')
+			.flatMap((event) => event.script.exec)
+			.join('\n');
+		expect(unsupportedCharsetTests).toContain('pm.response.to.have.status(415)');
+		expect(unsupportedCharsetTests).toContain('body.code).to.eql(\'INVALID_REQUEST\')');
+		expect(unsupportedCharsetTests).toContain('X-Request-Id');
+
+		const fallthrough500Examples = findItem(collection.item, 'POST Send Alert').response
+			.filter((response) => response.code === 500);
+		expect(fallthrough500Examples).toHaveLength(1);
+		expect(JSON.parse(fallthrough500Examples[0].body)).toEqual(expect.objectContaining({
+			success: false,
+			code: 'INTERNAL_ERROR',
+			requestId: expect.any(String),
+		}));
+
+		const tooManyParameters = findItem(collection.item, 'POST Send Alert (too many URL-encoded parameters - 413)');
+		expect(tooManyParameters).toBeDefined();
+		expect(tooManyParameters.request.body.raw).toContain('{{tooManyUrlEncodedParameters}}');
+		expect(tooManyParameters.event.find((event) => event.listen === 'prerequest').script.exec.join('\n'))
+			.toContain('Array.from({ length: 1001 }');
+		expect(tooManyParameters.event.find((event) => event.listen === 'test').script.exec.join('\n'))
+			.toContain('body.code).to.eql(\'PAYLOAD_TOO_LARGE\')');
+		expect(JSON.parse(tooManyParameters.response[0].body)).toEqual(expect.objectContaining({
+			code: 'PAYLOAD_TOO_LARGE',
+			error: 'Request contains too many URL-encoded parameters',
+			retryable: false,
+		}));
+
+		const message500 = findItem(collection.item, 'POST Send Message').response
+			.find((response) => response.code === 500);
+		expect(JSON.parse(message500.body)).toEqual(expect.objectContaining({
+			code: 'INTERNAL_ERROR',
+			retryable: true,
+		}));
+		expect(message500.header).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'X-Request-Id', value: expect.any(String) }),
+		]));
 
 		const listClassFiltered = findItem(collection.item, 'GET List Alerts (signalClass filter)');
 		expect(listClassFiltered).toBeDefined();

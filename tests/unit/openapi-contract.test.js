@@ -940,6 +940,68 @@ describe('status dependency contract drift', () => {
 			.toHaveProperty('sentryUnavailable');
 	});
 
+	it('documents global Express 500 responses and body-parser 400/413/415 responses', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const operations = Object.entries(spec.paths).flatMap(([path, pathItem]) => Object.entries(pathItem)
+			.filter(([method]) => ['get', 'post', 'put', 'patch', 'delete', 'options', 'head'].includes(method))
+			.map(([method, operation]) => ({ path, method, operation })));
+		const missingFallthrough500 = operations
+			.filter(({ operation }) => !operation.responses?.['500'])
+			.map(({ method, path }) => `${method.toUpperCase()} ${path}`);
+		const missingBodyParserErrors = operations
+			.filter(({ operation }) => operation.requestBody && (
+				!operation.responses?.['400'] || !operation.responses?.['413'] || !operation.responses?.['415']
+			))
+			.map(({ method, path }) => `${method.toUpperCase()} ${path}`);
+		const incorrectlyDocumented413 = operations
+			.filter(({ operation }) => operation.responses?.['413']
+				&& operation.responses['413'].$ref !== '#/components/responses/PayloadTooLarge')
+			.map(({ method, path }) => `${method.toUpperCase()} ${path}`);
+		const incorrectlyDocumented415 = operations
+			.filter(({ operation }) => operation.requestBody
+				&& operation.responses?.['415']?.$ref !== '#/components/responses/ExpressParserError')
+			.map(({ method, path }) => `${method.toUpperCase()} ${path}`);
+
+		expect(missingFallthrough500).toEqual([]);
+		expect(missingBodyParserErrors).toEqual([]);
+		expect(incorrectlyDocumented413).toEqual([]);
+		expect(incorrectlyDocumented415).toEqual([]);
+		expect(spec.components.schemas.Error.properties.sentryEventId.type).toBe('string');
+		expect(spec.components.schemas.ExpressErrorEnvelope.properties.sentryEventId.type).toBe('string');
+		expect(spec.components.responses.PayloadTooLarge.content['application/json'].schema.oneOf).toEqual([
+			{ $ref: '#/components/schemas/PayloadTooLarge' },
+			{ $ref: '#/components/schemas/ExpressErrorEnvelope' },
+		]);
+		expect(spec.components.responses.PayloadTooLarge.content['application/json'].examples)
+			.toHaveProperty('urlEncodedParameterLimit');
+		const payloadTooLargeSchema = spec.components.schemas.PayloadTooLarge;
+		expect(payloadTooLargeSchema.required).toEqual(expect.arrayContaining([
+			'code',
+			'requestId',
+			'retryable',
+		]));
+		expect(spec.components.responses.PayloadTooLarge.content['application/json'].examples.bodySize.value)
+			.toEqual(expect.objectContaining({
+				code: 'PAYLOAD_TOO_LARGE',
+				requestId: expect.any(String),
+				retryable: false,
+			}));
+		expect(spec.components.responses.ExpressParserError.content['application/json'].schema.$ref)
+			.toBe('#/components/schemas/ExpressErrorEnvelope');
+		expect(spec.components.responses.ExpressParserError.headers['X-Request-Id'].$ref)
+			.toBe('#/components/headers/XRequestIdResponseHeader');
+		expect(spec.components.responses.ExpressParserError.content['application/json'].examples.unsupportedCharset.value)
+			.toEqual({
+				success: false,
+				error: 'Request could not be processed',
+				code: 'INVALID_REQUEST',
+				requestId: 'req-unsupported-charset-001',
+				retryable: false,
+			});
+		expect(spec.paths['/api/webhook/message'].post.responses['500'].$ref)
+			.toBe('#/components/responses/Error');
+	});
+
 	it('documents every lastErrorCategory the remote-config service can emit', () => {
 		// The service emits `invalid_value` on a SUCCESSFUL load whose values failed
 		// schema validation. A client validating responses against the published spec

@@ -2205,18 +2205,6 @@
                 }
               ],
               "body": "{\n  \"success\": false,\n  \"error\": \"Internal server error\",\n  \"code\": \"INTERNAL_ERROR\",\n  \"requestId\": \"req-alert-error-001\",\n  \"retryable\": true\n}"
-            },
-            {
-              "name": "Internal Server Error (Sentry event ID)",
-              "status": "Internal Server Error",
-              "code": 500,
-              "header": [
-                {
-                  "key": "X-Request-Id",
-                  "value": "req-alert-error-002"
-                }
-              ],
-              "body": "{\n  \"success\": false,\n  \"error\": \"Internal server error\",\n  \"code\": \"INTERNAL_ERROR\",\n  \"requestId\": \"req-alert-error-002\",\n  \"retryable\": true,\n  \"sentryEventId\": \"a1b2c3d4e5f6473890123456789abcde\"\n}"
             }
           ]
         },
@@ -2270,6 +2258,182 @@
                 }
               ],
               "body": "{\n  \"success\": false,\n  \"error\": \"Malformed JSON request body\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-alert-malformed-001\",\n  \"retryable\": false\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Malformed JSON returns structured 400', () => {",
+                  "  pm.response.to.have.status(400);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.eql(false);",
+                  "  pm.expect(body.code).to.eql('INVALID_REQUEST');",
+                  "  pm.expect(body.requestId).to.be.a('string');",
+                  "});",
+                  "pm.test('X-Request-Id matches the response requestId', () => {",
+                  "  pm.expect(pm.response.headers.get('X-Request-Id')).to.eql(pm.response.json().requestId);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Send Alert (too many URL-encoded parameters - 413)",
+          "request": {
+            "method": "POST",
+            "description": "Express rejects URL-encoded bodies with more than 1,000 parameters. The pre-request script builds 1,001 fields so this request exercises that parser limit.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "x-request-id",
+                "value": "req-alert-param-limit-001",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{{tooManyUrlEncodedParameters}}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Too many URL-encoded parameters - 413",
+              "status": "Payload Too Large",
+              "code": 413,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-alert-param-limit-001"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Request contains too many URL-encoded parameters\",\n  \"code\": \"PAYLOAD_TOO_LARGE\",\n  \"requestId\": \"req-alert-param-limit-001\",\n  \"retryable\": false\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.variables.set('tooManyUrlEncodedParameters', Array.from({ length: 1001 }, (_, index) => 'key' + index + '=x').join('&'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('URL-encoded parameter limit returns structured 413', function () {",
+                  "  pm.response.to.have.status(413);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.eql(false);",
+                  "  pm.expect(body.code).to.eql('PAYLOAD_TOO_LARGE');",
+                  "  pm.expect(body.requestId).to.be.a('string');",
+                  "  pm.expect(body.retryable).to.eql(false);",
+                  "});",
+                  "pm.test('X-Request-Id matches the response requestId', function () {",
+                  "  pm.expect(pm.response.headers.get('X-Request-Id')).to.eql(pm.response.json().requestId);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Send Alert (unsupported JSON charset - 415)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json; charset=unsupported-charset",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "x-request-id",
+                "value": "req-alert-unsupported-charset-001",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"text\":\"valid JSON\"}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Unsupported JSON charset - 415 Unsupported Media Type",
+              "status": "Unsupported Media Type",
+              "code": 415,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-alert-unsupported-charset-001"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Request could not be processed\",\n  \"code\": \"INVALID_REQUEST\",\n  \"requestId\": \"req-alert-unsupported-charset-001\",\n  \"retryable\": false\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Unsupported JSON charset returns structured 415', function () {",
+                  "  pm.response.to.have.status(415);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.success).to.eql(false);",
+                  "  pm.expect(body.code).to.eql('INVALID_REQUEST');",
+                  "  pm.expect(body.requestId).to.eql('req-alert-unsupported-charset-001');",
+                  "  pm.expect(body.retryable).to.eql(false);",
+                  "});",
+                  "pm.test('X-Request-Id matches the response requestId', function () {",
+                  "  pm.expect(pm.response.headers.get('X-Request-Id')).to.eql(pm.response.json().requestId);",
+                  "});"
+                ]
+              }
             }
           ]
         },
@@ -3990,7 +4154,13 @@
               "name": "Internal Server Error (500)",
               "status": "Internal Server Error",
               "code": 500,
-              "body": "{\n  \"success\": false,\n  \"error\": \"Internal server error\",\n  \"requestId\": \"msg-correlation-500\"\n}"
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "msg-correlation-500"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Internal server error\",\n  \"code\": \"INTERNAL_ERROR\",\n  \"requestId\": \"msg-correlation-500\",\n  \"retryable\": true\n}"
             },
             {
               "name": "Request Timeout (408)",
@@ -4583,6 +4753,11 @@
                 "key": "x-api-key",
                 "value": "{{apiKey}}",
                 "type": "text"
+              },
+              {
+                "key": "x-request-id",
+                "value": "req-webhook-body-size-001",
+                "type": "text"
               }
             ],
             "body": {
@@ -4618,7 +4793,13 @@
               "name": "413 Payload too large",
               "status": "Payload Too Large",
               "code": 413,
-              "body": "{\n  \"success\": false,\n  \"error\": \"PAYLOAD_TOO_LARGE\",\n  \"message\": \"Request body exceeds maximum size of 256kb\",\n  \"limit\": \"256kb\"\n}"
+              "body": "{\n  \"success\": false,\n  \"error\": \"PAYLOAD_TOO_LARGE\",\n  \"message\": \"Request body exceeds maximum size of 256kb\",\n  \"limit\": \"256kb\",\n  \"code\": \"PAYLOAD_TOO_LARGE\",\n  \"requestId\": \"req-webhook-body-size-001\",\n  \"retryable\": false\n}",
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-webhook-body-size-001"
+                }
+              ]
             }
           ]
         },
