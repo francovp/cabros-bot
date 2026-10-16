@@ -163,4 +163,47 @@ describe('URLShortener - Unit Tests', () => {
 		// Cache should have 1 entry
 		expect(shortener.cache.size()).toBe(1);
 	});
+
+	it('coalesces concurrent requests for the same URL', async () => {
+		const shortener = new URLShortener();
+		let resolveProviderCall;
+		const providerCall = new Promise((resolve) => {
+			resolveProviderCall = resolve;
+		});
+		const callShortenerAPI = jest.fn(() => providerCall);
+		shortener.callShortenerAPI = callShortenerAPI;
+		const url = 'https://example.com/concurrent-url';
+
+		const firstResult = shortener.shortenUrl(url);
+		const secondResult = shortener.shortenUrl(url);
+		resolveProviderCall('https://short.url/concurrent');
+
+		await expect(Promise.all([firstResult, secondResult])).resolves.toEqual([
+			'https://short.url/concurrent',
+			'https://short.url/concurrent',
+		]);
+		expect(callShortenerAPI).toHaveBeenCalledTimes(1);
+		expect(shortener.inFlightShortenings.size).toBe(0);
+	});
+
+	it('retries a URL after its shared provider request fails', async () => {
+		const shortener = new URLShortener();
+		shortener.configuredServices = ['test'];
+		shortener.enabled = true;
+		const callShortenerAPI = jest.fn()
+			.mockRejectedValueOnce(new Error('provider unavailable'))
+			.mockResolvedValueOnce('https://short.url/recovered');
+		shortener.callShortenerAPI = callShortenerAPI;
+		const url = 'https://example.com/retry-after-failure';
+
+		const concurrentResults = await Promise.all([
+			shortener.shortenUrl(url),
+			shortener.shortenUrl(url),
+		]);
+		expect(concurrentResults).toEqual([null, null]);
+		expect(callShortenerAPI).toHaveBeenCalledTimes(1);
+
+		await expect(shortener.shortenUrl(url)).resolves.toBe('https://short.url/recovered');
+		expect(callShortenerAPI).toHaveBeenCalledTimes(2);
+	});
 });

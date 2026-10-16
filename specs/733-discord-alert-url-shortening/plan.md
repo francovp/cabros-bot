@@ -5,7 +5,7 @@
 
 ## Summary
 
-Pass the existing shared URL shortener into Discord alert formatting so enriched source links receive the same shortened URLs as WhatsApp. Keep original links on shortening failure. Harden the cross-channel integration test's fetch-call selection to use parsed exact hostnames and valid Green API fixture configuration.
+Pass the existing shared URL shortener into Discord alert formatting so enriched source links receive the same shortened URLs as WhatsApp. Coalesce in-flight shortening by exact URL so concurrent channel sends share one provider result. Keep original links on shortening failure. Harden the cross-channel integration test's fetch-call selection to use parsed exact hostnames and valid Green API fixture configuration.
 
 ## Technical Context
 
@@ -15,7 +15,7 @@ Pass the existing shared URL shortener into Discord alert formatting so enriched
 **Testing**: Jest unit and integration tests  
 **Target Platform**: Node.js service  
 **Project Type**: Single Express service  
-**Performance Goals**: Reuse the existing batch shortener call; do not add a provider request per URL.  
+**Performance Goals**: Reuse the existing batch shortener call and coalesce concurrent requests for the same URL; do not add provider requests per channel.
 **Constraints**: Keep channel gating and fail-open behavior; do not add environment variables or public API changes.  
 **Scale/Scope**: Discord enriched-alert formatting and its focused tests.
 
@@ -48,6 +48,7 @@ tests/
 
 - `DiscordService` accepts the existing URL shortener and passes it to the existing `WhatsAppMarkdownFormatter` implementation used to render enriched alerts.
 - `NotificationManagerBootstrap` supplies the shared shortener to Discord. Admin dry-run formatting uses the live Discord service's shortener when available.
+- The shared `URLShortener` reuses an in-flight request for an identical URL across concurrent channel formatting and removes the entry when the request settles, including failures.
 - The formatter's existing failure handling retains original URLs, so no new retry or delivery behavior is introduced.
 - Integration-test request selection uses `new URL(url).hostname` equality. The test uses a valid Green API fixture URL and key, and includes malicious host/path lookalikes to prevent substring matching regressions.
 - No data model, OpenAPI, Postman collection, Remote Config key, or environment template change is needed.
