@@ -233,11 +233,13 @@ function scoreScannerItem(item, scanType, options = {}) {
 		parts.push(`BB rating ${sign}${bbRating}`);
 	}
 	if (scanType === 'consecutive_candles_scan') {
-		if (item.pattern_strength !== undefined && item.pattern_strength !== null) {
-			parts.push(`strength ${item.pattern_strength}`);
+		const patternStrength = numberOrNull(item.pattern_strength);
+		const candleBodyRatio = numberOrNull(item.candle_body_ratio);
+		if (patternStrength !== null) {
+			parts.push(`strength ${patternStrength}`);
 		}
-		if (item.candle_body_ratio !== undefined && item.candle_body_ratio !== null) {
-			parts.push(`body ${item.candle_body_ratio}`);
+		if (candleBodyRatio !== null) {
+			parts.push(`body ${candleBodyRatio}`);
 		}
 	}
 	if (chasePenalty > 0) {
@@ -289,6 +291,8 @@ function rankScannerItems(items, scanType, options = {}) {
 }
 
 function numberOrNull(value) {
+	if (typeof value !== 'number' && typeof value !== 'string') return null;
+	if (typeof value === 'string' && value.trim() === '') return null;
 	const number = Number(value);
 	return Number.isFinite(number) ? number : null;
 }
@@ -307,20 +311,22 @@ function resolveTrendConfluence(item = {}, scanType, options = {}) {
 	const direction = resolveDirectionFromRaw(raw);
 	const expectedDirection = getExpectedTrendDirection(item, scanType);
 
+	const isDirectionlessScan = scanType === 'bollinger_scan' || scanType === 'volume_confirmation';
+
 	let status = explicitStatus;
 	if (direction && expectedDirection) {
 		status = direction === expectedDirection ? 'aligned' : 'counter-trend';
-	} else if (scanType === 'bollinger_scan' && direction) {
+	} else if (isDirectionlessScan && direction) {
 		status = 'aligned';
 	} else if (!status && typeof raw.aligned === 'boolean') {
 		status = raw.aligned ? 'aligned' : 'counter-trend';
 	} else if (!status && direction) {
 		status = 'unknown';
 	}
-	if (!expectedDirection && scanType !== 'bollinger_scan' && (status === 'aligned' || status === 'counter-trend')) {
+	if (!expectedDirection && !isDirectionlessScan && (status === 'aligned' || status === 'counter-trend')) {
 		status = 'unknown';
 	}
-	if (!expectedDirection && scanType === 'bollinger_scan' && !direction && (status === 'aligned' || status === 'counter-trend')) {
+	if (!expectedDirection && isDirectionlessScan && !direction && (status === 'aligned' || status === 'counter-trend')) {
 		status = 'unknown';
 	}
 	if (!status) {
@@ -485,4 +491,5 @@ module.exports = {
 	resolveTrendConfluence,
 	normalizeTrendDirection,
 	normalizeConfluenceStatus,
+	numberOrNull,
 };

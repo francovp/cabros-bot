@@ -57,6 +57,9 @@ const ENVIRONMENT_CLASSIFICATIONS = {
 	RAILWAY_GIT_REPO_OWNER: 'platform-injected release metadata',
 	RENDER_INSTANCE_ID: 'platform-injected runtime metadata',
 	RENDER_SERVICE_ID: 'platform-injected runtime metadata',
+	RENDER_SERVICE_NAME: 'platform-injected runtime metadata',
+	RAILWAY_SERVICE_ID: 'platform-injected runtime metadata',
+	RAILWAY_SERVICE_NAME: 'platform-injected runtime metadata',
 	SIGNAL_OUTCOME_EVALUATION_CADENCE_MS: 'deprecated compatibility alias',
 	SOURCE_VERSION: 'platform-injected release metadata',
 };

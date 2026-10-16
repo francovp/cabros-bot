@@ -86,9 +86,10 @@ describe('event bus alert flow', () => {
 	});
 
 	describe('end-to-end alert path', () => {
+		let notificationManager;
+
 		beforeEach(async () => {
-			const manager = await initializeNotificationServices(mockBot);
-			expect(manager).toBe(getNotificationManager());
+			notificationManager = await initializeNotificationServices(mockBot);
 
 			app = express();
 			app.use(express.json());
@@ -110,6 +111,8 @@ describe('event bus alert flow', () => {
 		});
 
 		it('publishes alert.delivered to every subscriber after delivery completes', async () => {
+			expect(notificationManager).toBe(getNotificationManager());
+
 			const subscribers = [jest.fn(), jest.fn(), jest.fn()];
 			subscribers.forEach((handler) => eventBus.on(EVENT_NAMES.ALERT_DELIVERED, handler));
 
@@ -154,37 +157,55 @@ describe('event bus alert flow', () => {
 		});
 
 		it('a slow async subscriber does not delay the HTTP response', async () => {
-			let releaseSubscriber;
-			const subscriberBlocked = new Promise((resolve) => {
-				releaseSubscriber = resolve;
+			// Two claims, because no single duration bound can carry both.
+			//
+			// Ordering. `emit()` calls handlers synchronously and never awaits
+			// the promise an async handler returns, so the response is written
+			// while the subscriber's tail is still pending. The subscriber is
+			// gated on a promise this test opens itself, so it provably cannot
+			// have settled while the gate is shut — there is no timer to race.
+			// A timer leaves the assertion a race a loaded runner can still
+			// lose: any stall after `emit()` longer than the sleep lets the
+			// subscriber settle before the flag is read, which is how this test
+			// failed on #1380 (360ms measured against a 250ms subscriber).
+			//
+			// Not delayed. `emitAsync()` bounds its wait at this bus's async
+			// timeout and then gives up, so awaiting it delays the response
+			// rather than hanging, and only the elapsed time reveals it. The
+			// ceiling is half that timeout: the real path is ~2ms, leaving a
+			// wide margin for a loaded runner while still failing if the
+			// publisher ever awaits the bus.
+			const busAsyncTimeoutMs =
+				Number.isFinite(eventBus._asyncTimeoutMs) && eventBus._asyncTimeoutMs > 0 ? eventBus._asyncTimeoutMs : 5000;
+			let subscriberSettled = false;
+			let openSubscriberGate;
+			const subscriberGate = new Promise((resolve) => {
+				openSubscriberGate = resolve;
 			});
-			let subscriberFinished = false;
 			const slow = jest.fn(async () => {
-				await subscriberBlocked;
-				subscriberFinished = true;
+				await subscriberGate;
+				subscriberSettled = true;
 			});
 			eventBus.on(EVENT_NAMES.ALERT_DELIVERED, slow);
 
-			// The invariant under test is an ordering one: the response settles
-			// while the subscriber is still pending. Asserting that directly keeps
-			// the subscriber blocked until after the response arrives, which is
-			// deterministic. An `elapsed < 200ms` wall-clock assertion measured the
-			// runner's load rather than the emit path and failed spuriously on a busy
-			// CI machine even though the subscriber was never awaited.
-			const response = await request(app)
-				.post('/api/stub-alert')
-				.set('x-api-key', 'integration-test-key')
-				.send({ alertId: 'e2e-3', text: 'third alert' })
-				.expect(200);
+			try {
+				const start = Date.now();
+				const response = await request(app)
+					.post('/api/stub-alert')
+					.set('x-api-key', 'integration-test-key')
+					.send({ alertId: 'e2e-3', text: 'third alert' })
+					.expect(200);
+				const elapsed = Date.now() - start;
 
-			expect(response.body.success).toBe(true);
-			expect(slow).toHaveBeenCalledTimes(1);
-			expect(subscriberFinished).toBe(false);
-
-			// Release so the test cannot pass by the subscriber never running.
-			releaseSubscriber();
-			await new Promise((resolve) => setImmediate(resolve));
-			expect(subscriberFinished).toBe(true);
+				expect(response.body.success).toBe(true);
+				// Prove the subscriber ran, so the ordering assertion cannot
+				// pass merely because nothing was subscribed.
+				expect(slow).toHaveBeenCalledTimes(1);
+				expect(subscriberSettled).toBe(false);
+				expect(elapsed).toBeLessThan(busAsyncTimeoutMs / 2);
+			} finally {
+				openSubscriberGate();
+			}
 		});
 	});
 });

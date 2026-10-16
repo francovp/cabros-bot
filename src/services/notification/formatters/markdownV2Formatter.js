@@ -127,10 +127,18 @@ class MarkdownV2Formatter {
 		const formatted = smartEscapeMarkdownV2(normalized);
 		const signalClass = options.signalClass;
 		const marker = formatSignalClassMarker(signalClass, { markdownV2: true });
-		if (marker) {
-			return `${marker}\n\n${formatted}`;
+		let result = marker ? `${marker}\n\n${formatted}` : formatted;
+
+		const sessionVal = options.session;
+		if (sessionVal) {
+			const { formatSessionLine } = require('../../storage/EquitySessionService');
+			const sessionLine = formatSessionLine(sessionVal, { markdownV2: true });
+			if (sessionLine) {
+				result += `\n${sessionLine}`;
+			}
 		}
-		return formatted;
+
+		return result;
 	}
 
 	/**
@@ -209,6 +217,15 @@ class MarkdownV2Formatter {
 		const htfLine = formatHtfAlignment(enriched);
 		if (htfLine) {
 			message += `\n${smartEscapeMarkdownV2(htfLine)}`;
+		}
+
+		const sessionVal = options.session || enriched.session;
+		if (sessionVal) {
+			const { formatSessionLine } = require('../../storage/EquitySessionService');
+			const sessionLine = formatSessionLine(sessionVal, { markdownV2: true });
+			if (sessionLine) {
+				message += `\n${sessionLine}`;
+			}
 		}
 
 		// Technical Levels

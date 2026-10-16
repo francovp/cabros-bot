@@ -26,6 +26,7 @@ const {
 	getTakeProfitTarget,
 	getRiskRewardRatio,
 } = require('./expandedAnalysisAlertReport');
+const { hasConfluenceEvidence } = require('./confluenceEvidence');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const alertStorageService = require('../storage/AlertStorageService');
 
@@ -40,6 +41,8 @@ function getFallbackTradePlan() {
 }
 
 const DEFAULT_TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
+const DEFAULT_TRADINGVIEW_MCP_CACHE_TTL_MS = 90000;
+const MAX_TRADINGVIEW_MCP_CACHE_ENTRIES = 100;
 const ENRICHMENT_WINDOW_MS = 24 * 60 * 60 * 1000;
 // Upper bound on distinct tool names kept in toolMetrics. MCP tools are a fixed,
 // allowlisted set today, so this only guards against a future dynamic tool name
@@ -99,6 +102,19 @@ function awaitWithTimeout(promise, timeoutMs, message) {
 // are frequently transient, so they must stay on the retry path.
 const TERMINAL_PROVIDER_ERROR_PATTERN = /service suspended|suspended by its owner/i;
 
+function canonicalize(value) {
+	if (Array.isArray(value)) {
+		return value.map(canonicalize);
+	}
+	if (value && typeof value === 'object') {
+		return Object.keys(value).sort().reduce((result, key) => {
+			result[key] = canonicalize(value[key]);
+			return result;
+		}, {});
+	}
+	return value;
+}
+
 function getAbortMessage(signal, fallback) {
 	const reason = signal && signal.reason;
 	if (reason instanceof Error && reason.message) {
@@ -122,10 +138,28 @@ function createBudgetExhaustedError(message) {
 	return error;
 }
 
-function createMcpError(message) {
-	const error = new Error(message);
-	if (TERMINAL_PROVIDER_ERROR_PATTERN.test(message)) {
+function createMcpError(message, options = {}) {
+	const text = String(message);
+	const error = new Error(text);
+	if (Number.isInteger(options.httpStatusCode)) {
+		error.httpStatusCode = options.httpStatusCode;
+	}
+	if (TERMINAL_PROVIDER_ERROR_PATTERN.test(text)) {
 		error.category = 'provider_unavailable';
+		error.retryable = false;
+	} else if (isDeterministicNoDataError(error)) {
+		error.category = 'not_found';
+		error.retryable = false;
+	} else if (options.isToolError || options.isToolResultError || options.category === 'upstream_tool_error') {
+		error.category = 'upstream_tool_error';
+		if (options.retryable === false) {
+			error.retryable = false;
+		}
+	} else if (options.category) {
+		error.category = options.category;
+		if (options.retryable === false) {
+			error.retryable = false;
+		}
 	}
 	return error;
 }
@@ -150,6 +184,63 @@ function createEmptyBaseAttemptStats() {
 		skippedNonViableCount: 0,
 		lastAttemptMs: null,
 	};
+}
+
+function createRequestCancelledError(signal, fallback = 'TradingView MCP request aborted') {
+	const error = new Error(getAbortMessage(signal, fallback));
+	error.category = 'request_cancelled';
+	return error;
+}
+
+function awaitSharedToolCall(state, signal, validateResult, onInvalidResult) {
+	if (signal?.aborted) {
+		if (!state.settled && state.subscribers === 0 && !state.controller.signal.aborted) {
+			state.controller.abort(createRequestCancelledError(signal));
+		}
+		state.promise.catch(() => {});
+		return Promise.reject(createRequestCancelledError(signal));
+	}
+
+	state.subscribers += 1;
+	return new Promise((resolve, reject) => {
+		let released = false;
+		const release = () => {
+			if (released) return;
+			released = true;
+			if (signal) signal.removeEventListener('abort', onAbort);
+			state.subscribers -= 1;
+			if (!state.settled && state.subscribers === 0 && !state.controller.signal.aborted) {
+				const reason = new Error('All TradingView MCP request subscribers cancelled');
+				reason.category = 'request_cancelled';
+				state.controller.abort(reason);
+			}
+		};
+		const onAbort = () => {
+			release();
+			reject(createRequestCancelledError(signal));
+		};
+
+		if (signal) {
+			signal.addEventListener('abort', onAbort, { once: true });
+			if (signal.aborted) onAbort();
+		}
+
+		state.promise.then((value) => {
+			try {
+				if (validateResult) validateResult(value);
+			} catch (error) {
+				onInvalidResult?.();
+				release();
+				reject(error);
+				return;
+			}
+			release();
+			resolve(value);
+		}, (error) => {
+			release();
+			reject(error);
+		});
+	});
 }
 
 function createRuntimeStatus({ includeEnrichment = true } = {}) {
@@ -180,6 +271,9 @@ function createRuntimeStatus({ includeEnrichment = true } = {}) {
 function createEmptyErrorCategoryCounts() {
 	return {
 		circuit_breaker_open: 0,
+		provider_unavailable: 0,
+		upstream_tool_error: 0,
+		not_found: 0,
 		http_5xx: 0,
 		http_4xx: 0,
 		timeout: 0,
@@ -190,6 +284,10 @@ function createEmptyErrorCategoryCounts() {
 
 function getPercentage(value, total) {
 	return total === 0 ? 0 : Number(((value / total) * 100).toFixed(2));
+}
+
+function createToolResultError(errorMessage, options = {}) {
+	return createMcpError(errorMessage, { ...options, isToolResultError: true });
 }
 
 const SETUP_TYPES = new Set(['breakout', 'mean_reversion', 'trend_continuation', 'reversal']);
@@ -251,6 +349,10 @@ class TradingViewMcpService {
 		this.notifyAdmin = config.notifyAdmin || null;
 		this.notificationManager = config.notificationManager || null;
 		this.toolMetrics = {};
+		this.toolCache = new Map();
+		this.toolInFlight = new Map();
+		this.sharedToolFailureErrors = new WeakSet();
+		this.recordedSharedToolFailureErrors = new WeakSet();
 	}
 
 	_resetForTesting() {
@@ -266,6 +368,10 @@ class TradingViewMcpService {
 		this.baseAttemptStats = createEmptyBaseAttemptStats();
 		this.baseAttemptDurations = [];
 		this.toolMetrics = {};
+		this.toolCache.clear();
+		this.toolInFlight.clear();
+		this.sharedToolFailureErrors = new WeakSet();
+		this.recordedSharedToolFailureErrors = new WeakSet();
 	}
 
 	isEnabled() {
@@ -276,7 +382,9 @@ class TradingViewMcpService {
 		const runtimeConfig = getRuntimeConfig();
 		const timeoutMs = parseInt(this.config.timeoutMs || runtimeConfig.TRADINGVIEW_MCP_TIMEOUT_MS, 10);
 		const maxRetries = parseInt(this.config.maxRetries || runtimeConfig.TRADINGVIEW_MCP_MAX_RETRIES, 10);
-		const defaultExchange = (this.config.defaultExchange || process.env.TRADINGVIEW_MCP_DEFAULT_EXCHANGE || 'BINANCE').toUpperCase();
+		const defaultExchange = (
+			this.config.defaultExchange || runtimeConfig.TRADINGVIEW_MCP_DEFAULT_EXCHANGE || 'BINANCE'
+		).toUpperCase();
 		const defaultTimeframe = normalizeTradingViewTimeframe(
 			this.config.defaultTimeframe || runtimeConfig.TRADINGVIEW_MCP_DEFAULT_TIMEFRAME || '1h',
 			'1h',
@@ -297,6 +405,13 @@ class TradingViewMcpService {
 			this.config.pageCooldownMs || runtimeConfig.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS,
 			10,
 		);
+		const cacheTtlMs = parseInt(
+			this.config.cacheTtlMs ?? runtimeConfig.TRADINGVIEW_MCP_CACHE_TTL_MS,
+			10,
+		);
+		const cacheEnabled = typeof this.config.cacheEnabled === 'boolean'
+			? this.config.cacheEnabled
+			: runtimeConfig.ENABLE_TRADINGVIEW_MCP_CACHE;
 
 		return {
 			url: this.config.url || process.env.TRADINGVIEW_MCP_URL || DEFAULT_TRADINGVIEW_MCP_URL,
@@ -308,6 +423,8 @@ class TradingViewMcpService {
 			breakerThreshold: Number.isFinite(breakerThreshold) && breakerThreshold > 0 ? breakerThreshold : 5,
 			breakerCooldownMs: Number.isFinite(breakerCooldownMs) && breakerCooldownMs > 0 ? breakerCooldownMs : 600000,
 			pageCooldownMs: Number.isFinite(pageCooldownMs) && pageCooldownMs > 0 ? pageCooldownMs : 3600000,
+			cacheEnabled,
+			cacheTtlMs: Number.isFinite(cacheTtlMs) && cacheTtlMs > 0 ? cacheTtlMs : DEFAULT_TRADINGVIEW_MCP_CACHE_TTL_MS,
 		};
 	}
 
@@ -572,7 +689,7 @@ class TradingViewMcpService {
 		const volumeConfirmationEnabled = getRuntimeConfig().ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
 		const confluenceEnabled = process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT === 'true';
 		const multiTimeframeEnabled = process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME === 'true';
-		const optionalEnrichmentEnabled = volumeConfirmationEnabled || confluenceEnabled;
+		const optionalEnrichmentEnabled = volumeConfirmationEnabled || confluenceEnabled || multiTimeframeEnabled;
 		const baseBudgetMs = budgetDeadlineAt
 			? Math.max(1, Math.floor(budgetMs * (optionalEnrichmentEnabled ? 0.75 : 1)))
 			: null;
@@ -691,7 +808,7 @@ class TradingViewMcpService {
 			} catch (error) {
 				// A "no data for this symbol/venue" answer is deterministic, not
 				// transient (#591): retrying it only burns the enrichment budget.
-				const terminal = isDeterministicNoDataError(error);
+				const terminal = isDeterministicNoDataError(error) || error?.category === 'not_found';
 				// #948: decline the retry when the residual base budget can no longer
 				// fund a window that completes the tool call. Decided on THIS
 				// attempt's own result so `retryable: false` returns the real
@@ -710,6 +827,8 @@ class TradingViewMcpService {
 					success: false,
 					channel: 'tradingview-mcp',
 					error: error.message,
+					...(error && error.category ? { category: error.category } : {}),
+					...(error && Number.isInteger(error.httpStatusCode) ? { httpStatusCode: error.httpStatusCode } : {}),
 					// Carry the structural budget marker out of the abort reason so the
 					// retry/caller chain can still recognise our own deadline (GH-630).
 					...(error && error.mcpBudgetExhausted === true ? { mcpBudgetExhausted: true } : {}),
@@ -717,7 +836,7 @@ class TradingViewMcpService {
 					// A deterministic "no data for this symbol/venue" answer will never
 					// succeed on a retry, so stop the chain here rather than adding a
 					// second stop mechanism - retryHelper already halts on retryable:false.
-					retryable: (terminal || nonViableRetry) ? false : error.category !== 'provider_unavailable',
+					retryable: (terminal || nonViableRetry || error?.retryable === false || error?.category === 'provider_unavailable') ? false : true,
 				};
 			} finally {
 				clearTimeout(attemptTimeoutId);
@@ -736,8 +855,17 @@ class TradingViewMcpService {
 			// Preserve the budget-exhaustion marker across the wrapper message, so the
 			// classifier still recognises our own deadline after the error is re-wrapped.
 			const failure = new Error(`TradingView MCP call failed: ${result.error || 'unknown error'}`);
+			if (result.category) {
+				failure.category = result.category;
+			}
+			if (Number.isInteger(result.httpStatusCode)) {
+				failure.httpStatusCode = result.httpStatusCode;
+			}
 			if (result.mcpBudgetExhausted === true) {
 				failure.mcpBudgetExhausted = true;
+			}
+			if (result.retryable === false) {
+				failure.retryable = false;
 			}
 			throw failure;
 		}
@@ -765,7 +893,9 @@ class TradingViewMcpService {
 							success: false,
 							channel: 'tradingview-mcp',
 							error: error.message,
-							retryable: error.category !== 'provider_unavailable',
+							...(error && error.category ? { category: error.category } : {}),
+							...(error && Number.isInteger(error.httpStatusCode) ? { httpStatusCode: error.httpStatusCode } : {}),
+							retryable: (error?.retryable === false || error?.category === 'provider_unavailable') ? false : true,
 						};
 					}
 				}, 1, this.logger, { signal: AbortSignal.any([controller.signal, budgetController.signal]) });
@@ -786,59 +916,85 @@ class TradingViewMcpService {
 		// The confluence call is wired to BOTH its own per-call timeout AND the overall budget signal
 		// (via AbortSignal.any) so an exhausted enrichment budget cancels it immediately.
 		let confluenceAnalysis = null;
-		let multiTimeframeAnalysis = null;
 		if (confluenceEnabled && !budgetController.signal.aborted) {
 			const remainingBudgetMs = budgetDeadlineAt ? budgetDeadlineAt - Date.now() : cfg.timeoutMs;
-			const confluenceTimeoutMs = Math.min(8000, Math.max(1, remainingBudgetMs));
-			const confluenceController = new AbortController();
-			const confluenceTimeoutId = setTimeout(() => {
-				confluenceController.abort(new Error(`TradingView MCP confluence timeout after ${confluenceTimeoutMs}ms`));
-			}, confluenceTimeoutMs);
-
-			// Respect both the per-call timeout and the overall enrichment budget
-			const combinedSignal = AbortSignal.any([confluenceController.signal, budgetController.signal]);
-			// These counters count CALLS, not enrichments. One alert enrichment issues up
-			// to two confluence calls (combined_analysis, then multi_timeframe_analysis when
-			// enabled), so each call records its own attempt and exactly one outcome. The
-			// alternative - one attempt per enrichment - makes applied+failed<=attempted
-			// arithmetically impossible, because a budget-starved second call would then be
-			// charged to the first call's attempt and be reported as both applied and failed.
-			this._recordConfluenceOutcome({ attempted: true });
-
-			try {
-				confluenceAnalysis = await this.callCombinedAnalysis({
-					symbol,
-					exchange,
-					timeframe,
-					signal: combinedSignal,
-				});
-				this._recordConfluenceOutcome({ applied: true });
-				console.debug(`[TradingViewMcpService] Confluence analysis fetched for ${symbol}`);
-				if (multiTimeframeEnabled) {
-					if (budgetController.signal.aborted) {
-						optionalEnrichmentPartial = true;
-						this._recordConfluenceOutcome({ budgetExhausted: true });
-					} else {
-						this._recordConfluenceOutcome({ attempted: true });
-						multiTimeframeAnalysis = await this.callMultiTimeframeAnalysis({
-							symbol,
-							exchange,
-							signal: combinedSignal,
-						});
-						this._recordConfluenceOutcome({ applied: true });
-						console.debug(`[TradingViewMcpService] Multi-timeframe confluence analysis fetched for ${symbol}`);
-					}
-				}
-			} catch (error) {
+			if (remainingBudgetMs <= 0) {
 				optionalEnrichmentPartial = true;
-				this._recordConfluenceOutcome({ failed: true, error });
-				this.logger.warn(`[TradingViewMcpService] Confluence enrichment failed for ${symbol} (fail-open): ${error.message}`);
-			} finally {
-				clearTimeout(confluenceTimeoutId);
+				this._recordConfluenceOutcome({ budgetExhausted: true });
+			} else {
+				const confluenceTimeoutMs = Math.min(8000, Math.max(1, remainingBudgetMs));
+				const confluenceController = new AbortController();
+				const confluenceTimeoutId = setTimeout(() => {
+					confluenceController.abort(new Error(`TradingView MCP confluence timeout after ${confluenceTimeoutMs}ms`));
+				}, confluenceTimeoutMs);
+
+				// Respect both the per-call timeout and the overall enrichment budget
+				const combinedSignal = AbortSignal.any([confluenceController.signal, budgetController.signal]);
+				// These counters count CALLS, not enrichments. One alert enrichment issues up
+				// to two confluence calls (combined_analysis, then multi_timeframe_analysis when
+				// enabled), so each call records its own attempt and exactly one outcome. The
+				// alternative - one attempt per enrichment - makes applied+failed<=attempted
+				// arithmetically impossible, because a budget-starved second call would then be
+				// charged to the first call's attempt and be reported as both applied and failed.
+				this._recordConfluenceOutcome({ attempted: true });
+
+				try {
+					confluenceAnalysis = await this.callCombinedAnalysis({
+						symbol,
+						exchange,
+						timeframe,
+						signal: combinedSignal,
+					});
+					this._recordConfluenceOutcome({ applied: true });
+					console.debug(`[TradingViewMcpService] Confluence analysis fetched for ${symbol}`);
+				} catch (error) {
+					optionalEnrichmentPartial = true;
+					this._recordConfluenceOutcome({ failed: true, error });
+					this.logger.warn(`[TradingViewMcpService] Confluence enrichment failed for ${symbol} (fail-open): ${error.message}`);
+				} finally {
+					clearTimeout(confluenceTimeoutId);
+				}
 			}
 		} else if (confluenceEnabled) {
 			optionalEnrichmentPartial = true;
 			this._recordConfluenceOutcome({ budgetExhausted: true });
+		}
+
+		// Multi-timeframe enrichment: optional call to multi_timeframe_analysis for higher-timeframe
+		// trend alignment. Gated independently by ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true
+		// so it runs whether or not confluence enrichment is enabled (fail-open: errors do not block
+		// delivery). Respects both the per-call timeout and the overall enrichment budget signal.
+		let multiTimeframeAnalysis = null;
+		if (multiTimeframeEnabled) {
+			const remainingBudgetMs = budgetDeadlineAt ? budgetDeadlineAt - Date.now() : cfg.timeoutMs;
+			if (budgetController.signal.aborted || remainingBudgetMs <= 0) {
+				optionalEnrichmentPartial = true;
+				this._recordConfluenceOutcome({ budgetExhausted: true });
+			} else {
+				const multiTimeframeTimeoutMs = Math.min(8000, Math.max(1, remainingBudgetMs));
+				const multiTimeframeController = new AbortController();
+				const multiTimeframeTimeoutId = setTimeout(() => {
+					multiTimeframeController.abort(new Error(`TradingView MCP multi-timeframe timeout after ${multiTimeframeTimeoutMs}ms`));
+				}, multiTimeframeTimeoutMs);
+				const combinedSignal = AbortSignal.any([multiTimeframeController.signal, budgetController.signal]);
+				this._recordConfluenceOutcome({ attempted: true });
+
+				try {
+					multiTimeframeAnalysis = await this.callMultiTimeframeAnalysis({
+						symbol,
+						exchange,
+						signal: combinedSignal,
+					});
+					this._recordConfluenceOutcome({ applied: true });
+					console.debug(`[TradingViewMcpService] Multi-timeframe confluence analysis fetched for ${symbol}`);
+				} catch (error) {
+					optionalEnrichmentPartial = true;
+					this._recordConfluenceOutcome({ failed: true, error });
+					this.logger.warn(`[TradingViewMcpService] Multi-timeframe enrichment failed for ${symbol} (fail-open): ${error.message}`);
+				} finally {
+					clearTimeout(multiTimeframeTimeoutId);
+				}
+			}
 		}
 
 		cleanBudget();
@@ -851,16 +1007,21 @@ class TradingViewMcpService {
 	}
 
 	async callCoinAnalysis({ symbol, exchange, timeframe, signal }) {
+		const cacheOutcome = { hit: false };
 		return this._withRuntimeStatus(async () => {
 			const rpcResult = await this._callTool('coin_analysis', {
 				symbol,
 				exchange,
 				timeframe,
-			}, { signal });
+			}, {
+				signal,
+				validateResult: result => this._validateAnalysisPayload(result, 'coin_analysis'),
+				onCacheHit: () => { cacheOutcome.hit = true; },
+			});
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw createMcpError(normalizedResult.error);
+				throw createToolResultError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -868,7 +1029,7 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal });
+		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit });
 	}
 
 	async analyzeSymbolIdentifier({ raw, exchange, symbol, timeframe, analysisMode, signal }) {
@@ -887,13 +1048,19 @@ class TradingViewMcpService {
 					success: false,
 					channel: 'tradingview-mcp',
 					error: error.message,
-					retryable: error.category !== 'provider_unavailable',
+					...(error && error.category ? { category: error.category } : {}),
+					...(error && Number.isInteger(error.httpStatusCode) ? { httpStatusCode: error.httpStatusCode } : {}),
+					retryable: (error?.retryable === false || error?.category === 'provider_unavailable') ? false : true,
 				};
 			}
 		}, cfg.maxRetries, this.logger, { signal });
 
 		if (!result.success) {
-			throw new Error(`TradingView MCP call failed for ${raw || `${exchange}:${symbol}`}: ${result.error || 'unknown error'}`);
+			const error = new Error(`TradingView MCP call failed for ${raw || `${exchange}:${symbol}`}: ${result.error || 'unknown error'}`);
+			if (result.category) error.category = result.category;
+			if (Number.isInteger(result.httpStatusCode)) error.httpStatusCode = result.httpStatusCode;
+			if (result.retryable === false) error.retryable = false;
+			throw error;
 		}
 
 		return {
@@ -905,16 +1072,21 @@ class TradingViewMcpService {
 	}
 
 	async callCombinedAnalysis({ symbol, exchange, timeframe, signal }) {
+		const cacheOutcome = { hit: false };
 		return this._withRuntimeStatus(async () => {
 			const rpcResult = await this._callTool('combined_analysis', {
 				symbol,
 				exchange,
 				timeframe,
-			}, { signal });
+			}, {
+				signal,
+				validateResult: result => this._validateAnalysisPayload(result, 'combined_analysis'),
+				onCacheHit: () => { cacheOutcome.hit = true; },
+			});
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw createMcpError(normalizedResult.error);
+				throw createToolResultError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -922,19 +1094,24 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal });
+		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit });
 	}
 
 	async callMultiTimeframeAnalysis({ symbol, exchange, signal }) {
+		const cacheOutcome = { hit: false };
 		return this._withRuntimeStatus(async () => {
 			const rpcResult = await this._callTool('multi_timeframe_analysis', {
 				symbol,
 				exchange,
-			}, { signal });
+			}, {
+				signal,
+				validateResult: result => this._validateAnalysisPayload(result, 'multi_timeframe_analysis'),
+				onCacheHit: () => { cacheOutcome.hit = true; },
+			});
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw createMcpError(normalizedResult.error);
+				throw createToolResultError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -942,16 +1119,17 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal });
+		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit });
 	}
 
 	async callMultiAgentAnalysis({ symbol, exchange, timeframe, signal }) {
+		const cacheOutcome = { hit: false };
 		return this._withRuntimeStatus(async () => {
 			const rpcResult = await this._callTool('multi_agent_analysis', {
 				symbol,
 				exchange,
 				timeframe,
-			}, { signal });
+			}, { signal, onCacheHit: () => { cacheOutcome.hit = true; } });
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
@@ -963,21 +1141,26 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal });
+		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit });
 	}
 
 	async callVolumeConfirmation({ symbol, exchange, timeframe, signal }) {
+		const cacheOutcome = { hit: false };
 		return this._withRuntimeStatus(async () => {
 			const fullSymbol = symbol.includes(':') ? symbol : `${exchange}:${symbol}`;
 			const rpcResult = await this._callTool('volume_confirmation_analysis', {
 				symbol: fullSymbol,
 				exchange,
 				timeframe,
-			}, { signal });
+			}, {
+				signal,
+				validateResult: result => this._validateAnalysisPayload(result, 'volume_confirmation_analysis'),
+				onCacheHit: () => { cacheOutcome.hit = true; },
+			});
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw createMcpError(normalizedResult.error);
+				throw createToolResultError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -985,43 +1168,60 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal, runtimeStatusKey: 'volumeRuntimeStatus' });
+		}, {
+			signal,
+			runtimeStatusKey: 'volumeRuntimeStatus',
+			shouldRecordSuccess: () => !cacheOutcome.hit,
+		});
 	}
 
 	async callScanTool(toolName, args = {}, options = {}) {
 		const { signal } = options;
 		const cfg = this.getConfig();
+		const cacheOutcome = { hit: false };
 
 		return this._withRuntimeStatus(async () => {
 			const result = await sendWithRetry(async () => {
 				try {
-					const rpcResult = await this._callTool(toolName, args, { signal });
+					const rpcResult = await this._callTool(toolName, args, {
+						signal,
+						onCacheHit: () => { cacheOutcome.hit = true; },
+					});
+					const normalizedResult = this._unwrapSchemaResult(rpcResult);
+					if (normalizedResult && normalizedResult.error) {
+						throw createToolResultError(normalizedResult.error);
+					}
 					return { success: true, channel: 'tradingview-mcp', data: rpcResult };
 				} catch (error) {
 					return {
 						success: false,
 						channel: 'tradingview-mcp',
 						error: error.message,
-						category: error.category,
-						httpStatusCode: error.httpStatusCode,
+						...(error && typeof error === 'object' && this.sharedToolFailureErrors.has(error)
+							? { sharedToolFailureError: error }
+							: {}),
+						...(error && error.category ? { category: error.category } : {}),
+						...(error && Number.isInteger(error.httpStatusCode) ? { httpStatusCode: error.httpStatusCode } : {}),
 						// Preserve the structural budget marker so the runtime status
 						// classifier still sees our own deadline, not a provider fault.
 						mcpBudgetExhausted: error.mcpBudgetExhausted === true,
-						retryable: error.category !== 'provider_unavailable',
+						retryable: (error?.retryable === false || error?.category === 'provider_unavailable') ? false : true,
 					};
 				}
 			}, cfg.maxRetries, this.logger, { signal });
 
 			if (!result.success) {
 				const error = new Error(`TradingView MCP scan ${toolName} failed: ${result.error || 'unknown error'}`);
-				error.category = result.category;
-				error.httpStatusCode = result.httpStatusCode;
+				if (result.sharedToolFailureError) error.sharedToolFailureCause = result.sharedToolFailureError;
+				if (result.category) error.category = result.category;
+				if (Number.isInteger(result.httpStatusCode)) error.httpStatusCode = result.httpStatusCode;
 				error.mcpBudgetExhausted = result.mcpBudgetExhausted === true;
+				if (result.retryable === false) error.retryable = false;
 				throw error;
 			}
 
 			return this._normalizeScanResult(result.data);
-		}, { signal });
+		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit });
 	}
 
 	_normalizeScanResult(data) {
@@ -1054,66 +1254,178 @@ class TradingViewMcpService {
 	}
 
 	async _executeCallTool(toolName, args = {}, options = {}) {
-		const { signal } = options;
-		const initializeRequest = {
-			jsonrpc: '2.0',
-			id: this._nextRequestId('initialize'),
-			method: 'initialize',
-			params: {
-				protocolVersion: '2024-11-05',
-				capabilities: {},
-				clientInfo: {
-					name: 'cabros-bot',
-					version: '0.1.0',
+		const { signal, validateResult, onCacheHit } = options;
+		if (signal?.aborted) throw createRequestCancelledError(signal);
+		const cfg = this.getConfig();
+		let cacheKey = null;
+		const cacheResult = (value) => {
+			if (validateResult) {
+				validateResult(value);
+			}
+			if (cacheKey) {
+				try {
+					const now = Date.now();
+					for (const [key, entry] of this.toolCache) {
+						if (entry.expiresAt <= now) this.toolCache.delete(key);
+					}
+					if (!this.toolCache.has(cacheKey) && this.toolCache.size >= MAX_TRADINGVIEW_MCP_CACHE_ENTRIES) {
+						this.toolCache.delete(this.toolCache.keys().next().value);
+					}
+					this.toolCache.set(cacheKey, { value, expiresAt: Date.now() + cfg.cacheTtlMs });
+				} catch {
+					// Cache failures are intentionally fail-open.
+				}
+			}
+			return value;
+		};
+		if (cfg.cacheEnabled) {
+			try {
+				cacheKey = `${toolName}:${JSON.stringify(canonicalize(args))}`;
+			} catch {
+				cacheKey = null;
+			}
+		}
+
+		if (cacheKey) {
+			let cached = null;
+			try {
+				cached = this.toolCache.get(cacheKey) || null;
+			} catch {
+				cacheKey = null;
+			}
+			if (cached && cacheKey) {
+				if (cached.expiresAt <= Date.now()) {
+					this.toolCache.delete(cacheKey);
+				} else {
+					if (signal?.aborted) throw createRequestCancelledError(signal);
+					try {
+						if (validateResult) validateResult(cached.value);
+					} catch (error) {
+						this.toolCache.delete(cacheKey);
+						throw error;
+					}
+					onCacheHit?.();
+					return cached.value;
+				}
+			}
+
+			const inFlight = this.toolInFlight.get(cacheKey);
+			if (inFlight && !inFlight.controller.signal.aborted) {
+				return awaitSharedToolCall(
+					inFlight,
+					signal,
+					validateResult,
+					() => this.toolCache.delete(cacheKey),
+				);
+			}
+		}
+
+		const executeToolCall = async (requestSignal) => {
+			const initializeRequest = {
+				jsonrpc: '2.0',
+				id: this._nextRequestId('initialize'),
+				method: 'initialize',
+				params: {
+					protocolVersion: '2024-11-05',
+					capabilities: {},
+					clientInfo: {
+						name: 'cabros-bot',
+						version: '0.1.0',
+					},
 				},
-			},
+			};
+
+			const initResponse = await this._rpcRequest(initializeRequest, { signal: requestSignal });
+			const sessionId = initResponse.sessionId;
+
+			if (!sessionId) {
+				throw new Error('TradingView MCP did not return mcp-session-id header');
+			}
+
+			await this._rpcRequest({
+				jsonrpc: '2.0',
+				method: 'notifications/initialized',
+				params: {},
+			}, { sessionId, expectResponse: false, signal: requestSignal });
+
+			const toolCallRequest = {
+				jsonrpc: '2.0',
+				id: this._nextRequestId('tool'),
+				method: 'tools/call',
+				params: {
+					name: toolName,
+					arguments: args,
+				},
+			};
+
+			const toolResponse = await this._rpcRequest(toolCallRequest, { sessionId, signal: requestSignal });
+			const callResult = toolResponse.rpc && toolResponse.rpc.result;
+
+			if (!callResult) {
+				throw new Error(`TradingView MCP tool ${toolName} returned empty result`);
+			}
+
+			if (callResult.isError) {
+				const errorMessage = this._extractContentText(callResult) || `TradingView MCP tool ${toolName} returned isError=true`;
+				throw createToolResultError(errorMessage);
+			}
+
+			if (callResult.structuredContent && typeof callResult.structuredContent === 'object') {
+				return callResult.structuredContent;
+			}
+
+			const contentText = this._extractContentText(callResult);
+			if (!contentText) {
+				throw new Error(`TradingView MCP tool ${toolName} returned empty content`);
+			}
+
+			return this._parseToolJson(contentText);
 		};
 
-		const initResponse = await this._rpcRequest(initializeRequest, { signal });
-		const sessionId = initResponse.sessionId;
-
-		if (!sessionId) {
-			throw new Error('TradingView MCP did not return mcp-session-id header');
+		if (!cacheKey) {
+			const value = await executeToolCall(signal);
+			return validateResult ? (validateResult(value), value) : value;
 		}
 
-		await this._rpcRequest({
-			jsonrpc: '2.0',
-			method: 'notifications/initialized',
-			params: {},
-		}, { sessionId, expectResponse: false, signal });
+		const controller = new AbortController();
+		const state = { controller, subscribers: 0, settled: false, promise: null };
+		state.promise = Promise.resolve()
+			.then(() => executeToolCall(controller.signal))
+			.then(cacheResult)
+			.catch((error) => {
+				if (controller.signal.aborted && state.subscribers === 0) {
+					throw createRequestCancelledError(controller.signal, 'All TradingView MCP request subscribers cancelled');
+				}
+				if (error && typeof error === 'object' && error.category !== 'request_cancelled') {
+					this.sharedToolFailureErrors.add(error);
+				}
+				throw error;
+			})
+			.finally(() => {
+				state.settled = true;
+				if (this.toolInFlight.get(cacheKey) === state) {
+					this.toolInFlight.delete(cacheKey);
+				}
+			});
+		this.toolInFlight.set(cacheKey, state);
 
-		const toolCallRequest = {
-			jsonrpc: '2.0',
-			id: this._nextRequestId('tool'),
-			method: 'tools/call',
-			params: {
-				name: toolName,
-				arguments: args,
-			},
-		};
+		return awaitSharedToolCall(
+			state,
+			signal,
+			validateResult,
+			() => this.toolCache.delete(cacheKey),
+		);
+	}
 
-		const toolResponse = await this._rpcRequest(toolCallRequest, { sessionId, signal });
-		const callResult = toolResponse.rpc && toolResponse.rpc.result;
-
-		if (!callResult) {
-			throw new Error(`TradingView MCP tool ${toolName} returned empty result`);
+	_validateAnalysisPayload(result, toolName) {
+		const normalizedResult = this._unwrapSchemaResult(result);
+		if (normalizedResult && normalizedResult.error) {
+			throw createToolResultError(normalizedResult.error);
 		}
 
-		if (callResult.isError) {
-			const errorMessage = this._extractContentText(callResult) || `TradingView MCP tool ${toolName} returned isError=true`;
-			throw createMcpError(errorMessage);
+		if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
+			throw new Error(`TradingView MCP ${toolName} returned invalid payload`);
 		}
-
-		if (callResult.structuredContent && typeof callResult.structuredContent === 'object') {
-			return callResult.structuredContent;
-		}
-
-		const contentText = this._extractContentText(callResult);
-		if (!contentText) {
-			throw new Error(`TradingView MCP tool ${toolName} returned empty content`);
-		}
-
-		return this._parseToolJson(contentText);
 	}
 
 	_extractContentText(callResult) {
@@ -1433,7 +1745,7 @@ class TradingViewMcpService {
 		// Confluence insight: append summary line using the .confluence sub-object from combined_analysis.
 		// The MCP payload shape (established in expandedAnalysisAlertReport.js) is:
 		//   confluenceAnalysis.confluence = { recommendation, confidence, signals_agree }
-		if (confluenceAnalysis) {
+		if (confluenceAnalysis && hasConfluenceEvidence(confluenceAnalysis)) {
 			const conf = confluenceAnalysis.confluence;
 			if (conf) {
 				const rec = conf.recommendation || conf.action || null;
@@ -1725,7 +2037,7 @@ class TradingViewMcpService {
 		};
 	}
 
-	async _withRuntimeStatus(operation, { signal, runtimeStatusKey } = {}) {
+	async _withRuntimeStatus(operation, { signal, runtimeStatusKey, shouldRecordSuccess } = {}) {
 		const runtimeStatusKeys = runtimeStatusKey ? ['runtimeStatus', runtimeStatusKey] : ['runtimeStatus'];
 
 		if (this.isBreakerOpen()) {
@@ -1736,6 +2048,7 @@ class TradingViewMcpService {
 
 		try {
 			const result = await operation();
+			if (shouldRecordSuccess && !shouldRecordSuccess()) return result;
 			const timestamp = new Date().toISOString();
 			this._recordSuccess();
 			runtimeStatusKeys.forEach((key) => {
@@ -1754,12 +2067,23 @@ class TradingViewMcpService {
 			});
 			return result;
 		} catch (error) {
-			if (signal && signal.aborted && getAbortMessage(signal, '') === 'Job cancelled by user') {
+			if (error?.category === 'request_cancelled'
+				|| (signal && signal.aborted && getAbortMessage(signal, '') === 'Job cancelled by user')) {
 				throw error;
 			}
 
 			const timestamp = new Date().toISOString();
-			this._recordFailure(error);
+			const sharedToolFailure = error
+				&& typeof error === 'object'
+				&& (this.sharedToolFailureErrors.has(error)
+					? error
+					: (this.sharedToolFailureErrors.has(error.sharedToolFailureCause)
+						? error.sharedToolFailureCause
+						: null));
+			if (!sharedToolFailure || !this.recordedSharedToolFailureErrors.has(sharedToolFailure)) {
+				this._recordFailure(error);
+				if (sharedToolFailure) this.recordedSharedToolFailureErrors.add(sharedToolFailure);
+			}
 			const errorCategory = this._getErrorCategory(error);
 			runtimeStatusKeys.forEach((key) => {
 				const prevCounts = (this[key] && this[key].errorCategoryCounts) || createEmptyErrorCategoryCounts();
@@ -1932,6 +2256,12 @@ class TradingViewMcpService {
 		}
 		if (error && error.category === 'provider_unavailable') {
 			return 'provider_unavailable';
+		}
+		if (error && (error.category === 'upstream_tool_error' || error.category === 'not_found')) {
+			return error.category;
+		}
+		if (isDeterministicNoDataError(error)) {
+			return 'not_found';
 		}
 		if (/circuit breaker/i.test(message)) {
 			return 'circuit_breaker_open';

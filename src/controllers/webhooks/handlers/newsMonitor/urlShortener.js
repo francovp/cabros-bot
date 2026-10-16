@@ -136,6 +136,7 @@ class URLShortener {
 		this.primaryService = (process.env.URL_SHORTENER_SERVICE || 'picsee').toLowerCase();
 		this.timeout = 60000; // 5s timeout per call
 		this.cache = new URLShortenerCache(options.cacheOptions);
+		this.inFlightShortenings = new Map();
 		this.serviceFailures = new Map(); // Track consecutive failures per service
 		this._explicitServiceFailuresMaxEntries = options.serviceFailuresMaxEntries !== undefined
 			? parsePositiveInteger(options.serviceFailuresMaxEntries, DEFAULT_URL_SHORTENER_FAILURES_MAX_ENTRIES, 'serviceFailuresMaxEntries', MAX_URL_SHORTENER_FAILURES_MAX_ENTRIES)
@@ -361,6 +362,23 @@ class URLShortener {
    * Shorten a single URL using configured services with fallback
    */
 	async shortenUrl(longUrl) {
+		const inFlight = this.inFlightShortenings.get(longUrl);
+		if (inFlight) {
+			return inFlight;
+		}
+
+		const shortening = this._shortenUrl(longUrl);
+		this.inFlightShortenings.set(longUrl, shortening);
+		try {
+			return await shortening;
+		} finally {
+			if (this.inFlightShortenings.get(longUrl) === shortening) {
+				this.inFlightShortenings.delete(longUrl);
+			}
+		}
+	}
+
+	async _shortenUrl(longUrl) {
 		// Check cache first
 		const cached = this.cache.get(longUrl);
 		if (cached) {
