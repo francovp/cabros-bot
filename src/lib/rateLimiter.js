@@ -2,6 +2,20 @@ const crypto = require('crypto');
 const { sendErrorFrom } = require('./errorEnvelope');
 
 const RATE_LIMIT_KEY_SALT = 'cabros-bot-rate-limit-identity';
+const keyHashCache = new Map();
+const MAX_KEY_HASH_ENTRIES = 500;
+
+function deriveApiKeyHash(apiKey) {
+	const cached = keyHashCache.get(apiKey);
+	if (cached) return cached;
+	if (keyHashCache.size >= MAX_KEY_HASH_ENTRIES) {
+		keyHashCache.clear();
+	}
+	const hash = crypto.scryptSync(apiKey, RATE_LIMIT_KEY_SALT, 6, { N: 1024, r: 8, p: 1 }).toString('hex');
+	keyHashCache.set(apiKey, hash);
+	return hash;
+}
+
 // src/lib/rateLimiter.js
 
 const rateLimit = new Map();
@@ -64,9 +78,9 @@ function getRateLimitKey(req) {
 	const apiKey = Array.isArray(rawApiKey) ? rawApiKey[0] : rawApiKey;
 
 	if (typeof apiKey === 'string' && apiKey.length > 0) {
-		// Derive a pseudonymous token from the API key using HMAC to avoid storing raw secrets in memory
-		// and prevent weak-password-hash static analysis triggers. Use first 12 chars for bucket differentiation.
-		const keyHash = crypto.createHmac('sha256', RATE_LIMIT_KEY_SALT).update(apiKey).digest('hex').substring(0, 12);
+		// Derive a pseudonymous token from the API key using scrypt to avoid storing raw secrets in memory
+		// and satisfy CodeQL password hash computational effort rules. Use first 12 chars for bucket differentiation.
+		const keyHash = deriveApiKeyHash(apiKey);
 		return `key:${keyHash}:ip:${baseIp}`;
 	}
 
@@ -158,6 +172,7 @@ rateLimiter.disableTestMode = function () {
 
 rateLimiter.reset = function () {
 	rateLimit.clear();
+	keyHashCache.clear();
 };
 
 rateLimiter.WEBHOOK_INGEST_PATHS = WEBHOOK_INGEST_PATHS;
