@@ -1978,6 +1978,25 @@ describe('Status endpoints', () => {
 		}));
 	});
 
+	it('reports Gemini grounding configured when the model comes from Remote Config', async () => {
+		process.env.MODEL_PROVIDER = 'gemini';
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		delete process.env.GEMINI_MODEL_NAME;
+		remoteConfigService._setRemoteOverridesForTesting({ GEMINI_MODEL_NAME: 'published-model' }, Date.now());
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.gemini).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+		});
+	});
+
 	it('reports Gemini quota status as degraded when active cooldown is in effect', async () => {
 		const before = Date.now();
 		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 5000 });

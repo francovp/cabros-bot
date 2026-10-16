@@ -702,6 +702,57 @@ describe('RemoteConfigService', () => {
 		expect(config.CHAT_PREFERENCES_CACHE_TTL_MS).toBe(30000);
 	});
 
+	it('supports alert model selectors while keeping credentials and provider routing environment-only', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.GEMINI_MODEL_NAME = 'env-primary';
+		process.env.GEMINI_MODEL_NAME_FALLBACK = 'env-fallback';
+		process.env.GROUNDING_MODEL_NAME = 'env-grounding';
+		mockTemplate({
+			GEMINI_MODEL_NAME: 'remote-primary',
+			GEMINI_MODEL_NAME_FALLBACK: 'remote-fallback',
+			GROUNDING_MODEL_NAME: 'remote-grounding',
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
+			GEMINI_MODEL_NAME: 'remote-primary',
+			GEMINI_MODEL_NAME_FALLBACK: 'remote-fallback',
+			GROUNDING_MODEL_NAME: 'remote-grounding',
+		}));
+		for (const key of ['GEMINI_MODEL_NAME', 'GEMINI_MODEL_NAME_FALLBACK', 'GROUNDING_MODEL_NAME']) {
+			expect(remoteConfigService.PARAMETER_SCHEMA[key]).toEqual(expect.objectContaining({ type: 'string' }));
+		}
+		for (const key of ['GEMINI_API_KEY', 'BRAVE_SEARCH_API_KEY', 'BRAVE_SEARCH_ENDPOINT', 'FORCE_BRAVE_SEARCH']) {
+			expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty(key);
+		}
+
+		const template = JSON.parse(fs.readFileSync(path.join(__dirname, '../../firebase-remote-config-template.json'), 'utf8'));
+		for (const key of ['GEMINI_MODEL_NAME', 'GEMINI_MODEL_NAME_FALLBACK', 'GROUNDING_MODEL_NAME']) {
+			expect(template.parameters[key]).toEqual(expect.objectContaining({
+				defaultValue: { useInAppDefault: true },
+				valueType: 'STRING',
+			}));
+		}
+		for (const key of ['GEMINI_API_KEY', 'BRAVE_SEARCH_API_KEY', 'BRAVE_SEARCH_ENDPOINT', 'FORCE_BRAVE_SEARCH']) {
+			expect(template.parameters).not.toHaveProperty(key);
+		}
+
+		mockTemplate({
+			GEMINI_MODEL_NAME: 'invalid model name',
+			GEMINI_MODEL_NAME_FALLBACK: 'invalid fallback',
+			GROUNDING_MODEL_NAME: 'invalid grounding model',
+		});
+		await remoteConfigService.loadNow();
+		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
+			GEMINI_MODEL_NAME: 'env-primary',
+			GEMINI_MODEL_NAME_FALLBACK: 'env-fallback',
+			GROUNDING_MODEL_NAME: 'env-grounding',
+		}));
+		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
+	});
+
 	it('keeps the startup-only signal outcome cadence out of Remote Config', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 		process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS = '60000';
