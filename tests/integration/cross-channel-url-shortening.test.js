@@ -4,6 +4,14 @@ const WhatsAppService = require('../../src/services/notification/WhatsAppService
 const DiscordService = require('../../src/services/notification/DiscordService');
 const WhatsAppMarkdownFormatter = require('../../src/services/notification/formatters/whatsappMarkdownFormatter');
 
+const hasHostname = (url, hostname) => {
+	try {
+		return new URL(url).hostname === hostname;
+	} catch {
+		return false;
+	}
+};
+
 describe('Cross-Channel URL Shortening Parity (WhatsApp & Discord)', () => {
 	let mockUrlShortener;
 	let originalFetch;
@@ -98,6 +106,22 @@ describe('Cross-Channel URL Shortening Parity (WhatsApp & Discord)', () => {
 		});
 
 		const fetchCalls = [];
+		fetchCalls.push(
+			{
+				url: 'https://evil.example/green-api.com/api/sendMessage',
+				options: {
+					method: 'POST',
+					body: JSON.stringify({ message: 'lookalike request' }),
+				},
+			},
+			{
+				url: 'https://discord.com.evil.example/api/webhooks/123/token',
+				options: {
+					method: 'POST',
+					body: JSON.stringify({ content: 'lookalike request' }),
+				},
+			},
+		);
 		global.fetch = jest.fn().mockImplementation(async (url, options) => {
 			fetchCalls.push({ url, options });
 			if (options?.method === 'GET') {
@@ -118,9 +142,9 @@ describe('Cross-Channel URL Shortening Parity (WhatsApp & Discord)', () => {
 		});
 
 		const waService = new WhatsAppService({
-			apiUrl: 'https://api.green-api.com',
+			apiUrl: 'https://1101234567.api.green-api.com/waInstance1101234567/sendMessage/',
+			apiKey: 'mock-greenapi-token',
 			idInstance: '1101234567',
-			apiTokenInstance: 'mock-greenapi-token',
 			chatId: '120363xxxxxx@g.us',
 			logger: console,
 			urlShortener: mockUrlShortener,
@@ -152,8 +176,10 @@ describe('Cross-Channel URL Shortening Parity (WhatsApp & Discord)', () => {
 		expect(discordResult.success).toBe(true);
 
 		// Extract outgoing messages
-		const waCall = fetchCalls.find((call) => call.url.includes('green-api.com'));
-		const discordCall = fetchCalls.find((call) => call.url.includes('discord.com') && call.options.method === 'POST');
+		const waCall = fetchCalls.find((call) => hasHostname(call.url, '1101234567.api.green-api.com'));
+		const discordCall = fetchCalls.find(
+			(call) => hasHostname(call.url, 'discord.com') && call.options.method === 'POST',
+		);
 
 		expect(waCall).toBeDefined();
 		expect(discordCall).toBeDefined();
