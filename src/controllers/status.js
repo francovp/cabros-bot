@@ -563,6 +563,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			alertFeedback: alertFeedbackStorageService.isEnabled(),
 			symbolAnalysisStorage: symbolAnalysisStorageService.isEnabled(),
 			symbolAnalysisMultiAgent: runtimeConfig.ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT,
+			apiOnlyMode: runtimeConfig.ENABLE_API_ONLY_MODE,
 			whatsappTemplateMode: !!process.env.WHATSAPP_TEMPLATE_NAME,
 			testAlert: isTestAlertEnabled(),
 			tokenCostBudget: tokenCostBudgetService.isEnabled(),
