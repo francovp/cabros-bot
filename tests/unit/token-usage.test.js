@@ -5,12 +5,16 @@ const {
 	normalizeUsageMetadata,
 	TokenUsageTracker,
 	PRICING_PER_1M,
+	_resetWarnedModelsForTesting,
 } = require('../../src/lib/tokenUsage');
 
 describe('tokenUsage', () => {
 	let warnSpy;
 
 	beforeEach(() => {
+		if (typeof _resetWarnedModelsForTesting === 'function') {
+			_resetWarnedModelsForTesting();
+		}
 		warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
 	});
 
@@ -91,6 +95,19 @@ describe('tokenUsage', () => {
 			const warnings = warnSpy.mock.calls.map((call) => call[0]);
 			const unknownWarnings = warnings.filter((msg) => typeof msg === 'string' && msg.includes('unknown model'));
 			expect(unknownWarnings.length).toBe(2);
+		});
+
+		it('deduplicates unknown-model warnings across multiple tracker instances', () => {
+			const tracker1 = new TokenUsageTracker();
+			tracker1.addUsage({ inputTokens: 100, outputTokens: 50 }, 'shared-unknown-model');
+			const tracker2 = new TokenUsageTracker();
+			tracker2.addUsage({ inputTokens: 100, outputTokens: 50 }, 'shared-unknown-model');
+
+			const warnings = warnSpy.mock.calls.map((call) => call[0]);
+			const unknownWarnings = warnings.filter((msg) => typeof msg === 'string' && msg.includes('shared-unknown-model'));
+			expect(unknownWarnings.length).toBe(1);
+			expect(tracker1.toJSON().pricing.unknownModels).toContain('shared-unknown-model');
+			expect(tracker2.toJSON().pricing.unknownModels).toContain('shared-unknown-model');
 		});
 
 		it('does NOT warn for gemma variants (legitimate free tier)', () => {

@@ -177,6 +177,12 @@ function normalizeUsageMetadata(usageMetadata) {
 	};
 }
 
+const warnedUnknownModels = new Set();
+
+function _resetWarnedModelsForTesting() {
+	warnedUnknownModels.clear();
+}
+
 class TokenUsageTracker {
 	constructor(defaultFeature = null) {
 		this.inputTokens = 0;
@@ -244,7 +250,8 @@ class TokenUsageTracker {
 			const { unknown, matchedKey } = resolvePricing(model);
 			if (unknown && matchedKey) {
 				this._unknownModels.add(matchedKey);
-				if (!this._warnedModels.has(matchedKey)) {
+				if (!warnedUnknownModels.has(matchedKey)) {
+					warnedUnknownModels.add(matchedKey);
 					this._warnedModels.add(matchedKey);
 					console.warn(
 						`[TokenUsageTracker] unknown model "${matchedKey}" priced at the default fallback rate; add an entry to PRICING_PER_1M in src/lib/tokenUsage.js to enable real cost accounting`,
@@ -1072,4 +1079,5 @@ module.exports = {
 	registerGlobalUsage,
 	PRICING_PER_1M,
 	MODEL_PRICING: PRICING_PER_1M,
+	_resetWarnedModelsForTesting,
 };
