@@ -24,6 +24,11 @@ const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { resolveDryRun } = require('../../../../lib/dryRunRequest');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
+const {
+	buildMinAlertContext,
+	applyMinAlertContext,
+	buildFooterPriceSourceLine,
+} = require('../../../../services/alerts/minAlertContext');
 const { outcomeAnnotationService, renderAnnotationLine } = require('../../../../services/alerts/outcomeAnnotationService');
 const { crossTimeframeCooldown } = require('../../../../services/alerts/crossTimeframeCooldown');
 const { burstAggregator, buildBurstGroupKey } = require('../../../../services/alerts/burstAggregator');
@@ -283,6 +288,33 @@ async function processEnrichment(alert, options) {
 		} finally {
 			sentryService.endSpan(enrichmentSpan);
 		}
+	}
+
+	// GH-581 / CB-269: minimum viable alert context — synthesize a degraded-but-honest
+	// decision package (entry reference + provisional invalidation/target) when both
+	// the configured enrichment pipeline is unavailable or returned an incomplete
+	// payload. Fail-open: any failure here is logged and never blocks delivery.
+	try {
+		const ctx = await buildMinAlertContext({
+			text: alert.text,
+			enriched: alert.enriched || null,
+			runtimeConfig,
+		});
+		if (ctx && ctx.applied) {
+			alert.minAlertContext = ctx;
+			alert.enriched = applyMinAlertContext(alert.enriched || null, ctx);
+			enriched = enriched || true;
+			const footerLine = buildFooterPriceSourceLine(ctx, runtimeConfig);
+			if (footerLine && alert.enriched) {
+				const existingExtra = typeof alert.enriched.extraText === 'string' ? alert.enriched.extraText : '';
+				const merged = existingExtra.includes(footerLine)
+					? existingExtra
+					: (existingExtra ? existingExtra + '\n' + footerLine : footerLine);
+				alert.enriched.extraText = merged;
+			}
+		}
+	} catch (error) {
+		console.warn('[Alert] Min alert context synthesis failed, continuing with original text:', error.message);
 	}
 
 	return enriched;
