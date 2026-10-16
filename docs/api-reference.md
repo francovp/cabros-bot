@@ -238,7 +238,7 @@ When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading`
 }
 ```
 
-`configured` reports Firestore credential readiness independently of the gate, so the pair is diagnostic rather than redundant: `enabled: false` with `configured: true` means "audit is off although credentials exist" (turn it on when you want the trail), while `enabled: true` with `configured: false` reports `status: "misconfigured"` — orders still execute but produce **no** audit record, which is the state worth alerting on. `status` is `ready` only when both hold. The block never exposes an operator identifier (stored only as a PBKDF2 hash), an exchange credential, or an API key. See [Environment Configuration](environment-configuration.md#binance-order-mutation-audit).
+`configured` reports Firestore credential readiness independently of the gate, so the pair is diagnostic rather than redundant: `enabled: false` with `configured: true` means "audit is off although credentials exist" (turn it on when you want the trail), while `enabled: true` with `configured: false` reports `status: "misconfigured"` — orders still execute but produce **no** audit record, which is the state worth alerting on. `status` is `ready` only when both hold. `ready` is credential readiness only (`enabled && configured`) and does not prove a write has succeeded, since audit writes are fail-open and a failed write is dropped with a warning. The block never exposes an operator identifier (stored only as a PBKDF2 hash), an exchange credential, or an API key. See [Environment Configuration](environment-configuration.md#binance-order-mutation-audit).
 
 ### GET /api/public/status
 
