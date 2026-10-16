@@ -11,9 +11,13 @@ describe('Admin Console Hosting Smoke & Security', () => {
 		expect(res.headers['content-security-policy']).toContain('https://*.web.app');
 		expect(res.headers['content-security-policy']).toContain('https://*.firebaseapp.com');
 		expect(res.headers['content-security-policy']).toContain('https://identitytoolkit.googleapis.com');
+		expect(res.headers['content-security-policy']).toContain('https://openclaw.tail5e4271.ts.net');
 		expect(res.text).toContain('/admin/admin.js');
 		expect(res.text).toContain('/admin/admin-request.js');
 		expect(res.text).toContain('/admin/admin.css');
+		expect(res.text).toContain('/admin/vue.runtime.global.prod.js');
+		expect(res.text).toContain('/admin/admin-components.js');
+		expect(res.headers['content-security-policy']).not.toContain('\'unsafe-eval\'');
 	});
 
 	it('serves admin auth-config without exposing service credentials', async () => {
@@ -40,6 +44,12 @@ describe('Admin Console Hosting Smoke & Security', () => {
 		const reqJsRes = await request(app).get('/admin/admin-request.js');
 		expect(reqJsRes.status).toBe(200);
 		expect(reqJsRes.headers['content-type']).toContain('javascript');
+
+		for (const asset of ['vue.runtime.global.prod.js', 'admin-components.js']) {
+			const assetRes = await request(app).get(`/admin/${asset}`);
+			expect(assetRes.status).toBe(200);
+			expect(assetRes.headers['content-type']).toContain('javascript');
+		}
 
 		const cssRes = await request(app).get('/admin/admin.css');
 		expect(cssRes.status).toBe(200);

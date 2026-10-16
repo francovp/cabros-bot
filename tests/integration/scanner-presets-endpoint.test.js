@@ -11,9 +11,10 @@ const { generateKeyPairSync } = require('crypto');
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const { _resetForTesting: resetScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
 	type: 'pkcs1',
@@ -51,6 +52,7 @@ describe('Scanner presets API integration tests', () => {
 		jest.clearAllMocks();
 		admin.__resetCollectionState();
 		resetScannerPresetService();
+		resetNotificationManagerForTesting();
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'preset-msg-id' });
 		mockBot = {
 			telegram: {
@@ -179,7 +181,7 @@ describe('Scanner presets API integration tests', () => {
 		expect(deleteResponse.body.storage).toEqual(expectedStorage);
 	});
 
-	it('reports ephemeral storage when durable scanner persistence is enabled but unavailable', async () => {
+	it('reports durable intent as degraded when a scanner preset write fails', async () => {
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
 		const firestoreAdmin = require('firebase-admin');
@@ -191,25 +193,24 @@ describe('Scanner presets API integration tests', () => {
 			.send({ name: 'Ephemeral preset' })
 			.expect(201);
 
-		expect(response.body.storage).toEqual({
+		// A failed write is a store fault, not a credential problem: `mode`/`backend`
+		// stay on the configured target and the unsynced record is reported as pending
+		// workload rather than reclassifying the whole backend as `memory` (#1342).
+		expect(response.body.storage).toEqual(expect.objectContaining({
 			enabled: true,
-			configured: false,
+			configured: true,
 			ready: false,
-			status: 'misconfigured',
-			mode: 'ephemeral',
-			backend: 'memory',
-		});
+			status: 'degraded',
+			readiness: 'degraded',
+			mode: 'durable',
+			backend: 'firestore',
+			lastErrorReason: 'firestore_unavailable',
+			pendingWrites: 1,
+			oldestPendingWriteAt: expect.any(String),
+		}));
 	});
 
-	it('runs a saved preset in dry-run mode with the market scanner report', async () => {
-		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
-			{
-				symbol: 'BINANCE:GMTUSDT',
-				changePercent: 26.415,
-				indicators: { close: 0.0134, RSI: 79.72 },
-			},
-		]);
-
+	it('returns structured preview in dry-run mode without calling MCP or delivery services', async () => {
 		const createResponse = await request(app)
 			.post('/api/scanner-presets')
 			.set('x-api-key', 'test-key')
@@ -218,6 +219,102 @@ describe('Scanner presets API integration tests', () => {
 				exchange: 'binance',
 				timeframe: '4h',
 				scans: ['top_gainers'],
+				limit: 5,
+			})
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const runResponse = await request(app)
+			.post(`/api/scanner-presets/${presetId}/run?dryRun=true`)
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'preset-dry-key-123')
+			.expect(200);
+
+		expect(runResponse.body).toEqual(expect.objectContaining({
+			success: true,
+			dryRun: true,
+			presetId,
+			preset: expect.objectContaining({
+				id: presetId,
+				name: 'Dry run preset',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				scans: ['top_gainers'],
+				limit: 5,
+			}),
+			validation: {
+				ok: true,
+				errors: [],
+			},
+			estimatedCalls: {
+				coinAnalysis: 1,
+				multiTimeframe: 0,
+			},
+			requestedChannels: expect.any(Array),
+			mcpReadiness: expect.objectContaining({
+				ready: expect.any(Boolean),
+			}),
+			idempotencyKey: 'preset-dry-key-123',
+			requestId: expect.any(String),
+		}));
+
+		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
+	it('returns validation errors with 200 OK when dry-run preset configuration has invalid settings', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({
+				name: 'Valid preset initially',
+				exchange: 'binance',
+				timeframe: '4h',
+				scans: ['top_gainers'],
+			})
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const runResponse = await request(app)
+			.post(`/api/scanner-presets/${presetId}/run`)
+			.set('x-api-key', 'test-key')
+			.send({
+				dryRun: true,
+				scans: ['invalid_scan_tool'],
+				timeframe: 'invalid_timeframe',
+			})
+			.expect(200);
+
+		expect(runResponse.body).toEqual(expect.objectContaining({
+			success: true,
+			dryRun: true,
+			presetId,
+			validation: {
+				ok: false,
+				errors: expect.arrayContaining([
+					expect.stringContaining('Unsupported scan types'),
+					expect.stringContaining('Unsupported timeframe'),
+				]),
+			},
+		}));
+
+		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
+	it('estimates multiTimeframe calls when includeMultiTimeframe is enabled', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({
+				name: 'Multi-timeframe preset',
+				exchange: 'binance',
+				timeframe: '1h',
+				scans: ['top_gainers', 'top_losers'],
+				limit: 10,
+				includeMultiTimeframe: true,
 			})
 			.expect(201);
 
@@ -228,26 +325,45 @@ describe('Scanner presets API integration tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(200);
 
-		expect(runResponse.body).toEqual(expect.objectContaining({
-			success: true,
-			dryRun: true,
-			presetId,
-			summary: expect.objectContaining({
-				totalScans: 1,
-				success: 1,
-				error: 0,
-				timeout: 0,
-				totalItems: 1,
-				delivered: 0,
-			}),
-		}));
-		expect(runResponse.body.payload.alertText).toContain('SCANNER DE MERCADO');
-		expect(runResponse.body.payload.alertText).toContain('GMTUSDT');
-		expect(tradingViewMcpService.callScanTool).toHaveBeenCalledWith(
-			'top_gainers',
-			{ exchange: 'BINANCE', timeframe: '4h', limit: 5 },
-			expect.any(Object),
-		);
+		expect(runResponse.body.estimatedCalls).toEqual({
+			coinAnalysis: 2,
+			multiTimeframe: 20,
+		});
+		expect(runResponse.body.preset.includeMultiTimeframe).toBe(true);
+		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+	});
+
+	it('resolves requested channels and chat overrides in dry-run mode', async () => {
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+		process.env.BOT_TOKEN = 'test-bot-token';
+		process.env.TELEGRAM_CHAT_ID = '123456789';
+
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({
+				name: 'Channel override preset',
+				exchange: 'binance',
+				timeframe: '4h',
+				scans: ['top_gainers'],
+			})
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const runResponse = await request(app)
+			.post(`/api/scanner-presets/${presetId}/run`)
+			.set('x-api-key', 'test-key')
+			.send({
+				dryRun: true,
+				channels: ['telegram'],
+				telegramChatId: '-100999888777',
+			})
+			.expect(200);
+
+		expect(runResponse.body.requestedChannels).toEqual(['telegram']);
+		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
 
 	it('routes preset delivery to requested channels only', async () => {
@@ -258,6 +374,7 @@ describe('Scanner presets API integration tests', () => {
 		process.env.WHATSAPP_API_URL = 'https://api.greenapi.com/waInstance123/';
 		process.env.WHATSAPP_API_KEY = 'test-whatsapp-key';
 		process.env.WHATSAPP_CHAT_ID = '120363000000000000@g.us';
+		resetNotificationManagerForTesting();
 
 		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
 			{
@@ -292,6 +409,8 @@ describe('Scanner presets API integration tests', () => {
 		expect(runResponse.body.requestedChannels).toEqual(['telegram']);
 		expect(runResponse.body.deliveredChannels).toEqual(['telegram']);
 		expect(runResponse.body.deliveryResults).toHaveLength(1);
+		expect(runResponse.body.processingTimeMs).toEqual(expect.any(Number));
+		expect(runResponse.body).not.toHaveProperty('totalDurationMs');
 		expect(mockTelegramSendMessage).toHaveBeenCalledWith(
 			'-100999888777',
 			expect.any(String),
@@ -361,5 +480,269 @@ describe('Scanner presets API integration tests', () => {
 		expect(data.lastRunAt).toBeTruthy();
 		expect(new Date(data.nextRunAt).getTime()).toBeGreaterThan(Date.now());
 	});
-});
 
+	it('returns ETag header and version field on GET /api/scanner-presets/:id', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'ETag preset', exchange: 'BINANCE' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+		expect(createResponse.body.preset.version).toBe(1);
+
+		const getResponse = await request(app)
+			.get(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(getResponse.headers.etag).toBe('"1"');
+		expect(getResponse.body.preset.version).toBe(1);
+	});
+
+	it('updates with a matching If-Match token and increments version', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Matched If-Match preset' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+		const initialVersion = createResponse.body.preset.version;
+
+		const updateResponse = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.set('If-Match', `"${initialVersion}"`)
+			.send({ limit: 12 })
+			.expect(200);
+
+		expect(updateResponse.body.preset.version).toBe(initialVersion + 1);
+		expect(updateResponse.body.preset.limit).toBe(12);
+		expect(updateResponse.headers.etag).toBe(`"${initialVersion + 1}"`);
+	});
+
+	it('returns 412 PRECONDITION_FAILED with current preset on stale If-Match', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Stale If-Match preset' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const response = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.set('If-Match', '"999"')
+			.send({ limit: 12 })
+			.expect(412);
+
+		expect(response.body.code).toBe('PRECONDITION_FAILED');
+		expect(response.body.preset).toMatchObject({
+			id: presetId,
+			version: createResponse.body.preset.version,
+		});
+	});
+
+	it('returns 409 PRESET_LOCKED when lockedUntil is in the future', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Locked preset' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+		const futureLock = new Date(Date.now() + 60000).toISOString();
+		await admin.firestore().collection('scannerPresets').doc(presetId).update({
+			lockedUntil: futureLock,
+			lockedBy: 'scheduler',
+			version: 2,
+		});
+
+		const response = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.send({ limit: 5 })
+			.expect(409);
+
+		expect(response.body.code).toBe('PRESET_LOCKED');
+		expect(response.body.lockedUntil).toBe(futureLock);
+	});
+
+	it('returns 412 PRECONDITION_FAILED on stale If-Match for DELETE', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Stale delete preset' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const response = await request(app)
+			.delete(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.set('If-Match', '"999"')
+			.expect(412);
+
+		expect(response.body.code).toBe('PRECONDITION_FAILED');
+		expect(await admin.firestore().collection('scannerPresets').doc(presetId).get()).toBeDefined();
+	});
+
+	it('returns 400 INVALID_IF_MATCH for a malformed If-Match header', async () => {
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Malformed If-Match preset' })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const response = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.set('If-Match', '"3", "4"')
+			.send({ limit: 7 })
+			.expect(400);
+
+		expect(response.body.code).toBe('INVALID_IF_MATCH');
+	});
+
+	it('returns 409 NAME_CONFLICT when creating a duplicate preset name', async () => {
+		await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Conflict preset' })
+			.expect(201);
+
+		const conflictResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'CONFLICT preset' })
+			.expect(409);
+
+		expect(conflictResponse.body.code).toBe('NAME_CONFLICT');
+		expect(conflictResponse.body.preset).toEqual(expect.objectContaining({
+			name: 'Conflict preset',
+		}));
+	});
+
+	it('returns 409 NAME_CONFLICT when renaming a preset onto another preset name', async () => {
+		const first = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Alpha' })
+			.expect(201);
+		const second = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Bravo' })
+			.expect(201);
+
+		const renameResponse = await request(app)
+			.put(`/api/scanner-presets/${second.body.preset.id}`)
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Alpha' })
+			.expect(409);
+
+		expect(renameResponse.body.code).toBe('NAME_CONFLICT');
+		expect(renameResponse.body.preset).toEqual(expect.objectContaining({
+			id: first.body.preset.id,
+			name: 'Alpha',
+		}));
+
+		// Bravo name preserved on the second preset.
+		const refetched = await request(app)
+			.get(`/api/scanner-presets/${second.body.preset.id}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+		expect(refetched.body.preset.name).toBe('Bravo');
+	});
+
+	it('allows a preset to rename itself with a case-only change', async () => {
+		const created = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'My Watchlist' })
+			.expect(201);
+
+		const updated = await request(app)
+			.put(`/api/scanner-presets/${created.body.preset.id}`)
+			.set('x-api-key', 'test-key')
+			.send({ name: 'my watchlist' })
+			.expect(200);
+
+		expect(updated.body.preset.name).toBe('my watchlist');
+		});
+
+			it('returns 400 without invoking MCP when a requested channel is disabled (GH-854 fail-fast)', async () => {
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+		process.env.ENABLE_WHATSAPP_ALERTS = 'false';
+
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Disabled-channel preset', exchange: 'binance', timeframe: '4h', scans: ['top_gainers'] })
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+		tradingViewMcpService.callScanTool.mockClear();
+
+		const response = await request(app)
+			.post(`/api/scanner-presets/${presetId}/run`)
+			.set('x-api-key', 'test-key')
+			.send({ channels: ['whatsapp'] })
+			.expect(400);
+
+		expect(response.body.error).toContain('Requested channel(s) disabled or misconfigured');
+		// Fail-fast: the TradingView MCP scan must NOT have been called.
+		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+	});
+	it('records signal outcomes when manual preset run succeeds and outcomes are enabled', async () => {
+		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+		const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue({});
+
+		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
+			{
+				symbol: 'BINANCE:AVAXUSDT',
+				changePercent: 15.2,
+				indicators: { close: 35.5, atr: 1.2, bb_lower: 32.0, bb_upper: 38.0 },
+			},
+		]);
+
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({
+				name: 'Outcome Manual Preset',
+				exchange: 'binance',
+				timeframe: '1h',
+				scans: ['top_gainers'],
+			})
+			.expect(201);
+
+		const presetId = createResponse.body.preset.id;
+
+		const runResponse = await request(app)
+			.post(`/api/scanner-presets/${presetId}/run`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(runResponse.body.success).toBe(true);
+		expect(recordSpy).toHaveBeenCalledTimes(1);
+		const recorded = recordSpy.mock.calls[0][0];
+		expect(recorded.source).toBe('scanner-preset');
+		expect(recorded.symbol).toBe('BINANCE:AVAXUSDT');
+		expect(recorded.exchange).toBe('BINANCE');
+		expect(recorded.timeframe).toBe('1h');
+		expect(recorded.setupType).toBe('top_gainers');
+		expect(recorded.side).toBe('BUY');
+		expect(recorded.price).toBe(35.5);
+		expect(recorded.stop).toBe(33.7);
+		expect(recorded.score).toBe(15.2);
+
+		recordSpy.mockRestore();
+		signalOutcomeService.isEnabled.mockRestore();
+	});
+
+});

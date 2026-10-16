@@ -35,14 +35,22 @@ If a specific PR number is provided (e.g. `PR #894`), target that PR directly:
 
 ### 2. Ensure Agent Attribution Label
 
-Every PR created or updated by an AI agent must carry an attribution label matching `<agent>-<model>` (e.g. `antigravity-gemini-3.7-flash`, `codex-gpt-5.6-luna`, `github-copilot-minimax-m3:free`). If the target PR is missing its attribution label, attach it:
+Every PR created or updated by an AI agent must carry an attribution label matching `<agent>-<model>` corresponding to the **PR's authoring agent and model** (e.g. `codex-gpt-5.6-luna` for Codex, `github-copilot-minimax-m3:free` for Copilot, `claude-3.7-sonnet` for Claude, `opencode-glm-4.5` for OpenCode, `antigravity-gemini-3.7-flash` for Antigravity).
+
+> [!WARNING]
+> **Never apply your own reviewer label to a PR authored by another agent.** An Antigravity reviewer must not label a Codex or Copilot PR as `antigravity-gemini-3.7-flash`. Use `--auto-label` to derive and apply the detected authoring agent label, or explicitly provide `<detected-authoring-agent>-<model>`.
+
+If the target PR is missing its attribution label, attach the detected authoring agent label:
 
 ```bash
-# Via detection script:
-.agents/skills/agent-cross-review/scripts/detect-agent-prs.sh --pr "$PR_NUM" --add-label "antigravity-gemini-3.7-flash"
+# Auto-detect authoring agent and attach corresponding label automatically:
+.agents/skills/agent-cross-review/scripts/detect-agent-prs.sh --pr "$PR_NUM" --auto-label
+
+# Or explicitly pass the detected authoring agent label:
+.agents/skills/agent-cross-review/scripts/detect-agent-prs.sh --pr "$PR_NUM" --add-label "<detected-authoring-agent>-<model>"
 
 # Or directly with gh:
-gh pr edit "$PR_NUM" --add-label "<agent>-<model>"
+gh pr edit "$PR_NUM" --add-label "<detected-authoring-agent>-<model>"
 ```
 
 ### 3. Inspect PR Context and Diff
@@ -56,6 +64,34 @@ gh pr view "$PR_NUM" --json number,title,body,headRefName,author,labels,url
 # Inspect the diff
 gh pr diff "$PR_NUM"
 ```
+
+**Fetch review thread state (required for the CodeQL/GHAS gate in rubric item 4):**
+
+```bash
+# Paginate all review threads; check isResolved and comment author
+gh api graphql -f query='
+{
+  repository(owner:"francovp", name:"cabros-bot") {
+    pullRequest(number: '"$PR_NUM"') {
+      reviewThreads(first: 50) {
+        nodes {
+          isResolved
+          path
+          line
+          comments(first: 1) {
+            nodes { author { login } body }
+          }
+        }
+      }
+    }
+  }
+}' --jq '
+  .data.repository.pullRequest.reviewThreads.nodes[]
+  | select(.isResolved == false)
+  | {path:.path, line:.line, author:.comments.nodes[0].author.login, snippet:(.comments.nodes[0].body[:120])}'
+```
+
+Any thread whose `author.login` is `github-advanced-security` and `isResolved` is `false` is a **security blocker** — resolve it before approving (rubric item 4).
 
 Read the linked GitHub issues, Linear tickets (e.g. `CB-xxx`), or user stories mentioned in the PR description to understand the intended behavior.
 
@@ -80,11 +116,15 @@ Review the diff systematically against [cabros-bot-review-rubric.md](references/
    - Does API key validation use `crypto.timingSafeEqual`?
    - In production (`NODE_ENV=production`, Render, Railway), does missing `WEBHOOK_API_KEY` fail closed with HTTP 503?
    - Are secrets, credentials, or API tokens strictly protected from logs, URL query strings, and output?
+   - **CodeQL / GHAS alerts** (evidence: PR #1100): are there open `github-advanced-security` inline review threads? Common findings in this codebase: clear-text logging of sensitive auth values (`src/lib/auth.js`) and sensitive data read from GET query parameters. Treat open CodeQL threads as blockers; they must be resolved before merge, not deferred.
 
 5. **Contract & Configuration Parity**:
    - Is `.env.example` updated for new application-owned environment variables?
-   - Are non-secret runtime variables added to `RemoteConfigService.js` and `firebase-remote-config-template.json`?
+   - Do Remote Config additions in `firebase-remote-config-template.json` maintain 100% parity with `RemoteConfigService.PARAMETER_SCHEMA` and `README.md` parameter tables (keys, descriptions, types, defaults)?
    - Are new routes and payloads registered in `src/openapi/openapi.json` and `CabrosBot.postman_collection.json`?
+   - Does Postman include runnable negative/error input variants (e.g. 400 `INVALID_REQUEST` for invalid limits, windows, malformed timestamps, or reversed ranges) with executable test assertions (`pm.test`), rather than only testing success cases?
+   - Do all error responses conform to the standardized error envelope (`{ success: false, error: ..., code: ... }` via `src/lib/errorEnvelope.js`)?
+   - Do replay endpoints (single and batch alert replay) start from the complete raw payload and overlay routing metadata, rather than cherry-picking known fields and dropping unrecognized attributes?
 
 6. **Agent & Model Attribution**:
    - Does the PR carry its mandatory `<agent>-<model>` label (e.g. `antigravity-gemini-3.7-flash`, `codex-gpt-5.6-luna`, `github-copilot-minimax-m3:free`)?
@@ -139,8 +179,11 @@ Assemble the review using this standard structure:
 - [ ] Telegram MarkdownV2 escaping
 - [ ] Firestore undefined sanitization
 - [ ] Timing-safe auth & fail-closed production check
-- [ ] `.env.example` & Remote Config parity
-- [ ] OpenAPI 3.1 & Postman collection sync
+- [ ] No open CodeQL / GHAS inline threads (clear-text logging, GET query param secrets)
+- [ ] `.env.example`, Remote Config & README documentation parity
+- [ ] OpenAPI 3.1 & Postman collection sync (including 400 negative variants)
+- [ ] Standardized error envelopes (`{ success: false, error: ..., code: ... }`)
+- [ ] Replay payload preservation (no dropped fields during replay)
 - [ ] Agent & Model attribution label (`<agent>-<model>`)
 - [ ] Unit & Integration test coverage
 

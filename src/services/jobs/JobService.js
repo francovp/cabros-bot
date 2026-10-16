@@ -9,16 +9,19 @@ const { tradingViewMcpService } = require('../tradingview/TradingViewMcpService'
 const {
 	parseExpandedAnalysisAlertRequest,
 	buildExpandedAnalysisAlertReport,
+	deriveItemSide,
+	recordExpandedAnalysisOutcomes,
 } = require('../tradingview/expandedAnalysisAlertReport');
 const {
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
+	recordMarketScannerOutcomes,
 } = require('../tradingview/marketScannerReport');
 const { enrichScannerItemsWithTrendConfluence } = require('../tradingview/marketScannerConfluence');
 const {
 	getNotificationManager,
-	initializeNotificationServices,
+	getOrInitializeNotificationManager,
 } = require('../../controllers/webhooks/handlers/alert/alert');
 const sentryService = require('../monitoring/SentryService');
 const { jobRepository } = require('./JobRepository');
@@ -36,6 +39,7 @@ const {
 } = require('../notification/requestRouting');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { runWithConcurrency } = require('../../lib/runWithConcurrency');
+const { adminSseService } = require('../sse/AdminSseService');
 
 const EXPIRATION_MS = 3600000; // 1 hour
 const DEFAULT_JOB_TIMEOUT_MS = 300000; // 5 minutes
@@ -90,188 +94,16 @@ function mergeCallbackStatus(current, next) {
 	return merged;
 }
 
-function expandIPv6(ip) {
-	let fullIp = ip;
-	if (ip.includes('::')) {
-		const parts = ip.split('::');
-		const left = parts[0] ? parts[0].split(':') : [];
-		const right = parts[1] ? parts[1].split(':') : [];
-		const missingCount = 8 - (left.length + right.length);
-		const middle = Array(missingCount).fill('0');
-		fullIp = [...left, ...middle, ...right].join(':');
-	}
-	return fullIp.split(':').map(part => part.padStart(4, '0')).join(':');
-}
-
-function isPrivateIp(ip) {
-	if (!ip) return true;
-	
-	let cleanIp = ip.trim().toLowerCase();
-	
-	// Handle IPv4-mapped IPv6 address like ::ffff:192.168.1.1
-	if (cleanIp.startsWith('::ffff:')) {
-		const ipv4Candidate = ip.substring(7);
-		if (net.isIPv4(ipv4Candidate)) {
-			cleanIp = ipv4Candidate;
-		}
-	}
-
-	if (net.isIPv4(cleanIp)) {
-		const parts = cleanIp.split('.').map(Number);
-		if (parts.length !== 4 || parts.some(isNaN)) return true;
-
-		if (parts[0] === 0) return true; // Current network / software-only
-		if (parts[0] === 127) return true; // Loopback
-		if (parts[0] === 10) return true; // RFC1918
-		if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true; // RFC1918
-		if (parts[0] === 192 && parts[1] === 168) return true; // RFC1918
-		if (parts[0] === 192 && parts[1] === 0 && parts[2] === 0) return true; // IETF special-purpose
-		if (parts[0] === 100 && parts[1] >= 64 && parts[1] <= 127) return true; // RFC6598 shared address space
-		if (parts[0] === 169 && parts[1] === 254) return true; // Link-local (includes 169.254.169.254)
-		if (parts[0] === 198 && (parts[1] === 18 || parts[1] === 19)) return true; // Benchmarking
-		if (parts[0] === 192 && parts[1] === 0 && parts[2] === 2) return true; // Documentation
-		if (parts[0] === 198 && parts[1] === 51 && parts[2] === 100) return true; // Documentation
-		if (parts[0] === 203 && parts[1] === 0 && parts[2] === 113) return true; // Documentation
-		if (parts[0] >= 224 && parts[0] <= 239) return true; // Multicast
-		if (parts[0] >= 240) return true; // Reserved / limited broadcast
-		if (parts[0] === 255 && parts[1] === 255 && parts[2] === 255 && parts[3] === 255) return true;
-
-		return false;
-	}
-
-	if (net.isIPv6(cleanIp)) {
-		const expanded = expandIPv6(cleanIp);
-
-		if (expanded === '0000:0000:0000:0000:0000:0000:0000:0001') return true; // Loopback
-		if (expanded === '0000:0000:0000:0000:0000:0000:0000:0000') return true; // Unspecified
-		if (/^fe[89ab]/i.test(expanded)) return true; // Link-local
-		if (/^f[cd]/i.test(expanded)) return true; // ULA
-		if (expanded.startsWith('ff')) return true; // Multicast
-
-		// Hex IPv4-mapped IPv6 address: ::ffff:7f00:0001
-		if (expanded.startsWith('0000:0000:0000:0000:0000:ffff:')) {
-			const parts = expanded.split(':');
-			const part6 = parts[6];
-			const part7 = parts[7];
-			
-			const octet0 = parseInt(part6.substring(0, 2), 16);
-			const octet1 = parseInt(part6.substring(2, 4), 16);
-			const octet2 = parseInt(part7.substring(0, 2), 16);
-			const octet3 = parseInt(part7.substring(2, 4), 16);
-			
-			const mappedIpv4 = `${octet0}.${octet1}.${octet2}.${octet3}`;
-			return isPrivateIp(mappedIpv4);
-		}
-
-		return false;
-	}
-
-	return true;
-}
-
-function normalizeHostname(hostname) {
-	if (hostname.startsWith('[') && hostname.endsWith(']')) {
-		return hostname.slice(1, -1);
-	}
-	return hostname;
-}
-
-function sanitizeCallbackUrlForLog(urlStr) {
-	try {
-		const url = new URL(urlStr);
-		url.username = '';
-		url.password = '';
-		url.pathname = '/...';
-		url.search = '';
-		url.hash = '';
-		return url.toString();
-	} catch (err) {
-		return '[invalid callback URL]';
-	}
-}
-
-async function validateCallbackUrl(urlStr) {
-	try {
-		const url = new URL(urlStr);
-		if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-			return { valid: false, reason: 'format' };
-		}
-
-		const hostname = normalizeHostname(url.hostname);
-
-		if (url.protocol === 'http:') {
-			const httpAllowed = hostname === 'localhost' ||
-				hostname === '127.0.0.1' ||
-				hostname === '::1' ||
-				process.env.NODE_ENV === 'test' ||
-				process.env.ALLOW_HTTP_CALLBACKS === 'true';
-			if (!httpAllowed) {
-				return { valid: false, reason: 'format' };
-			}
-		}
-
-		const allowPrivate = process.env.ALLOW_PRIVATE_CALLBACKS === 'true' ||
-			process.env.NODE_ENV === 'test';
-
-		let addresses;
-		if (net.isIP(hostname)) {
-			addresses = [{ address: hostname, family: net.isIP(hostname) }];
-		} else {
-			try {
-				addresses = await dns.promises.lookup(hostname, { all: true, verbatim: true });
-			} catch (dnsErr) {
-				return { valid: false, reason: 'dns' };
-			}
-		}
-
-		if (!addresses.length || (!allowPrivate && addresses.some(({ address }) => isPrivateIp(address)))) {
-			return { valid: false, reason: 'private' };
-		}
-
-		return { valid: true, addresses };
-	} catch (err) {
-		return { valid: false, reason: 'format' };
-	}
-}
-
-function createPinnedLookup(addresses) {
-	const pinnedAddresses = addresses.map(({ address, family }) => ({
-		address,
-		family: family || net.isIP(address),
-	}));
-
-	return (hostname, options, callback) => {
-		const requestedFamily = options?.family || 0;
-		const matchingAddresses = pinnedAddresses.filter(({ family }) => !requestedFamily || family === requestedFamily);
-		if (!matchingAddresses.length) {
-			const error = new Error(`No validated DNS answer for ${hostname}`);
-			error.code = 'ENOTFOUND';
-			callback(error);
-			return;
-		}
-
-		if (options?.all) {
-			callback(null, matchingAddresses);
-			return;
-		}
-
-		const [{ address, family }] = matchingAddresses;
-		callback(null, address, family);
-	};
-}
-
-function createPinnedCallbackDispatcher(addresses) {
-	return new Agent({
-		connect: {
-			lookup: createPinnedLookup(addresses),
-		},
-	});
-}
-
-async function isValidCallbackUrl(urlStr) {
-	const result = await validateCallbackUrl(urlStr);
-	return result.valid;
-}
+const {
+	expandIPv6,
+	isPrivateIp,
+	normalizeHostname,
+	sanitizeCallbackUrlForLog,
+	validateCallbackUrl,
+	createPinnedLookup,
+	createPinnedCallbackDispatcher,
+	isValidCallbackUrl,
+} = require('../../lib/callbackUrl');
 
 class JobService {
 	constructor(repository = jobRepository, queue = jobQueue) {
@@ -487,6 +319,10 @@ class JobService {
 
 		if (job.type === 'expanded-analysis') {
 			formatted.results = this._compactResults(job.fullResults);
+			// requestMetadata already holds the deduplicated symbol list, so re-parsing
+			// it in queue/poller modes reports zero. The count captured at creation is
+			// the authoritative record of what the caller's list collapsed to.
+			formatted.duplicatesRemoved = job.requestMetadata?.duplicatesRemoved ?? 0;
 		} else if (job.type === 'market-scanner') {
 			formatted.scanResults = this._compactScanResults(
 				job.fullScanResults,
@@ -584,20 +420,12 @@ class JobService {
 	}
 
 	/**
-	 * Creates a job, validates the request synchronously, and runs it in the background.
+	 * Validates a job request synchronously based on job type and payload.
 	 * @param {string} type - 'expanded-analysis' | 'market-scanner'
 	 * @param {Object} payload - request body payload
-	 * @param {Function|Object} botOrGetter - Telegraf bot instance or getter
-	 * @returns {Object} The created job metadata
+	 * @returns {{ parsed: Object, validatedTimeoutMs: number }}
 	 */
-	async createJob(type, payload, botOrGetter) {
-		await this._cleanExpiredJobs();
-		const routing = parseNotificationRouting(payload);
-		const mode = this._getExecutionMode();
-		const queueMode = this._isQueueMode();
-		const durableQueueMode = this._isDurableQueueMode();
-
-		// Synchronous validation based on job type
+	validateJobRequest(type, payload) {
 		let parsed;
 		if (type === 'expanded-analysis') {
 			parsed = parseExpandedAnalysisAlertRequest({ body: payload });
@@ -633,6 +461,27 @@ class JobService {
 			}
 			validatedTimeoutMs = Math.min(timeoutVal, MAX_JOB_TIMEOUT_MS);
 		}
+
+		return { parsed, validatedTimeoutMs };
+	}
+
+	/**
+	 * Creates a job, validates the request synchronously, and runs it in the background.
+	 *
+	 * @param {string} type - Job type: 'expanded-analysis' or 'market-scanner'
+	 * @param {Object} payload - Request payload matching the job type schema
+	 * @param {Function|Object} botOrGetter - Telegraf bot instance or getter
+	 * @returns {Object} The created job metadata
+	 */
+	async createJob(type, payload, botOrGetter) {
+		await this._cleanExpiredJobs();
+		const routing = parseNotificationRouting(payload);
+		const mode = this._getExecutionMode();
+		const queueMode = this._isQueueMode();
+		const durableQueueMode = this._isDurableQueueMode();
+
+		// Synchronous validation based on job type
+		const { parsed, validatedTimeoutMs } = this.validateJobRequest(type, payload);
 
 		let callbackUrl = null;
 		let callbackSecret = null;
@@ -713,12 +562,17 @@ class JobService {
 				timeframe: parsed.timeframe,
 				includeMultiTimeframe: parsed.includeMultiTimeframe,
 				analysisMode: parsed.analysisMode,
+				duplicatesRemoved: parsed.duplicatesRemoved,
 			} : {
 				exchange: parsed.exchange,
 				timeframe: parsed.timeframe,
 				scans: parsed.scans,
 				limit: parsed.limit,
 				bbwThreshold: parsed.bbwThreshold,
+				rating: parsed.rating,
+				pattern_type: parsed.consecutiveCandlesPatternType,
+				candle_count: parsed.candleCount,
+				...(parsed.minGrowth !== undefined ? { min_growth: parsed.minGrowth } : {}),
 				ranked: parsed.ranked,
 				includeMultiTimeframe: parsed.includeMultiTimeframe,
 			}),
@@ -774,6 +628,7 @@ class JobService {
 		try {
 			creation.persistencePromise = this.repository.save(job, { required: durableQueueMode });
 			await creation.persistencePromise;
+			this._broadcastJobProgress(job);
 
 			if (job.shutdownFinalized) {
 				return {
@@ -977,6 +832,9 @@ class JobService {
 			if (claim.reason === 'terminal') {
 				const terminalJob = await this.repository.get(jobId);
 				if (terminalJob) {
+					if (terminalJob.status === 'completed' && terminalJob.deliveryCheckpoint?.status === 'completed') {
+						this._recordJobOutcomes(terminalJob, terminalJob.requestMetadata || {});
+					}
 					await this._triggerCallbackIfConfigured(terminalJob, { awaitDelivery: true });
 				}
 			}
@@ -1087,6 +945,9 @@ class JobService {
 		}
 
 		job.status = 'processing';
+		if (job.deliveryCheckpoint?.status !== 'completed') {
+			job.startedAt = new Date(startTime).toISOString();
+		}
 		if (isQueuedMode) {
 			job.execution.status = 'running';
 		}
@@ -1147,6 +1008,7 @@ class JobService {
 					? this._buildScannerSummary(job.fullScanResults || [], job.deliveryResults)
 					: this._buildExpandedSummary(job.fullResults || [], job.deliveryResults);
 				job.status = 'completed';
+				this._recordJobOutcomes(job, parsed);
 			} else if (job.type === 'expanded-analysis') {
 				await this._executeExpandedAnalysis(job, parsed, signal, botOrGetter);
 			} else if (job.type === 'market-scanner') {
@@ -1180,6 +1042,7 @@ class JobService {
 				job.status = 'completed';
 				job.error = null;
 				job.code = null;
+				this._recordJobOutcomes(job, parsed);
 			} else {
 				const isTimeout =
 					error.message.includes('timed out') ||
@@ -1289,7 +1152,7 @@ class JobService {
 						}
 					}
 
-					result = { symbol: input.raw, status: 'analyzed', input, analysis, multiTimeframe };
+					result = { symbol: input.raw, status: 'analyzed', input, analysis, multiTimeframe, side: deriveItemSide(analysis) };
 				} catch (error) {
 					if (this._isClaimLost(signal)) return null;
 					if (this._isAbortTriggered(signal, error)) {
@@ -1345,6 +1208,7 @@ class JobService {
 				input: result.input,
 				analysis: result.analysis,
 				multiTimeframe: result.multiTimeframe,
+				side: result.side,
 			}));
 
 		if (analyzedItems.length === 0) {
@@ -1362,7 +1226,7 @@ class JobService {
 
 		let notificationManager = getNotificationManager();
 		if (!notificationManager) {
-			notificationManager = await initializeNotificationServices(this._resolveBot(botOrGetter));
+			notificationManager = await getOrInitializeNotificationManager(this._resolveBot(botOrGetter));
 		}
 
 		const routing = this._getRoutingFromJob(job);
@@ -1379,6 +1243,9 @@ class JobService {
 		job.requestedChannels = getRequestedChannels(notificationManager, routing);
 		job.summary = this._buildExpandedSummary(job.fullResults, deliveryResults);
 		job.status = 'completed';
+
+		this._recordJobOutcomes(job, parsed);
+
 		await this._persistJob(job);
 	}
 
@@ -1503,14 +1370,14 @@ class JobService {
 
 		let notificationManager = getNotificationManager();
 		if (!notificationManager) {
-			notificationManager = await initializeNotificationServices(this._resolveBot(botOrGetter));
+			notificationManager = await getOrInitializeNotificationManager(this._resolveBot(botOrGetter));
 		}
 
 		const routing = this._getRoutingFromJob(job);
 		const deliveryResults = await this._sendQueuedNotification(
 			job,
 			notificationManager,
-			{ text: alertText, source: 'tradingview-analysis' },
+			{ text: alertText, source: 'tradingview-analysis', category: 'scanner' },
 			routing,
 		);
 		if (this._isClaimLost(signal)) {
@@ -1520,6 +1387,9 @@ class JobService {
 		job.requestedChannels = getRequestedChannels(notificationManager, routing);
 		job.summary = this._buildScannerSummary(job.fullScanResults, deliveryResults);
 		job.status = 'completed';
+
+		this._recordJobOutcomes(job, parsed);
+
 		await this._persistJob(job);
 	}
 
@@ -1563,7 +1433,38 @@ class JobService {
 			}
 			return false;
 		}
+		this._broadcastJobProgress(job);
 		return true;
+	}
+
+	_broadcastJobProgress(job) {
+		if (!job || !job.jobId) return;
+		try {
+			adminSseService.broadcast('job-progress', {
+				jobId: job.jobId,
+				type: job.type,
+				status: job.status,
+				progress: job.progress || null,
+				error: job.error || null,
+				code: job.code || null,
+				updatedAt: job.updatedAt || job.createdAt || new Date().toISOString(),
+				totalDurationMs: job.totalDurationMs || null,
+				summary: job.summary || job.result?.summary || null,
+				timestamp: new Date().toISOString(),
+			});
+
+			if (job.status === 'completed' && job.type === 'market-scanner') {
+				adminSseService.broadcast('scanner-result', {
+					jobId: job.jobId,
+					type: job.type,
+					status: job.status,
+					summary: job.summary || job.result?.summary || null,
+					timestamp: new Date().toISOString(),
+				});
+			}
+		} catch (_) {
+			// Fail-safe
+		}
 	}
 
 	_isQueuedExecution(job) {
@@ -1573,6 +1474,24 @@ class JobService {
 			&& job.execution
 			&& (job.execution.mode === 'render-worker' || job.execution.mode === 'firestore-poller'),
 		);
+	}
+
+	_recordJobOutcomes(job, parsed) {
+		const options = {
+			jobId: job.jobId,
+			requestId: job.requestId || job.jobId,
+			startTime: job.startedAt ? new Date(job.startedAt).getTime() : undefined,
+			receivedAt: job.deliveryCheckpoint?.completedAt,
+		};
+		if (job.type === 'market-scanner') {
+			recordMarketScannerOutcomes(job.fullScanResults || [], parsed, options);
+		} else {
+			const analyzedItems = (job.fullResults || [])
+				.filter((result) => result.status === 'analyzed')
+				// Legacy reports rendered BUY when no direction was persisted.
+				.map((result) => ({ ...result, side: result.side || 'BUY' }));
+			recordExpandedAnalysisOutcomes(analyzedItems, parsed, options);
+		}
 	}
 
 	async _sendQueuedNotification(job, notificationManager, alert, routing = {}, options = {}) {
@@ -1655,6 +1574,14 @@ class JobService {
 		};
 		if (scanType === 'bollinger_scan') {
 			args.bbw_threshold = parsed.bbwThreshold;
+		} else if (scanType === 'rating_filter') {
+			args.rating = parsed.rating;
+		} else if (scanType === 'consecutive_candles_scan') {
+			args.pattern_type = parsed.consecutiveCandlesPatternType;
+			args.candle_count = parsed.candleCount;
+			if (parsed.minGrowth !== undefined) {
+				args.min_growth = parsed.minGrowth;
+			}
 		}
 		return args;
 	}

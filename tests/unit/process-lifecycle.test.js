@@ -12,6 +12,8 @@ describe('process lifecycle coordinator', () => {
 		const server = { close: jest.fn((callback) => callback()) };
 		const bot = { stop: jest.fn().mockResolvedValue(undefined) };
 		const stopWorker = jest.fn().mockResolvedValue(undefined);
+		const stopNewsMonitorScheduler = jest.fn().mockResolvedValue(undefined);
+		const stopAlertScheduler = jest.fn().mockResolvedValue(undefined);
 		const shutdownNewsMonitor = jest.fn();
 		const flushSentry = jest.fn().mockResolvedValue(true);
 		const forceExit = jest.fn();
@@ -20,6 +22,8 @@ describe('process lifecycle coordinator', () => {
 			getServer: () => server,
 			getBot: () => bot,
 			stopSignalOutcomeWorker: stopWorker,
+			stopNewsMonitorScheduler,
+			stopAlertScheduler,
 			shutdownNewsMonitor,
 			flushSentry,
 			timeoutMs: 100,
@@ -35,6 +39,8 @@ describe('process lifecycle coordinator', () => {
 
 		expect(server.close).toHaveBeenCalledTimes(1);
 		expect(stopWorker).toHaveBeenCalledWith({ drain: true });
+		expect(stopNewsMonitorScheduler).toHaveBeenCalledWith({ drain: true });
+		expect(stopAlertScheduler).toHaveBeenCalledWith({ drain: true });
 		expect(shutdownNewsMonitor).toHaveBeenCalledTimes(1);
 		expect(bot.stop).toHaveBeenCalledWith('SIGTERM');
 		expect(flushSentry).toHaveBeenCalledWith(100);
@@ -174,6 +180,45 @@ describe('process lifecycle coordinator', () => {
 		await shutdown;
 
 		expect(events).toEqual(['server', 'bot', 'jobs', 'worker', 'news', 'sentry', 'exit:0']);
+	});
+
+	it('stops the backlog monitor before tearing down Telegram', async () => {
+		const events = [];
+		const server = { close: jest.fn((callback) => callback()) };
+		const bot = { stop: jest.fn(async () => { events.push('bot'); }) };
+		let releaseMonitor;
+		const monitorDrain = new Promise((resolve) => { releaseMonitor = resolve; });
+		const forceExit = jest.fn();
+
+		const lifecycle = createProcessLifecycle({
+			getServer: () => server,
+			getBot: () => bot,
+			stopJobBacklogMonitor: async () => {
+				events.push('monitor:stop');
+				await monitorDrain;
+				events.push('monitor:drained');
+			},
+			flushSentry: jest.fn().mockResolvedValue(true),
+			timeoutMs: 5000,
+			forceExit,
+		});
+
+		const shutdown = lifecycle.handleSignal('SIGTERM');
+		await new Promise((resolve) => setImmediate(resolve));
+
+		// The monitor's timer is cleared in the same turn shutdown begins, before
+		// the bot is stopped. A probe armed during the shutdown window would page
+		// an operator through a bot that is already shutting down, so the stop must
+		// be initiated first rather than after the bot teardown is awaited.
+		expect(events).toEqual(['monitor:stop', 'bot']);
+
+		// The in-flight probe is still drained before cleanup completes.
+		releaseMonitor();
+		await shutdown;
+
+		expect(events).toEqual(['monitor:stop', 'bot', 'monitor:drained']);
+		expect(bot.stop).toHaveBeenCalledTimes(1);
+		expect(forceExit).toHaveBeenCalledWith(0);
 	});
 
 	it('waits for post-response persistence before flushing Sentry', async () => {

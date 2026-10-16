@@ -8,6 +8,7 @@ const {
 	createRequest,
 	operationDefinitions,
 	redactSecret,
+	sanitizeForHistory,
 	validateQuery,
 } = require('../../src/admin/admin-request');
 
@@ -26,6 +27,29 @@ describe('createRequest', () => {
 				body: '{"symbol":"BINANCE:BTCUSDT"}',
 				headers: { 'Content-Type': 'application/json', 'x-api-key': 'secret' },
 			}),
+		});
+	});
+
+	it('merges custom headers such as idempotency-key without overriding core headers', () => {
+		expect(createRequest({
+			path: '/api/jobs/tradingview-analysis',
+			method: 'POST',
+			apiKey: 'secret',
+			body: { type: 'market-scanner' },
+			headers: {
+				'idempotency-key': 'custom-key-123',
+			},
+		})).toEqual({
+			url: '/api/jobs/tradingview-analysis',
+			options: {
+				method: 'POST',
+				body: '{"type":"market-scanner"}',
+				headers: {
+					'Content-Type': 'application/json',
+					'idempotency-key': 'custom-key-123',
+					'x-api-key': 'secret',
+				},
+			},
 		});
 	});
 
@@ -140,6 +164,46 @@ describe('admin client safety', () => {
 		expect(jsonResult).not.toContain(escapedSecret);
 	});
 
+	it('redacts credentials and Discord webhook URLs for history storage (#1159)', () => {
+		expect(sanitizeForHistory(null)).toBeNull();
+		expect(sanitizeForHistory(undefined)).toBeUndefined();
+		expect(sanitizeForHistory('')).toBe('');
+
+		// Key-value credentials
+		const jsonWithKeys = JSON.stringify({
+			apiKey: 'secret-key-1',
+			token: 'secret-token-2',
+			password: 'secret-password-3',
+			authorization: 'Bearer secret-auth-4',
+			discordWebhookUrl: 'https://discord.com/api/webhooks/123456789/token-5',
+			webhookUrl: 'https://discord.com/api/webhooks/987654321/token-6',
+		});
+		const sanitizedKeys = sanitizeForHistory(jsonWithKeys);
+		expect(sanitizedKeys).not.toContain('secret-key-1');
+		expect(sanitizedKeys).not.toContain('secret-token-2');
+		expect(sanitizedKeys).not.toContain('secret-password-3');
+		expect(sanitizedKeys).not.toContain('secret-auth-4');
+		expect(sanitizedKeys).not.toContain('token-5');
+		expect(sanitizedKeys).not.toContain('token-6');
+		expect(sanitizedKeys).not.toContain('123456789');
+		expect(sanitizedKeys).not.toContain('987654321');
+
+		// Standalone Discord webhook URLs (in text or non-credential key)
+		const standaloneDiscord = 'Notice: sent to https://discord.com/api/webhooks/11223344/my-discord-token for review';
+		const sanitizedUrl = sanitizeForHistory(standaloneDiscord);
+		expect(sanitizedUrl).toBe('Notice: sent to https://discord.com/api/webhooks/[REDACTED]/[REDACTED] for review');
+		expect(sanitizedUrl).not.toContain('11223344');
+		expect(sanitizedUrl).not.toContain('my-discord-token');
+
+		// discordapp.com and canary/ptb subdomains
+		expect(sanitizeForHistory('https://discordapp.com/api/webhooks/556677/token-app'))
+			.toBe('https://discordapp.com/api/webhooks/[REDACTED]/[REDACTED]');
+		expect(sanitizeForHistory('https://canary.discord.com/api/webhooks/889900/token-canary?wait=true'))
+			.toBe('https://canary.discord.com/api/webhooks/[REDACTED]/[REDACTED]?wait=true');
+		expect(sanitizeForHistory('https://ptb.discord.com/api/webhooks/334455/token-ptb'))
+			.toBe('https://ptb.discord.com/api/webhooks/[REDACTED]/[REDACTED]');
+	});
+
 	it('keeps confirmations on every sensitive Playground operation', () => {
 		const sensitiveRoutes = [
 			['post', '/api/alerts/{alertId}/replay'],
@@ -228,8 +292,59 @@ describe('admin deadline budget calculations', () => {
 		expect(adminRequest.LONG_RUNNING_API_REQUEST_TIMEOUT_MS).toBe(990000);
 	});
 
-	it('assigns the derived volume confirmation timeout to /api/webhook/volume-confirmation', () => {
+	it('derives the symbol analysis deadline from its single shared 120s backend budget plus explicit overhead', () => {
+		expect(adminRequest.SYMBOL_ANALYSIS_BACKEND_BUDGET_MS).toBe(120000);
+		expect(adminRequest.SYMBOL_ANALYSIS_OVERHEAD_MS).toBe(30000);
+
+		// Symbol analysis spends ONE `createDeadline()` budget across the base
+		// `analyzeSymbolIdentifier` call AND the optional multi-timeframe /
+		// multi-agent calls, so this budget is never multiplied per MCP call.
+		const expectedSymbolAnalysisTimeout = adminRequest.SYMBOL_ANALYSIS_BACKEND_BUDGET_MS
+			+ adminRequest.SYMBOL_ANALYSIS_OVERHEAD_MS;
+		expect(expectedSymbolAnalysisTimeout).toBe(150000);
+		expect(adminRequest.SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS).toBe(150000);
+
+		expect(adminRequest.SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS)
+			.toBeLessThan(adminRequest.VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS);
+	});
+
+	it('assigns the derived volume confirmation timeout only to /api/webhook/volume-confirmation', () => {
 		expect(adminRequest.getApiRequestTimeout({ path: '/api/webhook/volume-confirmation' })).toBe(390000);
+	});
+
+	it('assigns the dedicated symbol analysis timeout to /api/webhook/symbol-analysis', () => {
+		expect(adminRequest.getApiRequestTimeout({ path: '/api/webhook/symbol-analysis' })).toBe(150000);
+		expect(adminRequest.getApiRequestTimeout({ path: '/api/webhook/symbol-analysis' }))
+			.toBe(adminRequest.SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS);
+	});
+
+	it('keeps the admin.js inline fallback literals in parity with this module', () => {
+		// admin.js re-derives every budget inline for the path where the shared
+		// helper script has not loaded, and the browser harness always injects the
+		// helper, so nothing else exercises that copy. Pin the literals so a change
+		// here cannot silently skip the fallback.
+		const source = fs.readFileSync(path.join(__dirname, '../../src/admin/admin.js'), 'utf8');
+		const declarationOf = (name) => {
+			const start = source.indexOf(`const ${name} =`);
+			expect(start).toBeGreaterThan(-1);
+			return source.slice(start, source.indexOf(';', start) + 1);
+		};
+
+		[
+			'SYMBOL_ANALYSIS_BACKEND_BUDGET_MS',
+			'SYMBOL_ANALYSIS_OVERHEAD_MS',
+			'VOLUME_CONFIRMATION_OVERHEAD_MS',
+			'VOLUME_CONFIRMATION_MCP_CALLS',
+		].forEach((name) => {
+			expect(declarationOf(name)).toMatch(new RegExp(`: \\(?${adminRequest[name]}\\)?;$`));
+		});
+
+		// Derived totals must combine the same operands, so neither copy can be
+		// rebalanced in isolation.
+		expect(declarationOf('SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS'))
+			.toContain(': SYMBOL_ANALYSIS_BACKEND_BUDGET_MS + SYMBOL_ANALYSIS_OVERHEAD_MS;');
+		expect(declarationOf('VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS'))
+			.toContain(': (VOLUME_CONFIRMATION_MCP_CALLS * TRADINGVIEW_MCP_MAX_TIMEOUT_MS) + VOLUME_CONFIRMATION_OVERHEAD_MS;');
 	});
 
 	it('assigns the derived long-running timeout to all long-running analysis and alert endpoints', () => {
@@ -241,11 +356,36 @@ describe('admin deadline budget calculations', () => {
 			'/api/webhook/alert',
 			'/api/webhook/message',
 			'/api/alerts/{alertId}/replay',
+			'/api/alerts/batch/replay',
 		];
 
 		longRunningRoutes.forEach((path) => {
 			expect(adminRequest.getApiRequestTimeout({ path })).toBe(990000);
 		});
+	});
+
+	it('scales batch replay timeout dynamically according to batch size', () => {
+		const replayPath = { path: '/api/alerts/batch/replay' };
+		// Default single operation budget when no options passed
+		expect(adminRequest.getApiRequestTimeout(replayPath)).toBe(990000);
+		expect(adminRequest.getApiRequestTimeout(replayPath, {})).toBe(990000);
+		expect(adminRequest.getApiRequestTimeout(replayPath, { batchSize: 1 })).toBe(990000);
+
+		// Scaled by batchSize option
+		expect(adminRequest.getApiRequestTimeout(replayPath, { batchSize: 2 })).toBe(1980000);
+		expect(adminRequest.getApiRequestTimeout(replayPath, { batchSize: 5 })).toBe(4950000);
+		expect(adminRequest.getApiRequestTimeout(replayPath, { batchSize: 50 })).toBe(49500000);
+		// Capped at 50 even if higher batchSize is passed
+		expect(adminRequest.getApiRequestTimeout(replayPath, { batchSize: 100 })).toBe(49500000);
+
+		// Scaled from body JSON alertIds
+		expect(adminRequest.getApiRequestTimeout(replayPath, {
+			body: JSON.stringify({ alertIds: ['id1', 'id2', 'id3'] }),
+		})).toBe(2970000);
+
+		// Helper function export
+		expect(typeof adminRequest.getBatchReplayTimeout).toBe('function');
+		expect(adminRequest.getBatchReplayTimeout({ batchSize: 3 })).toBe(2970000);
 	});
 
 	it('assigns standard 30s timeout to short operations and handles missing definitions safely', () => {

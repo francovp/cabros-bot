@@ -13,6 +13,47 @@ const validFirestoreServiceAccountJson = JSON.stringify({
 	private_key: testPrivateKey,
 });
 
+// `mode`/`backend` are intent-derived and must not flip to `memory` while
+// ENABLE_FIRESTORE_SCANNER_PRESETS=true, so these expected shapes are shared by the
+// three gate verdicts an operator must be able to tell apart (#1342).
+const ZEROED_STORAGE_READINESS = {
+	failOpen: true,
+	readiness: 'unverified',
+	collection: 'scannerPresets',
+	operationsAttempted: 0,
+	operationsSucceeded: 0,
+	operationsFailed: 0,
+	consecutiveFailures: 0,
+	lastSuccessAt: null,
+	lastFailureAt: null,
+	lastErrorReason: null,
+	pendingWrites: 0,
+	inFlightWrites: 0,
+	pendingDeletes: 0,
+	oldestPendingWriteAt: null,
+	lastReadFellBack: false,
+};
+
+const DISABLED_STORAGE = {
+	enabled: false,
+	configured: false,
+	ready: false,
+	status: 'disabled',
+	mode: 'ephemeral',
+	backend: 'memory',
+	...ZEROED_STORAGE_READINESS,
+};
+
+const MISCONFIGURED_STORAGE = {
+	enabled: true,
+	configured: false,
+	ready: false,
+	status: 'misconfigured',
+	mode: 'ephemeral',
+	backend: 'memory',
+	...ZEROED_STORAGE_READINESS,
+};
+
 describe('ScannerPresetService', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
@@ -37,14 +78,7 @@ describe('ScannerPresetService', () => {
 
 		await service.createPreset({ name: 'Memory-only preset' });
 
-		expect(service.getStorageStatus()).toEqual({
-			enabled: false,
-			configured: false,
-			ready: false,
-			status: 'disabled',
-			mode: 'ephemeral',
-			backend: 'memory',
-		});
+		expect(service.getStorageStatus()).toEqual(DISABLED_STORAGE);
 	});
 
 	it('persists a preset across service instances with the dedicated scanner storage flag', async () => {
@@ -69,17 +103,10 @@ describe('ScannerPresetService', () => {
 	it('reports the in-memory storage mode when durable storage is disabled', () => {
 		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
 
-		expect(new ScannerPresetService().getStorageStatus()).toEqual({
-			enabled: false,
-			configured: false,
-			ready: false,
-			status: 'disabled',
-			mode: 'ephemeral',
-			backend: 'memory',
-		});
+		expect(new ScannerPresetService().getStorageStatus()).toEqual(DISABLED_STORAGE);
 	});
 
-	it('reports ephemeral storage after a Firestore write failure', async () => {
+	it('keeps durable intent and reports degraded after a transient Firestore write failure', async () => {
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
 
 		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
@@ -88,17 +115,25 @@ describe('ScannerPresetService', () => {
 		const created = await service.createPreset({ name: 'Fallback preset' });
 
 		expect(created.name).toBe('Fallback preset');
-		expect(service.getStorageStatus()).toEqual({
+		expect(service.getStorageStatus()).toEqual(expect.objectContaining({
 			enabled: true,
-			configured: false,
+			// Credentials are demonstrably valid, so `misconfigured` — which means
+			// "check your credentials" — would be the wrong thing to report (#1342).
+			configured: true,
 			ready: false,
-			status: 'misconfigured',
-			mode: 'ephemeral',
-			backend: 'memory',
-		});
+			status: 'degraded',
+			readiness: 'degraded',
+			mode: 'durable',
+			backend: 'firestore',
+			operationsFailed: 1,
+			consecutiveFailures: 1,
+			lastErrorReason: 'firestore_unavailable',
+			pendingWrites: 1,
+			lastFailureAt: expect.any(String),
+		}));
 	});
 
-	it('retries Firestore after a transient write failure and reports recovery', async () => {
+	it('recovers the reported verdict after a transient write failure without a restart', async () => {
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
 
 		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
@@ -107,17 +142,20 @@ describe('ScannerPresetService', () => {
 		const service = new ScannerPresetService();
 
 		await service.createPreset({ name: 'First attempt' });
-		expect(service.getStorageStatus().mode).toBe('ephemeral');
+		expect(service.getStorageStatus().status).toBe('degraded');
 
 		await service.createPreset({ name: 'Recovered attempt' });
-		expect(service.getStorageStatus()).toEqual({
+		expect(service.getStorageStatus()).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: true,
 			ready: true,
 			status: 'ready',
+			readiness: 'verified',
 			mode: 'durable',
 			backend: 'firestore',
-		});
+			consecutiveFailures: 0,
+			lastSuccessAt: expect.any(String),
+		}));
 	});
 
 	it('does not report durable storage without usable Firestore credentials', () => {
@@ -126,14 +164,7 @@ describe('ScannerPresetService', () => {
 
 		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
 
-		expect(new ScannerPresetService().getStorageStatus()).toEqual({
-			enabled: true,
-			configured: false,
-			ready: false,
-			status: 'misconfigured',
-			mode: 'ephemeral',
-			backend: 'memory',
-		});
+		expect(new ScannerPresetService().getStorageStatus()).toEqual(MISCONFIGURED_STORAGE);
 	});
 
 	it('clears the unavailable state after a successful Firestore read recovery', async () => {
@@ -145,20 +176,28 @@ describe('ScannerPresetService', () => {
 		const service = new ScannerPresetService();
 
 		await service.listPresets();
-		expect(service.getStorageStatus().mode).toBe('ephemeral');
+		expect(service.getStorageStatus()).toEqual(expect.objectContaining({
+			status: 'degraded',
+			mode: 'durable',
+			backend: 'firestore',
+			lastReadFellBack: true,
+			consecutiveFailures: 1,
+		}));
 
 		await service.listPresets();
-		expect(service.getStorageStatus()).toEqual({
+		expect(service.getStorageStatus()).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: true,
 			ready: true,
 			status: 'ready',
 			mode: 'durable',
 			backend: 'firestore',
-		});
+			consecutiveFailures: 0,
+			lastReadFellBack: false,
+		}));
 	});
 
-	it('keeps presets from failed writes visible and ephemeral after reads recover', async () => {
+	it('keeps presets from failed writes visible and durable after reads recover', async () => {
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
 
 		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
@@ -172,7 +211,181 @@ describe('ScannerPresetService', () => {
 		expect(presets).toEqual([
 			expect.objectContaining({ id: created.id, name: 'Unsynced preset' }),
 		]);
-		expect(service.getStorageStatus().mode).toBe('ephemeral');
+		// The store answered a read, so it is usable; the unsynced record is reported as
+		// pending workload instead of flipping the backend to `memory`.
+		expect(service.getStorageStatus()).toEqual(expect.objectContaining({
+			mode: 'durable',
+			backend: 'firestore',
+			status: 'ready',
+			pendingWrites: 1,
+		}));
+	});
+
+	describe('#1342 status-path durability reporting', () => {
+		it('proves durable readiness from the status path with no prior write', async () => {
+			process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+			const firestoreAdmin = require('firebase-admin');
+			const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+			const service = new ScannerPresetService();
+
+			expect(service.getStorageStatus()).toEqual(expect.objectContaining({
+				status: 'unverified',
+				ready: false,
+				mode: 'durable',
+				backend: 'firestore',
+			}));
+
+			const probed = await service.probeStorageReadiness();
+
+			expect(probed).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				ready: true,
+				status: 'ready',
+				readiness: 'verified',
+				mode: 'durable',
+				backend: 'firestore',
+				operationsAttempted: 1,
+				operationsSucceeded: 1,
+				operationsFailed: 0,
+				consecutiveFailures: 0,
+			}));
+			expect(firestoreAdmin.__mockLimit).toHaveBeenCalledWith(1);
+		});
+
+		it('rate-limits repeat status probes so polling cannot amplify Firestore reads', async () => {
+			process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+			const firestoreAdmin = require('firebase-admin');
+			const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+			const service = new ScannerPresetService();
+
+			await service.probeStorageReadiness();
+			const readsAfterFirstProbe = firestoreAdmin.__mockGet.mock.calls.length;
+			await service.probeStorageReadiness();
+			await service.probeStorageReadiness();
+
+			expect(firestoreAdmin.__mockGet.mock.calls.length).toBe(readsAfterFirstProbe);
+		});
+
+		it('recovers the reported verdict after a transient read failure without a restart', async () => {
+			process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+			const firestoreAdmin = require('firebase-admin');
+			firestoreAdmin.__mockGet.mockRejectedValueOnce(new Error('Temporary Firestore outage'));
+			const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+			const service = new ScannerPresetService();
+
+			const degraded = await service.probeStorageReadiness();
+
+			expect(degraded).toEqual(expect.objectContaining({
+				status: 'degraded',
+				mode: 'durable',
+				backend: 'firestore',
+				consecutiveFailures: 1,
+				lastErrorReason: 'firestore_unavailable',
+				lastReadFellBack: true,
+			}));
+
+			await service.listPresets();
+
+			expect(service.getStorageStatus()).toEqual(expect.objectContaining({
+				status: 'ready',
+				ready: true,
+				mode: 'durable',
+				consecutiveFailures: 0,
+				lastReadFellBack: false,
+			}));
+		});
+
+		it('never reports a probe timeout as a credential misconfiguration', async () => {
+			process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+			const firestoreAdmin = require('firebase-admin');
+			firestoreAdmin.__mockGet.mockReturnValue(new Promise(() => {}));
+			const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+			const service = new ScannerPresetService();
+
+			const timedOut = await service.probeStorageReadiness({ timeoutMs: 10 });
+
+			expect(timedOut).toEqual(expect.objectContaining({
+				configured: true,
+				status: 'degraded',
+				mode: 'durable',
+				lastErrorReason: 'firestore_probe_timeout',
+			}));
+		});
+
+		it('a status-only call performs no read and neither latches nor clears a failure', async () => {
+			process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+			const firestoreAdmin = require('firebase-admin');
+			const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+			const service = new ScannerPresetService();
+
+			expect(service.getStorageStatus()).toEqual(expect.objectContaining({
+				status: 'unverified',
+				operationsAttempted: 0,
+				operationsFailed: 0,
+				lastReadFellBack: false,
+			}));
+			expect(firestoreAdmin.__mockGet).not.toHaveBeenCalled();
+
+			firestoreAdmin.__mockGet.mockRejectedValueOnce(new Error('Temporary Firestore read outage'));
+			await service.listPresets();
+			const latched = service.getStorageStatus();
+
+			expect(latched.status).toBe('degraded');
+			for (let index = 0; index < 3; index += 1) {
+				expect(service.getStorageStatus()).toEqual(latched);
+			}
+		});
+
+		it('a wedged pending write cannot downgrade the reported backend to memory', async () => {
+			process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+			const firestoreAdmin = require('firebase-admin');
+			firestoreAdmin.__mockDocSet.mockRejectedValue(new Error('Permanent Firestore write outage'));
+			const {
+				ScannerPresetService,
+				pendingFirestorePresets,
+			} = require('../../src/services/scannerPresets/ScannerPresetService');
+			const service = new ScannerPresetService();
+
+			await service.createPreset({ name: 'Wedged preset' });
+			expect(pendingFirestorePresets.size).toBe(1);
+
+			const status = service.getStorageStatus();
+
+			expect(status.mode).toBe('durable');
+			expect(status.backend).toBe('firestore');
+			expect(status.status).toBe('degraded');
+			expect(status.pendingWrites).toBe(1);
+			expect(status.oldestPendingWriteAt).toEqual(expect.any(String));
+		});
+
+		it('a wedged pending delete tombstone cannot downgrade the reported backend to memory', async () => {
+			process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+			const firestoreAdmin = require('firebase-admin');
+			firestoreAdmin.__mockDocDelete.mockRejectedValue(new Error('Permanent Firestore delete outage'));
+			const {
+				ScannerPresetService,
+				pendingFirestoreDeletes,
+			} = require('../../src/services/scannerPresets/ScannerPresetService');
+			const service = new ScannerPresetService();
+
+			const created = await service.createPreset({ name: 'Stuck delete preset' });
+			await service.deletePreset(created.id);
+			expect(pendingFirestoreDeletes.has(created.id)).toBe(true);
+
+			const status = service.getStorageStatus();
+
+			expect(status.mode).toBe('durable');
+			expect(status.backend).toBe('firestore');
+			expect(status.pendingDeletes).toBe(1);
+		});
 	});
 
 	it('does not resurrect a queued write after deleting during a Firestore outage', async () => {
@@ -217,6 +430,10 @@ describe('ScannerPresetService', () => {
 			}
 			return Promise.resolve();
 		});
+		firestoreAdmin.__mockDocGet.mockImplementation(() => Promise.resolve({
+			exists: true,
+			data: () => ({ name: 'New value', version: 1 }),
+		}));
 
 		const triggerPromise = service.createPreset({ name: 'Trigger flush' });
 		await new Promise((resolve) => setImmediate(resolve));
@@ -285,7 +502,11 @@ describe('ScannerPresetService', () => {
 		expect(await service.listPresets()).toEqual([
 			expect.objectContaining({ id: created.id, name: 'Newer value' }),
 		]);
-		expect(service.getStorageStatus().mode).toBe('ephemeral');
+		expect(service.getStorageStatus()).toEqual(expect.objectContaining({
+			mode: 'durable',
+			backend: 'firestore',
+			pendingWrites: 1,
+		}));
 	});
 
 	it('keeps a deletion tombstone when deleting an updated preset during an outage', async () => {
@@ -491,6 +712,10 @@ describe('ScannerPresetService', () => {
 			}
 			return Promise.resolve();
 		});
+		firestoreAdmin.__mockDocGet.mockImplementation(() => Promise.resolve({
+			exists: true,
+			data: () => ({ name: 'New value', version: 1 }),
+		}));
 
 		const updatePromise = service.updatePreset(created.id, { name: 'New value' });
 		await new Promise((resolve) => setImmediate(resolve));
@@ -540,7 +765,11 @@ describe('ScannerPresetService', () => {
 		expect(await service.listPresets()).toEqual(expect.arrayContaining([
 			expect.objectContaining({ id: queued.id, name: 'Queued recovery value' }),
 		]));
-		expect(service.getStorageStatus().mode).toBe('ephemeral');
+		expect(service.getStorageStatus()).toEqual(expect.objectContaining({
+			mode: 'durable',
+			backend: 'firestore',
+			inFlightWrites: expect.any(Number),
+		}));
 
 		releaseFlush();
 		await triggerPromise;
@@ -558,5 +787,399 @@ describe('ScannerPresetService', () => {
 
 		expect(await service.listPresets()).toEqual([]);
 		expect(await service.getPreset(created.id)).toBeNull();
+	});
+
+	it('initializes version to 1 on create and increments on each successful update', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		const created = await service.createPreset({ name: 'Versioned preset' });
+		expect(created.version).toBe(1);
+
+		const updatedOnce = await service.updatePreset(created.id, { name: 'Versioned preset v2' });
+		expect(updatedOnce.version).toBe(2);
+
+		const updatedTwice = await service.updatePreset(created.id, { limit: 9 });
+		expect(updatedTwice.version).toBe(3);
+
+		const refetched = await service.getPreset(created.id);
+		expect(refetched.version).toBe(3);
+	});
+
+	it('rejects updates with a stale ifMatch token using PRECONDITION_FAILED', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Stale token preset' });
+
+		let caught;
+		try {
+			await service.updatePreset(created.id, { name: 'Should fail' }, { ifMatchVersion: 99 });
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeDefined();
+		expect(caught.name).toBe('MarketScannerRequestError');
+		expect(caught.code).toBe('PRECONDITION_FAILED');
+		expect(caught.statusCode).toBe(412);
+		expect(caught.preset).toMatchObject({ id: created.id, version: 1 });
+
+		const refetched = await service.getPreset(created.id);
+		expect(refetched.name).toBe('Stale token preset');
+		expect(refetched.version).toBe(1);
+	});
+
+	it('accepts updates with a matching ifMatchVersion and increments version', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Matched token preset' });
+
+		const updated = await service.updatePreset(
+			created.id,
+			{ name: 'Matched token preset v2' },
+			{ ifMatchVersion: created.version },
+		);
+		expect(updated.version).toBe(2);
+		expect(updated.name).toBe('Matched token preset v2');
+	});
+
+	it('rejects updates against a locked preset using PRESET_LOCKED', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Locked preset' });
+		const futureLock = new Date(Date.now() + 60000).toISOString();
+		await service.updatePreset(created.id, { lockedUntil: futureLock, lockedBy: 'scheduler' });
+
+		let caught;
+		try {
+			await service.updatePreset(created.id, { name: 'Should fail locked' });
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeDefined();
+		expect(caught.name).toBe('MarketScannerRequestError');
+		expect(caught.code).toBe('PRESET_LOCKED');
+		expect(caught.statusCode).toBe(409);
+		expect(caught.lockedUntil).toBe(futureLock);
+	});
+
+	it('rejects deletes with a stale ifMatch token', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Stale delete preset' });
+
+		let caught;
+		try {
+			await service.deletePreset(created.id, { ifMatchVersion: 42 });
+		} catch (error) {
+			caught = error;
+		}
+		expect(caught).toBeDefined();
+		expect(caught.code).toBe('PRECONDITION_FAILED');
+		expect(caught.statusCode).toBe(412);
+
+		expect(await service.getPreset(created.id)).not.toBeNull();
+	});
+
+	it('accepts deletes with a matching ifMatchVersion', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Matched delete preset' });
+
+		const deleted = await service.deletePreset(created.id, { ifMatchVersion: created.version });
+		expect(deleted).toBe(true);
+		expect(await service.getPreset(created.id)).toBeNull();
+	});
+
+	it('returns null from updatePreset and deletePreset when the preset is missing without a token', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		expect(await service.updatePreset('missing-id', { name: 'gone' })).toBeNull();
+		expect(await service.deletePreset('missing-id')).toBe(false);
+	});
+
+	it('persists the version across Firestore writes and reloads', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const serviceA = new ScannerPresetService();
+		const created = await serviceA.createPreset({ name: 'Firestore versioned preset' });
+		expect(created.version).toBe(1);
+
+		const updated = await serviceA.updatePreset(created.id, { name: 'Firestore versioned v2' });
+		expect(updated.version).toBe(2);
+
+		jest.resetModules();
+		const {
+			ScannerPresetService: ReloadedScannerPresetService,
+		} = require('../../src/services/scannerPresets/ScannerPresetService');
+		const fetched = await new ReloadedScannerPresetService().getPreset(created.id);
+		expect(fetched.version).toBe(2);
+		expect(fetched.name).toBe('Firestore versioned v2');
+	});
+
+	it('atomically rejects a stale Firestore write that races a successful one', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const firestoreAdmin = require('firebase-admin');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Race target preset' });
+
+		const setSpy = firestoreAdmin.__mockDocSet;
+		setSpy.mockClear();
+		// First get: updatePreset's initial getPreset sees the local
+		// in-memory preset (mock returns version 1 to match what create wrote).
+		// Second get: the atomic re-check inside _writeFirestorePreset
+		// sees version 2 (a concurrent writer already won). The atomic
+		// write must be rejected.
+		let getCalls = 0;
+		firestoreAdmin.__mockDocGet.mockImplementation(() => {
+			getCalls += 1;
+			if (getCalls === 1) {
+				return Promise.resolve({ exists: true, data: () => ({ version: 1, name: 'Race target preset' }) });
+			}
+			return Promise.resolve({ exists: true, data: () => ({ version: 2, name: 'Concurrent winner' }) });
+		});
+
+		const stale = await service.updatePreset(created.id, { name: 'Stale concurrent write' });
+		expect(stale).toBeNull();
+		// The stale write never reached Firestore: no set() call was made
+		// because the atomic version check threw first.
+		expect(setSpy).not.toHaveBeenCalled();
+	});
+
+	it('serializes concurrent in-memory updates so only one wins per version', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'In-memory race' });
+
+		const [a, b] = await Promise.all([
+			service.updatePreset(created.id, { name: 'Writer A' }),
+			service.updatePreset(created.id, { name: 'Writer B' }),
+		]);
+
+		const winners = [a, b].filter((preset) => preset !== null);
+		expect(winners).toHaveLength(1);
+		expect(winners[0].version).toBe(2);
+		expect(['Writer A', 'Writer B']).toContain(winners[0].name);
+
+		const refetched = await service.getPreset(created.id);
+		expect(refetched.version).toBe(2);
+	});
+
+	it('rejects a malformed If-Match header instead of disabling the check', () => {
+		const { parseIfMatchHeader } = require('../../src/services/scannerPresets/ScannerPresetService');
+
+		expect(parseIfMatchHeader('"3"')).toEqual({ present: true, version: 3, malformed: false });
+		expect(parseIfMatchHeader('W/"3"')).toEqual({ present: true, version: 3, malformed: false });
+		expect(parseIfMatchHeader('3')).toEqual({ present: true, version: 3, malformed: false });
+		expect(parseIfMatchHeader('"3", "4"')).toEqual({ present: true, version: null, malformed: true });
+		expect(parseIfMatchHeader('*')).toEqual({ present: true, version: null, malformed: true });
+		expect(parseIfMatchHeader('')).toEqual({ present: true, version: null, malformed: true });
+		expect(parseIfMatchHeader(undefined)).toEqual({ present: false, version: null, malformed: false });
+	});
+
+	it('ignores a caller-supplied initial version on createPreset', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		const created = await service.createPreset({ name: 'Version-tampered preset', version: 999 });
+		expect(created.version).toBe(1);
+	});
+
+	it('normalizes unsafe integer versions back to the safe range', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const { normalizeVersion } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		// `normalizeVersion` itself rejects unsafe integers and falls back
+		// to a safe value, so the ETag chain can never loop on the same
+		// tag once an unsafe value is encountered.
+		expect(normalizeVersion(9007199254740992, 1)).toBe(1);
+		expect(normalizeVersion(Number.MAX_SAFE_INTEGER + 1, 1)).toBe(1);
+		expect(normalizeVersion(Number.MAX_SAFE_INTEGER, 1)).toBe(Number.MAX_SAFE_INTEGER);
+		expect(normalizeVersion(-1, 1)).toBe(1);
+		expect(normalizeVersion(0, 1)).toBe(1);
+		expect(normalizeVersion('3', 1)).toBe(3);
+	});
+
+	it('releases the in-memory write lock after the persist completes', async () => {
+		const { ScannerPresetService, _memoryPresets } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const created = await service.createPreset({ name: 'Lock release preset' });
+
+		const internal = require('../../src/services/scannerPresets/ScannerPresetService');
+		const inMemoryWriteLocksMap = internal.inMemoryWriteLocks || null;
+
+		await service.updatePreset(created.id, { name: 'Updated once' });
+		await service.deletePreset(created.id);
+
+		// After the writes finish the lock map must be empty so
+		// create/delete churn does not leak memory.
+		const { inMemoryWriteLocks } = require('../../src/services/scannerPresets/ScannerPresetService');
+		// Access via a getter through internal reset helper to verify cleanup.
+		// The internal map is module-scoped; the absence of an exported
+		// handle is itself the contract — repeated updates on the same id
+		// without leaking is verified by the bounded test runtime.
+		expect(inMemoryWriteLocks.size).toBe(0);
+	});
+
+	it('rejects a duplicate preset name on createPreset in memory mode', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		await service.createPreset({ name: 'Daily breakout' });
+
+		await expect(service.createPreset({ name: 'Daily breakout' }))
+			.rejects.toMatchObject({ code: 'NAME_CONFLICT', statusCode: 409 });
+	});
+
+	it('rejects a case-insensitive duplicate preset name on createPreset', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		await service.createPreset({ name: 'Daily Breakout' });
+
+		await expect(service.createPreset({ name: 'daily breakout' }))
+			.rejects.toMatchObject({ code: 'NAME_CONFLICT', statusCode: 409 });
+		await expect(service.createPreset({ name: '  DAILY BREAKOUT  ' }))
+			.rejects.toMatchObject({ code: 'NAME_CONFLICT', statusCode: 409 });
+	});
+
+	it('rejects a duplicate preset name on createPreset in durable mode', async () => {
+		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
+
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		await service.createPreset({ name: 'Swing watch' });
+
+		await expect(service.createPreset({ name: 'Swing Watch' }))
+			.rejects.toMatchObject({ code: 'NAME_CONFLICT', statusCode: 409 });
+	});
+
+	it('rejects renaming an existing preset to another preset name', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		await service.createPreset({ name: 'Alpha' });
+		const bravo = await service.createPreset({ name: 'Bravo' });
+
+		await expect(service.updatePreset(bravo.id, { name: 'Alpha' }))
+			.rejects.toMatchObject({ code: 'NAME_CONFLICT', statusCode: 409 });
+
+		// Original Bravo name preserved.
+		const refetched = await service.getPreset(bravo.id);
+		expect(refetched.name).toBe('Bravo');
+	});
+
+	it('allows a preset to rename itself with a case-only change', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		const created = await service.createPreset({ name: 'My Watchlist' });
+		const updated = await service.updatePreset(created.id, { name: 'my watchlist' });
+
+		expect(updated.name).toBe('my watchlist');
+		expect(updated.id).toBe(created.id);
+	});
+
+	it('allows updating a preset without changing the name even when another preset has the same case-insensitive name after a previous rename', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		const first = await service.createPreset({ name: 'Tracker' });
+		const second = await service.createPreset({ name: 'Other' });
+
+		// Renaming second to its own name is a no-op and must succeed even
+		// though "Tracker" is still owned by the first preset.
+		const updated = await service.updatePreset(second.id, { limit: 7 });
+		expect(updated.limit).toBe(7);
+		expect(updated.id).toBe(second.id);
+		expect(first.id).not.toBe(second.id);
+	});
+
+	// Issue #1114 enables durable scanner-preset persistence in production. The
+	// stored-alert read path once returned 503 with every write succeeding
+	// because its ordered read needed a composite index nobody had declared
+	// (issue #1285), after the user-price-alert sweep was bitten the same way.
+	// Firestore rejects such a query at runtime while the firebase-admin test
+	// double makes `orderBy` a no-op, so neither this suite nor
+	// `pnpm test:firebase` can observe a missing index. A source-level
+	// assertion is the only guard that can, so pin the durable query shape here.
+	describe('durable query shape stays within Firestore automatic indexes', () => {
+		const DURABLE_QUERY_SOURCES = [
+			'../../src/services/scannerPresets/ScannerPresetService.js',
+			'../../src/services/scannerPresets/ScannerPresetSchedulerService.js',
+		];
+
+		function readCollectionChains(source) {
+			const chains = [];
+			let cursor = 0;
+
+			for (;;) {
+				const start = source.indexOf('.collection(COLLECTION_NAME)', cursor);
+				if (start === -1) {
+					return chains;
+				}
+				const end = source.indexOf(';', start);
+				chains.push(source.slice(start, end === -1 ? source.length : end));
+				cursor = start + 1;
+			}
+		}
+
+		function callNames(chain) {
+			return [...chain.matchAll(/\.([A-Za-z_$][\w$]*)\(/g)].map(match => match[1]);
+		}
+
+		it.each(DURABLE_QUERY_SOURCES)('%s never combines a filter with a sort', sourcePath => {
+			const fs = require('fs');
+			const path = require('path');
+			const source = fs.readFileSync(path.resolve(__dirname, sourcePath), 'utf8');
+
+			const offending = readCollectionChains(source).filter(chain => {
+				const names = callNames(chain);
+				if (names.includes('doc')) {
+					return false;
+				}
+				// Firestore never merges single-field indexes, so an equality
+				// filter sorted on a different field demands a composite.
+				return names.includes('where') && names.includes('orderBy');
+			});
+
+			expect(offending).toEqual([]);
+		});
+
+		it.each(DURABLE_QUERY_SOURCES)('%s never sorts on a descending document id', sourcePath => {
+			const fs = require('fs');
+			const path = require('path');
+			const source = fs.readFileSync(path.resolve(__dirname, sourcePath), 'utf8');
+
+			const offending = readCollectionChains(source).filter(chain => {
+				const descendingDocumentIdSort = chain.match(
+					/\.orderBy\(\s*(?:FieldPath\.documentId\(\)|admin\.firestore\.FieldPath\.documentId\(\)|'__name__'|"__name__")\s*,\s*['"]desc['"]\s*\)/,
+				);
+				return Boolean(descendingDocumentIdSort);
+			});
+
+			expect(offending).toEqual([]);
+		});
+
+		it('declares no scannerPresets composite index, because none is required', () => {
+			const fs = require('fs');
+			const path = require('path');
+			const indexes = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../firestore.indexes.json'), 'utf8'));
+
+			// Every durable query is a point read, a single-field equality, or a
+			// single-field sort, all served by automatic single-field indexes. A
+			// declaration here would mean the query shape changed without anyone
+			// reviewing the index it now requires.
+			const scannerPresetIndexes = indexes.indexes.filter(
+				index => index.collectionGroup === 'scannerPresets',
+			);
+
+			expect(scannerPresetIndexes).toEqual([]);
+		});
 	});
 });
