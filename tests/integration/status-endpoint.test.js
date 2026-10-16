@@ -284,6 +284,9 @@ describe('Status endpoints', () => {
 			},
 			errorCategoryCounts: {
 				circuit_breaker_open: 0,
+				provider_unavailable: 0,
+				upstream_tool_error: 0,
+				not_found: 0,
 				http_5xx: 0,
 				http_4xx: 0,
 				timeout: 0,
@@ -2358,6 +2361,9 @@ describe('Status endpoints', () => {
 			},
 			errorCategoryCounts: {
 				circuit_breaker_open: 0,
+				provider_unavailable: 0,
+				upstream_tool_error: 0,
+				not_found: 0,
 				http_5xx: 0,
 				http_4xx: 0,
 				timeout: 0,
