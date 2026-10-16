@@ -1498,6 +1498,27 @@ describe('alert analytics summary examples (issue #731)', () => {
 		expect(Object.keys(shadowMetrics)).toEqual(expect.arrayContaining(required));
 		expect(shadowMetrics).not.toHaveProperty('available');
 	});
+
+	it('documents deployments array in GET Alert Analytics Summary example (issue #1169)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const alertSummary = findItem(collection.item, 'GET Alert Analytics Summary');
+		expect(alertSummary).toBeDefined();
+
+		const summaryExample = alertSummary.response.find((response) => response.name === '200 OK - Analytics summary');
+		expect(summaryExample).toBeDefined();
+
+		const summary = JSON.parse(summaryExample.body).summary;
+		expect(Array.isArray(summary.deployments)).toBe(true);
+		expect(summary.deployments.length).toBeGreaterThan(0);
+		expect(summary.deployments[0]).toEqual(expect.objectContaining({
+			platform: expect.any(String),
+			gitSha: expect.any(String),
+			service: expect.any(String),
+			runtimeVersion: expect.any(String),
+			count: expect.any(Number),
+			lastSeen: expect.any(String),
+		}));
+	});
 });
 
 describe('news-monitor stop/target example (GH-712)', () => {

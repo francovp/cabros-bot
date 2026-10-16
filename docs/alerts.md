@@ -87,6 +87,8 @@ Similarly, `enrichment.evidenceCoverage` tracks whether enriched alerts cited gr
 
 `enrichment.sentimentCalibration` reports whether the stored `sentiment_score` distribution can still rank alerts. A near-constant score is worse than no score: it cannot separate a strong setup from a weak one, so it cannot be used to tune thresholds or compare signal quality over time. See [Sentiment score calibration](#sentiment-score-calibration) below.
 
+`summary.deployments` groups stored alerts by deployment environment identity (`platform`, `gitSha`, `service`, `runtimeVersion`), ordered descending by `lastSeen` with `count` as tie-breaker, capped at 50 entries. This enables operators to audit alert volume and timing across running replicas and platforms.
+
 **Query Parameters:**
 - `from` - Optional ISO-8601 lower bound; defaults to 24 hours before `to`
 - `to` - Optional ISO-8601 upper bound; defaults to request time
@@ -212,7 +214,11 @@ An alert that persisted no real token usage is not attributed to any feature. Pl
         "inputTokens": 10,
         "outputTokens": 20,
         "totalTokens": 30,
-        "totalCost": 0.001
+        "totalCost": 0.001,
+        "pricing": {
+          "unknownModelPricing": false,
+          "unknownModels": []
+        }
       }
     },
     "delivery": {
@@ -231,6 +237,16 @@ An alert that persisted no real token usage is not attributed to any feature. Pl
         }
       }
     },
+    "deployments": [
+      {
+        "platform": "railway",
+        "gitSha": "a1b2c3d4e5f6",
+        "service": "cabros-bot",
+        "runtimeVersion": "0.1.0",
+        "count": 2,
+        "lastSeen": "2026-06-06T12:00:00.000Z"
+      }
+    ],
     "latency": {
       "averageProcessingMs": 250,
       "averageDeliveryMs": 150,

@@ -11,6 +11,7 @@ const {
 	classifyFirestoreError,
 	isMissingIndexError,
 } = require('./firestoreErrorCategories');
+const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETENTION_DAYS = 30;
@@ -298,7 +299,7 @@ function getFirestore() {
 function formatAnalysisDoc(doc) {
 	const data = typeof doc.data === 'function' ? doc.data() : (doc || {});
 	const id = doc.id || data.id;
-	return {
+	const formatted = {
 		id,
 		createdAt: getDocTimestamp(data.createdAt),
 		symbol: data.symbol || '',
@@ -311,6 +312,17 @@ function formatAnalysisDoc(doc) {
 		tokens: typeof data.tokens === 'number' ? data.tokens : null,
 		expiresAt: getDocTimestamp(data.expiresAt),
 	};
+
+	if (data.deployment && typeof data.deployment === 'object') {
+		formatted.deployment = {
+			platform: typeof data.deployment.platform === 'string' ? data.deployment.platform : null,
+			gitSha: typeof data.deployment.gitSha === 'string' ? data.deployment.gitSha : null,
+			service: typeof data.deployment.service === 'string' ? data.deployment.service : null,
+			runtimeVersion: typeof data.deployment.runtimeVersion === 'string' ? data.deployment.runtimeVersion : null,
+		};
+	}
+
+	return formatted;
 }
 
 /**
@@ -360,6 +372,7 @@ async function recordAnalysis(record = {}) {
 			tokens,
 			createdAt: admin.firestore.FieldValue.serverTimestamp(),
 			expiresAt: buildRetentionExpiryTimestamp(),
+			deployment: getDeploymentIdentity(),
 		});
 
 		await firestore.collection(COLLECTION_NAME).doc(id).set(dataToSave);

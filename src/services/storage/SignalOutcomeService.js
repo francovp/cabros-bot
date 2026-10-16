@@ -15,6 +15,7 @@ const {
 	parseEntryPriceSources,
 	getEntryPriceSourceChains: buildEntryPriceSourceChains,
 } = require('../../lib/signalOutcomeEntryPriceSources');
+const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
 
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 
@@ -1174,6 +1175,7 @@ async function recordSignalInternal({
 			eligibilityReason: eligibility.reason || null,
 			outcomeEvaluated: !isEligible,
 			outcomes,
+			deployment: getDeploymentIdentity(),
 		};
 
 		let docRef;
@@ -2165,6 +2167,10 @@ function createEmptyMetricsSummary(breakdownTypes = []) {
 				inputTokens: 0,
 				outputTokens: 0,
 				totalCost: 0,
+				pricing: {
+					unknownModelPricing: false,
+					unknownModels: [],
+				},
 			},
 		},
 	};
@@ -2695,6 +2701,8 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 	let totalTokenCost = 0;
 	let totalInputTokens = 0;
 	let totalOutputTokens = 0;
+	let unknownModelPricing = false;
+	const unknownModelsSet = new Set();
 	let totalProcessingTime = 0;
 	let processingTimeCount = 0;
 
@@ -2705,6 +2713,18 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 			totalTokenCost += signal.tokenUsage.totalCost || 0;
 			totalInputTokens += signal.tokenUsage.inputTokens || signal.tokenUsage.promptTokens || 0;
 			totalOutputTokens += signal.tokenUsage.outputTokens || signal.tokenUsage.completionTokens || 0;
+			if (signal.tokenUsage.pricing) {
+				if (signal.tokenUsage.pricing.unknownModelPricing) {
+					unknownModelPricing = true;
+				}
+				if (Array.isArray(signal.tokenUsage.pricing.unknownModels)) {
+					for (const model of signal.tokenUsage.pricing.unknownModels) {
+						if (typeof model === 'string' && model.trim()) {
+							unknownModelsSet.add(model.trim());
+						}
+					}
+				}
+			}
 		}
 		if (typeof signal.processingTimeMs === 'number') {
 			totalProcessingTime += signal.processingTimeMs;
@@ -2844,6 +2864,10 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 				inputTokens: totalInputTokens,
 				outputTokens: totalOutputTokens,
 				totalCost: parseFloat(totalTokenCost.toFixed(6)),
+				pricing: {
+					unknownModelPricing,
+					unknownModels: Array.from(unknownModelsSet),
+				},
 			},
 		},
 	};
@@ -2906,12 +2930,23 @@ function summarizeTokenUsage(tokenUsage) {
 		return null;
 	}
 
-	return {
+	const result = {
 		inputTokens: getNumericValue(tokenUsage.inputTokens || tokenUsage.promptTokens),
 		outputTokens: getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens),
 		totalTokens: getNumericValue(tokenUsage.totalTokens || tokenUsage.total),
 		totalCost: getNumericValue(tokenUsage.totalCost),
 	};
+
+	if (tokenUsage.pricing && typeof tokenUsage.pricing === 'object') {
+		result.pricing = {
+			unknownModelPricing: Boolean(tokenUsage.pricing.unknownModelPricing),
+			unknownModels: Array.isArray(tokenUsage.pricing.unknownModels)
+				? [...tokenUsage.pricing.unknownModels]
+				: [],
+		};
+	}
+
+	return result;
 }
 
 function getDocTimestamp(data) {
@@ -3012,6 +3047,15 @@ function formatOutcomeDocument(doc) {
 			observedPrice: typeof data.observedPrice === 'number' && Number.isFinite(data.observedPrice) ? data.observedPrice : null,
 			tradablePrice: typeof data.tradablePrice === 'number' && Number.isFinite(data.tradablePrice) ? data.tradablePrice : null,
 		});
+	}
+
+	if (data.deployment && typeof data.deployment === 'object') {
+		formatted.deployment = {
+			platform: typeof data.deployment.platform === 'string' ? data.deployment.platform : null,
+			gitSha: typeof data.deployment.gitSha === 'string' ? data.deployment.gitSha : null,
+			service: typeof data.deployment.service === 'string' ? data.deployment.service : null,
+			runtimeVersion: typeof data.deployment.runtimeVersion === 'string' ? data.deployment.runtimeVersion : null,
+		};
 	}
 
 	return formatted;

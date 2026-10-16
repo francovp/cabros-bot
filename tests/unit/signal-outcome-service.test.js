@@ -3045,6 +3045,10 @@ describe('SignalOutcomeService', () => {
 						inputTokens: 0,
 						outputTokens: 0,
 						totalCost: 0,
+						pricing: {
+							unknownModelPricing: false,
+							unknownModels: [],
+						},
 					},
 				},
 			});

@@ -9904,6 +9904,34 @@
               "object",
               "null"
             ],
+            "properties": {
+              "inputTokens": {
+                "type": "integer"
+              },
+              "outputTokens": {
+                "type": "integer"
+              },
+              "totalTokens": {
+                "type": "integer"
+              },
+              "totalCost": {
+                "type": "number"
+              },
+              "pricing": {
+                "type": "object",
+                "properties": {
+                  "unknownModelPricing": {
+                    "type": "boolean"
+                  },
+                  "unknownModels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            },
             "additionalProperties": true
           },
           "processingTimeMs": {
@@ -10622,6 +10650,27 @@
               "totalCost": {
                 "type": "number",
                 "example": 0.0035
+              },
+              "pricing": {
+                "type": "object",
+                "description": "Model pricing status and unpriced model list.",
+                "required": [
+                  "unknownModelPricing",
+                  "unknownModels"
+                ],
+                "properties": {
+                  "unknownModelPricing": {
+                    "type": "boolean",
+                    "example": false
+                  },
+                  "unknownModels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "example": []
+                  }
+                }
               }
             }
           }
@@ -10755,6 +10804,34 @@
               "object",
               "null"
             ],
+            "properties": {
+              "inputTokens": {
+                "type": "integer"
+              },
+              "outputTokens": {
+                "type": "integer"
+              },
+              "totalTokens": {
+                "type": "integer"
+              },
+              "totalCost": {
+                "type": "number"
+              },
+              "pricing": {
+                "type": "object",
+                "properties": {
+                  "unknownModelPricing": {
+                    "type": "boolean"
+                  },
+                  "unknownModels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            },
             "additionalProperties": true
           },
           "channels": {
@@ -10840,6 +10917,91 @@
           },
           "decision": {
             "$ref": "#/components/schemas/AlertDecision"
+          },
+          "deployment": {
+            "$ref": "#/components/schemas/DeploymentIdentity"
+          }
+        }
+      },
+      "DeploymentIdentity": {
+        "type": "object",
+        "description": "Deployment provenance metadata stamped at persistence time.",
+        "properties": {
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Hosting platform identifier (e.g., 'render', 'railway', 'vercel', 'fly', 'heroku', 'aws', 'gcp', or 'unknown')."
+          },
+          "gitSha": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Full or abbreviated git commit SHA of the running deployment."
+          },
+          "service": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Service or application name within the deployment platform."
+          },
+          "runtimeVersion": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Node.js runtime or application package version."
+          }
+        }
+      },
+      "DeploymentSummaryItem": {
+        "type": "object",
+        "description": "Aggregated alert count and last observed timestamp for a distinct deployment identity in the summary window.",
+        "required": [
+          "count",
+          "lastSeen"
+        ],
+        "properties": {
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Hosting platform identifier."
+          },
+          "gitSha": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Git commit SHA of the deployment."
+          },
+          "service": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Service name of the deployment."
+          },
+          "runtimeVersion": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Runtime or application version of the deployment."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of alerts emitted by this deployment in the summary window."
+          },
+          "lastSeen": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO timestamp of the most recent alert emitted by this deployment in the summary window."
           }
         }
       },
@@ -11312,6 +11474,13 @@
           },
           "delivery": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "deployments": {
+            "type": "array",
+            "description": "Deployment provenance rollup across alerts in the summary window, grouped by platform, git commit SHA, and service name, sorted by lastSeen descending.",
+            "items": {
+              "$ref": "#/components/schemas/DeploymentSummaryItem"
+            }
           },
           "latency": {
             "$ref": "#/components/schemas/AlertSummaryLatency"
