@@ -47,6 +47,11 @@ const {
 	postBinanceOrderPreview,
 	getBinanceAccountBalances,
 } = require('../controllers/trading/binanceOrders');
+const {
+	getPositions,
+	getPnlSummary,
+	getTrades,
+} = require('../controllers/trading/tradeLedger');
 const { postTestAlert } = require('../controllers/admin/testAlert');
 const { handleSseStream } = require('../controllers/admin/sseEvents');
 const { idempotencyMiddleware } = require('../lib/idempotency');
@@ -124,6 +129,9 @@ function getRoutes(botOrGetter) {
 	router.get('/trading/binance/account/balances', ...binanceOrderRead, getBinanceAccountBalances);
 	router.post('/trading/binance/orders', ...binanceOrderWrite, idempotencyMiddleware, postBinanceOrder);
 	router.delete('/trading/binance/orders', ...binanceOrderWrite, deleteBinanceOrder);
+	router.get('/trading/positions', ...binanceOrderRead, getPositions);
+	router.get('/trading/pnl/summary', ...binanceOrderRead, getPnlSummary);
+	router.get('/trading/trades', ...binanceOrderRead, getTrades);
 
 	const { getNewsMonitor } = require('../controllers/webhooks/handlers/newsMonitor/newsMonitor');
 	const {

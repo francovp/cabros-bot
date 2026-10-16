@@ -10,6 +10,7 @@ const {
 } = require('../../services/trading/BinanceOrderService');
 const { getIdempotencyKey } = require('../../lib/idempotency');
 const { binanceOrderAuditService } = require('../../services/trading/BinanceOrderAuditService');
+const { tradeLedgerService } = require('../../services/trading/TradeLedgerService');
 
 async function postBinanceOrder(req, res) {
 	const startTime = Date.now();
@@ -52,6 +53,17 @@ async function postBinanceOrder(req, res) {
 		}).catch((err) => {
 			console.warn('[BinanceOrdersController] audit logging failed:', err?.message || err);
 		});
+
+		if (!result.dryRun && result.order) {
+			tradeLedgerService.recordOrderFills({
+				environment: result.environment,
+				order: result.order,
+				origin: req.body?.origin,
+				alertId: req.body?.alertId,
+			}).catch((err) => {
+				console.warn('[BinanceOrdersController] trade ledger fill recording failed:', err?.message || err);
+			});
+		}
 
 		return res.status(result.dryRun ? 200 : 201).json(result);
 	} catch (error) {
@@ -151,6 +163,16 @@ async function getBinanceOrders(req, res) {
 		}).catch((err) => {
 			console.warn('[BinanceOrdersController] audit logging failed:', err?.message || err);
 		});
+
+		if (result.order && Array.isArray(result.order.fills) && result.order.fills.length > 0) {
+			tradeLedgerService.recordOrderFills({
+				environment: result.environment,
+				order: result.order,
+			}).catch((err) => {
+				console.warn('[BinanceOrdersController] trade ledger fill recording failed on reconcile:', err?.message || err);
+			});
+		}
+
 		return res.status(200).json(result);
 	} catch (error) {
 		const processingMs = Date.now() - startTime;
