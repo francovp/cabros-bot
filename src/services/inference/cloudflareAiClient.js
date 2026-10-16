@@ -45,6 +45,16 @@ class CloudflareAiClient {
 			throw new Error('CloudflareAiClient configuration incomplete');
 		}
 
+		const { tokenCostBudgetService } = require('../../lib/tokenUsage');
+		const isExceeded = tokenCostBudgetService?.isBudgetExceededAsync
+			? await tokenCostBudgetService.isBudgetExceededAsync()
+			: tokenCostBudgetService?.isBudgetExceeded();
+		if (isExceeded) {
+			const err = new Error('TOKEN_BUDGET_EXCEEDED: Daily LLM token cost budget exceeded');
+			err.status = 429;
+			throw err;
+		}
+
 		const client = new OpenAI({
 			apiKey: this.apiKey,
 			baseURL: this.baseURL,

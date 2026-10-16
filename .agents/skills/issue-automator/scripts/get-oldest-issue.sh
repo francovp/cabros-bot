@@ -74,14 +74,23 @@ while [ "$page" -lt "$MAX_PAGES" ]; do
 
   cursor=$(echo "$batch" | jq -r 'map(.createdAt) | max')
 
-  # Always exclude issues carrying `need manual PR deploy` or `brainstorming` —
-  # operator has marked them as requiring human intervention or as
-  # idea-stage without implementation intent. These are zero-work skips.
+  # Always exclude issues carrying `need manual PR deploy`, `brainstorming`, or a
+  # terminal handoff label — operator has marked them as requiring human
+  # intervention, as idea-stage without implementation intent, or as already
+  # escalated for a human decision. These are zero-work skips.
+  #
+  # `NEEDS_USER` is a *terminal* outcome (Step 6 branch 5: notify, release the
+  # claim, stop the run), so the cursor must not re-propose it every session —
+  # that produced eight identical comments and WhatsApp pages on #708.
   batch=$(echo "$batch" | jq -c '
     map(select(
       (.labels | map(.name | ascii_downcase) | index("need manual pr deploy") | not)
       and (.labels | map(.name | ascii_downcase) | index("brainstorming") | not)
       and (.labels | map(.name | ascii_downcase) | index("brainstorm") | not)
+      and (.labels | map(.name | ascii_downcase) | index("needs_user") | not)
+      and (.labels | map(.name | ascii_downcase) | index("needs user") | not)
+      and (.labels | map(.name | ascii_downcase) | index("human needed") | not)
+      and (.labels | map(.name | ascii_downcase) | index("need user") | not)
     ))
   ')
 

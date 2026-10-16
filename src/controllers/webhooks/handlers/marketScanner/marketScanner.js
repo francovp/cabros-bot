@@ -1,19 +1,18 @@
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
+const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
 	MarketScannerRequestError,
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
-	getRiskLevelsForSide,
-	getScanItemSide,
-	pickLevel,
+	recordMarketScannerOutcomes,
 } = require('../../../../services/tradingview/marketScannerReport');
 const {
 	getNotificationManager,
-	initializeNotificationServices,
+	getOrInitializeNotificationManager,
 } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const {
@@ -26,11 +25,17 @@ const {
 const { enrichScannerItemsWithTrendConfluence } = require('../../../../services/tradingview/marketScannerConfluence');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const {
+	classifyScannerError,
+	emptyScannerErrorCategoryCounts,
+	incrementScannerErrorCategoryCount,
+} = require('../../../../services/tradingview/marketScannerErrorCategories');
 
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
 
-function resolveBot(botOrGetter) {	if (typeof botOrGetter === 'function') {
+function resolveBot(botOrGetter) {
+	if (typeof botOrGetter === 'function') {
 		return botOrGetter();
 	}
 
@@ -45,12 +50,12 @@ function resolveDryRun(req) {
 
 function postMarketScannerAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 
 		try {
 			if (!getRuntimeConfig().ENABLE_MARKET_SCANNER) {
-				return res.status(404).json({
+				return sendErrorFrom(res, 404, {
 					error: 'Market scanner is not enabled',
 					code: 'FEATURE_DISABLED',
 				});
@@ -60,7 +65,25 @@ function postMarketScannerAlert(botOrGetter) {
 			const routing = parseNotificationRouting(req.body);
 			const parsed = parseMarketScannerRequest(req);
 			const timeoutMs = getMarketScannerTimeoutMs();
-			const deadline = createScannerDeadline(timeoutMs);
+			const mcpUnavailable = getMcpUnavailableReason();
+			if (mcpUnavailable) {
+				const scanResults = buildSkippedScanResults(parsed.scans, mcpUnavailable);
+				console.debug(`[MarketScanner] ${mcpUnavailable}`);
+				return res.status(502).json({
+					success: false,
+					ranked: parsed.ranked === true,
+					includeMultiTimeframe: parsed.includeMultiTimeframe === true,
+					code: 'TRADINGVIEW_MCP_UNAVAILABLE',
+					error: mcpUnavailable,
+					scanResults: compactScanResults(scanResults),
+					summary: buildSummary(scanResults, []),
+					timedOut: false,
+					timeoutMs,
+					requestId,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
+				});
+			}
+			const deadline = createScannerDeadline(timeoutMs, req.requestDeadlineSignal);
 			let scanResults;
 
 			try {
@@ -74,7 +97,7 @@ function postMarketScannerAlert(botOrGetter) {
 
 			if (successfulScans.length === 0) {
 				const timeoutError = timedOut;
-				return res.status(timeoutError ? 504 : 502).json({
+				return sendErrorFrom(res, timeoutError ? 504 : 502, {
 					success: false,
 					ranked: parsed.ranked === true,
 					includeMultiTimeframe: parsed.includeMultiTimeframe === true,
@@ -118,7 +141,7 @@ function postMarketScannerAlert(botOrGetter) {
 
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
-				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
+				notificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
 			}
 
 			const deliveryResults = await sendWithNotificationRouting(
@@ -142,10 +165,17 @@ function postMarketScannerAlert(botOrGetter) {
 							.filter(Boolean),
 					))
 					: [];
+				const scannerErrorCategories = scanResults
+					.filter((r) => r.status === 'error' && r.errorCategory)
+					.map((r) => r.errorCategory);
 				alertStorageService.saveAlert({
 					requestId,
 					text: alertText,
 					symbol: scannerSymbols[0] || null,
+					// A scanner run covers many symbols but persists one report document,
+					// so record the complete scanned symbol set.
+					symbols: scannerSymbols,
+					batchId: requestId,
 					exchange: parsed.exchange || null,
 					enriched: false,
 					enrichmentData: null,
@@ -158,77 +188,15 @@ function postMarketScannerAlert(botOrGetter) {
 					whatsappChatId: routing.whatsappChatId,
 					discordWebhookUrl: routing.discordWebhookUrl,
 					processingTimeMs: Date.now() - startTime,
+					scannerErrorCategories,
 				}).catch(() => {});
 			}
 
-			const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
-			if (signalOutcomeService.isEnabled()) {
-				for (const scanResult of scanResults) {
-					if (scanResult.status === 'success' && Array.isArray(scanResult.items) && scanResult.items.length > 0) {
-						// Resolve sides from the same prepared (rank-normalized) item set the
-						// report rendered, so persisted sides match delivered levels
-						const preparedItems = prepareMarketScannerItems(scanResult, parsed.ranked === true);
-						for (const item of preparedItems) {
-							const closePrice = item.indicators?.close ?? null;
-							// Persisted side must match the rendered report side
-							const itemSide = getScanItemSide(scanResult.scan, item);
-							const itemScore = item.changePercent ?? item.indicators?.RSI ?? item.volume_ratio ?? null;
-
-							const atr = pickLevel([item.indicators?.atr, item.indicators?.ATR, item.atr]);
-							const bbLower = pickLevel([item.indicators?.bb_lower, item.indicators?.bollinger_lower, item.indicators?.lower, item.bollinger?.lower, item.bollinger_lower]);
-							const bbUpper = pickLevel([item.indicators?.bb_upper, item.indicators?.bollinger_upper, item.indicators?.upper, item.bollinger?.upper, item.bollinger_upper]);
-							const support = pickLevel([
-								item.indicators?.support,
-								item.indicators?.nearest_support,
-								item.support,
-								item.support_resistance?.nearest_support,
-								item.support_resistance?.support_1,
-							]);
-							const resistance = pickLevel([
-								item.indicators?.resistance,
-								item.indicators?.nearest_resistance,
-								item.resistance,
-								item.support_resistance?.nearest_resistance,
-								item.support_resistance?.resistance_1,
-							]);
-
-							const validPrice = typeof closePrice === 'number' && Number.isFinite(closePrice) && closePrice > 0 ? closePrice : null;
-							let stopLoss = null;
-							let takeProfit = null;
-							if (validPrice !== null) {
-								const riskLevels = getRiskLevelsForSide({
-									side: itemSide,
-									price: validPrice,
-									atr: typeof atr === 'number' && Number.isFinite(atr) && atr > 0 ? atr : null,
-									bbLower: typeof bbLower === 'number' && Number.isFinite(bbLower) && bbLower > 0 ? bbLower : null,
-									bbUpper: typeof bbUpper === 'number' && Number.isFinite(bbUpper) && bbUpper > 0 ? bbUpper : null,
-									support: typeof support === 'number' && Number.isFinite(support) && support > 0 ? support : null,
-									resistance: typeof resistance === 'number' && Number.isFinite(resistance) && resistance > 0 ? resistance : null,
-								});
-								stopLoss = riskLevels.stopLoss;
-								takeProfit = riskLevels.takeProfit;
-							}
-
-							signalOutcomeService.recordSignal({
-								requestId,
-								source: 'market-scanner',
-								symbol: item.symbol,
-								exchange: parsed.exchange,
-								timeframe: parsed.timeframe,
-								setupType: scanResult.scan,
-								score: itemScore,
-								side: itemSide,
-								price: validPrice,
-								stop: stopLoss,
-								target: takeProfit,
-								sources: [],
-								tokenUsage: null,
-								processingTimeMs: Date.now() - startTime,
-							}).catch(() => {});
-						}
-					}
-				}
-			}
+			recordMarketScannerOutcomes(scanResults, parsed, {
+				requestId,
+				startTime,
+				source: 'market-scanner',
+			});
 
 			return res.status(200).json({
 				success: true,
@@ -247,7 +215,7 @@ function postMarketScannerAlert(botOrGetter) {
 			});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: error.message,
 					code: 'INVALID_REQUEST',
 					requestId,
@@ -255,7 +223,7 @@ function postMarketScannerAlert(botOrGetter) {
 			}
 
 			if (error instanceof MarketScannerRequestError) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: error.message,
 					code: error.code,
 					requestId,
@@ -274,7 +242,7 @@ function postMarketScannerAlert(botOrGetter) {
 				},
 			});
 
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error. Please try again later.',
 				code: 'INTERNAL_ERROR',
 				requestId,
@@ -339,11 +307,23 @@ async function runScans(parsed, options = {}) {
 			}
 
 			console.warn('[MarketScanner] Scan failed:', scanType, error.message);
+			const errorCategory = classifyScannerError(error);
+			sentryService.captureRuntimeError({
+				channel: 'market-scanner',
+				feature: 'market-scanner',
+				error,
+				extra: {
+					mcp_error_category: errorCategory,
+					scan_type: scanType,
+					source: 'market-scanner',
+				},
+			});
 			results.push({
 				scan: scanType,
 				status: 'error',
 				items: [],
 				error: error.message,
+				errorCategory,
 			});
 		}
 	}
@@ -359,6 +339,14 @@ function buildScanArgs(parsed, scanType) {
 	};
 	if (scanType === 'bollinger_scan') {
 		args.bbw_threshold = parsed.bbwThreshold;
+	} else if (scanType === 'rating_filter') {
+		args.rating = parsed.rating;
+	} else if (scanType === 'consecutive_candles_scan') {
+		args.pattern_type = parsed.consecutiveCandlesPatternType;
+		args.candle_count = parsed.candleCount;
+		if (parsed.minGrowth !== undefined) {
+			args.min_growth = parsed.minGrowth;
+		}
 	}
 	return args;
 }
@@ -370,6 +358,14 @@ function compactScanResults(results, includeScores = false) {
 				scan: result.scan,
 				status: result.status,
 				error: result.error,
+				errorCategory: result.errorCategory || null,
+			};
+		}
+		if (result.status === 'skipped') {
+			return {
+				scan: result.scan,
+				status: result.status,
+				reason: result.reason,
 			};
 		}
 
@@ -393,6 +389,12 @@ function compactScanResults(results, includeScores = false) {
 }
 
 function buildSummary(scanResults, deliveryResults) {
+	const errorCategories = emptyScannerErrorCategoryCounts();
+	for (const result of scanResults) {
+		if (result.status === 'error' && result.errorCategory) {
+			incrementScannerErrorCategoryCount(errorCategories, result.errorCategory);
+		}
+	}
 	return {
 		totalScans: scanResults.length,
 		success: scanResults.filter((r) => r.status === 'success').length,
@@ -400,6 +402,7 @@ function buildSummary(scanResults, deliveryResults) {
 		timeout: scanResults.filter((r) => r.status === 'timeout').length,
 		totalItems: scanResults.reduce((sum, r) => sum + r.items.length, 0),
 		delivered: deliveryResults.filter((r) => r.success).length,
+		errorCategoryCounts: errorCategories,
 	};
 }
 
@@ -413,14 +416,14 @@ function getMarketScannerTimeoutMs() {
 	return Math.min(parsedTimeout, MAX_SCANNER_TIMEOUT_MS);
 }
 
-function createScannerDeadline(timeoutMs) {
+function createScannerDeadline(timeoutMs, parentSignal) {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => {
 		controller.abort(new Error(`Market scanner timeout after ${timeoutMs}ms`));
 	}, timeoutMs);
 
 	return {
-		signal: controller.signal,
+		signal: parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal,
 		clear: () => clearTimeout(timeoutId),
 	};
 }
@@ -434,6 +437,57 @@ function appendTimeoutResults(results, scans, error) {
 			error,
 		});
 	});
+}
+
+// Fast-fail gate for a provider that is known-down, gated on the circuit breaker's
+// *recoverable* state rather than the sticky runtime status.
+//
+// `runtimeStatus.status === 'degraded'` alone is NOT a valid gate: it is only cleared
+// by a later *successful* MCP call, so gating on it skips the very calls that could
+// clear it -- a self-locking outage that never self-heals in a scanner-only process.
+// `getCircuitBreakerStatus()` is time-based: `getBreakerState()` moves open -> half-open
+// once the cooldown expires, which is exactly the "is a bounded probe allowed right now?"
+// signal we need. So fail fast only while the breaker is *still* open, and let the first
+// request after the cooldown act as the recovery probe.
+const FAIL_FAST_ERROR_CATEGORIES = ['http_5xx', 'request_failed', 'circuit_breaker_open'];
+
+function getMcpUnavailableReason() {
+	let mcpStatus = null;
+	try {
+		mcpStatus = typeof tradingViewMcpService?.getStatus === 'function'
+			? tradingViewMcpService.getStatus({ enabled: true })
+			: null;
+	} catch (error) {
+		// Fail open: an unavailable readiness lookup must not block the scanner.
+		console.debug('[MarketScanner] MCP readiness lookup failed; continuing scan:', error.message);
+		return null;
+	}
+
+	if (!mcpStatus || mcpStatus.status !== 'degraded') {
+		return null;
+	}
+	if (!FAIL_FAST_ERROR_CATEGORIES.includes(mcpStatus.lastErrorCategory)) {
+		return null;
+	}
+
+	const breakerState = mcpStatus.circuitBreaker && mcpStatus.circuitBreaker.state;
+	// No reported breaker state (e.g. a degraded status from an older/alternate
+	// implementation) means "unknown", and unknown is treated as probeable so the gate
+	// can never permanently lock the scanner out.
+	if (breakerState !== 'open') {
+		return null;
+	}
+
+	return `TradingView MCP is currently unavailable (circuit breaker: open, lastError: ${mcpStatus.lastErrorCategory}). Scans skipped.`;
+}
+
+function buildSkippedScanResults(scans, reason) {
+	return scans.map((scan) => ({
+		scan,
+		status: 'skipped',
+		reason,
+		items: [],
+	}));
 }
 
 function hasTimedOut(results) {

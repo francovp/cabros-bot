@@ -1,6 +1,7 @@
 const {
 	TokenUsageTracker,
 	normalizeUsageMetadata,
+	PRICING_PER_1M,
 } = require('../../src/lib/tokenUsage');
 
 describe('TokenUsageTracker cost accounting (CB-583 / Issue #583)', () => {
@@ -29,9 +30,8 @@ describe('TokenUsageTracker cost accounting (CB-583 / Issue #583)', () => {
 			}, null);
 
 			const json = tracker.toJSON();
-			// Default pricing now matches gemini-2.5-flash so cost telemetry
-			// is no longer silently zeroed out.
-			expect(json.totalCost).toBeCloseTo(0.0008, 6);
+			const expectedCost = (1000 / 1e6) * PRICING_PER_1M.default.input + (200 / 1e6) * PRICING_PER_1M.default.output;
+			expect(json.totalCost).toBeCloseTo(expectedCost, 6);
 			expect(json.totalCost).not.toBe(0);
 		});
 
@@ -44,7 +44,8 @@ describe('TokenUsageTracker cost accounting (CB-583 / Issue #583)', () => {
 			});
 
 			const json = tracker.toJSON();
-			expect(json.totalCost).toBeCloseTo(0.0008, 6);
+			const expectedCost = (1000 / 1e6) * PRICING_PER_1M.default.input + (200 / 1e6) * PRICING_PER_1M.default.output;
+			expect(json.totalCost).toBeCloseTo(expectedCost, 6);
 		});
 
 		it('uses default pricing for unknown model names (CB-583 fix)', () => {
@@ -56,7 +57,8 @@ describe('TokenUsageTracker cost accounting (CB-583 / Issue #583)', () => {
 			}, 'unknown-future-model-9000');
 
 			const json = tracker.toJSON();
-			expect(json.totalCost).toBeCloseTo(0.0008, 6);
+			const expectedCost = (1000 / 1e6) * PRICING_PER_1M.default.input + (200 / 1e6) * PRICING_PER_1M.default.output;
+			expect(json.totalCost).toBeCloseTo(expectedCost, 6);
 		});
 
 		it('treats brave-search as free (billed per request, not per token)', () => {
