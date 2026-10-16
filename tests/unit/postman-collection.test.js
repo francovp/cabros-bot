@@ -935,6 +935,15 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(capabilities.response[0].body).featureFlags.symbolAnalysisMultiAgent).toBe(false);
 	});
 
+	it('documents api-only mode state in status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		expect(JSON.parse(status.response[0].body).featureFlags.apiOnlyMode).toBe(false);
+		expect(JSON.parse(capabilities.response[0].body).featureFlags.apiOnlyMode).toBe(false);
+	});
+
 	it('documents notificationRedrive and zeroChannelBroadcasts in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');

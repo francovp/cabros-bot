@@ -858,6 +858,43 @@ describe('Status endpoints', () => {
 		expect(response.body.featureFlags.symbolAnalysisMultiAgent).toBe(true);
 	});
 
+	it('reports api-only mode feature flag as false by default', async () => {
+		delete process.env.ENABLE_API_ONLY_MODE;
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.apiOnlyMode).toBe(false);
+	});
+
+	it('reports api-only mode feature flag as true when enabled via env', async () => {
+		process.env.ENABLE_API_ONLY_MODE = 'true';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.apiOnlyMode).toBe(true);
+	});
+
+	it('reports api-only mode feature flag as true when enabled via remote config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		remoteConfigService._setRemoteOverridesForTesting(
+			{ ENABLE_API_ONLY_MODE: true },
+			Date.now()
+		);
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.apiOnlyMode).toBe(true);
+	});
+
 	it('reports safe Firebase Remote Config load metadata without values and honest readiness', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 
