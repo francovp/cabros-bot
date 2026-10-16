@@ -1,4 +1,5 @@
 const DiscordService = require('../../src/services/notification/DiscordService');
+const WhatsAppMarkdownFormatter = require('../../src/services/notification/formatters/whatsappMarkdownFormatter');
 
 describe('DiscordService', () => {
 	let service;
@@ -789,4 +790,144 @@ describe('DiscordService', () => {
 			expect(mockFormatter.formatEnriched).toHaveBeenCalledWith({ summary: 'data' }, { signalClass: 'B', session: 'post' });
 		});
 	});
+
+	describe('urlShortener integration', () => {
+		let mockUrlShortener;
+
+		beforeEach(() => {
+			mockUrlShortener = {
+				shortenUrlsParallel: jest.fn(),
+			};
+		});
+
+		it('accepts urlShortener in constructor config and wires it to default formatter', () => {
+			const svc = new DiscordService({
+				logger: mockLogger,
+				urlShortener: mockUrlShortener,
+			});
+
+			expect(svc.urlShortener).toBe(mockUrlShortener);
+			expect(svc.formatter.urlShortener).toBe(mockUrlShortener);
+		});
+
+		it('handles missing or null urlShortener gracefully', () => {
+			const svc = new DiscordService({ logger: mockLogger });
+			expect(svc.urlShortener).toBeNull();
+			expect(svc.formatter.urlShortener).toBeNull();
+
+			const svcNull = new DiscordService({ logger: mockLogger, urlShortener: null });
+			expect(svcNull.urlShortener).toBeNull();
+			expect(svcNull.formatter.urlShortener).toBeNull();
+		});
+
+		it('passes urlShortener to custom formatter if not already set', () => {
+			const customFormatter = new WhatsAppMarkdownFormatter();
+			expect(customFormatter.urlShortener).toBeNull();
+
+			const svc = new DiscordService({
+				logger: mockLogger,
+				urlShortener: mockUrlShortener,
+				formatter: customFormatter,
+			});
+
+			expect(svc.formatter).toBe(customFormatter);
+			expect(svc.formatter.urlShortener).toBe(mockUrlShortener);
+		});
+
+		it('preserves urlShortener on custom formatter if already set', () => {
+			const existingShortener = { shortenUrlsParallel: jest.fn() };
+			const customFormatter = new WhatsAppMarkdownFormatter({ urlShortener: existingShortener });
+
+			const svc = new DiscordService({
+				logger: mockLogger,
+				urlShortener: mockUrlShortener,
+				formatter: customFormatter,
+			});
+
+			expect(svc.formatter.urlShortener).toBe(existingShortener);
+		});
+
+		it('shortens URLs in enriched alert sources during send', async () => {
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+
+			mockUrlShortener.shortenUrlsParallel.mockResolvedValue({
+				'https://tradingview.com/chart/abc': 'https://picsee.io/short1',
+			});
+
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => ({ id: 'msg-short-1' }),
+				text: async () => JSON.stringify({ id: 'msg-short-1' }),
+			});
+
+			const svc = new DiscordService({
+				logger: mockLogger,
+				urlShortener: mockUrlShortener,
+			});
+			await svc.validate();
+
+			const alert = {
+				text: 'Alert text',
+				enriched: {
+					original_text: 'BTC Breakout',
+					sources: [
+						{ title: 'TradingView Chart', url: 'https://tradingview.com/chart/abc' },
+					],
+				},
+			};
+
+			const result = await svc.send(alert);
+
+			expect(result.success).toBe(true);
+			expect(mockUrlShortener.shortenUrlsParallel).toHaveBeenCalledWith(['https://tradingview.com/chart/abc']);
+
+			expect(global.fetch).toHaveBeenCalledTimes(2); // 1 probe + 1 send
+			const sendCall = global.fetch.mock.calls.find((call) => call[1]?.method === 'POST');
+			expect(sendCall).toBeDefined();
+			const requestBody = JSON.parse(sendCall[1].body);
+			expect(requestBody.content).toContain('https://picsee.io/short1');
+			expect(requestBody.content).not.toContain('https://tradingview.com/chart/abc');
+		});
+
+		it('degrades gracefully and preserves original URL when urlShortener rejects', async () => {
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+
+			mockUrlShortener.shortenUrlsParallel.mockRejectedValue(new Error('Shortening service rate limited'));
+
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => ({ id: 'msg-short-2' }),
+				text: async () => JSON.stringify({ id: 'msg-short-2' }),
+			});
+
+			const svc = new DiscordService({
+				logger: mockLogger,
+				urlShortener: mockUrlShortener,
+			});
+			await svc.validate();
+
+			const alert = {
+				text: 'Alert text',
+				enriched: {
+					original_text: 'BTC Breakout',
+					sources: [
+						{ title: 'TradingView Chart', url: 'https://tradingview.com/chart/abc' },
+					],
+				},
+			};
+
+			const result = await svc.send(alert);
+
+			expect(result.success).toBe(true);
+			const sendCall = global.fetch.mock.calls.find((call) => call[1]?.method === 'POST');
+			expect(sendCall).toBeDefined();
+			const requestBody = JSON.parse(sendCall[1].body);
+			expect(requestBody.content).toContain('https://tradingview.com/chart/abc');
+		});
+	});
 });
+

@@ -57,6 +57,7 @@ function buildServices(bot) {
 
 	const discordService = new DiscordService({
 		logger: console,
+		urlShortener: getURLShortener(),
 	});
 
 	return { telegramService, whatsappService, discordService };
