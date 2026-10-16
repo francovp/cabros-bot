@@ -5,6 +5,8 @@ const crypto = require('crypto');
 const AlertStorageService = require('../storage/AlertStorageService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const { fireAndForget } = require('../../lib/fireAndForget');
+const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
 const { signalRepeatCooldown, nextMonotonicGeneration } = require('../alerts/signalRepeatCooldown');
 
 const COLLECTION_NAME = 'notificationDeadLetters';
@@ -232,12 +234,83 @@ function isPendingRedriveStatus(status) {
 	return status === 'pending' || status === 'in_flight';
 }
 
+/**
+ * Build the channel-level redrive options that resume chunked delivery from
+ * the first undelivered chunk when the dead-letter record carries chunk
+ * metadata. Channels without chunked metadata fall back to the documented
+ * full-replay path (legacy records) and emit a single warning so the
+ * operator can clean them up manually.
+ */
+function buildChunkResumeOptions(claimed, channel) {
+	if (!claimed || !channel) {
+		return {};
+	}
+	if (channel !== 'whatsapp' && channel !== 'discord') {
+		return {};
+	}
+	const resume = claimed.chunkResume;
+	if (!resume || !Number.isInteger(resume.resumeFromChunk)) {
+		if (claimed.chunkResume === undefined) {
+			console.warn(`[NotificationRedriveService] Legacy dead-letter ${claimed.id} has no chunk metadata; replaying the full message`);
+		}
+		return {};
+	}
+	if (!Number.isInteger(resume.splitMessageCount) || resume.splitMessageCount <= 1) {
+		return {};
+	}
+	if (resume.resumeFromChunk >= resume.splitMessageCount) {
+		// No chunks left to retry — record already failed beyond the last chunk.
+		return {};
+	}
+	return { startChunk: resume.resumeFromChunk };
+}
+
+/**
+ * Extract chunk-resume context from a failed chunked delivery result so a
+ * later redrive can skip already-delivered chunks instead of replaying the
+ * full payload from chunk 1.
+ *
+ * Returns `null` when the failure is not chunked (single message or no
+ * `splitMessageCount`/`failedPart` metadata). Legacy records lacking these
+ * fields will fall back to the documented full-replay path.
+ */
+function extractChunkResumeContext(failure) {
+	if (!failure || typeof failure !== 'object') {
+		return null;
+	}
+	const splitMessageCount = Number.isInteger(failure.splitMessageCount) && failure.splitMessageCount > 1
+		? failure.splitMessageCount
+		: null;
+	const failedPart = Number.isInteger(failure.failedPart) && failure.failedPart > 0
+		? Math.min(failure.failedPart, splitMessageCount || failure.failedPart)
+		: null;
+	const messageCount = Number.isInteger(failure.messageCount) && failure.messageCount >= 0
+		? Math.min(failure.messageCount, splitMessageCount || failure.messageCount)
+		: null;
+	if (!splitMessageCount || !failedPart) {
+		return null;
+	}
+	const resumeFromChunk = Math.max(0, failedPart - 1);
+	const messageIds = Array.isArray(failure.messageIds)
+		? failure.messageIds.slice(0, messageCount ?? undefined).filter((id) => typeof id === 'string' && id.length > 0)
+		: [];
+	return {
+		splitMessageCount,
+		failedPart,
+		messageCount,
+		resumeFromChunk,
+		deliveredMessageIds: messageIds,
+	};
+}
+
 class NotificationRedriveService {
 	constructor(options = {}) {
 		this.inMemoryStore = new Map();
 		this.supersessionStore = new Map();
 		this.reconciliationPromises = new Map();
 		this.workerTimer = null;
+		this._workerStartupGeneration = 0;
+		this._workerStartupAbortController = null;
 		this.activeSweepPromise = null;
 		this.running = false;
 		this.notificationManagerGetter = options.notificationManagerGetter || null;
@@ -487,6 +560,7 @@ class NotificationRedriveService {
 		for (const failure of failures) {
 			const channel = failure.channel;
 			const recordId = `${alertId}_${channel}`;
+			const chunkResume = extractChunkResumeContext(failure);
 			const record = {
 				id: recordId,
 				alertId: String(alertId),
@@ -507,13 +581,14 @@ class NotificationRedriveService {
 				attemptCount: 0,
 				lastError: failure.error ? String(failure.error) : 'Unknown delivery failure',
 				lastStatusCode: typeof failure.statusCode === 'number' ? failure.statusCode : null,
-					repeatCooldown: options.repeatCooldown && options.repeatCooldown.key
-						? {
-							key: String(options.repeatCooldown.key),
-							channel: options.repeatCooldown.channelsByName?.[channel] || null,
-							reservedAt: options.repeatCooldown.reservedAt,
-							generation: options.repeatCooldown.generation ?? null,
-						}
+				chunkResume,
+				repeatCooldown: options.repeatCooldown && options.repeatCooldown.key
+					? {
+						key: String(options.repeatCooldown.key),
+						channel: options.repeatCooldown.channelsByName?.[channel] || null,
+						reservedAt: options.repeatCooldown.reservedAt,
+						generation: options.repeatCooldown.generation ?? null,
+					}
 					: null,
 				createdAt: toTimestamp(nowDate),
 				updatedAt: toTimestamp(nowDate),
@@ -543,10 +618,11 @@ class NotificationRedriveService {
 			if (firestore) {
 				try {
 					let timer = null;
-					const write = firestore.collection(COLLECTION_NAME).doc(recordId)
-						.set(sanitizedRecord, { merge: true });
-					const writeOutcome = write.then(() => 'persisted', (error) => {
-							console.warn(`[NotificationRedriveService] Failed to persist dead-letter ${recordId} in Firestore, kept in-memory:`, error.message);
+					const writeOutcome = fireAndForget('notificationRedrive', () => firestore.collection(COLLECTION_NAME)
+						.doc(recordId).set(sanitizedRecord, { merge: true }))
+						.then((result) => {
+							if (result.ok) return 'persisted';
+							console.warn('[NotificationRedriveService] Failed to persist dead-letter %s in Firestore, kept in-memory:', recordId, result.error.message);
 							return 'failed';
 						});
 					const persisted = await Promise.race([
@@ -576,11 +652,11 @@ class NotificationRedriveService {
 								releaseRepeatCooldown(record);
 							}
 						})).catch((error) => {
-							console.warn(`[NotificationRedriveService] Failed to terminalize late dead-letter ${recordId}:`, error.message);
+							console.warn('[NotificationRedriveService] Failed to terminalize late dead-letter %s:', recordId, error.message);
 						});
 					}
 				} catch (error) {
-					console.warn(`[NotificationRedriveService] Failed to persist dead-letter ${recordId} in Firestore, kept in-memory:`, error.message);
+					console.warn('[NotificationRedriveService] Failed to persist dead-letter %s in Firestore, kept in-memory:', recordId, error.message);
 					if (this.getWorkerRole() !== 'web') {
 						releaseRepeatCooldown(record);
 					}
@@ -598,36 +674,73 @@ class NotificationRedriveService {
 	async getEligibleRecords(batchLimit, maxAgeMs) {
 		const nowMs = Date.now();
 		const records = [];
+		const seenIds = new Set();
 		const firestore = this.getFirestore();
 
 		if (firestore) {
 			try {
-				const snapshot = await firestore.collection(COLLECTION_NAME)
-					.where('status', 'in', ['pending', 'in_flight'])
-					.limit(batchLimit * 2)
+				// Push `nextAttemptAt <= now` and `leaseUntil <= now` into the
+				// Firestore query so the sweep never fetches not-yet-due or
+				// actively-claimed rows. Three indexed queries replace the previous
+				// `where('status', 'in', ...).limit(batchLimit * 2)` over-fetch:
+				// (1) due pending rows, (2) expired pending rows that need a terminal
+				// transition, (3) in_flight rows whose lease has expired.
+				const duePendingSnapshot = await firestore.collection(COLLECTION_NAME)
+					.where('status', '==', 'pending')
+					.where('nextAttemptAt', '<=', toTimestamp(new Date(nowMs)))
+					.limit(batchLimit)
 					.get();
 
-				if (snapshot && !snapshot.empty) {
-					for (const doc of snapshot.docs) {
+				if (duePendingSnapshot && !duePendingSnapshot.empty) {
+					for (const doc of duePendingSnapshot.docs) {
+						if (records.length >= batchLimit) break;
 						const data = doc.data();
-						const nextAttemptMs = toMillis(data.nextAttemptAt);
 						const expiresAtMs = toMillis(data.expiresAt);
-						const leaseUntilMs = toMillis(data.leaseUntil);
+						const expired = Boolean(expiresAtMs) && nowMs >= expiresAtMs;
+						records.push({ ...data, id: doc.id, expired });
+						seenIds.add(doc.id);
+					}
+				}
 
-						if (expiresAtMs && nowMs >= expiresAtMs) {
-							// Record has expired window
+				if (records.length < batchLimit) {
+					const expiredPendingSnapshot = await firestore.collection(COLLECTION_NAME)
+						.where('status', '==', 'pending')
+						.where('expiresAt', '<=', toTimestamp(new Date(nowMs)))
+						.limit(batchLimit)
+						.get();
+
+					if (expiredPendingSnapshot && !expiredPendingSnapshot.empty) {
+						for (const doc of expiredPendingSnapshot.docs) {
+							if (records.length >= batchLimit) break;
+							if (seenIds.has(doc.id)) continue;
+							const data = doc.data();
 							records.push({ ...data, id: doc.id, expired: true });
-						} else if (data.status === 'in_flight' && leaseUntilMs && leaseUntilMs > nowMs) {
-							// Active unexpired claim, skip
-							continue;
-						} else if (nextAttemptMs <= nowMs) {
-							records.push({ ...data, id: doc.id, expired: false });
-						}
-
-						if (records.length >= batchLimit) {
-							break;
+							seenIds.add(doc.id);
 						}
 					}
+				}
+
+				if (records.length < batchLimit) {
+					const inFlightSnapshot = await firestore.collection(COLLECTION_NAME)
+						.where('status', '==', 'in_flight')
+						.where('leaseUntil', '<=', toTimestamp(new Date(nowMs)))
+						.limit(batchLimit)
+						.get();
+
+					if (inFlightSnapshot && !inFlightSnapshot.empty) {
+						for (const doc of inFlightSnapshot.docs) {
+							if (records.length >= batchLimit) break;
+							if (seenIds.has(doc.id)) continue;
+							const data = doc.data();
+							const expiresAtMs = toMillis(data.expiresAt);
+							const expired = Boolean(expiresAtMs) && nowMs >= expiresAtMs;
+							records.push({ ...data, id: doc.id, expired });
+							seenIds.add(doc.id);
+						}
+					}
+				}
+
+				if (records.length > 0) {
 					return records;
 				}
 			} catch (error) {
@@ -635,9 +748,12 @@ class NotificationRedriveService {
 			}
 		}
 
-		// Fallback to inMemoryStore
+		// Fallback to inMemoryStore with the same eligibility split (mirrors the
+		// Firestore query so a Firestore outage cannot regress the cost savings).
+		const pending = [];
+		const expiredInFlight = [];
 		for (const [id, data] of this.inMemoryStore.entries()) {
-			if (data.status !== 'pending' && data.status !== 'in_flight') {
+			if (!data || (data.status !== 'pending' && data.status !== 'in_flight')) {
 				continue;
 			}
 
@@ -645,17 +761,33 @@ class NotificationRedriveService {
 			const expiresAtMs = toMillis(data.expiresAt);
 			const leaseUntilMs = toMillis(data.leaseUntil);
 
-			if (expiresAtMs && nowMs >= expiresAtMs) {
-				records.push({ ...data, id, expired: true });
-			} else if (data.status === 'in_flight' && leaseUntilMs && leaseUntilMs > nowMs) {
-				continue;
-			} else if (nextAttemptMs <= nowMs) {
-				records.push({ ...data, id, expired: false });
+			if (data.status === 'pending') {
+				// Expired rows must be returned (with `expired: true`) so the sweep
+				// can mark them terminal, even when `nextAttemptAt` is in the future.
+				if (expiresAtMs && nowMs >= expiresAtMs) {
+					pending.push({ ...data, id, expired: true });
+				} else if (nextAttemptMs <= nowMs) {
+					pending.push({ ...data, id, expired: false });
+				}
+			} else if (data.status === 'in_flight') {
+				// Only reclaim rows whose lease has already expired (or was never claimed)
+				if (leaseUntilMs > nowMs) continue;
+				const expired = Boolean(expiresAtMs) && nowMs >= expiresAtMs;
+				expiredInFlight.push({ ...data, id, expired });
 			}
+		}
 
-			if (records.length >= batchLimit) {
-				break;
-			}
+		for (const record of pending) {
+			if (records.length >= batchLimit) break;
+			if (seenIds.has(record.id)) continue;
+			records.push(record);
+			seenIds.add(record.id);
+		}
+		for (const record of expiredInFlight) {
+			if (records.length >= batchLimit) break;
+			if (seenIds.has(record.id)) continue;
+			records.push(record);
+			seenIds.add(record.id);
 		}
 
 		return records;
@@ -708,7 +840,7 @@ class NotificationRedriveService {
 				}
 				return null;
 			} catch (error) {
-				console.warn(`[NotificationRedriveService] Transaction claim failed for ${record.id}:`, error.message);
+				console.warn('[NotificationRedriveService] Transaction claim failed for %s:', record.id, error.message);
 			}
 		}
 
@@ -757,7 +889,7 @@ class NotificationRedriveService {
 		if (firestore) {
 			try {
 				const writePromise = firestore.collection(COLLECTION_NAME).doc(recordId).set(sanitized, { merge: true }).then(() => true, (error) => {
-					console.warn(`[NotificationRedriveService] Failed to mark dead-letter ${recordId} terminal (${status}):`, error.message);
+					console.warn('[NotificationRedriveService] Failed to mark dead-letter %s terminal (%s):', recordId, status, error.message);
 					return false;
 				});
 				if (Number.isFinite(deadline)) {
@@ -773,7 +905,7 @@ class NotificationRedriveService {
 				}
 				return persisted;
 			} catch (error) {
-				console.warn(`[NotificationRedriveService] Failed to mark dead-letter ${recordId} terminal (${status}):`, error.message);
+				console.warn('[NotificationRedriveService] Failed to mark dead-letter %s terminal (%s):', recordId, status, error.message);
 				return false;
 			}
 		}
@@ -781,7 +913,7 @@ class NotificationRedriveService {
 		return true;
 	}
 
-	async markRetry(recordId, attemptCount, lastError, lastStatusCode) {
+	async markRetry(recordId, attemptCount, lastError, lastStatusCode, chunkResume) {
 		const nowMs = Date.now();
 		const nowDate = new Date(nowMs);
 		const backoffMs = calculateBackoffMs(attemptCount);
@@ -796,6 +928,7 @@ class NotificationRedriveService {
 			updatedAt: toTimestamp(nowDate),
 			workerId: null,
 			leaseUntil: null,
+			...(chunkResume !== undefined ? { chunkResume } : {}),
 		};
 
 		const sanitized = stripUndefinedFieldsDeep(updateData);
@@ -811,7 +944,7 @@ class NotificationRedriveService {
 				await firestore.collection(COLLECTION_NAME).doc(recordId).set(sanitized, { merge: true });
 				this._adjustPendingCount(previousStatus, sanitized.status);
 			} catch (error) {
-				console.warn(`[NotificationRedriveService] Failed to update retry for ${recordId}:`, error.message);
+				console.warn('[NotificationRedriveService] Failed to update retry for %s:', recordId, error.message);
 			}
 			return;
 		}
@@ -966,18 +1099,21 @@ class NotificationRedriveService {
 
 		const supersessionId = this.getSupersessionId(record.repeatCooldown.key, record.repeatCooldown.channel);
 		const localSupersession = this.supersessionStore.get(supersessionId);
-		if ((localSupersession && isSupersededByMarker(localSupersession, record))
-			|| this.inMemoryStore.get(record.id)?.status === 'cancelled') {
+		// A local marker is process/clock-derived, so its generation can disagree with
+		// the durable creation order across replicas. It is therefore only a fallback
+		// verdict here, never a short-circuit: a proven newer durable record wins.
+		const locallySuperseded = Boolean(localSupersession && isSupersededByMarker(localSupersession, record));
+		if (this.inMemoryStore.get(record.id)?.status === 'cancelled') {
 			return true;
 		}
 
 		const firestore = this.getFirestore();
 		if (!firestore) {
-			return false;
+			return locallySuperseded;
 		}
 		const remainingMs = Math.max(0, deadline - Date.now());
 		if (remainingMs === 0) {
-			return false;
+			return locallySuperseded;
 		}
 		let timer = null;
 		try {
@@ -991,7 +1127,7 @@ class NotificationRedriveService {
 				}),
 			]);
 			if (!snapshots) {
-				return false;
+				return locallySuperseded;
 			}
 			const [recordSnapshot, supersessionSnapshot] = snapshots;
 			const supersession = supersessionSnapshot?.exists ? supersessionSnapshot.data() : null;
@@ -1011,11 +1147,12 @@ class NotificationRedriveService {
 						return false;
 					}
 				}
+				return isSupersededByMarker(supersession, record) || locallySuperseded;
 			}
-			return isSupersededByMarker(supersession, record);
+			return locallySuperseded;
 		} catch (error) {
 			console.warn('[NotificationRedriveService] Failed to check superseded redrive:', error.message);
-			return false;
+			return locallySuperseded;
 		} finally {
 			if (timer) {
 				clearTimeout(timer);
@@ -1066,7 +1203,7 @@ class NotificationRedriveService {
 				});
 				const persisted = await resolveBeforeDeadline(write, deadline);
 				if (persisted === null) {
-					console.warn(`[NotificationRedriveService] Timed out persisting repeat supersession for ${channel}`);
+					console.warn('[NotificationRedriveService] Timed out persisting repeat supersession for %s', channel);
 				}
 			}));
 		}
@@ -1150,7 +1287,10 @@ class NotificationRedriveService {
 		}
 
 		const telegramService = notificationManager.channels?.get?.('telegram');
-		if (!telegramService || !telegramService.isEnabled()) {
+		const canSendAdmin = notificationManager.isTelegramAdminDeliveryEligible
+			? notificationManager.isTelegramAdminDeliveryEligible(telegramService)
+			: Boolean(telegramService && (telegramService.isEnabled?.() || telegramService.isAdminDeliveryEligible?.()));
+		if (!canSendAdmin) {
 			return;
 		}
 
@@ -1290,6 +1430,7 @@ class NotificationRedriveService {
 						...(claimed.alert || {}),
 						...(claimed.destinationOverride || {}),
 					};
+					const chunkResumeOptions = buildChunkResumeOptions(claimed, claimed.channel);
 
 					let results;
 					try {
@@ -1298,6 +1439,7 @@ class NotificationRedriveService {
 							[claimed.channel],
 							{
 								...options,
+								...chunkResumeOptions,
 								isRedrive: true,
 								parentSpan: options.parentSpan,
 								signal: dispatchSignal,
@@ -1337,6 +1479,7 @@ class NotificationRedriveService {
 						const nextAttempts = (claimed.attemptCount || 0) + 1;
 						const lastErr = channelResult?.error || 'Redrive attempt failed';
 						const lastCode = channelResult?.statusCode || null;
+						const chunkResume = extractChunkResumeContext(channelResult) || claimed.chunkResume;
 
 						if (nextAttempts >= maxAttempts) {
 							releaseRepeatCooldown(claimed);
@@ -1344,6 +1487,7 @@ class NotificationRedriveService {
 								lastError: String(lastErr),
 								lastStatusCode: lastCode,
 								attemptCount: nextAttempts,
+								chunkResume,
 							});
 							if (marked) {
 								this.totalExhaustedCount += 1;
@@ -1357,12 +1501,12 @@ class NotificationRedriveService {
 							}
 							errorCount += 1;
 						} else {
-							await this.markRetry(claimed.id, nextAttempts, lastErr, lastCode);
+							await this.markRetry(claimed.id, nextAttempts, lastErr, lastCode, chunkResume);
 							errorCount += 1;
 						}
 					}
 				} catch (error) {
-					console.error(`[NotificationRedriveService] Unexpected redrive dispatch error for ${claimed.id}:`, error.message);
+					console.error('[NotificationRedriveService] Unexpected redrive dispatch error for %s:', claimed.id, error.message);
 					const nextAttempts = (claimed.attemptCount || 0) + 1;
 					if (nextAttempts >= maxAttempts) {
 						releaseRepeatCooldown(claimed);
@@ -1456,14 +1600,18 @@ class NotificationRedriveService {
 				const applyDurablePendingCount = (count, snapshot = null) => {
 					const snapshotObservedAt = normalizeTimestampToDate(snapshot?.readTime);
 					const observedAtMs = snapshotObservedAt?.getTime() || pendingCountQueryStartedAtMs;
-					const localDeltaAfterSnapshot = this._pendingCountLocalMutations.reduce((delta, mutation) => (
-						mutation.sequence > localPendingCountMutationSequenceAtQueryStart && mutation.at > observedAtMs
-							? delta + mutation.delta
-							: delta
-					), 0);
+					const localDeltaAfterSnapshot = this._pendingCountLocalMutations.reduce((delta, mutation) => {
+						if (mutation.sequence <= localPendingCountMutationSequenceAtQueryStart) {
+							return delta;
+						}
+						if (snapshotObservedAt && mutation.at <= observedAtMs) {
+							return delta;
+						}
+						return delta + mutation.delta;
+					}, 0);
 					this.persistedPendingCount = Math.max(0, Math.floor(count + localDeltaAfterSnapshot));
 					this._pendingCountObservedAt = new Date(observedAtMs);
-					return Math.floor(count);
+					return this.persistedPendingCount;
 				};
 
 				const countPromise = Promise.resolve()
@@ -1923,23 +2071,63 @@ class NotificationRedriveService {
 			return false;
 		}
 
-		if (this.workerTimer) {
+		if (this.workerTimer || this.running) {
 			return true;
 		}
 
 		this._isDraining = false;
 		this.running = true;
-		if (configuredRole === 'worker') {
-			this._initialSeedPromise = this.seedCountersFromHeartbeat();
+		const startupJitterMs = resolveStartupJitterMs({
+			envVar: 'NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS',
+			runtimeKey: 'NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS',
+			globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+			globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+		});
+		if (startupJitterMs > 0) {
+			console.info(`[NotificationRedriveService] Applying startup jitter (${startupJitterMs}ms max)`);
 		}
-		this.workerTimer = setInterval(() => {
-			trackBackgroundTask(this.sweep()).catch((err) => {
-				console.warn('[NotificationRedriveService] Worker sweep error:', err.message);
-			});
-		}, intervalMs);
 
-		if (options.unref !== false && typeof this.workerTimer.unref === 'function') {
-			this.workerTimer.unref();
+		const startupGeneration = ++this._workerStartupGeneration;
+		const startupAbortController = new AbortController();
+		this._workerStartupAbortController = startupAbortController;
+		const scheduleSweeps = () => {
+			if (!this.running || startupGeneration !== this._workerStartupGeneration) {
+				return;
+			}
+			if (this._workerStartupAbortController === startupAbortController) {
+				this._workerStartupAbortController = null;
+			}
+			if (configuredRole === 'worker') {
+				this._initialSeedPromise = this.seedCountersFromHeartbeat();
+			}
+			this.workerTimer = setInterval(() => {
+				trackBackgroundTask(this.sweep()).catch((err) => {
+					console.warn('[NotificationRedriveService] Worker sweep error:', err.message);
+				});
+			}, intervalMs);
+			if (options.unref !== false && typeof this.workerTimer.unref === 'function') {
+				this.workerTimer.unref();
+			}
+			trackBackgroundTask(this.sweep()).catch((err) => {
+				console.warn('[NotificationRedriveService] Initial sweep error:', err.message);
+			});
+		};
+		if (startupJitterMs > 0) {
+			applyStartupJitter(startupJitterMs, {
+				unref: options.unref !== false,
+				signal: startupAbortController.signal,
+			}).then(scheduleSweeps).catch((err) => {
+				if (this._workerStartupAbortController === startupAbortController) {
+					this._workerStartupAbortController = null;
+				}
+				if (!startupAbortController.signal.aborted) {
+					console.warn('[NotificationRedriveService] Startup jitter failed:', err.message);
+				}
+				scheduleSweeps();
+			});
+		} else {
+			this._workerStartupAbortController = null;
+			scheduleSweeps();
 		}
 
 		console.info(`[NotificationRedriveService] Worker started in ${configuredRole} role (interval: ${intervalMs}ms)`);
@@ -1947,6 +2135,12 @@ class NotificationRedriveService {
 	}
 
 	async stopWorker(options = {}) {
+		this._workerStartupGeneration += 1;
+		if (this._workerStartupAbortController) {
+			this._workerStartupAbortController.abort();
+			this._workerStartupAbortController = null;
+		}
+		this.running = false;
 		if (this.workerTimer) {
 			clearInterval(this.workerTimer);
 			this.workerTimer = null;
@@ -1955,8 +2149,6 @@ class NotificationRedriveService {
 			clearInterval(this.telemetrySyncTimer);
 			this.telemetrySyncTimer = null;
 		}
-		this.running = false;
-
 		if (options.drain) {
 			this._isDraining = true;
 			const timeoutMs = parsePositiveInteger(options.timeoutMs, MAX_DRAIN_TIMEOUT_MS);
@@ -2209,6 +2401,11 @@ class NotificationRedriveService {
 	}
 
 	resetForTesting() {
+		this._workerStartupGeneration += 1;
+		if (this._workerStartupAbortController) {
+			this._workerStartupAbortController.abort();
+			this._workerStartupAbortController = null;
+		}
 		if (this.workerTimer) {
 			clearInterval(this.workerTimer);
 			this.workerTimer = null;

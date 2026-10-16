@@ -3,7 +3,18 @@
 const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
 const { loadFirebaseAdminCredentials } = require('../services/storage/firebaseAdminCredentials');
-const { isValidApiKey, validateApiKey } = require('./auth');
+const {
+	isAdminApiKeyScoped,
+	isValidAdminApiKey,
+	isValidBinanceTradingApiKey,
+	_isQueryApiKeyPresent,
+	_isQueryAuthSunsetReached,
+	rejectQueryApiKeyAfterSunset,
+	validateApiKey,
+	warnQueryApiKeyDeprecationOnce,
+} = require('./auth');
+const requestDeadline = require('./requestDeadline');
+const { sendErrorFrom } = require('./errorEnvelope');
 
 const ADMIN_VIEWER = 'admin.viewer';
 const ADMIN_OPERATOR = 'admin.operator';
@@ -90,16 +101,50 @@ function getAdminAuthConfig() {
 
 async function validateAdminAccess(req, res, next) {
 	if (!isFirebaseAdminAuthEnabled()) {
-		return validateApiKey(req, res, () => {
+		if (!isAdminApiKeyScoped()) {
+			return validateApiKey(req, res, () => {
+				req.adminRole = ADMIN_OPERATOR;
+				return requestDeadline.guard(req, res, next);
+			});
+		}
+
+		const suppliedApiKey = req.headers['x-api-key']
+			|| (isAdminApiKeyScoped() ? undefined : req.query['api-key']);
+		if (suppliedApiKey !== undefined && isValidAdminApiKey(req)) {
 			req.adminRole = ADMIN_OPERATOR;
-			next();
-		});
+			return requestDeadline.guard(req, res, next);
+		}
+		if (suppliedApiKey !== undefined) {
+			return sendErrorFrom(res, 403, { error: 'Forbidden: Invalid API key' });
+		}
+		return sendErrorFrom(res, 401, { error: 'Unauthorized: Missing API key' });
+	}
+	const expiredLegacyQueryKey = !isAdminApiKeyScoped()
+		&& process.env.WEBHOOK_API_KEY
+		&& _isQueryApiKeyPresent(req)
+		&& _isQueryAuthSunsetReached();
+	const hasApiKeyHeader = Boolean(req.headers['x-api-key']);
+	const hasBearerHeader = typeof req.headers.authorization === 'string'
+		&& /^Bearer\s+\S+$/i.test(req.headers.authorization);
+	if (
+		!isAdminApiKeyScoped()
+		&& process.env.WEBHOOK_API_KEY
+		&& expiredLegacyQueryKey
+		&& !hasApiKeyHeader
+		&& !hasBearerHeader
+		&& rejectQueryApiKeyAfterSunset(req, res)
+	) {
+		return;
 	}
 
-	const suppliedApiKey = req.headers['x-api-key'] || req.query['api-key'];
-	if (suppliedApiKey !== undefined && isValidApiKey(req)) {
+	const suppliedApiKey = req.headers['x-api-key']
+		|| (isAdminApiKeyScoped() || expiredLegacyQueryKey ? undefined : req.query['api-key']);
+	if (suppliedApiKey !== undefined && isValidAdminApiKey(req)) {
+		if (!isAdminApiKeyScoped() && !expiredLegacyQueryKey && _isQueryApiKeyPresent(req)) {
+			warnQueryApiKeyDeprecationOnce(req);
+		}
 		req.adminRole = ADMIN_OPERATOR;
-		return next();
+		return requestDeadline.guard(req, res, next);
 	}
 
 	const authorization = req.headers.authorization;
@@ -107,7 +152,7 @@ async function validateAdminAccess(req, res, next) {
 	if (match) {
 		const firebaseAuth = getFirebaseAuth();
 		if (!firebaseAuth) {
-			return res.status(503).json({ error: 'Admin authentication is unavailable', code: 'ADMIN_AUTH_UNAVAILABLE' });
+			return sendErrorFrom(res, 503, { error: 'Admin authentication is unavailable', code: 'ADMIN_AUTH_UNAVAILABLE' });
 		}
 		try {
 			const claims = await firebaseAuth.verifyIdToken(match[1], true);
@@ -118,23 +163,27 @@ async function validateAdminAccess(req, res, next) {
 				claims,
 			};
 			req.user = req.adminUser;
-			if (req.adminRole) return next();
-			return res.status(403).json({ error: 'Forbidden', code: 'ADMIN_ROLE_REQUIRED' });
+			if (req.adminRole) return requestDeadline.guard(req, res, next);
+			return sendErrorFrom(res, 403, { error: 'Forbidden', code: 'ADMIN_ROLE_REQUIRED' });
 		} catch (error) {
-			return res.status(401).json({ error: 'Unauthorized', code: 'ADMIN_AUTH_INVALID' });
+			return sendErrorFrom(res, 401, { error: 'Unauthorized', code: 'ADMIN_AUTH_INVALID' });
 		}
 	}
 
 	if (suppliedApiKey !== undefined) {
-		return res.status(403).json({ error: 'Forbidden: Invalid API key' });
+		return sendErrorFrom(res, 403, { error: 'Forbidden: Invalid API key' });
 	}
 
-	return res.status(401).json({ error: 'Unauthorized', code: 'ADMIN_AUTH_REQUIRED' });
+	return sendErrorFrom(res, 401, { error: 'Unauthorized', code: 'ADMIN_AUTH_REQUIRED' });
 }
 
 function requireConfiguredAdminAccess(req, res, next) {
-	if (!isFirebaseAdminAuthEnabled() && !String(process.env.WEBHOOK_API_KEY || '').trim()) {
-		return res.status(503).json({
+	if (
+		!isFirebaseAdminAuthEnabled()
+		&& !String(process.env.ADMIN_API_KEY || '').trim()
+		&& !String(process.env.WEBHOOK_API_KEY || '').trim()
+	) {
+		return sendErrorFrom(res, 503, {
 			error: 'Admin authentication is not configured',
 			code: 'ADMIN_AUTH_UNAVAILABLE',
 		});
@@ -142,10 +191,39 @@ function requireConfiguredAdminAccess(req, res, next) {
 	return validateAdminAccess(req, res, next);
 }
 
+function validateBinanceTradingAccess(req, res, next) {
+	const tradingKey = String(process.env.BINANCE_TRADING_API_KEY || '').trim();
+	if (!tradingKey) return validateAdminAccess(req, res, next);
+
+	const suppliedApiKey = req.headers['x-api-key'];
+	if (suppliedApiKey !== undefined && isValidBinanceTradingApiKey(req)) {
+		req.adminRole = ADMIN_OPERATOR;
+		return requestDeadline.guard(req, res, next);
+	}
+	if (suppliedApiKey === undefined || suppliedApiKey === '') {
+		return sendErrorFrom(res, 401, { error: 'Unauthorized: Missing API key' });
+	}
+	return sendErrorFrom(res, 403, { error: 'Forbidden: Invalid API key' });
+}
+
+function requireConfiguredBinanceTradingAccess(req, res, next) {
+	if (String(process.env.BINANCE_TRADING_API_KEY || '').trim()) {
+		return validateBinanceTradingAccess(req, res, next);
+	}
+	return requireConfiguredAdminAccess(req, res, next);
+}
+
+function requireConfiguredSseAccess(req, res, next) {
+	if (!req.headers.authorization && req.query?.token) {
+		req.headers.authorization = `Bearer ${req.query.token}`;
+	}
+	return requireConfiguredAdminAccess(req, res, next);
+}
+
 function requireAdminRole(requiredRole) {
 	return (req, res, next) => {
 		if (req.adminRole === ADMIN_OPERATOR || req.adminRole === requiredRole) return next();
-		return res.status(403).json({ error: 'Forbidden', code: 'ADMIN_ROLE_REQUIRED', requiredRole });
+		return sendErrorFrom(res, 403, { error: 'Forbidden', code: 'ADMIN_ROLE_REQUIRED', requiredRole });
 	};
 }
 
@@ -158,5 +236,8 @@ module.exports = {
 	isFirebaseAdminAuthEnabled,
 	requireAdminRole,
 	requireConfiguredAdminAccess,
+	requireConfiguredBinanceTradingAccess,
+	requireConfiguredSseAccess,
 	validateAdminAccess,
+	validateBinanceTradingAccess,
 };

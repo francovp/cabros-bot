@@ -191,6 +191,14 @@ describe('News Monitor Analysis Persistence & Endpoints Integration', () => {
 			expect(res.body.bySymbol.ETHUSDT).toBeDefined();
 			expect(res.body.byEventCategory.price_surge).toBeDefined();
 			expect(res.body.falsePositiveProxy).toBeDefined();
+			// Pin the real field names so the documented NewsAnalysisSummary contract
+			// cannot drift away from the runtime payload again.
+			expect(res.body.falsePositiveProxy).toEqual({
+				threshold: 0.7,
+				totalEvaluated: 1,
+				noFollowupCount: 1,
+				ratePercent: 100,
+			});
 		});
 	});
 });

@@ -90,10 +90,15 @@ describe('POST /api/admin/test-alert Integration', () => {
 			.send({ text: 'Smoke probe test' });
 
 		expect(res.status).toBe(403);
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Test alert endpoint is disabled',
 			code: 'FEATURE_DISABLED',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('executes dry-run mode returning formatted preview without side effects', async () => {
@@ -174,6 +179,42 @@ describe('POST /api/admin/test-alert Integration', () => {
 
 		expect(res.status).toBe(400);
 		expect(res.body.code).toBe('INVALID_REQUEST');
+	});
+
+	it('rejects an empty probe text with 400 Bad Request and no side effects', async () => {
+		// Backs the OpenAPI `minLength: 1` on TestAlertRequest.text: the schema now
+		// refuses "", and the handler must agree on the wire, before any channel is
+		// resolved, dispatched to, or persisted.
+		const res = await request(app)
+			.post('/api/admin/test-alert')
+			.set('x-api-key', 'secret-operator-key')
+			.send({ text: '', channels: ['telegram'] });
+
+		expect(res.status).toBe(400);
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+			error: 'Alert text is required and must be a string',
+			code: 'INVALID_REQUEST',
+		}));
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
+	});
+
+	it('accepts an omitted probe text and falls back to the default smoke marker', async () => {
+		const res = await request(app)
+			.post('/api/admin/test-alert')
+			.set('x-api-key', 'secret-operator-key')
+			.send({ channels: ['telegram'] });
+
+		expect(res.status).toBe(200);
+		expect(res.body.ok).toBe(true);
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({ text: expect.stringContaining('[TEST-ALERT]') }),
+			['telegram'],
+			expect.anything(),
+		);
 	});
 
 	it('returns cached idempotent response on repeated request with same x-idempotency-key', async () => {

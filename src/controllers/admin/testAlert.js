@@ -1,6 +1,7 @@
 'use strict';
 
 const { v4: uuidv4 } = require('uuid');
+const { sendErrorFrom } = require('../../lib/errorEnvelope');
 const { validateAlert } = require('../../lib/validation');
 const { TokenUsageTracker } = require('../../lib/tokenUsage');
 const alertStorageService = require('../../services/storage/AlertStorageService');
@@ -97,7 +98,7 @@ function resolveBot(botOrGetter) {
 function postTestAlert(botOrGetter) {
 	return async (req, res) => {
 		if (!isTestAlertEnabled()) {
-			return res.status(403).json({
+			return sendErrorFrom(res, 403, {
 				error: 'Test alert endpoint is disabled',
 				code: 'FEATURE_DISABLED',
 			});
@@ -110,7 +111,7 @@ function postTestAlert(botOrGetter) {
 			const remainingMs = RATE_LIMIT_WINDOW_MS - (now - lastCallTime);
 			const retryAfterSeconds = Math.ceil(remainingMs / 1000);
 			res.set('Retry-After', String(retryAfterSeconds));
-			return res.status(429).json({
+			return sendErrorFrom(res, 429, {
 				error: 'Rate limit exceeded. Test alert can only be called once per minute.',
 				code: 'RATE_LIMITED',
 				retryAfterSeconds,
@@ -118,7 +119,7 @@ function postTestAlert(botOrGetter) {
 		}
 
 		if (!checkAndIncrementDailyLimit()) {
-			return res.status(429).json({
+			return sendErrorFrom(res, 429, {
 				error: `Daily test alert limit reached (${getDailyLimit()}).`,
 				code: 'RATE_LIMITED',
 			});
@@ -129,14 +130,14 @@ function postTestAlert(botOrGetter) {
 		const body = req.body && typeof req.body === 'object' ? req.body : {};
 
 		if (body.dryRun !== undefined && typeof body.dryRun !== 'boolean') {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: 'dryRun must be a boolean',
 				code: 'INVALID_REQUEST',
 			});
 		}
 
 		if (body.includeEnrichment !== undefined && typeof body.includeEnrichment !== 'boolean') {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: 'includeEnrichment must be a boolean',
 				code: 'INVALID_REQUEST',
 			});
@@ -149,7 +150,7 @@ function postTestAlert(botOrGetter) {
 			} else if (req.query.dryRun === 'false' || req.query.dryRun === false) {
 				dryRun = false;
 			} else {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: 'dryRun query parameter must be a boolean',
 					code: 'INVALID_REQUEST',
 				});
@@ -165,7 +166,7 @@ function postTestAlert(botOrGetter) {
 			const validated = validateAlert(rawText);
 			alertText = validated.text;
 		} catch (validationErr) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: validationErr.message,
 				code: 'INVALID_REQUEST',
 			});
@@ -175,7 +176,7 @@ function postTestAlert(botOrGetter) {
 		try {
 			routing = parseNotificationRouting(body);
 		} catch (routingErr) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: routingErr.message,
 				code: 'INVALID_REQUEST',
 			});
@@ -192,7 +193,7 @@ function postTestAlert(botOrGetter) {
 			try {
 				validateNotificationRouting(notificationManager, routing);
 			} catch (validationErr) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: validationErr.message,
 					code: 'INVALID_REQUEST',
 				});
@@ -201,7 +202,7 @@ function postTestAlert(botOrGetter) {
 		} else {
 			const enabledChannels = notificationManager ? notificationManager.getEnabledChannels() : [];
 			if (!enabledChannels || enabledChannels.length === 0) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: 'No notification channels are enabled',
 					code: 'INVALID_REQUEST',
 				});

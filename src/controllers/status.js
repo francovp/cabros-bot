@@ -1,4 +1,5 @@
 const packageJson = require('../../package.json');
+const { sendErrorFrom } = require('../lib/errorEnvelope');
 const sentryService = require('../services/monitoring/SentryService');
 const {
 	scannerPresetService,
@@ -7,7 +8,9 @@ const {
 const { newsMonitorSchedulerService } = require('../services/newsMonitorScheduler');
 const { alertSchedulerService } = require('../services/scheduler');
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
+const alertFeedbackStorageService = require('../services/storage/AlertFeedbackStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
+const { resolveRemoteOverride } = require('../services/remoteConfig/resolveRemoteOverride');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
 const { jobQueue } = require('../services/jobs/JobQueue');
 const equityMarketDataService = require('../services/storage/EquityMarketDataService');
@@ -16,20 +19,35 @@ const { tradingViewMcpService } = require('../services/tradingview/TradingViewMc
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
 const { binanceOrderAuditService } = require('../services/trading/BinanceOrderAuditService');
 const symbolAnalysisStorageService = require('../services/storage/SymbolAnalysisStorageService');
+const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
 const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
+const { getAdminPagingStatus } = require('../services/notification/adminPagingStatus');
 const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
+const { firestoreWriteMetricsService, READ_HEALTH } = require('../services/storage/FirestoreWriteMetricsService');
+const { getPromptService } = require('../services/prompts');
+const { signalClassMetrics } = require('../services/alerts/signalClassifier');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsAppService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const { resolveStartupJitterMs } = require('../lib/startupJitter');
+const { outcomeAnnotationService } = require('../services/alerts/outcomeAnnotationService');
+const { crossTimeframeCooldown } = require('../services/alerts/crossTimeframeCooldown');
+const { burstAggregator } = require('../services/alerts/burstAggregator');
+const { userPriceAlertService } = require('../services/alerts/UserPriceAlertService');
+const { alertModeration } = require('../services/alerts/alertModeration');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
+const { getPromptReadiness } = require('../services/prompts/promptReadiness');
 const newsAnalysisStorageService = require('../services/storage/NewsAnalysisStorageService');
 const {
 	isNewsMonitorPaused,
 	getNewsMonitorPauseState,
 } = require('./webhooks/handlers/newsMonitor/pauseState');
+const { getVolumeTracker } = require('./webhooks/handlers/newsMonitor/volumeTracker');
+const { getSelfTestService } = require('./diagnostics/selftest');
+const telegramCommandAuth = require('../lib/telegramCommandAuth');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -41,12 +59,25 @@ const {
 	getRateLimitState: getTestAlertRateLimitState,
 	isTestAlertEnabled,
 } = require('./admin/testAlert');
+const { tokenCostBudgetService } = require('../lib/tokenUsage');
+const { isMaintenanceModeEnabled } = require('../lib/maintenanceMode');
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
 const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.0-flash-001';
 const DEFAULT_CF_AIG_MODEL = 'google-ai-studio/gemini-2.5-flash';
 
 function isEnabled(value) {
 	return value === 'true';
+}
+
+/**
+ * Resolve a Firestore storage gate the way the storage services do (issue #721):
+ * a published Remote Config value wins, and its absence falls back to the
+ * environment. `/api/status` reporting `process.env` would describe a gate the
+ * services are not actually evaluating.
+ */
+function resolveStorageGate(key) {
+	const remote = resolveRemoteOverride(key);
+	return typeof remote === 'boolean' ? remote : isEnabled(process.env[key]);
 }
 
 function hasValue(value) {
@@ -104,6 +135,70 @@ function providerDependencyStatus({ enabled, configured, provider = null }) {
 	return {
 		provider,
 		...dependencyStatus({ enabled, configured }),
+	};
+}
+
+/**
+ * Issue #1178. `ready` comes from observed prompt resolutions, not from credential
+ * shape, so flipping `ENABLE_LANGFUSE_PROMPTS=true` cannot make a deployment that
+ * falls back to the local prompt file report itself as ready.
+ *
+ * `schemaDrift` is the rollout signal for a Langfuse prompt that has not been
+ * republished after a local-fallback contract change (#1031): it is not a failure,
+ * but it does mean the managed prompt is behind the code.
+ */
+function getLangfusePromptDependencyStatus(langfusePromptsEnabled) {
+	const status = getPromptReadiness().getStatus();
+
+	if (!langfusePromptsEnabled) {
+		return status;
+	}
+
+	const drift = getPromptService().getSchemaDriftStatus();
+	if (Object.keys(drift).length === 0) {
+		return status;
+	}
+
+	return {
+		...status,
+		schemaDrift: Object.values(drift),
+	};
+}
+
+/**
+ * Fold observed read health into the Firestore dependency verdict.
+ *
+ * Issue #1285: `dependencies.firestore.ready` was derived purely from
+ * `enabled && configured`, and `configured` only checks that a credential blob
+ * parses with a valid private key. So a deployment whose writes succeeded 29/29
+ * and whose every read query was rejected still reported `ready: true` — the
+ * status endpoint could not distinguish a working Firestore from a broken one.
+ *
+ * Read health is applied only once a read has actually been observed, so the
+ * pre-existing `{ enabled, configured, ready, status }` shape is byte-identical
+ * for deployments that have not read yet. An untouched read path stays
+ * `ready: true` rather than flipping to a state that would imply breakage.
+ */
+function withFirestoreReadHealth(status) {
+	const readMetrics = firestoreWriteMetricsService.getReadSnapshot();
+	if (!readMetrics) {
+		return status;
+	}
+	const base = {
+		...status,
+		readHealth: readMetrics.readHealth,
+	};
+	if (readMetrics.readHealth !== READ_HEALTH.DEGRADED) {
+		return base;
+	}
+	return {
+		...base,
+		ready: false,
+		status: 'degraded',
+		readsFailed: readMetrics.readsFailed,
+		consecutiveReadFailures: readMetrics.consecutiveReadFailures,
+		lastReadErrorCategory: readMetrics.lastErrorCategory,
+		lastReadFailureAt: readMetrics.lastReadFailureAt,
 	};
 }
 
@@ -193,6 +288,10 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
 	const runtimeConfig = remoteConfigService.getRuntimeConfig();
+	const notificationManager = notificationRedriveService.getNotificationManager();
+	const channelStatuses = notificationManager && typeof notificationManager.getChannelStatuses === 'function'
+		? notificationManager.getChannelStatuses()
+		: {};
 	const telegramFlagEnabled = isEnabled(process.env.ENABLE_TELEGRAM_BOT);
 	const telegramEnabled = telegramFlagEnabled && !previewEnvironment;
 	const whatsappEnabled = isEnabled(process.env.ENABLE_WHATSAPP_ALERTS);
@@ -213,9 +312,13 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		tradingViewMcpEnrichmentEnabled
 		|| marketScannerEnabled
 		|| observedTradingViewMcpStatus.lastCheckedAt !== null;
-	const firestoreEnabled = isEnabled(process.env.ENABLE_FIRESTORE_ALERT_STORAGE);
-	const firestoreScannerPresetsEnabled = isEnabled(process.env.ENABLE_FIRESTORE_SCANNER_PRESETS);
-	const firestoreJobStorageEnabled = isEnabled(process.env.ENABLE_FIRESTORE_JOB_STORAGE)
+	// Issue #721: report the gate that actually runs, not the raw environment value.
+	// These gates are runtime-resolved, so a published remote value is what the
+	// services evaluate — reporting `process.env` here would tell an operator their
+	// toggle failed (or that it worked) when the opposite is true.
+	const firestoreEnabled = resolveStorageGate('ENABLE_FIRESTORE_ALERT_STORAGE');
+	const firestoreScannerPresetsEnabled = resolveStorageGate('ENABLE_FIRESTORE_SCANNER_PRESETS');
+	const firestoreJobStorageEnabled = resolveStorageGate('ENABLE_FIRESTORE_JOB_STORAGE')
 		|| firestoreEnabled;
 	const sentryEnabled = isEnabled(process.env.ENABLE_SENTRY);
 	const langfusePromptsEnabled = isEnabled(process.env.ENABLE_LANGFUSE_PROMPTS);
@@ -225,6 +328,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
 	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
+	const signalClassMarkerEnabled = runtimeConfig.ENABLE_SIGNAL_CLASS_MARKER;
 	const remoteConfigStatus = remoteConfigService.getStatus();
 	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING);
 	const equityMarketDataStatus = equityMarketDataService.getStatus();
@@ -254,18 +358,32 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		modelProvider,
 	});
 	const geminiQuota = getGeminiQuotaDependency({ gemini });
+	const grounding = geminiGroundingEnabled
+		? {
+			enabled: true,
+			configured: gemini.configured,
+			ready: gemini.ready,
+			status: gemini.status,
+			metrics: groundingMetrics.getMetrics(),
+		}
+		: null;
 	const tradingViewRuntimeStatus = tradingViewMcpService.getStatus({ enabled: tradingViewMcpEnabled });
 	const tradingViewMcp = {
 		...tradingViewRuntimeStatus,
 		errorCategoryCounts: tradingViewMcpService.getScannerErrorCategoryCounts(),
 	};
+	if (tradingViewMcpEnrichmentEnabled) {
+		tradingViewMcp.toolMetrics = tradingViewMcpService.getToolMetrics();
+	} else {
+		delete tradingViewMcp.toolMetrics;
+	}
 	const tradingViewVolumeConfirmation = tradingViewMcpService.getVolumeConfirmationStatus({
 		enabled: tradingViewVolumeConfirmationEnabled,
 	});
-	const firestore = dependencyStatus({
+	const firestore = withFirestoreReadHealth(dependencyStatus({
 		enabled: firestoreEnabled,
 		configured: isFirestoreConfigured(),
-	});
+	}));
 	const firestoreJobStorage = dependencyStatus({
 		enabled: firestoreJobStorageEnabled,
 		configured: firestore.configured,
@@ -283,10 +401,29 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			configured: hasValue(process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE),
 		}),
 	};
-	const langfuse = dependencyStatus({
-		enabled: langfusePromptsEnabled,
-		configured: hasValue(process.env.LANGFUSE_PUBLIC_KEY) && hasValue(process.env.LANGFUSE_SECRET_KEY),
-	});
+	const langfuse = getLangfusePromptDependencyStatus(langfusePromptsEnabled);
+	// Configuration/reachability (dependencies.langfuse) says nothing about whether
+	// prompts are actually served remotely. Keep the two facts apart so a 100%
+	// local-fallback regression is visible instead of silent.
+	let langfusePrompts;
+	try {
+		langfusePrompts = getPromptService().getPromptResolutionStatus();
+	} catch (error) {
+		console.warn(`[status] Failed to read prompt-resolution telemetry: ${error.message}`);
+		// Emit the documented fail-open verdict rather than omitting the key: a
+		// consumer reading status.dependencies.langfusePrompts.servingStatus would
+		// otherwise get a TypeError on exactly the path where telemetry is broken.
+		langfusePrompts = {
+			enabled: langfusePromptsEnabled,
+			configured: hasValue(process.env.LANGFUSE_PUBLIC_KEY) && hasValue(process.env.LANGFUSE_SECRET_KEY),
+			ready: false,
+			servingStatus: 'unknown',
+			servingPrompts: false,
+			lastErrorCategory: null,
+			consecutiveFailures: 0,
+			prompts: [],
+		};
+	}
 	const braveSearch = dependencyStatus({
 		enabled: newsMonitorEnabled && forceBraveSearch,
 		configured: hasValue(process.env.BRAVE_SEARCH_API_KEY),
@@ -342,10 +479,30 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		signalOutcomeWorkerDependency.status = 'disabled';
 	}
 
-	const webhookAuth = dependencyStatus({
-		enabled: true,
-		configured: hasValue(process.env.WEBHOOK_API_KEY),
-	});
+	const webhookAuth = {
+		...dependencyStatus({
+			enabled: true,
+			configured: hasValue(process.env.WEBHOOK_API_KEY),
+		}),
+		scope: 'webhook',
+	};
+
+	const adminApiKey = {
+		...dependencyStatus({
+			enabled: hasValue(process.env.ADMIN_API_KEY),
+			configured: hasValue(process.env.ADMIN_API_KEY),
+		}),
+		scope: 'admin',
+		legacyFallback: hasValue(process.env.WEBHOOK_API_KEY) && !hasValue(process.env.ADMIN_API_KEY),
+	};
+
+	const binanceTradingApiKey = {
+		...dependencyStatus({
+			enabled: hasValue(process.env.BINANCE_TRADING_API_KEY),
+			configured: hasValue(process.env.BINANCE_TRADING_API_KEY),
+		}),
+		scope: 'binance-trading',
+	};
 
 	return {
 		readiness: bootstrapReadiness.getStatus(),
@@ -363,6 +520,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			newsMonitor: newsMonitorEnabled,
 			newsMonitorPaused: isNewsMonitorPaused(),
 			newsMonitorTestMode: newsMonitorTestModeEnabled,
+			newsMonitorClassifier: isEnabled(process.env.ENABLE_NEWS_MONITOR_CLASSIFIER),
 			tradingViewMcpEnrichment: tradingViewMcpEnrichmentEnabled,
 			tradingViewVolumeConfirmation: tradingViewVolumeConfirmationFlagEnabled,
 			tradingViewConfluenceEnrichment: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT),
@@ -371,6 +529,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
 			firestoreJobStorage: firestoreJobStorageEnabled,
 			firestoreNewsAnalysis: newsAnalysisStorageService.isEnabled(),
+			firestoreChatPreferences: chatPreferenceService.isEnabled(),
 			scannerPresetScheduler: scannerPresetSchedulerService.isEnabled(),
 			newsMonitorScheduler: newsMonitorSchedulerService.isEnabled(),
 			alertScheduler: alertSchedulerService.isEnabled(),
@@ -391,10 +550,22 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
+			outcomeInformedDelivery: outcomeAnnotationService.isEnabled(),
+			alertCrossTimeframeSuppression: crossTimeframeCooldown.isEnabled(),
+			alertBurstAggregation: burstAggregator.isEnabled(),
+			alertHtfRender: runtimeConfig.ENABLE_ALERT_HTF_RENDER,
+			alertModeration: alertModeration.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			userPriceAlerts: userPriceAlertService.isEnabled(),
+			alertFeedback: alertFeedbackStorageService.isEnabled(),
 			symbolAnalysisStorage: symbolAnalysisStorageService.isEnabled(),
+			symbolAnalysisMultiAgent: runtimeConfig.ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT,
 			whatsappTemplateMode: !!process.env.WHATSAPP_TEMPLATE_NAME,
 			testAlert: isTestAlertEnabled(),
+			tokenCostBudget: tokenCostBudgetService.isEnabled(),
+			signalClassMarker: signalClassMarkerEnabled,
+			maintenanceMode: isMaintenanceModeEnabled(),
+			telegramCommandAuth: telegramCommandAuth.getStatus().enabled,
 		},
 		deliveryChannels: {
 			telegram: {
@@ -410,29 +581,76 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				status: discord.status,
 			},
 		},
+		channelHealth: channelStatuses,
+		// Operator intent, not runtime reachability. Mirrors
+		// NotificationChannel.isConfigured(), which is the enable flag AND the
+		// required credentials — i.e. exactly the `ready` semantics of
+		// dependencyStatus. Deriving this from `ready` (not `configured` alone)
+		// is what keeps this consistent with the zero-channel admin page, which
+		// calls the same method; using `configured` alone would report a channel
+		// with a webhook URL but a disabled flag as "configured" and contradict
+		// the page that reported it as unconfigured.
+		notificationChannelIntent: {
+			configured: [
+				{ name: 'telegram', ready: telegram.ready },
+				{ name: 'whatsapp', ready: whatsapp.ready },
+				{ name: 'discord', ready: discord.ready },
+			].filter((channel) => channel.ready).map((channel) => channel.name),
+			unconfigured: [
+				{ name: 'telegram', ready: telegram.ready },
+				{ name: 'whatsapp', ready: whatsapp.ready },
+				{ name: 'discord', ready: discord.ready },
+			].filter((channel) => !channel.ready).map((channel) => channel.name),
+		},
 		...(deliveryMetricsService.getSnapshot()
 			? { deliveryMetrics: deliveryMetricsService.getSnapshot() }
+			: {}),
+		// Non-secret operator-paging health. Lets an operator tell a working admin path from
+		// a silent one: readiness alone reports "ready" for a channel that is 0/N at runtime.
+		// Channel names and counters only — never tokens, webhook URLs, or chat IDs.
+		...(getAdminPagingStatus()
+			? { adminPaging: getAdminPagingStatus() }
 			: {}),
 		dependencies: {
 			telegram,
 			whatsapp,
 			discord,
 			webhookAuth,
+			adminApiKey,
+			binanceTradingApiKey,
 			whatsappCommandBridge: whatsAppCommandBridgeService.getStatus(),
 			whatsappTemplate: getWhatsAppTemplateStatus(),
 			gemini,
 			geminiQuota,
 			groundingCoalescing: getCoalescingStatus(),
+			...(grounding ? { grounding } : {}),
 			tradingViewMcp,
 			tradingViewVolumeConfirmation,
 			firestore,
 			firestoreJobStorage,
+			...(firestoreWriteMetricsService.getSnapshot()
+				? { firestoreWriteMetrics: firestoreWriteMetricsService.getSnapshot() }
+				: {}),
+			// `featureFlags.signalClassMarker: true` only says the badge marker
+			// is allowed to render; it says nothing about whether alerts are
+			// actually being classified. Expose the population rate so a silent
+			// regression back to 100% `unknown` is detectable from /api/status
+			// instead of looking healthy.
+			...(signalClassMetrics.getSnapshot()
+				? { signalClassClassification: signalClassMetrics.getSnapshot() }
+				: {}),
+			...(firestoreWriteMetricsService.getReadSnapshot()
+				? { firestoreReadMetrics: firestoreWriteMetricsService.getReadSnapshot() }
+				: {}),
+			persistentWriteHealth: firestoreWriteMetricsService.getPersistentWriteHealthSnapshot(),
 			sentry,
 			langfuse,
+			...(langfusePrompts ? { langfusePrompts } : {}),
 			braveSearch,
 			newsMonitor: {
 				enabled: newsMonitorEnabled,
 				...getNewsMonitorPauseState(),
+				...getVolumeTracker().getWindowUsage(),
 			},
 			newsMonitorLlm,
 			llmAlertEnrichment,
@@ -446,13 +664,20 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			newsMonitorDedup,
 			idempotencyStorage: idempotencyStorageService.getStorageStatus(),
 			firebaseRemoteConfig: remoteConfigStatus,
+			chatPreferences: chatPreferenceService.getStatus(),
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
+			newsAnalysisStorage: newsAnalysisStorageService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
+			userPriceAlertWorker: userPriceAlertService.getStatus(),
 			newsMonitorScheduler: newsMonitorSchedulerService.getStatus(),
 			alertScheduler: alertSchedulerService.getStatus(),
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
 				...signalOutcomeWorkerDependency,
+				breakdownBucketCap: signalOutcomeWorkerStatus.breakdownBucketCap,
+				lastBreakdownBucketCount: signalOutcomeWorkerStatus.lastBreakdownBucketCount,
+				lastBreakdownTruncated: signalOutcomeWorkerStatus.lastBreakdownTruncated,
+				breakdownTruncationCount: signalOutcomeWorkerStatus.breakdownTruncationCount,
 				entryPriceSources: signalOutcomeWorkerStatus.entryPriceSources,
 				role: signalOutcomeWorkerStatus.role,
 				running: signalOutcomeWorkerStatus.running,
@@ -467,14 +692,67 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				lastRunEvaluatedCount: signalOutcomeWorkerStatus.lastRunEvaluatedCount,
 				lastRunPendingCount: signalOutcomeWorkerStatus.lastRunPendingCount,
 				lastRunErrorCount: signalOutcomeWorkerStatus.lastRunErrorCount,
+				leaseMs: signalOutcomeWorkerStatus.leaseMs,
+				lastRunLeaseHeld: signalOutcomeWorkerStatus.lastRunLeaseHeld,
+				leaseHeldSkipCount: signalOutcomeWorkerStatus.leaseHeldSkipCount,
 			},
 			notificationRedrive: notificationRedriveService.getStatus({ skipTelemetrySync }),
 			alertSignalRepeatSuppression: {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
 			},
+			outcomeInformedDelivery: {
+				enabled: outcomeAnnotationService.isEnabled(),
+				...outcomeAnnotationService.getStats(),
+			},
+			alertCrossTimeframeSuppression: {
+				enabled: crossTimeframeCooldown.isEnabled(),
+				...crossTimeframeCooldown.getStats(),
+			},
+			alertBurstAggregation: {
+				enabled: burstAggregator.isEnabled(),
+				...burstAggregator.getStats(),
+			},
+			alertModeration: {
+				enabled: alertModeration.isEnabled(),
+				...alertModeration.getStats(),
+			},
+			alertFeedback: alertFeedbackStorageService.getStatus(),
 			jobExecutionQueue: jobExecutionQueueStatus,
 			binanceTrading: binanceTradingStatus,
+			startupJitter: (() => {
+				const global = resolveStartupJitterMs({
+					globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+					globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+				});
+				return {
+					global,
+					signalOutcome: resolveStartupJitterMs({
+						envVar: 'SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS',
+						runtimeKey: 'SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS',
+						globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+						globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+					}),
+					redrive: resolveStartupJitterMs({
+						envVar: 'NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS',
+						runtimeKey: 'NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS',
+						globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+						globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+					}),
+					scannerPreset: resolveStartupJitterMs({
+						envVar: 'SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS',
+						runtimeKey: 'SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS',
+						globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+						globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+					}),
+					remoteConfig: resolveStartupJitterMs({
+						envVar: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+						runtimeKey: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+						globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+						globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+					}),
+				};
+			})(),
 			binanceOrderAudit: binanceOrderAuditService.getStatus(),
 			symbolAnalysisStorage: symbolAnalysisStorageService.getStatus(),
 			testAlert: {
@@ -483,6 +761,9 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				lastRunStatus: getTestAlertLastRunStatus(),
 				rateLimitState: getTestAlertRateLimitState(),
 			},
+			tokenCostBudget: tokenCostBudgetService.getBudgetStatus(),
+			selfTest: getSelfTestService().getStatus(),
+			telegramCommandAuth: telegramCommandAuth.getStatus(),
 		},
 	};
 }
@@ -496,10 +777,25 @@ async function getApiStatus(req, res) {
 		) {
 			await notificationRedriveService.syncWorkerTelemetry();
 		}
+		if (typeof tokenCostBudgetService?.syncSharedSpendThrottled === 'function') {
+			try {
+				await tokenCostBudgetService.syncSharedSpendThrottled();
+			} catch (_) {
+				// Fail-open for status endpoint
+			}
+		}
+		// Prove scanner-preset durability with the bounded read that `/api/status` is
+		// asserting, instead of reporting credential shape as readiness (#1342). Fail-open
+		// and never blocks the response.
+		try {
+			await scannerPresetService.probeStorageReadiness();
+		} catch (_) {
+			// Fail-open for status endpoint
+		}
 		return res.status(200).json(getStatus({ skipTelemetrySync: true }));
 	} catch (error) {
 		console.error('[StatusController] getStatus failed:', error);
-		return res.status(500).json({ error: error.message, code: 'INTERNAL_ERROR' });
+		return sendErrorFrom(res, 500, { error: error.message, code: 'INTERNAL_ERROR' });
 	}
 }
 

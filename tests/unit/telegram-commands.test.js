@@ -105,6 +105,16 @@ describe('Telegram TradingView commands', () => {
 		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
 	});
 
+	it.each(['/preferences', '/filter', '/quiet', '/threshold', '/categories'])('applies canonical limits to the %s preference alias', async (command) => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 21 }, () => buildContext(command));
+
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+
+		expect(next).toHaveBeenCalledTimes(20);
+		expect(contexts[20].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+	});
+
 	it('does not charge uppercase command entities that Telegraf will not dispatch', async () => {
 		const next = jest.fn();
 		for (const context of Array.from({ length: 3 }, () => buildContext('/SCANNER'))) {
@@ -654,11 +664,13 @@ describe('Telegram TradingView commands', () => {
 
 			expect(menu).toEqual([
 				{ command: 'precio', description: 'Consulta el precio en Binance o Twelve Data' },
+				{ command: 'alerta', description: 'Configura o gestiona alertas de precio' },
 				{ command: 'cryptobot', description: 'Muestra el Chat ID actual de Telegram' },
 				{ command: 'analisis', description: 'Crea un análisis técnico en TradingView' },
 				{ command: 'scanner', description: 'Escaneo de mercado en TradingView' },
 				{ command: 'noticias', description: 'Monitor y análisis de noticias con IA' },
 				{ command: 'outcomes', description: 'Rendimiento reciente de señales evaluadas' },
+				{ command: 'preferencias', description: 'Preferencias de alertas para este chat' },
 				{ command: 'help', description: 'Muestra este mensaje de ayuda' },
 				{ command: 'start', description: 'Muestra este mensaje de ayuda' },
 			]);
@@ -674,6 +686,8 @@ describe('Telegram TradingView commands', () => {
 			const message = buildHelpMessage();
 			expect(message).toContain('*🤖 Comandos disponibles en Cabros Bot*');
 			expect(message).toContain('/precio <simbolo>');
+			expect(message).toContain('/alerta <simbolo>');
+			expect(message).toContain('/alert');
 			expect(message).toContain('/cryptobot id');
 			expect(message).toContain('/analisis <simbolos>');
 			expect(message).toContain('/analysis');

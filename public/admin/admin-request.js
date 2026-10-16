@@ -119,6 +119,15 @@
 	const VOLUME_CONFIRMATION_OVERHEAD_MS = 30000;
 	const VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS = (VOLUME_CONFIRMATION_MCP_CALLS * TRADINGVIEW_MCP_MAX_TIMEOUT_MS) + VOLUME_CONFIRMATION_OVERHEAD_MS; // 390000 ms
 
+	// Symbol analysis budget breakdown:
+	// - ONE createDeadline() signal spans the base analyzeSymbolIdentifier call and the optional
+	//   multi_timeframe_analysis / multi_agent_debate calls, so this budget is never multiplied per
+	//   MCP call the way volume confirmation is. Worst case is a single min(EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS, 120,000 ms).
+	// - Ingress, route handling, symbol validation, and network transport overhead: 30,000 ms
+	const SYMBOL_ANALYSIS_BACKEND_BUDGET_MS = 120000;
+	const SYMBOL_ANALYSIS_OVERHEAD_MS = 30000;
+	const SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS = SYMBOL_ANALYSIS_BACKEND_BUDGET_MS + SYMBOL_ANALYSIS_OVERHEAD_MS; // 150000 ms
+
 	// Long-running alert and analysis pipeline budget breakdown:
 	// - TradingView MCP enrichment maximum budget: 120,000 ms (TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS max)
 	// - Gemini Grounding analysis maximum timeout: 120,000 ms (GROUNDING_TIMEOUT_MS max)
@@ -171,9 +180,11 @@
 
 	const getApiRequestTimeout = (definition, options) => {
 		if (!definition || !definition.path) return API_REQUEST_TIMEOUT_MS;
-		if (definition.path === '/api/webhook/volume-confirmation'
-			|| definition.path === '/api/webhook/symbol-analysis') {
+		if (definition.path === '/api/webhook/volume-confirmation') {
 			return VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS;
+		}
+		if (definition.path === '/api/webhook/symbol-analysis') {
+			return SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS;
 		}
 		if (definition.path === '/api/alerts/batch/replay') {
 			return getBatchReplayTimeout(options);
@@ -201,6 +212,9 @@
 		LONG_RUNNING_BACKEND_BUDGET_MS,
 		LONG_RUNNING_OVERHEAD_MS,
 		LONG_RUNNING_REQUEST_PATHS,
+		SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS,
+		SYMBOL_ANALYSIS_BACKEND_BUDGET_MS,
+		SYMBOL_ANALYSIS_OVERHEAD_MS,
 		TRADINGVIEW_MCP_MAX_ENRICHMENT_BUDGET_MS,
 		TRADINGVIEW_MCP_MAX_TIMEOUT_MS,
 		VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS,

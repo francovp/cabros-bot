@@ -877,7 +877,7 @@ class AlertSchedulerService {
 					: {};
 				await requestRoutingModule.sendWithNotificationRouting(
 					notificationManager,
-					{ text: alertText, source: 'alert-scheduler' },
+					{ text: alertText, source: 'alert-scheduler', category: 'scanner' },
 					routing,
 					{ parentSpan: sentryService.getActiveSpan() },
 				);
