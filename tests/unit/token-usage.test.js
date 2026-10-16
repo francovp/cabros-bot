@@ -145,6 +145,14 @@ describe('tokenUsage', () => {
 			expect(json.outputTokens).toBe(250);
 			expect(json.totalTokens).toBe(750);
 		});
+
+		it('preserves non-Cloudflare provider prefix for unknown models', () => {
+			const tracker = new TokenUsageTracker();
+			tracker.addUsage({ inputTokens: 100, outputTokens: 50 }, 'azure/custom-llm');
+			const json = tracker.toJSON();
+			expect(json.pricing.unknownModelPricing).toBe(true);
+			expect(json.pricing.unknownModels).toContain('azure/custom-llm');
+		});
 	});
 
 	describe('TokenUsageTracker - formatSummary', () => {
@@ -154,6 +162,14 @@ describe('tokenUsage', () => {
 			const summary = tracker.formatSummary();
 			expect(summary).toMatch(/Token usage:/);
 			expect(summary).toMatch(/unknown/i);
+		});
+
+		it('describes mixed known and unknown costs accurately', () => {
+			const tracker = new TokenUsageTracker();
+			tracker.addUsage({ inputTokens: 1000000, outputTokens: 1000000 }, 'gemini-2.5-flash');
+			tracker.addUsage({ inputTokens: 100, outputTokens: 50 }, 'azure-llm');
+			const summary = tracker.formatSummary();
+			expect(summary).toMatch(/partial fallback rate for unknown model\(s\): azure-llm/);
 		});
 
 		it('omits pricing warning when all models are known', () => {

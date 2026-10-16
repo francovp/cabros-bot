@@ -112,19 +112,20 @@ function resolveModelPricing(model) {
 	return PRICING_PER_1M.default;
 }
 
+const CLOUDFLARE_GATEWAY_PREFIX = 'google-ai-studio/';
+
 /**
- * Normalize a model identifier by trimming whitespace and stripping any provider
- * prefix (e.g. `google-ai-studio/gemini-2.5-flash` -> `gemini-2.5-flash`).
+ * Normalize a model identifier by trimming whitespace and stripping the Cloudflare
+ * AI Gateway prefix (e.g. `google-ai-studio/gemini-2.5-flash` -> `gemini-2.5-flash`).
+ * Non-Cloudflare prefixes are preserved to avoid mangling provider namespaces.
  * @param {string} model
  * @returns {string}
  */
 function normalizeModelName(model) {
 	if (typeof model !== 'string') return model;
 	const trimmed = model.trim();
-	if (!trimmed) return trimmed;
-	const slashIndex = trimmed.indexOf('/');
-	if (slashIndex > 0 && slashIndex < trimmed.length - 1) {
-		return trimmed.slice(slashIndex + 1);
+	if (trimmed.startsWith(CLOUDFLARE_GATEWAY_PREFIX)) {
+		return trimmed.slice(CLOUDFLARE_GATEWAY_PREFIX.length).trim();
 	}
 	return trimmed;
 }
@@ -368,7 +369,10 @@ class TokenUsageTracker {
 - Total ${totalTokens} ($${fmt(totalCost)})`;
 
 		if (pricing && pricing.unknownModelPricing && pricing.unknownModels.length > 0) {
-			return `${summary}\n- Note: priced at the default fallback rate (unknown model pricing for: ${pricing.unknownModels.join(', ')})`;
+			const note = totalCost > 0
+				? `priced with partial fallback rate for unknown model(s): ${pricing.unknownModels.join(', ')}`
+				: `priced at the default fallback rate (unknown model pricing for: ${pricing.unknownModels.join(', ')})`;
+			return `${summary}\n- Note: ${note}`;
 		}
 		return summary;
 	}
