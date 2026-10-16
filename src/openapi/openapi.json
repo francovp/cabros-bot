@@ -14852,6 +14852,8 @@
               "invalid_response",
               "provider_unavailable",
               "circuit_breaker_open",
+              "upstream_tool_error",
+              "not_found",
               "request_failed",
               null
             ]

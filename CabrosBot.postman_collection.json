@@ -360,6 +360,18 @@
           "status": "OK",
           "code": 200,
           "body": "{\"dependencies\":{\"tradingViewMcp\":{\"status\":\"degraded\",\"lastErrorCategory\":\"provider_unavailable\",\"lastHttpStatusCode\":503}}}"
+        },
+        {
+          "name": "200 degraded upstream tool error telemetry",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"tradingViewMcp\":{\"status\":\"degraded\",\"lastErrorCategory\":\"upstream_tool_error\",\"errorCategoryCounts\":{\"upstream_tool_error\":1}}}}"
+        },
+        {
+          "name": "200 degraded not found telemetry",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"tradingViewMcp\":{\"status\":\"degraded\",\"lastErrorCategory\":\"not_found\",\"errorCategoryCounts\":{\"not_found\":1}}}}"
         }
       ]
     },

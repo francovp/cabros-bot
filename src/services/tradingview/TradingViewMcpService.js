@@ -123,10 +123,28 @@ function createBudgetExhaustedError(message) {
 	return error;
 }
 
-function createMcpError(message) {
-	const error = new Error(message);
-	if (TERMINAL_PROVIDER_ERROR_PATTERN.test(message)) {
+function createMcpError(message, options = {}) {
+	const text = String(message);
+	const error = new Error(text);
+	if (Number.isInteger(options.httpStatusCode)) {
+		error.httpStatusCode = options.httpStatusCode;
+	}
+	if (TERMINAL_PROVIDER_ERROR_PATTERN.test(text)) {
 		error.category = 'provider_unavailable';
+		error.retryable = false;
+	} else if (isDeterministicNoDataError(error)) {
+		error.category = 'not_found';
+		error.retryable = false;
+	} else if (options.isToolError || options.isToolResultError || options.category === 'upstream_tool_error') {
+		error.category = 'upstream_tool_error';
+		if (options.retryable === false) {
+			error.retryable = false;
+		}
+	} else if (options.category) {
+		error.category = options.category;
+		if (options.retryable === false) {
+			error.retryable = false;
+		}
 	}
 	return error;
 }
@@ -181,6 +199,9 @@ function createRuntimeStatus({ includeEnrichment = true } = {}) {
 function createEmptyErrorCategoryCounts() {
 	return {
 		circuit_breaker_open: 0,
+		provider_unavailable: 0,
+		upstream_tool_error: 0,
+		not_found: 0,
 		http_5xx: 0,
 		http_4xx: 0,
 		timeout: 0,
@@ -191,6 +212,10 @@ function createEmptyErrorCategoryCounts() {
 
 function getPercentage(value, total) {
 	return total === 0 ? 0 : Number(((value / total) * 100).toFixed(2));
+}
+
+function createToolResultError(errorMessage, options = {}) {
+	return createMcpError(errorMessage, { ...options, isToolResultError: true });
 }
 
 const SETUP_TYPES = new Set(['breakout', 'mean_reversion', 'trend_continuation', 'reversal']);
@@ -694,7 +719,7 @@ class TradingViewMcpService {
 			} catch (error) {
 				// A "no data for this symbol/venue" answer is deterministic, not
 				// transient (#591): retrying it only burns the enrichment budget.
-				const terminal = isDeterministicNoDataError(error);
+				const terminal = isDeterministicNoDataError(error) || error?.category === 'not_found';
 				// #948: decline the retry when the residual base budget can no longer
 				// fund a window that completes the tool call. Decided on THIS
 				// attempt's own result so `retryable: false` returns the real
@@ -713,6 +738,8 @@ class TradingViewMcpService {
 					success: false,
 					channel: 'tradingview-mcp',
 					error: error.message,
+					...(error && error.category ? { category: error.category } : {}),
+					...(error && Number.isInteger(error.httpStatusCode) ? { httpStatusCode: error.httpStatusCode } : {}),
 					// Carry the structural budget marker out of the abort reason so the
 					// retry/caller chain can still recognise our own deadline (GH-630).
 					...(error && error.mcpBudgetExhausted === true ? { mcpBudgetExhausted: true } : {}),
@@ -720,7 +747,7 @@ class TradingViewMcpService {
 					// A deterministic "no data for this symbol/venue" answer will never
 					// succeed on a retry, so stop the chain here rather than adding a
 					// second stop mechanism - retryHelper already halts on retryable:false.
-					retryable: (terminal || nonViableRetry) ? false : error.category !== 'provider_unavailable',
+					retryable: (terminal || nonViableRetry || error?.retryable === false || error?.category === 'provider_unavailable') ? false : true,
 				};
 			} finally {
 				clearTimeout(attemptTimeoutId);
@@ -739,8 +766,17 @@ class TradingViewMcpService {
 			// Preserve the budget-exhaustion marker across the wrapper message, so the
 			// classifier still recognises our own deadline after the error is re-wrapped.
 			const failure = new Error(`TradingView MCP call failed: ${result.error || 'unknown error'}`);
+			if (result.category) {
+				failure.category = result.category;
+			}
+			if (Number.isInteger(result.httpStatusCode)) {
+				failure.httpStatusCode = result.httpStatusCode;
+			}
 			if (result.mcpBudgetExhausted === true) {
 				failure.mcpBudgetExhausted = true;
+			}
+			if (result.retryable === false) {
+				failure.retryable = false;
 			}
 			throw failure;
 		}
@@ -768,7 +804,9 @@ class TradingViewMcpService {
 							success: false,
 							channel: 'tradingview-mcp',
 							error: error.message,
-							retryable: error.category !== 'provider_unavailable',
+							...(error && error.category ? { category: error.category } : {}),
+							...(error && Number.isInteger(error.httpStatusCode) ? { httpStatusCode: error.httpStatusCode } : {}),
+							retryable: (error?.retryable === false || error?.category === 'provider_unavailable') ? false : true,
 						};
 					}
 				}, 1, this.logger, { signal: AbortSignal.any([controller.signal, budgetController.signal]) });
@@ -889,7 +927,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw createMcpError(normalizedResult.error);
+				throw createToolResultError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -916,13 +954,19 @@ class TradingViewMcpService {
 					success: false,
 					channel: 'tradingview-mcp',
 					error: error.message,
-					retryable: error.category !== 'provider_unavailable',
+					...(error && error.category ? { category: error.category } : {}),
+					...(error && Number.isInteger(error.httpStatusCode) ? { httpStatusCode: error.httpStatusCode } : {}),
+					retryable: (error?.retryable === false || error?.category === 'provider_unavailable') ? false : true,
 				};
 			}
 		}, cfg.maxRetries, this.logger, { signal });
 
 		if (!result.success) {
-			throw new Error(`TradingView MCP call failed for ${raw || `${exchange}:${symbol}`}: ${result.error || 'unknown error'}`);
+			const error = new Error(`TradingView MCP call failed for ${raw || `${exchange}:${symbol}`}: ${result.error || 'unknown error'}`);
+			if (result.category) error.category = result.category;
+			if (Number.isInteger(result.httpStatusCode)) error.httpStatusCode = result.httpStatusCode;
+			if (result.retryable === false) error.retryable = false;
+			throw error;
 		}
 
 		return {
@@ -943,7 +987,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw createMcpError(normalizedResult.error);
+				throw createToolResultError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -963,7 +1007,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw createMcpError(normalizedResult.error);
+				throw createToolResultError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -1006,7 +1050,7 @@ class TradingViewMcpService {
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
-				throw createMcpError(normalizedResult.error);
+				throw createToolResultError(normalizedResult.error);
 			}
 
 			if (!normalizedResult || typeof normalizedResult !== 'object' || Array.isArray(normalizedResult)) {
@@ -1025,27 +1069,32 @@ class TradingViewMcpService {
 			const result = await sendWithRetry(async () => {
 				try {
 					const rpcResult = await this._callTool(toolName, args, { signal });
+					const normalizedResult = this._unwrapSchemaResult(rpcResult);
+					if (normalizedResult && normalizedResult.error) {
+						throw createToolResultError(normalizedResult.error);
+					}
 					return { success: true, channel: 'tradingview-mcp', data: rpcResult };
 				} catch (error) {
 					return {
 						success: false,
 						channel: 'tradingview-mcp',
 						error: error.message,
-						category: error.category,
-						httpStatusCode: error.httpStatusCode,
+						...(error && error.category ? { category: error.category } : {}),
+						...(error && Number.isInteger(error.httpStatusCode) ? { httpStatusCode: error.httpStatusCode } : {}),
 						// Preserve the structural budget marker so the runtime status
 						// classifier still sees our own deadline, not a provider fault.
 						mcpBudgetExhausted: error.mcpBudgetExhausted === true,
-						retryable: error.category !== 'provider_unavailable',
+						retryable: (error?.retryable === false || error?.category === 'provider_unavailable') ? false : true,
 					};
 				}
 			}, cfg.maxRetries, this.logger, { signal });
 
 			if (!result.success) {
 				const error = new Error(`TradingView MCP scan ${toolName} failed: ${result.error || 'unknown error'}`);
-				error.category = result.category;
-				error.httpStatusCode = result.httpStatusCode;
+				if (result.category) error.category = result.category;
+				if (Number.isInteger(result.httpStatusCode)) error.httpStatusCode = result.httpStatusCode;
 				error.mcpBudgetExhausted = result.mcpBudgetExhausted === true;
+				if (result.retryable === false) error.retryable = false;
 				throw error;
 			}
 
@@ -1130,7 +1179,7 @@ class TradingViewMcpService {
 
 		if (callResult.isError) {
 			const errorMessage = this._extractContentText(callResult) || `TradingView MCP tool ${toolName} returned isError=true`;
-			throw createMcpError(errorMessage);
+			throw createToolResultError(errorMessage);
 		}
 
 		if (callResult.structuredContent && typeof callResult.structuredContent === 'object') {
@@ -1961,6 +2010,12 @@ class TradingViewMcpService {
 		}
 		if (error && error.category === 'provider_unavailable') {
 			return 'provider_unavailable';
+		}
+		if (error && (error.category === 'upstream_tool_error' || error.category === 'not_found')) {
+			return error.category;
+		}
+		if (isDeterministicNoDataError(error)) {
+			return 'not_found';
 		}
 		if (/circuit breaker/i.test(message)) {
 			return 'circuit_breaker_open';
