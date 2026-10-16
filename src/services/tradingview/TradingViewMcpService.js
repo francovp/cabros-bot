@@ -186,16 +186,60 @@ function createEmptyBaseAttemptStats() {
 	};
 }
 
-function awaitWithAbort(promise, signal) {
-	if (!signal) return promise;
-	if (signal.aborted) {
-		return Promise.reject(new Error(getAbortMessage(signal, 'TradingView MCP request aborted')));
+function createRequestCancelledError(signal, fallback = 'TradingView MCP request aborted') {
+	const error = new Error(getAbortMessage(signal, fallback));
+	error.category = 'request_cancelled';
+	return error;
+}
+
+function awaitSharedToolCall(state, signal, validateResult, onInvalidResult) {
+	if (signal?.aborted) {
+		if (!state.settled && state.subscribers === 0 && !state.controller.signal.aborted) {
+			state.controller.abort(createRequestCancelledError(signal));
+		}
+		state.promise.catch(() => {});
+		return Promise.reject(createRequestCancelledError(signal));
 	}
 
+	state.subscribers += 1;
 	return new Promise((resolve, reject) => {
-		const onAbort = () => reject(new Error(getAbortMessage(signal, 'TradingView MCP request aborted')));
-		signal.addEventListener('abort', onAbort, { once: true });
-		Promise.resolve(promise).then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+		let released = false;
+		const release = () => {
+			if (released) return;
+			released = true;
+			if (signal) signal.removeEventListener('abort', onAbort);
+			state.subscribers -= 1;
+			if (!state.settled && state.subscribers === 0 && !state.controller.signal.aborted) {
+				const reason = new Error('All TradingView MCP request subscribers cancelled');
+				reason.category = 'request_cancelled';
+				state.controller.abort(reason);
+			}
+		};
+		const onAbort = () => {
+			release();
+			reject(createRequestCancelledError(signal));
+		};
+
+		if (signal) {
+			signal.addEventListener('abort', onAbort, { once: true });
+			if (signal.aborted) onAbort();
+		}
+
+		state.promise.then((value) => {
+			try {
+				if (validateResult) validateResult(value);
+			} catch (error) {
+				onInvalidResult?.();
+				release();
+				reject(error);
+				return;
+			}
+			release();
+			resolve(value);
+		}, (error) => {
+			release();
+			reject(error);
+		});
 	});
 }
 
@@ -307,6 +351,8 @@ class TradingViewMcpService {
 		this.toolMetrics = {};
 		this.toolCache = new Map();
 		this.toolInFlight = new Map();
+		this.sharedToolFailureErrors = new WeakSet();
+		this.recordedSharedToolFailureErrors = new WeakSet();
 	}
 
 	_resetForTesting() {
@@ -324,6 +370,8 @@ class TradingViewMcpService {
 		this.toolMetrics = {};
 		this.toolCache.clear();
 		this.toolInFlight.clear();
+		this.sharedToolFailureErrors = new WeakSet();
+		this.recordedSharedToolFailureErrors = new WeakSet();
 	}
 
 	isEnabled() {
@@ -959,12 +1007,17 @@ class TradingViewMcpService {
 	}
 
 	async callCoinAnalysis({ symbol, exchange, timeframe, signal }) {
+		const cacheOutcome = { hit: false };
 		return this._withRuntimeStatus(async () => {
 			const rpcResult = await this._callTool('coin_analysis', {
 				symbol,
 				exchange,
 				timeframe,
-			}, { signal, validateResult: result => this._validateAnalysisPayload(result, 'coin_analysis') });
+			}, {
+				signal,
+				validateResult: result => this._validateAnalysisPayload(result, 'coin_analysis'),
+				onCacheHit: () => { cacheOutcome.hit = true; },
+			});
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
@@ -976,7 +1029,7 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal });
+		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit });
 	}
 
 	async analyzeSymbolIdentifier({ raw, exchange, symbol, timeframe, analysisMode, signal }) {
@@ -1019,12 +1072,17 @@ class TradingViewMcpService {
 	}
 
 	async callCombinedAnalysis({ symbol, exchange, timeframe, signal }) {
+		const cacheOutcome = { hit: false };
 		return this._withRuntimeStatus(async () => {
 			const rpcResult = await this._callTool('combined_analysis', {
 				symbol,
 				exchange,
 				timeframe,
-			}, { signal, validateResult: result => this._validateAnalysisPayload(result, 'combined_analysis') });
+			}, {
+				signal,
+				validateResult: result => this._validateAnalysisPayload(result, 'combined_analysis'),
+				onCacheHit: () => { cacheOutcome.hit = true; },
+			});
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
@@ -1036,15 +1094,20 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal });
+		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit });
 	}
 
 	async callMultiTimeframeAnalysis({ symbol, exchange, signal }) {
+		const cacheOutcome = { hit: false };
 		return this._withRuntimeStatus(async () => {
 			const rpcResult = await this._callTool('multi_timeframe_analysis', {
 				symbol,
 				exchange,
-			}, { signal, validateResult: result => this._validateAnalysisPayload(result, 'multi_timeframe_analysis') });
+			}, {
+				signal,
+				validateResult: result => this._validateAnalysisPayload(result, 'multi_timeframe_analysis'),
+				onCacheHit: () => { cacheOutcome.hit = true; },
+			});
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
@@ -1056,16 +1119,17 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal });
+		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit });
 	}
 
 	async callMultiAgentAnalysis({ symbol, exchange, timeframe, signal }) {
+		const cacheOutcome = { hit: false };
 		return this._withRuntimeStatus(async () => {
 			const rpcResult = await this._callTool('multi_agent_analysis', {
 				symbol,
 				exchange,
 				timeframe,
-			}, { signal });
+			}, { signal, onCacheHit: () => { cacheOutcome.hit = true; } });
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
@@ -1077,17 +1141,22 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal });
+		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit });
 	}
 
 	async callVolumeConfirmation({ symbol, exchange, timeframe, signal }) {
+		const cacheOutcome = { hit: false };
 		return this._withRuntimeStatus(async () => {
 			const fullSymbol = symbol.includes(':') ? symbol : `${exchange}:${symbol}`;
 			const rpcResult = await this._callTool('volume_confirmation_analysis', {
 				symbol: fullSymbol,
 				exchange,
 				timeframe,
-			}, { signal, validateResult: result => this._validateAnalysisPayload(result, 'volume_confirmation_analysis') });
+			}, {
+				signal,
+				validateResult: result => this._validateAnalysisPayload(result, 'volume_confirmation_analysis'),
+				onCacheHit: () => { cacheOutcome.hit = true; },
+			});
 			const normalizedResult = this._unwrapSchemaResult(rpcResult);
 
 			if (normalizedResult && normalizedResult.error) {
@@ -1099,17 +1168,25 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal, runtimeStatusKey: 'volumeRuntimeStatus' });
+		}, {
+			signal,
+			runtimeStatusKey: 'volumeRuntimeStatus',
+			shouldRecordSuccess: () => !cacheOutcome.hit,
+		});
 	}
 
 	async callScanTool(toolName, args = {}, options = {}) {
 		const { signal } = options;
 		const cfg = this.getConfig();
+		const cacheOutcome = { hit: false };
 
 		return this._withRuntimeStatus(async () => {
 			const result = await sendWithRetry(async () => {
 				try {
-					const rpcResult = await this._callTool(toolName, args, { signal });
+					const rpcResult = await this._callTool(toolName, args, {
+						signal,
+						onCacheHit: () => { cacheOutcome.hit = true; },
+					});
 					const normalizedResult = this._unwrapSchemaResult(rpcResult);
 					if (normalizedResult && normalizedResult.error) {
 						throw createToolResultError(normalizedResult.error);
@@ -1120,6 +1197,9 @@ class TradingViewMcpService {
 						success: false,
 						channel: 'tradingview-mcp',
 						error: error.message,
+						...(error && typeof error === 'object' && this.sharedToolFailureErrors.has(error)
+							? { sharedToolFailureError: error }
+							: {}),
 						...(error && error.category ? { category: error.category } : {}),
 						...(error && Number.isInteger(error.httpStatusCode) ? { httpStatusCode: error.httpStatusCode } : {}),
 						// Preserve the structural budget marker so the runtime status
@@ -1132,6 +1212,7 @@ class TradingViewMcpService {
 
 			if (!result.success) {
 				const error = new Error(`TradingView MCP scan ${toolName} failed: ${result.error || 'unknown error'}`);
+				if (result.sharedToolFailureError) error.sharedToolFailureCause = result.sharedToolFailureError;
 				if (result.category) error.category = result.category;
 				if (Number.isInteger(result.httpStatusCode)) error.httpStatusCode = result.httpStatusCode;
 				error.mcpBudgetExhausted = result.mcpBudgetExhausted === true;
@@ -1140,7 +1221,7 @@ class TradingViewMcpService {
 			}
 
 			return this._normalizeScanResult(result.data);
-		}, { signal });
+		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit });
 	}
 
 	_normalizeScanResult(data) {
@@ -1173,10 +1254,10 @@ class TradingViewMcpService {
 	}
 
 	async _executeCallTool(toolName, args = {}, options = {}) {
-		const { signal, validateResult } = options;
+		const { signal, validateResult, onCacheHit } = options;
+		if (signal?.aborted) throw createRequestCancelledError(signal);
 		const cfg = this.getConfig();
 		let cacheKey = null;
-		let inFlightPromise = null;
 		const cacheResult = (value) => {
 			if (validateResult) {
 				validateResult(value);
@@ -1187,7 +1268,7 @@ class TradingViewMcpService {
 					for (const [key, entry] of this.toolCache) {
 						if (entry.expiresAt <= now) this.toolCache.delete(key);
 					}
-					if (this.toolCache.size >= MAX_TRADINGVIEW_MCP_CACHE_ENTRIES) {
+					if (!this.toolCache.has(cacheKey) && this.toolCache.size >= MAX_TRADINGVIEW_MCP_CACHE_ENTRIES) {
 						this.toolCache.delete(this.toolCache.keys().next().value);
 					}
 					this.toolCache.set(cacheKey, { value, expiresAt: Date.now() + cfg.cacheTtlMs });
@@ -1200,30 +1281,46 @@ class TradingViewMcpService {
 		if (cfg.cacheEnabled) {
 			try {
 				cacheKey = `${toolName}:${JSON.stringify(canonicalize(args))}`;
-				const cached = this.toolCache.get(cacheKey);
-				if (cached) {
-					if (cached.expiresAt > Date.now()) {
-						if (signal?.aborted) {
-							throw new Error(getAbortMessage(signal, 'TradingView MCP request aborted'));
-						}
-						if (validateResult) validateResult(cached.value);
-						return cached.value;
-					}
-					this.toolCache.delete(cacheKey);
-				}
-				inFlightPromise = this.toolInFlight.get(cacheKey) || null;
-			} catch (error) {
-				if (error.message === getAbortMessage(signal, 'TradingView MCP request aborted')) {
-					throw error;
-				}
+			} catch {
 				cacheKey = null;
 			}
-			if (inFlightPromise) {
-				return awaitWithAbort(inFlightPromise, signal);
+		}
+
+		if (cacheKey) {
+			let cached = null;
+			try {
+				cached = this.toolCache.get(cacheKey) || null;
+			} catch {
+				cacheKey = null;
+			}
+			if (cached && cacheKey) {
+				if (cached.expiresAt <= Date.now()) {
+					this.toolCache.delete(cacheKey);
+				} else {
+					if (signal?.aborted) throw createRequestCancelledError(signal);
+					try {
+						if (validateResult) validateResult(cached.value);
+					} catch (error) {
+						this.toolCache.delete(cacheKey);
+						throw error;
+					}
+					onCacheHit?.();
+					return cached.value;
+				}
+			}
+
+			const inFlight = this.toolInFlight.get(cacheKey);
+			if (inFlight && !inFlight.controller.signal.aborted) {
+				return awaitSharedToolCall(
+					inFlight,
+					signal,
+					validateResult,
+					() => this.toolCache.delete(cacheKey),
+				);
 			}
 		}
-		const executionSignal = cacheKey ? undefined : signal;
-		const executeToolCall = async () => {
+
+		const executeToolCall = async (requestSignal) => {
 			const initializeRequest = {
 				jsonrpc: '2.0',
 				id: this._nextRequestId('initialize'),
@@ -1236,9 +1333,9 @@ class TradingViewMcpService {
 						version: '0.1.0',
 					},
 				},
-				};
+			};
 
-			const initResponse = await this._rpcRequest(initializeRequest, { signal: executionSignal });
+			const initResponse = await this._rpcRequest(initializeRequest, { signal: requestSignal });
 			const sessionId = initResponse.sessionId;
 
 			if (!sessionId) {
@@ -1249,7 +1346,7 @@ class TradingViewMcpService {
 				jsonrpc: '2.0',
 				method: 'notifications/initialized',
 				params: {},
-			}, { sessionId, expectResponse: false, signal: executionSignal });
+			}, { sessionId, expectResponse: false, signal: requestSignal });
 
 			const toolCallRequest = {
 				jsonrpc: '2.0',
@@ -1261,7 +1358,7 @@ class TradingViewMcpService {
 				},
 			};
 
-			const toolResponse = await this._rpcRequest(toolCallRequest, { sessionId, signal: executionSignal });
+			const toolResponse = await this._rpcRequest(toolCallRequest, { sessionId, signal: requestSignal });
 			const callResult = toolResponse.rpc && toolResponse.rpc.result;
 
 			if (!callResult) {
@@ -1274,7 +1371,7 @@ class TradingViewMcpService {
 			}
 
 			if (callResult.structuredContent && typeof callResult.structuredContent === 'object') {
-				return cacheResult(callResult.structuredContent);
+				return callResult.structuredContent;
 			}
 
 			const contentText = this._extractContentText(callResult);
@@ -1282,22 +1379,42 @@ class TradingViewMcpService {
 				throw new Error(`TradingView MCP tool ${toolName} returned empty content`);
 			}
 
-			return cacheResult(this._parseToolJson(contentText));
+			return this._parseToolJson(contentText);
 		};
 
 		if (!cacheKey) {
-			return executeToolCall();
+			const value = await executeToolCall(signal);
+			return validateResult ? (validateResult(value), value) : value;
 		}
 
-		inFlightPromise = executeToolCall();
-		this.toolInFlight.set(cacheKey, inFlightPromise);
-		try {
-			return await awaitWithAbort(inFlightPromise, signal);
-		} finally {
-			if (this.toolInFlight.get(cacheKey) === inFlightPromise) {
-				this.toolInFlight.delete(cacheKey);
-			}
-		}
+		const controller = new AbortController();
+		const state = { controller, subscribers: 0, settled: false, promise: null };
+		state.promise = Promise.resolve()
+			.then(() => executeToolCall(controller.signal))
+			.then(cacheResult)
+			.catch((error) => {
+				if (controller.signal.aborted && state.subscribers === 0) {
+					throw createRequestCancelledError(controller.signal, 'All TradingView MCP request subscribers cancelled');
+				}
+				if (error && typeof error === 'object' && error.category !== 'request_cancelled') {
+					this.sharedToolFailureErrors.add(error);
+				}
+				throw error;
+			})
+			.finally(() => {
+				state.settled = true;
+				if (this.toolInFlight.get(cacheKey) === state) {
+					this.toolInFlight.delete(cacheKey);
+				}
+			});
+		this.toolInFlight.set(cacheKey, state);
+
+		return awaitSharedToolCall(
+			state,
+			signal,
+			validateResult,
+			() => this.toolCache.delete(cacheKey),
+		);
 	}
 
 	_validateAnalysisPayload(result, toolName) {
@@ -1920,7 +2037,7 @@ class TradingViewMcpService {
 		};
 	}
 
-	async _withRuntimeStatus(operation, { signal, runtimeStatusKey } = {}) {
+	async _withRuntimeStatus(operation, { signal, runtimeStatusKey, shouldRecordSuccess } = {}) {
 		const runtimeStatusKeys = runtimeStatusKey ? ['runtimeStatus', runtimeStatusKey] : ['runtimeStatus'];
 
 		if (this.isBreakerOpen()) {
@@ -1931,6 +2048,7 @@ class TradingViewMcpService {
 
 		try {
 			const result = await operation();
+			if (shouldRecordSuccess && !shouldRecordSuccess()) return result;
 			const timestamp = new Date().toISOString();
 			this._recordSuccess();
 			runtimeStatusKeys.forEach((key) => {
@@ -1949,12 +2067,23 @@ class TradingViewMcpService {
 			});
 			return result;
 		} catch (error) {
-			if (signal && signal.aborted && getAbortMessage(signal, '') === 'Job cancelled by user') {
+			if (error?.category === 'request_cancelled'
+				|| (signal && signal.aborted && getAbortMessage(signal, '') === 'Job cancelled by user')) {
 				throw error;
 			}
 
 			const timestamp = new Date().toISOString();
-			this._recordFailure(error);
+			const sharedToolFailure = error
+				&& typeof error === 'object'
+				&& (this.sharedToolFailureErrors.has(error)
+					? error
+					: (this.sharedToolFailureErrors.has(error.sharedToolFailureCause)
+						? error.sharedToolFailureCause
+						: null));
+			if (!sharedToolFailure || !this.recordedSharedToolFailureErrors.has(sharedToolFailure)) {
+				this._recordFailure(error);
+				if (sharedToolFailure) this.recordedSharedToolFailureErrors.add(sharedToolFailure);
+			}
 			const errorCategory = this._getErrorCategory(error);
 			runtimeStatusKeys.forEach((key) => {
 				const prevCounts = (this[key] && this[key].errorCategoryCounts) || createEmptyErrorCategoryCounts();

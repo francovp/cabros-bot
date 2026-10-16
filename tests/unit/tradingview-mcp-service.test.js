@@ -307,12 +307,186 @@ describe('TradingViewMcpService', () => {
 		await Promise.resolve();
 		const second = service._callTool('coin_analysis', { symbol: 'BTCUSDT' }, { signal: secondController.signal });
 		firstController.abort(new Error('first caller aborted'));
+		await expect(first).rejects.toThrow('first caller aborted');
+		const third = service._callTool('coin_analysis', { symbol: 'BTCUSDT' });
 		resolveTool({ rpc: { result: { structuredContent: { symbol: 'BTCUSDT' } } } });
 
-		await expect(first).rejects.toThrow('first caller aborted');
-		await expect(second).resolves.toEqual({ symbol: 'BTCUSDT' });
+		await expect(Promise.all([second, third])).resolves.toEqual([
+			{ symbol: 'BTCUSDT' },
+			{ symbol: 'BTCUSDT' },
+		]);
 		expect(service._rpcRequest).toHaveBeenCalledTimes(3);
-		expect(service._rpcRequest.mock.calls[2][1].signal).toBeUndefined();
+		expect(service._rpcRequest.mock.calls[2][1].signal).toBeDefined();
+		expect(service._rpcRequest.mock.calls[2][1].signal).not.toBe(firstController.signal);
+	});
+
+	it('aborts shared provider work when its last subscriber cancels', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_CACHE = 'true';
+		const service = new TradingViewMcpService({ maxRetries: 1 });
+		const firstController = new AbortController();
+		const secondController = new AbortController();
+		let toolSignal;
+		let markToolStarted;
+		let rejectTool;
+		const toolStarted = new Promise(resolve => { markToolStarted = resolve; });
+		service._rpcRequest = jest.fn().mockImplementation(async (payload, options = {}) => {
+			if (payload.method === 'initialize') return { sessionId: 'session-1' };
+			if (payload.method === 'notifications/initialized') return { status: 202 };
+			toolSignal = options.signal;
+			markToolStarted();
+			return new Promise((resolve, reject) => {
+				rejectTool = reject;
+				if (options.signal?.aborted) {
+					reject(options.signal.reason);
+					return;
+				}
+				options.signal?.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+			});
+		});
+
+		const first = service._callTool('coin_analysis', { symbol: 'BTCUSDT' }, { signal: firstController.signal });
+		const second = service._callTool('coin_analysis', { symbol: 'BTCUSDT' }, { signal: secondController.signal });
+		await toolStarted;
+		firstController.abort(new Error('first caller cancelled'));
+		await expect(first).rejects.toThrow('first caller cancelled');
+		expect(toolSignal?.aborted || false).toBe(false);
+		secondController.abort(new Error('last caller cancelled'));
+		await expect(second).rejects.toThrow('last caller cancelled');
+		if (!toolSignal?.aborted) rejectTool(new Error('provider work was not cancelled'));
+		await Promise.resolve();
+
+		expect(toolSignal).toBeDefined();
+		expect(toolSignal.aborted).toBe(true);
+		expect(service.toolInFlight.size).toBe(0);
+	});
+
+	it('starts a fresh shared call when a new caller arrives after cancellation', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_CACHE = 'true';
+		const service = new TradingViewMcpService({ maxRetries: 1 });
+		const firstController = new AbortController();
+		let rejectFirstTool;
+		let markFirstToolStarted;
+		let markSecondToolStarted;
+		const firstToolStarted = new Promise(resolve => { markFirstToolStarted = resolve; });
+		const secondToolStarted = new Promise(resolve => { markSecondToolStarted = resolve; });
+		let toolAttempt = 0;
+		service._rpcRequest = jest.fn().mockImplementation(async (payload) => {
+			if (payload.method === 'initialize') return { sessionId: `session-${toolAttempt + 1}` };
+			if (payload.method === 'notifications/initialized') return { status: 202 };
+			toolAttempt += 1;
+			if (toolAttempt === 1) {
+				markFirstToolStarted();
+				return new Promise((resolve, reject) => { rejectFirstTool = reject; });
+			}
+			markSecondToolStarted();
+			return { rpc: { result: { structuredContent: { symbol: 'BTCUSDT' } } } };
+		});
+
+		const first = service._callTool('coin_analysis', { symbol: 'BTCUSDT' }, { signal: firstController.signal });
+		await firstToolStarted;
+		firstController.abort(new Error('first caller cancelled'));
+		await expect(first).rejects.toThrow('first caller cancelled');
+
+		const second = service._callTool('coin_analysis', { symbol: 'BTCUSDT' });
+		await new Promise(resolve => setImmediate(resolve));
+		const startedFreshProviderCall = toolAttempt === 2;
+		rejectFirstTool(new Error('aborted provider request settled'));
+		const secondCall = await Promise.allSettled([second]);
+
+		expect(startedFreshProviderCall).toBe(true);
+		await expect(secondToolStarted).resolves.toBeUndefined();
+		expect(secondCall).toEqual([{
+			status: 'fulfilled',
+			value: { symbol: 'BTCUSDT' },
+		}]);
+		expect(service._rpcRequest).toHaveBeenCalledTimes(6);
+	});
+
+	it('does not start shared provider work for a pre-aborted caller', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_CACHE = 'true';
+		const service = new TradingViewMcpService({ maxRetries: 1 });
+		const controller = new AbortController();
+		controller.abort(new Error('already cancelled'));
+		service._rpcRequest = jest.fn();
+
+		await expect(service._callTool('coin_analysis', { symbol: 'BTCUSDT' }, { signal: controller.signal }))
+			.rejects.toThrow('already cancelled');
+		await Promise.resolve();
+
+		expect(service._rpcRequest).not.toHaveBeenCalled();
+	});
+
+	it('counts a shared provider failure once toward the circuit breaker', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_CACHE = 'true';
+		const service = new TradingViewMcpService({ breakerThreshold: 2, maxRetries: 1 });
+		let rejectTool;
+		let markToolStarted;
+		const toolStarted = new Promise(resolve => { markToolStarted = resolve; });
+		service._rpcRequest = jest.fn().mockImplementation(async (payload) => {
+			if (payload.method === 'initialize') return { sessionId: 'session-1' };
+			if (payload.method === 'notifications/initialized') return { status: 202 };
+			markToolStarted();
+			return new Promise((resolve, reject) => { rejectTool = reject; });
+		});
+
+		const first = service.callCoinAnalysis({ symbol: 'BTCUSDT', exchange: 'BINANCE', timeframe: '1h' });
+		await toolStarted;
+		const second = service.callCoinAnalysis({ symbol: 'BTCUSDT', exchange: 'BINANCE', timeframe: '1h' });
+		rejectTool(new Error('upstream failed'));
+		await Promise.allSettled([first, second]);
+
+		expect(service.consecutiveFailures).toBe(1);
+		expect(service.breakerState).toBe('closed');
+		expect(service._rpcRequest).toHaveBeenCalledTimes(3);
+	});
+
+	it('counts a shared scanner provider failure once toward the circuit breaker', async () => {
+		const service = new TradingViewMcpService({ breakerThreshold: 2, maxRetries: 1 });
+		const sharedError = new Error('shared scanner provider failure');
+		service.sharedToolFailureErrors.add(sharedError);
+		let rejectProvider;
+		const providerCall = new Promise((resolve, reject) => { rejectProvider = reject; });
+		service._callTool = jest.fn(() => providerCall);
+
+		const first = service.callScanTool('top_gainers');
+		const second = service.callScanTool('top_gainers');
+		rejectProvider(sharedError);
+		await Promise.allSettled([first, second]);
+
+		expect(service.consecutiveFailures).toBe(1);
+		expect(service.breakerState).toBe('closed');
+		expect(service._callTool).toHaveBeenCalledTimes(2);
+	});
+
+	it('does not treat a cached response as provider recovery', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_CACHE = 'true';
+		const service = new TradingViewMcpService({ maxRetries: 1 });
+		service._rpcRequest = jest.fn().mockImplementation(async (payload) => {
+			if (payload.method === 'initialize') return { sessionId: 'session-1' };
+			if (payload.method === 'notifications/initialized') return { status: 202 };
+			return { rpc: { result: { structuredContent: { price_data: { current_price: 70000 } } } } };
+		});
+		const input = { symbol: 'BTCUSDT', exchange: 'BINANCE', timeframe: '1h' };
+		await service.callCoinAnalysis(input);
+		service.breakerState = 'half-open';
+		service.consecutiveFailures = 1;
+		service.runtimeStatus = {
+			...service.runtimeStatus,
+			status: 'degraded',
+			successCount: 4,
+			lastErrorCategory: 'http_5xx',
+		};
+
+		await service.callCoinAnalysis(input);
+
+		expect(service.breakerState).toBe('half-open');
+		expect(service.consecutiveFailures).toBe(1);
+		expect(service.runtimeStatus).toEqual(expect.objectContaining({
+			status: 'degraded',
+			successCount: 4,
+			lastErrorCategory: 'http_5xx',
+		}));
+		expect(service._rpcRequest).toHaveBeenCalledTimes(3);
 	});
 
 	it('bounds the number of cached tool results', async () => {
