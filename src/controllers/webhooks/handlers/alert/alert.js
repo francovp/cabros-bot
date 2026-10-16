@@ -31,6 +31,7 @@ const { alertModeration } = require('../../../../services/alerts/alertModeration
 const { classifySignal } = require('../../../../services/alerts/signalClassifier');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
+const { alertSubscriberDeliveryService } = require('../../../../services/subscribers/AlertSubscriberDeliveryService');
 const { buildReplyMarkup } = require('../../../../services/alerts/telegramAlertKeyboard');
 const {
 	buildErrorEnvelope,
@@ -1029,8 +1030,22 @@ function postAlert(botOrGetter) {
 						aggregated,
 					});
 				})
-				.catch(() => {}); // errors already logged inside AlertStorageService
 			trackBackgroundTask(postPersistenceTask);
+
+			const subscriberDispatchTask = alertSubscriberDeliveryService.dispatchAlert({
+				alertId: inlineAlertId || undefined,
+				text: alert.text,
+				symbol: extracted.symbol !== 'unknown' ? extracted.symbol : null,
+				exchange: extracted.exchange || null,
+				side: parsedSignal?.side || null,
+				enriched,
+				enrichmentData: alert.enriched || null,
+				channels: requestedChannels,
+				source: body.source || 'webhook-alert',
+			}).catch((err) => {
+				console.warn('[WebhookAlert] Subscriber dispatch task failed:', err && err.message);
+			});
+			trackBackgroundTask(subscriberDispatchTask);
 
 			if (signalOutcomeService.isEnabled() && !suppressedRepeat) {
 				if (parsedSignal) {

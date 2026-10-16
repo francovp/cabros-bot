@@ -948,6 +948,91 @@ describe('TradingViewMcpService', () => {
 		expect(service._getErrorCategory(new Error('TradingView MCP HTTP 408: request timeout'))).toBe('http_4xx');
 	});
 
+	it('keeps non-deterministic tool-body errors retryable', async () => {
+		const service = new TradingViewMcpService({ maxRetries: 3, logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() } });
+		service._callTool = jest.fn().mockResolvedValue({ error: 'Analysis failed: provider returned no data' });
+
+		let error;
+		try {
+			await service.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1h',
+			});
+		} catch (caught) {
+			error = caught;
+		}
+
+		expect(error).toEqual(expect.objectContaining({ category: 'upstream_tool_error' }));
+		expect(error.retryable).toBeUndefined();
+		expect(service._callTool).toHaveBeenCalledTimes(1);
+		expect(service.getStatus().lastErrorCategory).toBe('upstream_tool_error');
+		expect(service.getStatus().errorCategoryCounts.upstream_tool_error).toBe(1);
+	});
+
+	it('does not retry deterministic no-data tool-body failures during enrichment', async () => {
+		const service = new TradingViewMcpService({ maxRetries: 3, logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() } });
+		service._callTool = jest.fn().mockResolvedValue({ error: 'No data found for BTCUSDT on BINANCE' });
+
+		await expect(service.enrichFromAlertText('BTCUSDT(240) pasó a señal de VENTA')).rejects.toThrow('No data found');
+
+		expect(service._callTool).toHaveBeenCalledTimes(1);
+		expect(service.getStatus().lastErrorCategory).toBe('not_found');
+		expect(service.getStatus().errorCategoryCounts.not_found).toBe(1);
+	});
+
+	it('classifies deterministic isError tool responses as terminal', async () => {
+		const service = new TradingViewMcpService({ logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() } });
+		service._rpcRequest = jest
+			.fn()
+			.mockResolvedValueOnce({ sessionId: 'test-session' })
+			.mockResolvedValueOnce({ status: 202 })
+			.mockResolvedValueOnce({
+				rpc: {
+					result: {
+						isError: true,
+						content: [{ type: 'text', text: 'No data found for BTCUSDT on BINANCE' }],
+					},
+				},
+			});
+
+		await expect(service._callTool('coin_analysis', { symbol: 'BTCUSDT' })).rejects.toMatchObject({
+			category: 'not_found',
+			retryable: false,
+		});
+	});
+
+	it('preserves terminal tool error metadata through scanner retries', async () => {
+		const service = new TradingViewMcpService({ maxRetries: 3, logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() } });
+		const error = new Error('No data found for BTCUSDT on BINANCE');
+		error.category = 'not_found';
+		error.retryable = false;
+		service._callTool = jest.fn().mockRejectedValue(error);
+
+		await expect(service.callScanTool('top_gainers')).rejects.toMatchObject({
+			category: 'not_found',
+			retryable: false,
+		});
+
+		expect(service._callTool).toHaveBeenCalledTimes(1);
+		expect(service.getStatus().lastErrorCategory).toBe('not_found');
+		expect(service.getStatus().errorCategoryCounts.not_found).toBe(1);
+	});
+
+	it('rejects parsed scanner error payloads as terminal failures', async () => {
+		const service = new TradingViewMcpService({ maxRetries: 3, logger: { warn: jest.fn(), error: jest.fn(), log: jest.fn() } });
+		service._callTool = jest.fn().mockResolvedValue({ error: 'No data found for BTCUSDT on BINANCE' });
+
+		await expect(service.callScanTool('top_gainers')).rejects.toMatchObject({
+			category: 'not_found',
+			retryable: false,
+		});
+
+		expect(service._callTool).toHaveBeenCalledTimes(1);
+		expect(service.getStatus().lastErrorCategory).toBe('not_found');
+		expect(service.getStatus().errorCategoryCounts.not_found).toBe(1);
+	});
+
 	it('classifies provider-level failures as terminal and preserves the HTTP status', async () => {
 		const originalFetch = global.fetch;
 		global.fetch = jest.fn().mockResolvedValue({
@@ -969,6 +1054,7 @@ describe('TradingViewMcpService', () => {
 				lastHttpStatusCode: 503,
 				lastErrorCategory: 'provider_unavailable',
 			}));
+			expect(service.getStatus().errorCategoryCounts.provider_unavailable).toBe(1);
 		} finally {
 			global.fetch = originalFetch;
 		}
@@ -1021,6 +1107,7 @@ describe('TradingViewMcpService', () => {
 			expect(service.getStatus()).toEqual(expect.objectContaining({
 				lastErrorCategory: 'provider_unavailable',
 			}));
+			expect(service.getStatus().errorCategoryCounts.provider_unavailable).toBe(1);
 		} finally {
 			global.fetch = originalFetch;
 		}
@@ -1068,10 +1155,11 @@ describe('TradingViewMcpService', () => {
 				.map(([, init]) => JSON.parse(init.body))
 				.filter((body) => body.method === 'tools/call');
 			expect(toolCalls).toHaveLength(3);
-			// A malformed upstream payload is not classified as a definitive provider outage.
+			// A malformed upstream payload is classified as an upstream tool error.
 			expect(service.getStatus()).toEqual(expect.objectContaining({
-				lastErrorCategory: 'request_failed',
+				lastErrorCategory: 'upstream_tool_error',
 			}));
+			expect(service.getStatus().errorCategoryCounts.upstream_tool_error).toBe(3);
 		} finally {
 			global.fetch = originalFetch;
 		}

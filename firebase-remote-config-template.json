@@ -780,6 +780,14 @@
       "conditionalValues": {},
       "description": "Enable durable Firestore persistence for scanner presets. Ships with useInAppDefault so publishing this template yields NO remote override for this key and the deployment value decides. Without it the Admin SDK reports the defaultValue with source 'remote', which would silently override render.yaml.",
       "valueType": "BOOLEAN"
+    },
+    "ENABLE_FIRESTORE_ALERT_SUBSCRIBERS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "conditionalValues": {},
+      "description": "Enable durable Firestore persistence for alert subscriber webhooks. Ships with useInAppDefault so publishing this template yields NO remote override for this key and the deployment value decides. Without it the Admin SDK reports the defaultValue with source 'remote', which would silently override render.yaml.",
+      "valueType": "BOOLEAN"
     }
   },
   "version": {

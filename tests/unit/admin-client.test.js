@@ -300,7 +300,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		elementsById[id] = node;
 		body.append(node);
 	});
-	['overview', 'status', 'diagnostics', 'alerts', 'outcomes', 'presets', 'jobs', 'orders', 'analysis', 'newsMonitor', 'trading', 'playground'].forEach((view) => {
+	['overview', 'status', 'diagnostics', 'alerts', 'outcomes', 'presets', 'subscribers', 'jobs', 'orders', 'analysis', 'newsMonitor', 'trading', 'playground'].forEach((view) => {
 		const button = new FakeElement('button');
 		button.dataset.view = view;
 		body.append(button);
@@ -2494,6 +2494,69 @@ describe('admin browser client', () => {
 		expect(editBtn.title).toBe('Requires admin.operator role');
 		expect(deleteBtn.disabled).toBe(true);
 		expect(deleteBtn.title).toBe('Requires admin.operator role');
+	});
+
+	it('renders dedicated alert subscriber controls and structured fields', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+
+		await selectView(browser, 'subscribers');
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alert-subscribers');
+		const createForm = findForm(browser.elementsById.view, 'POST /api/alert-subscribers');
+		const updateForm = findForm(browser.elementsById.view, 'PATCH /api/alert-subscribers/{id}');
+
+		expect(listForm).toBeDefined();
+		expect(createForm).toBeDefined();
+		expect(updateForm).toBeDefined();
+
+		expect(createForm.elements.url).toBeDefined();
+		expect(createForm.elements.secret).toBeDefined();
+		expect(createForm.elements.description).toBeDefined();
+		expect(createForm.elements.filterSymbols).toBeDefined();
+		expect(createForm.elements.filterSources).toBeDefined();
+		expect(createForm.elements.enabled).toBeDefined();
+	});
+
+	it('renders subscribers as structured cards with HMAC badge, filters, and actions', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/alert-subscribers') {
+					return response({
+						success: true,
+						storage: { mode: 'durable', backend: 'firestore' },
+						subscribers: [
+							{
+								id: 'sub_test_1',
+								url: 'https://example.com/webhook',
+								description: 'Test Webhook Subscriber',
+								enabled: true,
+								hasSecret: true,
+								filter: { symbols: ['BTCUSDT'], sources: ['webhook-alert'] },
+								lastDeliveryStatus: 'success',
+								lastDeliveryAt: '2026-03-30T12:00:00.000Z',
+							},
+						],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+
+		await selectView(browser, 'subscribers');
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alert-subscribers');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('https://example.com/webhook');
+		expect(viewText).toContain('Test Webhook Subscriber');
+		expect(viewText).toContain('HMAC Signed');
+		expect(viewText).toContain('Symbols: BTCUSDT');
+		expect(viewText).toContain('Sources: webhook-alert');
 	});
 
 	it('loads recent jobs with bounded status, type, and limit filters', async () => {

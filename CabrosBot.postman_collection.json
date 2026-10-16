@@ -360,6 +360,18 @@
           "status": "OK",
           "code": 200,
           "body": "{\"dependencies\":{\"tradingViewMcp\":{\"status\":\"degraded\",\"lastErrorCategory\":\"provider_unavailable\",\"lastHttpStatusCode\":503}}}"
+        },
+        {
+          "name": "200 degraded upstream tool error telemetry",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"tradingViewMcp\":{\"status\":\"degraded\",\"lastErrorCategory\":\"upstream_tool_error\",\"errorCategoryCounts\":{\"upstream_tool_error\":1}}}}"
+        },
+        {
+          "name": "200 degraded not found telemetry",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"dependencies\":{\"tradingViewMcp\":{\"status\":\"degraded\",\"lastErrorCategory\":\"not_found\",\"errorCategoryCounts\":{\"not_found\":1}}}}"
         }
       ]
     },
@@ -6242,6 +6254,273 @@
               "status": "OK",
               "code": 200,
               "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"presetId\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Daily Scan\",\n    \"exchange\": \"BINANCE\",\n    \"timeframe\": \"4h\",\n    \"scans\": [\n      \"top_gainers\"\n    ],\n    \"limit\": 5,\n    \"bbw_threshold\": 0.05,\n    \"ranked\": false,\n    \"includeMultiTimeframe\": false\n  },\n  \"validation\": {\n    \"ok\": true,\n    \"errors\": []\n  },\n  \"estimatedCalls\": {\n    \"coinAnalysis\": 1,\n    \"multiTimeframe\": 0\n  },\n  \"requestedChannels\": [\n    \"telegram\"\n  ],\n  \"mcpReadiness\": {\n    \"ready\": true,\n    \"lastCheckedAt\": \"2026-08-30T12:00:00.000Z\",\n    \"lastErrorCategory\": null\n  },\n  \"idempotencyKey\": \"preset-dryrun-key-123\",\n  \"requestId\": \"req-dryrun-abc\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Alert Subscribers",
+      "item": [
+        {
+          "name": "POST Create Alert Subscriber",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com/alerts/webhook\",\n  \"secret\": \"test-secret-1234\",\n  \"description\": \"TradingView webhook bridge\",\n  \"filter\": {\n    \"symbols\": [\n      \"BTCUSDT\",\n      \"ETHUSDT\"\n    ],\n    \"sources\": [\n      \"webhook-alert\"\n    ]\n  },\n  \"enabled\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alert-subscribers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alert-subscribers"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Created",
+              "status": "Created",
+              "code": 201,
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\",\n    \"failOpen\": true,\n    \"collection\": \"alertSubscribers\",\n    \"count\": 1,\n    \"activeCount\": 1\n  },\n  \"subscriber\": {\n    \"id\": \"d9b7a421-2a1e-4589-9a7c-4860b7692120\",\n    \"url\": \"https://example.com/alerts/webhook\",\n    \"description\": \"TradingView webhook bridge\",\n    \"enabled\": true,\n    \"hasSecret\": true,\n    \"filter\": {\n      \"symbols\": [\n        \"BTCUSDT\",\n        \"ETHUSDT\"\n      ],\n      \"sources\": [\n        \"webhook-alert\"\n      ]\n    },\n    \"createdAt\": \"2026-10-16T05:00:00.000Z\",\n    \"updatedAt\": \"2026-10-16T05:00:00.000Z\",\n    \"lastDeliveryAt\": null,\n    \"lastDeliveryStatus\": null\n  }\n}"
+            },
+            {
+              "name": "Error (invalid URL / SSRF blocked)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid webhook url: cannot target private or local network IP addresses\",\n  \"code\": \"INVALID_URL\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET List Alert Subscribers",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alert-subscribers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alert-subscribers"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\",\n    \"failOpen\": true,\n    \"collection\": \"alertSubscribers\",\n    \"count\": 1,\n    \"activeCount\": 1\n  },\n  \"subscribers\": [\n    {\n      \"id\": \"d9b7a421-2a1e-4589-9a7c-4860b7692120\",\n      \"url\": \"https://example.com/alerts/webhook\",\n      \"description\": \"TradingView webhook bridge\",\n      \"enabled\": true,\n      \"hasSecret\": true,\n      \"filter\": {\n        \"symbols\": [\n          \"BTCUSDT\",\n          \"ETHUSDT\"\n        ],\n        \"sources\": [\n          \"webhook-alert\"\n        ]\n      },\n      \"createdAt\": \"2026-10-16T05:00:00.000Z\",\n      \"updatedAt\": \"2026-10-16T05:00:00.000Z\",\n      \"lastDeliveryAt\": null,\n      \"lastDeliveryStatus\": null\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Get Alert Subscriber by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alert-subscribers/d9b7a421-2a1e-4589-9a7c-4860b7692120",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alert-subscribers",
+                "d9b7a421-2a1e-4589-9a7c-4860b7692120"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\",\n    \"failOpen\": true,\n    \"collection\": \"alertSubscribers\",\n    \"count\": 1,\n    \"activeCount\": 1\n  },\n  \"subscriber\": {\n    \"id\": \"d9b7a421-2a1e-4589-9a7c-4860b7692120\",\n    \"url\": \"https://example.com/alerts/webhook\",\n    \"description\": \"TradingView webhook bridge\",\n    \"enabled\": true,\n    \"hasSecret\": true,\n    \"filter\": {\n      \"symbols\": [\n        \"BTCUSDT\",\n        \"ETHUSDT\"\n      ],\n      \"sources\": [\n        \"webhook-alert\"\n      ]\n    },\n    \"createdAt\": \"2026-10-16T05:00:00.000Z\",\n    \"updatedAt\": \"2026-10-16T05:00:00.000Z\",\n    \"lastDeliveryAt\": null,\n    \"lastDeliveryStatus\": null\n  }\n}"
+            },
+            {
+              "name": "Not Found",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"error\": \"Alert subscriber not found\",\n  \"code\": \"NOT_FOUND\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "PUT Replace Alert Subscriber",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com/alerts/webhook-v2\",\n  \"description\": \"Updated TradingView webhook bridge\",\n  \"enabled\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alert-subscribers/d9b7a421-2a1e-4589-9a7c-4860b7692120",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alert-subscribers",
+                "d9b7a421-2a1e-4589-9a7c-4860b7692120"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\",\n    \"failOpen\": true,\n    \"collection\": \"alertSubscribers\",\n    \"count\": 1,\n    \"activeCount\": 1\n  },\n  \"subscriber\": {\n    \"id\": \"d9b7a421-2a1e-4589-9a7c-4860b7692120\",\n    \"url\": \"https://example.com/alerts/webhook-v2\",\n    \"description\": \"Updated TradingView webhook bridge\",\n    \"enabled\": true,\n    \"hasSecret\": true,\n    \"createdAt\": \"2026-10-16T05:00:00.000Z\",\n    \"updatedAt\": \"2026-10-16T05:05:00.000Z\",\n    \"lastDeliveryAt\": null,\n    \"lastDeliveryStatus\": null\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "PATCH Update Alert Subscriber",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"enabled\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/alert-subscribers/d9b7a421-2a1e-4589-9a7c-4860b7692120",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alert-subscribers",
+                "d9b7a421-2a1e-4589-9a7c-4860b7692120"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\",\n    \"failOpen\": true,\n    \"collection\": \"alertSubscribers\",\n    \"count\": 1,\n    \"activeCount\": 0\n  },\n  \"subscriber\": {\n    \"id\": \"d9b7a421-2a1e-4589-9a7c-4860b7692120\",\n    \"url\": \"https://example.com/alerts/webhook-v2\",\n    \"description\": \"Updated TradingView webhook bridge\",\n    \"enabled\": false,\n    \"hasSecret\": true,\n    \"createdAt\": \"2026-10-16T05:00:00.000Z\",\n    \"updatedAt\": \"2026-10-16T05:10:00.000Z\",\n    \"lastDeliveryAt\": null,\n    \"lastDeliveryStatus\": null\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "DELETE Delete Alert Subscriber",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alert-subscribers/d9b7a421-2a1e-4589-9a7c-4860b7692120",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alert-subscribers",
+                "d9b7a421-2a1e-4589-9a7c-4860b7692120"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"storage\": {\n    \"enabled\": true,\n    \"configured\": true,\n    \"ready\": true,\n    \"status\": \"ready\",\n    \"mode\": \"durable\",\n    \"backend\": \"firestore\",\n    \"failOpen\": true,\n    \"collection\": \"alertSubscribers\",\n    \"count\": 0,\n    \"activeCount\": 0\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Test Alert Subscriber Ping",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/alert-subscribers/d9b7a421-2a1e-4589-9a7c-4860b7692120/test",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "alert-subscribers",
+                "d9b7a421-2a1e-4589-9a7c-4860b7692120",
+                "test"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"delivery\": {\n    \"success\": true,\n    \"statusCode\": 200,\n    \"attempts\": 1,\n    \"durationMs\": 45\n  }\n}"
             }
           ]
         }
