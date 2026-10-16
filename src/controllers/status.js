@@ -49,6 +49,7 @@ const {
 const { getVolumeTracker } = require('./webhooks/handlers/newsMonitor/volumeTracker');
 const { getSelfTestService } = require('./diagnostics/selftest');
 const telegramCommandAuth = require('../lib/telegramCommandAuth');
+const { getAdminAuthStatus } = require('../lib/adminAuth');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -364,6 +365,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	const remoteConfigStatus = remoteConfigService.getStatus();
 	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING);
 	const equityMarketDataStatus = equityMarketDataService.getStatus();
+	const adminAuthStatus = getAdminAuthStatus();
 	const llmAlertEnrichmentDependencyEnabled = llmAlertEnrichmentEnabled && newsMonitorEnabled;
 
 	const telegram = dependencyStatus({
@@ -601,6 +603,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			equitySessionTag: runtimeConfig.ENABLE_EQUITY_SESSION_TAG,
 			maintenanceMode: isMaintenanceModeEnabled(),
 			telegramCommandAuth: telegramCommandAuth.getStatus().enabled,
+			firebaseAdminAuth: adminAuthStatus.enabled,
 		},
 		deliveryChannels: {
 			telegram: {
@@ -800,6 +803,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			tokenCostBudget: tokenCostBudgetService.getBudgetStatus(),
 			selfTest: getSelfTestService().getStatus(),
 			telegramCommandAuth: telegramCommandAuth.getStatus(),
+			adminAuth: adminAuthStatus,
 		},
 	};
 }
