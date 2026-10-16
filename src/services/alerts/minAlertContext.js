@@ -27,6 +27,8 @@ const NO_DATA_TAG = 'sin_datos_tecnicos';
 const NO_DATA_MESSAGE_ES = 'advertencia sin datos tecnicos';
 
 function hasCompleteRiskMetadata(value = {}) {
+	if (!value || typeof value !== 'object') return false;
+	if (value.levelsSource === 'derived-quote') return false;
 	return ['invalidation_level', 'target_level']
 		.every(field => (
 			(typeof value[field] === 'number' && Number.isFinite(value[field]) && value[field] > 0)
@@ -124,7 +126,9 @@ async function buildMinAlertContext({ text, enriched, runtimeConfig = {} } = {})
 	const reward = Math.abs(target_level - currentPrice);
 	const risk_reward_ratio = risk > 0 ? Number((reward / risk).toFixed(2)) : 2.0;
 
-	const priceSource = derivedPlan ? 'binance' : 'gemini';
+	const priceSource = (enriched && enriched.price_data && enriched.price_data.source)
+		|| (derivedPlan && derivedPlan.price_data && derivedPlan.price_data.source)
+		|| (derivedPlan ? 'binance' : (enriched && enriched.levelsSource === 'derived-quote' ? 'binance' : 'gemini'));
 
 	return {
 		applied: true,

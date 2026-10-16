@@ -3,7 +3,8 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { signalRepeatCooldown } = require('../../src/services/alerts/signalRepeatCooldown');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 
@@ -74,6 +75,8 @@ describe('Alert Min Context Integration (GH-581 / CB-269)', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
+		signalRepeatCooldown.reset();
 		deriveFallbackTradePlan.mockReset();
 		alertStorageService.isEnabled.mockReturnValue(false);
 
@@ -95,6 +98,8 @@ describe('Alert Min Context Integration (GH-581 / CB-269)', () => {
 	});
 
 	afterEach(() => {
+		resetNotificationManagerForTesting();
+		signalRepeatCooldown.reset();
 		restoreEnv(savedEnv);
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
@@ -202,10 +207,12 @@ describe('Alert Min Context Integration (GH-581 / CB-269)', () => {
 			.expect(200);
 
 		expect(response.body.success).toBe(true);
-		expect(deriveFallbackTradePlan).not.toHaveBeenCalled();
+		// deriveFallbackTradePlan is invoked once by grounding.js fallback, but minAlertContext does not run or invoke it again
+		expect(deriveFallbackTradePlan).toHaveBeenCalledTimes(1);
 
 		const telegramPayload = mockTelegramSendMessage.mock.calls[0][1];
 		expect(telegramPayload).not.toContain('sin datos tecnicos');
 		expect(telegramPayload).not.toContain('Levels provisional');
+		expect(telegramPayload).not.toContain('fuente_precio:');
 	});
 });
