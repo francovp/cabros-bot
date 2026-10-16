@@ -35,6 +35,13 @@
       "description": "Base delay for Gemini quota retries in milliseconds",
       "valueType": "NUMBER"
     },
+    "NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS": {
+      "defaultValue": {
+        "value": "1800000"
+      },
+      "description": "Maximum Gemini quota cooldown ceiling in milliseconds",
+      "valueType": "NUMBER"
+    },
     "NEWS_MAX_ALERTS_PER_BATCH": {
       "defaultValue": {
         "value": "10"

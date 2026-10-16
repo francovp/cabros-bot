@@ -96,6 +96,13 @@ describe('validate-env', () => {
 		]));
 	});
 
+	it('reports NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS bounds', () => {
+		process.env.NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS = '500';
+
+		const variables = validateEnv().map((warning) => warning.variable);
+		expect(variables).toContain('NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS');
+	});
+
 	it('accepts personal WhatsApp chat IDs ending with @c.us', () => {
 		process.env.WHATSAPP_CHAT_ID = '56912345678@c.us';
 
