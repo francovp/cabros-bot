@@ -67,6 +67,14 @@ const INDEX_QUERY_SCOPES = new Set(['COLLECTION', 'COLLECTION_GROUP']);
 const INDEX_API_SCOPES = new Set(['ANY_API', 'DATASTORE_MODE_API', 'MONGODB_COMPATIBLE_API']);
 const INDEX_DENSITIES = new Set(['DENSITY_UNSPECIFIED', 'SPARSE_ALL', 'SPARSE_ANY', 'DENSE']);
 const INDEX_STATES = new Set(['STATE_UNSPECIFIED', 'CREATING', 'READY', 'NEEDS_REPAIR']);
+const INDEX_DECLARATION_PROPERTIES = new Set([
+	'collectionGroup',
+	'queryScope',
+	'apiScope',
+	'density',
+	'multikey',
+	'fields',
+]);
 const INDEX_FIELD_PROPERTIES = new Set(['fieldPath', 'order', 'arrayConfig', 'searchConfig', 'vectorConfig']);
 const SEARCH_CONFIG_PROPERTIES = new Set(['textSpec', 'geoSpec']);
 const SEARCH_TEXT_SPEC_PROPERTIES = new Set(['indexSpecs']);
@@ -203,7 +211,7 @@ function readDeclaredIndexes(indexesPath = INDEXES_PATH) {
 		if (typeof index.collectionGroup !== 'string' || index.collectionGroup.trim() === '') {
 			invalid('must have a non-empty collectionGroup');
 		}
-		if (index.queryScope !== undefined && !INDEX_QUERY_SCOPES.has(index.queryScope)) {
+		if (!Object.prototype.hasOwnProperty.call(index, 'queryScope') || !INDEX_QUERY_SCOPES.has(index.queryScope)) {
 			invalid('has an invalid queryScope');
 		}
 		if (index.apiScope !== undefined && !INDEX_API_SCOPES.has(index.apiScope)) {
@@ -220,6 +228,9 @@ function readDeclaredIndexes(indexesPath = INDEXES_PATH) {
 				invalid(`uses the unsupported ${option} option`);
 			}
 		}
+		if (!hasOnlyProperties(index, INDEX_DECLARATION_PROPERTIES)) {
+			invalid('has unknown properties');
+		}
 		if (!Array.isArray(index.fields) || index.fields.length === 0) {
 			invalid('must have a non-empty fields array');
 		}
@@ -233,7 +244,7 @@ function readDeclaredIndexes(indexesPath = INDEXES_PATH) {
 
 		return {
 			collectionGroup: index.collectionGroup,
-			queryScope: index.queryScope || 'COLLECTION',
+			queryScope: index.queryScope,
 			...(index.apiScope !== undefined ? { apiScope: index.apiScope } : {}),
 			...(index.density !== undefined ? { density: index.density } : {}),
 			...(index.multikey !== undefined ? { multikey: index.multikey } : {}),
@@ -378,6 +389,17 @@ function isValidIndexField(field) {
 		&& typeof flat === 'object'
 		&& !Array.isArray(flat)
 		&& hasOnlyProperties(flat, VECTOR_FLAT_PROPERTIES);
+}
+
+function formatIndexField(field) {
+	if (field.order) return `${field.fieldPath} ${field.order}`;
+	if (field.arrayConfig) return `${field.fieldPath} ${field.arrayConfig}`;
+	if (field.vectorConfig) return `${field.fieldPath} VECTOR(${field.vectorConfig.dimension})`;
+
+	const searchModes = ['textSpec', 'geoSpec']
+		.filter((mode) => field.searchConfig[mode])
+		.map((mode) => mode === 'textSpec' ? 'TEXT' : 'GEO');
+	return `${field.fieldPath} SEARCH(${searchModes.join('+')})`;
 }
 
 function isValidLiveIndex(index, project, database) {
@@ -1133,7 +1155,7 @@ The CLI login store and FIREBASE_TOKEN are ignored so deployment and REST auditi
 	} else {
 		for (const entry of payload.indexes) {
 			const status = entry.ready ? 'READY' : (entry.deployed ? (entry.state || 'UNKNOWN') : 'MISSING');
-			const fields = entry.fields.map((field) => `${field.fieldPath} ${field.order}`).join(', ');
+			const fields = entry.fields.map(formatIndexField).join(', ');
 			console.log(`${entry.deployed ? ' ' : '!'} ${status.padEnd(8)} ${entry.collectionGroup} (${entry.queryScope}): ${fields}`);
 		}
 		console.log(

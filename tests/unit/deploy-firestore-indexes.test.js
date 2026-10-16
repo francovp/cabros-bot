@@ -311,7 +311,9 @@ describe('deploy-firestore-indexes', () => {
 
 		it.each([
 			['missing collection group', { queryScope: 'COLLECTION', fields: [{ fieldPath: 'x', order: 'ASCENDING' }] }],
+			['missing query scope', { collectionGroup: 'alerts', fields: [{ fieldPath: 'x', order: 'ASCENDING' }] }],
 			['empty fields', { collectionGroup: 'alerts', queryScope: 'COLLECTION', fields: [] }],
+			['unknown index property', { ...ALERTS_INDEX, apiScop: 'ANY_API' }],
 			['malformed field', { collectionGroup: 'alerts', queryScope: 'COLLECTION', fields: [{}] }],
 			['unknown field property', {
 				...ALERTS_INDEX,
@@ -1003,6 +1005,8 @@ describe('deploy-firestore-indexes', () => {
 		});
 
 		it.each([
+			['missing query scope', { collectionGroup: 'alerts', fields: ALERTS_INDEX.fields }],
+			['unknown index property', { ...ALERTS_INDEX, apiScop: 'ANY_API' }],
 			['unknown field property', {
 				...ALERTS_INDEX,
 				fields: [{ ...ALERTS_INDEX.fields[0], bogus: true }, ALERTS_INDEX.fields[1]],
@@ -1152,6 +1156,42 @@ describe('deploy-firestore-indexes', () => {
 				mode: 'apply',
 				summary: { allReady: true },
 			});
+		});
+
+		it('prints the configured mode for array, vector, and search fields', async () => {
+			const indexes = [
+				{
+					collectionGroup: 'documents',
+					queryScope: 'COLLECTION',
+					fields: [{ fieldPath: 'tags', arrayConfig: 'CONTAINS' }],
+				},
+				{
+					collectionGroup: 'documents',
+					queryScope: 'COLLECTION',
+					fields: [{
+						fieldPath: 'content',
+						searchConfig: {
+							textSpec: { indexSpecs: [{ indexType: 'TOKENIZED', matchType: 'MATCH_GLOBALLY' }] },
+						},
+					}],
+				},
+				{
+					collectionGroup: 'embeddings',
+					queryScope: 'COLLECTION',
+					fields: [{ fieldPath: 'embedding', vectorConfig: { dimension: 128, flat: {} } }],
+				},
+			];
+			fs.writeFileSync(indexesFile, JSON.stringify({ indexes }));
+			const request = withDatabaseMetadata(() => Promise.resolve({
+				data: { indexes: indexes.map((index) => liveIndex(index, 'READY')) },
+			}));
+
+			await expect(main(baseArgs(), { request })).resolves.toBe(0);
+
+			expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('tags CONTAINS'));
+			expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('content SEARCH(TEXT)'));
+			expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('embedding VECTOR(128)'));
+			expect(logSpy.mock.calls.flat().join('\n')).not.toContain('undefined');
 		});
 
 		it('caps the poll sleep to the remaining readiness budget', async () => {
