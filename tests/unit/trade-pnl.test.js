@@ -209,6 +209,19 @@ describe('summarize', () => {
 		expect(byOrigin.groups.map((g) => [g.key, g.realizedPnl])).toEqual([['mixed', '20']]);
 	});
 
+	it('assigns mixed setupType when a closing order spans lots with different setups', () => {
+		const mixedSetups = [
+			fill({ side: 'BUY', price: '100', qty: '1', quoteQty: '100', tradeId: 30, binanceOrderId: '30', setupType: 'breakout' }),
+			fill({ side: 'BUY', price: '100', qty: '1', quoteQty: '100', tradeId: 31, binanceOrderId: '31', setupType: 'pullback' }),
+			fill({ side: 'SELL', price: '110', qty: '2', quoteQty: '220', tradeId: 32, binanceOrderId: '32', filledAt: '2026-10-03T03:00:00.000Z' }),
+		];
+		const { roundTrips } = matchFifo(mixedSetups);
+		expect(roundTrips).toHaveLength(1);
+		expect(roundTrips[0].setupType).toBe('mixed');
+		const bySetup = summarize({ roundTrips, positions: [], groupBy: 'setupType' });
+		expect(bySetup.groups.map((g) => [g.key, g.realizedPnl])).toEqual([['mixed', '20']]);
+	});
+
 	it('returns null ROI and profit factor when there is no denominator', () => {
 		const summary = summarize({ roundTrips: [], positions: [] });
 		expect(summary.roiPct).toBeNull();

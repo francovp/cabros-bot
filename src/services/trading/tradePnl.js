@@ -159,6 +159,7 @@ function matchFifo(fills = []) {
 				exitMs: 0,
 				alertIds: new Set(),
 				origins: new Set(),
+				setupTypes: new Set(),
 				setupType: null,
 				invalidationLevel: null,
 			};
@@ -181,7 +182,7 @@ function matchFifo(fills = []) {
 			trip.entryMs = Math.min(trip.entryMs, piece.lot.filledMs);
 			if (piece.lot.alertId) trip.alertIds.add(piece.lot.alertId);
 			if (piece.lot.origin) trip.origins.add(piece.lot.origin);
-			trip.setupType = trip.setupType || piece.lot.setupType;
+			if (piece.lot.setupType) trip.setupTypes.add(piece.lot.setupType);
 			trip.invalidationLevel = trip.invalidationLevel ?? piece.lot.invalidationLevel;
 		}
 	}
@@ -217,6 +218,14 @@ function formatTrip(trip) {
 	} else {
 		origin = trip.origin || trip.exitOrigin || 'manual';
 	}
+	let setupType;
+	if (trip.setupTypes && trip.setupTypes.size === 1) {
+		setupType = [...trip.setupTypes][0];
+	} else if (trip.setupTypes && trip.setupTypes.size > 1) {
+		setupType = 'mixed';
+	} else {
+		setupType = trip.setupType || 'unknown';
+	}
 	const realized = trip.proceeds - trip.costBasis;
 	const entryPrice = div(trip.entryGross, trip.qty);
 	const exitPrice = div(trip.exitGross, trip.qty);
@@ -230,7 +239,7 @@ function formatTrip(trip) {
 		environment: trip.environment,
 		symbol: trip.symbol,
 		origin,
-		setupType: trip.setupType || 'unknown',
+		setupType,
 		exitOrderId: trip.exitOrderId,
 		qty: fromUnits(trip.qty),
 		entryPrice: fromUnits(entryPrice, RATIO_DP),
