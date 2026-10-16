@@ -1,5 +1,6 @@
 /* global AbortController */
 
+const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
@@ -11,7 +12,7 @@ const {
 } = require('../../../../services/tradingview/expandedAnalysisAlertReport');
 const {
 	getNotificationManager,
-	initializeNotificationServices,
+	getOrInitializeNotificationManager,
 } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const {
@@ -74,7 +75,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 
 			if (analyzedItems.length === 0) {
 				const timeoutError = timedOut;
-				return res.status(timeoutError ? 504 : 502).json({
+				return sendErrorFrom(res, timeoutError ? 504 : 502, {
 					success: false,
 					code: timeoutError ? 'EXPANDED_ANALYSIS_ALERT_TIMEOUT' : 'ALL_SYMBOLS_FAILED',
 					error: timeoutError
@@ -110,7 +111,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
-				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
+				notificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
 			}
 
 			const deliveryResults = await sendWithNotificationRouting(
@@ -179,7 +180,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 			});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: error.message,
 					code: 'INVALID_REQUEST',
 					requestId,
@@ -187,7 +188,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 			}
 
 			if (error instanceof ExpandedAnalysisAlertRequestError) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: error.message,
 					code: error.code,
 					requestId,
@@ -206,7 +207,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 				},
 			});
 
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error. Please try again later.',
 				code: 'INTERNAL_ERROR',
 				requestId,

@@ -1,7 +1,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { analyzeSymbols } = require('../../src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 
@@ -36,6 +36,7 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'tv-message-id' });
 		mockBot = {

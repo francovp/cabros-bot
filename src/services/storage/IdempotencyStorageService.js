@@ -27,6 +27,7 @@ const crypto = require('crypto');
 const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('./firestoreConfig');
 const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 
 const COLLECTION_NAME = 'idempotency_keys';
 const PENDING_STALE_TIMEOUT_MS = 180000; // 3 minutes max pending claim lifetime to cover 120s webhook limits
@@ -129,6 +130,15 @@ function recordReadinessSafely(record) {
 }
 
 function isEnabled() {
+	// Issue #721: a published remote value wins over the deployment value, so a
+	// remote `false` can switch durable idempotency off despite the `render.yaml`
+	// pin. `undefined` means no published value — gate off, stale, or key absent —
+	// which is not evidence, so the environment decides and the deprecated alias
+	// still applies.
+	const remote = resolveRemoteOverride('ENABLE_FIRESTORE_IDEMPOTENCY');
+	if (typeof remote === 'boolean') {
+		return remote;
+	}
 	return process.env.ENABLE_FIRESTORE_IDEMPOTENCY === 'true'
 		|| process.env.ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE === 'true';
 }

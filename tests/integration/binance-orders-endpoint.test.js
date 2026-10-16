@@ -1096,11 +1096,16 @@ describe('Binance orders API', () => {
 				.set('x-api-key', 'test-key')
 				.expect(403);
 
-			expect(response.body).toEqual({
+			expect(response.body).toEqual(expect.objectContaining({
 				success: false,
 				error: 'Binance order audit trail is disabled',
 				code: 'FEATURE_DISABLED',
-			});
+			}));
+			expect(response.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 
 			isEnabledSpy.mockRestore();
 		});
@@ -1114,11 +1119,16 @@ describe('Binance orders API', () => {
 				.set('x-api-key', 'test-key')
 				.expect(503);
 
-			expect(response.body).toEqual({
+			expect(response.body).toEqual(expect.objectContaining({
 				success: false,
 				error: 'Binance order audit trail is enabled but Firestore is not configured',
 				code: 'STORAGE_UNAVAILABLE',
-			});
+			}));
+			expect(response.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: true,
+				requestId: expect.any(String),
+			}));
 
 			isEnabledSpy.mockRestore();
 			isConfiguredSpy.mockRestore();
@@ -1179,8 +1189,43 @@ describe('Binance orders API', () => {
 					symbol: 'BTCUSDT',
 					status: 'dry_run',
 					limit: 25,
+					signal: expect.anything(),
 				}),
 			);
+			const callArg = listAuditRecordsSpy.mock.calls[0][0];
+			expect(callArg.signal).toBeDefined();
+			expect(typeof callArg.signal?.aborted).toBe('boolean');
+
+			isEnabledSpy.mockRestore();
+			isConfiguredSpy.mockRestore();
+			listAuditRecordsSpy.mockRestore();
+		});
+
+		it('forwards req.requestDeadlineSignal to listAuditRecords and handles abort', async () => {
+			const isEnabledSpy = jest.spyOn(binanceOrderAuditService, 'isEnabled').mockReturnValue(true);
+			const isConfiguredSpy = jest.spyOn(binanceOrderAuditService, 'isConfigured').mockReturnValue(true);
+
+			const customSignal = new AbortController().signal;
+			const listAuditRecordsSpy = jest.spyOn(binanceOrderAuditService, 'listAuditRecords').mockResolvedValue({
+				records: [],
+				hasMore: false,
+				nextBefore: null,
+			});
+
+			const customApp = express();
+			customApp.use((req, res, next) => {
+				req.requestDeadlineSignal = customSignal;
+				next();
+			});
+			customApp.use('/api', getRoutes(null));
+
+			await request(customApp)
+				.get('/api/trading/binance/orders/audit?symbol=BTCUSDT&limit=10')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			const callArg = listAuditRecordsSpy.mock.calls[0][0];
+			expect(callArg.signal === customSignal).toBe(true);
 
 			isEnabledSpy.mockRestore();
 			isConfiguredSpy.mockRestore();
@@ -1196,11 +1241,16 @@ describe('Binance orders API', () => {
 				.set('x-api-key', 'test-key')
 				.expect(400);
 
-			expect(resTooHigh.body).toEqual({
+			expect(resTooHigh.body).toEqual(expect.objectContaining({
 				success: false,
 				error: 'limit must be an integer between 1 and 100',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(resTooHigh.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 
 			const resTooLow = await request(app)
 				.get('/api/trading/binance/orders/audit?limit=0')

@@ -1,4 +1,9 @@
-const { scoreScannerItem, rankScannerItems, numberOrNull } = require('../../src/services/tradingview/marketScannerScoring');
+const {
+	scoreScannerItem,
+	rankScannerItems,
+	numberOrNull,
+	resolveTrendConfluence,
+} = require('../../src/services/tradingview/marketScannerScoring');
 
 describe('Market Scanner Scoring', () => {
 	describe('scoreScannerItem', () => {
@@ -571,5 +576,50 @@ describe('Market Scanner Scoring', () => {
 
 			expect(item).toEqual(original);
 		});
+	});
+});
+
+describe('resolveTrendConfluence for volume_confirmation', () => {
+	it('resolves directional higher-timeframe data when no candidate direction is supplied', () => {
+		const confluence = resolveTrendConfluence({}, 'volume_confirmation', {
+			trendConfluence: {
+				alignment: { status: 'ALIGNED', confidence: 85 },
+				recommendation: { action: 'BUY' },
+			},
+		});
+
+		expect(confluence).toEqual({ status: 'aligned', direction: 'bullish', confidence: 85 });
+	});
+
+	it('resolves aligned when the higher-timeframe direction matches the candidate', () => {
+		const confluence = resolveTrendConfluence({ breakout_type: 'bullish' }, 'volume_confirmation', {
+			trendConfluence: { direction: 'bullish', confidence: 90 },
+		});
+
+		expect(confluence).toEqual({ status: 'aligned', direction: 'bullish', confidence: 90 });
+	});
+
+	it('resolves counter-trend when the higher-timeframe direction opposes the candidate', () => {
+		const confluence = resolveTrendConfluence({ trading_recommendation: 'SELL' }, 'volume_confirmation', {
+			trendConfluence: { direction: 'bullish', confidence: 80 },
+		});
+
+		expect(confluence).toEqual({ status: 'counter-trend', direction: 'bullish', confidence: 80 });
+	});
+
+	it('returns an unknown result for neutral or directionless higher-timeframe data', () => {
+		const confluence = resolveTrendConfluence({}, 'volume_confirmation', {
+			trendConfluence: {
+				alignment: { status: 'MIXED' },
+				recommendation: { action: 'HOLD' },
+			},
+		});
+
+		expect(confluence).toEqual({ status: 'unknown', direction: null, confidence: null });
+	});
+
+	it('returns null when multi-timeframe data is missing or invalid', () => {
+		expect(resolveTrendConfluence({}, 'volume_confirmation', { trendConfluence: null })).toBeNull();
+		expect(resolveTrendConfluence({}, 'volume_confirmation', {})).toBeNull();
 	});
 });

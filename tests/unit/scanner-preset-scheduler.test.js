@@ -19,6 +19,7 @@ describe('ScannerPresetSchedulerService', () => {
 		process.env.ENABLE_SCANNER_PRESET_SCHEDULER = 'true';
 		process.env.SCANNER_PRESET_SCHEDULER_WORKER_ROLE = 'web';
 		process.env.SCANNER_PRESET_SCHEDULER_INTERVAL_MS = '60000';
+		process.env.WORKER_STARTUP_JITTER_MS = '0';
 		process.env.SCANNER_PRESET_SCHEDULER_BATCH_LIMIT = '50';
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'false';
 
@@ -407,6 +408,41 @@ describe('ScannerPresetSchedulerService', () => {
 	});
 
 	describe('worker lifecycle and shutdown drain', () => {
+		it('waits for startup jitter before scheduling the first scanner-preset sweep', async () => {
+			process.env.WORKER_STARTUP_JITTER_MS = '1000';
+			process.env.SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS = '50';
+			const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+			jest.useFakeTimers();
+			try {
+				scheduler.startWorker();
+				expect(scheduler.timer).toBeNull();
+				await jest.advanceTimersByTimeAsync(49);
+				expect(scheduler.timer).toBeNull();
+				await jest.advanceTimersByTimeAsync(1);
+				expect(scheduler.timer).not.toBeNull();
+			} finally {
+				await scheduler.stopWorker({ drain: false });
+				randomIntSpy.mockRestore();
+				jest.useRealTimers();
+			}
+		});
+
+		it('does not schedule a scanner-preset sweep when stopped during startup jitter', async () => {
+			process.env.WORKER_STARTUP_JITTER_MS = '1000';
+			process.env.SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS = '50';
+			const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+			jest.useFakeTimers();
+			try {
+				scheduler.startWorker();
+				await scheduler.stopWorker({ drain: false });
+				await jest.advanceTimersByTimeAsync(50);
+				expect(scheduler.timer).toBeNull();
+			} finally {
+				randomIntSpy.mockRestore();
+				jest.useRealTimers();
+			}
+		});
+
 		it('drains in-flight sweep on stopWorker', async () => {
 			let resolveScan;
 			const scanPromise = new Promise((resolve) => {

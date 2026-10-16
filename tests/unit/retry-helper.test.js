@@ -66,6 +66,24 @@ describe('retryHelper', () => {
 			expect(mockSendFn).toHaveBeenCalledTimes(2);
 		});
 
+		it('should stop immediately for terminal failures', async () => {
+			const mockSendFn = jest.fn().mockResolvedValue({
+				success: false,
+				channel: 'test',
+				error: 'No data found',
+				retryable: false,
+			});
+
+			const result = await sendWithRetry(mockSendFn, 3);
+
+			expect(result).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				attemptCount: 1,
+			}));
+			expect(mockSendFn).toHaveBeenCalledTimes(1);
+		});
+
 		it('should exhaust all retries and return failure', async () => {
 			const mockSendFn = jest.fn().mockResolvedValue({
 				success: false,
@@ -151,6 +169,27 @@ describe('retryHelper', () => {
 			expect(result.error).toBe('deadline reached');
 			expect(result.attemptCount).toBe(0);
 			expect(mockSendFn).not.toHaveBeenCalled();
+		});
+
+		it('should normalize object-valued abort reasons during retry delay', async () => {
+			const controller = new AbortController();
+			const mockSendFn = jest.fn().mockResolvedValue({
+				success: false,
+				channel: 'test',
+				error: 'send failed',
+			});
+			const pendingResult = sendWithRetry(mockSendFn, 3, null, {
+				signal: controller.signal,
+				maxRetryDelayMs: 1000,
+			});
+
+			await Promise.resolve();
+			controller.abort({ message: 'lease lost' });
+
+			const result = await pendingResult;
+
+			expect(result.aborted).toBe(true);
+			expect(result.error).toBe('Operation aborted');
 		});
 	});
 

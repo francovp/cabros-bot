@@ -1,7 +1,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices, getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, getNotificationManager, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { getCacheInstance } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 
@@ -43,6 +43,7 @@ describe('News Monitor dry-run mode', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 		signalOutcomeService.isEnabled.mockReturnValue(true);
 		signalOutcomeService.recordSignal.mockResolvedValue('outcome-id');
 

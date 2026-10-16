@@ -796,5 +796,46 @@ describe('Expanded Analysis Alert report', () => {
 			recordSpy.mockRestore();
 			signalOutcomeService.isEnabled.mockRestore();
 		});
+
+		it('normalizes overall_rating to [-1, 1] signed scale and confidence to [0, 1]', () => {
+			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue({});
+
+			recordExpandedAnalysisOutcomes([
+				{
+					input: { raw: 'BINANCE:ETHUSDT', exchange: 'BINANCE', symbol: 'ETHUSDT' },
+					side: 'SELL',
+					analysis: {
+						price_data: { close: 3000 },
+						market_sentiment: { overall_rating: 4 },
+					},
+				},
+				{
+					input: { raw: 'BINANCE:BTCUSDT', exchange: 'BINANCE', symbol: 'BTCUSDT' },
+					side: 'BUY',
+					analysis: {
+						price_data: { close: 60000 },
+						market_sentiment: { overall_rating: 4 },
+					},
+				},
+			], { timeframe: '1D' });
+
+			expect(recordSpy).toHaveBeenCalledTimes(2);
+			expect(recordSpy.mock.calls[0][0]).toEqual(expect.objectContaining({
+				symbol: 'ETHUSDT',
+				side: 'SELL',
+				score: -0.8,
+				confidenceScore: 0.8,
+			}));
+			expect(recordSpy.mock.calls[1][0]).toEqual(expect.objectContaining({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				score: 0.8,
+				confidenceScore: 0.8,
+			}));
+
+			recordSpy.mockRestore();
+			signalOutcomeService.isEnabled.mockRestore();
+		});
 	});
 });

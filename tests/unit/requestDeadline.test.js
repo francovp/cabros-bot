@@ -56,6 +56,8 @@ describe('Request Deadline Middleware (unit)', () => {
 		expect(next).toHaveBeenCalled();
 		expect(req.requestId).toBe('preset-request-id');
 		expect(res.getHeader('X-Request-Id')).toBe('preset-request-id');
+		expect(req.requestDeadlineAt).toBeGreaterThanOrEqual(Date.now());
+		expect(req.requestDeadlineAt - Date.now()).toBeLessThanOrEqual(5000);
 	});
 
 	test('mints a request id when none is provided', () => {
