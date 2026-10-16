@@ -18,11 +18,11 @@ function firstDefined(...values) {
 	return null;
 }
 
-// Pricing per 1M tokens (USD)
 // Based on official pricing documentation:
 // Gemini: https://ai.google.dev/gemini-api/docs/pricing
 // OpenAI: https://openai.com/api/pricing/
 // Anthropic: https://www.anthropic.com/pricing
+// CB-583: Brave Search grounding is billed per request and is treated as free for tokens.
 const PRICING_PER_1M = {
 	'gemini-3-pro-preview': { input: 2.00, output: 12.00 },
 	'gemini-3-flash-preview': { input: 0.50, output: 3.00 },
@@ -32,6 +32,7 @@ const PRICING_PER_1M = {
 	'gemini-2.5-flash-lite': { input: 0.10, output: 0.40 },
 	'gemini-1.5-flash': { input: 0.075, output: 0.30 },
 	'gemini-1.5-pro': { input: 1.25, output: 5.00 },
+	'brave-search': { input: 0, output: 0 },
 	'gpt-4o': { input: 2.50, output: 10.00 },
 	'gpt-4o-mini': { input: 0.15, output: 0.60 },
 	'claude-3-5-sonnet': { input: 3.00, output: 15.00 },
@@ -213,7 +214,10 @@ class TokenUsageTracker {
 	/**
 	 * Add a usage record (raw metadata or normalized object)
 	 * @param {Object|null|undefined} usage
-	 * @param {string} [model] - Model name for pricing calculation
+	 * @param {string} [model] - Model name for pricing calculation. When
+	 *   omitted, cost is estimated using the conservative Gemini 2.5 Flash
+	 *   default so `/api/alerts/summary` aggregates do not silently report
+	 *   `totalCost: 0` (CB-583 / Issue #583).
 	 */
 	addUsage(usage, model, featureOrOptions = this.defaultFeature) {
 		// Accept either a feature name (per-call attribution) or an options object
@@ -239,15 +243,13 @@ class TokenUsageTracker {
 		this.inputTokens += currentInput;
 		this.outputTokens += currentOutput;
 
-		let iCost = 0;
-		let oCost = 0;
-		if (model) {
-			const cost = this.calculateCost(currentInput, currentOutput, model);
-			iCost = cost.inputCost;
-			oCost = cost.outputCost;
-			this.inputCost += iCost;
-			this.outputCost += oCost;
+		const cost = this.calculateCost(currentInput, currentOutput, model);
+		const iCost = cost.inputCost;
+		const oCost = cost.outputCost;
+		this.inputCost += iCost;
+		this.outputCost += oCost;
 
+		if (model) {
 			const { unknown, matchedKey } = resolvePricing(model);
 			if (unknown && matchedKey) {
 				this._unknownModels.add(matchedKey);
@@ -327,6 +329,18 @@ class TokenUsageTracker {
 			...json,
 			estimatedSpendUsd: json.totalCost,
 		};
+	}
+
+	/**
+	 * Reset all accumulated token and cost counters to zero. Used by the
+	 * render-or-skip gate (CB-583) to drop token spend for unrenderable
+	 * enrichment output so cost aggregates stay honest.
+	 */
+	reset() {
+		this.inputTokens = 0;
+		this.outputTokens = 0;
+		this.inputCost = 0;
+		this.outputCost = 0;
 	}
 
 	toJSON() {

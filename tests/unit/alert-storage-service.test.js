@@ -3320,6 +3320,7 @@ describe('AlertStorageService', () => {
 							unknownModels: [],
 						},
 					},
+					costEstimateUsd: 0.001,
 				},
 				delivery: {
 					totalSuccess: 2,

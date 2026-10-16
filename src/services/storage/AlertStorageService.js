@@ -3539,6 +3539,10 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 	if (summary.decision) finalizeDecisionGatesRollup(summary.decision.gates);
 	summary.enrichment.sentimentCalibration = buildSentimentCalibration(sentimentScores, rawScoreCapCount);
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
+	// CB-583 / Issue #583: expose the same cost under a clearer
+	// `costEstimateUsd` alias so operators can see real spend without
+	// confusing it with input/output token counts.
+	summary.enrichment.costEstimateUsd = summary.enrichment.tokenUsage.totalCost;
 	for (const feature of FEATURE_TAGS) {
 		summary.costByFeature[feature].totalCost = Number(summary.costByFeature[feature].totalCost.toFixed(6));
 	}
