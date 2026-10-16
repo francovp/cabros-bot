@@ -247,4 +247,73 @@ describe('POST /api/admin/test-alert Integration', () => {
 		expect(res2.header['idempotency-replay']).toBe('true');
 		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(1);
 	});
+
+	it('does not replay 429 cooldown response after Retry-After expires and allows retry with same key', async () => {
+		let currentTime = 1700000000000;
+		jest.spyOn(Date, 'now').mockImplementation(() => currentTime);
+
+		const cooldownKey = 'test-alert-cooldown-retry-key';
+
+		// 1. Initial live probe succeeds (200 OK)
+		const res1 = await request(app)
+			.post('/api/admin/test-alert')
+			.set('x-api-key', 'secret-operator-key')
+			.send({ text: 'Initial probe', channels: ['telegram'] });
+
+		expect(res1.status).toBe(200);
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(1);
+
+		// 2. Second probe 10 seconds later with idempotency key hits 60s cooldown (429)
+		currentTime += 10000;
+		const res2 = await request(app)
+			.post('/api/admin/test-alert')
+			.set('x-api-key', 'secret-operator-key')
+			.set('x-idempotency-key', cooldownKey)
+			.send({ text: 'Cooldown probe', channels: ['telegram'] });
+
+		expect(res2.status).toBe(429);
+		expect(res2.body.code).toBe('RATE_LIMITED');
+		expect(res2.headers['retry-after']).toBe('50');
+
+		// 3. Retry with same key 5 seconds later (still in cooldown) also gets 429
+		currentTime += 5000;
+		const res3 = await request(app)
+			.post('/api/admin/test-alert')
+			.set('x-api-key', 'secret-operator-key')
+			.set('x-idempotency-key', cooldownKey)
+			.send({ text: 'Cooldown probe', channels: ['telegram'] });
+
+		expect(res3.status).toBe(429);
+		expect(res3.body.code).toBe('RATE_LIMITED');
+		expect(res3.headers['retry-after']).toBe('45');
+
+		// 4. Time advances past the 60s cooldown (e.g. 50s more, total 65s since first probe)
+		currentTime += 50000;
+
+		// 5. Retry with SAME idempotency key after cooldown expires:
+		// Must NOT return cached 429, but execute probe and return 200 OK!
+		const res4 = await request(app)
+			.post('/api/admin/test-alert')
+			.set('x-api-key', 'secret-operator-key')
+			.set('x-idempotency-key', cooldownKey)
+			.send({ text: 'Cooldown probe', channels: ['telegram'] });
+
+		expect(res4.status).toBe(200);
+		expect(res4.body.ok).toBe(true);
+		expect(res4.header['idempotency-replay']).toBe('false');
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(2);
+
+		// 6. Another call with same key now replays the successful 200 OK
+		const res5 = await request(app)
+			.post('/api/admin/test-alert')
+			.set('x-api-key', 'secret-operator-key')
+			.set('x-idempotency-key', cooldownKey)
+			.send({ text: 'Cooldown probe', channels: ['telegram'] });
+
+		expect(res5.status).toBe(200);
+		expect(res5.body.ok).toBe(true);
+		expect(res5.header['idempotency-replay']).toBe('true');
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(2);
+	});
 });
+
