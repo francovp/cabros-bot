@@ -17,6 +17,7 @@ const path = require('path');
 
 const FIRESTORE_FLAG_KEYS = [
 	'ENABLE_FIRESTORE_ALERT_STORAGE',
+	'ENABLE_FIRESTORE_ALERT_SUBSCRIBERS',
 	'ENABLE_FIRESTORE_IDEMPOTENCY',
 	'ENABLE_FIRESTORE_JOB_STORAGE',
 	'ENABLE_FIRESTORE_SCANNER_PRESETS',
@@ -307,6 +308,15 @@ describe('Issue #721 — Firestore storage flags in Remote Config', () => {
 
 			const { scannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
 			const status = scannerPresetService.getStorageStatus();
+			expect(status.backend).toBe('memory');
+		});
+
+		it('AlertSubscriberService reports durable storage from the remote gate', () => {
+			process.env.ENABLE_FIRESTORE_ALERT_SUBSCRIBERS = 'true';
+			publishRemote(remoteConfigService, { ENABLE_FIRESTORE_ALERT_SUBSCRIBERS: false });
+
+			const { alertSubscriberService } = require('../../src/services/subscribers/AlertSubscriberService');
+			const status = alertSubscriberService.getStorageStatus();
 			expect(status.backend).toBe('memory');
 		});
 

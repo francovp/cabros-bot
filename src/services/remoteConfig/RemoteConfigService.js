@@ -171,6 +171,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	// deployment has ENABLE_FIREBASE_REMOTE_CONFIG=false, so it keeps the render.yaml
 	// value and can never mutate the production collection through a remote toggle.
 	ENABLE_FIRESTORE_ALERT_STORAGE: { type: 'boolean', defaultValue: false },
+	ENABLE_FIRESTORE_ALERT_SUBSCRIBERS: { type: 'boolean', defaultValue: false },
 	ENABLE_FIRESTORE_IDEMPOTENCY: { type: 'boolean', defaultValue: false },
 	ENABLE_FIRESTORE_JOB_STORAGE: { type: 'boolean', defaultValue: false },
 	ENABLE_FIRESTORE_SCANNER_PRESETS: { type: 'boolean', defaultValue: false },
