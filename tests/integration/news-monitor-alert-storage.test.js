@@ -9,6 +9,7 @@ const NotificationManager = require('../../src/services/notification/Notificatio
 const { getNewsMonitor } = require('../../src/controllers/webhooks/handlers/newsMonitor/newsMonitor');
 const { setNotificationManager } = require('../../src/controllers/webhooks/handlers/newsMonitor/analyzer');
 const { getCacheInstance } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
+const { waitForBackgroundTasks } = require('../../src/lib/backgroundTaskTracker');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 
 jest.mock('../../src/services/grounding/gemini');
@@ -377,6 +378,124 @@ describe('News Monitor - Alert Storage Integration', () => {
 		expect(saveAlertSpy.mock.calls[1][0].tokenUsage).toBeNull();
 
 		resolveFirstSave('original-doc-id');
+	});
+
+	it('commits the pending state durably before starting the alert write', async () => {
+		const cache = getCacheInstance();
+		const sequence = [];
+		let durableState = 'unset';
+		const markSpy = jest.spyOn(cache, 'markOriginalPersistState').mockImplementation(async (...args) => {
+			await new Promise((resolve) => setImmediate(resolve));
+			durableState = args[2];
+			sequence.push(`state:${args[2]}`);
+		});
+		saveAlertSpy.mockImplementation(async () => {
+			sequence.push(`saveAlert(observed=${durableState})`);
+			return 'mock-alert-doc-id';
+		});
+
+		try {
+			await request(app)
+				.post('/api/news-monitor')
+				.set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+				.expect(200);
+
+			await waitForBackgroundTasks();
+			await new Promise((resolve) => setImmediate(resolve));
+
+			expect(sequence).toEqual([
+				'state:pending',
+				'saveAlert(observed=pending)',
+				'state:owned',
+			]);
+		} finally {
+			markSpy.mockRestore();
+		}
+	});
+
+	it('registers the ordered persistence sequence so shutdown cannot outrun it', async () => {
+		const cache = getCacheInstance();
+		let releasePendingState;
+		let pendingStateStarted = false;
+		const markSpy = jest.spyOn(cache, 'markOriginalPersistState').mockImplementation(async (...args) => {
+			if (args[2] !== 'pending') {
+				return undefined;
+			}
+			pendingStateStarted = true;
+			await new Promise((resolve) => { releasePendingState = resolve; });
+		});
+
+		try {
+			await request(app)
+				.post('/api/news-monitor')
+				.set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+				.expect(200);
+
+			// The pending-state transaction is in flight and blocking. The whole
+			// sequence must already be registered, otherwise shutdown observes an
+			// empty task set and completes before saveAlert is ever scheduled.
+			await new Promise((resolve) => setImmediate(resolve));
+			expect(pendingStateStarted).toBe(true);
+			expect(saveAlertSpy).not.toHaveBeenCalled();
+
+			let shutdownFinished = false;
+			const shutdown = waitForBackgroundTasks().then(() => { shutdownFinished = true; });
+			await new Promise((resolve) => setImmediate(resolve));
+			expect(shutdownFinished).toBe(false);
+
+			releasePendingState();
+			await shutdown;
+
+			expect(saveAlertSpy).toHaveBeenCalledTimes(1);
+		} finally {
+			markSpy.mockRestore();
+		}
+	});
+
+	it('renews the usage claim while a cached redelivery is still being persisted', async () => {
+		const cache = getCacheInstance();
+		const renewSpy = jest.spyOn(cache, 'renewUsageOwnership').mockResolvedValue(true);
+		// The ORIGINAL write fails, leaving usage unowned. The REDELIVERY write
+		// then hangs, so the claim is held while the document is in flight.
+		saveAlertSpy.mockRejectedValueOnce(new Error('firestore unavailable'));
+		let releaseSave;
+		saveAlertSpy.mockImplementationOnce(() => new Promise((resolve) => { releaseSave = resolve; }));
+
+		try {
+			await request(app)
+				.post('/api/news-monitor')
+				.set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['telegram'] })
+				.expect(200);
+			await waitForBackgroundTasks();
+
+			const failedEntry = await cache.get('BTCUSDT', 'price_surge');
+			expect(failedEntry.originalPersistedState).toBe('none');
+
+			const res = await request(app)
+				.post('/api/news-monitor')
+				.set('x-api-key', 'test-key')
+				.send({ crypto: ['BTCUSDT'], channels: ['whatsapp'] })
+				.expect(200);
+			expect(res.body.summary.cached).toBe(1);
+
+			// The redelivery save is still in flight, so the claim must still be
+			// held: a slow persist outliving the lease would let another replica
+			// reclaim it and write a second document carrying the same usage.
+			const claimedEntry = await cache.get('BTCUSDT', 'price_surge');
+			expect(claimedEntry.originalPersistedState).toBe('claimed');
+			expect(claimedEntry.usageClaimToken).toEqual(expect.any(String));
+
+			releaseSave('cached-doc-id');
+			await waitForBackgroundTasks();
+
+			const ownedEntry = await cache.get('BTCUSDT', 'price_surge');
+			expect(ownedEntry.originalPersistedState).toBe('owned');
+		} finally {
+			renewSpy.mockRestore();
+		}
 	});
 
 	it('does not persist when ENABLE_FIRESTORE_ALERT_STORAGE is false', async () => {
