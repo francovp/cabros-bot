@@ -38,6 +38,11 @@ const {
 	sendError,
 	STANDARD_ERROR_CODES,
 } = require('../../../../lib/errorEnvelope');
+const {
+	isEquityExchange,
+	classifySession,
+	isEquitySessionTagEnabled,
+} = require('../../../../services/storage/EquitySessionService');
 
 const ENRICHMENT_PROVIDER_STATUSES = new Set(['full', 'partial', 'failed']);
 
@@ -238,6 +243,9 @@ async function processEnrichment(alert, options) {
 				parsedSignal: parsed,
 			});
 			if (enrichedAlert && typeof enrichedAlert === 'object') {
+				if (alert.session && !enrichedAlert.session) {
+					enrichedAlert.session = alert.session;
+				}
 				enrichedAlert.tokenUsage = tokenUsage && typeof tokenUsage.toJSON === 'function' ? tokenUsage.toJSON() : null;
 				enriched = true;
 				alert.enriched = enrichedAlert;
@@ -556,11 +564,10 @@ function postAlert(botOrGetter) {
 			const source = (typeof body === 'object' && body && typeof body.source === 'string' && body.source.trim())
 				? body.source.trim()
 				: 'webhook-alert';
-			alert = { text, source, signalClass, ...truncation };
-			// `alert.text` is immutable from here on, so the TradingView signal is parsed
-			// once and shared by the repeat-suppression, persistence, and outcome-eligibility
-			// paths below.
-			const parsedSignal = parseTradingViewSignal(alert.text);
+			const parsedSignal = parseTradingViewSignal(text);
+			const session = parsedSignal?.session
+				|| (parsedSignal?.exchange && isEquityExchange(parsedSignal.exchange) ? classifySession({ exchange: parsedSignal.exchange, symbol: parsedSignal.symbol }) : undefined);
+			alert = { text, source, signalClass, ...(session ? { session } : {}), ...truncation };
 
 			if (alertModeration.isEnabled()) {
 				alertModeration.refreshConfig();
@@ -814,6 +821,7 @@ function postAlert(botOrGetter) {
 						&& buildBurstGroupKey({ parsedSignal, routing: deliveryRouting }) !== null;
 					const dispatchOutcome = await burstAggregator.dispatch({
 						parsedSignal,
+						alert,
 						routing: deliveryRouting,
 						deliver: async (overrides = {}) => sendWithNotificationRouting(
 							notificationManager,
@@ -1015,6 +1023,7 @@ function postAlert(botOrGetter) {
 				discordWebhookUrl: routing.discordWebhookUrl,
 				alertId: inlineAlertId || undefined,
 				side: parsedSignal?.side || null,
+				session: alert.session || undefined,
 				burstAggregateId,
 				burstSignalCount,
 				decision: decisionAudit,
@@ -1098,6 +1107,7 @@ function postAlert(botOrGetter) {
 								? Math.abs(alert.enriched.sentiment_score)
 								: null),
 						side: parsedSignal.side,
+						session: alert.session || parsedSignal.session || undefined,
 						price: mcpPrice,
 						stop: stopLevel,
 						target: targetLevel,
