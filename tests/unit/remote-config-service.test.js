@@ -25,8 +25,11 @@ describe('RemoteConfigService', () => {
 		savedEnv = { ...process.env };
 		Object.keys(process.env).forEach((key) => delete process.env[key]);
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'false';
+		process.env.WORKER_STARTUP_JITTER_MS = '0';
 		process.env.NEWS_ALERT_THRESHOLD = '0.7';
 		process.env.TRADINGVIEW_MCP_TIMEOUT_MS = '12000';
+		process.env.SIGNAL_OUTCOME_WINDOWS = '1h,4h,1D,1W';
+		process.env.SIGNAL_OUTCOME_WINDOW_LABELS = '';
 		jest.clearAllMocks();
 		isFirestoreConfigured.mockReturnValue(true);
 		remoteConfigService._resetForTesting();
@@ -62,6 +65,167 @@ describe('RemoteConfigService', () => {
 		expect(remoteConfigService.getRuntimeConfig().NEWS_ALERT_THRESHOLD).toBe(0.7);
 		expect(remoteConfigService.getRuntimeConfig().TRADINGVIEW_MCP_TIMEOUT_MS).toBe(12000);
 		expect(admin.remoteConfig).not.toHaveBeenCalled();
+	});
+
+	it('delays Remote Config startup by its configured jitter and cancels pending startup on stop', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.WORKER_STARTUP_JITTER_MS = '1000';
+		process.env.REMOTE_CONFIG_REFRESH_JITTER_MS = '50';
+		const load = jest.fn().mockResolvedValue(undefined);
+		mockTemplate({}, { load });
+		alertStorageService.getFirestore.mockReturnValue({});
+		jest.useFakeTimers();
+		const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+
+		try {
+			const startPromise = remoteConfigService.start();
+			expect(load).not.toHaveBeenCalled();
+			await jest.advanceTimersByTimeAsync(49);
+			expect(load).not.toHaveBeenCalled();
+			remoteConfigService.stop();
+			await jest.advanceTimersByTimeAsync(1);
+			await expect(startPromise).resolves.toBe(false);
+			expect(load).not.toHaveBeenCalled();
+		} finally {
+			remoteConfigService.stop();
+			randomIntSpy.mockRestore();
+			jest.useRealTimers();
+		}
+	});
+
+	it('cancels the referenced startup jitter timer immediately when stopped', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.WORKER_STARTUP_JITTER_MS = '1000';
+		process.env.REMOTE_CONFIG_REFRESH_JITTER_MS = '50';
+		const load = jest.fn().mockResolvedValue(undefined);
+		mockTemplate({}, { load });
+		alertStorageService.getFirestore.mockReturnValue({});
+		jest.useFakeTimers();
+		const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+
+		let startPromise;
+		try {
+			startPromise = remoteConfigService.start();
+			expect(jest.getTimerCount()).toBe(1);
+
+			remoteConfigService.stop();
+			expect(jest.getTimerCount()).toBe(0);
+			await expect(startPromise).resolves.toBe(false);
+			expect(load).not.toHaveBeenCalled();
+		} finally {
+			remoteConfigService.stop();
+			if (jest.getTimerCount() > 0) {
+				await jest.runOnlyPendingTimersAsync();
+			}
+			randomIntSpy.mockRestore();
+			jest.useRealTimers();
+		}
+	});
+
+	it('loads the template only after Remote Config startup jitter expires', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.WORKER_STARTUP_JITTER_MS = '1000';
+		process.env.REMOTE_CONFIG_REFRESH_JITTER_MS = '50';
+		const load = jest.fn().mockResolvedValue(undefined);
+		mockTemplate({}, { load });
+		alertStorageService.getFirestore.mockReturnValue({});
+		jest.useFakeTimers();
+		const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+
+		try {
+			const startPromise = remoteConfigService.start();
+			expect(load).not.toHaveBeenCalled();
+			await jest.advanceTimersByTimeAsync(49);
+			expect(load).not.toHaveBeenCalled();
+			await jest.advanceTimersByTimeAsync(1);
+			await expect(startPromise).resolves.toBe(true);
+			expect(load).toHaveBeenCalledTimes(1);
+		} finally {
+			remoteConfigService.stop();
+			randomIntSpy.mockRestore();
+			jest.useRealTimers();
+		}
+	});
+
+	it('applies the published Remote Config jitter to its first scheduled refresh', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.WORKER_STARTUP_JITTER_MS = '1000';
+		process.env.FIREBASE_REMOTE_CONFIG_REFRESH_INTERVAL_MS = '1000';
+		const load = jest.fn().mockResolvedValue(undefined);
+		mockTemplate({ REMOTE_CONFIG_REFRESH_JITTER_MS: 50 }, { load });
+		alertStorageService.getFirestore.mockReturnValue({});
+		jest.useFakeTimers();
+		const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(25);
+
+		try {
+			const startPromise = remoteConfigService.start();
+			await jest.advanceTimersByTimeAsync(25);
+			await expect(startPromise).resolves.toBe(true);
+			expect(load).toHaveBeenCalledTimes(1);
+
+			await jest.advanceTimersByTimeAsync(1024);
+			expect(load).toHaveBeenCalledTimes(1);
+			await jest.advanceTimersByTimeAsync(1);
+			expect(load).toHaveBeenCalledTimes(2);
+			await jest.advanceTimersByTimeAsync(1000);
+			expect(load).toHaveBeenCalledTimes(3);
+		} finally {
+			remoteConfigService.stop();
+			randomIntSpy.mockRestore();
+			jest.useRealTimers();
+		}
+	});
+
+	it('uses the global fallback for the first scheduled refresh when its override is absent', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.WORKER_STARTUP_JITTER_MS = '1000';
+		process.env.FIREBASE_REMOTE_CONFIG_REFRESH_INTERVAL_MS = '1000';
+		const load = jest.fn().mockResolvedValue(undefined);
+		mockTemplate({}, { load });
+		alertStorageService.getFirestore.mockReturnValue({});
+		jest.useFakeTimers();
+		const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt')
+			.mockReturnValueOnce(50)
+			.mockReturnValueOnce(25);
+
+		try {
+			const startPromise = remoteConfigService.start();
+			await jest.advanceTimersByTimeAsync(50);
+			await expect(startPromise).resolves.toBe(true);
+			expect(load).toHaveBeenCalledTimes(1);
+			expect(randomIntSpy).toHaveBeenNthCalledWith(2, 0, 1001);
+
+			await jest.advanceTimersByTimeAsync(1024);
+			expect(load).toHaveBeenCalledTimes(1);
+			await jest.advanceTimersByTimeAsync(1);
+			expect(load).toHaveBeenCalledTimes(2);
+		} finally {
+			remoteConfigService.stop();
+			randomIntSpy.mockRestore();
+			jest.useRealTimers();
+		}
+	});
+
+	it('lets global zero disable a published Remote Config refresh jitter', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.WORKER_STARTUP_JITTER_MS = '0';
+		process.env.FIREBASE_REMOTE_CONFIG_REFRESH_INTERVAL_MS = '1000';
+		const load = jest.fn().mockResolvedValue(undefined);
+		mockTemplate({ REMOTE_CONFIG_REFRESH_JITTER_MS: 50 }, { load });
+		alertStorageService.getFirestore.mockReturnValue({});
+		jest.useFakeTimers();
+		const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(25);
+
+		try {
+			await expect(remoteConfigService.start()).resolves.toBe(true);
+			expect(randomIntSpy).not.toHaveBeenCalled();
+			await jest.advanceTimersByTimeAsync(1000);
+			expect(load).toHaveBeenCalledTimes(2);
+		} finally {
+			remoteConfigService.stop();
+			randomIntSpy.mockRestore();
+			jest.useRealTimers();
+		}
 	});
 
 	it('resolves the generic message limit to the bounded environment value or safe default', () => {
@@ -102,6 +266,24 @@ describe('RemoteConfigService', () => {
 		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
 	});
 
+	it('supports the request-time alert decision audit gate in environment and Remote Config', async () => {
+		expect(remoteConfigService.PARAMETER_SCHEMA.ENABLE_ALERT_DECISION_AUDIT).toEqual({
+			type: 'boolean',
+			defaultValue: false,
+		});
+		expect(remoteConfigService.getRuntimeConfig().ENABLE_ALERT_DECISION_AUDIT).toBe(false);
+
+		process.env.ENABLE_ALERT_DECISION_AUDIT = 'true';
+		expect(remoteConfigService.getRuntimeConfig().ENABLE_ALERT_DECISION_AUDIT).toBe(true);
+
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({ ENABLE_ALERT_DECISION_AUDIT: false });
+		alertStorageService.getFirestore.mockReturnValue({});
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.getRuntimeConfig().ENABLE_ALERT_DECISION_AUDIT).toBe(false);
+	});
+
 	it('falls back to bounded defaults for invalid TradingView MCP environment values', () => {
 		[
 			['TRADINGVIEW_MCP_TIMEOUT_MS', 'not-a-number', 12000],
@@ -120,10 +302,22 @@ describe('RemoteConfigService', () => {
 			['ALERT_SCHEDULER_INTERVAL_MS', '4000000', 60000],
 			['ALERT_SCHEDULER_BATCH_LIMIT', '0', 10],
 			['ALERT_SCHEDULER_BATCH_LIMIT', '101', 10],
+			['TRADINGVIEW_MCP_CACHE_TTL_MS', '9999', 90000],
+			['TRADINGVIEW_MCP_CACHE_TTL_MS', '600001', 90000],
 		].forEach(([key, value, expected]) => {
 			process.env[key] = value;
 			expect(remoteConfigService.getRuntimeConfig()[key]).toBe(expected);
 		});
+	});
+
+	it('preserves valid TradingView MCP cache environment settings', () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_CACHE = 'true';
+		process.env.TRADINGVIEW_MCP_CACHE_TTL_MS = '120000';
+
+		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
+			ENABLE_TRADINGVIEW_MCP_CACHE: true,
+			TRADINGVIEW_MCP_CACHE_TTL_MS: 120000,
+		}));
 	});
 
 	it('preserves valid environment values when Remote Config is disabled', async () => {
@@ -376,6 +570,32 @@ describe('RemoteConfigService', () => {
 		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
 	});
 
+	it('applies the TradingView default exchange from Remote Config with environment fallback', async () => {
+		process.env.TRADINGVIEW_MCP_DEFAULT_EXCHANGE = 'NYSE';
+		expect(remoteConfigService.getRuntimeConfig().TRADINGVIEW_MCP_DEFAULT_EXCHANGE).toBe('NYSE');
+
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({ TRADINGVIEW_MCP_DEFAULT_EXCHANGE: 'NASDAQ' });
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+		expect(remoteConfigService.getRuntimeConfig().TRADINGVIEW_MCP_DEFAULT_EXCHANGE).toBe('NASDAQ');
+
+		mockTemplate({ TRADINGVIEW_MCP_DEFAULT_EXCHANGE: '   ' });
+		await remoteConfigService.loadNow();
+		expect(remoteConfigService.getRuntimeConfig().TRADINGVIEW_MCP_DEFAULT_EXCHANGE).toBe('NYSE');
+
+		mockTemplate({ TRADINGVIEW_MCP_DEFAULT_EXCHANGE: 'NASDAQ:NVDA' });
+		await remoteConfigService.loadNow();
+		expect(remoteConfigService.getRuntimeConfig().TRADINGVIEW_MCP_DEFAULT_EXCHANGE).toBe('NYSE');
+		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
+
+		mockTemplate({ TRADINGVIEW_MCP_DEFAULT_EXCHANGE: '.' });
+		await remoteConfigService.loadNow();
+		expect(remoteConfigService.getRuntimeConfig().TRADINGVIEW_MCP_DEFAULT_EXCHANGE).toBe('NYSE');
+		expect(remoteConfigService.getStatus().lastErrorCategory).toBe('invalid_value');
+	});
+
 	it('validates and applies expanded operational parameters from remote config', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 		mockTemplate({
@@ -409,6 +629,7 @@ describe('RemoteConfigService', () => {
 			NEWS_MAX_ALERTS_PER_BATCH: 15,
 			NEWS_MAX_ALERTS_PER_WINDOW: 30,
 			NEWS_MAX_ALERTS_PER_WINDOW_MS: 600000,
+			NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS: 3600000,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
 
@@ -418,6 +639,7 @@ describe('RemoteConfigService', () => {
 		expect(config.NEWS_MAX_ALERTS_PER_BATCH).toBe(15);
 		expect(config.NEWS_MAX_ALERTS_PER_WINDOW).toBe(30);
 		expect(config.NEWS_MAX_ALERTS_PER_WINDOW_MS).toBe(600000);
+		expect(config.NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS).toBe(3600000);
 		expect(config.GROUNDING_MAX_SOURCES).toBe(5);
 		expect(config.GROUNDING_TIMEOUT_MS).toBe(45000);
 		expect(config.GROUNDING_MAX_LENGTH).toBe(3000);
@@ -445,6 +667,22 @@ describe('RemoteConfigService', () => {
 		expect(config.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD).toBe(10);
 		expect(config.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS).toBe(300000);
 		expect(config.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS).toBe(1800000);
+	});
+
+	it('supports configurable signal outcome windows and labels in Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({
+			SIGNAL_OUTCOME_WINDOWS: '5m,1h,1M',
+			SIGNAL_OUTCOME_WINDOW_LABELS: '{"5m":"5 minutos","1h":"1 hora","1M":"1 mes"}',
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
+			SIGNAL_OUTCOME_WINDOWS: '5m,1h,1M',
+			SIGNAL_OUTCOME_WINDOW_LABELS: '{"5m":"5 minutos","1h":"1 hora","1M":"1 mes"}',
+		}));
 	});
 
 	it('validates and applies safe request-time feature flags from remote config', async () => {
@@ -574,10 +812,12 @@ describe('RemoteConfigService', () => {
 		process.env.ADMIN_SSE_MAX_CLIENT_CONNECTIONS = '3';
 		process.env.ADMIN_SSE_MAX_TOTAL_CONNECTIONS = '50';
 		process.env.ADMIN_SSE_HEARTBEAT_MS = '20000';
+		process.env.ADMIN_SSE_DRAIN_TIMEOUT_MS = '10000';
 		mockTemplate({
 			ADMIN_SSE_MAX_CLIENT_CONNECTIONS: 8,
 			ADMIN_SSE_MAX_TOTAL_CONNECTIONS: 200,
 			ADMIN_SSE_HEARTBEAT_MS: 15000,
+			ADMIN_SSE_DRAIN_TIMEOUT_MS: 5000,
 			ENABLE_ADMIN_SSE: true,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
@@ -588,6 +828,7 @@ describe('RemoteConfigService', () => {
 		expect(config.ADMIN_SSE_MAX_CLIENT_CONNECTIONS).toBe(8);
 		expect(config.ADMIN_SSE_MAX_TOTAL_CONNECTIONS).toBe(200);
 		expect(config.ADMIN_SSE_HEARTBEAT_MS).toBe(15000);
+		expect(config.ADMIN_SSE_DRAIN_TIMEOUT_MS).toBe(5000);
 
 		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('ENABLE_ADMIN_SSE');
 		expect(config).not.toHaveProperty('ENABLE_ADMIN_SSE');
@@ -759,12 +1000,31 @@ describe('RemoteConfigService', () => {
 				defaultValue: { value: '30000' },
 				valueType: 'NUMBER',
 			}));
+			for (const key of [
+				'WORKER_STARTUP_JITTER_MS',
+				'SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS',
+				'NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS',
+				'SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS',
+				'REMOTE_CONFIG_REFRESH_JITTER_MS',
+			]) {
+				expect(remoteConfigService.PARAMETER_SCHEMA[key]).toEqual({
+					type: 'number',
+					defaultValue: 5000,
+					integer: true,
+					min: 0,
+					max: 30000,
+				});
+				expect(template.parameters[key]).toEqual(expect.objectContaining({
+					defaultValue: { useInAppDefault: true },
+					valueType: 'NUMBER',
+				}));
+			}
 		});
 
-		// A published template outranks render.yaml for every allow-listed key, so a
-		// blueprint value that disagrees with the template is a flag that reports one
-		// thing while doing another (issue #1179). Storage gates that decide where a
-		// collection lives are excluded from the template entirely instead.
+		// A published template value outranks render.yaml for every allow-listed key,
+		// so disagreeing literal defaults make a flag report one thing while doing
+		// another (issue #1179). `useInAppDefault` explicitly means there is no remote
+		// value, so the deployment remains authoritative for that parameter.
 		it('never lets render.yaml and the published template disagree on an allow-listed key', () => {
 			const fs = require('fs');
 			const path = require('path');
@@ -781,7 +1041,11 @@ describe('RemoteConfigService', () => {
 				if (blueprintValue === undefined) {
 					continue;
 				}
-				expect({ [key]: parameter.defaultValue.value }).toEqual({ [key]: blueprintValue });
+				if (parameter.defaultValue?.useInAppDefault === true) {
+					expect(parameter.defaultValue).toEqual({ useInAppDefault: true });
+					continue;
+				}
+				expect({ [key]: parameter.defaultValue?.value }).toEqual({ [key]: blueprintValue });
 			}
 		});
 

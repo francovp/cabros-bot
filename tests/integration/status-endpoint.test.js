@@ -14,6 +14,8 @@ const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaMana
 const groundingMetrics = require('../../src/services/grounding/metrics');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
 const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
+const persistentWriteHealthSchema = require('../../src/openapi/openapi.json')
+	.components.schemas.PersistentWriteDomainHealth;
 const { getPromptService } = require('../../src/services/prompts');
 const { signalClassMetrics } = require('../../src/services/alerts/signalClassifier');
 const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
@@ -36,6 +38,15 @@ const validFirestoreServiceAccountJson = JSON.stringify({
 });
 
 describe('Status endpoints', () => {
+	function expectNullHealthFieldsAllowedBySchema(domainHealth) {
+		for (const field of ['lastSuccessAt', 'lastFailureAt', 'lastFailureCategory']) {
+			const value = domainHealth[field];
+			const property = persistentWriteHealthSchema.properties[field];
+			expect(property.type).toContain(value === null ? 'null' : 'string');
+			if (property.enum) expect(property.enum).toContain(value);
+		}
+	}
+
 	let savedEnv;
 	let savedTradingViewRuntimeStatus;
 	let savedTradingViewVolumeRuntimeStatus;
@@ -139,7 +150,61 @@ describe('Status endpoints', () => {
 		expect(response.body.error).toBe('Unauthorized: Missing API key');
 	});
 
+	it('exposes persistent-write health on both status aliases without provider errors', async () => {
+		const providerMessage = 'credential=super-secret Firestore failure';
+		firestoreWriteMetricsService.recordPersistentWriteFailure(
+			'alertStorage',
+			Object.assign(new Error(providerMessage), { code: 7 }),
+		);
+
+		const status = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		const capabilities = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(status.status).toBe(200);
+		expect(status.body.dependencies.persistentWriteHealth.byDomain.alertStorage).toMatchObject({
+			success: 0,
+			failure: 1,
+			failureRate: 1,
+			lastFailureCategory: 'firestore_permission_denied',
+			status: 'degraded',
+		});
+		expect(status.body.dependencies.persistentWriteHealth.byDomain.newsDedup).toMatchObject({
+			success: 0,
+			failure: 0,
+			status: 'unconfigured',
+		});
+		expectNullHealthFieldsAllowedBySchema(status.body.dependencies.persistentWriteHealth.byDomain.newsDedup);
+		expect(capabilities.body.dependencies.persistentWriteHealth.byDomain)
+			.toEqual(status.body.dependencies.persistentWriteHealth.byDomain);
+		expect(status.body.dependencies).not.toHaveProperty('firestoreWriteMetrics');
+		expect(status.text).not.toContain(providerMessage);
+		expect(capabilities.text).not.toContain(providerMessage);
+	});
+
+	it('returns healthy persistent-write null fields accepted by the OpenAPI schema', async () => {
+		firestoreWriteMetricsService.recordPersistentWriteSuccess('signalOutcomes');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		const health = response.body.dependencies.persistentWriteHealth.byDomain.signalOutcomes;
+		expect(health.status).toBe('ok');
+		expect(health.lastFailureAt).toBeNull();
+		expect(health.lastFailureCategory).toBeNull();
+		expectNullHealthFieldsAllowedBySchema(health);
+	});
+
 	it('returns machine-readable status on /api/status', async () => {
+		process.env.WORKER_STARTUP_JITTER_MS = '1000';
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS = '125';
+		remoteConfigService._setRemoteOverridesForTesting({ WORKER_STARTUP_JITTER_MS: 2000 }, Date.now());
 		const response = await request(app)
 			.get('/api/status')
 			.set('x-api-key', 'status-key');
@@ -161,6 +226,13 @@ describe('Status endpoints', () => {
 			}),
 		}));
 		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: true, status: 'ready' });
+		expect(response.body.dependencies.startupJitter).toEqual({
+			global: 2000,
+			signalOutcome: 125,
+			redrive: 2000,
+			scannerPreset: 2000,
+			remoteConfig: 2000,
+		});
 		expect(response.body.dependencies.gemini).toEqual({
 			enabled: true,
 			configured: true,
@@ -214,6 +286,9 @@ describe('Status endpoints', () => {
 			},
 			errorCategoryCounts: {
 				circuit_breaker_open: 0,
+				provider_unavailable: 0,
+				upstream_tool_error: 0,
+				not_found: 0,
 				http_5xx: 0,
 				http_4xx: 0,
 				timeout: 0,
@@ -235,7 +310,14 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			scope: 'webhook',
 		});
+		expect(response.body.dependencies.adminApiKey).toEqual(expect.objectContaining({
+			scope: 'admin',
+		}));
+		expect(response.body.dependencies.binanceTradingApiKey).toEqual(expect.objectContaining({
+			scope: 'binance-trading',
+		}));
 	});
 
 	it('exposes rolling alert-path MCP enrichment rates', async () => {
@@ -783,6 +865,102 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.alertCrossTimeframeSuppression.windowMs).toBe(60000);
 	});
 
+	it('reports alert HTF render feature flag as true by default', async () => {
+		delete process.env.ENABLE_ALERT_HTF_RENDER;
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.alertHtfRender).toBe(true);
+	});
+
+	it('reports alert HTF render feature flag as false when disabled', async () => {
+		process.env.ENABLE_ALERT_HTF_RENDER = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.alertHtfRender).toBe(false);
+	});
+
+	it('reports symbol analysis multi-agent feature flag as false by default', async () => {
+		delete process.env.ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT;
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.symbolAnalysisMultiAgent).toBe(false);
+	});
+
+	it('reports symbol analysis multi-agent feature flag as true when enabled via env', async () => {
+		process.env.ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT = 'true';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.symbolAnalysisMultiAgent).toBe(true);
+	});
+
+	it('reports symbol analysis multi-agent feature flag as true when enabled via remote config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		remoteConfigService._setRemoteOverridesForTesting(
+			{ ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT: true },
+			Date.now()
+		);
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.symbolAnalysisMultiAgent).toBe(true);
+	});
+
+	it('reports api-only mode feature flag as false by default', async () => {
+		delete process.env.ENABLE_API_ONLY_MODE;
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.apiOnlyMode).toBe(false);
+	});
+
+	it('reports api-only mode feature flag as true when enabled via env', async () => {
+		process.env.ENABLE_API_ONLY_MODE = 'true';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.apiOnlyMode).toBe(true);
+	});
+
+	it('reports api-only mode feature flag as true when enabled via remote config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		remoteConfigService._setRemoteOverridesForTesting(
+			{ ENABLE_API_ONLY_MODE: true },
+			Date.now()
+		);
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.apiOnlyMode).toBe(true);
+	});
+
 	it('reports safe Firebase Remote Config load metadata without values and honest readiness', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 
@@ -1053,6 +1231,10 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.signalOutcomeWorker).toMatchObject({
 			role: 'worker',
 			running: false,
+			breakdownBucketCap: 100,
+			lastBreakdownBucketCount: 0,
+			lastBreakdownTruncated: false,
+			breakdownTruncationCount: 0,
 			lastRunScannedCount: 0,
 			lastRunPendingCount: 0,
 			lastRunErrorCount: 0,
@@ -2282,6 +2464,9 @@ describe('Status endpoints', () => {
 			},
 			errorCategoryCounts: {
 				circuit_breaker_open: 0,
+				provider_unavailable: 0,
+				upstream_tool_error: 0,
+				not_found: 0,
 				http_5xx: 0,
 				http_4xx: 0,
 				timeout: 0,

@@ -1,5 +1,6 @@
 /* global AbortController */
 
+const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
@@ -11,7 +12,7 @@ const {
 } = require('../../../../services/tradingview/marketScannerReport');
 const {
 	getNotificationManager,
-	initializeNotificationServices,
+	getOrInitializeNotificationManager,
 } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const {
@@ -54,7 +55,7 @@ function postMarketScannerAlert(botOrGetter) {
 
 		try {
 			if (!getRuntimeConfig().ENABLE_MARKET_SCANNER) {
-				return res.status(404).json({
+				return sendErrorFrom(res, 404, {
 					error: 'Market scanner is not enabled',
 					code: 'FEATURE_DISABLED',
 				});
@@ -96,7 +97,7 @@ function postMarketScannerAlert(botOrGetter) {
 
 			if (successfulScans.length === 0) {
 				const timeoutError = timedOut;
-				return res.status(timeoutError ? 504 : 502).json({
+				return sendErrorFrom(res, timeoutError ? 504 : 502, {
 					success: false,
 					ranked: parsed.ranked === true,
 					includeMultiTimeframe: parsed.includeMultiTimeframe === true,
@@ -140,7 +141,7 @@ function postMarketScannerAlert(botOrGetter) {
 
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
-				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
+				notificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
 			}
 
 			const deliveryResults = await sendWithNotificationRouting(
@@ -214,7 +215,7 @@ function postMarketScannerAlert(botOrGetter) {
 			});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: error.message,
 					code: 'INVALID_REQUEST',
 					requestId,
@@ -222,7 +223,7 @@ function postMarketScannerAlert(botOrGetter) {
 			}
 
 			if (error instanceof MarketScannerRequestError) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: error.message,
 					code: error.code,
 					requestId,
@@ -241,7 +242,7 @@ function postMarketScannerAlert(botOrGetter) {
 				},
 			});
 
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error. Please try again later.',
 				code: 'INTERNAL_ERROR',
 				requestId,

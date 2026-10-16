@@ -78,7 +78,11 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
         "inputTokens": 100,
         "outputTokens": 40,
         "totalTokens": 140,
-        "totalCost": 0.00003
+        "totalCost": 0.00003,
+        "pricing": {
+          "unknownModelPricing": false,
+          "unknownModels": []
+        }
       },
       "processingTimeMs": 150
     }
@@ -95,12 +99,14 @@ Equity records also persist `sessionContext`, `decisionBarClosedAt`, `tradableAt
 
 #### GET /api/outcomes/summary
 
-Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, status, window, and date range. Explicit `from`/`to` ranges may include archived records restored from backups; requests without `from` remain bounded by the configured retention window. When no outcomes match the filters or tracking is enabled with an empty dataset, the endpoint returns `200 OK` with `available: false` and a typed empty summary structure. Requires `x-api-key` header (or deprecated `api-key` query parameter — see [GH-756](https://github.com/francovp/cabros-bot/issues/756)) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
+Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, setup type, status, window, and date range. Explicit `from`/`to` ranges may include archived records restored from backups; requests without `from` remain bounded by the configured retention window. When no outcomes match the filters or tracking is enabled with an empty dataset, the endpoint returns `200 OK` with `available: false` and a typed empty summary structure. Requires `x-api-key` header (or deprecated `api-key` query parameter — see [GH-756](https://github.com/francovp/cabros-bot/issues/756)) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
 
 **Query Parameters:**
 - `limit` - Maximum number of recent outcomes to aggregate (integer between `1` and `100`, default: `50`)
 - `symbol` - Filter by trading symbol (e.g. `BTCUSDT` or `BINANCE:BTCUSDT`)
 - `exchange` - Filter by exchange identifier (e.g. `BINANCE`, `NASDAQ`)
+- `setupType` - Single, non-empty, case-insensitive filter applied before the summary limit and aggregation; repeated query parameters return `400 INVALID_REQUEST`.
+- `breakdown` - Optional comma-separated values `symbol`, `setup`, or both. Each requested grouping is keyed by dimension plus exchange and capped at 100 buckets; unknown, empty, or repeated query values return `400 INVALID_REQUEST`.
 - `status` - Filter by evaluation status (`pending`, `evaluated`, `unavailable`)
 - `window` - Filter by measurement window (`1h`, `4h`, `1D`, `1W`)
 - `from` - Optional ISO-8601 lower bound timestamp
@@ -173,12 +179,24 @@ Query aggregated performance and coverage metrics for recorded signal outcomes, 
       "tokenUsage": {
         "inputTokens": 1200,
         "outputTokens": 400,
-        "totalCost": 0.0035
+        "totalCost": 0.0035,
+        "pricing": {
+          "unknownModelPricing": false,
+          "unknownModels": []
+        }
       }
     }
   }
 }
 ```
+
+When `breakdown` is requested, the response adds `symbolBreakdown` and/or `setupBreakdown`, plus `truncated`. Each group includes received/eligible/evaluated/pending/unavailable coverage counts, barrier-eligible target and stop hit rates as ratios from `0` to `1`, and per-window evaluated counts, rates, and average MFE/MAE. Symbol groups use `(symbol, exchange)`; setup groups use `(setupType, exchange)`. Missing dimensions are grouped under `UNKNOWN`. `truncated` is true if either grouping reaches its 100-bucket cap and omits further groups.
+
+```text
+GET /api/outcomes/summary?setupType=breakout&breakdown=symbol,setup
+```
+
+`GET /api/alerts/summary` accepts the same `breakdown` values to add these arrays inside its `shadowModeMetrics` object when that object is available.
 
 #### GET /api/outcomes/calibration
 
@@ -191,6 +209,17 @@ Query empirical confidence calibration feedback metrics comparing news-monitor a
 - `window` - Evaluation window for hit-rate benchmark (`1h`, `4h`, `1D`, `1W`, default: `4h`)
 - `from` - Optional ISO-8601 lower bound timestamp
 - `to` - Optional ISO-8601 upper bound timestamp
+
+**Firestore index prerequisite:** When the recent sample is capped before enough eligible confidence scores are found, calibration runs bounded source-specific recovery queries. Deploy these composites before deploying the application change, then wait for both to reach `READY` in Firebase Console (Firestore → Indexes):
+
+- `tradingSignalOutcomes`: `source ASC`, `receivedAt DESC`
+- `tradingSignalOutcomes`: `source ASC`, `confidenceScoreOrigin ASC`, `receivedAt DESC`
+
+```bash
+firebase deploy --only firestore:indexes --project <project-id>
+```
+
+If recovery needs an index that is missing or still building, `GET /api/outcomes/calibration` returns `503 STORAGE_UNAVAILABLE` until the index is ready.
 
 **Response (200 OK):**
 ```json

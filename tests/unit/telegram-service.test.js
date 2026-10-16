@@ -630,6 +630,24 @@ describe('TelegramService', () => {
 			const ineligibleService = new TelegramService({ bot: null });
 			expect(ineligibleService.isAdminDeliveryEligible()).toBe(false);
 		});
+
+		it('forwards session and signalClass to formatter.format and formatEnriched', async () => {
+			const mockFormatter = {
+				format: jest.fn().mockReturnValue('formatted text'),
+				formatEnriched: jest.fn().mockReturnValue('formatted enriched'),
+			};
+			const svc = new TelegramService({
+				bot: { telegram: { sendMessage: jest.fn().mockResolvedValue({ message_id: 1 }) } },
+				chatId: 'chat-1',
+				formatter: mockFormatter,
+			});
+
+			await svc.send({ text: 'plain alert', session: 'regular', signalClass: 'A' });
+			expect(mockFormatter.format).toHaveBeenCalledWith('plain alert', { signalClass: 'A', session: 'regular' });
+
+			await svc.send({ text: 'enriched alert', enriched: { summary: 'data' }, session: 'pre', signalClass: 'B' });
+			expect(mockFormatter.formatEnriched).toHaveBeenCalledWith({ summary: 'data' }, { signalClass: 'B', session: 'pre' });
+		});
 	});
 });
 
