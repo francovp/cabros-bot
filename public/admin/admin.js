@@ -5976,7 +5976,13 @@ const playgroundInputCache = new Map();
 const playgroundHistory = [];
 const sanitizeForHistory = (text) => {
 	if (!text || typeof text !== 'string') return text;
-	return text.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization)['"]?\s*[:=]\s*['"]?)[^'"\s,}\]]+/gi, '$1[REDACTED]');
+	if (typeof window !== 'undefined' && window.CabrosAdminRequest && typeof window.CabrosAdminRequest.sanitizeForHistory === 'function') {
+		return window.CabrosAdminRequest.sanitizeForHistory(text);
+	}
+	return text
+		.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization|discordWebhookUrl|webhookUrl)['"]?\s*[:=]\s*)(['"])(?:(?!\2).)*\2/gi, '$1$2[REDACTED]$2')
+		.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization|discordWebhookUrl|webhookUrl)['"]?\s*[:=]\s*)(?!['"])[^'"\s,}\]&]+/gi, '$1[REDACTED]')
+		.replace(/(https?:\/\/(?:[a-zA-Z0-9-]+\.)?discord(?:app)?\.com\/api\/webhooks\/)\d+(?:\/(?!\[REDACTED\])[^'"?\s/]*)?/gi, '$1[REDACTED]/[REDACTED]');
 };
 
 const renderPlayground = (contract, view) => {

@@ -7676,6 +7676,63 @@ describe('structured analysis forms', () => {
 			expect(playground.elements.body.value).toContain('[REDACTED]');
 		});
 
+		it('redacts Discord webhook URLs in request history and restored body (#1159)', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.includes('/api/webhook/alert')) {
+						return response({ success: true, messageId: 'm-102' });
+					}
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
+			await select.dispatch('change');
+			const liveToken = 'super-secret-discord-token-xyz';
+			const liveWebhookId = '9876543210';
+			playground.elements.body.value = JSON.stringify({
+				message: 'Breakout alert',
+				discordWebhookUrl: `https://discord.com/api/webhooks/${liveWebhookId}/${liveToken}`,
+			});
+			await playground.dispatch('submit');
+			await flush();
+
+			const historyItems = findAll(playground, (n) => n.className === 'history-item');
+			expect(historyItems.length).toBe(1);
+
+			// Verify webhook token and ID are redacted from history and playground text
+			expect(playground.textContent).not.toContain(liveToken);
+			expect(playground.textContent).not.toContain(liveWebhookId);
+
+			// Change the current form to another operation to clear inputs
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('GET /api/alerts —')).value;
+			await select.dispatch('change');
+			expect(playground.elements.body).toBeUndefined();
+
+			// Restore from history
+			const restoreBtn = find(historyItems[0], (n) => n.tagName === 'BUTTON' && n.textContent === 'Restore');
+			await restoreBtn.dispatch('click');
+			await flush();
+
+			// Form should be back to POST /api/webhook/alert with restored body
+			const currentSelected = find(select, (o) => o.value === select.value);
+			expect(currentSelected.textContent).toContain('POST /api/webhook/alert');
+			expect(playground.elements.body).toBeDefined();
+			expect(playground.elements.body.value).toContain('Breakout alert');
+			expect(playground.elements.body.value).not.toContain(liveToken);
+			expect(playground.elements.body.value).not.toContain(liveWebhookId);
+			expect(playground.elements.body.value).toContain('[REDACTED]');
+		});
+
 		it('records the submitted query payload when operations change mid-flight', async () => {
 			let releaseRequest;
 			const pendingRequest = new Promise((resolve) => { releaseRequest = resolve; });

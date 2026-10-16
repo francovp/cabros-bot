@@ -47,6 +47,14 @@
 			.reduce((redacted, variant) => redacted.split(variant).join('[REDACTED]'), String(value));
 	};
 
+	const sanitizeForHistory = (text) => {
+		if (!text || typeof text !== 'string') return text;
+		return text
+			.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization|discordWebhookUrl|webhookUrl)['"]?\s*[:=]\s*)(['"])(?:(?!\2).)*\2/gi, '$1$2[REDACTED]$2')
+			.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization|discordWebhookUrl|webhookUrl)['"]?\s*[:=]\s*)(?!['"])[^'"\s,}\]&]+/gi, '$1[REDACTED]')
+			.replace(/(https?:\/\/(?:[a-zA-Z0-9-]+\.)?discord(?:app)?\.com\/api\/webhooks\/)\d+(?:\/(?!\[REDACTED\])[^'"?\s/]*)?/gi, '$1[REDACTED]/[REDACTED]');
+	};
+
 	const operationDefinitions = (contract) => Object.entries(contract.paths)
 		.flatMap(([path, methods]) => Object.entries(methods)
 			.filter(([method]) => ['get', 'post', 'put', 'patch', 'delete'].includes(method))
@@ -230,6 +238,7 @@
 		getBatchReplayTimeout,
 		operationDefinitions,
 		redactSecret,
+		sanitizeForHistory,
 		validateQuery,
 	};
 }));
