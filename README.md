@@ -147,6 +147,9 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `POST` | `/api/news-monitor` | Trigger symbol news scanning & event detection | [News Monitoring](docs/news-monitor.md) |
 | `POST` | `/api/trading/binance/orders/preview` | Pre-trade Binance Spot cost & slippage preview | [API Reference](docs/api-reference.md#post-apitradingbinanceorderspreview) |
 | `GET` | `/api/trading/binance/account/balances` | Read-only Binance Spot balances for allowed assets | [API Reference](docs/api-reference.md#get-apitradingbinanceaccountbalances) |
+| `GET` | `/api/trading/positions` | Query open Binance trading positions with mark prices and unrealized P&L | [API Reference](docs/api-reference.md#get-apitradingpositions) |
+| `GET` | `/api/trading/pnl/summary` | Realized & unrealized P&L, ROI %, win rate, drawdown, and equity series | [API Reference](docs/api-reference.md#get-apitradingpnlsummary) |
+| `GET` | `/api/trading/trades` | Historical trade fills and closed round trips with pagination | [API Reference](docs/api-reference.md#get-apitradingtrades) |
 | `GET` | `/api/alerts` | Query stored alerts with pagination & filtering | [Stored Alerts](docs/alerts.md#get-apialerts) |
 | `GET` | `/api/alerts/summary` | Analytics & delivery success rate metrics | [Stored Alerts](docs/alerts.md#get-apialertssummary) |
 | `POST` | `/api/alerts/:alertId/replay` | Dry-run or live replay of stored alert | [Stored Alerts](docs/alerts.md#post-apialertsalertidreplay) |
@@ -164,6 +167,7 @@ Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schem
 | Variable | Type | Default | Bounds | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `GENERIC_MESSAGE_MAX_LENGTH` | Integer | `4000` | `1`-`20000` | Maximum inbound characters before generic message webhook truncation. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored, leaving the environment/default effective. |
+| `TRADE_LEDGER_MAX_SCAN` | Integer | `5000` | `1`-`20000` | Maximum durable trade fills scanned per positions or P&L summary calculation. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored, leaving the environment/default effective. |
 
 ---
 

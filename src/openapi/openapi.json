@@ -13935,6 +13935,18 @@
             "type": "string",
             "minLength": 1,
             "description": "Optional snake_case body form of the idempotency key."
+          },
+          "origin": {
+            "type": "string",
+            "description": "Optional provenance origin for the trade ledger (e.g. manual, auto_trade, alert)."
+          },
+          "alertId": {
+            "type": "string",
+            "description": "Optional linked alert identifier for trade ledger attribution."
+          },
+          "setupType": {
+            "type": "string",
+            "description": "Optional trading setup category for trade ledger grouping (e.g. breakout, pullback)."
           }
         },
         "oneOf": [

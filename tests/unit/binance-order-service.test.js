@@ -2429,4 +2429,64 @@ describe('BinanceOrderService', () => {
 		});
 	});
 
+	describe('provenance fields', () => {
+		it('accepts origin, alertId, and setupType in dry-run order requests', async () => {
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+				getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
+				testNewOrder: jest.fn().mockResolvedValue({}),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			const result = await service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: 0.001,
+				price: 50000,
+				dryRun: true,
+				origin: 'alert',
+				alertId: 'alert-123',
+				setupType: 'breakout',
+			});
+
+			expect(result.success).toBe(true);
+			expect(result.dryRun).toBe(true);
+		});
+
+		it('rejects invalid non-string origin, alertId, or setupType', async () => {
+			const service = createBinanceOrderService();
+
+			await expect(service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: 0.001,
+				price: 50000,
+				dryRun: true,
+				origin: 123,
+			})).rejects.toMatchObject({ message: 'origin must be a non-empty string' });
+
+			await expect(service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: 0.001,
+				price: 50000,
+				dryRun: true,
+				alertId: '   ',
+			})).rejects.toMatchObject({ message: 'alertId must be a non-empty string' });
+
+			await expect(service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: 0.001,
+				price: 50000,
+				dryRun: true,
+				setupType: '',
+			})).rejects.toMatchObject({ message: 'setupType must be a non-empty string' });
+		});
+	});
 });
+

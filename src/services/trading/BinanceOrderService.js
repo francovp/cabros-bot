@@ -291,7 +291,7 @@ function normalizeRequest(body) {
 	const allowedKeys = new Set([
 		'symbol', 'side', 'type', 'quantity', 'quoteOrderQty', 'price',
 		'timeInForce', 'clientOrderId', 'dryRun', 'idempotencyKey', 'idempotency_key',
-		'maxSlippageBps',
+		'maxSlippageBps', 'origin', 'alertId', 'setupType',
 	]);
 	const unknownKey = Object.keys(body).find((key) => !allowedKeys.has(key));
 	if (unknownKey) throw new BinanceOrderRequestError(`Unsupported order field: ${unknownKey}`);
@@ -343,6 +343,30 @@ function normalizeRequest(body) {
 		else throw new BinanceOrderRequestError('dryRun must be boolean');
 	}
 
+	let origin;
+	if (body.origin !== undefined) {
+		if (typeof body.origin !== 'string' || !body.origin.trim()) {
+			throw new BinanceOrderRequestError('origin must be a non-empty string');
+		}
+		origin = body.origin.trim().toLowerCase();
+	}
+
+	let alertId;
+	if (body.alertId !== undefined) {
+		if (typeof body.alertId !== 'string' || !body.alertId.trim()) {
+			throw new BinanceOrderRequestError('alertId must be a non-empty string');
+		}
+		alertId = body.alertId.trim();
+	}
+
+	let setupType;
+	if (body.setupType !== undefined) {
+		if (typeof body.setupType !== 'string' || !body.setupType.trim()) {
+			throw new BinanceOrderRequestError('setupType must be a non-empty string');
+		}
+		setupType = body.setupType.trim().toLowerCase();
+	}
+
 	return {
 		symbol,
 		side,
@@ -353,6 +377,9 @@ function normalizeRequest(body) {
 		timeInForce,
 		clientOrderId,
 		dryRun,
+		origin,
+		alertId,
+		setupType,
 	};
 }
 
