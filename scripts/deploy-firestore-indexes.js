@@ -24,7 +24,7 @@
  *    `unique` and **drops `state`**. Composite indexes also build asynchronously
  *    and a query is rejected until the build reaches `READY`. So the CLI command
  *    the existing runbook tells you to "confirm with" structurally cannot
- *    distinguish READY from BUILDING — which is how a completed deploy still
+ *    distinguish READY from CREATING — which is how a completed deploy still
  *    leaves every read returning 503. The raw REST collection returns `state`,
  *    so that is what this script reads.
  *
@@ -45,6 +45,8 @@ const { spawnSync } = require('node:child_process');
 
 const DEFAULT_PROJECT = 'cabros-bot';
 const DEFAULT_DATABASE = '(default)';
+// Firebase CLI defaults omitted database metadata to Standard edition.
+const DEFAULT_DATABASE_EDITION = 'STANDARD';
 const DEFAULT_LOG_FILE = '.firestore-indexes-deploy.log';
 const INDEXES_PATH = path.resolve(__dirname, '..', 'firestore.indexes.json');
 const FIRESTORE_API = 'https://firestore.googleapis.com/v1';
@@ -55,11 +57,26 @@ const STALLED_CREDENTIAL_EXIT_GRACE_MS = 1000;
 
 /**
  * `READY` is the only state a query can actually use. The API also reports
- * CREATING/BUILDING (still building), NEEDS_REPAIR/ERROR (deployed but
- * unusable), DISABLED, and STATE_UNSPECIFIED. Anything not READY is reported as
+ * CREATING (still building), NEEDS_REPAIR (deployed but
+ * unusable), and STATE_UNSPECIFIED. Anything not READY is reported as
  * not ready rather than assumed usable.
  */
 const READY_STATE = 'READY';
+const DATABASE_EDITIONS = new Set(['STANDARD', 'ENTERPRISE', 'DATABASE_EDITION_UNSPECIFIED']);
+const INDEX_QUERY_SCOPES = new Set(['COLLECTION', 'COLLECTION_GROUP']);
+const INDEX_API_SCOPES = new Set(['ANY_API', 'DATASTORE_MODE_API', 'MONGODB_COMPATIBLE_API']);
+const INDEX_DENSITIES = new Set(['DENSITY_UNSPECIFIED', 'SPARSE_ALL', 'SPARSE_ANY', 'DENSE']);
+const INDEX_STATES = new Set(['STATE_UNSPECIFIED', 'CREATING', 'READY', 'NEEDS_REPAIR']);
+const INDEX_FIELD_PROPERTIES = new Set(['fieldPath', 'order', 'arrayConfig', 'searchConfig', 'vectorConfig']);
+const SEARCH_CONFIG_PROPERTIES = new Set(['textSpec', 'geoSpec']);
+const SEARCH_TEXT_SPEC_PROPERTIES = new Set(['indexSpecs']);
+const SEARCH_TEXT_INDEX_SPEC_PROPERTIES = new Set(['indexType', 'matchType']);
+const SEARCH_TEXT_INDEX_TYPES = new Set(['TOKENIZED']);
+const SEARCH_TEXT_MATCH_TYPES = new Set(['MATCH_GLOBALLY']);
+const SEARCH_GEO_SPEC_PROPERTIES = new Set(['geoJsonIndexingDisabled']);
+const VECTOR_CONFIG_PROPERTIES = new Set(['dimension', 'flat']);
+const VECTOR_FLAT_PROPERTIES = new Set();
+const MAX_VECTOR_DIMENSION = 2048;
 
 /**
  * `projects.databases.collectionGroups.indexes.list` is paginated: it accepts
@@ -162,7 +179,7 @@ function parseArgs(argv = process.argv.slice(2)) {
  * Read the composite indexes declared in the repository template.
  *
  * @param {string} [indexesPath]
- * @returns {Array<{collectionGroup: string, queryScope: string, fields: Array<Record<string, unknown>>}>}
+ * @returns {Array<{collectionGroup: string, queryScope: string, apiScope?: string, density?: string, multikey?: boolean, fields: Array<Record<string, unknown>>}>}
  */
 function readDeclaredIndexes(indexesPath = INDEXES_PATH) {
 	let parsed;
@@ -172,22 +189,68 @@ function readDeclaredIndexes(indexesPath = INDEXES_PATH) {
 		throw new Error(`Failed to read ${indexesPath}: ${error.message}`, { cause: error });
 	}
 
-	const indexes = parsed && Array.isArray(parsed.indexes) ? parsed.indexes : [];
-	return indexes.map((index) => ({
-		collectionGroup: index.collectionGroup,
-		queryScope: index.queryScope || 'COLLECTION',
-		fields: Array.isArray(index.fields)
-			? index.fields.map((field) => ({ ...field }))
-			: [],
-	}));
+	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || !Array.isArray(parsed.indexes)) {
+		throw new Error(`${indexesPath} must contain an indexes array.`);
+	}
+
+	return parsed.indexes.map((index, indexNumber) => {
+		const invalid = (reason) => {
+			throw new Error(`${indexesPath} indexes[${indexNumber}] ${reason}.`);
+		};
+		if (!index || typeof index !== 'object' || Array.isArray(index)) {
+			invalid('must be an object');
+		}
+		if (typeof index.collectionGroup !== 'string' || index.collectionGroup.trim() === '') {
+			invalid('must have a non-empty collectionGroup');
+		}
+		if (index.queryScope !== undefined && !INDEX_QUERY_SCOPES.has(index.queryScope)) {
+			invalid('has an invalid queryScope');
+		}
+		if (index.apiScope !== undefined && !INDEX_API_SCOPES.has(index.apiScope)) {
+			invalid('has an invalid apiScope');
+		}
+		if (index.density !== undefined && !INDEX_DENSITIES.has(index.density)) {
+			invalid('has an invalid density');
+		}
+		if (index.multikey !== undefined && typeof index.multikey !== 'boolean') {
+			invalid('has an invalid multikey value');
+		}
+		for (const option of ['unique', 'shardCount', 'searchIndexOptions']) {
+			if (index[option] !== undefined) {
+				invalid(`uses the unsupported ${option} option`);
+			}
+		}
+		if (!Array.isArray(index.fields) || index.fields.length === 0) {
+			invalid('must have a non-empty fields array');
+		}
+
+		const fields = index.fields.map((field, fieldNumber) => {
+			if (!isValidIndexField(field)) {
+				invalid(`fields[${fieldNumber}] has invalid or unsupported properties/configuration`);
+			}
+			return { ...field };
+		});
+
+		return {
+			collectionGroup: index.collectionGroup,
+			queryScope: index.queryScope || 'COLLECTION',
+			...(index.apiScope !== undefined ? { apiScope: index.apiScope } : {}),
+			...(index.density !== undefined ? { density: index.density } : {}),
+			...(index.multikey !== undefined ? { multikey: index.multikey } : {}),
+			fields,
+		};
+	});
 }
 
 /**
  * Stable identity for an index: collection, scope, and the ordered field list.
  * Order matters — `receivedAt DESC, __name__ DESC` is a different index from
  * `receivedAt DESC, __name__ ASC` — so the comparison is on the ordered list.
+ * Optional index-level fields are normalized to the defaults for the database
+ * edition, matching firebase-tools' index comparison.
  *
  * @param {Object} index
+ * @param {string} [databaseEdition]
  * @returns {string}
  */
 function stableSerialize(value) {
@@ -200,8 +263,11 @@ function stableSerialize(value) {
 		.join(',')}}`;
 }
 
-function normalizeIndexFields(indexFields) {
+function normalizeIndexFields(indexFields, databaseEdition) {
 	const fields = Array.isArray(indexFields) ? [...indexFields] : [];
+	if (databaseEdition !== 'STANDARD') {
+		return fields;
+	}
 	const lastField = fields[fields.length - 1];
 	let nameOrder = 'ASCENDING';
 	for (const field of fields) {
@@ -224,15 +290,134 @@ function normalizeIndexFields(indexFields) {
 	return fields;
 }
 
-function indexKey(index) {
-	if (!index || !index.collectionGroup) {
+function parseIndexResourceName(name, project, database) {
+	if (typeof name !== 'string') return null;
+	const expectedPrefix = project === undefined || database === undefined
+		? /^projects\/[^/]+\/databases\/[^/]+\/collectionGroups\//
+		: `projects/${project}/databases/${database}/collectionGroups/`;
+	const prefix = typeof expectedPrefix === 'string'
+		? (name.startsWith(expectedPrefix) ? expectedPrefix : null)
+		: (expectedPrefix.exec(name)?.[0] || null);
+	if (!prefix) return null;
+	const suffix = name.slice(prefix.length);
+	const match = suffix.match(/^([^/]+)\/indexes\/([^/]+)$/);
+	return match ? { collectionGroup: match[1] } : null;
+}
+
+function getCollectionGroup(index) {
+	const parsedName = parseIndexResourceName(index.name);
+	if (parsedName) return parsedName.collectionGroup;
+	return typeof index.collectionGroup === 'string' && index.collectionGroup.length > 0
+		? index.collectionGroup
+		: '';
+}
+
+function hasOnlyProperties(value, properties) {
+	return Object.keys(value).every((property) => properties.has(property));
+}
+
+function isValidSearchConfig(searchConfig) {
+	if (!searchConfig || typeof searchConfig !== 'object' || Array.isArray(searchConfig)
+		|| !hasOnlyProperties(searchConfig, SEARCH_CONFIG_PROPERTIES)) {
+		return false;
+	}
+	const hasTextSpec = Object.prototype.hasOwnProperty.call(searchConfig, 'textSpec');
+	const hasGeoSpec = Object.prototype.hasOwnProperty.call(searchConfig, 'geoSpec');
+	if (!hasTextSpec && !hasGeoSpec) return false;
+
+	if (hasTextSpec) {
+		const { textSpec } = searchConfig;
+		if (!textSpec || typeof textSpec !== 'object' || Array.isArray(textSpec)
+			|| !hasOnlyProperties(textSpec, SEARCH_TEXT_SPEC_PROPERTIES)
+			|| !Array.isArray(textSpec.indexSpecs) || textSpec.indexSpecs.length === 0) {
+			return false;
+		}
+		for (const spec of textSpec.indexSpecs) {
+			if (!spec || typeof spec !== 'object' || Array.isArray(spec)
+				|| !hasOnlyProperties(spec, SEARCH_TEXT_INDEX_SPEC_PROPERTIES)
+				|| !SEARCH_TEXT_INDEX_TYPES.has(spec.indexType)
+				|| !SEARCH_TEXT_MATCH_TYPES.has(spec.matchType)) {
+				return false;
+			}
+		}
+	}
+
+	if (hasGeoSpec) {
+		const { geoSpec } = searchConfig;
+		if (!geoSpec || typeof geoSpec !== 'object' || Array.isArray(geoSpec)
+			|| !hasOnlyProperties(geoSpec, SEARCH_GEO_SPEC_PROPERTIES)
+			|| (geoSpec.geoJsonIndexingDisabled !== undefined
+				&& typeof geoSpec.geoJsonIndexingDisabled !== 'boolean')) {
+			return false;
+		}
+	}
+	return true;
+}
+
+function isValidIndexField(field) {
+	if (!field || typeof field !== 'object' || Array.isArray(field)
+		|| typeof field.fieldPath !== 'string' || field.fieldPath.trim() === ''
+		|| !hasOnlyProperties(field, INDEX_FIELD_PROPERTIES)) {
+		return false;
+	}
+	const modes = ['order', 'arrayConfig', 'searchConfig', 'vectorConfig']
+		.filter((mode) => Object.prototype.hasOwnProperty.call(field, mode));
+	if (modes.length !== 1) return false;
+	if (field.order !== undefined && !['ASCENDING', 'DESCENDING'].includes(field.order)) return false;
+	if (field.arrayConfig !== undefined && field.arrayConfig !== 'CONTAINS') return false;
+	if (field.searchConfig !== undefined && !isValidSearchConfig(field.searchConfig)) return false;
+	if (field.vectorConfig === undefined) return true;
+	const vectorConfig = field.vectorConfig;
+	if (!vectorConfig || typeof vectorConfig !== 'object' || Array.isArray(vectorConfig)) return false;
+	const { dimension, flat } = vectorConfig;
+	return hasOnlyProperties(vectorConfig, VECTOR_CONFIG_PROPERTIES)
+		&& Number.isInteger(dimension)
+		&& dimension >= 1
+		&& dimension <= MAX_VECTOR_DIMENSION
+		&& Boolean(flat)
+		&& typeof flat === 'object'
+		&& !Array.isArray(flat)
+		&& hasOnlyProperties(flat, VECTOR_FLAT_PROPERTIES);
+}
+
+function isValidLiveIndex(index, project, database) {
+	if (!index || typeof index !== 'object' || Array.isArray(index)) return false;
+	const parsedName = parseIndexResourceName(index.name, project, database);
+	if (!parsedName || (index.collectionGroup !== undefined
+		&& index.collectionGroup !== parsedName.collectionGroup)) return false;
+	if (!INDEX_QUERY_SCOPES.has(index.queryScope)) return false;
+	if (!Array.isArray(index.fields) || index.fields.length === 0 || !index.fields.every(isValidIndexField)) {
+		return false;
+	}
+	if (!INDEX_STATES.has(index.state)) return false;
+	if (index.apiScope !== undefined && !INDEX_API_SCOPES.has(index.apiScope)) return false;
+	if (index.density !== undefined && !INDEX_DENSITIES.has(index.density)) return false;
+	if (index.multikey !== undefined && typeof index.multikey !== 'boolean') return false;
+	// The pinned Firebase CLI does not support unique indexes, and these
+	// additional API options are not represented in the comparison key.
+	if (index.unique !== undefined || index.shardCount !== undefined || index.searchIndexOptions !== undefined) {
+		return false;
+	}
+	return true;
+}
+
+function indexKey(index, databaseEdition = DEFAULT_DATABASE_EDITION) {
+	if (!index) {
 		return '';
 	}
-	const fields = normalizeIndexFields(index.fields);
+	const collectionGroup = getCollectionGroup(index);
+	if (!collectionGroup) return '';
+	const defaultDensity = databaseEdition === DEFAULT_DATABASE_EDITION ? 'SPARSE_ALL' : 'DENSE';
+	const options = {
+		apiScope: index.apiScope === undefined ? 'ANY_API' : index.apiScope,
+		density: index.density === undefined ? defaultDensity : index.density,
+		multikey: index.multikey === undefined ? false : index.multikey,
+	};
+	const fields = normalizeIndexFields(index.fields, databaseEdition);
 	const serializedFields = fields
 		.map((field) => `${field.fieldPath}:${stableSerialize(field)}`)
 		.join(',');
-	return `${index.collectionGroup}|${index.queryScope || 'COLLECTION'}|${serializedFields}`;
+	return `${collectionGroup}|${index.queryScope || 'COLLECTION'}|${stableSerialize(options)}|${serializedFields}`;
 }
 
 /**
@@ -245,19 +430,20 @@ function indexKey(index) {
  *
  * @param {Array<Object>} declared
  * @param {Array<Object>} live
+ * @param {string} [databaseEdition]
  * @returns {Array<{key: string, collectionGroup: string, queryScope: string, fields: Array, deployed: boolean, state: string|null, ready: boolean}>}
  */
-function auditIndexes(declared, live) {
+function auditIndexes(declared, live, databaseEdition = DEFAULT_DATABASE_EDITION) {
 	const liveByKey = new Map();
 	for (const index of live || []) {
-		const key = indexKey(index);
+		const key = indexKey(index, databaseEdition);
 		if (key) {
 			liveByKey.set(key, index);
 		}
 	}
 
 	return (declared || []).map((index) => {
-		const key = indexKey(index);
+		const key = indexKey(index, databaseEdition);
 		const match = liveByKey.get(key);
 		const state = match ? (match.state || null) : null;
 		return {
@@ -393,13 +579,103 @@ function loadAuthenticatedClient() {
 	};
 }
 
+async function requestWithDeadline(request, url, opts) {
+	const remainingMs = opts.deadline - opts.now();
+	const timeoutError = new Error(opts.timeoutMessage);
+	timeoutError.code = 'FIRESTORE_INDEX_TIMEOUT';
+	if (remainingMs <= 0) {
+		throw timeoutError;
+	}
+
+	const controller = new AbortController();
+	let onAbort;
+	const aborted = new Promise((resolve, reject) => {
+		onAbort = () => reject(timeoutError);
+		controller.signal.addEventListener('abort', onAbort, { once: true });
+	});
+	const timeout = setTimeout(() => {
+		controller.abort(timeoutError);
+		if (typeof opts.onTimeout === 'function') {
+			try {
+				opts.onTimeout(timeoutError);
+			} catch {
+				// Timeout handling must not replace the authoritative timeout result.
+			}
+		}
+	}, remainingMs);
+
+	try {
+		return await Promise.race([
+			Promise.resolve().then(() => request('GET', url, { signal: controller.signal })),
+			aborted,
+		]);
+	} catch (error) {
+		if (controller.signal.aborted || (error && error.code === 'FIRESTORE_INDEX_TIMEOUT')) {
+			throw timeoutError;
+		}
+		throw error;
+	} finally {
+		clearTimeout(timeout);
+		controller.signal.removeEventListener('abort', onAbort);
+	}
+}
+
+/**
+ * Read the database edition used to resolve Firestore's implicit index defaults.
+ *
+ * @param {Object} opts
+ * @param {string} opts.project
+ * @param {string} opts.database
+ * @param {Function} [opts.request]
+ * @param {number} [opts.deadline]
+ * @param {number} [opts.timeoutMs]
+ * @param {Function} [opts.now]
+ * @param {Function} [opts.onTimeout]
+ * @returns {Promise<string>}
+ */
+async function fetchDatabaseEdition(opts = {}) {
+	const { project, database } = opts;
+	const request = opts.request || loadAuthenticatedClient().request;
+	const now = opts.now || Date.now;
+	const deadline = Number.isFinite(opts.deadline)
+		? opts.deadline
+		: now() + (Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : DEFAULT_REQUEST_TIMEOUT_MS);
+	const databaseId = database === '(default)' ? '(default)' : database;
+	const url = `${FIRESTORE_API}/projects/${project}/databases/${databaseId}`;
+	const expectedName = `projects/${project}/databases/${databaseId}`;
+	let response;
+	try {
+		response = await requestWithDeadline(request, url, {
+			deadline,
+			now,
+			onTimeout: opts.onTimeout,
+			timeoutMessage: `Timed out while reading Firestore database metadata for project ${project}.`,
+		});
+	} catch (error) {
+		if (error && error.code === 'FIRESTORE_INDEX_TIMEOUT') throw error;
+		throw new Error(`Failed to read Firestore database metadata for project ${project}. `
+			+ 'Check that you are authenticated and hold datastore.databases.get.', { cause: error });
+	}
+
+	const body = response && Object.prototype.hasOwnProperty.call(response, 'data')
+		? response.data
+		: response;
+	if (!body || typeof body !== 'object' || Array.isArray(body) || body.name !== expectedName) {
+		throw new Error(`Firestore returned invalid database metadata for project ${project}.`);
+	}
+	if (body.databaseEdition !== undefined
+		&& (typeof body.databaseEdition !== 'string' || !DATABASE_EDITIONS.has(body.databaseEdition))) {
+		throw new Error(`Firestore returned invalid database edition metadata for project ${project}.`);
+	}
+	return body.databaseEdition ?? DEFAULT_DATABASE_EDITION;
+}
+
 /**
  * Fetch the live index collection, which — unlike the Firebase CLI — includes
  * each index's build `state`.
  *
- * The collection is paginated, and the listing also carries Firestore's
- * automatic single-field indexes alongside the declared composites, so a project
- * with a modest number of declared composites can still exceed one page. Every
+ * The composite-index collection is paginated, so a project with many declared
+ * indexes can exceed one page. Every
  * page is followed; stopping at page one would report a genuinely READY index as
  * MISSING and hold the tool at exit 1 forever, which is the opposite of what an
  * operator running this during a P0 needs.
@@ -437,47 +713,21 @@ async function fetchLiveIndexes(opts = {}) {
 		}
 
 		let response;
-		const remainingMs = deadline - now();
-		if (remainingMs <= 0) {
-			const error = new Error(`Timed out while listing Firestore indexes for project ${project}.`);
-			error.code = 'FIRESTORE_INDEX_TIMEOUT';
-			throw error;
-		}
-
-		const controller = new AbortController();
-		const timeoutError = new Error(`Timed out while listing Firestore indexes for project ${project}.`);
-		timeoutError.code = 'FIRESTORE_INDEX_TIMEOUT';
-		let onAbort;
-		const aborted = new Promise((resolve, reject) => {
-			onAbort = () => reject(timeoutError);
-			controller.signal.addEventListener('abort', onAbort, { once: true });
-		});
-		const timeout = setTimeout(() => {
-			controller.abort(timeoutError);
-			if (typeof opts.onTimeout === 'function') {
-				try {
-					opts.onTimeout(timeoutError);
-				} catch {
-					// Timeout handling must not replace the authoritative timeout result.
-				}
-			}
-		}, remainingMs);
 		try {
-			response = await Promise.race([
-				Promise.resolve().then(() => request('GET', url.toString(), { signal: controller.signal })),
-				aborted,
-			]);
+			response = await requestWithDeadline(request, url.toString(), {
+				deadline,
+				now,
+				onTimeout: opts.onTimeout,
+				timeoutMessage: `Timed out while listing Firestore indexes for project ${project}.`,
+			});
 		} catch (error) {
-			if (controller.signal.aborted || error.code === 'FIRESTORE_INDEX_TIMEOUT') {
-				throw timeoutError;
+			if (error && error.code === 'FIRESTORE_INDEX_TIMEOUT') {
+				throw error;
 			}
 			// The provider message can embed the project/database path; surface a
 			// fixed message so no project detail leaks into CI output or the log.
 			throw new Error(`Failed to list Firestore indexes for project ${project}. `
 				+ 'Check that you are authenticated and hold datastore.indexes.list.', { cause: error });
-		} finally {
-			clearTimeout(timeout);
-			controller.signal.removeEventListener('abort', onAbort);
 		}
 
 		// `AuthorizedHttpClient.send()` resolves with the parsed JSON body on `.data`;
@@ -499,10 +749,21 @@ async function fetchLiveIndexes(opts = {}) {
 				+ 'cannot be reported as missing or ready. Verify authentication '
 				+ '(FIREBASE_SERVICE_ACCOUNT_JSON / GOOGLE_APPLICATION_CREDENTIALS / ADC) and retry.');
 		}
+		for (const index of body.indexes) {
+			if (!isValidLiveIndex(index, project, databaseId)) {
+				throw new Error(`Firestore returned an invalid or out-of-scope index record for project ${project}. `
+					+ 'The listing could not be read authoritatively, so declared indexes cannot be reported as missing or ready.');
+			}
+		}
 
 		all.push(...body.indexes);
 		pages += 1;
 
+		if (Object.prototype.hasOwnProperty.call(body, 'nextPageToken')
+			&& typeof body.nextPageToken !== 'string') {
+			throw new Error(`Firestore returned a malformed pagination token for project ${project}. `
+				+ 'The listing could not be read authoritatively, so the declared indexes cannot be reported as missing or ready.');
+		}
 		const next = typeof body.nextPageToken === 'string' && body.nextPageToken.length > 0
 			? body.nextPageToken
 			: null;
@@ -708,9 +969,10 @@ Options:
   --json              Output the result as JSON
   --help, -h          Show this help message
 
-Requires Application Default Credentials with datastore.indexes permissions. Supported sources are
-FIREBASE_SERVICE_ACCOUNT_JSON, GOOGLE_APPLICATION_CREDENTIALS, or the runtime ADC provider. The CLI
-login store and FIREBASE_TOKEN are ignored so deployment and REST auditing use the same credential.
+Requires Application Default Credentials with datastore.databases.get and datastore.indexes.list.
+--apply also needs the Firebase CLI's Firestore index deployment permissions. Supported credential
+sources are FIREBASE_SERVICE_ACCOUNT_JSON, GOOGLE_APPLICATION_CREDENTIALS, or the runtime ADC provider.
+The CLI login store and FIREBASE_TOKEN are ignored so deployment and REST auditing use the same credential.
 `);
 		return 0;
 	}
@@ -791,6 +1053,20 @@ login store and FIREBASE_TOKEN are ignored so deployment and REST auditing use t
 	let audit;
 	let summary;
 	const wait = deps.sleep || sleep;
+	let databaseEdition;
+	try {
+		databaseEdition = await fetchDatabaseEdition({
+			project: args.project,
+			database: args.database,
+			request,
+			deadline: args.apply ? deadline : undefined,
+			now,
+			onTimeout: deps.onTimeout,
+		});
+	} catch (error) {
+		console.error(`error: ${error.message}`);
+		return 2;
+	}
 
 	for (;;) {
 		if (args.apply && summary && now() >= deadline) {
@@ -812,7 +1088,7 @@ login store and FIREBASE_TOKEN are ignored so deployment and REST auditing use t
 			return 2;
 		}
 
-		audit = auditIndexes(declared, live);
+		audit = auditIndexes(declared, live, databaseEdition);
 		summary = summarizeAudit(audit);
 		const remainingMs = deadline - now();
 		if (summary.allReady || !args.apply || remainingMs <= 0) {
@@ -876,10 +1152,12 @@ module.exports = {
 	DEFAULT_DATABASE,
 	DEFAULT_POLL_INTERVAL_MS,
 	DEFAULT_PROJECT,
+	DEFAULT_DATABASE_EDITION,
 	INDEX_PAGE_SIZE,
 	MAX_INDEX_PAGES,
 	READY_STATE,
 	auditIndexes,
+	fetchDatabaseEdition,
 	fetchLiveIndexes,
 	indexKey,
 	loadAuthenticatedClient,

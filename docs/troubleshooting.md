@@ -126,9 +126,11 @@ Symptom: `GET /api/alerts`, `/api/alerts/summary`, `/api/alerts/export`, and rep
    pnpm run deploy:firestore:indexes -- --apply      # deploy, then wait for READY
    ```
 
-   Composite indexes build asynchronously and a query is rejected until the build reaches `READY`, so the helper polls the Firestore REST API for each index's build state and exits non-zero until every declared index is `READY`. Do **not** confirm with `firebase firestore:indexes`: that command routes its output through `makeIndexSpec()`, which projects each index down to its field list and **drops `state`**, so it cannot distinguish `READY` from `BUILDING` — which is precisely how a completed deploy leaves every read returning `503`.
+   Composite indexes build asynchronously and a query is rejected until the build reaches `READY`, so the helper polls the Firestore REST API for each index's build state and exits non-zero until every declared index is `READY`. Do **not** confirm with `firebase firestore:indexes`: that command routes its output through `makeIndexSpec()`, which projects each index down to its field list and **drops `state`**, so it cannot distinguish `READY` from `CREATING` — which is precisely how a completed deploy leaves every read returning `503`.
 
    Read the exit code precisely: **0** = every declared index `READY`, **1** = at least one missing or still building (this is the actionable state), **2** = the listing could not be read authoritatively — unauthenticated, a truncated page, or an unreadable template. Exit 2 is *not* "the indexes are missing"; it means the tool refuses to guess, so fix auth and re-run rather than creating indexes.
+
+   The audit reads the database resource to apply edition-specific index defaults, so the ADC identity needs `datastore.databases.get` and `datastore.indexes.list`; `--apply` also needs Firebase CLI index-deployment permissions.
 
    `--apply` deploys only the default database and `firestore.indexes.json` selected by `firebase.json`; custom `--database` and `--indexes` values are dry-run only. Deployment and REST auditing use the same Application Default Credentials from `FIREBASE_SERVICE_ACCOUNT_JSON`, `GOOGLE_APPLICATION_CREDENTIALS`, or the runtime ADC provider. The helper ignores the local Firebase CLI login store and `FIREBASE_TOKEN` so the two phases cannot silently run as different identities.
 

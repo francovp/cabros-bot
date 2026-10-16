@@ -4,7 +4,7 @@
  * Unit coverage for scripts/deploy-firestore-indexes.js (issue #1285).
  *
  * The load-bearing behaviour is that a declared-but-not-live (or live-but-still
- * BUILDING) composite index is reported as not ready and drives a non-zero exit
+ * CREATING) composite index is reported as not ready and drives a non-zero exit
  * status. That is the whole point of the tool: a deploy that "succeeded" while
  * every stored-alert read is still rejected with FAILED_PRECONDITION is the
  * exact failure this issue documents.
@@ -15,9 +15,11 @@ const os = require('os');
 const path = require('path');
 
 const {
+	DEFAULT_DATABASE_EDITION,
 	INDEX_PAGE_SIZE,
 	MAX_INDEX_PAGES,
 	auditIndexes,
+	fetchDatabaseEdition,
 	fetchLiveIndexes,
 	indexKey,
 	main,
@@ -48,8 +50,13 @@ const REPLAYS_INDEX = {
 	],
 };
 
-function liveIndex(spec, state) {
-	return { ...spec, state };
+function liveIndex(spec, state, project = 'cabros-bot', database = '(default)') {
+	const { collectionGroup, ...rest } = spec;
+	return {
+		...rest,
+		name: `projects/${project}/databases/${database}/collectionGroups/${collectionGroup}/indexes/test-index`,
+		state,
+	};
 }
 
 function liveDeclaredIndex(spec, state) {
@@ -145,6 +152,60 @@ describe('deploy-firestore-indexes', () => {
 				],
 			}));
 		});
+
+		it('normalizes default index options and distinguishes non-default options', () => {
+			const defaults = indexKey(ALERTS_INDEX);
+
+			expect(indexKey({
+				...ALERTS_INDEX,
+				apiScope: 'ANY_API',
+				density: 'SPARSE_ALL',
+				multikey: false,
+			})).toBe(defaults);
+			for (const option of [
+				{ apiScope: 'DATASTORE_MODE_API' },
+				{ density: 'DENSE' },
+				{ multikey: true },
+			]) {
+				expect(indexKey({ ...ALERTS_INDEX, ...option })).not.toBe(defaults);
+			}
+
+			expect(indexKey({ ...ALERTS_INDEX, density: 'DENSE' }, 'ENTERPRISE'))
+				.toBe(indexKey(ALERTS_INDEX, 'ENTERPRISE'));
+		});
+
+		it('does not add an implicit __name__ field for Enterprise indexes', () => {
+			const declared = {
+				collectionGroup: 'alerts',
+				queryScope: 'COLLECTION',
+				fields: [{ fieldPath: 'receivedAt', order: 'DESCENDING' }],
+			};
+			const live = liveIndex({
+				...declared,
+				fields: [
+					...declared.fields,
+					{ fieldPath: '__name__', order: 'DESCENDING' },
+				],
+			}, 'READY');
+
+			expect(auditIndexes([declared], [live], 'STANDARD')[0].ready).toBe(true);
+			expect(auditIndexes([declared], [live], 'ENTERPRISE')[0].deployed).toBe(false);
+		});
+
+		it('accepts a one-field Enterprise vector index from the REST listing', async () => {
+			const declared = {
+				collectionGroup: 'embeddings',
+				queryScope: 'COLLECTION',
+				fields: [{ fieldPath: 'embedding', vectorConfig: { dimension: 128, flat: {} } }],
+			};
+			const request = jest.fn().mockResolvedValue({
+				data: { indexes: [liveIndex(declared, 'READY', 'p')] },
+			});
+			const live = await fetchLiveIndexes({ project: 'p', database: '(default)', request });
+
+			expect(auditIndexes([declared], live, 'ENTERPRISE')[0])
+				.toMatchObject({ deployed: true, state: 'READY', ready: true });
+		});
 	});
 
 	describe('readDeclaredIndexes()', () => {
@@ -183,7 +244,14 @@ describe('deploy-firestore-indexes', () => {
 				{
 					collectionGroup: 'documents',
 					queryScope: 'COLLECTION',
-					fields: [{ fieldPath: 'content', searchConfig: { searchMethod: 'TEST_ONLY' } }],
+					fields: [{
+						fieldPath: 'content',
+						searchConfig: {
+							textSpec: {
+								indexSpecs: [{ indexType: 'TOKENIZED', matchType: 'MATCH_GLOBALLY' }],
+							},
+						},
+					}],
 				},
 			];
 			const indexesPath = path.join(tempDir, 'indexes.json');
@@ -196,13 +264,124 @@ describe('deploy-firestore-indexes', () => {
 			expect(audit.map(({ ready }) => ready)).toEqual([true, true, true]);
 		});
 
+		it('preserves index-level API scope, density, and multikey options', () => {
+			const index = {
+				...ALERTS_INDEX,
+				apiScope: 'DATASTORE_MODE_API',
+				density: 'SPARSE_ALL',
+				multikey: true,
+			};
+			const indexesPath = path.join(tempDir, 'indexes-with-options.json');
+			fs.writeFileSync(indexesPath, JSON.stringify({ indexes: [index] }));
+
+			expect(readDeclaredIndexes(indexesPath)).toEqual([index]);
+		});
+
+		it('rejects unique indexes that the pinned Firebase CLI cannot deploy', () => {
+			const indexesPath = path.join(tempDir, 'unique-index.json');
+			fs.writeFileSync(indexesPath, JSON.stringify({ indexes: [{ ...ALERTS_INDEX, unique: true }] }));
+
+			expect(() => readDeclaredIndexes(indexesPath)).toThrow(/unique/);
+		});
+
+		it.each([
+			['shardCount', { shardCount: 4 }],
+			['searchIndexOptions', { searchIndexOptions: {} }],
+		])('rejects declared %s because the deploy comparison cannot represent it', (option, extra) => {
+			const indexesPath = path.join(tempDir, `unsupported-${option}.json`);
+			fs.writeFileSync(indexesPath, JSON.stringify({ indexes: [{ ...ALERTS_INDEX, ...extra }] }));
+
+			expect(() => readDeclaredIndexes(indexesPath)).toThrow(new RegExp(option));
+		});
+
 		it('reports an unreadable template instead of silently auditing nothing', () => {
 			expect(() => readDeclaredIndexes(path.join(tempDir, 'missing.json')))
 				.toThrow(/Failed to read/);
 		});
+
+		it.each([
+			['missing indexes', {}],
+			['non-array indexes', { indexes: 'alerts' }],
+		])('rejects a template with %s', (_description, contents) => {
+			const indexesPath = path.join(tempDir, 'malformed.json');
+			fs.writeFileSync(indexesPath, JSON.stringify(contents));
+
+			expect(() => readDeclaredIndexes(indexesPath)).toThrow(/must contain an indexes array/);
+		});
+
+		it.each([
+			['missing collection group', { queryScope: 'COLLECTION', fields: [{ fieldPath: 'x', order: 'ASCENDING' }] }],
+			['empty fields', { collectionGroup: 'alerts', queryScope: 'COLLECTION', fields: [] }],
+			['malformed field', { collectionGroup: 'alerts', queryScope: 'COLLECTION', fields: [{}] }],
+			['unknown field property', {
+				...ALERTS_INDEX,
+				fields: [{ ...ALERTS_INDEX.fields[0], bogus: true }, ALERTS_INDEX.fields[1]],
+			}],
+			['malformed nested search config', {
+				collectionGroup: 'documents',
+				queryScope: 'COLLECTION',
+				fields: [{ fieldPath: 'content', searchConfig: { textSpec: { indexSpecs: [{}] } } }],
+			}],
+			['fractional vector dimension', {
+				collectionGroup: 'embeddings',
+				queryScope: 'COLLECTION',
+				fields: [{ fieldPath: 'embedding', vectorConfig: { dimension: 128.5, flat: {} } }],
+			}],
+			['vector dimension above the Firestore limit', {
+				collectionGroup: 'embeddings',
+				queryScope: 'COLLECTION',
+				fields: [{ fieldPath: 'embedding', vectorConfig: { dimension: 2049, flat: {} } }],
+			}],
+			['unknown vectorConfig property', {
+				collectionGroup: 'embeddings',
+				queryScope: 'COLLECTION',
+				fields: [{ fieldPath: 'embedding', vectorConfig: { dimension: 128, flat: {}, metric: 'COSINE' } }],
+			}],
+			['unknown flat index property', {
+				collectionGroup: 'embeddings',
+				queryScope: 'COLLECTION',
+				fields: [{ fieldPath: 'embedding', vectorConfig: { dimension: 128, flat: { metric: 'COSINE' } } }],
+			}],
+		])('rejects an index declaration with %s', (_description, index) => {
+			const indexesPath = path.join(tempDir, 'malformed-entry.json');
+			fs.writeFileSync(indexesPath, JSON.stringify({ indexes: [index] }));
+
+			expect(() => readDeclaredIndexes(indexesPath)).toThrow(/indexes\[0\]/);
+		});
 	});
 
 	describe('auditIndexes()', () => {
+		it('matches a REST index using the collection group encoded in its resource name', () => {
+			const live = {
+				name: 'projects/cabros-bot/databases/(default)/collectionGroups/alerts/indexes/abc123',
+				queryScope: 'COLLECTION',
+				fields: ALERTS_INDEX.fields,
+				state: 'READY',
+			};
+
+			expect(auditIndexes([ALERTS_INDEX], [live])[0])
+				.toMatchObject({ deployed: true, state: 'READY', ready: true });
+		});
+
+		it('does not match indexes whose API scope, density, or multikey differs', () => {
+			const declared = {
+				...ALERTS_INDEX,
+				apiScope: 'DATASTORE_MODE_API',
+				density: 'SPARSE_ALL',
+				multikey: true,
+			};
+			const same = liveIndex(declared, 'READY');
+
+			expect(auditIndexes([declared], [same])[0].ready).toBe(true);
+			for (const different of [
+				liveIndex({ ...declared, apiScope: 'ANY_API' }, 'READY'),
+				liveIndex({ ...declared, density: 'DENSE' }, 'READY'),
+				liveIndex({ ...declared, multikey: false }, 'READY'),
+			]) {
+				expect(auditIndexes([declared], [different])[0].deployed).toBe(false);
+			}
+		});
+
 		it('reports a declared index as ready only when the live state is READY', () => {
 			const audit = auditIndexes([ALERTS_INDEX], [liveIndex(ALERTS_INDEX, 'READY')]);
 
@@ -230,9 +409,9 @@ describe('deploy-firestore-indexes', () => {
 		});
 
 		it('reports a still-building index as deployed but not ready', () => {
-			const audit = auditIndexes([ALERTS_INDEX], [liveIndex(ALERTS_INDEX, 'BUILDING')]);
+			const audit = auditIndexes([ALERTS_INDEX], [liveIndex(ALERTS_INDEX, 'CREATING')]);
 
-			expect(audit[0]).toMatchObject({ deployed: true, state: 'BUILDING', ready: false });
+			expect(audit[0]).toMatchObject({ deployed: true, state: 'CREATING', ready: false });
 		});
 
 		it('reports an index absent from the live project as not deployed', () => {
@@ -276,7 +455,7 @@ describe('deploy-firestore-indexes', () => {
 
 		it('is not allReady while any index exists but is still building', () => {
 			const summary = summarizeAudit(auditIndexes([ALERTS_INDEX], [
-				liveIndex(ALERTS_INDEX, 'BUILDING'),
+				liveIndex(ALERTS_INDEX, 'CREATING'),
 			]));
 
 			expect(summary).toMatchObject({
@@ -301,7 +480,7 @@ describe('deploy-firestore-indexes', () => {
 	describe('fetchLiveIndexes()', () => {
 		it('requests the raw REST collection, which is the only source of build state', async () => {
 			const request = jest.fn().mockResolvedValue({
-				data: { indexes: [liveIndex(ALERTS_INDEX, 'BUILDING')] },
+				data: { indexes: [liveIndex(ALERTS_INDEX, 'CREATING')] },
 			});
 
 			const indexes = await fetchLiveIndexes({
@@ -315,7 +494,7 @@ describe('deploy-firestore-indexes', () => {
 				`https://firestore.googleapis.com/v1/projects/cabros-bot/databases/(default)/collectionGroups/-/indexes?pageSize=${INDEX_PAGE_SIZE}`,
 				expect.objectContaining({ signal: expect.any(AbortSignal) }),
 			);
-			expect(indexes[0].state).toBe('BUILDING');
+			expect(indexes[0].state).toBe('CREATING');
 		});
 
 		it('aborts a stalled REST request at the timeout deadline', async () => {
@@ -344,6 +523,55 @@ describe('deploy-firestore-indexes', () => {
 				.rejects.toThrow(/could not be read authoritatively/);
 		});
 
+		it.each([
+			['malformed name', 'not-a-resource-name'],
+			['different project', 'projects/other-project/databases/(default)/collectionGroups/alerts/indexes/abc'],
+			['different database', 'projects/p/databases/other-db/collectionGroups/alerts/indexes/abc'],
+		])('rejects an index listing with a %s', async (_description, name) => {
+			const request = jest.fn().mockResolvedValue({ data: { indexes: [{ name }] } });
+
+			await expect(fetchLiveIndexes({ project: 'p', database: '(default)', request }))
+				.rejects.toThrow(/could not be read authoritatively/);
+		});
+
+		it.each([
+			['empty scope', (index) => ({ ...index, queryScope: '' })],
+			['missing scope', (index) => {
+				const { queryScope: _queryScope, ...rest } = index;
+				return rest;
+			}],
+			['empty fields', (index) => ({ ...index, fields: [] })],
+			['missing state', (index) => {
+				const { state: _state, ...rest } = index;
+				return rest;
+			}],
+			['invalid state', (index) => ({ ...index, state: 'UNKNOWN' })],
+			['unsupported DISABLED state', (index) => ({ ...index, state: 'DISABLED' })],
+			['unknown field property', (index) => ({
+				...index,
+				fields: [{ ...index.fields[0], bogus: true }, ...index.fields.slice(1)],
+			})],
+			['invalid vector dimension', (index) => ({
+				...index,
+				fields: [{ fieldPath: 'embedding', vectorConfig: { dimension: 2.5, flat: {} } }],
+			})],
+		])('rejects a REST index with %s', async (_description, makeInvalid) => {
+			const index = makeInvalid(liveIndex(ALERTS_INDEX, 'READY', 'p'));
+			const request = jest.fn().mockResolvedValue({ data: { indexes: [index] } });
+
+			await expect(fetchLiveIndexes({ project: 'p', database: '(default)', request }))
+				.rejects.toThrow(/could not be read authoritatively/);
+		});
+
+		it('accepts STATE_UNSPECIFIED as a valid but not-ready REST state', async () => {
+			const index = liveIndex(ALERTS_INDEX, 'STATE_UNSPECIFIED', 'p');
+			const request = jest.fn().mockResolvedValue({ data: { indexes: [index] } });
+			const live = await fetchLiveIndexes({ project: 'p', database: '(default)', request });
+
+			expect(auditIndexes([ALERTS_INDEX], live)[0])
+				.toMatchObject({ deployed: true, state: 'STATE_UNSPECIFIED', ready: false });
+		});
+
 		it('returns the declared-empty list when the API sends an explicit empty array', async () => {
 			const request = jest.fn().mockResolvedValue({ data: { indexes: [] } });
 
@@ -362,8 +590,8 @@ describe('deploy-firestore-indexes', () => {
 				.rejects.not.toThrow(/10\.0\.0\.1/);
 		});
 
-		// The listing is paginated, and it also contains Firestore's automatic
-		// single-field indexes, so exceeding one page is realistic. Stopping at
+		// The composite-index listing is paginated; a database with many declared
+		// indexes can exceed one page. Stopping at
 		// page one would report a genuinely READY index as MISSING.
 		it('follows nextPageToken and collects every page', async () => {
 			const request = jest.fn()
@@ -390,7 +618,7 @@ describe('deploy-firestore-indexes', () => {
 		it('reports everyReady when the declared index is only found on a later page', () => {
 			const request = jest.fn()
 				.mockResolvedValueOnce({ data: { indexes: [], nextPageToken: 'page-2' } })
-				.mockResolvedValueOnce({ data: { indexes: [liveIndex(ALERTS_INDEX, 'READY')] } });
+				.mockResolvedValueOnce({ data: { indexes: [liveIndex(ALERTS_INDEX, 'READY', 'p')] } });
 
 			return fetchLiveIndexes({ project: 'p', database: '(default)', request })
 				.then((live) => {
@@ -400,7 +628,7 @@ describe('deploy-firestore-indexes', () => {
 
 		it('still refuses a truncated later page instead of trusting the pages read so far', async () => {
 			const request = jest.fn()
-				.mockResolvedValueOnce({ data: { indexes: [liveIndex(ALERTS_INDEX, 'READY')], nextPageToken: 'page-2' } })
+				.mockResolvedValueOnce({ data: { indexes: [liveIndex(ALERTS_INDEX, 'READY', 'p')], nextPageToken: 'page-2' } })
 				.mockResolvedValueOnce({ data: {} });
 
 			await expect(fetchLiveIndexes({ project: 'p', database: '(default)', request }))
@@ -410,11 +638,25 @@ describe('deploy-firestore-indexes', () => {
 		it('rejects a repeated non-empty pagination token as an incomplete listing', async () => {
 			const request = jest.fn()
 				.mockResolvedValueOnce({ data: { indexes: [], nextPageToken: 'page-2' } })
-				.mockResolvedValueOnce({ data: { indexes: [liveIndex(ALERTS_INDEX, 'READY')], nextPageToken: 'page-2' } });
+				.mockResolvedValueOnce({ data: { indexes: [liveIndex(ALERTS_INDEX, 'READY', 'p')], nextPageToken: 'page-2' } });
 
 			await expect(fetchLiveIndexes({ project: 'p', database: '(default)', request }))
 				.rejects.toThrow(/repeated pagination token|truncated/i);
 			expect(request).toHaveBeenCalledTimes(2);
+		});
+
+		it.each([
+			['number', 17],
+			['object', { token: 'page-2' }],
+			['null', null],
+		])('rejects a non-string nextPageToken (%s) as an indeterminate listing', async (_description, nextPageToken) => {
+			const request = jest.fn().mockResolvedValue({
+				data: { indexes: [liveIndex(ALERTS_INDEX, 'READY', 'p')], nextPageToken },
+			});
+
+			await expect(fetchLiveIndexes({ project: 'p', database: '(default)', request }))
+				.rejects.toThrow(/malformed pagination token|could not be read authoritatively/i);
+			expect(request).toHaveBeenCalledTimes(1);
 		});
 
 		it('refuses rather than auditing a truncated listing when the page cap is reached', async () => {
@@ -427,6 +669,54 @@ describe('deploy-firestore-indexes', () => {
 			await expect(fetchLiveIndexes({ project: 'p', database: '(default)', request }))
 				.rejects.toThrow(/truncated/);
 			expect(request).toHaveBeenCalledTimes(MAX_INDEX_PAGES);
+		});
+	});
+
+	describe('fetchDatabaseEdition()', () => {
+		it('reads the selected database metadata and returns its edition', async () => {
+			const request = jest.fn().mockResolvedValue({
+				data: { name: 'projects/cabros-bot/databases/(default)', databaseEdition: 'ENTERPRISE' },
+			});
+
+			await expect(fetchDatabaseEdition({ project: 'cabros-bot', database: '(default)', request }))
+				.resolves.toBe('ENTERPRISE');
+			expect(request).toHaveBeenCalledWith(
+				'GET',
+				'https://firestore.googleapis.com/v1/projects/cabros-bot/databases/(default)',
+				expect.objectContaining({ signal: expect.any(AbortSignal) }),
+			);
+		});
+
+		it('uses the standard edition when the API omits databaseEdition', async () => {
+			const request = jest.fn().mockResolvedValue({
+				data: { name: 'projects/cabros-bot/databases/(default)' },
+			});
+
+			await expect(fetchDatabaseEdition({ project: 'cabros-bot', database: '(default)', request }))
+				.resolves.toBe(DEFAULT_DATABASE_EDITION);
+		});
+
+		it('rejects a response that is not the selected database resource', async () => {
+			const request = jest.fn().mockResolvedValue({ data: {} });
+
+			await expect(fetchDatabaseEdition({ project: 'cabros-bot', database: '(default)', request }))
+				.rejects.toThrow(/invalid database metadata/);
+		});
+
+		it('aborts a stalled database metadata request at the deadline', async () => {
+			let signal;
+			const request = jest.fn((_method, _url, options) => {
+				signal = options.signal;
+				return new Promise(() => {});
+			});
+
+			await expect(fetchDatabaseEdition({
+				project: 'cabros-bot',
+				database: '(default)',
+				request,
+				timeoutMs: 10,
+			})).rejects.toThrow(/Timed out while reading Firestore database metadata/);
+			expect(signal.aborted).toBe(true);
 		});
 	});
 
@@ -635,31 +925,55 @@ describe('deploy-firestore-indexes', () => {
 
 		const baseArgs = () => ['--indexes', indexesFile, '--log-file', logFile];
 		const applyArgs = () => ['--log-file', logFile];
+		const databaseMetadata = () => ({
+			name: 'projects/cabros-bot/databases/(default)',
+			databaseEdition: 'STANDARD',
+		});
+		const withDatabaseMetadata = (requestIndexes) => jest.fn((method, url, options) => (
+			url.endsWith('/databases/(default)')
+				? Promise.resolve({ data: databaseMetadata() })
+				: requestIndexes(method, url, options)
+		));
 
-		const readyRequest = () => jest.fn().mockResolvedValue({
+		const readyRequest = () => withDatabaseMetadata(() => Promise.resolve({
 			data: { indexes: [liveIndex(ALERTS_INDEX, 'READY')] },
-		});
+		}));
 
-		const defaultIndexRequest = (state) => jest.fn().mockResolvedValue({
+		const defaultIndexRequest = (state) => withDatabaseMetadata(() => Promise.resolve({
 			data: { indexes: readDeclaredIndexes().map((index) => liveIndex(index, state)) },
-		});
+		}));
 
 		it('exits 0 when every declared index is READY', async () => {
 			await expect(main(baseArgs(), { request: readyRequest() })).resolves.toBe(0);
 			expect(errorSpy).not.toHaveBeenCalled();
 		});
 
+		it('uses the selected database edition to normalize live density defaults', async () => {
+			const request = jest.fn((method, url) => {
+				if (url.endsWith('/databases/(default)')) {
+					return Promise.resolve({
+						data: { name: 'projects/cabros-bot/databases/(default)', databaseEdition: 'ENTERPRISE' },
+					});
+				}
+				return Promise.resolve({
+					data: { indexes: [liveIndex({ ...ALERTS_INDEX, density: 'DENSE' }, 'READY')] },
+				});
+			});
+
+			await expect(main(baseArgs(), { request })).resolves.toBe(0);
+		});
+
 		it('exits 1 when a declared index is missing, without touching the audit log', async () => {
-			const request = jest.fn().mockResolvedValue({ data: { indexes: [] } });
+			const request = withDatabaseMetadata(() => Promise.resolve({ data: { indexes: [] } }));
 
 			await expect(main(baseArgs(), { request })).resolves.toBe(1);
 			expect(fs.existsSync(logFile)).toBe(false);
 		});
 
 		it('exits 1 when a declared index exists but is still building', async () => {
-			const request = jest.fn().mockResolvedValue({
-				data: { indexes: [liveIndex(ALERTS_INDEX, 'BUILDING')] },
-			});
+			const request = withDatabaseMetadata(() => Promise.resolve({
+				data: { indexes: [liveIndex(ALERTS_INDEX, 'CREATING')] },
+			}));
 
 			await expect(main(baseArgs(), { request })).resolves.toBe(1);
 		});
@@ -669,8 +983,78 @@ describe('deploy-firestore-indexes', () => {
 			expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/Unknown option/));
 		});
 
+		it.each([
+			['missing indexes', {}],
+			['non-array indexes', { indexes: null }],
+		])('exits 2 for a template with %s', async (_description, contents) => {
+			fs.writeFileSync(indexesFile, JSON.stringify(contents));
+
+			await expect(main(baseArgs(), { request: readyRequest() })).resolves.toBe(2);
+			expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/must contain an indexes array/));
+		});
+
+		it('exits 2 instead of reporting missing when a declaration entry is malformed', async () => {
+			fs.writeFileSync(indexesFile, JSON.stringify({ indexes: [{}] }));
+			const request = readyRequest();
+
+			await expect(main(baseArgs(), { request })).resolves.toBe(2);
+			expect(request).not.toHaveBeenCalled();
+			expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/indexes\[0\]/));
+		});
+
+		it.each([
+			['unknown field property', {
+				...ALERTS_INDEX,
+				fields: [{ ...ALERTS_INDEX.fields[0], bogus: true }, ALERTS_INDEX.fields[1]],
+			}],
+			['malformed nested search config', {
+				collectionGroup: 'documents',
+				queryScope: 'COLLECTION',
+				fields: [{ fieldPath: 'content', searchConfig: { textSpec: { indexSpecs: [{}] } } }],
+			}],
+			['invalid vector dimension', {
+				collectionGroup: 'embeddings',
+				queryScope: 'COLLECTION',
+				fields: [{ fieldPath: 'embedding', vectorConfig: { dimension: 2049, flat: {} } }],
+			}],
+		])('exits 2 instead of reporting missing for a declaration with %s', async (_description, index) => {
+			fs.writeFileSync(indexesFile, JSON.stringify({ indexes: [index] }));
+			const request = readyRequest();
+
+			await expect(main(baseArgs(), { request })).resolves.toBe(2);
+			expect(request).not.toHaveBeenCalled();
+			expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/indexes\[0\]/));
+		});
+
+		it('exits 2 when the template declares an unsupported unique index', async () => {
+			fs.writeFileSync(indexesFile, JSON.stringify({ indexes: [{ ...ALERTS_INDEX, unique: true }] }));
+			const request = readyRequest();
+
+			await expect(main(baseArgs(), { request })).resolves.toBe(2);
+			expect(request).not.toHaveBeenCalled();
+			expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/unique/));
+		});
+
+		it.each([
+			['shardCount', { shardCount: 4 }],
+			['searchIndexOptions', { searchIndexOptions: {} }],
+		])('exits 2 when the template declares unsupported %s', async (option, extra) => {
+			fs.writeFileSync(indexesFile, JSON.stringify({ indexes: [{ ...ALERTS_INDEX, ...extra }] }));
+			const request = readyRequest();
+
+			await expect(main(baseArgs(), { request })).resolves.toBe(2);
+			expect(request).not.toHaveBeenCalled();
+			expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(new RegExp(option)));
+		});
+
+		it('exits 1 when an index state is STATE_UNSPECIFIED', async () => {
+			const request = defaultIndexRequest('STATE_UNSPECIFIED');
+
+			await expect(main(baseArgs(), { request })).resolves.toBe(1);
+		});
+
 		it('exits 2 rather than reporting missing indexes when the listing is indeterminate', async () => {
-			const request = jest.fn().mockResolvedValue({ data: {} });
+			const request = withDatabaseMetadata(() => Promise.resolve({ data: {} }));
 
 			await expect(main(baseArgs(), { request })).resolves.toBe(2);
 			expect(errorSpy).toHaveBeenCalledWith(expect.stringMatching(/authoritatively/));
@@ -700,7 +1084,8 @@ describe('deploy-firestore-indexes', () => {
 
 		it('waits through --apply until the build reaches READY instead of exiting on the first poll', async () => {
 			const request = jest.fn()
-				.mockResolvedValueOnce({ data: { indexes: readDeclaredIndexes().map((index) => liveIndex(index, 'BUILDING')) } })
+				.mockResolvedValueOnce({ data: databaseMetadata() })
+				.mockResolvedValueOnce({ data: { indexes: readDeclaredIndexes().map((index) => liveIndex(index, 'CREATING')) } })
 				.mockResolvedValueOnce({ data: { indexes: readDeclaredIndexes().map((index) => liveIndex(index, 'READY')) } });
 			const deploy = jest.fn().mockReturnValue({ status: 0, stdout: '', stderr: '' });
 
@@ -711,15 +1096,18 @@ describe('deploy-firestore-indexes', () => {
 			})).resolves.toBe(0);
 
 			expect(deploy).toHaveBeenCalledTimes(1);
-			expect(request).toHaveBeenCalledTimes(2);
+			expect(request).toHaveBeenCalledTimes(3);
 			expect(fs.readFileSync(logFile, 'utf8')).toContain('ALL_READY=true');
 		});
 
 		it('exits 1 when --apply never reaches READY within the budget', async () => {
 			let clock = 0;
-			const request = jest.fn().mockImplementation(async () => {
+			const request = jest.fn().mockImplementation(async (_method, url) => {
+				if (url.endsWith('/databases/(default)')) {
+					return { data: databaseMetadata() };
+				}
 				clock += 2000;
-				return { data: { indexes: readDeclaredIndexes().map((index) => liveIndex(index, 'BUILDING')) } };
+				return { data: { indexes: readDeclaredIndexes().map((index) => liveIndex(index, 'CREATING')) } };
 			});
 			const deploy = jest.fn().mockReturnValue({ status: 0, stdout: '', stderr: '' });
 
@@ -730,7 +1118,7 @@ describe('deploy-firestore-indexes', () => {
 				now: () => clock,
 			})).resolves.toBe(1);
 
-			expect(request).toHaveBeenCalledTimes(1);
+			expect(request).toHaveBeenCalledTimes(2);
 			expect(fs.readFileSync(logFile, 'utf8')).toContain('ALL_READY=false');
 		});
 
@@ -768,9 +1156,12 @@ describe('deploy-firestore-indexes', () => {
 
 		it('caps the poll sleep to the remaining readiness budget', async () => {
 			let clock = 0;
-			const request = jest.fn().mockImplementation(async () => {
+			const request = jest.fn().mockImplementation(async (_method, url) => {
+				if (url.endsWith('/databases/(default)')) {
+					return { data: databaseMetadata() };
+				}
 				clock += 1;
-				return { data: { indexes: readDeclaredIndexes().map((index) => liveIndex(index, 'BUILDING')) } };
+				return { data: { indexes: readDeclaredIndexes().map((index) => liveIndex(index, 'CREATING')) } };
 			});
 			const wait = jest.fn(async (ms) => { clock += ms; });
 			const deploy = jest.fn().mockReturnValue({ status: 0, stdout: '', stderr: '' });
@@ -784,7 +1175,7 @@ describe('deploy-firestore-indexes', () => {
 			})).resolves.toBe(1);
 
 			expect(wait).toHaveBeenCalledWith(2);
-			expect(request).toHaveBeenCalledTimes(1);
+			expect(request).toHaveBeenCalledTimes(2);
 		});
 
 		it('exits 0 without any request when the template declares no indexes', async () => {
