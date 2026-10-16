@@ -36,7 +36,7 @@ description: >-
 These rules override older deployment/label guidance in bundled references and helper scripts.
 
 1. Linear issue creation is unavailable. Use GitHub only; do not attempt Linear creation or treat its absence as a blocker.
-2. Add `<agent>/<actual-model>` to each PR when starting work or immediately after creation, and verify it remains when ready. Example: `codex/gpt-6.1-sol`. Create the repository label if missing. Use the actual session model; never infer it from this example. Report unavailable model metadata. Retain this attribution after removing `agent-working`.
+2. Add `<agent>/<actual-model>` to each PR when starting work or immediately after creation, and verify it remains when ready. Example: `codex/gpt-6.1-sol`. Create the repository label if missing. Use the actual session model; never infer it from this example. When model metadata is unavailable, apply `agent-working` alone and record attribution as unavailable; ready, handoff, and shipped checks must accept that recorded state instead of requiring an invented model label. Retain available attribution after removing `agent-working`.
 3. For more than one issue/PR, dispatch one parallel subagent session per independent item, up to available slots and the max-2 write budget unless the user explicitly sets another batch size. Use distinct claim session identities and isolated worktrees. Each returns outcome, PR URL, review count, and verification evidence; the coordinator waits for all assigned items. Serialize dependent items and shared GitHub account switching; never edit one checkout concurrently.
 4. `automation/skip` is informational: process labeled issues/PRs normally, never filter them out or skip because of this label.
 5. Inspect PRs labeled `GLOBAL_BLOCKED` or `need manual PR deploy`, including items omitted by `get-oldest-issue.sh`. For PR-only work, first find and claim its linked issue. If none exists, apply the existing session/timestamp claim-comment protocol to the PR, re-read concurrent claims before writes, and yield to a fresh foreign owner; do not pass a PR number to the issue claim helper. Supplement that helper with paginated `gh issue list` / `gh pr list` label queries. Claim linked issues before recovery writes; establish ownership for PR-only work as well. Follow Step 6.5 for inactive, suspended, or outdated deployments; notify WhatsApp for missing deployment variables.
@@ -108,7 +108,7 @@ NOTIFY_MESSAGE="[GLOBAL_BLOCKED] Issue #${ISSUE_NUM} (${ISSUE_URL}) blocked on $
 1. **Global deadlock** — when a PR/issue is `GLOBAL_BLOCKED` and still cannot be unblocked after the unblock attempt, alerting humans that tooling/auth/infra prevents safe work on that item. The run then continues with the next oldest issue (see Step 6), unless the blocker is a total tooling/access failure, in which case the run stops with `GLOBAL_BLOCKED`.
 2. **Manual PR deploy / missing deployment variable** — when a deployment requires a missing environment variable or other operator action and the `need manual PR deploy` label is present or added (see Step 6.5). Send the variable name, affected environment, required operator action, and PR link; never include secret values.
 3. **`NEEDS_USER` / `HUMAN NEEDED`** — when an issue requires human input (`NEEDS_USER`, `HUMAN NEEDED`, `NEEDS USER`). Notify with the issue URL and a PR URL only if one exists, release this session's claim, and stop the run. Do not append the issue to `SKIPPED_ISSUES` or advance.
-4. **PR ready / in review** — when a PR is ready for review, including automatic-merge candidates, and when it is intentionally handed off for human review in Step 7. Verify the identity label remains and include the PR link.
+4. **PR ready / in review** — when a PR is ready for review, including automatic-merge candidates, and when it is intentionally handed off for human review in Step 7. Verify the identity label remains when metadata is available, otherwise preserve the recorded unavailable attribution, and include the PR link.
 5. **Shipped** — after merge, send the PR link and the actual release-tag and master E2E results.
 
 ## Concurrent Agent Coordination (Issue Claiming)
@@ -221,7 +221,12 @@ Follow these steps in strict chronological order to automate issue resolution:
    ```bash
    # Set AGENT_MODEL_LABEL to the actual session identity first.
    PR_NUMBER="$(gh pr view --json number --jq .number)"
-   gh pr edit "$PR_NUMBER" --add-label "agent-working" --add-label "$AGENT_MODEL_LABEL"
+   gh pr edit "$PR_NUMBER" --add-label "agent-working"
+   if [ -n "${AGENT_MODEL_LABEL:-}" ]; then
+     gh pr edit "$PR_NUMBER" --add-label "$AGENT_MODEL_LABEL"
+   else
+     printf '%s\n' 'Agent/model attribution unavailable; agent-working applied.' >&2
+   fi
    ```
 10. Verify the PR title describes the change and the PR body references the source GitHub issue; use `create-pr` to correct either if needed.
 
@@ -261,9 +266,10 @@ Follow these steps in strict chronological order to automate issue resolution:
 6. Observe the retry and bounded verification policies specified in `references/readiness-and-verification.md`; the discussion loop itself ends only after the quiet-window condition above is met or Step 7 is selected for a human-input thread.
 7. Verify the PR title describes the change and the PR body references the source GitHub issue; use `create-pr` to correct either if needed.
 8. If Codex approved (or the full quiet window ended without new actionable feedback), all merge-gate criteria pass, and the agent is confident the PR is mergeable:
+   - Before merging, send the mandatory PR-ready WhatsApp notification using the Notification Webhook helper: set `NOTIFY_MESSAGE` to a `[PR_READY]` message containing the issue URL, PR URL, and ready-to-merge status. Use the configured `NOTIFY_WHATSAPP_CHAT_ID` destination; this event is separate from the later shipped notification.
    - Merge the PR.
    - Check for configured release/tag automation under Session Finalization; when configured, wait for its new tag covering the merged commit and record the actual tag. Run relevant E2E against active `master`. Report unavailable checks under the deployment exception.
-   - Verify the identity label remains and send a WhatsApp shipped notification with PR link.
+   - Verify the identity label remains when metadata is available, otherwise preserve the recorded unavailable attribution, and send a WhatsApp shipped notification with PR link.
    - **Remove `agent-working` from the issue and the PR**:
     ```bash
     gh issue edit <ISSUE_NUMBER> --remove-label "agent-working"
@@ -324,7 +330,7 @@ If `GLOBAL_BLOCKED` is caused by the last deployment being inactive, suspended, 
 
 1. If `LOCAL_DEADLOCK`: Write a concise blocker summary on the issue or PR. Append the issue number to `SKIPPED_ISSUES`. Sync GitHub issue and PR state as needed.
 2. **If the issue has a merged PR**: Ensure the issue is closed if appropriate, then use Session Finalization for `SHIPPED`.
-3. **If `IN_REVIEW` with no agent writes**: The PR/issue state is already correct and must not be changed further — except that, if this session claimed the issue this run (Step 1/Step 2 returned `RESULT=CLAIMED` or `RESULT=TAKEOVER`), the one remaining cleanup is to release the freshly-acquired claim it added: remove the `agent-working` label so the issue is not held claimed until `CLAIM_TTL_MINUTES` (see the **Release a claim on a no-write terminal exit** rule). Keep/verify the mandatory agent/model attribution label as the sole additional metadata exception. Do not make other issue or PR state changes. Append the issue number to `SKIPPED_ISSUES`.
+3. **If `IN_REVIEW` with no agent writes**: The PR/issue state is already correct and must not be changed further — except that, if this session claimed the issue this run (Step 1/Step 2 returned `RESULT=CLAIMED` or `RESULT=TAKEOVER`), the one remaining cleanup is to release the freshly-acquired claim it added: remove the `agent-working` label so the issue is not held claimed until `CLAIM_TTL_MINUTES` (see the **Release a claim on a no-write terminal exit** rule). Keep/verify the agent/model attribution label when metadata is available (otherwise retain its recorded unavailable state) as the sole additional metadata exception. Do not make other issue or PR state changes. Append the issue number to `SKIPPED_ISSUES`.
 4. **If the issue is claimed by another agent session** (claim script exit `2` / `RESULT=SKIP`): Do not modify the issue or PR state. Append the issue number to `SKIPPED_ISSUES`.
 5. **If the issue or its linked PR is `NEEDS_USER` / `HUMAN NEEDED` / `need user`**: Send a WhatsApp notification with the issue link and PR link when available, release this session's `agent-working` claim after reconfirming ownership, and stop the run. Do not append the issue to `SKIPPED_ISSUES`, advance to another issue, or attempt implementation.
 6. **If the issue or its linked PR is `GLOBAL_BLOCKED`** (the label is present or the iteration set the outcome):
