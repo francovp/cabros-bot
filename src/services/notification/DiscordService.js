@@ -459,12 +459,13 @@ class DiscordService extends NotificationChannel {
 
 	async formatAlert(alert = {}) {
 		const signalClass = alert.signalClass || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.signalClass : undefined);
+		const session = alert.session || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.session : undefined);
 		if (alert.enriched && typeof alert.enriched === 'object') {
-			return this.formatter.formatEnriched(alert.enriched, { signalClass });
+			return this.formatter.formatEnriched(alert.enriched, { signalClass, session });
 		}
 
 		return typeof alert.text === 'string'
-			? this.formatter.format(alert.text, { signalClass })
+			? this.formatter.format(alert.text, { signalClass, session })
 			: '';
 	}
 

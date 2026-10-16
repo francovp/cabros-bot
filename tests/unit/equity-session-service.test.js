@@ -150,6 +150,64 @@ describe('EquitySessionService', () => {
 			})).toBe('closed');
 		});
 
+		it('correctly handles winter EST (UTC-5) daylight saving differences', () => {
+			// In December, US Eastern is EST (UTC-5)
+			// 14:00 UTC = 09:00 EST -> Pre-market (regular opens at 09:30 EST)
+			expect(classifySession({
+				exchange: 'NASDAQ',
+				symbol: 'AAPL',
+				timestamp: '2026-12-01T14:00:00.000Z',
+			})).toBe('pre');
+
+			// 20:30 UTC = 15:30 EST -> Regular market (regular closes at 16:00 EST)
+			expect(classifySession({
+				exchange: 'NYSE',
+				symbol: 'MSFT',
+				timestamp: '2026-12-01T20:30:00.000Z',
+			})).toBe('regular');
+
+			// 21:05 UTC = 16:05 EST -> Post-market
+			expect(classifySession({
+				exchange: 'BATS',
+				symbol: 'TSLA',
+				timestamp: '2026-12-01T21:05:00.000Z',
+			})).toBe('post');
+		});
+
+		it('correctly handles US early-close half days (closes at 13:00 ET / 1:00 PM)', () => {
+			// Black Friday (day after Thanksgiving, 2026-11-27)
+			// 17:00 UTC = 12:00 EST -> Regular market (half-day closes at 13:00 EST)
+			expect(classifySession({
+				exchange: 'NASDAQ',
+				symbol: 'AAPL',
+				timestamp: '2026-11-27T17:00:00.000Z',
+			})).toBe('regular');
+
+			// 19:00 UTC = 14:00 EST -> Post-market (regular session closed at 13:00 EST!)
+			expect(classifySession({
+				exchange: 'NYSE',
+				symbol: 'NVDA',
+				timestamp: '2026-11-27T19:00:00.000Z',
+			})).toBe('post');
+
+			// July 3, 2025 (day before July 4, EDT UTC-4)
+			// 18:00 UTC = 14:00 EDT -> Post-market (regular session closed at 13:00 EDT!)
+			expect(classifySession({
+				exchange: 'NASDAQ',
+				symbol: 'AAPL',
+				timestamp: '2025-07-03T18:00:00.000Z',
+			})).toBe('post');
+		});
+
+		it('supports explicit UTC mode when useEasternTime is false', () => {
+			expect(classifySession({
+				exchange: 'NASDAQ',
+				symbol: 'AAPL',
+				timestamp: '2026-06-10T14:00:00.000Z',
+				useEasternTime: false,
+			})).toBe('regular');
+		});
+
 		it('formats Spanish labels correctly', () => {
 			expect(formatSessionLabelSpanish('regular')).toBe('regular');
 			expect(formatSessionLabelSpanish('pre')).toBe('pre');

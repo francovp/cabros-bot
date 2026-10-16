@@ -3722,5 +3722,7 @@ module.exports = {
 	LOCK_COLLECTION_NAME,
 	STORAGE_UNAVAILABLE_CODE,
 	INVALID_CURSOR_MESSAGE,
+	isUsMarketHalfDay,
+	isUsMarketHoliday,
 	_resetForTesting,
 };

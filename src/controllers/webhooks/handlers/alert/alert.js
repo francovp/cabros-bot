@@ -243,6 +243,9 @@ async function processEnrichment(alert, options) {
 				parsedSignal: parsed,
 			});
 			if (enrichedAlert && typeof enrichedAlert === 'object') {
+				if (alert.session && !enrichedAlert.session) {
+					enrichedAlert.session = alert.session;
+				}
 				enrichedAlert.tokenUsage = tokenUsage && typeof tokenUsage.toJSON === 'function' ? tokenUsage.toJSON() : null;
 				enriched = true;
 				alert.enriched = enrichedAlert;
@@ -818,6 +821,7 @@ function postAlert(botOrGetter) {
 						&& buildBurstGroupKey({ parsedSignal, routing: deliveryRouting }) !== null;
 					const dispatchOutcome = await burstAggregator.dispatch({
 						parsedSignal,
+						alert,
 						routing: deliveryRouting,
 						deliver: async (overrides = {}) => sendWithNotificationRouting(
 							notificationManager,

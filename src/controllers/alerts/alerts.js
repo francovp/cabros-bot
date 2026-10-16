@@ -1028,6 +1028,7 @@ function replayAlert(botOrGetter) {
 							text: storedAlert.text,
 							source: storedAlert.source || 'webhook',
 							...(storedAlert.signalClass ? { signalClass: storedAlert.signalClass } : {}),
+							...(storedAlert.session ? { session: storedAlert.session } : {}),
 						};
 
 						const { TokenUsageTracker } = require('../../lib/tokenUsage');
@@ -1053,6 +1054,7 @@ function replayAlert(botOrGetter) {
 				enriched: (reEnriched ? newEnrichmentData : storedAlert.enrichmentData) || undefined,
 				source: storedAlert.source || 'alert-replay',
 				signalClass: storedAlert.signalClass || undefined,
+				session: storedAlert.session || undefined,
 				replay: {
 					originalAlertId: alertId,
 					idempotencyKey: idempotencyKey.trim(),
@@ -1235,6 +1237,7 @@ function batchReplayAlerts(botOrGetter) {
 						enriched: storedAlert.enrichmentData || undefined,
 						source: storedAlert.source || 'alert-replay',
 						signalClass: storedAlert.signalClass || undefined,
+						session: storedAlert.session || undefined,
 						replay: {
 							originalAlertId: alertId,
 							idempotencyKey: alertIdempotencyKey,

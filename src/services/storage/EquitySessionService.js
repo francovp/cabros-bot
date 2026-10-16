@@ -1,6 +1,7 @@
 'use strict';
 
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { isUsMarketHalfDay, isUsMarketHoliday } = require('./SignalOutcomeService');
 
 /**
  * Supported equity exchanges for session classification.
@@ -158,7 +159,7 @@ function getLocalDateParts(date) {
  * @returns {'regular'|'pre'|'post'|'closed'|'24/7'}
  */
 function classifySession(params = {}) {
-	const { exchange, symbol, timestamp, useEasternTime } = params;
+	const { exchange, symbol, timestamp, useEasternTime = true } = params;
 	const normalizedExchange = normalizeExchange(exchange);
 
 	// Check if crypto
@@ -183,7 +184,8 @@ function classifySession(params = {}) {
 	if (useEasternTime) {
 		const local = getLocalDateParts(validDate);
 		const isoDate = `${local.year}-${String(local.month).padStart(2, '0')}-${String(local.day).padStart(2, '0')}`;
-		if (US_EQUITY_HOLIDAYS.has(isoDate)) {
+		const isHoliday = US_EQUITY_HOLIDAYS.has(isoDate) || (typeof isUsMarketHoliday === 'function' && isUsMarketHoliday(isoDate));
+		if (isHoliday) {
 			return 'closed';
 		}
 		const dayOfWeek = (['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(local.weekday));
@@ -191,25 +193,27 @@ function classifySession(params = {}) {
 			return 'closed';
 		}
 
+		const isHalfDay = typeof isUsMarketHalfDay === 'function' && isUsMarketHalfDay(isoDate);
+		const regularCloseMinutes = isHalfDay ? 780 : 960; // 13:00 vs 16:00 ET
+
 		const minutes = local.hour * 60 + local.minute;
 		// 04:00 to 09:30 ET = 240 to 570 min (Pre)
-		// 09:30 to 16:00 ET = 570 to 960 min (Regular)
-		// 16:00 to 20:00 ET = 960 to 1200 min (Post)
+		// 09:30 to regularCloseMinutes ET = 570 to regularCloseMinutes min (Regular)
+		// regularCloseMinutes to 20:00 ET = regularCloseMinutes to 1200 min (Post)
 		// 20:00 to 04:00 ET = Closed
-		if (minutes >= 570 && minutes < 960) {
+		if (minutes >= 570 && minutes < regularCloseMinutes) {
 			return 'regular';
 		}
 		if (minutes >= 240 && minutes < 570) {
 			return 'pre';
 		}
-		if (minutes >= 960 && minutes < 1200) {
+		if (minutes >= regularCloseMinutes && minutes < 1200) {
 			return 'post';
 		}
 		return 'closed';
 	}
 
-	// Default UTC classification per issue #804 specification:
-	// Check day of week in UTC (0 = Sunday, 6 = Saturday)
+	// Legacy UTC classification (when useEasternTime is explicitly false)
 	const dayOfWeek = validDate.getUTCDay();
 	if (dayOfWeek === 0 || dayOfWeek === 6) {
 		return 'closed';
@@ -217,26 +221,29 @@ function classifySession(params = {}) {
 
 	// Check US holiday in UTC YYYY-MM-DD
 	const isoDate = validDate.toISOString().slice(0, 10);
-	if (US_EQUITY_HOLIDAYS.has(isoDate)) {
+	const isHoliday = US_EQUITY_HOLIDAYS.has(isoDate) || (typeof isUsMarketHoliday === 'function' && isUsMarketHoliday(isoDate));
+	if (isHoliday) {
 		return 'closed';
 	}
 
 	const utcHours = validDate.getUTCHours();
 	const utcMinutes = validDate.getUTCMinutes();
 	const minutesFromMidnight = utcHours * 60 + utcMinutes;
+	const isHalfDay = typeof isUsMarketHalfDay === 'function' && isUsMarketHalfDay(isoDate);
+	const regularCloseMinutes = isHalfDay ? 1020 : 1200; // 17:00 vs 20:00 UTC (13:00 vs 16:00 EDT)
 
 	// Pre-market: 08:00 UTC (480 min) to 13:30 UTC (810 min)
-	// Regular: 13:30 UTC (810 min) to 20:00 UTC (1200 min)
-	// Post-market: 20:00 UTC (1200 min) to 00:00 UTC (1440 min)
+	// Regular: 13:30 UTC (810 min) to regularCloseMinutes (1200 min / 1020 on half days)
+	// Post-market: regularCloseMinutes to 00:00 UTC (1440 min)
 	// Closed: 00:00 to 08:00 UTC (0 to 480 min)
 
-	if (minutesFromMidnight >= 810 && minutesFromMidnight < 1200) {
+	if (minutesFromMidnight >= 810 && minutesFromMidnight < regularCloseMinutes) {
 		return 'regular';
 	}
 	if (minutesFromMidnight >= 480 && minutesFromMidnight < 810) {
 		return 'pre';
 	}
-	if (minutesFromMidnight >= 1200 && minutesFromMidnight < 1440) {
+	if (minutesFromMidnight >= regularCloseMinutes && minutesFromMidnight < 1440) {
 		return 'post';
 	}
 
