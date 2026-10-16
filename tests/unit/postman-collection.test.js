@@ -27,7 +27,59 @@ function collectRequestItems(items, result = []) {
 	return result;
 }
 
+function collectRequestsAndSavedExamples(items, result = []) {
+	for (const item of items) {
+		if (item.request) result.push(item.request);
+		for (const response of item.response || []) {
+			if (response.originalRequest) result.push(response.originalRequest);
+		}
+		if (Array.isArray(item.item)) collectRequestsAndSavedExamples(item.item, result);
+	}
+	return result;
+}
+
 describe('Postman collection contract', () => {
+	it('adds executable response assertions to each alert decision rollup and export variant', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const names = [
+			'GET Alert Analytics Summary (decision rollup)',
+			'GET Alert Analytics Summary (invalid includeDecisionRollup)',
+			'GET Export Alerts (JSONL - decision audit)',
+			'GET Export Alerts (CSV - decision audit opt-in)',
+			'GET Export Alerts (invalid includeDecision)',
+		];
+
+		for (const name of names) {
+			const item = findItem(collection.item, name);
+			const testScript = item?.event?.find((event) => event.listen === 'test')?.script?.exec?.join('\n') || '';
+			expect(testScript).toContain('pm.test(');
+			expect(testScript).toContain('pm.response.to.have.status(');
+		}
+
+		const summaryScript = findItem(collection.item, names[0]).event.find((event) => event.listen === 'test').script.exec.join('\n');
+		expect(summaryScript).toContain('pm.response.to.have.status(200)');
+		expect(summaryScript).toContain('success');
+		expect(summaryScript).toContain('if (body.summary.decision)');
+		const jsonlScript = findItem(collection.item, names[2]).event.find((event) => event.listen === 'test').script.exec.join('\n');
+		expect(jsonlScript).toContain('pm.response.to.have.status(200)');
+		expect(jsonlScript).toContain('if (row.decision)');
+		expect(jsonlScript).toContain('row.decision.enrichment.providers');
+		const jsonlExample = JSON.parse(findItem(collection.item, names[2]).response.find((response) => response.code === 200).body);
+		expect(jsonlExample.useTradingViewData).toBe(true);
+		expect(jsonlExample.tradingViewEnrichmentApplied).toBe(true);
+		expect(jsonlExample.tradingViewEnrichmentStatus).toBe('full');
+		expect(jsonlExample.decision.enrichment.providers.tradingViewMcp.status).toBe('full');
+		const csvScript = findItem(collection.item, names[3]).event.find((event) => event.listen === 'test').script.exec.join('\n');
+		expect(csvScript).toContain('pm.response.to.have.status(200)');
+		expect(csvScript).toContain('decision');
+		for (const name of [names[1], names[4]]) {
+			const item = findItem(collection.item, name);
+			const testScript = item.event.find((event) => event.listen === 'test').script.exec.join('\n');
+			expect(testScript).toContain('pm.response.to.have.status(400)');
+			expect(testScript).toContain('INVALID_REQUEST');
+		}
+	});
+
 	it('documents Firebase admin configuration and bearer-auth status access', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const config = findItem(collection.item, 'GET Firebase Admin Auth Config');
@@ -59,6 +111,28 @@ describe('Postman collection contract', () => {
 			hits: 0,
 			misses: 0,
 			failures: 0,
+		});
+	});
+
+	it('documents bounded startup jitter in the Get Status response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const jitterExample = findItem(collection.item, 'Get Status - startup jitter');
+
+		expect(JSON.parse(status.response.find((response) => response.code === 200).body).dependencies.startupJitter).toEqual({
+			global: 5000,
+			signalOutcome: 5000,
+			redrive: 5000,
+			scannerPreset: 5000,
+			remoteConfig: 5000,
+		});
+		expect(jitterExample.request.url.raw).toBe('{{baseUrl}}/api/status');
+		expect(JSON.parse(jitterExample.response[0].body).dependencies.startupJitter).toEqual({
+			global: 5000,
+			signalOutcome: 5000,
+			redrive: 5000,
+			scannerPreset: 5000,
+			remoteConfig: 5000,
 		});
 	});
 
@@ -109,6 +183,43 @@ describe('Postman collection contract', () => {
 		]));
 	});
 
+	it('documents cross-timeframe duplicate collapse with the delivered baseline leg', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const collapsed = findItem(collection.item, 'POST Send Alert (cross-timeframe duplicate suppressed)');
+		expect(collapsed).toBeDefined();
+		expect(collapsed.request.method).toBe('POST');
+		expect(collapsed.request.url.raw).toBe('{{baseUrl}}/api/webhook/alert');
+		expect(findHeader(collapsed, 'x-api-key').value).toBe('{{apiKey}}');
+		expect(collapsed.request.body.raw).toContain('BINANCE:BTCUSDT(240)');
+
+		const suppressed = collapsed.response.find((response) => response.code === 200);
+		const suppressedBody = JSON.parse(suppressed.body);
+		expect(suppressedBody.success).toBe(true);
+		expect(suppressedBody.suppressedRepeat).toBe(true);
+		expect(suppressedBody.suppressionReason).toBe('cross_timeframe_duplicate');
+		expect(suppressedBody.results).toEqual([]);
+		expect(suppressedBody.deliveredChannels).toEqual([]);
+		expect(suppressed.originalRequest.body.raw).toContain('BINANCE:BTCUSDT(240)');
+
+		const unauthorized = collapsed.response.find((response) => response.code === 401);
+		expect(JSON.parse(unauthorized.body)).toMatchObject({ success: false, retryable: false });
+
+		const baseline = findItem(collection.item, 'POST Send Alert (daily signal - cross-timeframe baseline)');
+		expect(baseline).toBeDefined();
+		expect(baseline.request.body.raw).toContain('BINANCE:BTCUSDT(D)');
+		const delivered = baseline.response.find((response) => response.code === 200);
+		const deliveredBody = JSON.parse(delivered.body);
+		expect(deliveredBody.suppressedRepeat).toBeUndefined();
+		expect(deliveredBody.deliveredChannels).toEqual(['telegram']);
+	});
+
+	it('leaves the same-timeframe repeat suppression example without a suppression reason', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const sameTimeframe = findItem(collection.item, 'POST Send Alert (repeat suppressed)');
+		const suppressed = sameTimeframe.response.find((response) => response.code === 200);
+		expect(JSON.parse(suppressed.body).suppressionReason).toBeUndefined();
+	});
+
 	it('documents valid and invalid per-symbol alert routing variants', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const valid = findItem(collection.item, 'POST Send Alert (per-symbol routing)');
@@ -144,7 +255,49 @@ describe('Postman collection contract', () => {
 		expect(script).toContain('pm.variables.set(\'oversizedWebhookPadding\'');
 		expect(oversized.request.body.raw).toContain('{{oversizedWebhookPadding}}');
 		expect(oversized.request.body.raw).not.toContain('{{$padString}}');
+		expect(oversized.request.header).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'x-request-id', value: 'req-webhook-body-size-001' }),
+		]));
+		expect(oversized.response[0].header).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'X-Request-Id', value: 'req-webhook-body-size-001' }),
+		]));
+		expect(JSON.parse(oversized.response[0].body)).toEqual(expect.objectContaining({
+			code: 'PAYLOAD_TOO_LARGE',
+			requestId: 'req-webhook-body-size-001',
+			retryable: false,
+		}));
 
+	});
+
+	it('documents expanded-analysis symbol deduplication as an internally consistent variant (#874)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const variant = findItem(collection.item, 'POST Expanded Analysis Alert (duplicate symbols)');
+
+		expect(variant).toBeDefined();
+
+		const requested = JSON.parse(variant.request.body.raw).symbols;
+		expect(requested.length).toBeGreaterThan(2);
+
+		const [ok, tooMany] = variant.response;
+		expect(ok.code).toBe(200);
+		expect(tooMany.code).toBe(400);
+
+		const okBody = JSON.parse(ok.body);
+		expect(okBody.success).toBe(true);
+		expect(okBody.results.map((result) => result.symbol)).toEqual([
+			'BINANCE:BTCUSDT',
+			'BATS:AAPL',
+			'NASDAQ:NVDA',
+		]);
+		expect(okBody.results).toHaveLength(3);
+		expect(okBody.summary.total).toBe(okBody.results.length);
+
+		// The documented count must equal submitted minus analysed, so the example
+		// cannot drift away from the body it documents.
+		expect(okBody.duplicatesRemoved).toBe(requested.length - okBody.results.length);
+		expect(okBody.duplicatesRemoved).toBeGreaterThan(0);
+
+		expect(JSON.parse(tooMany.body).error).toContain('Too many symbols requested');
 	});
 
 	it('uses distinct demo keys for middleware-backed scanner requests', () => {
@@ -312,6 +465,65 @@ describe('Postman collection contract', () => {
 		expect(marketBuyResp.order.quoteOrderQty).toBe('50');
 		expect(marketBuyResp.order.newOrderRespType).toBe('FULL');
 		expect(marketBuyResp.order.newClientOrderId).toBeUndefined();
+	});
+
+	it('documents the generic-message dry-run preview variants (issue #876)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const queryItem = findItem(collection.item, 'POST Send Message (dry-run, query flag)');
+		const bodyItem = findItem(collection.item, 'POST Send Message (dry-run, body field)');
+
+		expect(queryItem).toBeDefined();
+		expect(bodyItem).toBeDefined();
+		expect(queryItem.request.url.raw).toContain('{{baseUrl}}/api/webhook/message?dryRun=true');
+		expect(bodyItem.request.url.raw).toBe('{{baseUrl}}/api/webhook/message');
+		expect(JSON.parse(bodyItem.request.body.raw).dryRun).toBe(true);
+		expect(findHeader(queryItem, 'idempotency-key')).toBeDefined();
+
+		for (const item of [queryItem, bodyItem]) {
+			const tests = (item.event || []).filter((event) => event.listen === 'test');
+			expect(tests.length).toBeGreaterThan(0);
+			const script = tests[0].script.exec.join('\n');
+			expect(script).toContain('pm.test');
+			expect(script).toContain('dryRun');
+			expect(script).toContain('deliveredChannels');
+
+			for (const example of item.response) {
+				if (example.code !== 200) continue;
+				const body = JSON.parse(example.body);
+				expect(body.success).toBe(true);
+				expect(body.dryRun).toBe(true);
+				expect(body.deliveredChannels).toEqual([]);
+				expect(body.requestId).toEqual(expect.any(String));
+				expect(body.payload.text).toEqual(expect.any(String));
+				expect(body.estimatedChunks).toEqual(expect.objectContaining({
+					telegram: expect.any(Number),
+					whatsapp: expect.any(Number),
+					discord: expect.any(Number),
+				}));
+				expect(body.results).toBeUndefined();
+				// The saved example must not leak the webhook credential it documents.
+				expect(example.body).not.toContain('abc-xyz-token');
+				expect(body.routing).not.toHaveProperty('discordWebhookUrl');
+			}
+		}
+
+		// Broadcast shape: an omitted channel subset is reported as a broadcast.
+		const broadcastExample = JSON.parse(bodyItem.response[0].body);
+		expect(broadcastExample.broadcast).toBe(true);
+
+		const invalidValue = queryItem.response.find((res) => res.code === 400 && res.name.includes('invalid dryRun'));
+		expect(invalidValue).toBeDefined();
+		expect(JSON.parse(invalidValue.body)).toMatchObject({
+			success: false,
+			details: { field: 'dryRun' },
+		});
+
+		const invalidRouting = queryItem.response.find((res) => res.code === 400 && res.name.includes('routing override'));
+		expect(invalidRouting).toBeDefined();
+		expect(JSON.parse(invalidRouting.body)).toMatchObject({
+			success: false,
+			details: { field: 'discordWebhookUrl' },
+		});
 	});
 
 	it('documents Request Timeout (408) response examples with required fields', () => {
@@ -496,6 +708,78 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(summaryInvalid.response[0].body).code).toBe('INVALID_REQUEST');
 	});
 
+	it('documents the optional summary interval series with self-consistent examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const hourly = findItem(collection.item, 'GET Alert Analytics Summary (interval=hour)');
+		const daily = findItem(collection.item, 'GET Alert Analytics Summary (interval=day)');
+		const invalid = findItem(collection.item, 'GET Alert Analytics Summary (invalid interval - 400 Bad Request)');
+		const overCap = findItem(collection.item, 'GET Alert Analytics Summary (interval window over cap - 400 Bad Request)');
+
+		expect(hourly).toBeDefined();
+		expect(hourly.request.url.raw).toContain('interval=hour');
+		expect(daily).toBeDefined();
+		expect(daily.request.url.raw).toContain('interval=day');
+
+		expect(invalid).toBeDefined();
+		expect(invalid.response[0].code).toBe(400);
+		const invalidBody = JSON.parse(invalid.response[0].body);
+		expect(invalidBody).toEqual({
+			success: false,
+			error: 'Invalid interval parameter. Allowed values: hour, day.',
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		});
+
+		expect(overCap).toBeDefined();
+		expect(overCap.response[0].code).toBe(400);
+		const overCapBody = JSON.parse(overCap.response[0].body);
+		expect(overCapBody.error).toContain('interval "hour"');
+		expect(overCapBody.error).toContain('31 days');
+		expect(overCapBody.code).toBe('INVALID_REQUEST');
+
+		// The examples must be internally consistent with the runtime contract,
+		// otherwise they document a shape the server never produces.
+		const hourlyBody = JSON.parse(hourly.response[0].body).summary;
+		expect(hourlyBody.window.interval).toBe('hour');
+		expect(hourlyBody.window.maxDays).toBe(31);
+		expect(hourlyBody.buckets.map(b => b.bucketStart)).toEqual([
+			'2026-06-06T00:00:00.000Z',
+			'2026-06-06T01:00:00.000Z',
+			'2026-06-06T02:00:00.000Z',
+			'2026-06-06T03:00:00.000Z',
+		]);
+
+		const dailyBody = JSON.parse(daily.response[0].body).summary;
+		expect(dailyBody.window.interval).toBe('day');
+		expect(dailyBody.window.maxDays).toBe(366);
+
+		for (const body of [hourlyBody, dailyBody]) {
+			expect(body.buckets.reduce((sum, b) => sum + b.total, 0)).toBe(body.totalAlerts);
+			for (const bucket of body.buckets) {
+				expect(Object.keys(bucket)).toEqual(['bucketStart', 'total', 'success', 'failure', 'byChannel']);
+				const channels = Object.values(bucket.byChannel);
+				expect(bucket.success).toBe(channels.reduce((sum, c) => sum + c.success, 0));
+				expect(bucket.failure).toBe(channels.reduce((sum, c) => sum + c.failure, 0));
+			}
+			const starts = body.buckets.map(b => Date.parse(b.bucketStart));
+			expect(starts).toEqual([...starts].sort((a, b) => a - b));
+		}
+
+		// Gapless series: the empty-window example must still be zero-filled.
+		const emptyBody = JSON.parse(hourly.response[1].body).summary;
+		expect(emptyBody.buckets).toHaveLength(3);
+		for (const bucket of emptyBody.buckets) {
+			expect(bucket).toEqual({
+				bucketStart: expect.any(String),
+				total: 0,
+				success: 0,
+				failure: 0,
+				byChannel: {},
+			});
+		}
+	});
+
 	it('documents signalClass in alert webhook and alert query/summary examples', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const postAlert = findItem(collection.item, 'POST Send Alert');
@@ -525,6 +809,76 @@ describe('Postman collection contract', () => {
 		expect(postInvalid.response[0].code).toBe(400);
 		expect(JSON.parse(postInvalid.response[0].body).code).toBe('INVALID_REQUEST');
 
+		const malformedJsonAlert = findItem(collection.item, 'POST Send Alert (malformed JSON - 400 Bad Request)');
+		expect(malformedJsonAlert).toBeDefined();
+		expect(malformedJsonAlert.request.url.raw).toBe('{{baseUrl}}/api/webhook/alert');
+		expect(malformedJsonAlert.request.body.raw).toBe('{"text":');
+		expect(malformedJsonAlert.response[0].code).toBe(400);
+		expect(JSON.parse(malformedJsonAlert.response[0].body)).toEqual(expect.objectContaining({
+			code: 'INVALID_REQUEST',
+			error: 'Malformed JSON request body',
+			requestId: expect.any(String),
+		}));
+		const malformedJsonTests = (malformedJsonAlert.event || [])
+			.filter((event) => event.listen === 'test')
+			.flatMap((event) => event.script.exec)
+			.join('\n');
+		expect(malformedJsonTests).toContain('pm.test');
+		expect(malformedJsonTests).toContain('Malformed JSON returns structured 400');
+		expect(malformedJsonTests).toContain('pm.response.to.have.status(400)');
+		expect(malformedJsonTests).toContain('body.code).to.eql(\'INVALID_REQUEST\')');
+
+		const unsupportedCharset = findItem(collection.item, 'POST Send Alert (unsupported JSON charset - 415)');
+		expect(unsupportedCharset).toBeDefined();
+		expect(unsupportedCharset.request.header).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'Content-Type', value: 'application/json; charset=unsupported-charset' }),
+		]));
+		expect(unsupportedCharset.response[0].code).toBe(415);
+		expect(JSON.parse(unsupportedCharset.response[0].body)).toEqual(expect.objectContaining({
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		}));
+		const unsupportedCharsetTests = unsupportedCharset.event
+			.filter((event) => event.listen === 'test')
+			.flatMap((event) => event.script.exec)
+			.join('\n');
+		expect(unsupportedCharsetTests).toContain('pm.response.to.have.status(415)');
+		expect(unsupportedCharsetTests).toContain('body.code).to.eql(\'INVALID_REQUEST\')');
+		expect(unsupportedCharsetTests).toContain('X-Request-Id');
+
+		const fallthrough500Examples = findItem(collection.item, 'POST Send Alert').response
+			.filter((response) => response.code === 500);
+		expect(fallthrough500Examples).toHaveLength(1);
+		expect(JSON.parse(fallthrough500Examples[0].body)).toEqual(expect.objectContaining({
+			success: false,
+			code: 'INTERNAL_ERROR',
+			requestId: expect.any(String),
+		}));
+
+		const tooManyParameters = findItem(collection.item, 'POST Send Alert (too many URL-encoded parameters - 413)');
+		expect(tooManyParameters).toBeDefined();
+		expect(tooManyParameters.request.body.raw).toContain('{{tooManyUrlEncodedParameters}}');
+		expect(tooManyParameters.event.find((event) => event.listen === 'prerequest').script.exec.join('\n'))
+			.toContain('Array.from({ length: 1001 }');
+		expect(tooManyParameters.event.find((event) => event.listen === 'test').script.exec.join('\n'))
+			.toContain('body.code).to.eql(\'PAYLOAD_TOO_LARGE\')');
+		expect(JSON.parse(tooManyParameters.response[0].body)).toEqual(expect.objectContaining({
+			code: 'PAYLOAD_TOO_LARGE',
+			error: 'Request contains too many URL-encoded parameters',
+			retryable: false,
+		}));
+
+		const message500 = findItem(collection.item, 'POST Send Message').response
+			.find((response) => response.code === 500);
+		expect(JSON.parse(message500.body)).toEqual(expect.objectContaining({
+			code: 'INTERNAL_ERROR',
+			retryable: true,
+		}));
+		expect(message500.header).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'X-Request-Id', value: expect.any(String) }),
+		]));
+
 		const listClassFiltered = findItem(collection.item, 'GET List Alerts (signalClass filter)');
 		expect(listClassFiltered).toBeDefined();
 		expect(listClassFiltered.request.url.raw).toContain('signalClass=breakout,reversal');
@@ -551,6 +905,15 @@ describe('Postman collection contract', () => {
 		const exportClassInvalid = findItem(collection.item, 'GET Export Alerts (invalid signalClass - 400 Bad Request)');
 		expect(exportClassInvalid).toBeDefined();
 		expect(exportClassInvalid.response[0].code).toBe(400);
+	});
+
+	it('documents symbol analysis multi-agent state in status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		expect(JSON.parse(status.response[0].body).featureFlags.symbolAnalysisMultiAgent).toBe(false);
+		expect(JSON.parse(capabilities.response[0].body).featureFlags.symbolAnalysisMultiAgent).toBe(false);
 	});
 
 	it('documents notificationRedrive and zeroChannelBroadcasts in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
@@ -747,6 +1110,80 @@ describe('Postman collection contract', () => {
 			status: 'disabled',
 			mode: 'ephemeral',
 			backend: 'memory',
+		});
+
+		// Every documented variant must be free of the provider text that Firestore
+		// embeds in its error messages.
+		for (const response of item.response) {
+			expect(response.body).not.toContain('projects/');
+			expect(response.body).not.toContain('console.firebase.google.com');
+		}
+	});
+
+	it('documents unverified, ready, degraded and disabled symbol analysis storage variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - symbol analysis storage readiness (issue #1179)');
+
+		expect(item).toBeDefined();
+
+		const unverified = item.response.find((res) => res.name.includes('unverified'));
+		const ready = item.response.find((res) => res.name.includes('was persisted'));
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const disabled = item.response.find((res) => res.name.includes('flag off'));
+
+		// Issue #1179 acceptance: enabling the flag must not immediately report `ready`,
+		// because every Firestore failure here drops the record and still answers the
+		// analysis, so credential shape alone proves nothing about persistence.
+		expect(unverified.code).toBe(200);
+		expect(JSON.parse(unverified.body).dependencies.symbolAnalysisStorage).toEqual({
+			enabled: true,
+			configured: true,
+			ready: false,
+			status: 'unverified',
+			readiness: 'unverified',
+			failOpen: true,
+			collection: 'symbolAnalyses',
+			retentionDays: 7,
+			writesAttempted: 0,
+			writesSucceeded: 0,
+			writesFailed: 0,
+			readsAttempted: 0,
+			readsSucceeded: 0,
+			readsFailed: 0,
+			consecutiveFailures: 0,
+			lastWriteAt: null,
+			lastFailureAt: null,
+			lastErrorReason: null,
+		});
+
+		expect(ready.code).toBe(200);
+		expect(JSON.parse(ready.body).dependencies.symbolAnalysisStorage).toMatchObject({
+			ready: true,
+			status: 'ready',
+			readiness: 'verified',
+			// Only a write proves persistence; the reads alongside it do not.
+			writesSucceeded: 31,
+			consecutiveFailures: 0,
+		});
+
+		expect(degraded.code).toBe(200);
+		expect(JSON.parse(degraded.body).dependencies.symbolAnalysisStorage).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			readiness: 'degraded',
+			// Intent is unchanged while storage is broken, and the fallback is stated.
+			enabled: true,
+			configured: true,
+			failOpen: true,
+			lastErrorReason: 'firestore_unavailable',
+		});
+
+		expect(disabled.code).toBe(200);
+		expect(JSON.parse(disabled.body).dependencies.symbolAnalysisStorage).toMatchObject({
+			enabled: false,
+			ready: false,
+			status: 'disabled',
+			writesAttempted: 0,
 		});
 
 		// Every documented variant must be free of the provider text that Firestore
@@ -1039,6 +1476,51 @@ describe('Postman collection contract', () => {
 	});
 });
 
+describe('alert analytics summary examples (issue #731)', () => {
+	it('documents complete schema-conforming outcome breakdown responses', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const contract = JSON.parse(fs.readFileSync(
+			path.join(__dirname, '../../src/openapi/openapi.json'), 'utf8'));
+		const required = contract.components.schemas.OutcomesSummary.required;
+		const direct = findItem(collection.item, 'GET Summarize Signal Outcomes (breakdowns)');
+		const alertSummary = findItem(collection.item, 'GET Alert Analytics Summary (outcome breakdowns)');
+		expect(direct).toBeDefined();
+		expect(alertSummary).toBeDefined();
+		const directExample = direct.response.find((response) => response.name === '200 Success (breakdowns)');
+		const shadowExample = alertSummary.response.find((response) => response.name === '200 OK - Shadow mode breakdowns');
+		expect(directExample).toBeDefined();
+		expect(shadowExample).toBeDefined();
+
+		const directSummary = JSON.parse(directExample.body).summary;
+		const shadowMetrics = JSON.parse(shadowExample.body).summary.shadowModeMetrics;
+		expect(Object.keys(directSummary)).toEqual(expect.arrayContaining([...required, 'available']));
+		expect(directSummary.available).toBe(true);
+		expect(Object.keys(shadowMetrics)).toEqual(expect.arrayContaining(required));
+		expect(shadowMetrics).not.toHaveProperty('available');
+	});
+
+	it('documents deployments array in GET Alert Analytics Summary example (issue #1169)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const alertSummary = findItem(collection.item, 'GET Alert Analytics Summary');
+		expect(alertSummary).toBeDefined();
+
+		const summaryExample = alertSummary.response.find((response) => response.name === '200 OK - Analytics summary');
+		expect(summaryExample).toBeDefined();
+
+		const summary = JSON.parse(summaryExample.body).summary;
+		expect(Array.isArray(summary.deployments)).toBe(true);
+		expect(summary.deployments.length).toBeGreaterThan(0);
+		expect(summary.deployments[0]).toEqual(expect.objectContaining({
+			platform: expect.any(String),
+			gitSha: expect.any(String),
+			service: expect.any(String),
+			runtimeVersion: expect.any(String),
+			count: expect.any(Number),
+			lastSeen: expect.any(String),
+		}));
+	});
+});
+
 describe('news-monitor stop/target example (GH-712)', () => {
 	it('POST News Monitor success example includes a populated stop/target alert', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
@@ -1096,14 +1578,33 @@ describe('news-monitor stop/target example (GH-712)', () => {
 			const body = JSON.parse(response.body);
 			const confluence = body.dependencies.tradingViewMcp.enrichment.confluence;
 
-			expect(confluence.enabled).toBe(true);
-			expect(body.featureFlags.tradingViewConfluenceEnrichment).toBe(true);
+			expect(confluence.enabled).toBe(body.featureFlags.tradingViewConfluenceEnrichment);
+			expect(typeof confluence.enabled).toBe('boolean');
 			expect(allowedFailureCategories).toContain(confluence.lastFailureCategory);
 			expect(confluence.appliedCount + confluence.failedCount)
 				.toBeLessThanOrEqual(confluence.attemptedCount);
 			expect(response.body).not.toContain('combined_analysis failed');
 			expect(response.body).not.toContain('projects/');
 		}
+	});
+
+	it('Get Status documents MTF-only telemetry with the confluence gate disabled', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - confluence enrichment counters');
+		const example = item.response.find((response) => /multi-timeframe-only/i.test(response.name));
+		expect(example).toBeDefined();
+
+		const body = JSON.parse(example.body);
+		const confluence = body.dependencies.tradingViewMcp.enrichment.confluence;
+		expect(body.featureFlags.tradingViewConfluenceEnrichment).toBe(false);
+		expect(body.featureFlags.tradingViewConfluenceMultiTimeframe).toBe(true);
+		expect(confluence).toMatchObject({
+			enabled: false,
+			attemptedCount: 1,
+			appliedCount: 1,
+			failedCount: 0,
+			budgetExhaustedCount: 0,
+		});
 	});
 
 	it('Get Status - confluence enrichment counters asserts the block is separate from alertPath', () => {
@@ -1114,6 +1615,38 @@ describe('news-monitor stop/target example (GH-712)', () => {
 		expect(script).toContain('enrichment.confluence');
 		expect(script).toContain('enrichment.alertPath');
 		expect(script).toContain('appliedCount + c.failedCount');
+	});
+
+	// GH-637: a saved response alone cannot demonstrate the 4,000-character clip, because
+	// the request that produced it must actually send an oversized body. The example is
+	// only runnable if it generates that body itself.
+	it('provides a runnable oversized-alert example that reproduces the truncation response', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'POST Send Alert (truncation metadata)');
+		expect(item).toBeDefined();
+
+		// The body must be larger than the 4,000-character cap, built at runtime.
+		const prerequest = item.event.find((entry) => entry.listen === 'prerequest');
+		expect(prerequest).toBeDefined();
+		const prerequestScript = prerequest.script.exec.join('\n');
+		expect(prerequestScript).toContain('truncationPadding');
+		expect(prerequestScript).toMatch(/repeat\(\s*\d{4,}\s*\)/);
+		expect(item.request.body.raw).toContain('{{truncationPadding}}');
+
+		// And it must assert the documented response rather than only display it.
+		const test = item.event.find((entry) => entry.listen === 'test');
+		expect(test).toBeDefined();
+		const testScript = test.script.exec.join('\n');
+		for (const field of ['truncated', 'originalLength', 'deliveredLength']) {
+			expect(testScript).toContain(field);
+		}
+
+		const example = item.response.find((response) => /truncated/.test(response.name));
+		expect(example.code).toBe(200);
+		const body = JSON.parse(example.body);
+		expect(body.truncated).toBe(true);
+		expect(body.originalLength).toBeGreaterThan(4000);
+		expect(body.deliveredLength).toBe(4003);
 	});
 
 	// The first version of this example was named for a budget-starved multi-timeframe
@@ -1136,5 +1669,82 @@ describe('news-monitor stop/target example (GH-712)', () => {
 		// Two calls per alert with multi-timeframe on, so the window cannot be 1:1 with alerts.
 		expect(confluence.attemptedCount).toBeGreaterThan(enrichment.alertPath.totalCount);
 		expect(confluence.appliedCount + confluence.failedCount).toBeLessThanOrEqual(confluence.attemptedCount);
+	});
+});
+
+describe('scoped API key Postman examples', () => {
+	it('documents header-only dedicated keys and uses the scoped variable on each surface', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const alert = findItem(collection.item, 'POST Send Alert');
+		const order = findItem(collection.item, 'POST Binance order (dry-run LIMIT)');
+		const balances = findItem(collection.item, 'GET Binance Account Balances');
+		const invalidAdminQuery = findItem(collection.item, 'GET Status (dedicated key query rejected)');
+		const invalidTradingQuery = findItem(collection.item, 'GET Binance Orders (dedicated key query rejected)');
+
+		expect(findHeader(status, 'x-api-key').value).toBe('{{adminApiKey}}');
+		expect(findHeader(alert, 'x-api-key').value).toBe('{{apiKey}}');
+		expect(findHeader(order, 'x-api-key').value).toBe('{{binanceTradingApiKey}}');
+		expect(findHeader(balances, 'x-api-key').value).toBe('{{binanceTradingApiKey}}');
+
+		for (const example of [invalidAdminQuery, invalidTradingQuery]) {
+			expect(example.request.url.raw).toContain('api-key=not-a-valid-key');
+			expect(example.request.header).not.toEqual(expect.arrayContaining([
+				expect.objectContaining({ key: 'x-api-key' }),
+			]));
+			expect(example.response[0].code).toBe(401);
+		}
+		expect(invalidAdminQuery.response[0].body).toContain('ADMIN_AUTH_REQUIRED');
+	});
+
+	it('uses the matching scoped variable for every API request and saved response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		for (const request of collectRequestsAndSavedExamples(collection.item)) {
+			const rawUrl = request.url?.raw || '';
+			if (!rawUrl.includes('/api/')) continue;
+			const header = (request.header || []).find((entry) => entry.key.toLowerCase() === 'x-api-key');
+			if (!header) continue;
+
+			const pathname = new URL(rawUrl.replace('{{baseUrl}}', 'https://placeholder.invalid')).pathname;
+			const expected = pathname.startsWith('/api/webhook/') || pathname === '/api/news-monitor'
+				? '{{apiKey}}'
+				: pathname.startsWith('/api/trading/binance/')
+					? '{{binanceTradingApiKey}}'
+					: '{{adminApiKey}}';
+			expect(header.value).toBe(expected);
+		}
+	});
+});
+
+// `success` was added to both news-monitor read envelopes but the saved 200 examples kept
+// omitting it, so the examples contradicted the runtime and the schema sitting beside them
+// — and nothing enforced it. These assert each example against the schema that declares the
+// field required, so the drift cannot come back silently.
+describe('news-monitor admin read examples (issue #1290)', () => {
+	const readEndpoints = [
+		{ name: 'GET News Monitor Summary', schema: 'NewsAnalysisSummary' },
+		{ name: 'GET News Monitor Analyses', schema: 'NewsAnalysisList' },
+	];
+
+	readEndpoints.forEach(({ name, schema }) => {
+		it(`${name} saved 200 example carries every field its schema marks required`, () => {
+			const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+			const openapi = JSON.parse(fs.readFileSync(
+				path.join(__dirname, '../../src/openapi/openapi.json'), 'utf8'));
+			const item = findItem(collection.item, name);
+			expect(item).toBeDefined();
+
+			const required = openapi.components.schemas[schema].required || [];
+			expect(required).toContain('success');
+
+			const example = item.response.find((response) => response.code === 200);
+			expect(example).toBeDefined();
+			const body = JSON.parse(example.body);
+
+			// The console reads these bodies directly, so an example that understates the
+			// envelope teaches the next reader the wrong contract.
+			expect(Object.keys(body)).toEqual(expect.arrayContaining(required));
+			expect(body.success).toBe(true);
+		});
 	});
 });

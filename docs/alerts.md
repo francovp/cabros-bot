@@ -13,6 +13,8 @@ If alert storage is enabled but Firestore cannot serve the request, they return 
 
 List, summary, and export order by `receivedAt` **and** `FieldPath.documentId()` for deterministic pagination. Firestore sorts `__name__` ascending for free but requires a composite index for the descending direction, so `alerts { receivedAt DESC, __name__ DESC }` must be declared in `firestore.indexes.json` **and** deployed (`firebase deploy --only firestore:indexes`) or those three endpoints answer `503`. Detail reads (`GET /api/alerts/:alertId`) use a document get and need no index.
 
+When `ENABLE_ALERT_DECISION_AUDIT=true`, alert reads can expose a sanitized `decision` object containing the parsed signal, enrichment attempt/result, gate verdicts, requested and delivered channels, and request id. `decision.enrichment.providers` records the `full`, `partial`, or `failed` outcome for each attempted Gemini or TradingView MCP provider; a failed provider stays visible when the other provider supplies a fallback. This metadata is internal to the alert enrichment flow and is excluded from the public enrichment payload. `decision.dispatch.requestedChannelMode` is `explicit` when the request supplied `channels`, `symbol_route` when a configured `symbolRoutes` entry matched the alert, and `broadcast` when the enabled channel set handled the alert. For dry runs, a broadcast channel set is resolved only when the notification manager is already initialized. The sanitizer bounds nested values to depth 6, 32 object keys, 32 array entries, and 1000 characters per string to keep persisted audit data predictable and exclude unbounded provider or request payloads. The default is `false`; only webhook alert records carry this field. The request-time gate is eligible for Firebase Remote Config.
+
 #### GET /api/alerts
 
 List stored alerts ordered by `receivedAt` descending.
@@ -64,7 +66,7 @@ List stored alerts ordered by `receivedAt` descending.
 
 #### GET /api/alerts/export
 
-Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string fields whose leading control characters (`tab`/`LF`/`CR`) are followed by `=`, `+`, `-`, or `@`—or that begin directly with those markers—with an apostrophe so spreadsheet clients treat them as inert text; finite numeric strings such as `-42` remain unchanged. JSONL output is unchanged.
+Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string fields whose leading control characters (`tab`/`LF`/`CR`) are followed by `=`, `+`, `-`, or `@`—or that begin directly with those markers—with an apostrophe so spreadsheet clients treat them as inert text; finite numeric strings such as `-42` remain unchanged. Feature-attributed records include a `feature` column containing comma-separated tags. JSONL output is unchanged.
 
 **Query Parameters:**
 - `format` - `jsonl` or `csv` (default: `jsonl`)
@@ -73,16 +75,19 @@ Export bounded stored alerts as JSONL or CSV. CSV serialization prefixes string 
 - `source` / `enriched` - Optional filters
 - `includeText` - Optional boolean; raw alert text is excluded unless `true`
 - `includeEnrichment` - Optional boolean; safe bounded projection of `enrichmentData` is excluded unless `true`
+- `includeDecision` - Optional boolean (default: `false`); adds the bounded `decision` object when the audit gate is enabled. For CSV, the `decision` column is absent unless this flag is `true`.
 
 #### GET /api/alerts/summary
 
 Return bounded JSON-only analytics for stored alerts without exposing raw alert text or credentials.
 
-Each enriched alert records only safe prompt provenance (`name`, `source`, `label`, and `version`) when a prompt was resolved. The `enrichment.riskMetadataCoverage` block uses enriched alerts as its denominator and reports populated counts/percentages for `invalidation_level`, `target_level`, `setup_type`, and `risk_reward_ratio`. `byPromptProvenance` groups the same metrics by Langfuse/local provenance; legacy records without provenance use `null`. Missing or invalid optional values remain zero coverage and are never synthesized.
+Each enriched alert records only safe prompt provenance (`name`, `source`, `label`, and `version`) when a prompt was resolved. The `enrichment.riskMetadataCoverage` block uses enriched alerts as its denominator and reports populated counts/percentages for `invalidation_level`, `target_level`, `setup_type`, and `risk_reward_ratio`. `byPromptProvenance` groups the same metrics by Langfuse/local provenance; legacy records without provenance use `null`. Missing or invalid optional values remain zero coverage and are never synthesized. `directionEchoRate` counts alerts with both a recognized `setup_type` and a known direction; `echoed` is `BUY` with `trend_continuation` or `SELL` with `reversal`, and its denominator is only alerts with both values available.
 
 Similarly, `enrichment.evidenceCoverage` tracks whether enriched alerts cited grounding sources, reporting `zeroSources`, `oneToTwoSources`, and `threePlusSources` distribution along with `averageSourceCount`, overall and grouped `byPromptProvenance`.
 
 `enrichment.sentimentCalibration` reports whether the stored `sentiment_score` distribution can still rank alerts. A near-constant score is worse than no score: it cannot separate a strong setup from a weak one, so it cannot be used to tune thresholds or compare signal quality over time. See [Sentiment score calibration](#sentiment-score-calibration) below.
+
+`summary.deployments` groups stored alerts by deployment environment identity (`platform`, `gitSha`, `service`, `runtimeVersion`), ordered descending by `lastSeen` with `count` as tie-breaker, capped at 50 entries. This enables operators to audit alert volume and timing across running replicas and platforms.
 
 **Query Parameters:**
 - `from` - Optional ISO-8601 lower bound; defaults to 24 hours before `to`
@@ -93,8 +98,19 @@ Similarly, `enrichment.evidenceCoverage` tracks whether enriched alerts cited gr
 - `symbol` - Optional symbol filter (e.g. `BTCUSDT`, `BINANCE:BTCUSDT`, `AAPL`). Case-insensitive and matched against extracted symbol and exchange fields. Up to 64 characters.
 - `exchange` - Optional exchange filter (e.g. `BINANCE`, `COINBASE`). Case-insensitive and matched against the extracted exchange field. Up to 64 characters.
 - `eventCategory` - Optional event category filter (e.g. `price_surge`, `price_decline`, `regulatory`). Case-insensitive and matched against `eventCategory`. Up to 64 characters.
+- `signalClass` - Optional signal class filter; repeatable and comma-separated (e.g. `signalClass=breakout&signalClass=reversal` or `signalClass=breakout,reversal`)
+- `interval` - Optional bucket width for the time series: `hour` or `day`. Omit it for the aggregate-only response. See [Time-bucketed series](#time-bucketed-series-interval) below.
+- `includeDecisionRollup` - Optional boolean (default: `false`); adds `summary.decision.gates` when the audit gate is enabled.
 
 The service caps the queried window at 31 days to keep routine operator usage cheap.
+
+The optional decision rollup's `denominator` counts alerts scanned in the summary window. Each gate entry includes its `name`, `decision`, `populated` count, and `percentage` from 0 to 100. The decision section is omitted when it is not requested or the audit gate is disabled.
+
+The summary also returns `costByFeature` for `grounding`, `news-analysis`, `expanded-analysis`, `scanner`, and `enrichment`. Each bucket includes `alerts`, `batches`, `symbols`, `inputTokens`, `outputTokens`, `totalTokens`, and `totalCost`; the feature costs sum to `enrichment.tokenUsage.totalCost` without double-counting. Older records without feature tags are attributed conservatively from their stored source.
+
+`totalCost` values are **estimates** derived from published list prices in `src/lib/tokenUsage.js` (`PRICING_PER_1M`), not provider invoices. Model names are normalized before lookup (provider prefixes such as `openai/` or `azure/` and revision suffixes are stripped, family heuristics fill gaps, and models marked `:free` or `/free` cost 0). A model that matches no known entry is priced at the documented default rate rather than 0, so an unpriced model is never reported as free. `alerts` counts stored documents, `batches` counts distinct news-monitor requests (grouped by `requestId`/`batchId`, not per document), and `symbols` counts distinct symbols across a batch — a multi-symbol expanded-analysis or scanner report contributes all of its symbols even though it is stored as one document.
+
+An alert that persisted no real token usage is not attributed to any feature. Plain webhook alerts always store a `tokenUsage` object, but when grounding and TradingView enrichment are both disabled it is all-zero, so it contributes nothing to any bucket and carries no `feature` tag in CSV exports.
 
 **Response (200 OK):**
 ```json
@@ -140,6 +156,7 @@ The service caps the queried window at 31 days to keep routine operator usage ch
           "setup_type": { "populated": 0, "percentage": 0 },
           "risk_reward_ratio": { "populated": 0, "percentage": 0 }
         },
+        "directionEchoRate": { "echoed": 0, "total": 0, "percentage": 0 },
         "byPromptProvenance": [
           {
             "provenance": null,
@@ -149,7 +166,8 @@ The service caps the queried window at 31 days to keep routine operator usage ch
               "target_level": { "populated": 0, "percentage": 0 },
               "setup_type": { "populated": 0, "percentage": 0 },
               "risk_reward_ratio": { "populated": 0, "percentage": 0 }
-            }
+            },
+            "directionEchoRate": { "echoed": 0, "total": 0, "percentage": 0 }
           }
         ]
       },
@@ -196,7 +214,11 @@ The service caps the queried window at 31 days to keep routine operator usage ch
         "inputTokens": 10,
         "outputTokens": 20,
         "totalTokens": 30,
-        "totalCost": 0.001
+        "totalCost": 0.001,
+        "pricing": {
+          "unknownModelPricing": false,
+          "unknownModels": []
+        }
       }
     },
     "delivery": {
@@ -215,6 +237,16 @@ The service caps the queried window at 31 days to keep routine operator usage ch
         }
       }
     },
+    "deployments": [
+      {
+        "platform": "railway",
+        "gitSha": "a1b2c3d4e5f6",
+        "service": "cabros-bot",
+        "runtimeVersion": "0.1.0",
+        "count": 2,
+        "lastSeen": "2026-06-06T12:00:00.000Z"
+      }
+    ],
     "latency": {
       "averageProcessingMs": 250,
       "averageDeliveryMs": 150,
@@ -253,6 +285,76 @@ The service caps the queried window at 31 days to keep routine operator usage ch
 For rollout validation, first verify the active prompt provenance and coverage in preview, then observe a bounded production/shadow window after aligning the remote `alert-enrichment` prompt with the local optional-risk schema. Treat missing fields as unavailable data; do not use zero coverage as a trading outcome or fabricate stops, targets, setup types, or R:R values.
 
 The `feedback` block is always included regardless of the report filters so traders can correlate prompt calibration with raw trader outcomes. Counts are sourced from the `alertFeedback` collection (when `ENABLE_FIRESTORE_ALERT_FEEDBACK=true`) or the in-process memory surface; only SHA-256 chat hashes are persisted and raw chat ids are never returned.
+
+#### Time-bucketed series (interval)
+
+The aggregate response has no time axis, so a console cannot chart alert volume or delivery success over time. Client-side bucketing is not a workaround: `limit` bounds the sample, so a page of alerts is not the population.
+
+Supply the optional `interval` parameter to add `summary.buckets`, a time-bucketed series over the requested window. **Omitting `interval` leaves the response byte-for-byte unchanged** — same keys, same order, same values — so existing consumers are unaffected.
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
+  "$BASE_URL/api/alerts/summary?from=2026-06-06T00:00:00.000Z&to=2026-06-06T03:00:00.000Z&interval=hour"
+```
+
+| Behaviour | Detail |
+| :--- | :--- |
+| `interval` values | `hour` or `day`. Case-insensitive. |
+| Window cap | `hour` → 31 days, `day` → 366 days. A wider window returns `400`. |
+| Bucket alignment | UTC hours (`hour`) or UTC midnights (`day`). |
+| Ordering | Ascending by `bucketStart`, starting at the aligned start of the window and running through `to`. |
+| Empty buckets | Present with zero counts, never omitted, so a chart has no gaps and the array length is predictable for a given window and interval. |
+| Filters | Every existing filter (`source`, `enriched`, `symbol`, `eventCategory`, `exchange`, `signalClass`, `from`/`to`/`limit`) narrows the buckets exactly as it narrows the totals. |
+| Reads | The series is derived from the same bounded Firestore cursor scan as the aggregates. No unbounded collection read was introduced. |
+
+Each bucket is `{ bucketStart, total, success, failure, byChannel }`:
+
+```json
+{
+  "success": true,
+  "summary": {
+    "window": {
+      "from": "2026-06-06T00:00:00.000Z",
+      "to": "2026-06-06T03:00:00.000Z",
+      "limit": 500,
+      "maxDays": 31,
+      "interval": "hour"
+    },
+    "buckets": [
+      {
+        "bucketStart": "2026-06-06T00:00:00.000Z",
+        "total": 1,
+        "success": 1,
+        "failure": 0,
+        "byChannel": { "telegram": { "total": 1, "success": 1, "failure": 0 } }
+      },
+      {
+        "bucketStart": "2026-06-06T01:00:00.000Z",
+        "total": 0,
+        "success": 0,
+        "failure": 0,
+        "byChannel": {}
+      }
+    ],
+    "totalAlerts": 1
+  }
+}
+```
+
+Two invariants a consumer can rely on:
+
+- **`sum(bucket.total) === totalAlerts`.** The series and the aggregates are computed from the same bounded sample, so they cannot disagree. `bucket.total` counts *alerts*, not deliveries, so an alert with no recorded `deliveryResults` still increments it.
+- **`bucket.success` / `bucket.failure` equal the sums of that bucket's `byChannel[*]` counts.** A delivery result with no usable channel name is counted under `unknown`.
+
+`window.interval` and the interval-specific `window.maxDays` are reported only when `interval` is supplied.
+
+**Validation failures are never silent.** An empty, unrecognised, or over-cap `interval` returns `400` rather than falling back to the aggregate-only response — a silent fallback is how a flag ends up reporting itself enabled while resolving to something else. Interval failures use the shared error envelope from `src/lib/errorEnvelope.js` (`success`, `error`, `code`, `requestId`, `retryable`); the endpoint's pre-existing timestamp and filter failures keep their original `{ error, code }` body.
+
+Note the difference in window handling: with `interval` set, an over-cap window is **rejected**; with `interval` omitted, a window wider than 31 days is still **silently narrowed** to 31 days, as it always has been.
+
+The `adminRead` guard and rate limiting are unchanged; this is an operator read surface and neither was weakened to make the aggregation cheaper.
+
+`GET /api/outcomes/summary` has the same gap (aggregates with no time axis) and is tracked separately; this change is limited to the alerts summary.
 
 #### Sentiment score calibration
 
@@ -353,6 +455,17 @@ Replay a stored alert through the configured notification channels. The endpoint
 
 **Dry-run mode:** add `dryRun: true` to the body (or `?dryRun=true` to the URL) to fetch the stored alert and build the would-be payload, then return it without dispatching to any channel and without persisting a replay attempt. Use this to preview the text, enrichment data, and per-channel routing (resolving channel service defaults and `TELEGRAM_TOPIC_ROUTES` when the stored alert lacks explicit overrides) before triggering a real replay. The dry-run response returns the 12-character SHA-256 hash prefix `idempotencyKeyHashPrefix` without leaking the raw key into upstream caches (the live endpoint never returns it).
 
+**Re-enrichment (`reEnrich`):** add `reEnrich: true` to the body to re-run the full enrichment
+pipeline (Gemini grounding and TradingView MCP data) on the stored alert before dispatching.
+Defaults to `false`, in which case the stored alert text is dispatched with its original enrichment
+data. When re-enrichment succeeds the replay dispatches the refreshed payload and the persisted
+`alertReplays` audit document records `reEnriched: true` together with the sanitized
+`enrichmentData`. The live replay response keeps `reEnriched` as a boolean and, when re-enrichment
+was requested, includes both `originalEnrichment` and `reEnrichedData` for comparison. On fail-open,
+`reEnrichedData` is `null`, the original enrichment is dispatched, and `reEnriched` is omitted.
+If both `ENABLE_GEMINI_GROUNDING=false` and
+`ENABLE_TRADINGVIEW_MCP_ENRICHMENT=false`, the flag is safely ignored and the standard replay path runs.
+
 **Request body:**
 ```json
 {
@@ -390,6 +503,21 @@ Replay a stored alert through the configured notification channels. The endpoint
   "results": [
     { "channel": "telegram", "success": true, "messageId": "tg-1" }
   ]
+}
+```
+
+**Response (200 OK - re-enriched live replay):**
+```json
+{
+  "success": true,
+  "alertId": "alert-123",
+  "replayId": "1700000000000_<uuid>",
+  "results": [
+    { "channel": "telegram", "success": true, "messageId": "tg-1" }
+  ],
+  "reEnriched": true,
+  "originalEnrichment": { "sentiment": "BULLISH", "current_price": 64000 },
+  "reEnrichedData": { "sentiment": "BULLISH", "current_price": 65000 }
 }
 ```
 

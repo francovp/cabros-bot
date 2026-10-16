@@ -1,10 +1,11 @@
-/* global jest, describe, it, beforeEach, afterEach, expect */
+/* global jest, describe, it, beforeEach, afterEach, expect, saveEnv, restoreEnv */
 
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
+const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
 jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	saveAlert: jest.fn().mockResolvedValue('stored-message-id'),
@@ -18,11 +19,14 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 	beforeEach(async () => {
 		savedEnv = saveEnv();
+		remoteConfigService._resetForTesting();
+		delete process.env.GENERIC_MESSAGE_MAX_LENGTH;
 		Object.assign(process.env, {
 			WEBHOOK_API_KEY: 'test-key',
 			ENABLE_TELEGRAM_BOT: 'true',
 			ENABLE_WHATSAPP_ALERTS: 'true',
 			ENABLE_DISCORD_ALERTS: 'false',
+			ENABLE_FIREBASE_REMOTE_CONFIG: 'false',
 			BOT_TOKEN: 'test-bot-token',
 			TELEGRAM_CHAT_ID: '123456789',
 			WHATSAPP_API_URL: 'https://api.greenapi.com/waInstance123/',
@@ -32,6 +36,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 		idempotencyService.clear();
 
 		mockBot = {
@@ -52,6 +57,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 	});
 
 	afterEach(() => {
+		remoteConfigService._resetForTesting();
 		restoreEnv(savedEnv);
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
@@ -62,6 +68,35 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 	// ---------------------------------------------------------------------------
 	// Success cases
 	// ---------------------------------------------------------------------------
+	it('returns the standardized error envelope when unexpected processing fails', async () => {
+		const runtimeConfigSpy = jest.spyOn(remoteConfigService, 'getRuntimeConfig').mockImplementation(() => {
+			throw new Error('runtime configuration unavailable');
+		});
+		const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+		let res;
+		try {
+			res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.set('x-request-id', 'msg-error-500')
+				.send({ message: 'Force an unexpected error', channels: ['telegram'] })
+				.expect(500);
+		} finally {
+			runtimeConfigSpy.mockRestore();
+			consoleErrorSpy.mockRestore();
+		}
+
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			error: 'Internal server error',
+			code: 'INTERNAL_ERROR',
+			requestId: 'msg-error-500',
+			retryable: true,
+		}));
+		expect(res.headers['x-request-id']).toBe(res.body.requestId);
+	});
+
 	it('sends a message to telegram only', async () => {
 		const res = await request(app)
 			.post('/api/webhook/message')
@@ -119,11 +154,12 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 	it('does not persist raw discordWebhookUrl to AlertStorageService to prevent credential leakage', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
-		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
 		global.fetch = jest.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({ id: 'discord-msg-789' }),
 		});
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		const res = await request(app)
@@ -140,7 +176,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		expect(alertStorageService.saveAlert).toHaveBeenCalledWith(
 			expect.not.objectContaining({
 				discordWebhookUrl: expect.anything(),
-			})
+			}),
 		);
 	});
 
@@ -163,11 +199,12 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 	it('sends a message to discord using per-request discordWebhookUrl override', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
-		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
 		global.fetch = jest.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({ id: 'discord-msg-789' }),
 		});
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		const res = await request(app)
@@ -193,7 +230,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 	it('returns 400 when discordWebhookUrl is invalid (non-HTTPS or non-Discord)', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
-		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
 		await initializeNotificationServices(mockBot);
 
 		const res = await request(app)
@@ -213,6 +250,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 	it('returns 400 when discordWebhookUrl path lacks webhook ID and token', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
 		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		const res = await request(app)
@@ -231,11 +269,12 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 
 	it('returns 409 IDEMPOTENCY_CONFLICT when reusing key with different discordWebhookUrl', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
-		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/token';
+		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
 		global.fetch = jest.fn().mockResolvedValue({
 			ok: true,
 			json: async () => ({ id: 'discord-msg-1' }),
 		});
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		await request(app)
@@ -260,10 +299,13 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			})
 			.expect(409);
 
-		expect(conflictRes.body).toEqual({
+		expect(conflictRes.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
 			error: expect.stringContaining('different payload'),
 			code: 'IDEMPOTENCY_CONFLICT',
-		});
+		}));
 	});
 
 	it('replays a sequential request without redispatching selected Telegram, WhatsApp, and Discord channels', async () => {
@@ -273,7 +315,9 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			ok: true,
 			json: async () => ({ idMessage: 'provider-message-123', id: 'provider-message-123' }),
 		});
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
+		global.fetch.mockClear();
 
 		const payload = {
 			message: 'Replay this notification once',
@@ -330,6 +374,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			ok: true,
 			json: async () => ({ idMessage: 'provider-validation-123', id: 'provider-validation-123' }),
 		});
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		global.fetch = jest.fn().mockImplementation(async () => {
@@ -388,10 +433,13 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.send(conflictingPayload)
 			.expect(409);
 
-		expect(conflict.body).toEqual({
+		expect(conflict.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
 			error: expect.stringContaining('different payload'),
 			code: 'IDEMPOTENCY_CONFLICT',
-		});
+		}));
 	});
 
 	it('rejects a non-string body idempotency key before dispatch', async () => {
@@ -401,10 +449,13 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.send({ message: 'Invalid key type', channels: ['telegram'], idempotencyKey: {} })
 			.expect(400);
 
-		expect(response.body).toEqual({
+		expect(response.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
 			error: 'Idempotency key must be a non-empty string',
 			code: 'INVALID_REQUEST',
-		});
+		}));
 		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
 	});
 
@@ -415,10 +466,13 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.send({ message: 'Invalid array key', channels: ['telegram'], idempotencyKey: ['key-a'] })
 			.expect(400);
 
-		expect(response.body).toEqual({
+		expect(response.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
 			error: 'Idempotency key must be a non-empty string',
 			code: 'INVALID_REQUEST',
-		});
+		}));
 		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
 	});
 
@@ -429,10 +483,13 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.send({ message: 'Invalid null key', channels: ['telegram'], idempotencyKey: null })
 			.expect(400);
 
-		expect(response.body).toEqual({
+		expect(response.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
 			error: 'Idempotency key must be a non-empty string',
 			code: 'INVALID_REQUEST',
-		});
+		}));
 		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
 	});
 
@@ -444,6 +501,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			json: async () => ({ id: 'discord-msg-789' }),
 		});
 
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		const res = await request(app)
@@ -461,6 +519,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 				messageId: 'discord-msg-789',
 				messageIds: ['discord-msg-789'],
 				messageCount: 1,
+				attemptCount: 1,
 			},
 		]);
 		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
@@ -483,7 +542,9 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			return { ok: true, json: async () => ({ idMessage: 'wa-msg-456' }) };
 		});
 
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
+		global.fetch.mockClear();
 
 		const res = await request(app)
 			.post('/api/webhook/message')
@@ -859,6 +920,41 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 	// ---------------------------------------------------------------------------
 	// Truncation metadata (GH-602)
 	// ---------------------------------------------------------------------------
+	it('uses a valid environment limit and preserves exact-boundary truncation behavior', async () => {
+		process.env.GENERIC_MESSAGE_MAX_LENGTH = '5000';
+
+		const atLimit = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'C'.repeat(5000), channels: ['telegram'] })
+			.expect(200);
+
+		expect(atLimit.body).not.toHaveProperty('truncated');
+
+		const overLimit = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'D'.repeat(5001), channels: ['telegram'] })
+			.expect(200);
+
+		expect(overLimit.body.truncated).toBe(true);
+		expect(overLimit.body.originalLength).toBe(5001);
+		expect(overLimit.body.deliveredLength).toBe(5003);
+	});
+
+	it('uses a fresh Remote Config limit for generic message delivery', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		remoteConfigService._setRemoteOverridesForTesting({ GENERIC_MESSAGE_MAX_LENGTH: 5000 });
+
+		const res = await request(app)
+			.post('/api/webhook/message')
+			.set('x-api-key', 'test-key')
+			.send({ message: 'R'.repeat(4500), channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body).not.toHaveProperty('truncated');
+	});
+
 	it('omits truncation metadata when message fits within MAX_MESSAGE_LENGTH', async () => {
 		const res = await request(app)
 			.post('/api/webhook/message')
@@ -923,7 +1019,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		);
 		expect(truncationWarnings.length).toBe(0);
 		warnSpy.mockRestore();
-		});
+	});
 
 	// Chunk estimation & dryValidate mode (GH-614)
 	// ---------------------------------------------------------------------------
@@ -1031,6 +1127,280 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 				whatsapp: 1,
 				discord: 2,
 			});
+		});
+	});
+
+	// Dry-run routing/audit preview (issue #876)
+	// ---------------------------------------------------------------------------
+	describe('dry-run mode', () => {
+		const VALID_DISCORD_WEBHOOK = 'https://discord.com/api/webhooks/123456789/abc-xyz-token';
+
+		it('previews routing via ?dryRun=true without sending or persisting', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.send({ message: 'Dry-run probe', channels: ['telegram'] })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.dryRun).toBe(true);
+			expect(res.body.deliveredChannels).toEqual([]);
+			expect(res.body.requestedChannels).toEqual(['telegram']);
+			expect(res.body.payload).toEqual({ text: 'Dry-run probe' });
+			expect(res.body.estimatedChunks).toEqual({ telegram: 1, whatsapp: 1, discord: 1 });
+			expect(res.body.requestId).toEqual(expect.any(String));
+
+			// No delivery, no persistence, no delivery-results payload.
+			expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+			expect(global.fetch).not.toHaveBeenCalled();
+			expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
+			expect(res.body.results).toBeUndefined();
+		});
+
+		it('previews routing via a boolean dryRun body field', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({ message: 'Body dry-run probe', dryRun: true })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.dryRun).toBe(true);
+			expect(res.body.deliveredChannels).toEqual([]);
+			// Omitted channels broadcast to every enabled channel.
+			expect(res.body.broadcast).toBe(true);
+			expect(res.body.requestedChannels).toEqual(['telegram', 'whatsapp']);
+			expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+			expect(global.fetch).not.toHaveBeenCalled();
+			expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
+		});
+
+		it('honours the string dryRun form used by the query flag', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({ message: 'String dry-run probe', dryRun: 'true', channels: ['telegram'] })
+				.expect(200);
+
+			expect(res.body.dryRun).toBe(true);
+			expect(res.body.deliveredChannels).toEqual([]);
+			expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+		});
+
+		it('delivers normally when dryRun is explicitly false', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({ message: 'Live send', dryRun: false, channels: ['telegram'] })
+				.expect(200);
+
+			expect(res.body.dryRun).toBeUndefined();
+			expect(res.body.deliveredChannels).toBeUndefined();
+			expect(res.body.results).toHaveLength(1);
+			expect(res.body.results[0].success).toBe(true);
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+		});
+
+		it('returns 400 instead of silently delivering when dryRun is not a recognised value', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({ message: 'Intended as a preview', dryRun: 'yes', channels: ['telegram'] })
+				.expect(400);
+
+			expect(res.body.success).toBe(false);
+			expect(res.body.error).toContain('must be a boolean');
+			expect(res.body.details).toEqual({ field: 'dryRun' });
+			expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+			expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
+		});
+
+		it('returns the shared error envelope on the dryRun 400 so code/retryable are matchable', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.send({ message: 'Intended as a preview', dryRun: 'yes', channels: ['telegram'] })
+				.expect(400);
+
+			// The published Error component promises code/retryable; match on them.
+			expect(res.body.code).toBe('INVALID_REQUEST');
+			expect(res.body.retryable).toBe(false);
+			expect(res.body.requestId).toEqual(expect.any(String));
+		});
+
+		// Guards the regression where a query typo fell through to a live delivery.
+		it.each([
+			['dryRun=yes', 'a non-boolean string'],
+			['dryRun=1', 'a numeric truthy string'],
+			['dryRun=0', 'a numeric falsy string'],
+			['dryRun=truthy', 'an arbitrary string'],
+			['dryRun=', 'an empty value with no boolean'],
+		])(
+			'rejects ?%s instead of silently delivering (%s)',
+			async (query) => {
+				const res = await request(app)
+					.post(`/api/webhook/message?${query}`)
+					.set('x-api-key', 'test-key')
+					.send({ message: 'Query preview intended', channels: ['telegram'] })
+					.expect(400);
+
+				expect(res.body.success).toBe(false);
+				expect(res.body.code).toBe('INVALID_REQUEST');
+				expect(res.body.retryable).toBe(false);
+				expect(res.body.details).toEqual({ field: 'dryRun' });
+				expect(res.body.dryRun).toBeUndefined();
+				expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+				expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
+			},
+		);
+
+		it.each([['dryRun=FALSE'], ['dryRun=True']])(
+			'rejects the case-variant query token %s rather than guessing the intent',
+			async (query) => {
+				const res = await request(app)
+					.post(`/api/webhook/message?${query}`)
+					.set('x-api-key', 'test-key')
+					.send({ message: 'Query preview intended', channels: ['telegram'] })
+					.expect(400);
+
+				expect(res.body.details).toEqual({ field: 'dryRun' });
+				expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+			},
+		);
+
+		it('delivers normally when the query flag is ?dryRun=false', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message?dryRun=false')
+				.set('x-api-key', 'test-key')
+				.send({ message: 'Live send via query flag', channels: ['telegram'] })
+				.expect(200);
+
+			expect(res.body.dryRun).toBeUndefined();
+			expect(res.body.results[0].success).toBe(true);
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+		});
+
+		it('still validates channel routing during a dry run', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.send({ message: 'Bad channel', channels: ['carrier-pigeon'] })
+				.expect(400);
+
+			expect(res.body.success).toBe(false);
+			expect(res.body.details).toMatchObject({ field: 'channels' });
+			expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+		});
+
+		it('still validates destination overrides during a dry run', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.send({ message: 'Bad destination', discordWebhookUrl: 'http://discord.com/api/webhooks/1/token' })
+				.expect(400);
+
+			expect(res.body.success).toBe(false);
+			expect(res.body.details).toEqual({ field: 'discordWebhookUrl' });
+			expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+		});
+
+		it('reports disabled or misconfigured channels as 400 during a dry run', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.send({ message: 'Discord is disabled', channels: ['discord'] })
+				.expect(400);
+
+			expect(res.body.success).toBe(false);
+			expect(res.body.error).toContain('disabled or misconfigured');
+			expect(res.body.details).toMatchObject({ field: 'channels' });
+			expect(global.fetch).not.toHaveBeenCalled();
+		});
+
+		it('surfaces resolved destination overrides but never the Discord webhook credential', async () => {
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			process.env.DISCORD_WEBHOOK_URL = VALID_DISCORD_WEBHOOK;
+			resetNotificationManagerForTesting();
+			await initializeNotificationServices(mockBot);
+
+			const res = await request(app)
+				.post('/api/webhook/message?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.send({
+					message: 'Routing preview',
+					channels: ['telegram', 'whatsapp', 'discord'],
+					telegramChatId: '-1001234567890',
+					telegramThreadId: 101,
+					whatsappChatId: '120363000000000000@g.us',
+					discordWebhookUrl: VALID_DISCORD_WEBHOOK,
+				})
+				.expect(200);
+
+			expect(res.body.dryRun).toBe(true);
+			expect(res.body.requestedChannels).toEqual(['telegram', 'whatsapp', 'discord']);
+			expect(res.body.routing).toEqual({
+				channels: ['telegram', 'whatsapp', 'discord'],
+				telegramChatId: '-1001234567890',
+				telegramThreadId: 101,
+				whatsappChatId: '120363000000000000@g.us',
+				discordWebhookUrlProvided: true,
+			});
+			expect(res.body.routing.discordWebhookUrl).toBeUndefined();
+			expect(JSON.stringify(res.body)).not.toContain('abc-xyz-token');
+		});
+
+		it('does not reserve or complete an idempotency key during a dry run', async () => {
+			const dryRunRes = await request(app)
+				.post('/api/webhook/message?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'generic-message-dryrun-1')
+				.send({ message: 'Dry run with a key', channels: ['telegram'] })
+				.expect(200);
+
+			expect(dryRunRes.body.dryRun).toBe(true);
+			expect(dryRunRes.headers['idempotency-replay']).toBeUndefined();
+			expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
+
+			// The same key must still be usable for a live request: a dry run left
+			// no reservation behind, so this delivers instead of replaying.
+			const liveRes = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'generic-message-dryrun-1')
+				.send({ message: 'Dry run with a key', channels: ['telegram'] })
+				.expect(200);
+
+			expect(liveRes.headers['idempotency-replay']).toBe('false');
+			expect(liveRes.body.idempotencyReplayed).toBeUndefined();
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledTimes(1);
+		});
+
+		it('reports inbound truncation metadata during a dry run', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.send({ message: 'z'.repeat(6000), channels: ['telegram'] })
+				.expect(200);
+
+			expect(res.body.dryRun).toBe(true);
+			expect(res.body.truncated).toBe(true);
+			expect(res.body.originalLength).toBe(6000);
+			expect(res.body.deliveredLength).toBe(4003);
+			expect(res.body.payload.text).toHaveLength(4003);
+			expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
+		});
+
+		it('prefers dryValidate when both dryValidate and dryRun are requested', async () => {
+			const res = await request(app)
+				.post('/api/webhook/message?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.send({ message: 'Both flags', dryValidate: true, channels: ['telegram'] })
+				.expect(200);
+
+			expect(res.body.dryValidate).toBe(true);
+			expect(res.body.dryRun).toBeUndefined();
+			expect(res.body.estimatedChunks).toEqual({ telegram: 1, whatsapp: 1, discord: 1 });
+			expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
 		});
 	});
 });

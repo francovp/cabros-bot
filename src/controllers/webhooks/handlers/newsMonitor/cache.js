@@ -607,14 +607,16 @@ class NewsCache {
 		// Prune inactive/expired leases before capacity check
 		this._evictDeliveryLocksIfOverCapacity({ reserveSlot: !existingLease });
 
-		// If this is a new lease and capacity is already saturated with active leases,
+		const isNewOrEvicted = !this.deliveryLocks.has(key);
+
+		// If this is a new lease (or was evicted during pruning) and capacity is already saturated with active leases,
 		// reject the claim to preserve existing active leases from eviction.
-		if (!existingLease && this.deliveryLocks.size >= this.deliveryLockMaxEntries) {
+		if (isNewOrEvicted && this.deliveryLocks.size >= this.deliveryLockMaxEntries) {
 			console.warn('[NewsCache] Delivery lock capacity saturated with active leases; rejecting new claim');
 			return false;
 		}
 
-		const persistentLeaseActive = existingLease && existingLease.persistentUntil > now;
+		const persistentLeaseActive = !isNewOrEvicted && existingLease && existingLease.persistentUntil > now;
 		const claimToken = persistentLeaseActive && existingLease.claimToken
 			? existingLease.claimToken
 			: randomUUID();

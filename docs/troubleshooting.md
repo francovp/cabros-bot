@@ -119,13 +119,15 @@ Symptom: `GET /api/alerts`, `/api/alerts/summary`, `/api/alerts/export`, and rep
 
 2. **Check `dependencies.firestore.readHealth` on `/api/status`.** `degraded` forces `ready: false` and `status: "degraded"`, which is the authoritative signal that the read path — not the credentials — is broken. `unknown` means no read has been attempted yet, which is *not* evidence of health.
 
-3. **Missing composite index (the usual cause).** Stored-alert reads order by `receivedAt` **and** `FieldPath.documentId()` so pagination has a deterministic tie-breaker. Firestore applies a free final `__name__` **ascending** sort, so ordering `__name__` **descending** requires the composite index `alerts { receivedAt DESC, __name__ DESC }` declared in `firestore.indexes.json`. Adding the declaration to the file does **not** create it in the live project:
+3. **Missing composite index (query-specific).** Stored-alert reads order by `receivedAt` **and** `FieldPath.documentId()` so pagination has a deterministic tie-breaker. Firestore defaults the final `__name__` order to the direction of the last sorted field, so the automatic single-field `receivedAt DESC` index serves this query; no `alerts` composite is needed. `GET /api/alerts/:alertId` reads a document by id and is unaffected.
 
    ```bash
    firebase deploy --only firestore:indexes --project <project-id>
    ```
 
-   Composite indexes build asynchronously and a query is rejected until the build reaches `READY`. Confirm with `firebase firestore:indexes` or the Firebase console. Only `receivedAt`-ordered `alerts` queries need it; `GET /api/alerts/:alertId` reads a document by id and is unaffected.
+   Composite indexes build asynchronously and a query is rejected until the build reaches `READY`. Confirm with `firebase firestore:indexes` or the Firebase console.
+
+   Signal-outcome calibration recovery also requires two composites on `tradingSignalOutcomes`: `source ASC, receivedAt DESC` and `source ASC, confidenceScoreOrigin ASC, receivedAt DESC`. Deploy them before the application change with `firebase deploy --only firestore:indexes --project <project-id>` and wait for both to reach `READY`; otherwise a recovery query can make `GET /api/outcomes/calibration` return `503 STORAGE_UNAVAILABLE`. See [Signal Outcomes](signal-outcomes.md#get-apioutcomescalibration).
 
 4. **Confirm the read path with `/ready`.** `GET /ready?depth=dependencies` executes the same indexed read (bounded to one document) and fails closed with `503` while it is broken, so it can be used as an external alert signal. `GET /api/alerts/summary` and `GET /api/alerts` reproduce the fault directly.
 

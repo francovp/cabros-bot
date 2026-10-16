@@ -42,6 +42,18 @@ const PRICING_PER_1M = {
 	'default': { input: 0.15, output: 0.60 },
 };
 
+const VALID_FEATURES = new Set([
+	'grounding',
+	'news-analysis',
+	'expanded-analysis',
+	'scanner',
+	'enrichment',
+]);
+
+function normalizeFeature(feature) {
+	return VALID_FEATURES.has(feature) ? feature : null;
+}
+
 /**
  * Resolve pricing configuration for a given model string.
  * Strips provider prefixes (e.g. google/, google-ai-studio/, azure/, openai/)
@@ -100,6 +112,47 @@ function resolveModelPricing(model) {
 	return PRICING_PER_1M.default;
 }
 
+const CLOUDFLARE_GATEWAY_PREFIX = 'google-ai-studio/';
+
+/**
+ * Normalize a model identifier by trimming whitespace and stripping the Cloudflare
+ * AI Gateway prefix (e.g. `google-ai-studio/gemini-2.5-flash` -> `gemini-2.5-flash`).
+ * Non-Cloudflare prefixes are preserved to avoid mangling provider namespaces.
+ * @param {string} model
+ * @returns {string}
+ */
+function normalizeModelName(model) {
+	if (typeof model !== 'string') return model;
+	const trimmed = model.trim();
+	if (trimmed.startsWith(CLOUDFLARE_GATEWAY_PREFIX)) {
+		return trimmed.slice(CLOUDFLARE_GATEWAY_PREFIX.length).trim();
+	}
+	return trimmed;
+}
+
+/**
+ * Resolve pricing for a model and report whether resolution fell through to the
+ * default fallback rate, so callers can surface unpriced models instead of
+ * silently costing them at the fallback.
+ *
+ * Pricing behavior is delegated unchanged to `resolveModelPricing`; that function
+ * returns the shared `PRICING_PER_1M.default` object *by reference* only when no
+ * table entry or family heuristic matched, which is what `unknown` keys off.
+ * @param {string} model
+ * @returns {{ pricing: {input: number, output: number}, matchedKey: string|null, unknown: boolean }}
+ */
+function resolvePricing(model) {
+	if (typeof model !== 'string' || model.trim() === '') {
+		return { pricing: PRICING_PER_1M.default, matchedKey: null, unknown: false };
+	}
+
+	const pricing = resolveModelPricing(model);
+	const matchedKey = normalizeModelName(model);
+	const unknown = pricing === PRICING_PER_1M.default;
+
+	return { pricing, matchedKey, unknown };
+}
+
 /**
  * Normalize usage metadata from various providers into a common shape.
  * Supports Gemini usageMetadata ({ promptTokenCount, candidatesTokenCount, totalTokenCount }),
@@ -125,12 +178,22 @@ function normalizeUsageMetadata(usageMetadata) {
 	};
 }
 
+const warnedUnknownModels = new Set();
+
+function _resetWarnedModelsForTesting() {
+	warnedUnknownModels.clear();
+}
+
 class TokenUsageTracker {
-	constructor() {
+	constructor(defaultFeature = null) {
 		this.inputTokens = 0;
 		this.outputTokens = 0;
 		this.inputCost = 0;
 		this.outputCost = 0;
+		this._unknownModels = new Set();
+		this._warnedModels = new Set();
+		this.defaultFeature = normalizeFeature(defaultFeature);
+		this.byFeature = {};
 	}
 
 	/**
@@ -152,7 +215,15 @@ class TokenUsageTracker {
 	 * @param {Object|null|undefined} usage
 	 * @param {string} [model] - Model name for pricing calculation
 	 */
-	addUsage(usage, model, options = {}) {
+	addUsage(usage, model, featureOrOptions = this.defaultFeature) {
+		// Accept either a feature name (per-call attribution) or an options object
+		// ({ recordGlobal }) for backward compatibility with existing call sites.
+		const options = (featureOrOptions && typeof featureOrOptions === 'object')
+			? featureOrOptions
+			: {};
+		const feature = (featureOrOptions && typeof featureOrOptions === 'object')
+			? featureOrOptions.feature
+			: featureOrOptions;
 		const normalized = normalizeUsageMetadata(usage);
 		if (!normalized) return;
 
@@ -176,6 +247,18 @@ class TokenUsageTracker {
 			oCost = cost.outputCost;
 			this.inputCost += iCost;
 			this.outputCost += oCost;
+
+			const { unknown, matchedKey } = resolvePricing(model);
+			if (unknown && matchedKey) {
+				this._unknownModels.add(matchedKey);
+				if (!warnedUnknownModels.has(matchedKey)) {
+					warnedUnknownModels.add(matchedKey);
+					this._warnedModels.add(matchedKey);
+					console.warn(
+						`[TokenUsageTracker] unknown model "${matchedKey}" priced at the default fallback rate; add an entry to PRICING_PER_1M in src/lib/tokenUsage.js to enable real cost accounting`,
+					);
+				}
+			}
 		}
 
 		if (options.recordGlobal && this !== globalTokenTracker) {
@@ -187,15 +270,55 @@ class TokenUsageTracker {
 				model,
 			});
 		}
+
+		const featureName = normalizeFeature(feature);
+		if (featureName) {
+			const bucket = this.byFeature[featureName] || (this.byFeature[featureName] = {
+				calls: 0,
+				inputTokens: 0,
+				outputTokens: 0,
+				totalTokens: 0,
+				inputCost: 0,
+				outputCost: 0,
+				totalCost: 0,
+			});
+			bucket.calls += 1;
+			bucket.inputTokens += currentInput;
+			bucket.outputTokens += currentOutput;
+			bucket.totalTokens += currentInput + currentOutput;
+			bucket.inputCost += iCost;
+			bucket.outputCost += oCost;
+			bucket.totalCost += iCost + oCost;
+		}
 	}
 
 	merge(otherTracker) {
 		if (!otherTracker) return;
-		const { inputTokens, outputTokens, inputCost, outputCost } = otherTracker.toJSON();
+		const { inputTokens, outputTokens, inputCost, outputCost, pricing, byFeature } = otherTracker.toJSON();
 		this.inputTokens += inputTokens;
 		this.outputTokens += outputTokens;
 		this.inputCost += (inputCost || 0);
 		this.outputCost += (outputCost || 0);
+		if (pricing && Array.isArray(pricing.unknownModels)) {
+			for (const model of pricing.unknownModels) {
+				this._unknownModels.add(model);
+			}
+		}
+
+		for (const [feature, usage] of Object.entries(byFeature || {})) {
+			const bucket = this.byFeature[feature] || (this.byFeature[feature] = {
+				calls: 0,
+				inputTokens: 0,
+				outputTokens: 0,
+				totalTokens: 0,
+				inputCost: 0,
+				outputCost: 0,
+				totalCost: 0,
+			});
+			for (const field of Object.keys(bucket)) {
+				bucket[field] += Number(usage[field]) || 0;
+			}
+		}
 	}
 
 	getTotalUsage() {
@@ -209,14 +332,22 @@ class TokenUsageTracker {
 	toJSON() {
 		const totalTokens = this.inputTokens + this.outputTokens;
 		const totalCost = this.inputCost + this.outputCost;
-		return {
+		const result = {
 			inputTokens: this.inputTokens,
 			outputTokens: this.outputTokens,
 			totalTokens,
 			inputCost: this.inputCost,
 			outputCost: this.outputCost,
 			totalCost,
+			pricing: {
+				unknownModelPricing: this._unknownModels.size > 0,
+				unknownModels: Array.from(this._unknownModels),
+			},
 		};
+		if (Object.keys(this.byFeature).length > 0) {
+			result.byFeature = this.byFeature;
+		}
+		return result;
 	}
 
 	/**
@@ -224,7 +355,7 @@ class TokenUsageTracker {
 	 * @returns {string}
 	 */
 	formatSummary() {
-		const { inputTokens, outputTokens, totalTokens, inputCost, outputCost, totalCost } = this.toJSON();
+		const { inputTokens, outputTokens, totalTokens, inputCost, outputCost, totalCost, pricing } = this.toJSON();
 
 		// Helper to format currency (up to 6 decimal places for small amounts)
 		const fmt = (val) => {
@@ -232,10 +363,18 @@ class TokenUsageTracker {
 			return val < 0.01 ? val.toPrecision(3) : val.toFixed(4);
 		};
 
-		return `Token usage:
+		const summary = `Token usage:
 - In ${inputTokens} ($${fmt(inputCost)})
 - Out ${outputTokens} ($${fmt(outputCost)})
 - Total ${totalTokens} ($${fmt(totalCost)})`;
+
+		if (pricing && pricing.unknownModelPricing && pricing.unknownModels.length > 0) {
+			const note = totalCost > 0
+				? `priced with partial fallback rate for unknown model(s): ${pricing.unknownModels.join(', ')}`
+				: `priced at the default fallback rate (unknown model pricing for: ${pricing.unknownModels.join(', ')})`;
+			return `${summary}\n- Note: ${note}`;
+		}
+		return summary;
 	}
 }
 
@@ -446,14 +585,18 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 	}
 
 	_triggerThresholdAlert(type, config, utilizationPct) {
+		if (type !== 'limit' && type !== 'warning') {
+			return Promise.resolve();
+		}
+
 		const firestore = this._getFirestore();
-		if (!firestore || typeof firestore.runTransaction !== 'function') {
+		if (!firestore || typeof firestore.runTransaction !== 'function' || typeof firestore.collection !== 'function') {
 			if (type === 'limit') {
 				if (this.limitAlertSent) return Promise.resolve();
 				this.limitAlertSent = true;
 				this.alertsSent++;
 				console.error(`[TokenCostBudget] Hard limit reached: daily token spend $${this.dailySpendUsd.toFixed(4)} reached 100% of daily budget $${config.budgetUsd.toFixed(2)}. Blocking new LLM calls.`);
-				return Promise.resolve(this._sendAdminNotification('limit', {
+				const promise = Promise.resolve(this._sendAdminNotification('limit', {
 					dailySpendUsd: this.dailySpendUsd,
 					budgetUsd: config.budgetUsd,
 					utilizationPct,
@@ -466,12 +609,19 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 					this.limitAlertSent = false;
 					this.alertsSent = Math.max(0, this.alertsSent - 1);
 				});
+				try {
+					const { trackBackgroundTask } = require('./backgroundTaskTracker');
+					if (typeof trackBackgroundTask === 'function') {
+						trackBackgroundTask(promise);
+					}
+				} catch (_) {}
+				return promise;
 			} else if (type === 'warning') {
 				if (this.warningAlertSent) return Promise.resolve();
 				this.warningAlertSent = true;
 				this.alertsSent++;
 				console.warn(`[TokenCostBudget] Warning: daily token spend $${this.dailySpendUsd.toFixed(4)} reached ${utilizationPct.toFixed(1)}% of daily budget $${config.budgetUsd.toFixed(2)} (threshold ${config.warnThresholdPct}%)`);
-				return Promise.resolve(this._sendAdminNotification('warning', {
+				const promise = Promise.resolve(this._sendAdminNotification('warning', {
 					dailySpendUsd: this.dailySpendUsd,
 					budgetUsd: config.budgetUsd,
 					utilizationPct,
@@ -485,6 +635,13 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 					this.warningAlertSent = false;
 					this.alertsSent = Math.max(0, this.alertsSent - 1);
 				});
+				try {
+					const { trackBackgroundTask } = require('./backgroundTaskTracker');
+					if (typeof trackBackgroundTask === 'function') {
+						trackBackgroundTask(promise);
+					}
+				} catch (_) {}
+				return promise;
 			}
 			return Promise.resolve();
 		}
@@ -508,6 +665,25 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 				updatedAt: new Date().toISOString(),
 			}, { merge: true });
 			return true;
+		}).catch(async (err) => {
+			console.warn(`[TokenCostBudget] Error in atomic alert claim transaction: ${err.message}`);
+			this.alertsSent++;
+			try {
+				const delivered = await this._sendAdminNotification(type, {
+					dailySpendUsd: this.dailySpendUsd,
+					budgetUsd: config.budgetUsd,
+					utilizationPct,
+					warnThresholdPct: config.warnThresholdPct,
+				});
+				if (delivered === false) {
+					this[fieldName] = false;
+					this.alertsSent = Math.max(0, this.alertsSent - 1);
+				}
+			} catch (_) {
+				this[fieldName] = false;
+				this.alertsSent = Math.max(0, this.alertsSent - 1);
+			}
+			return false;
 		}).then(async (claimed) => {
 			if (!claimed) {
 				return;
@@ -535,24 +711,6 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 					await this._releaseAlertClaimAtomically('warning');
 				}
 			}
-		}).catch(async (err) => {
-			console.warn(`[TokenCostBudget] Error in atomic alert claim transaction: ${err.message}`);
-			this.alertsSent++;
-			try {
-				const delivered = await this._sendAdminNotification(type, {
-					dailySpendUsd: this.dailySpendUsd,
-					budgetUsd: config.budgetUsd,
-					utilizationPct,
-					warnThresholdPct: config.warnThresholdPct,
-				});
-				if (delivered === false) {
-					this[fieldName] = false;
-					this.alertsSent = Math.max(0, this.alertsSent - 1);
-				}
-			} catch (_) {
-				this[fieldName] = false;
-				this.alertsSent = Math.max(0, this.alertsSent - 1);
-			}
 		});
 
 		try {
@@ -561,6 +719,8 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 				trackBackgroundTask(claimPromise);
 			}
 		} catch (_) {}
+
+		return claimPromise;
 	}
 
 	async _syncSharedSpend() {
@@ -915,10 +1075,13 @@ function registerGlobalUsage(usage, model) {
 module.exports = {
 	normalizeUsageMetadata,
 	TokenUsageTracker,
+	normalizeModelName,
+	resolvePricing,
 	GlobalTokenCostBudgetTracker,
 	globalTokenTracker,
 	tokenCostBudgetService: globalTokenTracker,
 	registerGlobalUsage,
 	PRICING_PER_1M,
 	MODEL_PRICING: PRICING_PER_1M,
+	_resetWarnedModelsForTesting,
 };

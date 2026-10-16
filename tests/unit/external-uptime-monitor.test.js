@@ -162,9 +162,16 @@ describe('ops/external-uptime-monitor.js', () => {
 		});
 
 		it('defaults the probe target to the canonical production URL', () => {
-			expect(monitor.parseArgs([], {}).baseUrl).toBe('https://cabros-bot-production.up.railway.app');
+			expect(monitor.parseArgs([], {}).baseUrl).toBe('https://cabros-crypto-bot-telegram.onrender.com');
 			expect(monitor.parseArgs([], {}).checkDocs).toBe(true);
 			expect(monitor.parseArgs([], {}).previousConclusion).toBe('none');
+		});
+
+		it('does not default to the retired Railway host, which answers 404', () => {
+			// While this default pointed at the dead Railway host the monitor reported a
+			// permanent phantom DOWN and was blind to real production (#1107's failure class).
+			expect(monitor.parseArgs([], {}).baseUrl).not.toContain('railway.app');
+			expect(monitor.DEFAULT_BASE_URL).not.toContain('railway.app');
 		});
 	});
 

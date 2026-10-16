@@ -1,7 +1,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
@@ -31,6 +31,7 @@ describe('Market Scanner Alert endpoint', () => {
 
 		jest.clearAllMocks();
 		tradingViewMcpService.getStatus.mockReset().mockReturnValue(undefined);
+		resetNotificationManagerForTesting();
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'scan-msg-id' });
 		mockBot = {
@@ -118,6 +119,41 @@ describe('Market Scanner Alert endpoint', () => {
 		);
 		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
 		expect(mockTelegramSendMessage.mock.calls[0][1]).toContain('SCANNER DE MERCADO');
+	});
+
+	it('persists ranked scanner scores as signed normalized values', async () => {
+		const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+		const recordedCalls = [];
+		const recordSignalSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockImplementation(async (params) => {
+			recordedCalls.push(params);
+			return {};
+		});
+		const item = {
+			symbol: 'BINANCE:BTCUSDT',
+			changePercent: -5,
+			indicators: { close: 60000, RSI: 40 },
+		};
+
+		tradingViewMcpService.callScanTool.mockImplementation(async (scanType) => (
+			scanType === 'top_losers' ? [item] : []
+		));
+
+		try {
+			await request(app)
+				.post('/api/webhook/market-scanner-alert')
+				.set('x-api-key', 'test-key')
+				.send({ scans: ['top_losers'], timeframe: '4h', exchange: 'BINANCE', ranked: true })
+				.expect(200);
+
+			expect(recordedCalls).toHaveLength(1);
+			expect(recordedCalls[0].side).toBe('SELL');
+			expect(recordedCalls[0].score).toBeLessThan(0);
+			expect(Math.abs(recordedCalls[0].score)).toBeLessThanOrEqual(1);
+		} finally {
+			recordSignalSpy.mockRestore();
+			signalOutcomeService.isEnabled.mockRestore();
+		}
 	});
 
 	it('routes market scanner delivery to requested channels only', async () => {

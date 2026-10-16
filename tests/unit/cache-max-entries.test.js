@@ -279,6 +279,33 @@ describe('Cache Max Entries / LRU Eviction', () => {
 			expect(cache.deliveryLocks.get('active')?.active).toBe(true);
 		});
 
+		it('rejects claim for an evicted inactive key when deliveryLocks is saturated with active leases', async () => {
+			// Set up key1 as inactive
+			const key1 = 'BTCUSDT:price_surge:delivery:telegram';
+			cache.deliveryLocks.set(key1, {
+				active: false,
+				persistentUntil: 0,
+			});
+			// Set up key2 and key3 as active (size = 3, but deliveryLockMaxEntries = 2)
+			cache.deliveryLocks.set('active1', {
+				active: true,
+				persistentUntil: Date.now() + 60000,
+			});
+			cache.deliveryLocks.set('active2', {
+				active: true,
+				persistentUntil: Date.now() + 60000,
+			});
+
+			// Now key1 was in cache when claimDelivery started, but _evictDeliveryLocksIfOverCapacity evicts key1!
+			// After eviction, key1 is no longer in deliveryLocks, and deliveryLocks.size is 2 (== maxEntries).
+			// Claiming key1 should be rejected because capacity is saturated with active leases!
+			const claimed = await cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'telegram');
+
+			expect(claimed).toBe(false);
+			expect(cache.deliveryLocks.size).toBe(2);
+			expect(cache.deliveryLocks.has(key1)).toBe(false);
+		});
+
 		it('exposes deliveryLocks stats in getStats()', () => {
 			const stats = cache.getStats();
 			expect(stats.deliveryLockMaxEntries).toBe(2);

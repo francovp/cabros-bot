@@ -531,7 +531,7 @@ class NewsAnalyzer {
 				const currentIndex = nextIndex;
 				nextIndex += 1;
 				const symbol = symbols[currentIndex];
-				const symbolTokenUsage = new TokenUsageTracker();
+const symbolTokenUsage = new TokenUsageTracker('news-analysis');
 				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, symbolTokenUsage, routing, batchStartedAt, symbolOptions)
 					.then((result) => {
 						if (tokenUsage) {
@@ -1178,7 +1178,7 @@ class NewsAnalyzer {
 		// Optional LLM enrichment
 		let enrichmentMetadata = null;
 		if (this.enrichmentService.isEnabled() && ENABLE_NEWS_MONITOR_TEST_MODE !== true) {
-			enrichmentMetadata = await this.enrichmentService.enrichAlert(geminiAnalysis);
+			enrichmentMetadata = await this.enrichmentService.enrichAlert(geminiAnalysis, { tokenUsage });
 			if (enrichmentMetadata && enrichmentMetadata.enriched_confidence < this.alertThreshold) {
 				console.debug('[Analyzer] Enrichment lowered confidence below threshold');
 				return {
@@ -1360,6 +1360,9 @@ class NewsAnalyzer {
 
 			if (meetsConviction) {
 				const side = (sentimentScore > 0) ? 'BUY' : 'SELL';
+				const outcomeScore = typeof alert.confidence === 'number' && Number.isFinite(alert.confidence)
+					? (side === 'SELL' ? -1 : 1) * Math.abs(alert.confidence)
+					: null;
 				const stop = (alert.marketContext && typeof alert.marketContext.stop === 'number')
 					? alert.marketContext.stop
 					: (typeof alert.stop === 'number' ? alert.stop : null);
@@ -1377,8 +1380,8 @@ class NewsAnalyzer {
 					exchange: alert.marketContext && alert.marketContext.source === 'binance' ? 'BINANCE' : 'UNKNOWN',
 					timeframe: null,
 					setupType: 'news-alert',
-					score: alert.confidence,
-					confidenceScore: alert.confidence,
+					score: outcomeScore,
+					confidenceScore: typeof alert.confidence === 'number' && Number.isFinite(alert.confidence) ? Math.abs(alert.confidence) : null,
 					side,
 					price: alert.marketContext ? alert.marketContext.price : null,
 					priceSource: alert.marketContext ? alert.marketContext.source : null,
