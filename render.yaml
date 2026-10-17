@@ -182,7 +182,7 @@ services:
   - key: NOTIFICATION_REDRIVE_MAX_ATTEMPTS
     value: 5
   - key: NOTIFICATION_REDRIVE_MAX_AGE_MS
-    value: 86400000
+    value: 3600000
   - key: REDIS_URL
     fromService:
       name: cabros-crypto-bot-telegram-queue
