@@ -292,3 +292,37 @@ describe('Render Firebase Remote Config blueprint (issue #1113)', () => {
 		);
 	});
 });
+
+const { JOB_EXECUTION_MIRRORED_KEYS } = require('../../scripts/sync-production-env');
+
+describe('Render job worker env controls parity (#855)', () => {
+	const readBlueprint = () => fs.readFileSync(path.join(__dirname, '../../render.yaml'), 'utf8');
+
+	const serviceBlock = (blueprint, serviceName) => {
+		const start = blueprint.indexOf(`  name: ${serviceName}\n`);
+		expect(start).toBeGreaterThan(-1);
+		const nextService = blueprint.indexOf('\n- type: ', start);
+		return nextService === -1 ? blueprint.slice(start) : blueprint.slice(start, nextService);
+	};
+
+	it.each(JOB_EXECUTION_MIRRORED_KEYS)(
+		'declares %s on the web service so mirrors are never dangling',
+		key => {
+			const blueprint = readBlueprint();
+			const web = serviceBlock(blueprint, 'cabros-crypto-bot-telegram-iac');
+			expect(web).toContain(`- key: ${key}\n`);
+		},
+	);
+
+	it.each(JOB_EXECUTION_MIRRORED_KEYS)(
+		'mirrors %s onto the jobs worker via fromService',
+		key => {
+			const blueprint = readBlueprint();
+			const worker = serviceBlock(blueprint, 'cabros-crypto-bot-telegram-worker');
+			expect(worker).toContain(
+				`- key: ${key}\n    fromService:\n      name: cabros-crypto-bot-telegram-iac\n      type: web\n      envVarKey: ${key}`,
+			);
+		},
+	);
+});
+
