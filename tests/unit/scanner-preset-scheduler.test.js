@@ -481,5 +481,15 @@ describe('ScannerPresetSchedulerService', () => {
 			expect(drained).toBe(true);
 			expect(scheduler.running).toBe(false);
 		});
+
+		it('honors SCANNER_PRESET_SCHEDULER_LEASE_MS from environment and Remote Config', () => {
+			expect(scheduler.getLeaseMs()).toBe(120000);
+
+			process.env.SCANNER_PRESET_SCHEDULER_LEASE_MS = '180000';
+			expect(scheduler.getLeaseMs()).toBe(180000);
+
+			process.env.SCANNER_PRESET_SCHEDULER_LEASE_MS = 'invalid';
+			expect(scheduler.getLeaseMs()).toBe(120000);
+		});
 	});
 });

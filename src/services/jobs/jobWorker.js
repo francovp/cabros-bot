@@ -3,6 +3,7 @@
 const { jobQueue } = require('./JobQueue');
 const { JobService } = require('./JobService');
 const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 function getWorkerId() {
 	return process.env.RENDER_INSTANCE_ID
@@ -215,8 +216,11 @@ async function startJobWorker({
 	let activePollPromise = null;
 	const startupAbortController = new AbortController();
 	const inFlightJobs = new Set();
-	const maxAttempts = Number(process.env.JOB_QUEUE_ATTEMPTS) > 0
-		? Math.min(Number(process.env.JOB_QUEUE_ATTEMPTS), 20)
+	const configuredAttempts = Number(
+		getRuntimeConfig().JOB_QUEUE_ATTEMPTS ?? process.env.JOB_QUEUE_ATTEMPTS,
+	);
+	const maxAttempts = configuredAttempts > 0
+		? Math.min(configuredAttempts, 50)
 		: 5;
 
 	const pollOnce = async () => {
