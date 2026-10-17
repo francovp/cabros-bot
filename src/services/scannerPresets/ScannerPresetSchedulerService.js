@@ -111,7 +111,11 @@ class ScannerPresetSchedulerService {
 	}
 
 	getLeaseMs() {
-		return parseEnvInt(process.env.SCANNER_PRESET_SCHEDULER_LEASE_MS, DEFAULT_LEASE_MS, 10000, 600000);
+		const runtime = getRuntimeConfig();
+		const raw = runtime.SCANNER_PRESET_SCHEDULER_LEASE_MS !== undefined
+			? runtime.SCANNER_PRESET_SCHEDULER_LEASE_MS
+			: process.env.SCANNER_PRESET_SCHEDULER_LEASE_MS;
+		return parseEnvInt(raw, DEFAULT_LEASE_MS, 10000, 600000);
 	}
 
 	getStatus() {

@@ -678,6 +678,49 @@ describe('OpenAPI contract', () => {
 			expect(statusExample.dependencies.tokenCostBudget.budgetUsd).toBe(5);
 			expect(statusExample.featureFlags.tokenCostBudget).toBe(false);
 		});
+
+		// Issue #1118: `binanceOrderAudit` was returned by the handler but declared
+		// in neither the spec nor a Postman example, so the generic drift test above
+		// had nothing to compare. Pinning the name keeps a future removal from
+		// passing silently on both surfaces at once.
+		it('documents BinanceOrderAuditDependency and exposes the audit flag in the Status contract', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			expect(contract.components.schemas.Status.properties.dependencies.properties.binanceOrderAudit)
+				.toEqual({ $ref: '#/components/schemas/BinanceOrderAuditDependency' });
+
+			const auditSchema = contract.components.schemas.BinanceOrderAuditDependency;
+			expect(auditSchema.type).toBe('object');
+			expect(auditSchema.additionalProperties).toBe(false);
+			expect(auditSchema.required).toEqual([
+				'enabled',
+				'configured',
+				'ready',
+				'status',
+				'collection',
+				'retentionDays',
+			]);
+			expect(auditSchema.properties.status.enum).toEqual(['ready', 'misconfigured', 'disabled']);
+			expect(auditSchema.properties.retentionDays).toEqual(expect.objectContaining({
+				type: 'integer',
+				minimum: 1,
+				maximum: 365,
+			}));
+
+			expect(contract.components.schemas.Status.description).toContain('featureFlags.binanceOrderAudit reports ENABLE_BINANCE_ORDER_AUDIT');
+
+			const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+			expect(statusExample.featureFlags.binanceOrderAudit).toBe(false);
+			expect(statusExample.dependencies.binanceOrderAudit).toEqual({
+				enabled: false,
+				configured: true,
+				ready: false,
+				status: 'disabled',
+				collection: 'binanceOrderAudit',
+				retentionDays: 30,
+			});
+		});
 	});
 
 	describe('news-monitor alert barrier fields (GH-712)', () => {
@@ -1110,5 +1153,35 @@ describe('status dependency contract drift', () => {
 		expect(deploymentIdentity.properties).toHaveProperty('service');
 		expect(deploymentIdentity.properties).toHaveProperty('runtimeVersion');
 		expect(deploymentSummaryItem.required).toEqual(expect.arrayContaining(['count', 'lastSeen']));
+	});
+
+	describe('Batch alert IDs nonblank contract (GH-1174)', () => {
+		const requestBodies = ['BatchDeleteAlerts', 'BatchExportAlerts', 'BatchReplayAlerts'];
+		const spec = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+		it.each(requestBodies)('declares minLength: 1 and pattern: "\\S" on alertIds items in %s', (bodyName) => {
+			const schema = spec.components.requestBodies[bodyName].content['application/json'].schema;
+			const alertIdsProp = schema.properties.alertIds;
+
+			expect(alertIdsProp.type).toBe('array');
+			expect(alertIdsProp.items).toEqual(expect.objectContaining({
+				type: 'string',
+				minLength: 1,
+				pattern: '\\S',
+			}));
+		});
+
+		it('matches non-empty string and rejects empty/whitespace-only with regex pattern "\\S"', () => {
+			const regex = new RegExp('\\S');
+
+			expect(regex.test('')).toBe(false);
+			expect(regex.test(' ')).toBe(false);
+			expect(regex.test('   ')).toBe(false);
+			expect(regex.test('\t')).toBe(false);
+			expect(regex.test('\n')).toBe(false);
+			expect(regex.test('alert-1')).toBe(true);
+			expect(regex.test('doc_123456')).toBe(true);
+			expect(regex.test('a')).toBe(true);
+		});
 	});
 });

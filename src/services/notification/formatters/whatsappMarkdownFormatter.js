@@ -142,9 +142,11 @@ class WhatsAppMarkdownFormatter {
 			const urls = citationList.map(c => c.url).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
 
 			let shortenedMap = {};
-			if (this.urlShortener && urls.length > 0) {
+			if (this.urlShortener && urls.length > 0 && !options.signal?.aborted) {
 				try {
-					shortenedMap = await this.urlShortener.shortenUrlsParallel(urls);
+					shortenedMap = options.signal
+						? await this.urlShortener.shortenUrlsParallel(urls, { signal: options.signal })
+						: await this.urlShortener.shortenUrlsParallel(urls);
 				} catch (error) {
 					if (this.logger) {
 						this.logger.warn?.(`WhatsApp formatter: URL shortening failed, falling back to title-only: ${error.message}`);
@@ -303,10 +305,12 @@ class WhatsAppMarkdownFormatter {
 			const urls = sourceList.map(c => c.url).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
 
 			let shortenedMap = {};
-			if (this.urlShortener && urls.length > 0) {
+			if (this.urlShortener && urls.length > 0 && !options.signal?.aborted) {
 				try {
 					// Call shortenUrlsParallel to shorten all URLs at once
-					shortenedMap = await this.urlShortener.shortenUrlsParallel(urls);
+					shortenedMap = options.signal
+						? await this.urlShortener.shortenUrlsParallel(urls, { signal: options.signal })
+						: await this.urlShortener.shortenUrlsParallel(urls);
 				} catch (error) {
 					// Log shortening failure but don't block message delivery
 					if (this.logger) {

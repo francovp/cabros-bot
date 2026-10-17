@@ -27,7 +27,8 @@ const {
 	getRiskRewardRatio,
 } = require('./expandedAnalysisAlertReport');
 const { hasConfluenceEvidence } = require('./confluenceEvidence');
-const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const remoteConfigService = require('../remoteConfig/RemoteConfigService');
+const { getRuntimeConfig } = remoteConfigService;
 const alertStorageService = require('../storage/AlertStorageService');
 
 // GH-1229: the heuristic risk plan is a SECONDARY source only. It is loaded lazily
@@ -268,6 +269,25 @@ function createRuntimeStatus({ includeEnrichment = true } = {}) {
 	return status;
 }
 
+function createEmptyWarmupTelemetry(options = {}) {
+	return {
+		enabled: options.enabled ?? false,
+		running: false,
+		intervalMs: options.intervalMs || 600000,
+		timeoutMs: options.timeoutMs || 60000,
+		lastProbeAt: null,
+		lastSuccessAt: null,
+		lastFailureAt: null,
+		lastDurationMs: null,
+		lastStatus: "not_attempted",
+		lastErrorReason: null,
+		consecutiveFailures: 0,
+		totalProbes: 0,
+		successCount: 0,
+		failureCount: 0,
+	};
+}
+
 function createEmptyErrorCategoryCounts() {
 	return {
 		circuit_breaker_open: 0,
@@ -353,9 +373,18 @@ class TradingViewMcpService {
 		this.toolInFlight = new Map();
 		this.sharedToolFailureErrors = new WeakSet();
 		this.recordedSharedToolFailureErrors = new WeakSet();
+		this.warmupIntervalMs = config.warmupIntervalMs || null;
+		this.warmupTimeoutMs = config.warmupTimeoutMs || null;
+		this.warmupTelemetry = createEmptyWarmupTelemetry();
+		this.warmupSchedulerTimer = null;
+		this.isWarmupSchedulerRunning = false;
+		this._warmupInFlightPromise = null;
 	}
 
 	_resetForTesting() {
+		this.stopWarmupScheduler();
+		this.warmupTelemetry = createEmptyWarmupTelemetry();
+		this._warmupInFlightPromise = null;
 		this.runtimeStatus = createRuntimeStatus();
 		this.volumeRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
 		this.consecutiveFailures = 0;
@@ -380,7 +409,9 @@ class TradingViewMcpService {
 
 	getConfig() {
 		const runtimeConfig = getRuntimeConfig();
-		const timeoutMs = parseInt(this.config.timeoutMs || runtimeConfig.TRADINGVIEW_MCP_TIMEOUT_MS, 10);
+		const timeoutOverride = remoteConfigService.getRemoteOverride?.('TRADINGVIEW_MCP_TIMEOUT_MS');
+		const rawTimeout = this.config.timeoutMs ?? timeoutOverride ?? runtimeConfig.TRADINGVIEW_MCP_TIMEOUT_MS;
+		const timeoutMs = parseInt(rawTimeout, 10);
 		const maxRetries = parseInt(this.config.maxRetries || runtimeConfig.TRADINGVIEW_MCP_MAX_RETRIES, 10);
 		const defaultExchange = (
 			this.config.defaultExchange || runtimeConfig.TRADINGVIEW_MCP_DEFAULT_EXCHANGE || 'BINANCE'
@@ -389,8 +420,10 @@ class TradingViewMcpService {
 			this.config.defaultTimeframe || runtimeConfig.TRADINGVIEW_MCP_DEFAULT_TIMEFRAME || '1h',
 			'1h',
 		);
+		const enrichmentBudgetOverride = remoteConfigService.getRemoteOverride?.('TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS');
+		const rawEnrichmentBudget = this.config.enrichmentBudgetMs ?? enrichmentBudgetOverride ?? runtimeConfig.TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS;
 		const enrichmentBudgetMs = parseInt(
-			this.config.enrichmentBudgetMs || runtimeConfig.TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS,
+			rawEnrichmentBudget,
 			10,
 		);
 		const breakerThreshold = parseInt(
@@ -458,6 +491,172 @@ class TradingViewMcpService {
 		};
 	}
 
+	_getConfigParamSource(paramName) {
+		if (this.config && this.config[paramName] !== undefined) {
+			return 'override';
+		}
+		const envMap = {
+			timeoutMs: 'TRADINGVIEW_MCP_TIMEOUT_MS',
+			enrichmentBudgetMs: 'TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS',
+		};
+		const envKey = envMap[paramName];
+		if (envKey) {
+			const remoteVal = remoteConfigService.getRemoteOverride?.(envKey);
+			if (remoteVal !== undefined) {
+				return 'remote';
+			}
+			if (process.env[envKey] !== undefined) {
+				return 'env';
+			}
+		}
+		return 'default';
+	}
+
+	isWarmupEnabled() {
+		const runtimeConfig = getRuntimeConfig();
+		return typeof this.config.warmupEnabled === 'boolean'
+			? this.config.warmupEnabled
+			: Boolean(runtimeConfig.ENABLE_TRADINGVIEW_MCP_WARMUP);
+	}
+
+	getWarmupConfig() {
+		const runtimeConfig = getRuntimeConfig();
+		const rawInterval = this.warmupIntervalMs || this.config.warmupIntervalMs || runtimeConfig.TRADINGVIEW_MCP_WARMUP_INTERVAL_MS;
+		const rawTimeout = this.warmupTimeoutMs || this.config.warmupTimeoutMs || runtimeConfig.TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS;
+		const intervalMs = parseInt(rawInterval, 10);
+		const timeoutMs = parseInt(rawTimeout, 10);
+		return {
+			enabled: this.isWarmupEnabled(),
+			intervalMs: Number.isFinite(intervalMs) && intervalMs > 0 ? intervalMs : 600000,
+			timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 60000,
+		};
+	}
+
+	getWarmupStatus() {
+		const cfg = this.getWarmupConfig();
+		return {
+			enabled: cfg.enabled,
+			running: this.isWarmupSchedulerRunning,
+			intervalMs: cfg.intervalMs,
+			timeoutMs: cfg.timeoutMs,
+			lastProbeAt: this.warmupTelemetry.lastProbeAt,
+			lastSuccessAt: this.warmupTelemetry.lastSuccessAt,
+			lastFailureAt: this.warmupTelemetry.lastFailureAt,
+			lastDurationMs: this.warmupTelemetry.lastDurationMs,
+			lastStatus: this.warmupTelemetry.lastStatus,
+			lastErrorReason: this.warmupTelemetry.lastErrorReason,
+			consecutiveFailures: this.warmupTelemetry.consecutiveFailures,
+			totalProbes: this.warmupTelemetry.totalProbes,
+			successCount: this.warmupTelemetry.successCount,
+			failureCount: this.warmupTelemetry.failureCount,
+		};
+	}
+
+	async probeWarmup(options = {}) {
+		if (this._warmupInFlightPromise) {
+			return this._warmupInFlightPromise;
+		}
+		this._warmupInFlightPromise = this._executeWarmupProbe(options).finally(() => {
+			this._warmupInFlightPromise = null;
+		});
+		return this._warmupInFlightPromise;
+	}
+
+	async _executeWarmupProbe(options = {}) {
+		const startedAt = Date.now();
+		const probeAt = new Date().toISOString();
+		this.warmupTelemetry.lastProbeAt = probeAt;
+		this.warmupTelemetry.totalProbes += 1;
+		this.warmupTelemetry.lastStatus = 'running';
+
+		const cfg = this.getWarmupConfig();
+		const timeoutMs = options.timeoutMs || cfg.timeoutMs;
+
+		try {
+			const initPayload = {
+				jsonrpc: '2.0',
+				id: ++this.requestCounter,
+				method: 'initialize',
+				params: {
+					protocolVersion: '2024-11-05',
+					capabilities: {},
+					clientInfo: { name: 'cabros-bot-warmup', version: '1.0.0' },
+				},
+			};
+
+			await this._rpcRequest(initPayload, { timeoutMs, isWarmup: true });
+
+			const durationMs = Math.max(0, Date.now() - startedAt);
+			this.warmupTelemetry.lastSuccessAt = new Date().toISOString();
+			this.warmupTelemetry.lastDurationMs = durationMs;
+			this.warmupTelemetry.lastStatus = 'success';
+			this.warmupTelemetry.lastErrorReason = null;
+			this.warmupTelemetry.consecutiveFailures = 0;
+			this.warmupTelemetry.successCount += 1;
+
+			if (this.breakerState === 'open' || this.breakerState === 'half-open') {
+				this.breakerState = 'closed';
+				this.breakerOpenedAt = null;
+				this.lastBreakerStateChangeAt = new Date().toISOString();
+				this.consecutiveFailures = 0;
+			}
+
+			return { success: true, durationMs };
+		} catch (error) {
+			const durationMs = Math.max(0, Date.now() - startedAt);
+			const isTimeout = error.name === 'AbortError' || /timeout|aborted/i.test(error.message);
+			this.warmupTelemetry.lastFailureAt = new Date().toISOString();
+			this.warmupTelemetry.lastDurationMs = durationMs;
+			this.warmupTelemetry.lastStatus = isTimeout ? 'timeout' : 'failed';
+			this.warmupTelemetry.lastErrorReason = error.message;
+			this.warmupTelemetry.consecutiveFailures += 1;
+			this.warmupTelemetry.failureCount += 1;
+			this.logger?.warn?.(`[TradingViewMcpService] Warmup probe failed: ${error.message}`);
+			return { success: false, error: error.message, durationMs };
+		}
+	}
+
+	startWarmupScheduler() {
+		if (this.isWarmupSchedulerRunning) {
+			return true;
+		}
+		if (!this.isWarmupEnabled()) {
+			return false;
+		}
+		this.isWarmupSchedulerRunning = true;
+		const scheduleNext = () => {
+			if (!this.isWarmupSchedulerRunning) return;
+			const { intervalMs } = this.getWarmupConfig();
+			this.warmupSchedulerTimer = setTimeout(async () => {
+			if (!this.isWarmupSchedulerRunning) return;
+			try {
+				await this.probeWarmup();
+			} catch (err) {
+				this.logger?.warn?.(`[TradingViewMcpService] Scheduled warmup probe error: ${err.message}`);
+			}
+			scheduleNext();
+			}, intervalMs);
+			if (typeof this.warmupSchedulerTimer?.unref === 'function') {
+				this.warmupSchedulerTimer.unref();
+			}
+		};
+		scheduleNext();
+		return true;
+	}
+
+	async stopWarmupScheduler() {
+		this.isWarmupSchedulerRunning = false;
+		if (this.warmupSchedulerTimer) {
+			clearTimeout(this.warmupSchedulerTimer);
+			this.warmupSchedulerTimer = null;
+		}
+		if (this._warmupInFlightPromise) {
+			try {
+				await this._warmupInFlightPromise;
+			} catch (_) {}
+		}
+	}
+
 	getStatus({ enabled = this.isEnabled(), runtimeStatus = this.runtimeStatus } = {}) {
 		const { url } = this.getConfig();
 		const configured = typeof url === 'string' && url.trim().length > 0;
@@ -465,6 +664,7 @@ class TradingViewMcpService {
 		const baseStatus = !enabled ? 'disabled' : !configured ? 'misconfigured' : runtimeStatus.status;
 		const status = baseStatus === 'ready' && circuitBreaker.state === 'open' ? 'degraded' : baseStatus;
 
+		const cfg = this.getConfig();
 		const statusDetails = {
 			enabled,
 			configured,
@@ -473,6 +673,13 @@ class TradingViewMcpService {
 			ready: enabled && configured && status === 'ready' && circuitBreaker.state !== 'open',
 			status,
 		};
+		if (runtimeStatus === this.runtimeStatus) {
+			statusDetails.timeoutMs = cfg.timeoutMs;
+			statusDetails.timeoutSource = this._getConfigParamSource('timeoutMs');
+			statusDetails.enrichmentBudgetMs = cfg.enrichmentBudgetMs;
+			statusDetails.enrichmentBudgetSource = this._getConfigParamSource('enrichmentBudgetMs');
+			statusDetails.warmup = this.getWarmupStatus();
+		}
 		if (statusDetails.enrichment && runtimeStatus === this.runtimeStatus) {
 			statusDetails.enrichment = {
 				...statusDetails.enrichment,
@@ -1447,13 +1654,14 @@ class TradingViewMcpService {
 
 	async _rpcRequest(payload, options = {}) {
 		const cfg = this.getConfig();
+		const timeoutMs = options.timeoutMs || cfg.timeoutMs;
 		const { sessionId, expectResponse = true, signal } = options;
 		const controller = new AbortController();
 		const timeoutId = setTimeout(() => {
 			// Our own per-fetch deadline, so it carries the same marker as the budget and
 			// attempt aborts: a client time limit, not a provider fault.
-			controller.abort(createBudgetExhaustedError(`TradingView MCP timeout after ${cfg.timeoutMs}ms`));
-		}, cfg.timeoutMs);
+			controller.abort(createBudgetExhaustedError(`TradingView MCP timeout after ${timeoutMs}ms`));
+		}, timeoutMs);
 		let onAbort = null;
 
 		if (signal) {
@@ -1508,7 +1716,7 @@ class TradingViewMcpService {
 					throw aborted;
 				}
 
-				const timedOut = new Error(`TradingView MCP timeout after ${cfg.timeoutMs}ms`);
+				const timedOut = new Error(`TradingView MCP timeout after ${timeoutMs}ms`);
 				if (reason && reason.mcpBudgetExhausted === true) {
 					timedOut.mcpBudgetExhausted = true;
 				}

@@ -317,7 +317,7 @@ class DiscordService extends NotificationChannel {
 				this.webhookUrl ||
 				process.env.DISCORD_WEBHOOK_URL ||
 				(this.webhookUrls && this.webhookUrls.length > 0) ||
-				process.env.DISCORD_WEBHOOK_URLS
+				process.env.DISCORD_WEBHOOK_URLS,
 			)
 		);
 	}
@@ -325,7 +325,19 @@ class DiscordService extends NotificationChannel {
 	async send(alert = {}, options = {}) {
 		const startedAt = Date.now();
 		let totalAttempts = 0;
+		const abortResult = (attemptCount = totalAttempts) => ({
+			success: false,
+			channel: 'discord',
+			error: options.signal?.reason?.message || options.signal?.reason || 'Operation aborted',
+			aborted: true,
+			attemptCount,
+			durationMs: Date.now() - startedAt,
+		});
 		try {
+			if (options.signal?.aborted) {
+				return abortResult(0);
+			}
+
 			const overrideUrl = alert.discordWebhookUrl;
 			if (overrideUrl) {
 				if (!isValidDiscordWebhookUrl(overrideUrl)) {
@@ -337,7 +349,9 @@ class DiscordService extends NotificationChannel {
 						durationMs: Date.now() - startedAt,
 					};
 				}
-				return await this.sendWithWebhookUrl(alert, overrideUrl, options, startedAt);
+				const content = await this.formatAlert(alert, options);
+				if (options.signal?.aborted) return abortResult(0);
+				return await this.sendWithWebhookUrl(alert, overrideUrl, options, startedAt, content);
 			}
 
 			const candidates = this.getHealthyWebhookUrls();
@@ -351,19 +365,29 @@ class DiscordService extends NotificationChannel {
 				};
 			}
 
+			const content = await this.formatAlert(alert, options);
+			if (options.signal?.aborted) return abortResult(0);
+
 			let lastResult = null;
 			const tried = new Set();
 			for (let attempt = 0; attempt < candidates.length; attempt += 1) {
+				if (options.signal?.aborted) return abortResult();
 				const url = this.pickNextWebhookUrl();
 				if (!url || tried.has(url)) break;
 				tried.add(url);
-				const result = await this.sendWithWebhookUrl(alert, url, options, startedAt);
+				const result = await this.sendWithWebhookUrl(alert, url, options, startedAt, content);
 				totalAttempts += result.attemptCount || 0;
 				lastResult = result;
 				if (result.success) {
 					return {
 						...result,
 						attemptCount: totalAttempts,
+					};
+				}
+				if (options.signal?.aborted || result.aborted) {
+					return {
+						...result,
+						...abortResult(totalAttempts),
 					};
 				}
 				if (result.statusCode === 429) {
@@ -395,8 +419,8 @@ class DiscordService extends NotificationChannel {
 		}
 	}
 
-	async sendWithWebhookUrl(alert, webhookUrl, options = {}, startedAt = Date.now()) {
-		const content = await this.formatAlert(alert);
+	async sendWithWebhookUrl(alert, webhookUrl, options = {}, startedAt = Date.now(), formattedContent) {
+		const content = formattedContent ?? await this.formatAlert(alert, options);
 		const chunks = splitMessageIntoChunks(content, DISCORD_MESSAGE_LIMIT);
 		const isChunked = chunks.length > 1;
 		const resumeFromChunk = Number.isInteger(options.startChunk) && options.startChunk > 0
@@ -464,15 +488,17 @@ class DiscordService extends NotificationChannel {
 			: `${targetUrl}?wait=true`;
 	}
 
-	async formatAlert(alert = {}) {
+	async formatAlert(alert = {}, options = {}) {
 		const signalClass = alert.signalClass || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.signalClass : undefined);
 		const session = alert.session || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.session : undefined);
+		const formatOptions = { signalClass, session };
+		if (options.signal) formatOptions.signal = options.signal;
 		if (alert.enriched && typeof alert.enriched === 'object') {
-			return await this.formatter.formatEnriched(alert.enriched, { signalClass, session });
+			return await this.formatter.formatEnriched(alert.enriched, formatOptions);
 		}
 
 		return typeof alert.text === 'string'
-			? this.formatter.format(alert.text, { signalClass, session })
+			? this.formatter.format(alert.text, formatOptions)
 			: '';
 	}
 

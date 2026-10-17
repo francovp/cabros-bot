@@ -834,6 +834,83 @@ describe('RemoteConfigService', () => {
 		expect(config).not.toHaveProperty('ENABLE_ADMIN_SSE');
 	});
 
+	it('supports job queue and scanner scheduler parameters via Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({
+			SCANNER_PRESET_SCHEDULER_LEASE_MS: 180000,
+			JOB_QUEUE_ATTEMPTS: 8,
+			JOB_QUEUE_BACKOFF_MS: 45000,
+			JOB_QUEUE_CONCURRENCY: 4,
+			JOB_QUEUE_CLAIM_LEASE_MS: 90000,
+			JOB_QUEUE_CONNECT_TIMEOUT_MS: 8000,
+			JOB_QUEUE_PROBE_TIMEOUT_MS: 10000,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.SCANNER_PRESET_SCHEDULER_LEASE_MS).toBe(180000);
+		expect(config.JOB_QUEUE_ATTEMPTS).toBe(8);
+		expect(config.JOB_QUEUE_BACKOFF_MS).toBe(45000);
+		expect(config.JOB_QUEUE_CONCURRENCY).toBe(4);
+		expect(config.JOB_QUEUE_CLAIM_LEASE_MS).toBe(90000);
+		expect(config.JOB_QUEUE_CONNECT_TIMEOUT_MS).toBe(8000);
+		expect(config.JOB_QUEUE_PROBE_TIMEOUT_MS).toBe(10000);
+	});
+
+	it('enforces bounds on job queue and scanner scheduler parameters', () => {
+		process.env.SCANNER_PRESET_SCHEDULER_LEASE_MS = '700000'; // max 600000
+		process.env.JOB_QUEUE_ATTEMPTS = '60'; // max 50
+		process.env.JOB_QUEUE_BACKOFF_MS = '500'; // min 1000
+		process.env.JOB_QUEUE_CONCURRENCY = '150'; // max 100
+		process.env.JOB_QUEUE_CLAIM_LEASE_MS = '400000'; // max 300000
+		process.env.JOB_QUEUE_CONNECT_TIMEOUT_MS = '100000'; // max 60000
+		process.env.JOB_QUEUE_PROBE_TIMEOUT_MS = '200000'; // max 120000
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.SCANNER_PRESET_SCHEDULER_LEASE_MS).toBe(120000); // fallback to default
+		expect(config.JOB_QUEUE_ATTEMPTS).toBe(5); // fallback to default
+		expect(config.JOB_QUEUE_BACKOFF_MS).toBe(30000); // fallback to default
+		expect(config.JOB_QUEUE_CONCURRENCY).toBe(1); // fallback to default
+		expect(config.JOB_QUEUE_CLAIM_LEASE_MS).toBe(60000); // fallback to default
+		expect(config.JOB_QUEUE_CONNECT_TIMEOUT_MS).toBe(5000); // fallback to default
+		expect(config.JOB_QUEUE_PROBE_TIMEOUT_MS).toBe(5000); // fallback to default
+	});
+
+	it('keeps process-startup gates and security controls out of Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.JOB_EXECUTION_MODE = 'local';
+		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
+		process.env.SCANNER_PRESET_SCHEDULER_WORKER_ROLE = 'web';
+		process.env.ALLOW_HTTP_CALLBACKS = 'false';
+		process.env.ALLOW_PRIVATE_CALLBACKS = 'false';
+		mockTemplate({
+			JOB_EXECUTION_MODE: 'render-worker',
+			NOTIFICATION_REDRIVE_WORKER_ROLE: 'worker',
+			SCANNER_PRESET_SCHEDULER_WORKER_ROLE: 'worker',
+			ALLOW_HTTP_CALLBACKS: true,
+			ALLOW_PRIVATE_CALLBACKS: true,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		// Process-startup execution mode and role gates must remain environment-only
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('JOB_EXECUTION_MODE');
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('NOTIFICATION_REDRIVE_WORKER_ROLE');
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('SCANNER_PRESET_SCHEDULER_WORKER_ROLE');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('JOB_EXECUTION_MODE');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('NOTIFICATION_REDRIVE_WORKER_ROLE');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('SCANNER_PRESET_SCHEDULER_WORKER_ROLE');
+
+		// Security controls (SSRF protection / callback protocols) must remain environment-only
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('ALLOW_HTTP_CALLBACKS');
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('ALLOW_PRIVATE_CALLBACKS');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('ALLOW_HTTP_CALLBACKS');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('ALLOW_PRIVATE_CALLBACKS');
+	});
+
 	describe('getStatus readiness and lifecycle states', () => {
 		it('reports disabled readiness status when Remote Config is disabled', () => {
 			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'false';
