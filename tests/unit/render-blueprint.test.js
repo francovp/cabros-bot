@@ -293,6 +293,8 @@ describe('Render Firebase Remote Config blueprint (issue #1113)', () => {
 	});
 });
 
+const { JOB_EXECUTION_MIRRORED_KEYS } = require('../../scripts/sync-production-env');
+
 describe('Render job worker env controls parity (#855)', () => {
 	const readBlueprint = () => fs.readFileSync(path.join(__dirname, '../../render.yaml'), 'utf8');
 
@@ -302,22 +304,6 @@ describe('Render job worker env controls parity (#855)', () => {
 		const nextService = blueprint.indexOf('\n- type: ', start);
 		return nextService === -1 ? blueprint.slice(start) : blueprint.slice(start, nextService);
 	};
-
-	const JOB_EXECUTION_MIRRORED_KEYS = [
-		'TRADINGVIEW_MCP_DEFAULT_EXCHANGE',
-		'MARKET_SCANNER_DEFAULT_EXCHANGE',
-		'EXPANDED_ANALYSIS_ALERT_SYMBOLS',
-		'ZERO_CHANNEL_ALERT_COOLDOWN_MS',
-		'ENABLE_API_ONLY_MODE',
-		'FIREBASE_REMOTE_CONFIG_REFRESH_INTERVAL_MS',
-		'FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS',
-		'FIREBASE_REMOTE_CONFIG_MAX_AGE_MS',
-		'ENABLE_NOTIFICATION_REDRIVE',
-		'NOTIFICATION_REDRIVE_INTERVAL_MS',
-		'NOTIFICATION_REDRIVE_BATCH_LIMIT',
-		'NOTIFICATION_REDRIVE_MAX_ATTEMPTS',
-		'NOTIFICATION_REDRIVE_MAX_AGE_MS',
-	];
 
 	it.each(JOB_EXECUTION_MIRRORED_KEYS)(
 		'declares %s on the web service so mirrors are never dangling',

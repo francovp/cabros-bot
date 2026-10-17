@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const {
 	parseArgs,
@@ -180,8 +181,33 @@ services:
   - key: JOB_EXECUTION_MODE
     value: render-worker
 `;
-			const tempDir = path.join(__dirname, '../fixtures/temp-blueprint-test');
-			fs.mkdirSync(tempDir, { recursive: true });
+			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueprint-test-'));
+			fs.writeFileSync(path.join(tempDir, 'render.yaml'), mockBlueprint, 'utf8');
+
+			try {
+				const result = checkJobWorkerParity(tempDir);
+				expect(result.valid).toBe(false);
+				expect(result.missingKeys).toContain('MARKET_SCANNER_DEFAULT_EXCHANGE');
+			} finally {
+				fs.rmSync(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		it('rejects worker static env var without fromService web mirror', () => {
+			const mockBlueprint = `
+services:
+- type: web
+  name: cabros-crypto-bot-telegram-iac
+  envVars:
+  - key: MARKET_SCANNER_DEFAULT_EXCHANGE
+    value: BINANCE
+- type: worker
+  name: cabros-crypto-bot-telegram-worker
+  envVars:
+  - key: MARKET_SCANNER_DEFAULT_EXCHANGE
+    value: BINANCE
+`;
+			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueprint-test-static-'));
 			fs.writeFileSync(path.join(tempDir, 'render.yaml'), mockBlueprint, 'utf8');
 
 			try {
@@ -210,14 +236,29 @@ services:
       type: web
       envVarKey: MARKET_SCANNER_DEFAULT_EXCHANGE
 `;
-			const tempDir = path.join(__dirname, '../fixtures/temp-blueprint-test-valid');
-			fs.mkdirSync(tempDir, { recursive: true });
+			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueprint-test-valid-'));
 			fs.writeFileSync(path.join(tempDir, 'render.yaml'), mockBlueprint, 'utf8');
 
 			try {
 				const result = checkJobWorkerParity(tempDir);
 				expect(result.valid).toBe(true);
 				expect(result.mirroredKeys).toContain('MARKET_SCANNER_DEFAULT_EXCHANGE');
+			} finally {
+				fs.rmSync(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		it('throws an error if required services are missing from render.yaml', () => {
+			const mockBlueprint = `
+services:
+- type: web
+  name: other-service
+`;
+			const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'blueprint-test-missing-'));
+			fs.writeFileSync(path.join(tempDir, 'render.yaml'), mockBlueprint, 'utf8');
+
+			try {
+				expect(() => checkJobWorkerParity(tempDir)).toThrow(/cabros-crypto-bot-telegram-iac not found/);
 			} finally {
 				fs.rmSync(tempDir, { recursive: true, force: true });
 			}

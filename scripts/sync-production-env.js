@@ -364,7 +364,7 @@ function checkJobWorkerParity(repoRoot = path.join(__dirname, '..')) {
 		throw new Error(`render.yaml not found at ${blueprintPath}`);
 	}
 
-	const content = fs.readFileSync(blueprintPath, 'utf8');
+	const content = fs.readFileSync(blueprintPath, 'utf8').replace(/\r\n/g, '\n');
 
 	function extractServiceBlock(name) {
 		const start = content.indexOf(`  name: ${name}\n`);
@@ -375,6 +375,13 @@ function checkJobWorkerParity(repoRoot = path.join(__dirname, '..')) {
 
 	const webBlock = extractServiceBlock('cabros-crypto-bot-telegram-iac');
 	const workerBlock = extractServiceBlock('cabros-crypto-bot-telegram-worker');
+
+	if (!webBlock) {
+		throw new Error('Service cabros-crypto-bot-telegram-iac not found in render.yaml');
+	}
+	if (!workerBlock) {
+		throw new Error('Service cabros-crypto-bot-telegram-worker not found in render.yaml');
+	}
 
 	const webKeys = new Set();
 	const webKeyMatches = webBlock.matchAll(/- key:\s*([A-Za-z0-9_]+)/g);
@@ -390,9 +397,11 @@ function checkJobWorkerParity(repoRoot = path.join(__dirname, '..')) {
 		if (keyMatch) {
 			const key = keyMatch[1];
 			const nextChunk = workerLines.slice(idx + 1, idx + 6).join('\n');
-			if (nextChunk.includes('fromService:') && nextChunk.includes(`envVarKey: ${key}`)) {
-				workerMirrors.add(key);
-			} else {
+			if (
+				nextChunk.includes('fromService:') &&
+				nextChunk.includes('name: cabros-crypto-bot-telegram-iac') &&
+				nextChunk.includes(`envVarKey: ${key}`)
+			) {
 				workerMirrors.add(key);
 			}
 		}
@@ -413,8 +422,10 @@ function checkJobWorkerParity(repoRoot = path.join(__dirname, '..')) {
 		}
 	}
 
+	const valid = webDeclaredKeys.length > 0 && missingKeys.length === 0;
+
 	return {
-		valid: missingKeys.length === 0,
+		valid,
 		webDeclaredKeys: webDeclaredKeys.sort(),
 		mirroredKeys: mirroredKeys.sort(),
 		missingKeys: missingKeys.sort(),
