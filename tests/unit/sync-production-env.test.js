@@ -8,6 +8,7 @@ const {
 	detectRenderServices,
 	recordSyncLog,
 	checkEnvironmentDrift,
+	checkJobWorkerParity,
 	validateVariableName,
 } = require('../../scripts/sync-production-env');
 
@@ -160,6 +161,73 @@ describe('sync-production-env tool', () => {
 			expect(agentsDoc).toContain('scripts/sync-production-env.js');
 			expect(agentsDoc).toContain('pnpm run sync:production-env');
 			expect(agentsDoc).toMatch(/Dry-run by default/i);
+		});
+	});
+
+	describe('Job Worker Blueprint Parity (#855)', () => {
+		it('detects missing job worker mirrors when web declares job execution env keys', () => {
+			// Mock blueprint where web declares MARKET_SCANNER_DEFAULT_EXCHANGE but worker does not mirror it
+			const mockBlueprint = `
+services:
+- type: web
+  name: cabros-crypto-bot-telegram-iac
+  envVars:
+  - key: MARKET_SCANNER_DEFAULT_EXCHANGE
+    value: BINANCE
+- type: worker
+  name: cabros-crypto-bot-telegram-worker
+  envVars:
+  - key: JOB_EXECUTION_MODE
+    value: render-worker
+`;
+			const tempDir = path.join(__dirname, '../fixtures/temp-blueprint-test');
+			fs.mkdirSync(tempDir, { recursive: true });
+			fs.writeFileSync(path.join(tempDir, 'render.yaml'), mockBlueprint, 'utf8');
+
+			try {
+				const result = checkJobWorkerParity(tempDir);
+				expect(result.valid).toBe(false);
+				expect(result.missingKeys).toContain('MARKET_SCANNER_DEFAULT_EXCHANGE');
+			} finally {
+				fs.rmSync(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		it('validates that all declared job execution keys on web are mirrored on worker', () => {
+			const mockBlueprint = `
+services:
+- type: web
+  name: cabros-crypto-bot-telegram-iac
+  envVars:
+  - key: MARKET_SCANNER_DEFAULT_EXCHANGE
+    value: BINANCE
+- type: worker
+  name: cabros-crypto-bot-telegram-worker
+  envVars:
+  - key: MARKET_SCANNER_DEFAULT_EXCHANGE
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: MARKET_SCANNER_DEFAULT_EXCHANGE
+`;
+			const tempDir = path.join(__dirname, '../fixtures/temp-blueprint-test-valid');
+			fs.mkdirSync(tempDir, { recursive: true });
+			fs.writeFileSync(path.join(tempDir, 'render.yaml'), mockBlueprint, 'utf8');
+
+			try {
+				const result = checkJobWorkerParity(tempDir);
+				expect(result.valid).toBe(true);
+				expect(result.mirroredKeys).toContain('MARKET_SCANNER_DEFAULT_EXCHANGE');
+			} finally {
+				fs.rmSync(tempDir, { recursive: true, force: true });
+			}
+		});
+
+		it('passes parity check for repository render.yaml blueprint', () => {
+			const result = checkJobWorkerParity(repoRoot);
+			expect(result.valid).toBe(true);
+			expect(result.missingKeys).toHaveLength(0);
+			expect(result.mirroredKeys.length).toBeGreaterThan(0);
 		});
 	});
 });

@@ -153,6 +153,36 @@ services:
   - key: ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME
     value: true
     previewValue: false
+  # Job execution environment controls (#855). Declared on web and mirrored to
+  # cabros-crypto-bot-telegram-worker so worker cutover cannot silently diverge.
+  - key: TRADINGVIEW_MCP_DEFAULT_EXCHANGE
+    value: BINANCE
+  - key: MARKET_SCANNER_DEFAULT_EXCHANGE
+    value: BINANCE
+  - key: EXPANDED_ANALYSIS_ALERT_SYMBOLS
+    value: BINANCE:BTCUSDT,BINANCE:ETHUSDT,BINANCE:SOLUSDT
+  - key: ZERO_CHANNEL_ALERT_COOLDOWN_MS
+    value: 300000
+  - key: ENABLE_API_ONLY_MODE
+    value: false
+    previewValue: false
+  - key: FIREBASE_REMOTE_CONFIG_REFRESH_INTERVAL_MS
+    value: 300000
+  - key: FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS
+    value: 10000
+  - key: FIREBASE_REMOTE_CONFIG_MAX_AGE_MS
+    value: 3600000
+  - key: ENABLE_NOTIFICATION_REDRIVE
+    value: true
+    previewValue: false
+  - key: NOTIFICATION_REDRIVE_INTERVAL_MS
+    value: 60000
+  - key: NOTIFICATION_REDRIVE_BATCH_LIMIT
+    value: 50
+  - key: NOTIFICATION_REDRIVE_MAX_ATTEMPTS
+    value: 5
+  - key: NOTIFICATION_REDRIVE_MAX_AGE_MS
+    value: 86400000
   - key: REDIS_URL
     fromService:
       name: cabros-crypto-bot-telegram-queue
@@ -511,6 +541,48 @@ services:
       name: cabros-crypto-bot-telegram-iac
       type: web
       envVarKey: ENABLE_MESSAGE_FOOTER_METADATA
+  # Job execution environment controls (#855). Mirrored from web so worker cutover
+  # cannot silently diverge from web-local execution.
+  - key: TRADINGVIEW_MCP_DEFAULT_EXCHANGE
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: TRADINGVIEW_MCP_DEFAULT_EXCHANGE
+  - key: MARKET_SCANNER_DEFAULT_EXCHANGE
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: MARKET_SCANNER_DEFAULT_EXCHANGE
+  - key: EXPANDED_ANALYSIS_ALERT_SYMBOLS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: EXPANDED_ANALYSIS_ALERT_SYMBOLS
+  - key: ZERO_CHANNEL_ALERT_COOLDOWN_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ZERO_CHANNEL_ALERT_COOLDOWN_MS
+  - key: ENABLE_API_ONLY_MODE
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_API_ONLY_MODE
+  - key: FIREBASE_REMOTE_CONFIG_REFRESH_INTERVAL_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: FIREBASE_REMOTE_CONFIG_REFRESH_INTERVAL_MS
+  - key: FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS
+  - key: FIREBASE_REMOTE_CONFIG_MAX_AGE_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: FIREBASE_REMOTE_CONFIG_MAX_AGE_MS
 - type: keyvalue
   plan: starter
   region: frankfurt
