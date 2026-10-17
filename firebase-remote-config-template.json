@@ -294,6 +294,48 @@
       "description": "Polling interval in milliseconds for firestore-poller job execution mode",
       "valueType": "NUMBER"
     },
+    "JOB_QUEUE_ATTEMPTS": {
+      "defaultValue": {
+        "value": "5"
+      },
+      "description": "Maximum BullMQ job execution retry attempts before permanent failure",
+      "valueType": "NUMBER"
+    },
+    "JOB_QUEUE_BACKOFF_MS": {
+      "defaultValue": {
+        "value": "30000"
+      },
+      "description": "Base exponential backoff delay in milliseconds for BullMQ job retries",
+      "valueType": "NUMBER"
+    },
+    "JOB_QUEUE_CONCURRENCY": {
+      "defaultValue": {
+        "value": "1"
+      },
+      "description": "Maximum concurrent BullMQ jobs processed by the job worker",
+      "valueType": "NUMBER"
+    },
+    "JOB_QUEUE_CLAIM_LEASE_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Worker heartbeat lease duration in milliseconds for claimed jobs",
+      "valueType": "NUMBER"
+    },
+    "JOB_QUEUE_CONNECT_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Redis connection timeout in milliseconds for BullMQ queues and workers",
+      "valueType": "NUMBER"
+    },
+    "JOB_QUEUE_PROBE_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Redis broker probe timeout in milliseconds for health status checks",
+      "valueType": "NUMBER"
+    },
     "SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT": {
       "defaultValue": {
         "value": "50"
@@ -397,6 +439,13 @@
         "value": "50"
       },
       "description": "Maximum due scanner presets to process per scheduler sweep",
+      "valueType": "NUMBER"
+    },
+    "SCANNER_PRESET_SCHEDULER_LEASE_MS": {
+      "defaultValue": {
+        "value": "120000"
+      },
+      "description": "Scheduler lease duration in milliseconds to prevent overlapping scanner preset sweeps",
       "valueType": "NUMBER"
     },
     "NEWS_MONITOR_SCHEDULER_INTERVAL_MS": {
