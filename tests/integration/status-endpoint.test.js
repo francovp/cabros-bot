@@ -1,6 +1,15 @@
 /* global saveEnv, restoreEnv */
 const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('fs');
-const request = require('supertest');
+const realSupertest = require('supertest');
+const http = require('http');
+
+let persistentServer;
+let currentApp;
+
+const request = (app) => {
+	currentApp = app;
+	return realSupertest(persistentServer || app);
+};
 const express = require('express');
 const { generateKeyPairSync } = require('crypto');
 const { tmpdir } = require('os');
@@ -54,6 +63,42 @@ describe('Status endpoints', () => {
 	let app;
 	let tempDir;
 	let promptStatusSpies = [];
+	beforeAll(async () => {
+		for (let attempt = 0; attempt < 10; attempt++) {
+			const candidateServer = http.createServer((req, res) => {
+				if (currentApp) {
+					currentApp(req, res);
+				} else {
+					res.writeHead(500);
+					res.end('App not initialized');
+				}
+			});
+			await new Promise((resolve) => candidateServer.listen(0, '127.0.0.1', resolve));
+			const port = candidateServer.address().port;
+			try {
+				const probeRes = await new Promise((resolve, reject) => {
+					const req = http.get(`http://127.0.0.1:${port}/healthcheck-probe`, (res) => {
+						let data = '';
+						res.on('data', (c) => { data += c; });
+						res.on('end', () => resolve({ status: res.statusCode, data }));
+					});
+					req.on('error', reject);
+				});
+				if (probeRes.status !== 400 && !probeRes.data.includes('explicit proxy')) {
+					persistentServer = candidateServer;
+					break;
+				}
+			} catch (_) {}
+			await new Promise((resolve) => candidateServer.close(resolve));
+		}
+	});
+
+	afterAll(async () => {
+		if (persistentServer) {
+			await new Promise((resolve) => persistentServer.close(resolve));
+			persistentServer = null;
+		}
+	});
 
 	beforeEach(() => {
 		savedEnv = saveEnv();
@@ -810,6 +855,28 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.signalClassMarker).toBe(false);
+	});
+
+	it('reports telegram command rate limiting as enabled by default in featureFlags and dependencies.telegram', async () => {
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.telegramCommandRateLimiting).toBe(true);
+		expect(response.body.dependencies.telegram.commandRateLimiting).toBe(true);
+	});
+
+	it('reports telegram command rate limiting as disabled when explicitly disabled', async () => {
+		process.env.ENABLE_TELEGRAM_COMMAND_RATE_LIMITING = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.telegramCommandRateLimiting).toBe(false);
+		expect(response.body.dependencies.telegram.commandRateLimiting).toBe(false);
 	});
 
 	it('omits signal classification metrics until an alert has been classified', async () => {

@@ -370,10 +370,13 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	const adminAuthStatus = getAdminAuthStatus();
 	const llmAlertEnrichmentDependencyEnabled = llmAlertEnrichmentEnabled && newsMonitorEnabled;
 
-	const telegram = dependencyStatus({
-		enabled: telegramEnabled,
-		configured: hasValue(process.env.BOT_TOKEN) && hasValue(process.env.TELEGRAM_CHAT_ID),
-	});
+	const telegram = {
+		...dependencyStatus({
+			enabled: telegramEnabled,
+			configured: hasValue(process.env.BOT_TOKEN) && hasValue(process.env.TELEGRAM_CHAT_ID),
+		}),
+		commandRateLimiting: process.env.ENABLE_TELEGRAM_COMMAND_RATE_LIMITING !== 'false',
+	};
 	const whatsappChatId = previewEnvironment
 		? process.env.WHATSAPP_PREVIEW_CHAT_ID || process.env.WHATSAPP_CHAT_ID
 		: process.env.WHATSAPP_CHAT_ID;
@@ -650,6 +653,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			equitySessionTag: runtimeConfig.ENABLE_EQUITY_SESSION_TAG,
 			maintenanceMode: isMaintenanceModeEnabled(),
 			telegramCommandAuth: telegramCommandAuth.getStatus().enabled,
+			telegramCommandRateLimiting: process.env.ENABLE_TELEGRAM_COMMAND_RATE_LIMITING !== 'false',
 			firebaseAdminAuth: adminAuthStatus.enabled,
 		},
 		deliveryChannels: {
