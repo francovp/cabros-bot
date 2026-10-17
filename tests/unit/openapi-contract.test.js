@@ -1139,6 +1139,15 @@ describe('status dependency contract drift', () => {
 		});
 	});
 
+	it('documents telegramCommandRateLimiting on the status schema and StatusResult example (issue #1183)', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const statusDescription = spec.components.schemas.Status.description;
+		const statusExample = spec.components.responses.StatusResult.content['application/json'].example;
+
+		expect(statusDescription).toContain('featureFlags.telegramCommandRateLimiting reports ENABLE_TELEGRAM_COMMAND_RATE_LIMITING');
+		expect(statusExample.featureFlags.telegramCommandRateLimiting).toBe(true);
+	});
+
 	it('documents deployment provenance identity on stored alerts and rollup on alert summary (issue #1169)', () => {
 		const spec = require('../../src/openapi/openapi.json');
 		const storedAlert = spec.components.schemas.StoredAlert;
