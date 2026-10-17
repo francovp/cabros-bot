@@ -496,6 +496,12 @@ function formatAlertDocument(doc, options = {}) {
 			runtimeVersion: typeof data.deployment.runtimeVersion === 'string' ? data.deployment.runtimeVersion : null,
 		};
 	}
+	if (Array.isArray(data.telegramMessageIds)) {
+		docObj.telegramMessageIds = data.telegramMessageIds;
+	}
+	if (data.reactions && typeof data.reactions === 'object') {
+		docObj.reactions = data.reactions;
+	}
 	return docObj;
 }
 
@@ -2344,6 +2350,28 @@ async function saveAlertInternal(params = {}) {
 			tradingViewEnrichmentApplied: Boolean(tradingViewEnrichmentApplied),
 			deployment: getDeploymentIdentity(),
 		};
+		const collectedTelegramMessageIds = new Set();
+		if (Array.isArray(params.telegramMessageIds)) {
+			for (const mid of params.telegramMessageIds) {
+				if (mid != null) collectedTelegramMessageIds.add(String(mid).trim());
+			}
+		}
+		if (Array.isArray(deliveryResults)) {
+			for (const res of deliveryResults) {
+				if (res && (res.channel === 'telegram' || !res.channel)) {
+					if (res.messageId != null) collectedTelegramMessageIds.add(String(res.messageId).trim());
+					if (Array.isArray(res.messageIds)) {
+						for (const mid of res.messageIds) {
+							if (mid != null) collectedTelegramMessageIds.add(String(mid).trim());
+						}
+					}
+				}
+			}
+		}
+		const telegramMessageIdsArray = Array.from(collectedTelegramMessageIds).filter(Boolean);
+		if (telegramMessageIdsArray.length > 0) {
+			document.telegramMessageIds = telegramMessageIdsArray;
+		}
 		if (truncated) {
 			document.truncated = true;
 			document.originalLength = rawText.length;
@@ -2629,6 +2657,246 @@ async function getAlertById(alertId) {
 	}
 
 	return formatAlertDocument(snapshot);
+}
+
+const MAX_REACTIONS_PER_ALERT = 5000;
+
+/**
+ * Find an alert by a Telegram message ID (stored in telegramMessageIds).
+ *
+ * @param {string|number} messageId
+ * @returns {Promise<Object|null>}
+ */
+async function findAlertByTelegramMessageId(messageId) {
+	if (!isEnabled() || messageId == null) {
+		return null;
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		return null;
+	}
+	try {
+		const strId = String(messageId).trim();
+		const snapshot = await firestore.collection(COLLECTION_NAME)
+			.where('telegramMessageIds', 'array-contains', strId)
+			.limit(1)
+			.get();
+		if (snapshot.empty || !snapshot.docs || snapshot.docs.length === 0) {
+			return null;
+		}
+		return formatAlertDocument(snapshot.docs[0]);
+	} catch (error) {
+		logger.warn(`[AlertStorageService] findAlertByTelegramMessageId failed: ${error.message}`);
+		return null;
+	}
+}
+
+/**
+ * Update reaction records on an alert document.
+ * Enforces a bounded size (MAX_REACTIONS_PER_ALERT = 5000) with oldest eviction.
+ *
+ * @param {string} alertId
+ * @param {Object} reactionData - { chatId, userId, emoji, at, weight, removed }
+ * @returns {Promise<boolean>}
+ */
+async function updateAlertReactions(alertId, reactionData = {}) {
+	if (!isEnabled() || !alertId || !reactionData) {
+		return false;
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		return false;
+	}
+	const { chatId, userId, emoji, at, weight, removed } = reactionData;
+	if (!chatId || !userId) {
+		return false;
+	}
+	const userKey = `${chatId}_${userId}`;
+	const docRef = firestore.collection(COLLECTION_NAME).doc(alertId);
+
+	try {
+		if (typeof firestore.runTransaction === 'function') {
+			await firestore.runTransaction(async (transaction) => {
+				const snapshot = await transaction.get(docRef);
+				if (!snapshot || !snapshot.exists) {
+					return;
+				}
+				const data = snapshot.data() || {};
+				const reactions = { ...(data.reactions || {}) };
+
+				if (removed) {
+					delete reactions[userKey];
+				} else {
+					reactions[userKey] = {
+						emoji: typeof emoji === 'string' ? emoji : '',
+						at: at || new Date().toISOString(),
+						weight: typeof weight === 'number' ? weight : 0,
+					};
+
+					const keys = Object.keys(reactions);
+					if (keys.length > MAX_REACTIONS_PER_ALERT) {
+						keys.sort((a, b) => {
+							const atA = new Date(reactions[a]?.at || 0).getTime();
+							const atB = new Date(reactions[b]?.at || 0).getTime();
+							return atA - atB;
+						});
+						const toRemove = keys.slice(0, keys.length - MAX_REACTIONS_PER_ALERT);
+						for (const k of toRemove) {
+							delete reactions[k];
+						}
+					}
+				}
+
+				transaction.update(docRef, { reactions });
+			});
+		} else {
+			const snapshot = await docRef.get();
+			if (!snapshot || !snapshot.exists) return false;
+			const data = snapshot.data() || {};
+			const reactions = { ...(data.reactions || {}) };
+			if (removed) {
+				delete reactions[userKey];
+			} else {
+				reactions[userKey] = {
+					emoji: typeof emoji === 'string' ? emoji : '',
+					at: at || new Date().toISOString(),
+					weight: typeof weight === 'number' ? weight : 0,
+				};
+				const keys = Object.keys(reactions);
+				if (keys.length > MAX_REACTIONS_PER_ALERT) {
+					keys.sort((a, b) => {
+						const atA = new Date(reactions[a]?.at || 0).getTime();
+						const atB = new Date(reactions[b]?.at || 0).getTime();
+						return atA - atB;
+					});
+					const toRemove = keys.slice(0, keys.length - MAX_REACTIONS_PER_ALERT);
+					for (const k of toRemove) {
+						delete reactions[k];
+					}
+				}
+			}
+			await docRef.update({ reactions });
+		}
+		return true;
+	} catch (error) {
+		logger.warn(`[AlertStorageService] updateAlertReactions failed: ${error.message}`);
+		return false;
+	}
+}
+
+/**
+ * Aggregate reactions into total, approve, reject, approveRate, and Beta-Bernoulli weightedScore.
+ *
+ * @param {Object} alertOrReactions
+ * @returns {Object} { total, approve, reject, approveRate, weightedScore }
+ */
+function aggregateReactions(alertOrReactions) {
+	const reactions = (alertOrReactions && alertOrReactions.reactions && typeof alertOrReactions.reactions === 'object')
+		? alertOrReactions.reactions
+		: ((alertOrReactions && typeof alertOrReactions === 'object' && !alertOrReactions.id && !alertOrReactions.text) ? alertOrReactions : {});
+
+	let approve = 0;
+	let reject = 0;
+
+	for (const entry of Object.values(reactions)) {
+		if (!entry || typeof entry !== 'object') continue;
+		if (entry.weight > 0) {
+			approve += 1;
+		} else if (entry.weight < 0) {
+			reject += 1;
+		}
+	}
+
+	const total = approve + reject;
+	const approveRate = total > 0 ? parseFloat((approve / total).toFixed(4)) : 0;
+
+	let confidence = 0.5;
+	if (alertOrReactions && typeof alertOrReactions.confidence === 'number' && Number.isFinite(alertOrReactions.confidence)) {
+		confidence = alertOrReactions.confidence;
+	} else if (alertOrReactions?.enrichmentData && typeof alertOrReactions.enrichmentData.confidence === 'number') {
+		confidence = alertOrReactions.enrichmentData.confidence;
+	}
+
+	const prior = confidence;
+	const weightedScore = total > 0
+		? Math.max(0, Math.min(1, parseFloat(((approve + 4 * prior) / (total + 4)).toFixed(4))))
+		: null;
+
+	return {
+		total,
+		approve,
+		reject,
+		approveRate,
+		weightedScore,
+	};
+}
+
+/**
+ * Retrieve top setups for a symbol based on user reactions over the last N days.
+ *
+ * @param {Object} options - { symbol, days, limit }
+ * @returns {Promise<Array>}
+ */
+async function getTopSetupsByReactions({ symbol, days = 7, limit = 3 } = {}) {
+	if (!isEnabled() || !symbol) {
+		return [];
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		return [];
+	}
+	try {
+		const normSymbol = String(symbol).trim().toUpperCase();
+		const effectiveDays = Number.isFinite(days) && days > 0 ? days : 7;
+		const effectiveLimit = Number.isFinite(limit) && limit > 0 ? limit : 3;
+
+		const cutoff = new Date(Date.now() - effectiveDays * 24 * 60 * 60 * 1000);
+
+		const snapshot = await firestore.collection(COLLECTION_NAME)
+			.where('symbol', '==', normSymbol)
+			.get();
+
+		if (snapshot.empty || !snapshot.docs) {
+			return [];
+		}
+
+		const results = [];
+		for (const doc of snapshot.docs) {
+			const formatted = formatAlertDocument(doc);
+			if (!formatted.reactions || typeof formatted.reactions !== 'object') {
+				continue;
+			}
+			const receivedDate = formatted.receivedAt ? new Date(formatted.receivedAt) : null;
+			if (receivedDate && receivedDate < cutoff) {
+				continue;
+			}
+
+			const metrics = aggregateReactions(formatted);
+			if (metrics.total > 0) {
+				results.push({
+					id: formatted.id,
+					symbol: formatted.symbol || normSymbol,
+					receivedAt: formatted.receivedAt,
+					text: formatted.text,
+					reactionMetrics: metrics,
+				});
+			}
+		}
+
+		results.sort((a, b) => {
+			const scoreA = a.reactionMetrics.weightedScore ?? 0;
+			const scoreB = b.reactionMetrics.weightedScore ?? 0;
+			if (scoreB !== scoreA) {
+				return scoreB - scoreA;
+			}
+			return (b.reactionMetrics.approve || 0) - (a.reactionMetrics.approve || 0);
+		});
+
+		return results.slice(0, effectiveLimit);
+	} catch (error) {
+		logger.warn(`[AlertStorageService] getTopSetupsByReactions failed: ${error.message}`);
+		return [];
+	}
 }
 
 /**
@@ -3604,6 +3872,11 @@ module.exports = {
 	formatEnrichmentSummary,
 	extractSourceDomains,
 	formatAlertDocument,
+	findAlertByTelegramMessageId,
+	updateAlertReactions,
+	aggregateReactions,
+	getTopSetupsByReactions,
+	MAX_REACTIONS_PER_ALERT,
 	STORAGE_UNAVAILABLE_CODE,
 	probeOrderedAlertRead,
 	FIRESTORE_ERROR_CATEGORIES,
