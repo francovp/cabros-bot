@@ -238,6 +238,18 @@ describe('Documentation Alignment Policy', () => {
 		expect(readme).toContain('DISCORD_MAX_TOTAL_RETRY_WAIT_MS');
 		expect(readme).toMatch(/split(?:s|ting)? into (?:ordered|sequential) chunks/i);
 	});
+
+	test('TOKEN_COST_DAILY_BUDGET_USD documented ceiling matches RemoteConfig schema', () => {
+		const envConfigDoc = fs.readFileSync(path.join(repoRoot, 'docs/environment-configuration.md'), 'utf8');
+		const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+		const schema = remoteConfigService.PARAMETER_SCHEMA.TOKEN_COST_DAILY_BUDGET_USD;
+
+		expect(schema.min).toBe(0.01);
+		expect(schema.max).toBe(10000);
+		expect(envConfigDoc).toContain('TOKEN_COST_DAILY_BUDGET_USD');
+		expect(envConfigDoc).toMatch(/TOKEN_COST_DAILY_BUDGET_USD.*range `0\.01`-`10000\.00`/);
+		expect(envConfigDoc).not.toContain('1000.00');
+	});
 });
 
 describe('Node.js runtime contract', () => {
