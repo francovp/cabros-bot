@@ -254,6 +254,24 @@ describe('Postman collection contract', () => {
 		});
 	});
 
+	it('documents the scanner preset scheduler floor in the primary status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const expectedFields = [
+			'enabled', 'configured', 'ready', 'status', 'role', 'running', 'intervalMs', 'batchLimit',
+			'lastRunAt', 'lastRunDurationMs', 'lastRunScannedCount', 'lastRunExecutedCount',
+			'lastRunErrorCount', 'lastRunDeferredByFloorCount',
+		].sort();
+
+		for (const name of ['Get Status', 'Get Capabilities']) {
+			const item = findItem(collection.item, name);
+			const response = item?.response?.find((example) => example.code === 200);
+			const scheduler = JSON.parse(response.body).dependencies.scannerPresetScheduler;
+
+			expect(Object.keys(scheduler).sort()).toEqual(expectedFields);
+			expect(scheduler.lastRunDeferredByFloorCount).toBe(0);
+		}
+	});
+
 	it('documents alertScheduler feature flag and dependency in the Get Status response example', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');
