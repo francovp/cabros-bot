@@ -74,7 +74,12 @@ describe('Alert TradingView MCP Integration', () => {
 
 		expect(response.body.success).toBe(true);
 		expect(response.body.enriched).toBe(true);
-		expect(tradingViewMcpService.enrichFromAlertText).toHaveBeenCalledWith('BTCUSDT(240) pasó a señal de VENTA');
+		expect(tradingViewMcpService.enrichFromAlertText).toHaveBeenCalledWith(
+			'BTCUSDT(240) pasó a señal de VENTA',
+			expect.objectContaining({
+				tokenUsage: expect.objectContaining({ bySource: expect.any(Object) }),
+			}),
+		);
 		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
 
 		const telegramPayload = mockTelegramSendMessage.mock.calls[0][1];

@@ -5,6 +5,7 @@
  */
 
 function toNumber(value) {
+	if (value === null || value === undefined || value === '') return null;
 	const num = Number(value);
 	return Number.isFinite(num) ? num : null;
 }
@@ -170,12 +171,12 @@ function normalizeUsageMetadata(usageMetadata) {
 	const outputTokens = toNumber(firstDefined(meta.candidatesTokenCount, meta.outputTokens, meta.completionTokens, meta.completion_tokens)) || 0;
 
 	const explicitTotal = toNumber(firstDefined(meta.totalTokenCount, meta.totalTokens, meta.total_tokens));
-	const totalTokens = explicitTotal != null ? explicitTotal : inputTokens + outputTokens;
+	const totalTokens = explicitTotal != null && explicitTotal > 0 ? explicitTotal : inputTokens + outputTokens;
 
 	return {
 		inputTokens,
 		outputTokens,
-		totalTokens: totalTokens != null ? totalTokens : inputTokens + outputTokens,
+		totalTokens,
 	};
 }
 
@@ -195,6 +196,7 @@ class TokenUsageTracker {
 		this._warnedModels = new Set();
 		this.defaultFeature = normalizeFeature(defaultFeature);
 		this.byFeature = {};
+		this.bySource = {};
 	}
 
 	/**
@@ -294,11 +296,84 @@ class TokenUsageTracker {
 		}
 	}
 
-	merge(otherTracker) {
-		if (!otherTracker) return;
-		const { inputTokens, outputTokens, inputCost, outputCost, pricing, byFeature } = otherTracker.toJSON();
+	/**
+	 * Add usage to the total and attribute it to a named provider or enrichment source.
+	 * Accepts a normalized usage object or another tracker.
+	 */
+	addSource(name, usage, model) {
+		if (typeof name !== 'string' || !name.trim()) return;
+		const rawUsage = usage && typeof usage.toJSON === 'function' ? usage.toJSON() : usage;
+		const normalized = normalizeUsageMetadata(rawUsage);
+		if (!normalized) return;
+
+		const inputTokens = normalized.inputTokens || 0;
+		let outputTokens = normalized.outputTokens || 0;
+		const remainder = (normalized.totalTokens || 0) - inputTokens - outputTokens;
+		if (remainder > 0) outputTokens += remainder;
+
+		const source = this.bySource[name] || (this.bySource[name] = {
+			inputTokens: 0,
+			outputTokens: 0,
+			totalTokens: 0,
+		});
+		source.inputTokens += inputTokens;
+		source.outputTokens += outputTokens;
+		source.totalTokens += inputTokens + outputTokens;
+
 		this.inputTokens += inputTokens;
 		this.outputTokens += outputTokens;
+		const costs = typeof rawUsage?.inputCost === 'number' && typeof rawUsage?.outputCost === 'number'
+			? { inputCost: rawUsage.inputCost, outputCost: rawUsage.outputCost }
+			: this.calculateCost(inputTokens, outputTokens, model);
+		this.inputCost += costs.inputCost;
+		this.outputCost += costs.outputCost;
+
+		for (const unknownModel of rawUsage?.pricing?.unknownModels || []) {
+			this._unknownModels.add(unknownModel);
+		}
+
+		const sourceFeatures = rawUsage?.byFeature;
+		if (sourceFeatures && typeof sourceFeatures === 'object') {
+			for (const [feature, usageByFeature] of Object.entries(sourceFeatures)) {
+				const bucket = this.byFeature[feature] || (this.byFeature[feature] = {
+					calls: 0,
+					inputTokens: 0,
+					outputTokens: 0,
+					totalTokens: 0,
+					inputCost: 0,
+					outputCost: 0,
+					totalCost: 0,
+				});
+				for (const field of Object.keys(bucket)) {
+					bucket[field] += Number(usageByFeature[field]) || 0;
+				}
+			}
+		} else if (this.defaultFeature) {
+			const bucket = this.byFeature[this.defaultFeature] || (this.byFeature[this.defaultFeature] = {
+				calls: 0,
+				inputTokens: 0,
+				outputTokens: 0,
+				totalTokens: 0,
+				inputCost: 0,
+				outputCost: 0,
+				totalCost: 0,
+			});
+			bucket.calls += 1;
+			bucket.inputTokens += inputTokens;
+			bucket.outputTokens += outputTokens;
+			bucket.totalTokens += inputTokens + outputTokens;
+			bucket.inputCost += costs.inputCost;
+			bucket.outputCost += costs.outputCost;
+			bucket.totalCost += costs.inputCost + costs.outputCost;
+		}
+	}
+
+	merge(otherTracker) {
+		if (!otherTracker) return;
+		const otherData = typeof otherTracker.toJSON === 'function' ? otherTracker.toJSON() : otherTracker;
+		const { inputTokens, outputTokens, inputCost, outputCost, pricing, byFeature, bySource } = otherData;
+		this.inputTokens += Number(inputTokens) || 0;
+		this.outputTokens += Number(outputTokens) || 0;
 		this.inputCost += (inputCost || 0);
 		this.outputCost += (outputCost || 0);
 		if (pricing && Array.isArray(pricing.unknownModels)) {
@@ -321,6 +396,18 @@ class TokenUsageTracker {
 				bucket[field] += Number(usage[field]) || 0;
 			}
 		}
+
+		for (const [sourceName, usage] of Object.entries(bySource || {})) {
+			if (!usage || typeof usage !== 'object') continue;
+			const bucket = this.bySource[sourceName] || (this.bySource[sourceName] = {
+				inputTokens: 0,
+				outputTokens: 0,
+				totalTokens: 0,
+			});
+			bucket.inputTokens += Number(usage.inputTokens) || 0;
+			bucket.outputTokens += Number(usage.outputTokens) || 0;
+			bucket.totalTokens += Number(usage.totalTokens) || 0;
+		}
 	}
 
 	getTotalUsage() {
@@ -341,6 +428,10 @@ class TokenUsageTracker {
 		this.outputTokens = 0;
 		this.inputCost = 0;
 		this.outputCost = 0;
+		this.byFeature = {};
+		this.bySource = {};
+		this._unknownModels.clear();
+		this._warnedModels.clear();
 	}
 
 	toJSON() {
@@ -361,6 +452,9 @@ class TokenUsageTracker {
 		if (Object.keys(this.byFeature).length > 0) {
 			result.byFeature = this.byFeature;
 		}
+		if (Object.keys(this.bySource).length > 0) {
+			result.bySource = Object.fromEntries(Object.entries(this.bySource).map(([name, usage]) => [name, { ...usage }]));
+		}
 		return result;
 	}
 
@@ -369,7 +463,7 @@ class TokenUsageTracker {
 	 * @returns {string}
 	 */
 	formatSummary() {
-		const { inputTokens, outputTokens, totalTokens, inputCost, outputCost, totalCost, pricing } = this.toJSON();
+		const { inputTokens, outputTokens, totalTokens, inputCost, outputCost, totalCost, pricing, bySource } = this.toJSON();
 
 		// Helper to format currency (up to 6 decimal places for small amounts)
 		const fmt = (val) => {
@@ -377,10 +471,17 @@ class TokenUsageTracker {
 			return val < 0.01 ? val.toPrecision(3) : val.toFixed(4);
 		};
 
-		const summary = `Token usage:
+		let summary = `Token usage:
 - In ${inputTokens} ($${fmt(inputCost)})
 - Out ${outputTokens} ($${fmt(outputCost)})
 - Total ${totalTokens} ($${fmt(totalCost)})`;
+
+		if (bySource && Object.keys(bySource).length > 1) {
+			const sourceBreakdowns = Object.entries(bySource)
+				.map(([name, usage]) => `  • ${name}: ${usage.totalTokens} (${usage.inputTokens} in / ${usage.outputTokens} out)`)
+				.join('\n');
+			summary += `\nBy source:\n${sourceBreakdowns}`;
+		}
 
 		if (pricing && pricing.unknownModelPricing && pricing.unknownModels.length > 0) {
 			const note = totalCost > 0
@@ -1060,6 +1161,10 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 		this.outputTokens = 0;
 		this.inputCost = 0;
 		this.outputCost = 0;
+		this.byFeature = {};
+		this.bySource = {};
+		this._unknownModels.clear();
+		this._warnedModels.clear();
 		this.dailySpendUsd = 0;
 		this.dailyInputTokens = 0;
 		this.dailyOutputTokens = 0;
