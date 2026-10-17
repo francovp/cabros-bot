@@ -777,6 +777,13 @@
       "description": "Comma-separated ordered parameter names extracted from the alert for GreenAPI sendTemplate placeholders. Each maps to a field in alert.enriched or alert. Missing fields produce empty strings. WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, and WHATSAPP_TEMPLATE_NAMESPACE are excluded (notification destinations).",
       "valueType": "STRING"
     },
+    "WHATSAPP_COMMAND_POLL_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "3000"
+      },
+      "description": "Polling interval in milliseconds for the GreenAPI WhatsApp command bridge (bounded between 500ms and 60000ms)",
+      "valueType": "NUMBER"
+    },
     "ENABLE_FIRESTORE_CHAT_PREFERENCES": {
       "defaultValue": {
         "value": "false"
