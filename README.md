@@ -3,7 +3,7 @@
 [![Node.js CI](https://github.com/francovp/cabros-bot/actions/workflows/node.js.yml/badge.svg)](https://github.com/francovp/cabros-bot/actions/workflows/node.js.yml)
 [![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](https://github.com/francovp/cabros-bot)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC)
-[![Node Version](https://img.shields.io/badge/node-%3E%3D24.18.0%20%3C25-brightgreen.svg)](https://nodejs.org/)
+[![Node Version](https://img.shields.io/badge/node-%3E%3D24.18.0%20%3C27-brightgreen.svg)](https://nodejs.org/)
 
 A high-performance crypto, equity, and market intelligence bot service built with Node.js and Express. It connects incoming TradingView alerts and scheduled event monitors with Gemini Grounding, TradingView MCP analysis, and Binance Spot execution, dispatching formatted alerts concurrently across Telegram, WhatsApp, and Discord.
 
@@ -53,7 +53,7 @@ Comprehensive guides and technical documentation are maintained inside the [`doc
 
 ### 1. Prerequisites
 
-- **Node.js**: `>=24.18.0 <25` (enforced via `.node-version` and `package.json` engines)
+- **Node.js**: `>=24.18.0 <27` (enforced via `.node-version` and `package.json` engines)
 - **Package Manager**: `pnpm` (`pnpm@10.34.1` recommended)
 - **Telegram Bot Token**: Created via [@BotFather](https://t.me/botfather)
 
@@ -706,6 +706,9 @@ pnpm run test:firebase
 
 # Run linter
 pnpm run lint
+
+# Set up a secondary git worktree with symlinked node_modules and shared caches
+pnpm run setup:worktree
 ```
 
 ---

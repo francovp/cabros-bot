@@ -252,7 +252,7 @@ describe('Node.js runtime contract', () => {
 
     expect(fs.existsSync(nodeVersionPath)).toBe(true);
     expect(fs.readFileSync(nodeVersionPath, 'utf8').trim()).toBe(nodeVersion);
-    expect(packageJson.engines.node).toBe(`>=${nodeVersion} <25`);
+    expect(packageJson.engines.node).toBe(`>=${nodeVersion} <27`);
     expect(workflow).toContain('node-version-file: .node-version');
     expect(workflow).not.toMatch(/node-version:\s*20\b/i);
     expect(devcontainer).toContain(`FROM node:${nodeVersion}`);
