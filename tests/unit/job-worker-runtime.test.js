@@ -641,4 +641,69 @@ describe('job worker runtime', () => {
 			expect(service.failQueuedJob).toHaveBeenCalledWith('job-final-fail', 'worker-fp-1', finalError, 5);
 		});
 	});
+
+	describe('Worker environment controls (#855)', () => {
+		const originalEnv = { ...process.env };
+
+		afterEach(() => {
+			process.env = { ...originalEnv };
+		});
+
+		it('honors mirrored MARKET_SCANNER_DEFAULT_EXCHANGE for market scanner job parsing', () => {
+			const { parseMarketScannerRequest } = require('../../src/services/tradingview/marketScannerReport');
+
+			process.env.MARKET_SCANNER_DEFAULT_EXCHANGE = 'NASDAQ';
+			const parsedNasdaq = parseMarketScannerRequest({ body: {} });
+			expect(parsedNasdaq.exchange).toBe('NASDAQ');
+
+			delete process.env.MARKET_SCANNER_DEFAULT_EXCHANGE;
+			const parsedDefault = parseMarketScannerRequest({ body: {} });
+			expect(parsedDefault.exchange).toBe('BINANCE');
+		});
+
+		it('honors mirrored ENABLE_NOTIFICATION_REDRIVE for failed job delivery recording', async () => {
+			const NotificationManager = require('../../src/services/notification/NotificationManager');
+			const { notificationRedriveService } = require('../../src/services/notification/NotificationRedriveService');
+			const recordSpy = jest.spyOn(notificationRedriveService, 'recordDeliveryResults').mockResolvedValue(['job-scanner-1_telegram']);
+
+			process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+			const channel = {
+				name: 'telegram',
+				isEnabled: () => true,
+				send: jest.fn().mockResolvedValue({
+					success: false,
+					channel: 'telegram',
+					error: 'Network timeout',
+					category: 'TIMEOUT',
+				}),
+			};
+
+			const manager = new NotificationManager(channel);
+			const alert = {
+				text: 'Market scanner report',
+				source: 'job_worker',
+				jobId: 'job-scanner-1',
+			};
+
+			await manager.sendToAll(alert);
+
+			expect(recordSpy).toHaveBeenCalledWith(
+				expect.objectContaining({
+					text: 'Market scanner report',
+					source: 'job_worker',
+					jobId: 'job-scanner-1',
+				}),
+				expect.arrayContaining([
+					expect.objectContaining({
+						channel: 'telegram',
+						category: 'TIMEOUT',
+						error: 'Network timeout',
+					}),
+				]),
+				expect.any(Object),
+			);
+
+			recordSpy.mockRestore();
+		});
+	});
 });

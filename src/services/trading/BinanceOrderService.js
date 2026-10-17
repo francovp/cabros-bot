@@ -3,6 +3,11 @@
 const crypto = require('crypto');
 const { MainClient } = require('binance');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const {
+	bindOrderProvenance,
+	resolveOrderProvenance,
+} = require('./orderProvenance');
+const AlertStorageService = require('../storage/AlertStorageService');
 
 const TESTNET_BASE_URL = 'https://testnet.binance.vision';
 const DEMO_BASE_URL = 'https://demo-api.binance.com';
@@ -22,6 +27,7 @@ const CRYPTO_QUOTE_SUFFIXES = ['USDT', 'USDC', 'BUSD', 'FDUSD', 'TUSD', 'BTC', '
 const ALLOWED_ORDER_TYPES = new Set(['MARKET', 'LIMIT']);
 const ALLOWED_SIDES = new Set(['BUY', 'SELL']);
 const ALLOWED_TIME_IN_FORCE = new Set(['GTC', 'IOC', 'FOK']);
+const ALLOWED_ORIGINS = new Set(['manual', 'auto_trade', 'admin_alert', 'alert']);
 const DEFINITIVE_BINANCE_ERROR_CODES = new Set([-1003, -1015, -1021, -1034]);
 const RETRYABLE_BINANCE_ERROR_CODES = new Set([-1001, -1006, -1007]);
 const ACCOUNT_DEPENDENT_FILTERS = new Set([
@@ -108,7 +114,25 @@ async function reconcileOrder(client, symbol, clientOrderId) {
 	if (!clientOrderId || typeof client.getOrder !== 'function') return null;
 
 	try {
-		return await client.getOrder({ symbol, origClientOrderId: clientOrderId });
+		const order = await client.getOrder({ symbol, origClientOrderId: clientOrderId });
+		if (order && !order.fills && typeof client.getAccountTradeList === 'function' && Number(order.executedQty) > 0) {
+			try {
+				const trades = await client.getAccountTradeList({ symbol, orderId: order.orderId });
+				if (Array.isArray(trades) && trades.length > 0) {
+					order.fills = trades.map((t) => ({
+						price: t.price,
+						qty: t.qty,
+						commission: t.commission,
+						commissionAsset: t.commissionAsset,
+						tradeId: t.id,
+						time: t.time,
+					}));
+				}
+			} catch {
+				// fail-open: keep order without extra trade list query
+			}
+		}
+		return order;
 	} catch (error) {
 		if (isOrderNotFoundError(error)) return null;
 		throw new BinanceOrderServiceError(
@@ -291,7 +315,7 @@ function normalizeRequest(body) {
 	const allowedKeys = new Set([
 		'symbol', 'side', 'type', 'quantity', 'quoteOrderQty', 'price',
 		'timeInForce', 'clientOrderId', 'dryRun', 'idempotencyKey', 'idempotency_key',
-		'maxSlippageBps',
+		'maxSlippageBps', 'origin', 'alertId', 'setupType',
 	]);
 	const unknownKey = Object.keys(body).find((key) => !allowedKeys.has(key));
 	if (unknownKey) throw new BinanceOrderRequestError(`Unsupported order field: ${unknownKey}`);
@@ -343,6 +367,33 @@ function normalizeRequest(body) {
 		else throw new BinanceOrderRequestError('dryRun must be boolean');
 	}
 
+	let origin;
+	if (body.origin !== undefined) {
+		if (typeof body.origin !== 'string' || !body.origin.trim()) {
+			throw new BinanceOrderRequestError('origin must be a non-empty string', 'INVALID_REQUEST', 400);
+		}
+		origin = body.origin.trim().toLowerCase();
+		if (!ALLOWED_ORIGINS.has(origin)) {
+			throw new BinanceOrderRequestError(`origin must be one of: ${[...ALLOWED_ORIGINS].join(', ')}`, 'INVALID_REQUEST', 400);
+		}
+	}
+
+	let alertId;
+	if (body.alertId !== undefined) {
+		if (typeof body.alertId !== 'string' || !body.alertId.trim()) {
+			throw new BinanceOrderRequestError('alertId must be a non-empty string', 'INVALID_REQUEST', 400);
+		}
+		alertId = body.alertId.trim();
+	}
+
+	let setupType;
+	if (body.setupType !== undefined) {
+		if (typeof body.setupType !== 'string' || !body.setupType.trim()) {
+			throw new BinanceOrderRequestError('setupType must be a non-empty string', 'INVALID_REQUEST', 400);
+		}
+		setupType = body.setupType.trim().toLowerCase();
+	}
+
 	return {
 		symbol,
 		side,
@@ -353,6 +404,9 @@ function normalizeRequest(body) {
 		timeInForce,
 		clientOrderId,
 		dryRun,
+		origin,
+		alertId,
+		setupType,
 	};
 }
 
@@ -904,6 +958,7 @@ function sanitizeFill(fill) {
 		commission: fill.commission,
 		commissionAsset: fill.commissionAsset,
 		tradeId: fill.tradeId,
+		time: fill.time,
 	}).filter(([, value]) => value !== undefined));
 }
 
@@ -1204,6 +1259,27 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			}
 
 			const order = normalizeRequest(body);
+			if (order.alertId) {
+				if (!AlertStorageService.isEnabled()) {
+					throw new BinanceOrderRequestError('Alert storage is disabled', 'ALERT_LINK_UNAVAILABLE', 409);
+				}
+				const firestore = AlertStorageService.getFirestore();
+				if (!firestore) {
+					throw new BinanceOrderRequestError('Alert storage is unavailable', 'ALERT_LINK_UNAVAILABLE', 409);
+				}
+				let alertDoc;
+				try {
+					alertDoc = await AlertStorageService.getAlertById(order.alertId);
+				} catch {
+					throw new BinanceOrderRequestError('Alert storage is unavailable', 'ALERT_LINK_UNAVAILABLE', 409);
+				}
+				if (!alertDoc) {
+					throw new BinanceOrderRequestError('Alert not found', 'ALERT_NOT_FOUND', 404);
+				}
+				if (!order.setupType && alertDoc.setupType) {
+					order.setupType = String(alertDoc.setupType).trim().toLowerCase();
+				}
+			}
 			const requestIdempotencyKey = hasValue(idempotencyKey)
 				? idempotencyKey
 				: [body.idempotencyKey, body.idempotency_key].find(hasValue);
@@ -1232,11 +1308,24 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 							409,
 						);
 					}
+					const provenance = await resolveOrderProvenance({
+						environment: config.environment,
+						symbol: order.symbol,
+						clientOrderId,
+						binanceOrderId: existingOrder.orderId,
+						origin: order.origin,
+						alertId: order.alertId,
+						setupType: order.setupType,
+						ErrorClass: BinanceOrderRequestError,
+					});
 					return {
 						success: true,
 						dryRun: false,
 						environment: config.environment,
 						order: sanitizeOrderResponse(existingOrder),
+						origin: provenance.origin,
+						alertId: provenance.alertId,
+						setupType: provenance.setupType,
 					};
 				}
 			}
@@ -1311,23 +1400,50 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			const orderParams = buildOrderParams({ ...boundedOrder, clientOrderId });
 			if (order.dryRun) {
 				await validateOrderTestFilters(client, boundedOrder, orderParams, filters);
-				return {
+				const result = {
 					success: true,
 					dryRun: true,
 					environment: config.environment,
 					order: orderParams,
 				};
+				if (order.origin !== undefined) result.origin = order.origin;
+				if (order.alertId !== undefined) result.alertId = order.alertId;
+				if (order.setupType !== undefined) result.setupType = order.setupType;
+				return result;
 			}
 
 			await validateOrderTestFilters(client, boundedOrder, orderParams, filters);
+			await bindOrderProvenance({
+				environment: config.environment,
+				symbol: order.symbol,
+				clientOrderId,
+				origin: order.origin,
+				alertId: order.alertId,
+				setupType: order.setupType,
+			});
 			try {
 				const response = await client.submitNewOrder(orderParams);
-				return {
+				if (response?.orderId) {
+					bindOrderProvenance({
+						environment: config.environment,
+						symbol: order.symbol,
+						clientOrderId,
+						binanceOrderId: response.orderId,
+						origin: order.origin,
+						alertId: order.alertId,
+						setupType: order.setupType,
+					}).catch(() => {});
+				}
+				const result = {
 					success: true,
 					dryRun: false,
 					environment: config.environment,
 					order: sanitizeOrderResponse(response || {}),
 				};
+				if (order.origin !== undefined) result.origin = order.origin;
+				if (order.alertId !== undefined) result.alertId = order.alertId;
+				if (order.setupType !== undefined) result.setupType = order.setupType;
+				return result;
 			} catch (error) {
 				if (isDefinitiveBinanceRejection(error)) {
 					const reqError = new BinanceOrderRequestError('Binance rejected the order', 'BINANCE_ORDER_REJECTED');

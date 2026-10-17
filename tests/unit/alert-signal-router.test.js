@@ -160,7 +160,7 @@ describe('deriveOrderIntent', () => {
 		const intent = deriveOrderIntent({ alert: buyAlert(), parsed: buyParsed(), config });
 		expect(intent.skip).toBeUndefined();
 		expect(intent.side).toBe('BUY');
-		expect(intent.order).toMatchObject({ symbol: 'BTCUSDT', side: 'BUY', type: 'MARKET', quoteOrderQty: 100, dryRun: true });
+		expect(intent.order).toMatchObject({ symbol: 'BTCUSDT', side: 'BUY', type: 'MARKET', quoteOrderQty: 100, dryRun: true, origin: 'auto_trade' });
 	});
 
 	it('never exceeds the Binance trading notional cap', () => {

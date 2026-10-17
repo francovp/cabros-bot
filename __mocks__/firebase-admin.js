@@ -305,7 +305,7 @@ const mockRunTransaction = jest.fn(async (updateFunction) => {
 
 let apps = [];
 
-const firestore = jest.fn(() => ({ collection: mockCollection, batch: mockBatch, runTransaction: mockRunTransaction }));
+const firestore = jest.fn(() => ({ collection: mockCollection, batch: mockBatch }));
 firestore.FieldValue = { serverTimestamp: mockServerTimestamp, delete: mockDeleteFieldValue };
 firestore.Timestamp = { fromDate: mockTimestampFromDate, fromSeconds: mockTimestampFromSeconds };
 firestore.FieldPath = { documentId: mockDocumentId };
@@ -317,7 +317,6 @@ const mock = {
 	initializeApp: mockInitializeApp,
 	firestore,
 	credential: { cert: mockCert, applicationDefault: mockApplicationDefault },
-	__mockRunTransaction: mockRunTransaction,
 	// Test helpers to manipulate shared state
 	__mockAdd: mockAdd,
 	__mockCollection: mockCollection,

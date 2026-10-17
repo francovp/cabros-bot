@@ -146,6 +146,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	REQUEST_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1000, max: 120000 },
 	ENABLE_BINANCE_ORDER_AUDIT: { type: 'boolean', defaultValue: false },
 	BINANCE_ORDER_AUDIT_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
+	TRADE_LEDGER_MAX_SCAN: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 20000 },
+	// ENABLE_TRADE_LEDGER excluded: environment-only gate controlling durable persistence.
 	// ENABLE_SYMBOL_ANALYSIS_STORAGE, SYMBOL_ANALYSIS_RETENTION_DAYS excluded:
 	// a process-startup gate that decides where a collection lives and its TTL
 	// horizon are deployment-controlled, matching ENABLE_FIRESTORE_IDEMPOTENCY,
@@ -167,6 +169,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	// WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_NAMESPACE excluded:
 	// notification destinations — must remain deployment-controlled.
 	WHATSAPP_TEMPLATE_PARAM_ORDER: { type: 'string', defaultValue: 'symbol,price,action,setup,timeframe,source' },
+	WHATSAPP_COMMAND_POLL_INTERVAL_MS: { type: 'number', defaultValue: 3000, integer: true, min: 500, max: 60000 },
 	// ENABLE_TEST_ALERT, TEST_ALERT_DAILY_LIMIT, ENABLE_ADMIN_SSE excluded:
 	// route-enablement gates and abuse rate-limiting controls must remain deployment-controlled.
 	ADMIN_SSE_MAX_CLIENT_CONNECTIONS: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 20 },

@@ -156,6 +156,7 @@ function deriveOrderIntent({ alert, parsed, config }) {
 			symbol,
 			side,
 			type: 'MARKET',
+			origin: 'auto_trade',
 			quoteOrderQty: maxNotional,
 			dryRun: config.dryRun,
 		},

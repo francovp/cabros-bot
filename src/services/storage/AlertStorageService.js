@@ -305,7 +305,8 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_TOKEN_COST_BUDGET === 'true'
 		|| rcBudgetEnabled
 		|| process.env.ENABLE_FIRESTORE_ALERT_FEEDBACK === 'true'
-		|| process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE === 'true';
+		|| process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE === 'true'
+		|| process.env.ENABLE_TRADE_LEDGER === 'true';
 }
 
 function getAlertStorageRetentionDays() {
