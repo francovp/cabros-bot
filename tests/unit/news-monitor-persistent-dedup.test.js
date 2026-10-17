@@ -36,6 +36,7 @@ jest.mock('../../src/services/storage/NewsDedupStorageService', () => ({
 const { NewsCache } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
 const { EventCategory } = require('../../src/controllers/webhooks/handlers/newsMonitor/constants');
 const { waitForBackgroundTasks, resetForTesting } = require('../../src/lib/backgroundTaskTracker');
+const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 
 describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 	let cache;
@@ -52,6 +53,7 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 		mockSetEntry.mockResolvedValue(undefined);
 		mockUpdateEntry.mockResolvedValue(true);
 		mockRenewEntry.mockResolvedValue(true);
+		mockDeleteEntry.mockResolvedValue(true);
 		cache = new NewsCache();
 		cache.ttlMs = 1000; // 1 second for fast tests
 	});
@@ -143,6 +145,119 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			const result = await cache.claim('BTCUSDT', EventCategory.PRICE_SURGE);
 			// Fail-open allows the local claim to succeed
 			expect(result).toBe(true);
+		});
+
+		it('bounds Firestore claimEntry by deadline and fails open when Firestore stalls', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			// Firestore stalls indefinitely
+			mockClaimEntry.mockReturnValue(new Promise(() => {}));
+
+			const start = Date.now();
+			const result = await cache.claim('BTCUSDT', EventCategory.PRICE_SURGE, {
+				deadline: Date.now() + 40,
+			});
+			const elapsed = Date.now() - start;
+
+			expect(result).toBe(true);
+			expect(elapsed).toBeGreaterThanOrEqual(30);
+			expect(elapsed).toBeLessThan(500);
+			// Local reservation is preserved
+			expect(cache.cache.has('BTCUSDT:price_surge')).toBe(true);
+		});
+
+		it('bounds Firestore claimEntry by options.signal and fails open immediately', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			mockClaimEntry.mockReturnValue(new Promise(() => {}));
+
+			const controller = new AbortController();
+			const claimPromise = cache.claim('BTCUSDT', EventCategory.PRICE_SURGE, {
+				signal: controller.signal,
+			});
+			controller.abort('caller timeout');
+
+			const result = await claimPromise;
+			expect(result).toBe(true);
+			expect(cache.cache.has('BTCUSDT:price_surge')).toBe(true);
+		});
+
+		it('retains an abandoned marker and retries durable deletion before reclaiming', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			mockDeleteEntry.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+			await expect(cache.claim('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toBe(true);
+			await cache.releaseClaim('BTCUSDT', EventCategory.PRICE_SURGE);
+
+			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual({ status: 'claiming-abandoned' });
+			mockGetEntryRecord.mockResolvedValue({
+				data: { status: 'claiming' },
+				expiresAtMs: Date.now() + cache.ttlMs,
+			});
+			await expect(cache.get('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toBeNull();
+
+			await expect(cache.claim('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toBe(true);
+			expect(mockDeleteEntry).toHaveBeenCalledTimes(2);
+			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual({ status: 'claiming' });
+		});
+
+		it('fails open and allows local reclaim when retrying abandoned claim deletion fails', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			mockDeleteEntry.mockResolvedValue(false);
+			mockClaimEntry.mockResolvedValue(true);
+
+			await expect(cache.claim('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toBe(true);
+			await cache.releaseClaim('BTCUSDT', EventCategory.PRICE_SURGE);
+
+			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual({ status: 'claiming-abandoned' });
+
+			await expect(cache.claim('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toBe(true);
+			expect(cache.cache.get('BTCUSDT:price_surge').data).toEqual({ status: 'claiming' });
+		});
+
+		it('removes the reserved local slot when Firestore claim returns false', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			mockClaimEntry.mockResolvedValue(false);
+
+			const result = await cache.claim('BTCUSDT', EventCategory.PRICE_SURGE);
+			expect(result).toBe(false);
+			expect(cache.cache.has('BTCUSDT:price_surge')).toBe(false);
+		});
+
+		it('prevents concurrent claims from exceeding maxEntries while awaiting Firestore', async () => {
+			mockIsEnabled.mockReturnValue(true);
+			mockIsReady.mockReturnValue(true);
+			const tinyCache = new NewsCache(undefined, { maxEntries: 1 });
+
+			let resolveFirstClaim;
+			const firstClaimPromise = new Promise(resolve => {
+				resolveFirstClaim = resolve;
+			});
+			mockClaimEntry.mockImplementationOnce(() => firstClaimPromise);
+
+			// First claim starts and awaits Firestore
+			const p1 = tinyCache.claim('BTCUSDT', EventCategory.PRICE_SURGE);
+
+			// Verify that the first claim reserved the slot locally
+			expect(tinyCache.cache.size).toBe(1);
+
+			// Second claim for another symbol arrives while first is in-flight
+			const p2 = tinyCache.claim('ETHUSDT', EventCategory.PRICE_SURGE);
+
+			// Second claim should be rejected immediately because capacity is 1 and already reserved with active claim
+			const result2 = await p2;
+			expect(result2).toBe(false);
+
+			// First claim completes
+			resolveFirstClaim(true);
+			const result1 = await p1;
+			expect(result1).toBe(true);
+			expect(tinyCache.cache.size).toBe(1);
+			expect(tinyCache.cache.has('BTCUSDT:price_surge')).toBe(true);
+			tinyCache.shutdown();
 		});
 	});
 
@@ -548,6 +663,35 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 			expect(mockClaimEntry).toHaveBeenCalledTimes(1);
 		});
 
+		it('bounds persistent channel lease claim by deadline and fails open when Firestore stalls', async () => {
+			mockClaimEntry.mockReturnValue(new Promise(() => {}));
+
+			const start = Date.now();
+			const result = await cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp', {
+				deadline: Date.now() + 40,
+			});
+			const elapsed = Date.now() - start;
+
+			expect(result).toBe(true);
+			expect(elapsed).toBeGreaterThanOrEqual(30);
+			expect(elapsed).toBeLessThan(500);
+			expect(cache.deliveryLocks.has('BTCUSDT:price_surge:delivery:whatsapp')).toBe(true);
+		});
+
+		it('bounds persistent channel lease claim by options.signal and fails open immediately', async () => {
+			mockClaimEntry.mockReturnValue(new Promise(() => {}));
+
+			const controller = new AbortController();
+			const claimPromise = cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp', {
+				signal: controller.signal,
+			});
+			controller.abort('sweep shutdown');
+
+			const result = await claimPromise;
+			expect(result).toBe(true);
+			expect(cache.deliveryLocks.has('BTCUSDT:price_surge:delivery:whatsapp')).toBe(true);
+		});
+
 		it('renews an active persistent channel lease', async () => {
 			await cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'whatsapp');
 
@@ -756,6 +900,10 @@ describe('NewsDedupStorageService — claimEntry()', () => {
 	const originalNow = admin.firestore.Timestamp.now;
 	const originalFromMillis = admin.firestore.Timestamp.fromMillis;
 
+	beforeEach(() => {
+		firestoreWriteMetricsService.resetForTesting();
+	});
+
 	afterEach(() => {
 		jest.clearAllMocks();
 		admin.firestore.mockClear();
@@ -789,6 +937,8 @@ describe('NewsDedupStorageService — claimEntry()', () => {
 		realService._resetForTesting();
 
 		await expect(realService.claimEntry('BTCUSDT:price_surge', 5_000)).resolves.toBe(true);
+		expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.newsDedup)
+			.toMatchObject({ success: 1, failure: 0 });
 		expect(runTransaction).toHaveBeenCalledTimes(1);
 		expect(transaction.set).toHaveBeenCalledWith(docRef, {
 			key: 'BTCUSDT:price_surge',
@@ -820,6 +970,8 @@ describe('NewsDedupStorageService — claimEntry()', () => {
 		realService._resetForTesting();
 
 		await expect(realService.claimEntry('BTCUSDT:price_surge', 5_000)).resolves.toBe(false);
+		expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.newsDedup)
+			.toMatchObject({ success: 0, failure: 0, status: 'unconfigured' });
 		expect(transaction.set).not.toHaveBeenCalled();
 	});
 
@@ -877,13 +1029,17 @@ describe('NewsDedupStorageService — claimEntry()', () => {
 		realService._resetForTesting();
 
 		await expect(realService.renewEntry('BTCUSDT:price_surge:delivery:whatsapp', 30_000, 'owner-a')).resolves.toBe(false);
+		expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.newsDedup)
+			.toMatchObject({ success: 0, failure: 0, status: 'unconfigured' });
 		expect(transaction.set).not.toHaveBeenCalled();
 	});
 
 	it('returns an indeterminate result when Firestore renewal fails', async () => {
 		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		admin.firestore.Timestamp.now = jest.fn(() => ({ toMillis: () => 10_000 }));
+		admin.firestore.Timestamp.fromMillis = jest.fn(() => ({ toMillis: () => 40_000 }));
 		const docRef = {};
-		const runTransaction = jest.fn().mockRejectedValue(new Error('Firestore unavailable'));
+		const runTransaction = jest.fn().mockRejectedValue(Object.assign(new Error('Firestore unavailable'), { code: 14 }));
 
 		admin.firestore.mockReturnValue({
 			collection: () => ({ doc: () => docRef }),
@@ -894,11 +1050,191 @@ describe('NewsDedupStorageService — claimEntry()', () => {
 		realService._resetForTesting();
 
 		await expect(realService.renewEntry('BTCUSDT:price_surge:delivery:whatsapp', 30_000, 'owner-a')).resolves.toBeNull();
+		expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.newsDedup)
+			.toMatchObject({ success: 0, failure: 1, lastFailureCategory: 'firestore_unavailable' });
+	});
+
+	it('records a successful persistent lease renewal', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		const now = { toMillis: () => 10_000 };
+		const expiresAt = { toMillis: () => 40_000 };
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => ({ expiresAt: { toMillis: () => 15_000 }, data: { claimToken: 'owner-a' } }),
+			}),
+			set: jest.fn(),
+		};
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => docRef }),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		});
+		admin.firestore.Timestamp.now = jest.fn(() => now);
+		admin.firestore.Timestamp.fromMillis = jest.fn(() => expiresAt);
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.renewEntry('BTCUSDT:price_surge:delivery:whatsapp', 30_000, 'owner-a')).resolves.toBe(true);
+		expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.newsDedup)
+			.toMatchObject({ success: 1, failure: 0 });
+		expect(transaction.set).toHaveBeenCalledWith(docRef, expect.objectContaining({
+			expiresAt,
+		}));
+	});
+
+	it('records claim failures while preserving the fail-open claim result', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		admin.firestore.Timestamp.now = jest.fn(() => ({ toMillis: () => 10_000 }));
+		admin.firestore.Timestamp.fromMillis = jest.fn(() => ({ toMillis: () => 15_000 }));
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => ({}) }),
+			runTransaction: jest.fn().mockRejectedValue(Object.assign(new Error('Firestore unavailable'), { code: 14 })),
+		});
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+		const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+		try {
+			await expect(realService.claimEntry('BTCUSDT:price_surge', 5_000)).resolves.toBe(true);
+			expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.newsDedup)
+				.toMatchObject({ success: 0, failure: 1, lastFailureCategory: 'firestore_unavailable' });
+		} finally {
+			warnSpy.mockRestore();
+		}
+	});
+});
+
+describe('NewsDedupStorageService — expired-entry cleanup and deleteEntry()', () => {
+	const originalNow = admin.firestore.Timestamp.now;
+
+	beforeEach(() => {
+		firestoreWriteMetricsService.resetForTesting();
+	});
+
+	afterEach(() => {
+		jest.clearAllMocks();
+		admin.firestore.mockClear();
+		admin.firestore.Timestamp.now = originalNow;
+		delete process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP;
+	});
+
+	it('records failed expired-entry cleanup without blocking the read', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		const docRef = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => ({ expiresAt: { toMillis: () => 9_999 }, data: { status: 'sent' } }),
+			}),
+			delete: jest.fn().mockRejectedValue(Object.assign(new Error('Firestore unavailable'), { code: 14 })),
+		};
+		admin.firestore.mockReturnValue({ collection: () => ({ doc: () => docRef }) });
+		admin.firestore.Timestamp.now = jest.fn(() => ({ toMillis: () => 10_000 }));
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+		const debugSpy = jest.spyOn(console, 'debug').mockImplementation(() => {});
+
+		try {
+			await expect(realService.getEntryRecord('BTCUSDT:price_surge')).resolves.toBeNull();
+			await new Promise(resolve => setImmediate(resolve));
+			expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.newsDedup)
+				.toMatchObject({ success: 0, failure: 1, lastFailureCategory: 'firestore_unavailable' });
+		} finally {
+			debugSpy.mockRestore();
+		}
+	});
+
+	it('records a failed explicit deletion', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		admin.firestore.mockReturnValue({
+			collection: () => ({
+				doc: () => ({
+					delete: jest.fn().mockRejectedValue(Object.assign(new Error('Firestore unavailable'), { code: 14 })),
+				}),
+			}),
+		});
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+		const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+		try {
+			await expect(realService.deleteEntry('BTCUSDT:price_surge')).resolves.toBe(false);
+			expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.newsDedup)
+				.toMatchObject({ success: 0, failure: 1, lastFailureCategory: 'firestore_unavailable' });
+		} finally {
+			warnSpy.mockRestore();
+		}
+	});
+});
+
+describe('NewsDedupStorageService — setEntry()', () => {
+	const originalNow = admin.firestore.Timestamp.now;
+	const originalFromMillis = admin.firestore.Timestamp.fromMillis;
+
+	beforeEach(() => {
+		firestoreWriteMetricsService.resetForTesting();
+	});
+
+	afterEach(() => {
+		jest.clearAllMocks();
+		admin.firestore.mockClear();
+		admin.firestore.Timestamp.now = originalNow;
+		admin.firestore.Timestamp.fromMillis = originalFromMillis;
+		delete process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP;
+	});
+
+	it('records a successful persistent dedup transaction', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		const now = { toMillis: () => 10_000 };
+		const docRef = {};
+		const transaction = {
+			get: jest.fn().mockResolvedValue({ exists: false }),
+			set: jest.fn(),
+		};
+		const runTransaction = jest.fn(async callback => callback(transaction));
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => docRef }),
+			runTransaction,
+		});
+		admin.firestore.Timestamp.now = jest.fn(() => now);
+		admin.firestore.Timestamp.fromMillis = jest.fn(() => ({ toMillis: () => 20_000 }));
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.setEntry('BTCUSDT:price_surge', 10_000, { sent: true })).resolves.toBeUndefined();
+		expect(transaction.set).toHaveBeenCalled();
+		expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.newsDedup)
+			.toMatchObject({ success: 1, failure: 0 });
+	});
+
+	it('keeps setEntry fail-open and records a failed transaction', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		admin.firestore.Timestamp.now = jest.fn(() => ({ toMillis: () => 10_000 }));
+		admin.firestore.Timestamp.fromMillis = jest.fn(() => ({ toMillis: () => 20_000 }));
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => ({}) }),
+			runTransaction: jest.fn().mockRejectedValue(Object.assign(new Error('Firestore unavailable'), { code: 14 })),
+		});
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			await expect(realService.setEntry('BTCUSDT:price_surge', 10_000, { sent: true })).resolves.toBeUndefined();
+			expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.newsDedup)
+				.toMatchObject({ success: 0, failure: 1, lastFailureCategory: 'firestore_unavailable' });
+		} finally {
+			warnSpy.mockRestore();
+		}
 	});
 });
 
 describe('NewsDedupStorageService — updateEntry()', () => {
 	const originalNow = admin.firestore.Timestamp.now;
+
+	beforeEach(() => {
+		firestoreWriteMetricsService.resetForTesting();
+	});
 
 	afterEach(() => {
 		jest.clearAllMocks();
@@ -939,6 +1275,8 @@ describe('NewsDedupStorageService — updateEntry()', () => {
 			deliveryResults: [{ channel: 'whatsapp', success: true }],
 		}))
 			.resolves.toBe(true);
+		expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.newsDedup)
+			.toMatchObject({ success: 1, failure: 0 });
 		expect(transaction.set).toHaveBeenCalledWith(docRef, {
 			key: 'BTCUSDT:price_surge',
 			createdAt,
@@ -950,6 +1288,62 @@ describe('NewsDedupStorageService — updateEntry()', () => {
 				],
 			},
 		});
+	});
+
+	it.each([
+		['missing', { exists: false, data: () => undefined }],
+		['expired', {
+			exists: true,
+			data: () => ({ expiresAt: { toMillis: () => 9_999 }, data: { status: 'pending' } }),
+		}],
+	])('does not count a %s entry as a successful write', async (_label, snapshot) => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		admin.firestore.Timestamp.now = jest.fn(() => ({ toMillis: () => 10_000 }));
+		const transaction = {
+			get: jest.fn().mockResolvedValue(snapshot),
+			set: jest.fn(),
+		};
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => ({}) }),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		});
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.updateEntry('BTCUSDT:price_surge', { status: 'sent' })).resolves.toBe(false);
+		expect(transaction.set).not.toHaveBeenCalled();
+		expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.newsDedup)
+			.toMatchObject({ success: 0, failure: 0, status: 'unconfigured' });
+	});
+
+	it('does not count an expected-state mismatch as a successful write', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		admin.firestore.Timestamp.now = jest.fn(() => ({ toMillis: () => 10_000 }));
+		const transaction = {
+			get: jest.fn().mockResolvedValue({
+				exists: true,
+				data: () => ({
+					expiresAt: { toMillis: () => 15_000 },
+					data: { status: 'claimed' },
+				}),
+			}),
+			set: jest.fn(),
+		};
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => ({}) }),
+			runTransaction: jest.fn(async callback => callback(transaction)),
+		});
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.updateEntry('BTCUSDT:price_surge', { status: 'sent' }, {
+			mergeFields: ['status'],
+			expectedField: 'status',
+			expectedValues: ['pending'],
+		})).resolves.toBe(false);
+		expect(transaction.set).not.toHaveBeenCalled();
+		expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.newsDedup)
+			.toMatchObject({ success: 0, failure: 0, status: 'unconfigured' });
 	});
 
 	it('merges only claimed-channel deltas with the latest routing state', async () => {
@@ -1064,5 +1458,20 @@ describe('NewsDedupStorageService — updateEntry()', () => {
 				},
 			},
 		}));
+	});
+
+	it('fails open and records a failed transaction', async () => {
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'true';
+		admin.firestore.Timestamp.now = jest.fn(() => ({ toMillis: () => 10_000 }));
+		admin.firestore.mockReturnValue({
+			collection: () => ({ doc: () => ({}) }),
+			runTransaction: jest.fn().mockRejectedValue(Object.assign(new Error('Firestore unavailable'), { code: 14 })),
+		});
+		const realService = jest.requireActual('../../src/services/storage/NewsDedupStorageService');
+		realService._resetForTesting();
+
+		await expect(realService.updateEntry('BTCUSDT:price_surge', { status: 'sent' })).resolves.toBe(false);
+		expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.newsDedup)
+			.toMatchObject({ success: 0, failure: 1, lastFailureCategory: 'firestore_unavailable' });
 	});
 });

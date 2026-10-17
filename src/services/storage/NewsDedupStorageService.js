@@ -18,6 +18,8 @@
 
 const admin = require('firebase-admin');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
+const { fireAndForget } = require('../../lib/fireAndForget');
 
 const COLLECTION_NAME = 'news-monitor-dedup';
 const DELIVERY_ROUTING_FIELDS = {
@@ -42,6 +44,29 @@ function mergeRoutingData(existingRouting = {}, updatedRouting = {}, channels) {
 		}
 	}
 	return mergedRouting;
+}
+
+/**
+ * Channels a payload is authoritative for: the ones it carries delivery results
+ * for plus the ones its routing targeted. Scopes a merge so an incoming write
+ * cannot erase another replica's per-channel destination metadata (#871).
+ *
+ * @param {Object} data - Cache payload
+ * @returns {string[]}
+ */
+function collectScopedChannels(data) {
+	const channels = new Set();
+	for (const result of Array.isArray(data?.deliveryResults) ? data.deliveryResults : []) {
+		if (result && typeof result.channel === 'string') {
+			channels.add(result.channel);
+		}
+	}
+	for (const channel of Array.isArray(data?.routing?.channels) ? data.routing.channels : []) {
+		if (typeof channel === 'string') {
+			channels.add(channel);
+		}
+	}
+	return Array.from(channels);
 }
 
 function mergeDeliveryData(existingData = {}, updatedData = {}, options = {}) {
@@ -86,7 +111,8 @@ function isEnabled() {
 /**
  * Initialize Firebase Admin (idempotent) and return Firestore client.
  * Reuses existing admin app if already initialized by AlertStorageService.
- * Returns null when the feature is disabled or initialization fails.
+ * Returns null when the feature is disabled, when initialization fails, or when
+ * configured Firebase credentials are invalid (in-memory fallback).
  *
  * @returns {FirebaseFirestore.Firestore | null}
  */
@@ -100,24 +126,13 @@ function getFirestore() {
 	}
 
 	try {
-		let credential;
-
-		// Inline JSON (preferred for Render.com secret env vars)
-		if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-			const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-			credential = admin.credential.cert(serviceAccount);
-		}
-
-		const appOptions = {};
-		if (credential) {
-			appOptions.credential = credential;
-		}
-		if (process.env.FIREBASE_PROJECT_ID) {
-			appOptions.projectId = process.env.FIREBASE_PROJECT_ID;
-		}
-
-		if (!admin.apps.length) {
-			admin.initializeApp(appOptions);
+		const initialization = initializeFirebaseAdminApp({ admin });
+		if (!initialization.ok) {
+			console.warn(
+				`[NewsDedupStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`,
+			);
+			db = null;
+			return null;
 		}
 
 		db = admin.firestore();
@@ -172,8 +187,10 @@ async function getEntryRecord(key) {
 		const now = admin.firestore.Timestamp.now();
 		if (expiresAtMs <= now.toMillis()) {
 			// Expired — delete it asynchronously (fire-and-forget)
-			docRef.delete().catch(err => {
-				console.debug('[NewsDedupStorageService] Failed to delete expired entry:', err.message);
+			fireAndForget('newsDedup', () => docRef.delete()).then(write => {
+				if (!write.ok) {
+					console.debug('[NewsDedupStorageService] Failed to delete expired entry:', write.error.message);
+				}
 			});
 			return null;
 		}
@@ -220,7 +237,7 @@ async function claimEntry(key, ttlMs, claimToken) {
 		const expiresAtMs = now.toMillis() + ttlMs;
 		const expiresAt = admin.firestore.Timestamp.fromMillis(expiresAtMs);
 		const docRef = firestore.collection(COLLECTION_NAME).doc(key);
-		const claimed = await firestore.runTransaction(async transaction => {
+		const write = await fireAndForget('newsDedup', () => firestore.runTransaction(async transaction => {
 			const existing = await transaction.get(docRef);
 			const existingData = existing.exists && existing.data();
 
@@ -236,7 +253,9 @@ async function claimEntry(key, ttlMs, claimToken) {
 				data: claimToken ? { status: 'claiming', claimToken } : { status: 'claiming' },
 			});
 			return true;
-		});
+		}), { shouldRecordSuccess: claimed => claimed === true });
+		if (!write.ok) throw write.error;
+		const claimed = write.value;
 		if (!claimed) {
 			console.debug('[NewsDedupStorageService] Dedup entry already exists during claim:', key);
 			return false;
@@ -252,6 +271,10 @@ async function claimEntry(key, ttlMs, claimToken) {
 
 /**
  * Write a dedup entry to Firestore.
+ *
+ * Concurrent writers are merged channel-scoped rather than replaced wholesale:
+ * a replica retrying an analysis carries a full payload that may predate
+ * another replica's delivery result, and a shallow spread would drop it.
  *
  * Fail-open: errors are logged and swallowed; alert delivery is not affected.
  *
@@ -271,24 +294,27 @@ async function setEntry(key, ttlMs, data) {
 		const expiresAtMs = now.toMillis() + ttlMs;
 		const expiresAt = admin.firestore.Timestamp.fromMillis(expiresAtMs);
 
-		await firestore.runTransaction(async transaction => {
+		const write = await fireAndForget('newsDedup', () => firestore.runTransaction(async transaction => {
 			const docRef = firestore.collection(COLLECTION_NAME).doc(key);
 			const existing = await transaction.get(docRef);
 			const existingData = existing.exists ? existing.data() : null;
-			// Merge over the current durable payload so concurrent field-scoped
-			// writes (e.g. originalPersistedState committed after this write
-			// started) are not erased by this replacement.
 			const baseData = existingData?.data && typeof existingData.data === 'object'
 				? existingData.data
 				: {};
-			const nextData = { ...baseData, ...(data || {}) };
+			const scopedChannels = collectScopedChannels(data);
+			const nextData = mergeDeliveryData(
+				baseData,
+				data || {},
+				scopedChannels.length > 0 ? { deliveryChannels: scopedChannels } : {},
+			);
 			transaction.set(docRef, {
 				key,
 				createdAt: existingData?.createdAt ?? now,
 				expiresAt,
 				data: nextData,
 			});
-		});
+		}));
+		if (!write.ok) throw write.error;
 		console.debug('[NewsDedupStorageService] Dedup entry written with data:', key);
 	} catch (error) {
 		console.warn('[NewsDedupStorageService] setEntry error (fail-open):', error.message);
@@ -296,11 +322,45 @@ async function setEntry(key, ttlMs, data) {
 }
 
 /**
+ * Whether a guarded state transition may reclaim a lease-like state.
+ *
+ * A state named by `reclaimStale.states` is only writable once the deadline in
+ * `reclaimStale.expiresField` has passed, so a crashed owner is recovered in a
+ * bounded interval instead of stranding the field until the dedup TTL. A missing
+ * or non-numeric deadline counts as reclaimable: records written before the
+ * lease existed carry no deadline and would otherwise be stranded forever.
+ *
+ * @param {Object} currentData - Durable payload snapshot
+ * @param {*} currentValue - Value currently stored in options.expectedField
+ * @param {Object} options - updateEntry options
+ * @param {number} nowMs - Current epoch milliseconds
+ * @returns {boolean}
+ */
+function isStaleClaimReclaimable(currentData, currentValue, options, nowMs) {
+	const reclaim = options.reclaimStale;
+	if (!reclaim || !Array.isArray(reclaim.states) || !reclaim.states.includes(currentValue)) {
+		return false;
+	}
+	const deadline = currentData ? currentData[reclaim.expiresField] : undefined;
+	if (typeof deadline !== 'number' || !Number.isFinite(deadline)) {
+		return true;
+	}
+	return deadline <= nowMs;
+}
+
+/**
  * Update an existing dedup entry without extending its original TTL.
  *
  * @param {string} key - Dedup key
  * @param {Object} data - Updated cache payload
- * @param {{deliveryChannels?: string[]}} options - Optional claimed-channel delta scope
+ * @param {Object} [options] - Guard and merge scope
+ * @param {string[]} [options.mergeFields] - Field-scoped merge instead of a payload merge
+ * @param {string} [options.expectedField] - Field whose current value gates the write
+ * @param {Array} [options.expectedValues] - Values that permit the write; undefined always passes
+ * @param {{states: Array, expiresField: string}} [options.reclaimStale] - Bounded reclaim for lease-like states
+ * @param {string} [options.expectedTokenField] - Owner-token field that must match when present
+ * @param {string} [options.expectedToken] - Owner token required by expectedTokenField
+ * @param {string[]} [options.deliveryChannels] - Claimed-channel delta scope for payload merges
  * @returns {Promise<boolean>} true when an active entry was updated
  */
 async function updateEntry(key, data, options = {}) {
@@ -312,7 +372,7 @@ async function updateEntry(key, data, options = {}) {
 	try {
 		const now = admin.firestore.Timestamp.now();
 		const docRef = firestore.collection(COLLECTION_NAME).doc(key);
-		return await firestore.runTransaction(async transaction => {
+		const write = await fireAndForget('newsDedup', () => firestore.runTransaction(async transaction => {
 			const existing = await transaction.get(docRef);
 			const existingData = existing.exists && existing.data();
 			if (!existing.exists || !existingData?.expiresAt
@@ -330,8 +390,18 @@ async function updateEntry(key, data, options = {}) {
 					const allowed = Array.isArray(options.expectedValues)
 						? options.expectedValues
 						: [];
-					if (currentValue !== undefined && !allowed.includes(currentValue)) {
+					if (currentValue !== undefined
+						&& !allowed.includes(currentValue)
+						&& !isStaleClaimReclaimable(existingData.data, currentValue, options, now.toMillis())) {
 						return false;
+					}
+					if (options.expectedTokenField !== undefined) {
+						const currentToken = existingData.data
+							? existingData.data[options.expectedTokenField]
+							: undefined;
+						if (currentToken != null && currentToken !== options.expectedToken) {
+							return false;
+						}
 					}
 				}
 				nextData = { ...(existingData.data || {}) };
@@ -351,7 +421,9 @@ async function updateEntry(key, data, options = {}) {
 				data: nextData,
 			});
 			return true;
-		});
+		}), { shouldRecordSuccess: updated => updated === true });
+		if (!write.ok) throw write.error;
+		return write.value;
 	} catch (error) {
 		console.warn('[NewsDedupStorageService] updateEntry error (fail-open):', error.message);
 		return false;
@@ -376,7 +448,7 @@ async function renewEntry(key, ttlMs, claimToken) {
 		const now = admin.firestore.Timestamp.now();
 		const expiresAt = admin.firestore.Timestamp.fromMillis(now.toMillis() + ttlMs);
 		const docRef = firestore.collection(COLLECTION_NAME).doc(key);
-		return await firestore.runTransaction(async transaction => {
+		const write = await fireAndForget('newsDedup', () => firestore.runTransaction(async transaction => {
 			const existing = await transaction.get(docRef);
 			const existingData = existing.exists && existing.data();
 			if (!existing.exists || !existingData?.expiresAt
@@ -395,7 +467,9 @@ async function renewEntry(key, ttlMs, claimToken) {
 				data: existingData.data || null,
 			});
 			return true;
-		});
+		}), { shouldRecordSuccess: renewed => renewed === true });
+		if (!write.ok) throw write.error;
+		return write.value;
 	} catch (error) {
 		console.warn('[NewsDedupStorageService] renewEntry error (fail-open):', error.message);
 		return null;
@@ -406,18 +480,21 @@ async function renewEntry(key, ttlMs, claimToken) {
  * Delete a dedup entry (mainly for testing / manual invalidation).
  *
  * @param {string} key - Dedup key
- * @returns {Promise<void>}
+ * @returns {Promise<boolean>} true when the entry is deleted or storage is unavailable
  */
 async function deleteEntry(key) {
 	const firestore = getFirestore();
 	if (!firestore) {
-		return;
+		return true;
 	}
 
 	try {
-		await firestore.collection(COLLECTION_NAME).doc(key).delete();
+		const write = await fireAndForget('newsDedup', () => firestore.collection(COLLECTION_NAME).doc(key).delete());
+		if (!write.ok) throw write.error;
+		return true;
 	} catch (error) {
 		console.warn('[NewsDedupStorageService] deleteEntry error:', error.message);
+		return false;
 	}
 }
 
@@ -445,6 +522,7 @@ module.exports = {
 	deleteEntry,
 	COLLECTION_NAME,
 	// Exported for testing — reset the cached db singleton between tests
+	getFirestore,
 	_resetForTesting() {
 		db = null;
 	},
