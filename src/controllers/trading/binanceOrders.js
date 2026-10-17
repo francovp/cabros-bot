@@ -49,6 +49,9 @@ async function postBinanceOrder(req, res) {
 			environment: result.environment,
 			binanceOrderId: result.order?.orderId ?? null,
 			clientOrderId: result.order?.clientOrderId ?? null,
+			origin: result.origin ?? req.body?.origin ?? 'manual',
+			alertId: result.alertId ?? req.body?.alertId ?? null,
+			setupType: result.setupType ?? req.body?.setupType ?? null,
 			response: result,
 			processingMs,
 		}).catch((err) => {
@@ -97,6 +100,9 @@ async function postBinanceOrder(req, res) {
 				environment: error.environment,
 				binanceOrderId: null,
 				clientOrderId: clientOrderId ?? null,
+				origin: req.body?.origin || 'manual',
+				alertId: typeof req.body?.alertId === 'string' && req.body?.alertId.trim() ? req.body.alertId.trim() : null,
+				setupType: typeof req.body?.setupType === 'string' && req.body?.setupType.trim() ? req.body.setupType.trim().toLowerCase() : null,
 				response: { error: error.message, code: error.code },
 				processingMs,
 			}).catch((err) => {
@@ -126,6 +132,9 @@ async function postBinanceOrder(req, res) {
 			dryRun: Boolean(req.body?.dryRun),
 			binanceOrderId: null,
 			clientOrderId: clientOrderId ?? null,
+			origin: req.body?.origin || 'manual',
+			alertId: typeof req.body?.alertId === 'string' && req.body?.alertId.trim() ? req.body.alertId.trim() : null,
+			setupType: typeof req.body?.setupType === 'string' && req.body?.setupType.trim() ? req.body.setupType.trim().toLowerCase() : null,
 			response: { error: error.message, code: 'BINANCE_ORDER_FAILED' },
 			processingMs,
 		}).catch((err) => {

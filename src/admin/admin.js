@@ -1903,6 +1903,7 @@ const createAlertDetailPanel = (alert) => {
 	if (data.truncated === true) {
 		panel.append(element('p', { className: 'request-state', text: 'Enrichment content was truncated.' }));
 	}
+	panel.append(createTradeTicket({ alert, defaultOrigin: 'admin_alert' }));
 	return panel;
 };
 
@@ -4001,6 +4002,12 @@ const formatOrderEnvironment = (environment) => {
 			text: 'Environment: testnet',
 		});
 	}
+	if (environment === 'demo') {
+		return element('span', {
+			className: 'status-badge status-ready',
+			text: 'Environment: demo',
+		});
+	}
 	return element('span', {
 		className: 'status-badge status-disabled',
 		text: `Environment: ${formatOrderValue(environment)}`,
@@ -4106,6 +4113,326 @@ const ORDER_LIST_QUERY_VALIDATION = {
 };
 
 const trimFormValue = (value) => (value === undefined || value === null ? '' : String(value).trim());
+
+function parseAlertTradeCandidate(alert) {
+	if (!alert || typeof alert !== 'object') {
+		return { symbol: '', side: 'BUY', price: '', setupType: null };
+	}
+
+	const enrichment = asObject(alert.enrichmentData);
+	let rawSymbol = alert.symbol || enrichment.symbol || enrichment.asset || enrichment.ticker || '';
+	const text = typeof alert.text === 'string' ? alert.text : '';
+
+	if (!rawSymbol && text) {
+		const symbolMatch = text.match(/(?:^|\s)(?:([A-Z_]+):)?([A-Z0-9._-]{3,20})(?:\s*\(|\s+)/i);
+		if (symbolMatch) {
+			rawSymbol = symbolMatch[2];
+		}
+	}
+
+	let symbol = String(rawSymbol).trim().toUpperCase();
+	if (symbol.includes(':')) {
+		symbol = symbol.split(':').pop().trim().toUpperCase();
+	}
+
+	let side = 'BUY';
+	const candidateText = `${alert.signal || ''} ${enrichment.signal || ''} ${text}`;
+	const buyMatch = candidateText.match(/\b(COMPRA|BUY)\b/i);
+	const sellMatch = candidateText.match(/\b(VENTA|SELL)\b/i);
+	if (buyMatch && !sellMatch) side = 'BUY';
+	else if (sellMatch && !buyMatch) side = 'SELL';
+	else if (buyMatch && sellMatch) {
+		side = buyMatch.index < sellMatch.index ? 'BUY' : 'SELL';
+	}
+
+	let price = '';
+	if (alert.price != null && Number.isFinite(Number(alert.price)) && Number(alert.price) > 0) {
+		price = String(alert.price);
+	} else if (enrichment.price != null && Number.isFinite(Number(enrichment.price)) && Number(enrichment.price) > 0) {
+		price = String(enrichment.price);
+	} else if (enrichment.current_price != null && Number.isFinite(Number(enrichment.current_price)) && Number(enrichment.current_price) > 0) {
+		price = String(enrichment.current_price);
+	} else if (text) {
+		const priceMatch = text.match(/(?:precio|price|entry|at)\s*[:=]?\s*\$?([0-9]+(?:\.[0-9]+)?)/i);
+		if (priceMatch) {
+			price = priceMatch[1];
+		}
+	}
+
+	const setupType = enrichment.setup_type || enrichment.setupType || alert.setupType || null;
+
+	return {
+		symbol,
+		side,
+		price,
+		setupType: setupType ? String(setupType).trim().toLowerCase() : null,
+	};
+}
+
+function createTradeTicket({ alert, position, defaultOrigin = 'manual', onOrderSubmitted } = {}) {
+	const panel = element('article', { className: 'operation-card trade-ticket' });
+	const candidate = alert ? parseAlertTradeCandidate(alert) : {
+		symbol: position && position.symbol ? String(position.symbol).trim().toUpperCase() : '',
+		side: position ? 'SELL' : 'BUY',
+		price: position && (position.markPrice || position.currentPrice) ? String(position.markPrice || position.currentPrice) : '',
+		setupType: null,
+	};
+
+	let initialQuantity = '';
+	let initialQuoteOrderQty = '50';
+	if (position && position.quantity) {
+		initialQuantity = String(position.quantity);
+		initialQuoteOrderQty = '';
+	}
+
+	const heading = element('h4', { text: alert ? 'Trade this alert' : (position ? `Close position (${position.symbol})` : 'Trade ticket') });
+	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: testnet' });
+	panel.append(heading, environmentBadge);
+
+	if (alert && alert.id) {
+		const alertMeta = element('p', { className: 'mono-line', text: `Linked alert: ${alert.id}` });
+		panel.append(alertMeta);
+	}
+
+	const form = element('form', { className: 'ticket-form' });
+	const symbolField = addField(form, 'Symbol', 'ticket-symbol', {
+		placeholder: 'e.g. BTCUSDT',
+		value: candidate.symbol,
+		required: true,
+	});
+	const sideField = addField(form, 'Side', 'ticket-side', { tag: 'select' });
+	['BUY', 'SELL'].forEach((s) => {
+		const opt = element('option', { text: s });
+		opt.value = s;
+		sideField.append(opt);
+	});
+	sideField.value = candidate.side;
+
+	const typeField = addField(form, 'Type', 'ticket-type', { tag: 'select' });
+	['LIMIT', 'MARKET'].forEach((t) => {
+		const opt = element('option', { text: t });
+		opt.value = t;
+		typeField.append(opt);
+	});
+	typeField.value = candidate.price ? 'LIMIT' : 'MARKET';
+
+	const priceField = addField(form, 'Price', 'ticket-price', {
+		placeholder: 'e.g. 50000.00',
+		value: candidate.price,
+	});
+
+	const quantityField = addField(form, 'Quantity', 'ticket-quantity', {
+		placeholder: 'e.g. 0.001',
+		value: initialQuantity,
+	});
+
+	const quoteQtyField = addField(form, 'Quote Order Qty (USDT)', 'ticket-quote-qty', {
+		placeholder: 'e.g. 50',
+		value: initialQuoteOrderQty,
+	});
+
+	const syncTypeFields = () => {
+		const isLimit = typeField.value === 'LIMIT';
+		priceField.disabled = !isLimit;
+		if (isLimit) {
+			quoteQtyField.disabled = true;
+			quoteQtyField.value = '';
+			quantityField.disabled = false;
+		} else {
+			priceField.disabled = true;
+			priceField.value = '';
+			quoteQtyField.disabled = false;
+			quantityField.disabled = false;
+		}
+	};
+	typeField.addEventListener('change', syncTypeFields);
+	syncTypeFields();
+
+	const actions = element('div', { className: 'ticket-actions' });
+	const dryRunBtn = element('button', { text: 'Validate (Dry Run)', className: 'trade-dry-run-btn' });
+	dryRunBtn.type = 'button';
+
+	const confirmInput = element('input', {
+		className: 'ticket-confirm-input',
+		placeholder: 'Type "CONFIRM" to enable live order',
+	});
+	confirmInput.type = 'text';
+	confirmInput.disabled = true;
+
+	const submitBtn = element('button', {
+		text: 'Submit Live Order',
+		className: 'trade-submit-btn',
+	});
+	submitBtn.type = 'button';
+	submitBtn.disabled = true;
+
+	const output = element('div', { className: 'response-block ticket-output', text: 'No validation run yet.' });
+	const validationNotice = element('div', { className: 'ticket-validation-notice' });
+
+	actions.append(dryRunBtn, confirmInput, submitBtn);
+	form.append(actions, validationNotice, output);
+	panel.append(form);
+
+	let currentEnv = 'testnet';
+	let dryRunSuccessful = false;
+
+	const updateEnvironmentBadge = (env) => {
+		currentEnv = env || currentEnv;
+		environmentBadge.replaceChildren(formatOrderEnvironment(currentEnv));
+		checkSubmitReadiness();
+	};
+
+	const checkSubmitReadiness = () => {
+		const isOperator = typeof canPerformMutation === 'function' ? canPerformMutation() : true;
+		const isConfirmed = confirmInput.value.trim() === 'CONFIRM';
+		const isLiveBlocked = currentEnv === 'live';
+
+		if (!isOperator) {
+			submitBtn.disabled = true;
+			submitBtn.title = 'Requires admin.operator role';
+			return;
+		}
+		if (isLiveBlocked) {
+			submitBtn.disabled = true;
+			submitBtn.title = 'Live trading is disabled on tickets (testnet/demo only until #769)';
+			return;
+		}
+		if (!dryRunSuccessful) {
+			submitBtn.disabled = true;
+			submitBtn.title = 'Run Dry Run validation first';
+			return;
+		}
+		if (!isConfirmed) {
+			submitBtn.disabled = true;
+			submitBtn.title = 'Type "CONFIRM" to enable submission';
+			return;
+		}
+
+		submitBtn.disabled = false;
+		submitBtn.title = 'Submit order to Binance';
+	};
+
+	checkSubmitReadiness();
+	confirmInput.addEventListener('input', checkSubmitReadiness);
+
+	const buildOrderPayload = (dryRun) => {
+		const sym = trimFormValue(symbolField.value).toUpperCase();
+		const side = sideField.value;
+		const type = typeField.value;
+		const payload = {
+			symbol: sym,
+			side,
+			type,
+			dryRun,
+		};
+		if (alert && alert.id) {
+			payload.alertId = String(alert.id).trim();
+			payload.origin = 'admin_alert';
+		} else if (defaultOrigin) {
+			payload.origin = defaultOrigin;
+		}
+		if (candidate.setupType) {
+			payload.setupType = candidate.setupType;
+		}
+		if (type === 'LIMIT') {
+			const pr = trimFormValue(priceField.value);
+			if (pr) payload.price = pr;
+			const qty = trimFormValue(quantityField.value);
+			if (qty) payload.quantity = qty;
+		} else {
+			const quote = trimFormValue(quoteQtyField.value);
+			const qty = trimFormValue(quantityField.value);
+			if (quote) payload.quoteOrderQty = quote;
+			else if (qty) payload.quantity = qty;
+		}
+		return payload;
+	};
+
+	dryRunBtn.addEventListener('click', async () => {
+		dryRunSuccessful = false;
+		confirmInput.disabled = true;
+		confirmInput.value = '';
+		submitBtn.disabled = true;
+		validationNotice.replaceChildren();
+
+		const payload = buildOrderPayload(true);
+		if (!ORDER_LIST_QUERY_VALIDATION.symbol(payload.symbol)) {
+			showError(output, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
+			return;
+		}
+
+		const definition = {
+			method: 'POST',
+			path: '/api/trading/binance/orders',
+			label: 'Dry Run Order',
+			requiredRole: 'admin.operator',
+		};
+
+		const data = await sendRequest({
+			definition,
+			path: definition.path,
+			body: payload,
+			button: dryRunBtn,
+			output,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+
+		if (data && data.success) {
+			dryRunSuccessful = true;
+			if (data.environment) updateEnvironmentBadge(data.environment);
+			validationNotice.replaceChildren(
+				element('p', { className: 'status-badge status-ready', text: `Dry run passed (${data.environment || currentEnv})` })
+			);
+			confirmInput.disabled = false;
+			checkSubmitReadiness();
+		} else {
+			dryRunSuccessful = false;
+			validationNotice.replaceChildren(
+				element('p', { className: 'status-badge status-danger', text: 'Dry run failed' })
+			);
+		}
+	});
+
+	submitBtn.addEventListener('click', async () => {
+		if (submitBtn.disabled) return;
+		const payload = buildOrderPayload(false);
+		const nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		const basePrefix = alert && alert.id ? String(alert.id).trim() : 'manual';
+		const idempotencyKey = `${basePrefix}-${payload.side.toLowerCase()}-${nonce}`;
+
+		payload.idempotencyKey = idempotencyKey;
+
+		const definition = {
+			method: 'POST',
+			path: '/api/trading/binance/orders',
+			label: 'Submit Live Order',
+			requiredRole: 'admin.operator',
+		};
+
+		submitBtn.disabled = true;
+		dryRunBtn.disabled = true;
+
+		const data = await sendRequest({
+			definition,
+			path: definition.path,
+			body: payload,
+			headers: { 'idempotency-key': idempotencyKey },
+			button: submitBtn,
+			output,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+
+		dryRunBtn.disabled = false;
+		if (data && data.success) {
+			validationNotice.replaceChildren(
+				element('p', { className: 'status-badge status-ready', text: `Order placed: #${data.order?.orderId || 'submitted'}` })
+			);
+			if (typeof onOrderSubmitted === 'function') onOrderSubmitted(data);
+		}
+	});
+
+	return panel;
+}
 
 const createOrderListForm = () => {
 	const definition = { method: 'GET', path: '/api/trading/binance/orders', label: 'Load recent orders' };
@@ -7642,6 +7969,7 @@ const createTradingView = (contract) => {
 	const outcomesDefinition = { method: 'GET', path: '/api/outcomes', label: 'Load signal records' };
 	const auditDefinition = { method: 'GET', path: '/api/trading/binance/orders/audit', label: 'Load order audit' };
 	const ledgerDefinition = { method: 'GET', path: TRADING_LEDGER_PATH, label: 'Load trade ledger' };
+	const positionsDefinition = { method: 'GET', path: '/api/trading/positions', label: 'Load open positions' };
 	const statusDefinition = { method: 'GET', path: '/api/status', label: 'Load trading environment' };
 
 	const wrap = element('section', { className: 'dashboard trading-view' });
@@ -7691,8 +8019,14 @@ const createTradingView = (contract) => {
 
 	const realPanelHost = element('div');
 	const realOutput = element('div', { className: 'response-block', text: '' });
+	const positionsPanel = createTradingPanelShell('positions-panel', 'Open positions',
+		'Durable positions from recorded fills.');
+	const positionsHost = element('div', { className: 'positions-host' });
+	const positionsTicketHost = element('div', { className: 'positions-ticket-host' });
+	const positionsOutput = element('div', { className: 'response-block', text: '' });
+	positionsPanel.append(positionsHost, positionsTicketHost, positionsOutput);
 	const analyticsOutput = element('div', { className: 'response-block', text: '' });
-	main.append(paperPanel, realPanelHost, realOutput);
+	main.append(paperPanel, realPanelHost, positionsPanel, realOutput);
 
 	const curveHost = element('div');
 	const barsHost = element('div');
@@ -7895,6 +8229,77 @@ const createTradingView = (contract) => {
 		formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
 	});
 
+	const renderPositions = (positions) => {
+		positionsHost.replaceChildren();
+		positionsTicketHost.replaceChildren();
+		const openList = positions.filter((p) => p && Number(p.quantity) > 0);
+		if (!openList.length) {
+			positionsHost.append(createEmptyState('No open positions recorded.'));
+			return;
+		}
+		const table = createResultTable('Open positions', [
+			['Symbol', (p) => formatOrderValue(p && p.symbol)],
+			['Quantity', (p) => formatOrderValue(p && p.quantity)],
+			['Entry price', (p) => formatOrderValue(p && p.entryPrice)],
+			['Mark price', (p) => formatOrderValue(p && (p.currentPrice || p.markPrice))],
+			['Unrealized P&L', (p) => formatTradingPercent(p && p.unrealizedPnl)],
+			['Action', (p) => {
+				const closeBtn = element('button', { text: 'Close', className: 'position-close-btn' });
+				closeBtn.type = 'button';
+				closeBtn.addEventListener('click', async () => {
+					closeBtn.disabled = true;
+					let sellQty = String(p.quantity);
+					try {
+						const balanceData = await sendRequest({
+							definition: { method: 'GET', path: '/api/trading/binance/account/balances', label: 'Query balance' },
+							path: '/api/trading/binance/account/balances',
+							query: { symbol: p.symbol, refresh: 'true' },
+							button: closeBtn,
+							output: positionsOutput,
+							formatResponse: () => '',
+						});
+						if (balanceData && Array.isArray(balanceData.balances)) {
+							const baseAsset = p.symbol.replace(/USDT$|BUSD$|USDC$/, '');
+							const match = balanceData.balances.find((b) => b.asset === baseAsset);
+							if (match && match.free && Number(match.free) < Number(sellQty)) {
+								sellQty = String(match.free);
+							}
+						}
+					} catch (err) {
+						console.warn('Could not query balance for position close:', err);
+					}
+					closeBtn.disabled = false;
+					const ticket = createTradeTicket({
+						position: { ...p, quantity: sellQty },
+						defaultOrigin: 'manual',
+						onOrderSubmitted: () => loadAll(),
+					});
+					positionsTicketHost.replaceChildren(ticket);
+				});
+				return closeBtn;
+			}],
+		], openList, 'data-table data-table-scroll');
+		positionsHost.append(table.scroll);
+	};
+
+	const loadPositions = (current) => {
+		if (!contract || !contract.paths || !contract.paths['/api/trading/positions']) {
+			positionsHost.replaceChildren(createEmptyState('Positions API not available in contract.'));
+			return Promise.resolve();
+		}
+		return sendRequest({
+			definition: positionsDefinition,
+			path: positionsDefinition.path,
+			button: refresh,
+			output: positionsOutput,
+			isCurrent: () => current === generation,
+			captureResponseData: (data) => {
+				renderPositions(Array.isArray(data && data.positions) ? data.positions : []);
+			},
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+	};
+
 	const loadAll = () => {
 		const current = ++generation;
 		refresh.disabled = true;
@@ -7903,6 +8308,7 @@ const createTradingView = (contract) => {
 			loadPaper(current),
 			loadSignals(current),
 			loadAudit(current),
+			loadPositions(current),
 			renderRealPnlPanel(contract, ledgerDefinition, {}, refresh)
 				.then((panel) => realPanelHost.replaceChildren(panel)),
 		]).then(() => {

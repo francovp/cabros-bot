@@ -3887,11 +3887,30 @@
           "403": {
             "$ref": "#/components/responses/Error"
           },
+          "404": {
+            "description": "The linked alert was not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "alertNotFound": {
+                    "value": {
+                      "success": false,
+                      "error": "Alert not found",
+                      "code": "ALERT_NOT_FOUND"
+                    }
+                  }
+                }
+              }
+            }
+          },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
           "409": {
-            "description": "The idempotency key conflicts with the request, or the recovered Binance order does not match the requested order.",
+            "description": "The idempotency key conflicts with the request, the recovered Binance order does not match the requested order, or the linked alert storage is unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3909,6 +3928,13 @@
                       "success": false,
                       "error": "Reconciled Binance order does not match the request",
                       "code": "BINANCE_ORDER_CONFLICT"
+                    }
+                  },
+                  "alertLinkUnavailable": {
+                    "value": {
+                      "success": false,
+                      "error": "Alert storage is disabled",
+                      "code": "ALERT_LINK_UNAVAILABLE"
                     }
                   }
                 }
