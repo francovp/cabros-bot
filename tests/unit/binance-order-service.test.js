@@ -13,6 +13,7 @@ const {
 } = require('../../src/services/trading/BinanceOrderService');
 const { resetOrderProvenanceForTesting } = require('../../src/services/trading/orderProvenance');
 const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+const AlertStorageService = require('../../src/services/storage/AlertStorageService');
 const { MainClient } = require('binance');
 
 function exchangeInfo(overrides = {}) {
@@ -49,10 +50,17 @@ describe('BinanceOrderService', () => {
 		savedEnv = saveEnv();
 		configureTrading();
 		resetOrderProvenanceForTesting();
+		jest.spyOn(AlertStorageService, 'isEnabled').mockReturnValue(true);
+		jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue({});
+		jest.spyOn(AlertStorageService, 'getAlertById').mockImplementation(async (id) => {
+			if (!id || id.startsWith('nonexistent')) return null;
+			return { id, setupType: 'breakout' };
+		});
 	});
 
 	afterEach(() => {
 		restoreEnv(savedEnv);
+		jest.restoreAllMocks();
 		jest.clearAllMocks();
 	});
 
@@ -2562,6 +2570,12 @@ describe('BinanceOrderService', () => {
 	});
 
 	describe('provenance fields', () => {
+		beforeEach(() => {
+			jest.spyOn(AlertStorageService, 'isEnabled').mockReturnValue(true);
+			jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue({});
+			jest.spyOn(AlertStorageService, 'getAlertById').mockResolvedValue({ id: 'alert-123', setupType: 'breakout' });
+		});
+
 		it('accepts origin, alertId, and setupType in dry-run order requests', async () => {
 			const client = {
 				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
@@ -2632,6 +2646,151 @@ describe('BinanceOrderService', () => {
 				dryRun: true,
 				origin: 'invalid_origin',
 			})).rejects.toMatchObject({ message: expect.stringContaining('origin must be one of:') });
+		});
+
+		describe('alertId linkage validation (issue #1276)', () => {
+			let getAlertByIdSpy;
+			let isEnabledSpy;
+			let getFirestoreSpy;
+
+			beforeEach(() => {
+				isEnabledSpy = jest.spyOn(AlertStorageService, 'isEnabled').mockReturnValue(true);
+				getFirestoreSpy = jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue({});
+				getAlertByIdSpy = jest.spyOn(AlertStorageService, 'getAlertById').mockResolvedValue({
+					id: 'valid-alert-123',
+					symbol: 'BTCUSDT',
+					price: 50000,
+					setupType: 'breakout',
+				});
+			});
+
+			afterEach(() => {
+				isEnabledSpy?.mockRestore();
+				getFirestoreSpy?.mockRestore();
+				getAlertByIdSpy?.mockRestore();
+			});
+
+			it('rejects with 409 ALERT_LINK_UNAVAILABLE when alertId is provided but alert storage is disabled', async () => {
+				isEnabledSpy.mockReturnValue(false);
+				const service = createBinanceOrderService();
+
+				await expect(service.placeOrder({
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'LIMIT',
+					quantity: 0.001,
+					price: 50000,
+					dryRun: true,
+					alertId: 'valid-alert-123',
+				})).rejects.toMatchObject({
+					code: 'ALERT_LINK_UNAVAILABLE',
+					statusCode: 409,
+				});
+			});
+
+			it('rejects with 409 ALERT_LINK_UNAVAILABLE when alertId is provided but firestore is unavailable', async () => {
+				getFirestoreSpy.mockReturnValue(null);
+				const service = createBinanceOrderService();
+
+				await expect(service.placeOrder({
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'LIMIT',
+					quantity: 0.001,
+					price: 50000,
+					dryRun: true,
+					alertId: 'valid-alert-123',
+				})).rejects.toMatchObject({
+					code: 'ALERT_LINK_UNAVAILABLE',
+					statusCode: 409,
+				});
+			});
+
+			it('rejects with 409 ALERT_LINK_UNAVAILABLE when reading alert throws a storage error', async () => {
+				getAlertByIdSpy.mockRejectedValue(new Error('Firestore read timeout'));
+				const service = createBinanceOrderService();
+
+				await expect(service.placeOrder({
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'LIMIT',
+					quantity: 0.001,
+					price: 50000,
+					dryRun: true,
+					alertId: 'valid-alert-123',
+				})).rejects.toMatchObject({
+					code: 'ALERT_LINK_UNAVAILABLE',
+					statusCode: 409,
+				});
+			});
+
+			it('rejects with 404 ALERT_NOT_FOUND when alert does not exist in AlertStorageService', async () => {
+				getAlertByIdSpy.mockResolvedValue(null);
+				const service = createBinanceOrderService();
+
+				await expect(service.placeOrder({
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'LIMIT',
+					quantity: 0.001,
+					price: 50000,
+					dryRun: true,
+					alertId: 'nonexistent-alert-999',
+				})).rejects.toMatchObject({
+					code: 'ALERT_NOT_FOUND',
+					statusCode: 404,
+				});
+			});
+
+			it('rejects with 400 INVALID_REQUEST when alertId is whitespace or non-string', async () => {
+				const service = createBinanceOrderService();
+
+				await expect(service.placeOrder({
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'LIMIT',
+					quantity: 0.001,
+					price: 50000,
+					dryRun: true,
+					alertId: '   ',
+				})).rejects.toMatchObject({
+					code: 'INVALID_REQUEST',
+					statusCode: 400,
+				});
+
+				await expect(service.placeOrder({
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'LIMIT',
+					quantity: 0.001,
+					price: 50000,
+					dryRun: true,
+					alertId: 12345,
+				})).rejects.toMatchObject({
+					code: 'INVALID_REQUEST',
+					statusCode: 400,
+				});
+			});
+
+			it('succeeds and adopts alert setupType when alert exists and setupType is omitted', async () => {
+				const service = createBinanceOrderService();
+
+				const result = await service.placeOrder({
+					symbol: 'BTCUSDT',
+					side: 'BUY',
+					type: 'LIMIT',
+					quantity: 0.001,
+					price: 50000,
+					dryRun: true,
+					alertId: 'valid-alert-123',
+					origin: 'admin_alert',
+				});
+
+				expect(result.success).toBe(true);
+				expect(result.alertId).toBe('valid-alert-123');
+				expect(result.origin).toBe('admin_alert');
+				expect(result.setupType).toBe('breakout');
+			});
 		});
 	});
 });

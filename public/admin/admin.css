@@ -387,3 +387,8 @@ cabros-fields, cabros-result { display: block; min-width: 0; }
 .quick-control-output { margin: 0; }
 .trading-pending-notice { display: grid; gap: .5rem; }
 .data-table-scroll { min-width: 26rem; }
+.trade-ticket { border: 1px solid var(--border-bright); background: var(--panel-soft); margin-top: .75rem; }
+.ticket-actions { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-top: .5rem; }
+.ticket-confirm-input { max-width: 16rem; }
+.positions-panel { display: grid; gap: 1rem; }
+.positions-ticket-host { margin-top: .75rem; }

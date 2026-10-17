@@ -9265,4 +9265,279 @@ describe('structured analysis forms', () => {
 		});
 	});
 
+	describe('trade this alert ticket and position close (issue #1276)', () => {
+		it('prefills trade ticket from alert with Binance pair, parsed signal side, alert price, and default quote size', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/alerts/alert-trade-1') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-trade-1',
+								text: 'BINANCE:BTCUSDT(1H) COMPRA precio: 65000.50',
+								symbol: 'BINANCE:BTCUSDT',
+								price: '65000.50',
+								signal: 'COMPRA',
+								enriched: false,
+							},
+						});
+					}
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'alerts');
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			detailForm.elements['path-alertId'].value = 'alert-trade-1';
+			await detailForm.dispatch('submit');
+			await flush();
+
+			const ticket = find(detailForm, (node) => node.className && node.className.includes('trade-ticket'));
+			expect(ticket).toBeDefined();
+			expect(ticket.textContent).toContain('Trade this alert');
+			expect(ticket.textContent).toContain('Linked alert: alert-trade-1');
+			expect(ticket.textContent).toContain('Environment: testnet');
+
+			const symbolInput = find(ticket, (n) => n.name === 'ticket-symbol');
+			expect(symbolInput.value).toBe('BTCUSDT');
+
+			const sideSelect = find(ticket, (n) => n.name === 'ticket-side');
+			expect(sideSelect.value).toBe('BUY');
+
+			const typeSelect = find(ticket, (n) => n.name === 'ticket-type');
+			expect(typeSelect.value).toBe('LIMIT');
+
+			const priceInput = find(ticket, (n) => n.name === 'ticket-price');
+			expect(priceInput.value).toBe('65000.50');
+		});
+
+		it('parses VENTA signal side from alert text and does not infer from sentiment', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/alerts/alert-sell-1') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-sell-1',
+								text: 'BINANCE:ETHUSDT(4H) VENTA at 3500',
+								symbol: 'BINANCE:ETHUSDT',
+								price: '3500',
+								enrichmentData: { sentiment: 'bullish' },
+								enriched: true,
+							},
+						});
+					}
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'alerts');
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			detailForm.elements['path-alertId'].value = 'alert-sell-1';
+			await detailForm.dispatch('submit');
+			await flush();
+
+			const ticket = find(detailForm, (node) => node.className && node.className.includes('trade-ticket'));
+			const sideSelect = find(ticket, (n) => n.name === 'ticket-side');
+			expect(sideSelect.value).toBe('SELL');
+		});
+
+		it('executes dryRun first, displays validated order, and requires typing CONFIRM for live submission', async () => {
+			const orderRequests = [];
+			const browser = createBrowser({
+				fetchImpl: async (url, options = {}) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/alerts/alert-trade-2') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-trade-2',
+								text: 'BINANCE:BTCUSDT(1H) COMPRA 60000',
+								symbol: 'BTCUSDT',
+								price: '60000',
+								enriched: false,
+							},
+						});
+					}
+					if (url === '/api/trading/binance/orders' && options.method === 'POST') {
+						const body = JSON.parse(options.body);
+						orderRequests.push({ body, headers: options.headers });
+						return response({
+							success: true,
+							dryRun: body.dryRun,
+							environment: 'testnet',
+							order: { orderId: 9988, symbol: 'BTCUSDT', side: body.side, type: body.type },
+						});
+					}
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'alerts');
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			detailForm.elements['path-alertId'].value = 'alert-trade-2';
+			await detailForm.dispatch('submit');
+			await flush();
+
+			const ticket = find(detailForm, (node) => node.className && node.className.includes('trade-ticket'));
+			const dryRunBtn = find(ticket, (n) => n.className && n.className.includes('trade-dry-run-btn'));
+			const submitBtn = find(ticket, (n) => n.className && n.className.includes('trade-submit-btn'));
+			const confirmInput = find(ticket, (n) => n.className && n.className.includes('ticket-confirm-input'));
+
+			expect(submitBtn.disabled).toBe(true);
+			expect(confirmInput.disabled).toBe(true);
+
+			// Click dry run
+			const qtyInput = find(ticket, (n) => n.name === 'ticket-quantity');
+			qtyInput.value = '0.001';
+			await dryRunBtn.dispatch('click');
+			await flush();
+
+			expect(orderRequests).toHaveLength(1);
+			expect(orderRequests[0].body.dryRun).toBe(true);
+			expect(orderRequests[0].body.alertId).toBe('alert-trade-2');
+			expect(orderRequests[0].body.origin).toBe('admin_alert');
+			expect(ticket.textContent).toContain('Dry run passed');
+			expect(confirmInput.disabled).toBe(false);
+			expect(submitBtn.disabled).toBe(true);
+
+			// Partial confirmation keeps submit disabled
+			confirmInput.value = 'CONFIR';
+			await confirmInput.dispatch('input');
+			expect(submitBtn.disabled).toBe(true);
+
+			// Exact "CONFIRM" enables submit
+			confirmInput.value = 'CONFIRM';
+			await confirmInput.dispatch('input');
+			expect(submitBtn.disabled).toBe(false);
+
+			// Click submit
+			await submitBtn.dispatch('click');
+			await flush();
+
+			expect(orderRequests).toHaveLength(2);
+			expect(orderRequests[1].body.dryRun).toBe(false);
+			expect(orderRequests[1].body.alertId).toBe('alert-trade-2');
+			expect(orderRequests[1].body.origin).toBe('admin_alert');
+			expect(orderRequests[1].body.idempotencyKey).toMatch(/^alert-trade-2-buy-[0-9a-z-]+$/);
+			expect(ticket.textContent).toContain('Order placed: #9988');
+		});
+
+		it('disables live submit when environment is live', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url, options = {}) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/alerts/alert-live') {
+						return response({
+							success: true,
+							alert: { id: 'alert-live', text: 'BTCUSDT COMPRA 50000', price: '50000', symbol: 'BTCUSDT' },
+						});
+					}
+					if (url === '/api/trading/binance/orders') {
+						return response({
+							success: true,
+							dryRun: true,
+							environment: 'live',
+						});
+					}
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'alerts');
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			detailForm.elements['path-alertId'].value = 'alert-live';
+			await detailForm.dispatch('submit');
+			await flush();
+
+			const ticket = find(detailForm, (node) => node.className && node.className.includes('trade-ticket'));
+			const dryRunBtn = find(ticket, (n) => n.className && n.className.includes('trade-dry-run-btn'));
+			const submitBtn = find(ticket, (n) => n.className && n.className.includes('trade-submit-btn'));
+			const confirmInput = find(ticket, (n) => n.className && n.className.includes('ticket-confirm-input'));
+
+			const qtyInput = find(ticket, (n) => n.name === 'ticket-quantity');
+			qtyInput.value = '0.001';
+			await dryRunBtn.dispatch('click');
+			await flush();
+
+			expect(ticket.textContent).toContain('Environment: live');
+			confirmInput.value = 'CONFIRM';
+			await confirmInput.dispatch('input');
+
+			expect(submitBtn.disabled).toBe(true);
+			expect(submitBtn.title).toContain('Live trading is disabled');
+		});
+
+		it('renders open positions in trading view and Close button prefills sell order with sellable quantity', async () => {
+			const queried = [];
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					queried.push(url);
+					if (url === '/openapi.json') return response(contract);
+					if (url.startsWith('/api/status')) {
+						return response({
+							dependencies: { binanceTrading: { environment: 'testnet', maxNotionalConfigured: true } },
+						});
+					}
+					if (url.startsWith('/api/outcomes/summary')) return response({ summary: {} });
+					if (url.startsWith('/api/outcomes')) return response({ outcomes: [] });
+					if (url.startsWith('/api/trading/binance/orders/audit')) return response({ audit: [] });
+					if (url.startsWith('/api/trading/positions')) {
+						return response({
+							success: true,
+							positions: [
+								{ symbol: 'BTCUSDT', quantity: '0.05', entryPrice: '50000', markPrice: '55000', unrealizedPnl: 250 },
+							],
+						});
+					}
+					if (url.startsWith('/api/trading/binance/account/balances')) {
+						return response({
+							success: true,
+							balances: [
+								{ asset: 'BTC', free: '0.04', locked: '0.01' },
+								{ asset: 'USDT', free: '1000', locked: '0' },
+							],
+						});
+					}
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			await flush();
+
+			expect(queried.some((u) => u.startsWith('/api/trading/positions'))).toBe(true);
+			const positionsPanel = find(browser.elementsById.view, (n) => n.className && n.className.includes('positions-panel'));
+			expect(positionsPanel).toBeDefined();
+			expect(positionsPanel.textContent).toContain('BTCUSDT');
+			expect(positionsPanel.textContent).toContain('0.05');
+
+			const closeBtn = find(positionsPanel, (n) => n.className && n.className.includes('position-close-btn'));
+			expect(closeBtn).toBeDefined();
+
+			await closeBtn.dispatch('click');
+			await flush();
+
+			expect(queried.some((u) => u.startsWith('/api/trading/binance/account/balances'))).toBe(true);
+			const ticket = find(positionsPanel, (n) => n.className && n.className.includes('trade-ticket'));
+			expect(ticket).toBeDefined();
+			expect(ticket.textContent).toContain('Close position (BTCUSDT)');
+
+			const symbolInput = find(ticket, (n) => n.name === 'ticket-symbol');
+			expect(symbolInput.value).toBe('BTCUSDT');
+
+			const sideSelect = find(ticket, (n) => n.name === 'ticket-side');
+			expect(sideSelect.value).toBe('SELL');
+
+			const qtyInput = find(ticket, (n) => n.name === 'ticket-quantity');
+			// Clamped to free balance of 0.04 from 0.05 position
+			expect(qtyInput.value).toBe('0.04');
+		});
+	});
 });
