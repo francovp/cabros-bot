@@ -57,15 +57,22 @@ describe('Postman collection contract', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');
 		const capabilities = findItem(collection.item, 'Get Capabilities');
+		const expectedSchedulerFields = [
+			'enabled', 'configured', 'ready', 'status', 'role', 'running', 'intervalMs', 'batchLimit',
+			'lastRunAt', 'lastRunDurationMs', 'lastRunScannedCount', 'lastRunExecutedCount',
+			'lastRunErrorCount', 'lastRunDeferredByFloorCount',
+		].sort();
 
 		expect(status).toBeDefined();
 		const statusBody = JSON.parse(status.response[0].body);
 		expect(statusBody.dependencies.scannerPresetScheduler).toBeDefined();
+		expect(Object.keys(statusBody.dependencies.scannerPresetScheduler).sort()).toEqual(expectedSchedulerFields);
 		expect(statusBody.dependencies.scannerPresetScheduler.lastRunDeferredByFloorCount).toBe(0);
 
 		expect(capabilities).toBeDefined();
 		const capabilitiesBody = JSON.parse(capabilities.response[0].body);
 		expect(capabilitiesBody.dependencies.scannerPresetScheduler).toBeDefined();
+		expect(Object.keys(capabilitiesBody.dependencies.scannerPresetScheduler).sort()).toEqual(expectedSchedulerFields);
 		expect(capabilitiesBody.dependencies.scannerPresetScheduler.lastRunDeferredByFloorCount).toBe(0);
 	});
 
