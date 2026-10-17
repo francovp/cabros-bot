@@ -16,6 +16,7 @@ const alertModule = require('../../controllers/webhooks/handlers/alert/alert');
 const requestRoutingModule = require('../notification/requestRouting');
 const sentryService = require('../monitoring/SentryService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
 
 const DEFAULT_SCHEDULER_INTERVAL_MS = 60000;
 const MIN_SCHEDULER_INTERVAL_MS = 1000;
@@ -78,6 +79,7 @@ class ScannerPresetSchedulerService {
 		this.workerId = options.workerId || `${process.pid}-${crypto.randomUUID()}`;
 		this.running = false;
 		this.timer = null;
+		this.startupGeneration = 0;
 		this.activeSweepPromise = null;
 		this.shutdownRequested = false;
 
@@ -118,7 +120,11 @@ class ScannerPresetSchedulerService {
 	}
 
 	getLeaseMs() {
-		return parseEnvInt(process.env.SCANNER_PRESET_SCHEDULER_LEASE_MS, DEFAULT_LEASE_MS, 10000, 600000);
+		const runtime = getRuntimeConfig();
+		const raw = runtime.SCANNER_PRESET_SCHEDULER_LEASE_MS !== undefined
+			? runtime.SCANNER_PRESET_SCHEDULER_LEASE_MS
+			: process.env.SCANNER_PRESET_SCHEDULER_LEASE_MS;
+		return parseEnvInt(raw, DEFAULT_LEASE_MS, 10000, 600000);
 	}
 
 	getStatus() {
@@ -156,11 +162,37 @@ class ScannerPresetSchedulerService {
 
 		this.running = true;
 		this.shutdownRequested = false;
-		this._scheduleNextSweep(this.getIntervalMs());
+		const startupGeneration = ++this.startupGeneration;
+
+		const startupJitterMs = resolveStartupJitterMs({
+			envVar: 'SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS',
+			runtimeKey: 'SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS',
+			globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+			globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+		});
+		if (startupJitterMs > 0) {
+			console.info(`[ScannerPresetScheduler] Applying startup jitter (${startupJitterMs}ms max)`);
+			applyStartupJitter(startupJitterMs)
+				.then(() => {
+					if (!this.running || this.shutdownRequested || startupGeneration !== this.startupGeneration) {
+						return;
+					}
+					this._scheduleNextSweep(this.getIntervalMs());
+				})
+				.catch((err) => {
+					console.warn('[ScannerPresetScheduler] Startup jitter failed:', err.message);
+					if (this.running && !this.shutdownRequested && startupGeneration === this.startupGeneration) {
+						this._scheduleNextSweep(this.getIntervalMs());
+					}
+				});
+		} else {
+			this._scheduleNextSweep(this.getIntervalMs());
+		}
 	}
 
 	async stopWorker(options = {}) {
 		const { drain = true, timeoutMs = 10000 } = options;
+		this.startupGeneration += 1;
 		this.running = false;
 		this.shutdownRequested = true;
 
@@ -389,6 +421,7 @@ class ScannerPresetSchedulerService {
 
 					const lockedUntilMs = data.lockedUntil ? new Date(data.lockedUntil).getTime() : 0;
 					if (lockedUntilMs > claimNowMs) return false;
+					preset.nextRunAt = data.nextRunAt || null;
 
 					if (this._isFloorDeferred(data, claimNowMs)) return false;
 
@@ -424,6 +457,7 @@ class ScannerPresetSchedulerService {
 
 				const lockedUntilMs = data.lockedUntil ? new Date(data.lockedUntil).getTime() : 0;
 				if (lockedUntilMs > claimNowMs) return false;
+				preset.nextRunAt = data.nextRunAt || null;
 
 				if (this._isFloorDeferred(data, claimNowMs)) return false;
 
@@ -452,6 +486,7 @@ class ScannerPresetSchedulerService {
 
 		const lockedUntilMs = mem.lockedUntil ? new Date(mem.lockedUntil).getTime() : 0;
 		if (lockedUntilMs > claimNowMs) return false;
+		preset.nextRunAt = mem.nextRunAt || null;
 
 		if (this._isFloorDeferred(mem, claimNowMs)) return false;
 
@@ -499,7 +534,7 @@ class ScannerPresetSchedulerService {
 
 				let notificationManager = this.getNotificationManager();
 				if (!notificationManager && this.botGetter) {
-					notificationManager = await alertModule.initializeNotificationServices(resolveBot(this.botGetter));
+					notificationManager = await alertModule.getOrInitializeNotificationManager(resolveBot(this.botGetter));
 				}
 
 				if (notificationManager) {
@@ -514,6 +549,14 @@ class ScannerPresetSchedulerService {
 						parentSpan: sentryService.getActiveSpan(),
 					});
 				}
+
+				// Preset reports currently render unranked; persist the same item directions.
+				marketScannerReportModule.recordMarketScannerOutcomes(scanResults, { ...preset, ranked: false }, {
+					idempotencyKeyPrefix: JSON.stringify(['scanner-preset', preset.id, preset.nextRunAt || null]),
+					requestId: `preset-${preset.id}-${startTime}`,
+					startTime,
+					source: 'scanner-preset',
+				});
 			}
 		} catch (err) {
 			status = 'error';

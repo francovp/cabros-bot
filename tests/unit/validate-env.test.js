@@ -67,15 +67,42 @@ describe('validate-env', () => {
 	it('reports numeric values outside documented bounds and rejects fractional integers', () => {
 		process.env.TRADINGVIEW_MCP_TIMEOUT_MS = '10';
 		process.env.TRADINGVIEW_MCP_MAX_RETRIES = '1.5';
+		process.env.TRADINGVIEW_MCP_CACHE_TTL_MS = '9999';
 		process.env.GROUNDING_MAX_SOURCES = '0';
+		process.env.REQUEST_TIMEOUT_MS = '500';
 
 		const variables = validateEnv().map((warning) => warning.variable);
 
 		expect(variables).toEqual(expect.arrayContaining([
 			'TRADINGVIEW_MCP_TIMEOUT_MS',
 			'TRADINGVIEW_MCP_MAX_RETRIES',
+			'TRADINGVIEW_MCP_CACHE_TTL_MS',
 			'GROUNDING_MAX_SOURCES',
+			'REQUEST_TIMEOUT_MS',
 		]));
+	});
+
+	it('reports news cache max-entries bounds for issue #689', () => {
+		process.env.NEWS_CACHE_MAX_ENTRIES = '0';
+		process.env.NEWS_DELIVERY_LOCK_MAX_ENTRIES = '-1';
+		process.env.URL_SHORTENER_CACHE_MAX_ENTRIES = 'not-a-number';
+		process.env.URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES = '999999';
+
+		const variables = validateEnv().map((warning) => warning.variable);
+
+		expect(variables).toEqual(expect.arrayContaining([
+			'NEWS_CACHE_MAX_ENTRIES',
+			'NEWS_DELIVERY_LOCK_MAX_ENTRIES',
+			'URL_SHORTENER_CACHE_MAX_ENTRIES',
+			'URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES',
+		]));
+	});
+
+	it('reports NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS bounds', () => {
+		process.env.NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS = '500';
+
+		const variables = validateEnv().map((warning) => warning.variable);
+		expect(variables).toContain('NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS');
 	});
 
 	it('accepts personal WhatsApp chat IDs ending with @c.us', () => {
@@ -117,6 +144,30 @@ describe('validate-env', () => {
 		process.env.TELEGRAM_TOPIC_ROUTES = 'webhook-signal:101,market-scanner:202';
 		warnings = validateEnv();
 		expect(warnings.map((w) => w.variable)).not.toContain('TELEGRAM_TOPIC_ROUTES');
+	});
+
+	it('rejects unknown signal outcome entry-price providers', () => {
+		process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'mcp,wat';
+
+		expect(validateEnv().map((warning) => warning.variable)).toContain('SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES');
+	});
+
+	it('validates TRADINGVIEW_MCP_WARMUP_INTERVAL_MS and TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS bounds', () => {
+		process.env.TRADINGVIEW_MCP_WARMUP_INTERVAL_MS = '1000'; // below 60000
+		let warnings = validateEnv();
+		expect(warnings.map((w) => w.variable)).toContain('TRADINGVIEW_MCP_WARMUP_INTERVAL_MS');
+
+		process.env.TRADINGVIEW_MCP_WARMUP_INTERVAL_MS = '600000';
+		warnings = validateEnv();
+		expect(warnings.map((w) => w.variable)).not.toContain('TRADINGVIEW_MCP_WARMUP_INTERVAL_MS');
+
+		process.env.TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS = '1000'; // below 5000
+		warnings = validateEnv();
+		expect(warnings.map((w) => w.variable)).toContain('TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS');
+
+		process.env.TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS = '60000';
+		warnings = validateEnv();
+		expect(warnings.map((w) => w.variable)).not.toContain('TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS');
 	});
 
 	it('formats warnings with remediation and no raw value', () => {

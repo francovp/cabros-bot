@@ -12,11 +12,15 @@
 }(typeof window === 'undefined' ? globalThis : window, () => {
 	const confirmations = {
 		'POST /api/alerts/{alertId}/replay': 'Replay this alert?',
+		'POST /api/alerts/batch/replay': 'Replay selected alerts?',
+		'POST /api/alerts/batch/delete': 'Delete selected alerts? This action cannot be undone.',
 		'POST /api/scanner-presets/{id}/run': 'Run this scanner preset?',
 		'DELETE /api/scanner-presets/{id}': 'Delete this scanner preset?',
 		'POST /api/jobs/{jobId}/cancel': 'Cancel this job?',
 		'POST /api/jobs/{jobId}/retry': 'Retry this job?',
 		'POST /api/jobs/{jobId}/retry-failed': 'Retry failed items for this job?',
+		'DELETE /api/alert-subscribers/{id}': 'Delete this alert subscriber webhook?',
+		'POST /api/alert-subscribers/{id}/test': 'Send test webhook ping to this subscriber?',
 	};
 
 	const hasJsonBody = (body) => body !== undefined && body !== null
@@ -43,6 +47,14 @@
 			.reduce((redacted, variant) => redacted.split(variant).join('[REDACTED]'), String(value));
 	};
 
+	const sanitizeForHistory = (text) => {
+		if (!text || typeof text !== 'string') return text;
+		return text
+			.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization|discordWebhookUrl|webhookUrl)['"]?\s*[:=]\s*)(['"])(?:(?!\2).)*\2/gi, '$1$2[REDACTED]$2')
+			.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization|discordWebhookUrl|webhookUrl)['"]?\s*[:=]\s*)(?!['"])[^'"\s,}\]&]+/gi, '$1[REDACTED]')
+			.replace(/(https?:\/\/(?:[a-zA-Z0-9-]+\.)?discord(?:app)?\.com\/api\/webhooks\/)\d+(?:\/(?!\[REDACTED\])[^'"?\s/]*)?/gi, '$1[REDACTED]/[REDACTED]');
+	};
+
 	const operationDefinitions = (contract) => Object.entries(contract.paths)
 		.flatMap(([path, methods]) => Object.entries(methods)
 			.filter(([method]) => ['get', 'post', 'put', 'patch', 'delete'].includes(method))
@@ -60,7 +72,7 @@
 
 	const confirmRequest = (definition, confirm) => !definition.confirm || confirm(definition.confirm);
 
-	const createRequest = ({ path, method, query, body, apiKey, authToken, baseUrl }) => {
+	const createRequest = ({ path, method, query, body, apiKey, authToken, baseUrl, headers: extraHeaders }) => {
 		if (typeof path !== 'string' || !path.startsWith('/api/') || path.includes('?') || path.includes('#')) {
 			throw new Error('API path must start with /api/');
 		}
@@ -76,6 +88,13 @@
 		if (hasJsonBody(body)) {
 			headers['Content-Type'] = 'application/json';
 			options.body = JSON.stringify(body);
+		}
+		if (extraHeaders && typeof extraHeaders === 'object' && !Array.isArray(extraHeaders)) {
+			Object.entries(extraHeaders).forEach(([key, value]) => {
+				if (value !== undefined && value !== null && value !== '') {
+					headers[key] = String(value);
+				}
+			});
 		}
 		if (apiKey) headers['x-api-key'] = apiKey;
 		if (authToken) headers.Authorization = `Bearer ${authToken}`;
@@ -110,6 +129,15 @@
 	const VOLUME_CONFIRMATION_OVERHEAD_MS = 30000;
 	const VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS = (VOLUME_CONFIRMATION_MCP_CALLS * TRADINGVIEW_MCP_MAX_TIMEOUT_MS) + VOLUME_CONFIRMATION_OVERHEAD_MS; // 390000 ms
 
+	// Symbol analysis budget breakdown:
+	// - ONE createDeadline() signal spans the base analyzeSymbolIdentifier call and the optional
+	//   multi_timeframe_analysis / multi_agent_debate calls, so this budget is never multiplied per
+	//   MCP call the way volume confirmation is. Worst case is a single min(EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS, 120,000 ms).
+	// - Ingress, route handling, symbol validation, and network transport overhead: 30,000 ms
+	const SYMBOL_ANALYSIS_BACKEND_BUDGET_MS = 120000;
+	const SYMBOL_ANALYSIS_OVERHEAD_MS = 30000;
+	const SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS = SYMBOL_ANALYSIS_BACKEND_BUDGET_MS + SYMBOL_ANALYSIS_OVERHEAD_MS; // 150000 ms
+
 	// Long-running alert and analysis pipeline budget breakdown:
 	// - TradingView MCP enrichment maximum budget: 120,000 ms (TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS max)
 	// - Gemini Grounding analysis maximum timeout: 120,000 ms (GROUNDING_TIMEOUT_MS max)
@@ -140,13 +168,36 @@
 		'/api/webhook/alert',
 		'/api/webhook/message',
 		'/api/alerts/{alertId}/replay',
+		'/api/alerts/batch/replay',
 	]);
 
-	const getApiRequestTimeout = (definition) => {
+	const getBatchReplayTimeout = (options) => {
+		let count = 1;
+		if (options && typeof options === 'object') {
+			if (typeof options.batchSize === 'number' && options.batchSize > 0) {
+				count = Math.min(options.batchSize, 50);
+			} else if (options.body) {
+				try {
+					const parsed = typeof options.body === 'string' ? JSON.parse(options.body) : options.body;
+					if (Array.isArray(parsed && parsed.alertIds) && parsed.alertIds.length > 0) {
+						count = Math.min(parsed.alertIds.length, 50);
+					}
+				} catch (_) {}
+			}
+		}
+		return count > 1 ? count * LONG_RUNNING_API_REQUEST_TIMEOUT_MS : LONG_RUNNING_API_REQUEST_TIMEOUT_MS;
+	};
+
+	const getApiRequestTimeout = (definition, options) => {
 		if (!definition || !definition.path) return API_REQUEST_TIMEOUT_MS;
-		if (definition.path === '/api/webhook/volume-confirmation'
-			|| definition.path === '/api/webhook/symbol-analysis') {
+		if (definition.path === '/api/webhook/volume-confirmation') {
 			return VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS;
+		}
+		if (definition.path === '/api/webhook/symbol-analysis') {
+			return SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS;
+		}
+		if (definition.path === '/api/alerts/batch/replay') {
+			return getBatchReplayTimeout(options);
 		}
 		return LONG_RUNNING_REQUEST_PATHS.has(definition.path)
 			? LONG_RUNNING_API_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS;
@@ -171,6 +222,9 @@
 		LONG_RUNNING_BACKEND_BUDGET_MS,
 		LONG_RUNNING_OVERHEAD_MS,
 		LONG_RUNNING_REQUEST_PATHS,
+		SYMBOL_ANALYSIS_API_REQUEST_TIMEOUT_MS,
+		SYMBOL_ANALYSIS_BACKEND_BUDGET_MS,
+		SYMBOL_ANALYSIS_OVERHEAD_MS,
 		TRADINGVIEW_MCP_MAX_ENRICHMENT_BUDGET_MS,
 		TRADINGVIEW_MCP_MAX_TIMEOUT_MS,
 		VOLUME_CONFIRMATION_API_REQUEST_TIMEOUT_MS,
@@ -181,8 +235,10 @@
 		createRequest,
 		getAdminRole,
 		getApiRequestTimeout,
+		getBatchReplayTimeout,
 		operationDefinitions,
 		redactSecret,
+		sanitizeForHistory,
 		validateQuery,
 	};
 }));

@@ -6,6 +6,7 @@ const alertStorageService = require('../../src/services/storage/AlertStorageServ
 const marketScannerController = require('../../src/controllers/webhooks/handlers/marketScanner/marketScanner');
 const notificationAlertModule = require('../../src/controllers/webhooks/handlers/alert/alert');
 const requestRouting = require('../../src/services/notification/requestRouting');
+const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 
 describe('ScannerPresetSchedulerService', () => {
 	let savedEnv;
@@ -18,6 +19,7 @@ describe('ScannerPresetSchedulerService', () => {
 		process.env.ENABLE_SCANNER_PRESET_SCHEDULER = 'true';
 		process.env.SCANNER_PRESET_SCHEDULER_WORKER_ROLE = 'web';
 		process.env.SCANNER_PRESET_SCHEDULER_INTERVAL_MS = '60000';
+		process.env.WORKER_STARTUP_JITTER_MS = '0';
 		process.env.SCANNER_PRESET_SCHEDULER_BATCH_LIMIT = '50';
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'false';
 
@@ -141,6 +143,53 @@ describe('ScannerPresetSchedulerService', () => {
 	});
 
 	describe('sweep and execution in memory mode', () => {
+		it('stores one outcome per symbol and scheduled occurrence after a failed finalization', async () => {
+			const { waitForBackgroundTasks } = require('../../src/lib/backgroundTaskTracker');
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'mcp';
+			const outcomes = new Map();
+			alertStorageService.getFirestore.mockReturnValue({ collection: () => ({
+				add: async (document) => {
+					const id = String(outcomes.size);
+					outcomes.set(id, document);
+					return { id };
+				},
+				doc: (id) => ({ id, create: async (document) => {
+					if (outcomes.has(id)) throw Object.assign(new Error('Already exists'), { code: 6 });
+					outcomes.set(id, document);
+				} }),
+			}) });
+			const preset = await scannerPresetService.createPreset({
+				name: 'Replay preset', exchange: 'BINANCE', scans: ['top_gainers'],
+				schedule: { enabled: true, cadence: '5m' },
+				nextRunAt: '2026-10-02T12:00:00.000Z',
+			});
+			const items = [
+				{ symbol: 'BTCUSDT', changePercent: 5, indicators: { close: 50000 } },
+				{ symbol: 'ETHUSDT', changePercent: 4, indicators: { close: 3000 } },
+			];
+			const scan = jest.spyOn(marketScannerController, 'runScans').mockResolvedValue([
+				{ scan: 'top_gainers', status: 'success', items },
+			]);
+			jest.spyOn(notificationAlertModule, 'getNotificationManager').mockReturnValue({});
+			jest.spyOn(requestRouting, 'sendWithNotificationRouting').mockResolvedValue([{ channel: 'telegram', success: true }]);
+			jest.spyOn(scheduler, '_finalizePresetRun').mockRejectedValue(new Error('process lost before finalization'));
+			await expect(scheduler._executePreset(preset)).rejects.toThrow('process lost');
+			await waitForBackgroundTasks();
+			expect(outcomes.size).toBe(2);
+			const originalIds = [...outcomes.keys()];
+			outcomes.get(originalIds[0]).evaluationMarker = 'preserve me';
+			// A new attempt may return the same symbols in a different order.
+			scan.mockResolvedValue([{ scan: 'top_gainers', status: 'success', items: [...items].reverse() }]);
+			await expect(scheduler._executePreset({ ...preset })).rejects.toThrow('process lost');
+			await waitForBackgroundTasks();
+			expect(outcomes.size).toBe(2);
+			expect(outcomes.get(originalIds[0]).evaluationMarker).toBe('preserve me');
+			await expect(scheduler._executePreset({ ...preset, nextRunAt: '2026-10-02T12:05:00.000Z' })).rejects.toThrow('process lost');
+			await waitForBackgroundTasks();
+			expect(outcomes.size).toBe(4);
+		});
+
 		it('finds and executes due preset, then advances nextRunAt', async () => {
 			const preset = await scannerPresetService.createPreset({
 				name: 'Due preset',
@@ -178,6 +227,50 @@ describe('ScannerPresetSchedulerService', () => {
 			expect(updated.lastRunAt).toBeDefined();
 			expect(new Date(updated.nextRunAt).getTime()).toBeGreaterThan(Date.now());
 			expect(updated.lockedUntil).toBeNull();
+		});
+
+		it('records signal outcomes for executed presets when enabled', async () => {
+			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue({});
+
+			const preset = await scannerPresetService.createPreset({
+				name: 'Outcome Preset',
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				scans: ['bollinger_scan'],
+				ranked: true,
+				schedule: { enabled: true, cadence: '1h' },
+				nextRunAt: new Date(Date.now() - 1000).toISOString(),
+			});
+
+			const mockScanResults = [
+				{
+					scan: 'bollinger_scan',
+					status: 'success',
+					items: [{ symbol: 'ADAUSDT', changePercent: 7.2, trendConfluence: { direction: 'Bearish' }, indicators: { close: 0.5, atr: 0.02, bb_lower: 0.45, bb_upper: 0.55 } }],
+				},
+			];
+
+			jest.spyOn(marketScannerController, 'runScans').mockResolvedValue(mockScanResults);
+			jest.spyOn(requestRouting, 'sendWithNotificationRouting').mockResolvedValue([{ channel: 'telegram', success: true }]);
+			jest.spyOn(notificationAlertModule, 'getNotificationManager').mockReturnValue({});
+
+			await scheduler.sweep();
+
+			expect(recordSpy).toHaveBeenCalledTimes(1);
+			const recorded = recordSpy.mock.calls[0][0];
+			expect(recorded.source).toBe('scanner-preset');
+			expect(recorded.symbol).toBe('ADAUSDT');
+			expect(recorded.exchange).toBe('BINANCE');
+			expect(recorded.timeframe).toBe('4h');
+			expect(recorded.setupType).toBe('bollinger_scan');
+			expect(recorded.side).toBe('BUY');
+			expect(recorded.price).toBe(0.5);
+			expect(recorded.stop).toBe(0.47);
+			expect(recorded.score).toBe(7.2);
+
+			recordSpy.mockRestore();
+			signalOutcomeService.isEnabled.mockRestore();
 		});
 
 		it('skips presets that are not due or disabled', async () => {
@@ -267,6 +360,15 @@ describe('ScannerPresetSchedulerService', () => {
 	});
 
 	describe('claim exclusivity and concurrency', () => {
+		it.each([true, false])('captures the occurrence read at claim time (transaction=%s)', async (transactional) => {
+			const preset = { id: 'claimed-occurrence', nextRunAt: '2026-10-02T12:00:00.000Z' };
+			mockDocs.set(preset.id, { schedule: { enabled: true }, nextRunAt: '2026-10-02T12:05:00.000Z' });
+			if (!transactional) delete mockFirestore.runTransaction;
+			jest.spyOn(scannerPresetService, '_getFirestore').mockReturnValue(mockFirestore);
+			expect(await scheduler._claimPreset(preset, Date.parse('2026-10-02T12:10:00.000Z'), 120000)).toBe(true);
+			expect(preset.nextRunAt).toBe('2026-10-02T12:05:00.000Z');
+		});
+
 		it('prevents concurrent schedulers from double-running the same preset', async () => {
 			const preset = await scannerPresetService.createPreset({
 				name: 'Contended preset',
@@ -672,6 +774,41 @@ describe('ScannerPresetSchedulerService', () => {
 	});
 
 	describe('worker lifecycle and shutdown drain', () => {
+		it('waits for startup jitter before scheduling the first scanner-preset sweep', async () => {
+			process.env.WORKER_STARTUP_JITTER_MS = '1000';
+			process.env.SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS = '50';
+			const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+			jest.useFakeTimers();
+			try {
+				scheduler.startWorker();
+				expect(scheduler.timer).toBeNull();
+				await jest.advanceTimersByTimeAsync(49);
+				expect(scheduler.timer).toBeNull();
+				await jest.advanceTimersByTimeAsync(1);
+				expect(scheduler.timer).not.toBeNull();
+			} finally {
+				await scheduler.stopWorker({ drain: false });
+				randomIntSpy.mockRestore();
+				jest.useRealTimers();
+			}
+		});
+
+		it('does not schedule a scanner-preset sweep when stopped during startup jitter', async () => {
+			process.env.WORKER_STARTUP_JITTER_MS = '1000';
+			process.env.SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS = '50';
+			const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+			jest.useFakeTimers();
+			try {
+				scheduler.startWorker();
+				await scheduler.stopWorker({ drain: false });
+				await jest.advanceTimersByTimeAsync(50);
+				expect(scheduler.timer).toBeNull();
+			} finally {
+				randomIntSpy.mockRestore();
+				jest.useRealTimers();
+			}
+		});
+
 		it('drains in-flight sweep on stopWorker', async () => {
 			let resolveScan;
 			const scanPromise = new Promise((resolve) => {
@@ -709,6 +846,16 @@ describe('ScannerPresetSchedulerService', () => {
 			await stopPromise;
 			expect(drained).toBe(true);
 			expect(scheduler.running).toBe(false);
+		});
+
+		it('honors SCANNER_PRESET_SCHEDULER_LEASE_MS from environment and Remote Config', () => {
+			expect(scheduler.getLeaseMs()).toBe(120000);
+
+			process.env.SCANNER_PRESET_SCHEDULER_LEASE_MS = '180000';
+			expect(scheduler.getLeaseMs()).toBe(180000);
+
+			process.env.SCANNER_PRESET_SCHEDULER_LEASE_MS = 'invalid';
+			expect(scheduler.getLeaseMs()).toBe(120000);
 		});
 	});
 });
