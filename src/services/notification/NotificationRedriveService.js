@@ -5,6 +5,8 @@ const crypto = require('crypto');
 const AlertStorageService = require('../storage/AlertStorageService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const { fireAndForget } = require('../../lib/fireAndForget');
+const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
 const { signalRepeatCooldown, nextMonotonicGeneration } = require('../alerts/signalRepeatCooldown');
 
 const COLLECTION_NAME = 'notificationDeadLetters';
@@ -307,6 +309,8 @@ class NotificationRedriveService {
 		this.supersessionStore = new Map();
 		this.reconciliationPromises = new Map();
 		this.workerTimer = null;
+		this._workerStartupGeneration = 0;
+		this._workerStartupAbortController = null;
 		this.activeSweepPromise = null;
 		this.running = false;
 		this.notificationManagerGetter = options.notificationManagerGetter || null;
@@ -614,10 +618,11 @@ class NotificationRedriveService {
 			if (firestore) {
 				try {
 					let timer = null;
-					const write = firestore.collection(COLLECTION_NAME).doc(recordId)
-						.set(sanitizedRecord, { merge: true });
-					const writeOutcome = write.then(() => 'persisted', (error) => {
-							console.warn('[NotificationRedriveService] Failed to persist dead-letter %s in Firestore, kept in-memory:', recordId, error.message);
+					const writeOutcome = fireAndForget('notificationRedrive', () => firestore.collection(COLLECTION_NAME)
+						.doc(recordId).set(sanitizedRecord, { merge: true }))
+						.then((result) => {
+							if (result.ok) return 'persisted';
+							console.warn('[NotificationRedriveService] Failed to persist dead-letter %s in Firestore, kept in-memory:', recordId, result.error.message);
 							return 'failed';
 						});
 					const persisted = await Promise.race([
@@ -1606,7 +1611,7 @@ class NotificationRedriveService {
 					}, 0);
 					this.persistedPendingCount = Math.max(0, Math.floor(count + localDeltaAfterSnapshot));
 					this._pendingCountObservedAt = new Date(observedAtMs);
-					return Math.floor(count);
+					return this.persistedPendingCount;
 				};
 
 				const countPromise = Promise.resolve()
@@ -2066,23 +2071,63 @@ class NotificationRedriveService {
 			return false;
 		}
 
-		if (this.workerTimer) {
+		if (this.workerTimer || this.running) {
 			return true;
 		}
 
 		this._isDraining = false;
 		this.running = true;
-		if (configuredRole === 'worker') {
-			this._initialSeedPromise = this.seedCountersFromHeartbeat();
+		const startupJitterMs = resolveStartupJitterMs({
+			envVar: 'NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS',
+			runtimeKey: 'NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS',
+			globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+			globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+		});
+		if (startupJitterMs > 0) {
+			console.info(`[NotificationRedriveService] Applying startup jitter (${startupJitterMs}ms max)`);
 		}
-		this.workerTimer = setInterval(() => {
-			trackBackgroundTask(this.sweep()).catch((err) => {
-				console.warn('[NotificationRedriveService] Worker sweep error:', err.message);
-			});
-		}, intervalMs);
 
-		if (options.unref !== false && typeof this.workerTimer.unref === 'function') {
-			this.workerTimer.unref();
+		const startupGeneration = ++this._workerStartupGeneration;
+		const startupAbortController = new AbortController();
+		this._workerStartupAbortController = startupAbortController;
+		const scheduleSweeps = () => {
+			if (!this.running || startupGeneration !== this._workerStartupGeneration) {
+				return;
+			}
+			if (this._workerStartupAbortController === startupAbortController) {
+				this._workerStartupAbortController = null;
+			}
+			if (configuredRole === 'worker') {
+				this._initialSeedPromise = this.seedCountersFromHeartbeat();
+			}
+			this.workerTimer = setInterval(() => {
+				trackBackgroundTask(this.sweep()).catch((err) => {
+					console.warn('[NotificationRedriveService] Worker sweep error:', err.message);
+				});
+			}, intervalMs);
+			if (options.unref !== false && typeof this.workerTimer.unref === 'function') {
+				this.workerTimer.unref();
+			}
+			trackBackgroundTask(this.sweep()).catch((err) => {
+				console.warn('[NotificationRedriveService] Initial sweep error:', err.message);
+			});
+		};
+		if (startupJitterMs > 0) {
+			applyStartupJitter(startupJitterMs, {
+				unref: options.unref !== false,
+				signal: startupAbortController.signal,
+			}).then(scheduleSweeps).catch((err) => {
+				if (this._workerStartupAbortController === startupAbortController) {
+					this._workerStartupAbortController = null;
+				}
+				if (!startupAbortController.signal.aborted) {
+					console.warn('[NotificationRedriveService] Startup jitter failed:', err.message);
+				}
+				scheduleSweeps();
+			});
+		} else {
+			this._workerStartupAbortController = null;
+			scheduleSweeps();
 		}
 
 		console.info(`[NotificationRedriveService] Worker started in ${configuredRole} role (interval: ${intervalMs}ms)`);
@@ -2090,6 +2135,12 @@ class NotificationRedriveService {
 	}
 
 	async stopWorker(options = {}) {
+		this._workerStartupGeneration += 1;
+		if (this._workerStartupAbortController) {
+			this._workerStartupAbortController.abort();
+			this._workerStartupAbortController = null;
+		}
+		this.running = false;
 		if (this.workerTimer) {
 			clearInterval(this.workerTimer);
 			this.workerTimer = null;
@@ -2098,8 +2149,6 @@ class NotificationRedriveService {
 			clearInterval(this.telemetrySyncTimer);
 			this.telemetrySyncTimer = null;
 		}
-		this.running = false;
-
 		if (options.drain) {
 			this._isDraining = true;
 			const timeoutMs = parsePositiveInteger(options.timeoutMs, MAX_DRAIN_TIMEOUT_MS);
@@ -2352,6 +2401,11 @@ class NotificationRedriveService {
 	}
 
 	resetForTesting() {
+		this._workerStartupGeneration += 1;
+		if (this._workerStartupAbortController) {
+			this._workerStartupAbortController.abort();
+			this._workerStartupAbortController = null;
+		}
 		if (this.workerTimer) {
 			clearInterval(this.workerTimer);
 			this.workerTimer = null;

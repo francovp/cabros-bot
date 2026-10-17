@@ -30,6 +30,8 @@ jest.mock('../../src/controllers/webhooks/handlers/alert/alert', () => ({
 	postAlert: jest.fn(() => (_req, res) => res.status(501).json({ error: 'not mocked' })),
 	initializeNotificationServices: jest.fn(),
 	getNotificationManager: jest.fn(),
+	getOrInitializeNotificationManager: jest.fn(),
+	processEnrichment: jest.fn(),
 }));
 
 jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
@@ -81,6 +83,7 @@ describe('Alerts API Integration Tests', () => {
 		};
 		alertHandler.getNotificationManager.mockReturnValue(mockNotificationManager);
 		alertHandler.initializeNotificationServices.mockResolvedValue(mockNotificationManager);
+		alertHandler.getOrInitializeNotificationManager.mockResolvedValue(mockNotificationManager);
 		alertStorageService.isEnabled.mockReturnValue(true);
 		alertStorageService.saveReplayAttempt.mockResolvedValue('replay-1');
 		alertStorageService.listReplayAttempts.mockResolvedValue({ replays: [], hasMore: false, nextBefore: null });
@@ -258,10 +261,17 @@ describe('Alerts API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(400);
 
-		expect(res.body).toEqual({
-			error: 'Invalid include parameter \'unknown_field\'. Allowed values: enrichment_summary.',
+		// The structured envelope adds success/retryable/requestId to the original
+		// {error, code} shape, so this can no longer be an exact match.
+		expect(res.body).toEqual(expect.objectContaining({
+			error: "Invalid include parameter 'unknown_field'. Allowed values: enrichment_summary.",
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('returns 400 for invalid before cursor values', async () => {
@@ -270,10 +280,15 @@ describe('Alerts API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(400);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('passes symbol, eventCategory, and exchange filters to alertStorageService.listAlerts', async () => {
@@ -327,37 +342,57 @@ describe('Alerts API Integration Tests', () => {
 			.get('/api/alerts?symbol=')
 			.set('x-api-key', 'test-key')
 			.expect(400);
-		expect(emptySymbol.body).toEqual({
+		expect(emptySymbol.body).toEqual(expect.objectContaining({
 			error: 'Invalid symbol filter. Use a non-empty string up to 64 characters.',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(emptySymbol.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 
 		const emptyCategory = await request(app)
 			.get('/api/alerts?eventCategory=')
 			.set('x-api-key', 'test-key')
 			.expect(400);
-		expect(emptyCategory.body).toEqual({
+		expect(emptyCategory.body).toEqual(expect.objectContaining({
 			error: 'Invalid eventCategory filter. Use a non-empty string up to 64 characters.',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(emptyCategory.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 
 		const emptyExchange = await request(app)
 			.get('/api/alerts?exchange=')
 			.set('x-api-key', 'test-key')
 			.expect(400);
-		expect(emptyExchange.body).toEqual({
+		expect(emptyExchange.body).toEqual(expect.objectContaining({
 			error: 'Invalid exchange filter. Use a non-empty string up to 64 characters.',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(emptyExchange.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 
 		const whitespaceSymbol = await request(app)
 			.get('/api/alerts?symbol=%20%20%20')
 			.set('x-api-key', 'test-key')
 			.expect(400);
-		expect(whitespaceSymbol.body).toEqual({
+		expect(whitespaceSymbol.body).toEqual(expect.objectContaining({
 			error: 'Invalid symbol filter. Use a non-empty string up to 64 characters.',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(whitespaceSymbol.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('accepts an opaque nextBefore cursor from a previous response', async () => {
@@ -392,10 +427,15 @@ describe('Alerts API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(403);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
 			code: 'FEATURE_DISABLED',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('returns 503 when Firestore reads are unavailable for the list endpoint', async () => {
@@ -408,10 +448,15 @@ describe('Alerts API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(503);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Alert storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.',
 			code: 'STORAGE_UNAVAILABLE',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: true,
+			requestId: expect.any(String),
+		}));
 	});
 
 	// ── Issue #1285 ──────────────────────────────────────────────────────────
@@ -594,6 +639,11 @@ describe('Alerts API Integration Tests', () => {
 				setup_type: { populated: 1, percentage: 50 },
 				risk_reward_ratio: { populated: 1, percentage: 50 },
 			},
+			directionEchoRate: {
+				echoed: 0,
+				total: 1,
+				percentage: 0,
+			},
 			byPromptProvenance: [],
 		};
 		alertStorageService.summarizeAlerts.mockResolvedValue({
@@ -607,6 +657,54 @@ describe('Alerts API Integration Tests', () => {
 
 		expect(res.body.summary.enrichment.riskMetadataCoverage).toEqual(riskMetadataCoverage);
 		expect(res.body.summary.shadowModeMetrics).toBe('No measurements found');
+	});
+
+	it('passes requested outcome breakdowns through shadowModeMetrics', async () => {
+		signalOutcomeService.isEnabled.mockReturnValue(true);
+		const shadowModeMetrics = {
+			symbolBreakdown: [{ symbol: 'BTCUSDT', exchange: 'BINANCE', received: 1 }],
+			setupBreakdown: [{ setupType: 'breakout', exchange: 'BINANCE', received: 1 }],
+			truncated: false,
+		};
+		signalOutcomeService.getMetricsSummary.mockResolvedValue(shadowModeMetrics);
+		alertStorageService.summarizeAlerts.mockResolvedValue({ totalAlerts: 1 });
+
+		const res = await request(app)
+			.get('/api/alerts/summary?breakdown=Symbol,setup')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(signalOutcomeService.getMetricsSummary).toHaveBeenCalledWith(expect.objectContaining({
+			breakdown: ['symbol', 'setup'],
+		}));
+		expect(res.body.summary.shadowModeMetrics).toEqual(shadowModeMetrics);
+	});
+
+	it('rejects unsupported outcome breakdown values', async () => {
+		const res = await request(app)
+			.get('/api/alerts/summary?breakdown=symbol,unknown')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual({
+			error: 'Invalid breakdown parameter. Allowed values: symbol, setup.',
+			code: 'INVALID_REQUEST',
+		});
+		expect(alertStorageService.summarizeAlerts).not.toHaveBeenCalled();
+	});
+
+	it('rejects repeated outcome breakdown query parameters', async () => {
+		const res = await request(app)
+			.get('/api/alerts/summary?breakdown=symbol&breakdown=setup')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual({
+			error: 'Invalid breakdown parameter. Allowed values: symbol, setup.',
+			code: 'INVALID_REQUEST',
+		});
+		expect(signalOutcomeService.getMetricsSummary).not.toHaveBeenCalled();
+		expect(alertStorageService.summarizeAlerts).not.toHaveBeenCalled();
 	});
 
 	it('returns evidence coverage from the protected summary endpoint', async () => {
@@ -687,10 +785,15 @@ describe('Alerts API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(400);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 		expect(alertStorageService.summarizeAlerts).not.toHaveBeenCalled();
 	});
 
@@ -704,10 +807,15 @@ describe('Alerts API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(400);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Invalid summary window. from must be before or equal to to.',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('passes symbol, eventCategory, and exchange filters to alertStorageService.summarizeAlerts', async () => {
@@ -729,33 +837,73 @@ describe('Alerts API Integration Tests', () => {
 		}));
 	});
 
+	it('passes includeDecisionRollup=true to the summary service', async () => {
+		alertStorageService.summarizeAlerts.mockResolvedValue({ totalAlerts: 0, bySource: {} });
+
+		await request(app)
+			.get('/api/alerts/summary?includeDecisionRollup=true')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.summarizeAlerts).toHaveBeenCalledWith(expect.objectContaining({
+			includeDecisionRollup: true,
+		}));
+	});
+
+	it('rejects non-boolean includeDecisionRollup values', async () => {
+		const res = await request(app)
+			.get('/api/alerts/summary?includeDecisionRollup=yes')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			error: 'Invalid includeDecisionRollup flag. Use true or false.',
+			code: 'INVALID_REQUEST',
+		}));
+	});
+
 	it('returns 400 when GET /api/alerts/summary receives invalid filter values', async () => {
 		const emptySymbol = await request(app)
 			.get('/api/alerts/summary?symbol=')
 			.set('x-api-key', 'test-key')
 			.expect(400);
-		expect(emptySymbol.body).toEqual({
+		expect(emptySymbol.body).toEqual(expect.objectContaining({
 			error: 'Invalid symbol filter. Use a non-empty string up to 64 characters.',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(emptySymbol.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 
 		const emptyCategory = await request(app)
 			.get('/api/alerts/summary?eventCategory=')
 			.set('x-api-key', 'test-key')
 			.expect(400);
-		expect(emptyCategory.body).toEqual({
+		expect(emptyCategory.body).toEqual(expect.objectContaining({
 			error: 'Invalid eventCategory filter. Use a non-empty string up to 64 characters.',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(emptyCategory.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 
 		const emptyExchange = await request(app)
 			.get('/api/alerts/summary?exchange=')
 			.set('x-api-key', 'test-key')
 			.expect(400);
-		expect(emptyExchange.body).toEqual({
+		expect(emptyExchange.body).toEqual(expect.objectContaining({
 			error: 'Invalid exchange filter. Use a non-empty string up to 64 characters.',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(emptyExchange.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('passes signalClass filter to alertStorageService.summarizeAlerts', async () => {
@@ -1028,12 +1176,31 @@ describe('Alerts API Integration Tests', () => {
 			includeEnrichment: false,
 		});
 		expect(res.headers['content-type']).toContain('text/csv');
-		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,feature,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
+		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,feature,channels,deliveryResults,suppressedRepeat,suppressionReason,tokenUsage,text');
 		expect(res.text).toContain('\'=alert-1,,-42,\'@webhook');
 		expect(res.text).toContain('"\'=@SUM(1,1), ""quoted""\r\n+next"');
 		expect(res.text).not.toContain('=alert-1,-42,@webhook');
 		expect(res.text).toContain('PROVIDER_LIMIT');
 		expect(res.text).toContain('}]",true,,');
+		expect(res.text.split('\n')[0]).not.toContain('decision');
+	});
+
+	it('includes the decision CSV column only when explicitly requested', async () => {
+		alertStorageService.exportAlerts.mockResolvedValue({
+			alerts: [{
+				id: 'alert-decision-1',
+				decision: { gates: [{ name: 'same-signal-cooldown', decision: 'suppress' }] },
+			}],
+		});
+
+		const res = await request(app)
+			.get('/api/alerts/export?format=csv&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&includeDecision=true')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(alertStorageService.exportAlerts).toHaveBeenCalledWith(expect.objectContaining({ includeDecision: true }));
+		expect(res.text.split('\n')[0]).toContain('decision');
+		expect(res.text).toContain('same-signal-cooldown');
 	});
 
 	it('includes entry-price mirrors in CSV export', async () => {
@@ -1078,7 +1245,7 @@ describe('Alerts API Integration Tests', () => {
 			.expect(200);
 
 		expect(res.headers['content-type']).toContain('text/csv');
-		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,feature,channels,deliveryResults,suppressedRepeat,tokenUsage,text');
+		expect(res.text).toContain('id,requestId,receivedAt,source,signalClass,enriched,useTradingViewData,tradingViewEnrichmentApplied,tradingViewEnrichmentStatus,eventCategory,confidence,sentimentScore,dedupStatus,feature,channels,deliveryResults,suppressedRepeat,suppressionReason,tokenUsage,text');
 		expect(res.text).toContain('news-123,req-news-456,2026-06-06T12:00:00.000Z,news-monitor,news_event,true,false,false,not_applicable,price_surge,0.85,0.75,fresh');
 		expect(res.text).toContain('BTCUSDT: Bitcoin surges past 100k');
 		expect(res.text).toContain(',news-analysis,');
@@ -1110,10 +1277,15 @@ describe('Alerts API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(400);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Export requests require bounded from and to ISO-8601 timestamps.',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 		expect(alertStorageService.exportAlerts).not.toHaveBeenCalled();
 	});
 
@@ -1123,10 +1295,15 @@ describe('Alerts API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(400);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Invalid export format. Use jsonl or csv.',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 		expect(alertStorageService.exportAlerts).not.toHaveBeenCalled();
 	});
 
@@ -1136,10 +1313,28 @@ describe('Alerts API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(400);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Invalid includeEnrichment flag. Use true or false.',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
+		expect(alertStorageService.exportAlerts).not.toHaveBeenCalled();
+	});
+
+	it('returns 400 when includeDecision flag is invalid', async () => {
+		const res = await request(app)
+			.get('/api/alerts/export?format=jsonl&from=2026-06-06T00:00:00.000Z&to=2026-06-07T00:00:00.000Z&includeDecision=maybe')
+			.set('x-api-key', 'test-key')
+			.expect(400);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			error: 'Invalid includeDecision flag. Use true or false.',
+			code: 'INVALID_REQUEST',
+		}));
 		expect(alertStorageService.exportAlerts).not.toHaveBeenCalled();
 	});
 
@@ -1279,10 +1474,15 @@ describe('Alerts API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(404);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Alert not found',
 			code: 'NOT_FOUND',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('returns 503 when Firestore reads are unavailable for the detail endpoint', async () => {
@@ -1295,10 +1495,15 @@ describe('Alerts API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(503);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Alert storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.',
 			code: 'STORAGE_UNAVAILABLE',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: true,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('replays a stored alert to selected channels and records the replay attempt', async () => {
@@ -1342,6 +1547,31 @@ describe('Alerts API Integration Tests', () => {
 			replayId: 'replay-1',
 			results: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
 		});
+	});
+
+	it('uses the shared bootstrap when replay has no initialized notification manager', async () => {
+		alertHandler.getNotificationManager.mockReturnValue(null);
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-bootstrap',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Bootstrap replay',
+			deliveryResults: [{ channel: 'telegram', success: false }],
+			source: 'webhook',
+		});
+
+		await request(app)
+			.post('/api/alerts/alert-bootstrap/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-bootstrap-key')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(alertHandler.getOrInitializeNotificationManager).toHaveBeenCalledWith(null);
+		expect(alertHandler.initializeNotificationServices).not.toHaveBeenCalled();
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({ text: 'Bootstrap replay' }),
+			['telegram'],
+		);
 	});
 
 	it('preserves signalClass when replaying a stored alert', async () => {
@@ -1399,6 +1629,184 @@ describe('Alerts API Integration Tests', () => {
 		expect(res.body.success).toBe(true);
 	});
 
+	it('replays a stored alert with reEnrich=true query parameter, running enrichment pipeline', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-123',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay me',
+			enriched: true,
+			enrichmentData: { sentiment: 'bullish' },
+			tokenUsage: { totalTokens: 42 },
+			deliveryResults: [{ channel: 'whatsapp', success: false }],
+			source: 'webhook',
+			useTradingViewData: false,
+		});
+
+		const newEnrichment = { sentiment: 'super-bullish', current_price: 100 };
+		alertHandler.processEnrichment.mockImplementation(async (candidate) => {
+			candidate.enriched = newEnrichment;
+			return true;
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay?reEnrich=true')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-enrich-query')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(alertHandler.processEnrichment).toHaveBeenCalledWith(
+			expect.objectContaining({ text: 'Replay me', source: 'webhook' }),
+			expect.objectContaining({ useTradingViewData: false })
+		);
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				text: 'Replay me',
+				enriched: newEnrichment,
+			}),
+			['telegram']
+		);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith({
+			alertId: 'alert-123',
+			idempotencyKey: 'replay-key-enrich-query',
+			channels: ['telegram'],
+			deliveryResults: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+			reEnriched: true,
+			enrichmentData: newEnrichment,
+		});
+		expect(res.body).toEqual({
+			success: true,
+			alertId: 'alert-123',
+			replayId: 'replay-1',
+			results: [{ channel: 'telegram', success: true, messageId: 'tg-1' }],
+			reEnriched: true,
+			originalEnrichment: { sentiment: 'bullish' },
+			reEnrichedData: newEnrichment,
+		});
+	});
+
+	it('replays a stored alert with reEnrich: true in JSON request body', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-123',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay me',
+			enriched: false,
+			enrichmentData: null,
+			deliveryResults: [],
+			source: 'webhook',
+		});
+
+		const newEnrichment = { sentiment: 'bullish' };
+		alertHandler.processEnrichment.mockImplementation(async (candidate) => {
+			candidate.enriched = newEnrichment;
+			return true;
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-enrich-body')
+			.send({ channels: ['telegram'], reEnrich: true })
+			.expect(200);
+
+		expect(alertHandler.processEnrichment).toHaveBeenCalled();
+		expect(res.body.reEnriched).toBe(true);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith(
+			expect.objectContaining({
+				reEnriched: true,
+				enrichmentData: newEnrichment,
+			})
+		);
+	});
+
+	it('falls back to original text and logs warning when re-enrichment fails (fail-open)', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-123',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay me',
+			enriched: true,
+			enrichmentData: { sentiment: 'original-data' },
+			deliveryResults: [],
+			source: 'webhook',
+		});
+
+		alertHandler.processEnrichment.mockRejectedValue(new Error('Enrichment service timed out'));
+		const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay?reEnrich=true')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-enrich-fail')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(warnSpy).toHaveBeenCalledWith(
+			expect.stringContaining('[AlertReplay] Enrichment failed'),
+			expect.stringContaining('Enrichment service timed out')
+		);
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				text: 'Replay me',
+				enriched: { sentiment: 'original-data' },
+			}),
+			['telegram']
+		);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith(
+			expect.objectContaining({
+				reEnriched: false,
+			})
+		);
+		expect(res.body.reEnriched).toBeUndefined();
+		expect(res.body.originalEnrichment).toEqual({ sentiment: 'original-data' });
+		expect(res.body.reEnrichedData).toBeNull();
+		warnSpy.mockRestore();
+	});
+
+	it('logs a warning and skips enrichment when both ENABLE_GEMINI_GROUNDING and ENABLE_TRADINGVIEW_MCP_ENRICHMENT are false', async () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'false';
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-123',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Replay me',
+			enriched: true,
+			enrichmentData: { sentiment: 'original-data' },
+			deliveryResults: [],
+			source: 'webhook',
+		});
+
+		const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay?reEnrich=true')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-enrich-disabled')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(alertHandler.processEnrichment).not.toHaveBeenCalled();
+		expect(warnSpy).toHaveBeenCalledWith(
+			expect.stringContaining('[AlertReplay] reEnrich requested but enrichment is disabled')
+		);
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				text: 'Replay me',
+				enriched: { sentiment: 'original-data' },
+			}),
+			['telegram']
+		);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith(
+			expect.objectContaining({
+				reEnriched: false,
+			})
+		);
+		expect(res.body.reEnriched).toBeUndefined();
+		warnSpy.mockRestore();
+	});
+
 	it('returns 400 when replay is missing an idempotency key', async () => {
 		const res = await request(app)
 			.post('/api/alerts/alert-123/replay')
@@ -1406,10 +1814,15 @@ describe('Alerts API Integration Tests', () => {
 			.send({ channels: ['telegram'] })
 			.expect(400);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Replay requests require an idempotency-key or x-idempotency-key header or idempotencyKey body field.',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('returns 400 when replay channels contain unsupported names', async () => {
@@ -1420,10 +1833,99 @@ describe('Alerts API Integration Tests', () => {
 			.send({ channels: ['telegram', 'slack'] })
 			.expect(400);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Unknown channel(s): slack. Valid channels: telegram, whatsapp, discord.',
 			code: 'INVALID_REQUEST',
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
+	});
+
+	it('returns 400 when replay dryRun in body is not a boolean', async () => {
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-invalid-dryrun-body')
+			.send({ channels: ['telegram'], dryRun: 'garbage' })
+			.expect(400);
+
+		expect(res.body).toEqual({
+			success: false,
+			error: '"dryRun" body must be a boolean if provided',
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
 		});
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+	});
+
+	it('returns 400 when replay dryRun in query string is not a boolean', async () => {
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay?dryRun=invalid')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-invalid-dryrun-query')
+			.send({ channels: ['telegram'] })
+			.expect(400);
+
+		expect(res.body).toEqual({
+			success: false,
+			error: '"dryRun" query must be a boolean if provided',
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		});
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+	});
+
+	it('returns 400 when valid body dryRun is combined with invalid query dryRun', async () => {
+		const res = await request(app)
+			.post('/api/alerts/alert-123/replay?dryRun=invalid')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-key-conflict-dryrun')
+			.send({ channels: ['telegram'], dryRun: true })
+			.expect(400);
+
+		expect(res.body).toEqual({
+			success: false,
+			error: '"dryRun" query must be a boolean if provided',
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		});
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+	});
+
+	it('replays alert live when dryRun=false is explicitly provided via query string', async () => {
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-789-q',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'Explicit false in query',
+			enriched: false,
+			enrichmentData: null,
+			deliveryResults: [],
+			source: 'webhook',
+		});
+
+		const res = await request(app)
+			.post('/api/alerts/alert-789-q/replay?dryRun=false')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-explicit-false-query')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(res.body.dryRun).toBeUndefined();
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(1);
+		expect(alertStorageService.saveReplayAttempt).toHaveBeenCalledWith(
+			expect.objectContaining({
+				alertId: 'alert-789-q',
+			}),
+		);
 	});
 
 	it('returns payload preview and skips delivery/persistence on dryRun=true via body', async () => {
@@ -1598,7 +2100,7 @@ describe('Alerts API Integration Tests', () => {
 		});
 	});
 
-	it('still returns payload preview when dryRun=false is explicitly provided', async () => {
+	it('replays alert live when dryRun=false is explicitly provided', async () => {
 		alertStorageService.getAlertById.mockResolvedValue({
 			id: 'alert-789',
 			receivedAt: '2026-06-06T12:34:56.000Z',
@@ -1636,10 +2138,15 @@ describe('Alerts API Integration Tests', () => {
 			.send({ channels: ['telegram'], dryRun: true })
 			.expect(404);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Alert not found',
 			code: 'NOT_FOUND',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 		expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
 	});
@@ -1652,10 +2159,15 @@ describe('Alerts API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(403);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
 			code: 'FEATURE_DISABLED',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 		expect(alertStorageService.listReplayAttempts).not.toHaveBeenCalled();
 	});
 
@@ -1751,10 +2263,15 @@ describe('Alerts API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(503);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Firestore down',
 			code: 'STORAGE_UNAVAILABLE',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: true,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('includes lastReplay on GET /api/alerts/:alertId when a replay exists', async () => {
@@ -1867,6 +2384,42 @@ describe('Alerts API Integration Tests', () => {
 			expect(res.body.code).toBe('INVALID_REQUEST');
 		});
 
+		it('returns 400 when batch replay dryRun in body is not a boolean', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], idempotencyKey: 'batch-k-invalid-dryrun', dryRun: 'garbage' })
+				.expect(400);
+
+			expect(res.body).toEqual({
+				success: false,
+				error: '"dryRun" body must be a boolean if provided',
+				code: 'INVALID_REQUEST',
+				requestId: expect.any(String),
+				retryable: false,
+			});
+			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+		});
+
+		it('returns 400 when batch replay dryRun in query string is not a boolean', async () => {
+			const res = await request(app)
+				.post('/api/alerts/batch/replay?dryRun=invalid')
+				.set('x-api-key', 'test-key')
+				.send({ alertIds: ['alert-1'], idempotencyKey: 'batch-k-invalid-dryrun-q' })
+				.expect(400);
+
+			expect(res.body).toEqual({
+				success: false,
+				error: '"dryRun" query must be a boolean if provided',
+				code: 'INVALID_REQUEST',
+				requestId: expect.any(String),
+				retryable: false,
+			});
+			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+		});
+
 		it('replays alerts live to selected channels and records attempts', async () => {
 			alertStorageService.getAlertById
 				.mockResolvedValueOnce({
@@ -1916,12 +2469,12 @@ describe('Alerts API Integration Tests', () => {
 				.expect(200);
 
 			expect(res.body.success).toBe(true);
-			expect(res.body.results[0]).toEqual({
+			expect(res.body.results[0]).toEqual(expect.objectContaining({
 				alertId: 'missing-alert',
 				success: false,
 				error: 'Alert not found',
 				code: 'NOT_FOUND',
-			});
+			}));
 			expect(res.body.results[1].success).toBe(true);
 		});
 
@@ -1943,6 +2496,28 @@ describe('Alerts API Integration Tests', () => {
 			expect(res.body.dryRun).toBe(true);
 			expect(res.body.results[0].dryRun).toBe(true);
 			expect(res.body.results[0].payloadPreview.text).toBe('Dry run alert');
+			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
+		});
+
+		it('supports dryRun preview via query string on batch replay', async () => {
+			alertStorageService.getAlertById.mockResolvedValueOnce({
+				id: 'alert-batch-q',
+				text: 'Batch query dry run',
+				source: 'webhook',
+			});
+
+			const res = await request(app)
+				.post('/api/alerts/batch/replay?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'batch-dry-q-1')
+				.send({ alertIds: ['alert-batch-q'] })
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.dryRun).toBe(true);
+			expect(res.body.results[0].dryRun).toBe(true);
+			expect(res.body.results[0].payloadPreview.text).toBe('Batch query dry run');
 			expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
 		});
@@ -2038,12 +2613,12 @@ describe('Alerts API Integration Tests', () => {
 				.expect(200);
 
 			expect(res.body.success).toBe(true);
-			expect(res.body.results[0]).toEqual({
+			expect(res.body.results[0]).toEqual(expect.objectContaining({
 				alertId: 'alert-1',
 				success: false,
 				error: 'Telegram API unreachable',
 				code: 'DELIVERY_FAILED',
-			});
+			}));
 			expect(res.body.results[1].success).toBe(true);
 		});
 
@@ -2063,20 +2638,20 @@ describe('Alerts API Integration Tests', () => {
 				.expect(200);
 
 			expect(res.body.success).toBe(true);
-			expect(res.body.results[0]).toEqual({
+			expect(res.body.results[0]).toEqual(expect.objectContaining({
 				alertId: 'alert-1',
 				success: false,
 				error: 'Channel delivery failed',
 				code: 'DELIVERY_FAILED',
 				results: [{ channel: 'telegram', success: false, error: 'Chat not found' }],
-			});
-			expect(res.body.results[1]).toEqual({
+			}));
+			expect(res.body.results[1]).toEqual(expect.objectContaining({
 				alertId: 'alert-2',
 				success: false,
 				error: 'No notification channels delivered',
 				code: 'DELIVERY_FAILED',
 				results: [],
-			});
+			}));
 			expect(alertStorageService.saveReplayAttempt).not.toHaveBeenCalled();
 		});
 
@@ -2127,12 +2702,12 @@ describe('Alerts API Integration Tests', () => {
 			expect(res.body.results).toHaveLength(2);
 			// alert-1 failed closed on reconciliation error, so sendToChannels was only called once (for alert-2)
 			expect(mockNotificationManager.sendToChannels).toHaveBeenCalledTimes(1);
-			expect(res.body.results[0]).toEqual({
+			expect(res.body.results[0]).toEqual(expect.objectContaining({
 				alertId: 'alert-1',
 				success: false,
 				error: 'Failed to reconcile existing replay attempt: Firestore read timeout',
 				code: 'RECONCILIATION_FAILED',
-			});
+			}));
 			expect(res.body.results[1].success).toBe(true);
 			expect(res.body.results[1].alertId).toBe('alert-2');
 		});

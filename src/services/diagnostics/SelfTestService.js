@@ -15,6 +15,7 @@
 
 const packageJson = require('../../../package.json');
 const { getDeploymentCommit } = require('../../lib/deploymentEnvironment');
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 
 const DEFAULT_PER_CHECK_TIMEOUT_MS = 5000;
 const DEFAULT_SUITE_TIMEOUT_MS = 30000;
@@ -119,6 +120,16 @@ function toBoolean(value) {
 	return value === 'true';
 }
 
+function isRuntimeGateEnabled(key) {
+	const remote = resolveRemoteOverride(key);
+	if (typeof remote === 'boolean') {
+		return remote;
+	}
+	return toBoolean(process.env[key])
+		|| (key === 'ENABLE_FIRESTORE_IDEMPOTENCY'
+			&& toBoolean(process.env.ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE));
+}
+
 function hasValue(value) {
 	return typeof value === 'string' ? value.trim().length > 0 : value != null;
 }
@@ -193,10 +204,12 @@ function buildChecks({ botOrGetter, getBinanceOrderService }) {
 	checks.push({
 		id: 'firestore.collections',
 		run: () => {
-			const firestoreEnabled = toBoolean(process.env.ENABLE_FIRESTORE_ALERT_STORAGE)
-				|| toBoolean(process.env.ENABLE_FIRESTORE_JOB_STORAGE)
-				|| toBoolean(process.env.ENABLE_FIRESTORE_SCANNER_PRESETS)
-				|| toBoolean(process.env.ENABLE_FIRESTORE_IDEMPOTENCY);
+			const firestoreEnabled = [
+				'ENABLE_FIRESTORE_ALERT_STORAGE',
+				'ENABLE_FIRESTORE_JOB_STORAGE',
+				'ENABLE_FIRESTORE_SCANNER_PRESETS',
+				'ENABLE_FIRESTORE_IDEMPOTENCY',
+			].some(isRuntimeGateEnabled);
 			if (!firestoreEnabled) {
 				return { status: 'skipped', message: 'No Firestore feature is enabled' };
 			}
@@ -346,7 +359,12 @@ function createSelfTestService({ botOrGetter, getBinanceOrderService } = {}) {
 		};
 	}
 
-	return { run, getLastResult, getStatus };
+	function updateDependencies({ botOrGetter: newBot, getBinanceOrderService: newBinance } = {}) {
+		if (newBot !== undefined) botOrGetter = newBot;
+		if (newBinance !== undefined) getBinanceOrderService = newBinance;
+	}
+
+	return { run, getLastResult, getStatus, updateDependencies };
 }
 
 module.exports = {

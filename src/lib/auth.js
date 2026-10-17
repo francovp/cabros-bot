@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const API_KEY_COMPARISON_LENGTH = 4096;
 const sentryService = require('../services/monitoring/SentryService');
 const { isProductionLikeEnvironment, isPreviewEnvironment } = require('./deploymentEnvironment');
+const { sendErrorFrom } = require('./errorEnvelope');
 
 const QUERY_DEPRECATION_FLAG_KEY = '__cabrosApiKeyQueryDeprecationWarned';
 
@@ -55,6 +56,15 @@ function warnQueryApiKeyDeprecationOnce(req) {
 	console.warn(`[auth] The api-key query parameter is deprecated and may leak through reverse-proxy access logs. Route: ${route}.${sunsetNote}`);
 }
 
+function rejectQueryApiKeyAfterSunset(req, res) {
+	if (!isQueryApiKeyPresent(req) || !isQueryAuthSunsetReached()) return false;
+	sendErrorFrom(res, 401, {
+		error: 'The api-key query parameter support has been removed; use the x-api-key header instead.',
+		code: 'API_KEY_QUERY_REMOVED',
+	});
+	return true;
+}
+
 /**
  * Middleware to validate API key for webhook endpoints.
  * Requires `x-api-key` header to match `WEBHOOK_API_KEY` environment variable.
@@ -94,7 +104,7 @@ function validateApiKey(req, res, next) {
 			} catch (_) {
 				// Fail-safe
 			}
-			return res.status(503).json({
+			return sendErrorFrom(res, 503, {
 				error: 'Service Misconfigured: WEBHOOK_API_KEY is not set in production',
 				code: 'WEBHOOK_API_KEY_UNSET',
 			});
@@ -105,22 +115,17 @@ function validateApiKey(req, res, next) {
 	}
 
 	// Sunset has passed: query-parameter auth is no longer accepted.
-	if (isQueryApiKeyPresent(req) && isQueryAuthSunsetReached()) {
-		return res.status(401).json({
-			error: 'The api-key query parameter support has been removed; use the x-api-key header instead.',
-			code: 'API_KEY_QUERY_REMOVED',
-		});
-	}
+	if (rejectQueryApiKeyAfterSunset(req, res)) return;
 
 	// Get API key from headers (recommended) or query params. Headers is recommended, query params are less secure.
 	const apiKey = req.headers['x-api-key'] || req.query['api-key'];
 
 	if (!apiKey) {
-		return res.status(401).json({ error: 'Unauthorized: Missing API key' });
+		return sendErrorFrom(res, 401, { error: 'Unauthorized: Missing API key' });
 	}
 
 	if (!isValidApiKey(req)) {
-		return res.status(403).json({ error: 'Forbidden: Invalid API key' });
+		return sendErrorFrom(res, 403, { error: 'Forbidden: Invalid API key' });
 	}
 
 	if (isQueryApiKeyPresent(req)) {
@@ -153,6 +158,57 @@ function isValidApiKey(req) {
 		&& sourceValidApiKey.length <= API_KEY_COMPARISON_LENGTH;
 }
 
+function isAdminApiKeyScoped() {
+	return Boolean(String(process.env.ADMIN_API_KEY || '').trim());
+}
+
+function getAdminApiKey() {
+	const adminKey = String(process.env.ADMIN_API_KEY || '').trim();
+	return adminKey || String(process.env.WEBHOOK_API_KEY || '');
+}
+
+function isValidConfiguredApiKey(supplied, configured) {
+	if (!configured) return false;
+	const keyToCheck = Array.isArray(supplied) ? supplied[0] : supplied;
+	if (typeof keyToCheck !== 'string') return false;
+
+	const sourceApiKey = Buffer.from(keyToCheck);
+	const sourceConfiguredApiKey = Buffer.from(configured);
+	const bufferApiKey = Buffer.alloc(API_KEY_COMPARISON_LENGTH);
+	const bufferConfiguredApiKey = Buffer.alloc(API_KEY_COMPARISON_LENGTH);
+	sourceApiKey.copy(bufferApiKey, 0, 0, API_KEY_COMPARISON_LENGTH);
+	sourceConfiguredApiKey.copy(bufferConfiguredApiKey, 0, 0, API_KEY_COMPARISON_LENGTH);
+	const buffersMatch = crypto.timingSafeEqual(bufferApiKey, bufferConfiguredApiKey);
+	return buffersMatch
+		&& sourceApiKey.length === sourceConfiguredApiKey.length
+		&& sourceApiKey.length <= API_KEY_COMPARISON_LENGTH
+		&& sourceConfiguredApiKey.length <= API_KEY_COMPARISON_LENGTH;
+}
+
+function isValidAdminApiKey(req) {
+	const adminKey = String(process.env.ADMIN_API_KEY || '').trim();
+	if (adminKey) {
+		// Dedicated credentials stay out of URLs; only the legacy fallback below
+		// preserves query compatibility.
+		const supplied = req && req.headers && (req.headers['x-api-key'] || req.headers['X-API-Key']);
+		return isValidConfiguredApiKey(supplied, adminKey);
+	}
+	// Preserve legacy webhook-key behavior, including query compatibility,
+	// until the operator configures the dedicated admin credential.
+	if (process.env.WEBHOOK_API_KEY) return isValidApiKey(req);
+	// The permissive local/test behavior is handled by validateApiKey only when
+	// Firebase auth is disabled. With Firebase auth enabled, no key is valid.
+	return false;
+}
+
+function isValidBinanceTradingApiKey(req) {
+	const tradingKey = String(process.env.BINANCE_TRADING_API_KEY || '').trim();
+	if (!tradingKey) return false;
+	// Dedicated trading credentials are header-only to avoid URL exposure.
+	const supplied = req && req.headers && (req.headers['x-api-key'] || req.headers['X-API-Key']);
+	return isValidConfiguredApiKey(supplied, tradingKey);
+}
+
 function _resetQueryDeprecationFlagForTests() {
 	delete process.env[QUERY_DEPRECATION_FLAG_KEY];
 }
@@ -162,6 +218,12 @@ module.exports = {
 	_isQueryAuthSunsetReached: isQueryAuthSunsetReached,
 	_parseApiKeyQuerySunset: parseApiKeyQuerySunset,
 	_resetQueryDeprecationFlagForTests,
+	rejectQueryApiKeyAfterSunset,
+	getAdminApiKey,
+	isAdminApiKeyScoped,
+	isValidAdminApiKey,
 	isValidApiKey,
+	isValidBinanceTradingApiKey,
+	warnQueryApiKeyDeprecationOnce,
 	validateApiKey,
 };
