@@ -113,6 +113,16 @@ describe('Telegram TradingView commands', () => {
 		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
 	});
 
+	it('applies canonical rate limits to /history and /alertas alias', async () => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 11 }, () => buildContext('/alertas'));
+
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+
+		expect(next).toHaveBeenCalledTimes(10);
+		expect(contexts[10].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes para /history'));
+	});
+
 	it.each(['/preferences', '/filter', '/quiet', '/threshold', '/categories'])('applies canonical limits to the %s preference alias', async (command) => {
 		const next = jest.fn();
 		const contexts = Array.from({ length: 21 }, () => buildContext(command));
@@ -667,6 +677,26 @@ describe('Telegram TradingView commands', () => {
 	});
 
 	describe('alertHistoryCommand', () => {
+		beforeEach(() => {
+			process.env.TELEGRAM_ALLOWED_CHAT_IDS = '123';
+		});
+
+		afterEach(() => {
+			delete process.env.TELEGRAM_ALLOWED_CHAT_IDS;
+		});
+
+		it('rejects unauthorized chats', async () => {
+			process.env.TELEGRAM_ALLOWED_CHAT_IDS = '999';
+			const context = buildContext('/history');
+
+			await alertHistoryCommand(context);
+
+			expect(alertStorageService.listAlerts).not.toHaveBeenCalled();
+			expect(context.reply).toHaveBeenCalledWith(
+				'No tienes autorización para consultar el historial de alertas.',
+			);
+		});
+
 		it('reports when alert storage is disabled', async () => {
 			alertStorageService.isEnabled.mockReturnValue(false);
 			const context = buildContext('/history');
@@ -679,7 +709,7 @@ describe('Telegram TradingView commands', () => {
 			);
 		});
 
-		it('filters by symbol and formats delivery status as MarkdownV2', async () => {
+		it('filters by symbol and formats delivery status as MarkdownV2 with escaped characters', async () => {
 			alertStorageService.isEnabled.mockReturnValue(true);
 			alertStorageService.listAlerts.mockResolvedValue({
 				alerts: [
@@ -710,7 +740,74 @@ describe('Telegram TradingView commands', () => {
 			expect(message).toContain('BULLISH');
 			expect(message).toContain('telegram OK');
 			expect(message).toContain('whatsapp FALLÓ');
+			// Verify MarkdownV2 pipe is escaped
+			expect(message).toContain('\\| Enriquecida: sí');
 			expect(message).not.toContain('ETHUSDT');
+		});
+
+		it('honors positional limit argument when symbol is provided', async () => {
+			alertStorageService.isEnabled.mockReturnValue(true);
+			alertStorageService.listAlerts.mockResolvedValue({
+				alerts: Array.from({ length: 15 }, (_, i) => ({
+					symbol: 'BTCUSDT',
+					receivedAt: '2026-08-31T12:34:00.000Z',
+					deliveryResults: [{ channel: 'telegram', success: true }],
+				})),
+			});
+			const context = buildContext('/history BTCUSDT 10');
+
+			await alertHistoryCommand(context);
+
+			const message = context.reply.mock.calls[0][0];
+			expect(message).toContain('últimas 10');
+			// 10 alerts rendered
+			expect(message).toContain('10\\.');
+			expect(message).not.toContain('11\\.');
+		});
+
+		it('handles skipped channel delivery results and filters by status=skipped', async () => {
+			alertStorageService.isEnabled.mockReturnValue(true);
+			alertStorageService.listAlerts.mockResolvedValue({
+				alerts: [
+					{
+						symbol: 'SOLUSDT',
+						receivedAt: '2026-08-31T12:34:00.000Z',
+						deliveryResults: [
+							{ channel: 'telegram', success: true, skipped: true },
+						],
+					},
+					{
+						symbol: 'BTCUSDT',
+						receivedAt: '2026-08-31T12:30:00.000Z',
+						deliveryResults: [
+							{ channel: 'telegram', success: true },
+							{ channel: 'whatsapp', success: true, skipped: true },
+						],
+					},
+				],
+			});
+			const context = buildContext('/history status skipped');
+
+			await alertHistoryCommand(context);
+
+			const message = context.reply.mock.calls[0][0];
+			expect(message).toContain('SOLUSDT');
+			expect(message).toContain('telegram OMITIDO');
+			// BTCUSDT had a successful non-skipped delivery, so its deliveryStatus is 'delivered', not 'skipped'
+			expect(message).not.toContain('BTCUSDT');
+		});
+
+		it('escapes trailing dot in empty-state MarkdownV2 reply', async () => {
+			alertStorageService.isEnabled.mockReturnValue(true);
+			alertStorageService.listAlerts.mockResolvedValue({ alerts: [] });
+			const context = buildContext('/history XRPUSDT');
+
+			await alertHistoryCommand(context);
+
+			expect(context.reply).toHaveBeenCalledWith(
+				'No hay alertas recientes para XRPUSDT\\.',
+				{ parse_mode: 'MarkdownV2' },
+			);
 		});
 
 		it('filters failed deliveries and clamps the requested limit', async () => {
