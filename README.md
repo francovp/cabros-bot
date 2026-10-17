@@ -186,6 +186,7 @@ When the Telegram bot is enabled (`ENABLE_TELEGRAM_BOT=true`), the bot provides 
 | `/scanner` | `[options]` | Executes market scanner sweep across preconfigured assets. |
 | `/jobs` | `[jobId]` | Inspects status or lists active background analysis jobs. |
 | `/noticias` | `[options]` | Trigger news monitoring analysis for specified crypto/equity tickers. |
+| `/reactions`, `/reacciones` | `<symbol>` | Returns top 3 setups by trader reaction approval over the last 7 days. |
 
 See the [Telegram Commands Reference](docs/commands.md) for aliases, throttling rules, and examples.
 
@@ -398,6 +399,7 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
 | Variable | Default | Bounds | Purpose |
 | :--- | :--- | :--- | :--- |
 | `ENABLE_SIGNAL_OUTCOME_TRACKING` | `false` | — | Master gate for recording, sweeping and `/api/outcomes`. Environment-only. |
+| `ENABLE_TELEGRAM_REACTION_AGGREGATION` | `false` | — | Aggregate Telegram message reactions into signal quality scores. |
 | `SIGNAL_OUTCOME_WORKER_ROLE` | `web` | `web`/`worker`/`disabled` | Which entrypoint may start the sweep. Environment-only. |
 | `SIGNAL_OUTCOME_EVALUATION_LEASE_MS` | `120000` | `10000`–`600000` | Distributed sweep lease duration. Environment-only. |
 

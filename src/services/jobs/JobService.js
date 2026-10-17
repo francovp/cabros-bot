@@ -38,6 +38,7 @@ const {
 	getDeliveredChannels,
 } = require('../notification/requestRouting');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 const { runWithConcurrency } = require('../../lib/runWithConcurrency');
 const { adminSseService } = require('../sse/AdminSseService');
 
@@ -972,7 +973,10 @@ class JobService {
 			&& isQueuedMode
 			&& typeof this.repository.renewClaim === 'function'
 		) {
-			const configuredLeaseMs = Number(process.env.JOB_QUEUE_CLAIM_LEASE_MS);
+			const remoteLeaseMs = resolveRemoteOverride('JOB_QUEUE_CLAIM_LEASE_MS');
+			const configuredLeaseMs = Number(
+				remoteLeaseMs !== undefined ? remoteLeaseMs : process.env.JOB_QUEUE_CLAIM_LEASE_MS,
+			);
 			const leaseMs = Number.isInteger(configuredLeaseMs) && configuredLeaseMs > 0
 				? configuredLeaseMs
 				: 60000;
@@ -1416,7 +1420,10 @@ class JobService {
 			&& (job.execution.mode === 'render-worker' || job.execution.mode === 'firestore-poller'),
 		);
 		if (isQueuedMode) {
-			const leaseMs = Number(process.env.JOB_QUEUE_CLAIM_LEASE_MS);
+			const remoteLeaseMs = resolveRemoteOverride('JOB_QUEUE_CLAIM_LEASE_MS');
+			const leaseMs = Number(
+				remoteLeaseMs !== undefined ? remoteLeaseMs : process.env.JOB_QUEUE_CLAIM_LEASE_MS,
+			);
 			const effectiveLeaseMs = Number.isInteger(leaseMs) && leaseMs > 0 ? leaseMs : 60000;
 			if (job.execution.status === 'claimed' || job.execution.status === 'running') {
 				job.execution.leaseUntil = new Date(Date.now() + effectiveLeaseMs).toISOString();

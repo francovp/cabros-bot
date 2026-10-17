@@ -10350,6 +10350,7 @@
           "drawdownProxy",
           "falsePositiveCandidatesCount",
           "falsePositiveCandidates",
+          "reactions",
           "latencyCostMetadata"
         ],
         "properties": {
@@ -10489,8 +10490,54 @@
               "$ref": "#/components/schemas/FalsePositiveCandidate"
             }
           },
+          "reactions": {
+            "$ref": "#/components/schemas/OutcomesReactionsSummary"
+          },
           "latencyCostMetadata": {
             "$ref": "#/components/schemas/LatencyCostMetadata"
+          }
+        }
+      },
+      "OutcomesReactionsSummary": {
+        "type": "object",
+        "description": "Aggregated trader Telegram reaction votes (Issue #844).",
+        "required": [
+          "total",
+          "approve",
+          "reject",
+          "approveRate",
+          "weightedScore"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 15
+          },
+          "approve": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 12
+          },
+          "reject": {
+            "type": "integer",
+            "minimum": 0,
+            "example": 3
+          },
+          "approveRate": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "example": 0.8
+          },
+          "weightedScore": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1,
+            "example": 0.7368
           }
         }
       },

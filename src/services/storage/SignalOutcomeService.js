@@ -2168,6 +2168,13 @@ function createEmptyMetricsSummary(breakdownTypes = []) {
 		},
 		falsePositiveCandidatesCount: 0,
 		falsePositiveCandidates: [],
+		reactions: {
+			total: 0,
+			approve: 0,
+			reject: 0,
+			approveRate: 0,
+			weightedScore: null,
+		},
 		latencyCostMetadata: {
 			averageProcessingTimeMs: null,
 			tokenUsage: {
@@ -2868,6 +2875,41 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 		? parseFloat((allTotalR / allRCount).toFixed(4))
 		: null;
 
+	let totalReactionApprove = 0;
+	let totalReactionReject = 0;
+	let confidenceSum = 0;
+	let confidenceCount = 0;
+
+	for (const doc of docs) {
+		const rawScore = typeof doc.score === 'number' && Number.isFinite(doc.score) ? Math.abs(doc.score) : null;
+		if (rawScore !== null) {
+			confidenceSum += rawScore;
+			confidenceCount++;
+		}
+		if (doc.reactions && typeof doc.reactions === 'object') {
+			for (const r of Object.values(doc.reactions)) {
+				if (!r || typeof r !== 'object') continue;
+				if (r.weight > 0) totalReactionApprove++;
+				else if (r.weight < 0) totalReactionReject++;
+			}
+		}
+	}
+
+	const totalReactions = totalReactionApprove + totalReactionReject;
+	const avgConfidence = confidenceCount > 0 ? (confidenceSum / confidenceCount) : 0.5;
+	const prior = avgConfidence;
+	const weightedReactionScore = totalReactions > 0
+		? Math.max(0, Math.min(1, parseFloat(((totalReactionApprove + 4 * prior) / (totalReactions + 4)).toFixed(4))))
+		: null;
+
+	const reactionsSummary = {
+		total: totalReactions,
+		approve: totalReactionApprove,
+		reject: totalReactionReject,
+		approveRate: totalReactions > 0 ? parseFloat((totalReactionApprove / totalReactions).toFixed(4)) : 0,
+		weightedScore: weightedReactionScore,
+	};
+
 	const summary = {
 		available: true,
 		totalSignalsReceived,
@@ -2895,6 +2937,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 		},
 		falsePositiveCandidatesCount: falsePositiveCandidates.length,
 		falsePositiveCandidates: falsePositiveCandidates.slice(0, 5),
+		reactions: reactionsSummary,
 		latencyCostMetadata: {
 			averageProcessingTimeMs,
 			tokenUsage: {
