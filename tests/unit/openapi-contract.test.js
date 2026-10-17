@@ -79,6 +79,20 @@ describe('OpenAPI contract', () => {
 		expect(fs.existsSync(contractPath)).toBe(true);
 	});
 
+	it('documents stored alert sources as open strings', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const sourceParameter = contract.components.parameters.Source;
+		const storedSource = contract.components.schemas.StoredAlert.properties.source;
+
+		expect(sourceParameter.schema.enum).toBeUndefined();
+		expect(sourceParameter.example).toBe('webhook-alert');
+		expect(sourceParameter.description).toContain('Custom source values are also accepted as exact filters');
+		expect(sourceParameter.description).toContain('/api/webhook/message');
+		expect(storedSource.enum).toBeUndefined();
+		expect(storedSource.description).toContain('webhook-message');
+		expect(storedSource.description).toMatch(/custom source strings may also be stored/i);
+	});
+
 	it('documents per-symbol alert routing and symbol-scoped results', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const alertRequest = contract.components.schemas.AlertRequest;
@@ -138,6 +152,10 @@ describe('OpenAPI contract', () => {
 			'GET /api/scanner-presets', 'POST /api/scanner-presets',
 			'GET /api/scanner-presets/{id}', 'PUT /api/scanner-presets/{id}',
 			'DELETE /api/scanner-presets/{id}', 'POST /api/scanner-presets/{id}/run',
+			'GET /api/alert-subscribers', 'POST /api/alert-subscribers',
+			'GET /api/alert-subscribers/{id}', 'PUT /api/alert-subscribers/{id}',
+			'PATCH /api/alert-subscribers/{id}', 'DELETE /api/alert-subscribers/{id}',
+			'POST /api/alert-subscribers/{id}/test',
 			'POST /api/jobs/tradingview-analysis', 'GET /api/jobs', 'GET /api/jobs/{jobId}',
 			'POST /api/jobs/{jobId}/cancel', 'POST /api/jobs/{jobId}/retry',
 			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/outcomes/calibration',
@@ -219,6 +237,13 @@ describe('OpenAPI contract', () => {
 			'POST /api/alerts/batch/export': 'admin.viewer',
 			'POST /api/alerts/batch/delete': 'admin.operator',
 			'POST /api/scanner-presets': 'admin.operator',
+			'GET /api/alert-subscribers': 'admin.viewer',
+			'POST /api/alert-subscribers': 'admin.operator',
+			'GET /api/alert-subscribers/{id}': 'admin.viewer',
+			'PUT /api/alert-subscribers/{id}': 'admin.operator',
+			'PATCH /api/alert-subscribers/{id}': 'admin.operator',
+			'DELETE /api/alert-subscribers/{id}': 'admin.operator',
+			'POST /api/alert-subscribers/{id}/test': 'admin.operator',
 			'POST /api/jobs/{jobId}/cancel': 'admin.operator',
 			'POST /api/news-monitor/pause': 'admin.operator',
 			'POST /api/news-monitor/resume': 'admin.operator',
@@ -645,6 +670,49 @@ describe('OpenAPI contract', () => {
 			expect(statusExample.dependencies.tokenCostBudget.budgetUsd).toBe(5);
 			expect(statusExample.featureFlags.tokenCostBudget).toBe(false);
 		});
+
+		// Issue #1118: `binanceOrderAudit` was returned by the handler but declared
+		// in neither the spec nor a Postman example, so the generic drift test above
+		// had nothing to compare. Pinning the name keeps a future removal from
+		// passing silently on both surfaces at once.
+		it('documents BinanceOrderAuditDependency and exposes the audit flag in the Status contract', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			expect(contract.components.schemas.Status.properties.dependencies.properties.binanceOrderAudit)
+				.toEqual({ $ref: '#/components/schemas/BinanceOrderAuditDependency' });
+
+			const auditSchema = contract.components.schemas.BinanceOrderAuditDependency;
+			expect(auditSchema.type).toBe('object');
+			expect(auditSchema.additionalProperties).toBe(false);
+			expect(auditSchema.required).toEqual([
+				'enabled',
+				'configured',
+				'ready',
+				'status',
+				'collection',
+				'retentionDays',
+			]);
+			expect(auditSchema.properties.status.enum).toEqual(['ready', 'misconfigured', 'disabled']);
+			expect(auditSchema.properties.retentionDays).toEqual(expect.objectContaining({
+				type: 'integer',
+				minimum: 1,
+				maximum: 365,
+			}));
+
+			expect(contract.components.schemas.Status.description).toContain('featureFlags.binanceOrderAudit reports ENABLE_BINANCE_ORDER_AUDIT');
+
+			const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+			expect(statusExample.featureFlags.binanceOrderAudit).toBe(false);
+			expect(statusExample.dependencies.binanceOrderAudit).toEqual({
+				enabled: false,
+				configured: true,
+				ready: false,
+				status: 'disabled',
+				collection: 'binanceOrderAudit',
+				retentionDays: 30,
+			});
+		});
 	});
 
 	describe('news-monitor alert barrier fields (GH-712)', () => {
@@ -1057,6 +1125,26 @@ describe('status dependency contract drift', () => {
 			scannerPreset: 5000,
 			remoteConfig: 5000,
 		});
+	});
+
+	it('documents deployment provenance identity on stored alerts and rollup on alert summary (issue #1169)', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const storedAlert = spec.components.schemas.StoredAlert;
+		const alertSummary = spec.components.schemas.AlertSummary;
+		const deploymentIdentity = spec.components.schemas.DeploymentIdentity;
+		const deploymentSummaryItem = spec.components.schemas.DeploymentSummaryItem;
+
+		expect(storedAlert.properties.deployment).toEqual({ $ref: '#/components/schemas/DeploymentIdentity' });
+		expect(alertSummary.properties.deployments).toEqual({
+			type: 'array',
+			description: expect.any(String),
+			items: { $ref: '#/components/schemas/DeploymentSummaryItem' },
+		});
+		expect(deploymentIdentity.properties).toHaveProperty('platform');
+		expect(deploymentIdentity.properties).toHaveProperty('gitSha');
+		expect(deploymentIdentity.properties).toHaveProperty('service');
+		expect(deploymentIdentity.properties).toHaveProperty('runtimeVersion');
+		expect(deploymentSummaryItem.required).toEqual(expect.arrayContaining(['count', 'lastSeen']));
 	});
 
 	describe('Batch alert IDs nonblank contract (GH-1174)', () => {

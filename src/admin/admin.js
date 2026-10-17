@@ -8,6 +8,10 @@ const VIEWS = {
 		{ method: 'GET', path: '/api/scanner-presets', label: 'Load presets' },
 		{ method: 'POST', path: '/api/scanner-presets', label: 'Create preset' },
 	],
+	subscribers: [
+		{ method: 'GET', path: '/api/alert-subscribers', label: 'Load subscribers' },
+		{ method: 'POST', path: '/api/alert-subscribers', label: 'Create subscriber' },
+	],
 	jobs: [{ method: 'POST', path: '/api/jobs/tradingview-analysis', label: 'Create job' }],
 	analysis: [
 		{
@@ -71,6 +75,17 @@ const VIEW_ACTIONS = {
 			confirm: 'Delete this scanner preset?',
 		},
 	],
+	subscribers: [
+		{ method: 'PATCH', path: '/api/alert-subscribers/{id}', label: 'Update subscriber' },
+		{
+			method: 'POST', path: '/api/alert-subscribers/{id}/test', label: 'Test subscriber ping',
+			confirm: 'Send test webhook ping to this subscriber?',
+		},
+		{
+			method: 'DELETE', path: '/api/alert-subscribers/{id}', label: 'Delete subscriber',
+			confirm: 'Delete this alert subscriber webhook?',
+		},
+	],
 };
 
 const STATUS_DEFINITION = { method: 'GET', path: '/api/status', label: 'Refresh status' };
@@ -107,6 +122,8 @@ const DISPLAY_LABELS = {
 	idempotencyStorage: 'Idempotency storage',
 	scannerPresetStorage: 'Scanner preset storage',
 	symbolAnalysisStorage: 'Symbol analysis storage',
+	alertSubscribers: 'Alert subscribers',
+	alertSubscriberStorage: 'Alert subscriber storage',
 	cloudflareAig: 'Cloudflare AI Gateway',
 };
 
@@ -118,6 +135,7 @@ const VIEW_TITLES = {
 	alerts: 'Alerts',
 	outcomes: 'Outcomes',
 	presets: 'Presets',
+	subscribers: 'Subscribers',
 	jobs: 'Jobs',
 	orders: 'Orders',
 	analysis: 'Analysis',
@@ -1118,6 +1136,7 @@ const statusNeedsAttention = (detail) => hasStatus({ status: effectiveStatus(det
 const statusDetailFields = [
 	['configured', 'Configured'],
 	['enabled', 'Enabled'],
+	['routed', 'Routed'],
 	['environment', 'Environment'],
 	['allowedSymbols', 'Allowed symbols'],
 	['maxNotionalConfigured', 'Max notional configured'],
@@ -1723,6 +1742,22 @@ const sentimentBadge = (enrichment) => {
 	});
 };
 
+const sessionBadge = (session) => {
+	if (!session || typeof session !== 'string') return null;
+	const norm = session.trim().toLowerCase();
+	if (norm === 'unknown' || norm === '24/7') return null;
+	const tones = {
+		regular: 'status-ready',
+		pre: 'status-active',
+		post: 'status-disabled',
+		closed: 'status-danger',
+	};
+	return element('span', {
+		className: `status-badge ${tones[norm] || 'status-unknown'}`,
+		text: `Sesión: ${norm}`,
+	});
+};
+
 const deliveryChips = (results) => {
 	const wrap = element('div', { className: 'chip-grid delivery-chips' });
 	(Array.isArray(results) ? results : []).forEach((result) => {
@@ -1790,6 +1825,8 @@ const createAlertDetailPanel = (alert) => {
 	const data = asObject(alert && alert.enrichmentData);
 	const sentimentNode = sentimentBadge(data);
 	if (sentimentNode) badges.append(sentimentNode);
+	const sessionNode = sessionBadge(alert && alert.session);
+	if (sessionNode) badges.append(sessionNode);
 	const head = element('div', { className: 'section-heading' });
 	head.append(headCopy, badges);
 	panel.append(head);
@@ -1899,6 +1936,8 @@ const createAlertCard = (alert, { onSelect, isSelected = false, registerCheckbox
 		: element('span', { className: 'status-badge status-disabled', text: 'Plain' }));
 	const sentimentNode = sentimentBadge(asObject(alert && alert.enrichmentData));
 	if (sentimentNode) badges.append(sentimentNode);
+	const sessionNode = sessionBadge(alert && alert.session);
+	if (sessionNode) badges.append(sessionNode);
 	const head = element('div', { className: 'section-heading' });
 	head.append(headCopy, badges);
 	card.append(head);
@@ -2464,7 +2503,24 @@ const createAlertListForm = () => {
 	);
 	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
 	const before = addField(form, 'Before cursor', 'before', { placeholder: 'nextBefore from the previous page' });
-	const source = addField(form, 'Source', 'source', { placeholder: 'webhook' });
+	const source = addField(form, 'Source', 'source', { placeholder: 'Any source, including custom values' });
+	source.setAttribute('list', 'alert-source-options');
+	const sourceOptions = element('datalist', { attributes: { id: 'alert-source-options' } });
+	[
+		['', 'All sources'],
+		['webhook-alert', 'Webhook alert'],
+		['webhook-message', 'Webhook message'],
+		['webhook', 'Webhook (legacy)'],
+		['news-monitor', 'News monitor'],
+		['market-scanner', 'Market scanner'],
+		['expanded-analysis', 'Expanded analysis'],
+		['test-alert', 'Test alert'],
+	].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		sourceOptions.append(option);
+	});
+	form.append(sourceOptions);
 	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
 	registerFilterScope('alerts.list', { limit, before, source, enriched });
 	[
@@ -2476,6 +2532,10 @@ const createAlertListForm = () => {
 		option.value = value;
 		enriched.append(option);
 	});
+	const activeFilters = element('p', { className: 'active-filters', text: 'Active filters: none' });
+	const clearFilters = element('button', { text: 'Clear filters' });
+	clearFilters.type = 'button';
+	clearFilters.disabled = true;
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
 	const prev = element('button', { text: 'Previous page' });
@@ -2524,7 +2584,7 @@ const createAlertListForm = () => {
 
 	batchToolbar.append(selectAllLabel, selectionCount, batchReplayButton, batchExportButton, batchDeleteButton, batchOutput);
 
-	form.append(button, prev, next, output, batchToolbar, alertList, rawToggle);
+	form.append(activeFilters, button, clearFilters, prev, next, output, batchToolbar, alertList, rawToggle);
 
 	let currentAlerts = [];
 	const selectedAlertIds = new Set();
@@ -2753,7 +2813,25 @@ const createAlertListForm = () => {
 		rawCopyButton.hidden = true;
 		output.textContent = 'Filters changed — load alerts to refresh.';
 		if (clearCursor) before.value = '';
+		updateActiveFilters();
 	};
+	const updateActiveFilters = () => {
+		const active = [];
+		if (source.value) active.push(`source=${source.value}`);
+		if (enriched.value) active.push(`enriched=${enriched.value}`);
+		if (active.length === 0) {
+			activeFilters.textContent = 'Active filters: none';
+			clearFilters.disabled = true;
+		} else {
+			activeFilters.textContent = `Active filters: ${active.join(', ')}`;
+			clearFilters.disabled = false;
+		}
+	};
+	clearFilters.addEventListener('click', () => {
+		source.value = '';
+		enriched.value = '';
+		resetPagination({ clearCursor: true });
+	});
 	[limit, source, enriched].forEach((field) => {
 		field.addEventListener('input', () => resetPagination({ clearCursor: true }));
 		field.addEventListener('change', () => resetPagination({ clearCursor: true }));
@@ -5411,6 +5489,355 @@ const addPresetStructuredFields = (form, contract, operation) => {
 	syncBody();
 };
 
+const createSubscriberSummary = (subscriber, { onEdit, onTest, onDelete }) => {
+	const card = element('div', { className: 'operation-card subscriber-card' });
+	const header = element('div', { className: 'preset-card-header' });
+	const title = element('h4', { text: subscriber.url || 'Unnamed subscriber' });
+	const isEnabled = subscriber.enabled !== false;
+	const statusBadge = element('span', {
+		className: `status-badge ${isEnabled ? 'status-ready' : 'status-disabled'}`,
+		text: isEnabled ? 'Active' : 'Disabled',
+	});
+	header.append(title, statusBadge);
+	card.append(header);
+
+	if (subscriber.description) {
+		card.append(element('p', { className: 'job-meta', text: subscriber.description }));
+	}
+
+	const chips = element('div', { className: 'chip-grid' });
+	if (subscriber.hasSecret) {
+		chips.append(element('span', { className: 'status-badge status-ready', text: 'HMAC Signed' }));
+	}
+	if (subscriber.filter && typeof subscriber.filter === 'object') {
+		if (Array.isArray(subscriber.filter.symbols) && subscriber.filter.symbols.length) {
+			chips.append(element('span', {
+				className: 'capability-chip',
+				text: `Symbols: ${subscriber.filter.symbols.join(', ')}`,
+			}));
+		}
+		if (Array.isArray(subscriber.filter.sources) && subscriber.filter.sources.length) {
+			chips.append(element('span', {
+				className: 'capability-chip',
+				text: `Sources: ${subscriber.filter.sources.join(', ')}`,
+			}));
+		}
+	}
+	if (chips.children.length) card.append(chips);
+
+	if (subscriber.lastDeliveryAt || subscriber.lastDeliveryStatus) {
+		const dl = element('dl', { className: 'status-detail-list' });
+		if (subscriber.lastDeliveryStatus) {
+			dl.append(element('dt', { text: 'Last delivery status' }), element('dd', { text: subscriber.lastDeliveryStatus }));
+		}
+		if (subscriber.lastDeliveryAt) {
+			const dd = element('dd');
+			dd.append(createTimestamp(subscriber.lastDeliveryAt));
+			dl.append(element('dt', { text: 'Last delivery' }), dd);
+		}
+		card.append(dl);
+	}
+
+	const actions = element('div', { className: 'preset-actions' });
+	const testBtn = element('button', { text: 'Test Ping', className: 'button-primary' });
+	testBtn.type = 'button';
+	testBtn.setAttribute('aria-label', `Test subscriber ping ${subscriber.id}`);
+	const editBtn = element('button', { text: 'Edit' });
+	editBtn.type = 'button';
+	editBtn.setAttribute('aria-label', `Edit subscriber ${subscriber.id}`);
+	const deleteBtn = element('button', { text: 'Delete', className: 'destructive-action' });
+	deleteBtn.type = 'button';
+	deleteBtn.setAttribute('aria-label', `Delete subscriber ${subscriber.id}`);
+
+	const isOperator = canPerformMutation();
+	if (!isOperator) {
+		testBtn.disabled = true;
+		testBtn.title = 'Requires admin.operator role';
+		editBtn.disabled = true;
+		editBtn.title = 'Requires admin.operator role';
+		deleteBtn.disabled = true;
+		deleteBtn.title = 'Requires admin.operator role';
+	}
+
+	const output = element('div', { className: 'response-block', text: '' });
+	output.hidden = true;
+	let lastRawJson = '';
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.hidden = true;
+	rawToggle.append(element('summary', { text: 'Test details' }), rawCopyButton, rawOutput);
+
+	testBtn.addEventListener('click', () => {
+		onTest(subscriber, testBtn, card, output, rawToggle, rawOutput, rawCopyButton, (rawJson) => {
+			lastRawJson = rawJson;
+		});
+	});
+	editBtn.addEventListener('click', () => {
+		onEdit(subscriber);
+	});
+	deleteBtn.addEventListener('click', () => {
+		onDelete(subscriber, deleteBtn, card);
+	});
+
+	actions.append(testBtn, editBtn, deleteBtn);
+	card.append(actions, output, rawToggle);
+
+	return card;
+};
+
+const createSubscriberListForm = (contract, { onEdit, onStorageUpdate }) => {
+	const definition = { method: 'GET', path: '/api/alert-subscribers', label: 'Load subscribers' };
+	const form = element('form', { className: 'operation-card subscriber-list-panel' });
+
+	const titleRow = element('div', { className: 'section-heading' });
+	const title = element('h3', { text: 'Alert subscribers' });
+	const storageBadge = element('span', { className: 'status-badge status-unknown', text: 'Storage: checking…' });
+	titleRow.append(title, storageBadge);
+	const route = element('code', { text: `${definition.method} ${definition.path}` });
+	form.append(titleRow, route);
+
+	const updateStorageBadge = (storage) => {
+		if (!storage || typeof storage !== 'object') return;
+		const mode = String(storage.mode || 'unknown');
+		const backend = String(storage.backend || 'unknown');
+		const isDurable = mode.toLowerCase() === 'durable';
+		storageBadge.className = `status-badge ${isDurable ? 'status-ready' : 'status-disabled'}`;
+		storageBadge.textContent = `${displayLabel(mode)} · ${displayLabel(backend)}`;
+	};
+
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+
+	const listContainer = element('div', { className: 'form-fields subscriber-list' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
+
+	let lastListRawJson = '';
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastListRawJson, 'Copy details');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.hidden = true;
+	rawToggle.append(element('summary', { text: 'Subscribers details' }), rawCopyButton, rawOutput);
+
+	form.append(button, listContainer, output, rawToggle);
+
+	const onTestSubscriber = async (subscriber, testBtn, card, cardOutput, cardRawToggle, cardRawOutput, cardRawCopy, setRawJson) => {
+		const testDef = {
+			method: 'POST',
+			path: '/api/alert-subscribers/{id}/test',
+			label: 'Test subscriber ping',
+			confirm: 'Send test webhook ping to this subscriber?',
+			requiredRole: 'admin.operator',
+		};
+		setRawJson('');
+		cardRawToggle.hidden = true;
+		cardOutput.hidden = false;
+		cardOutput.className = 'response-block request-state';
+		cardOutput.textContent = 'Sending test ping…';
+		try {
+			const data = await sendRequest({
+				definition: testDef,
+				path: `/api/alert-subscribers/${encodeURIComponent(subscriber.id)}/test`,
+				button: testBtn,
+				output: cardOutput,
+				formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+			});
+			if (!data) {
+				cardOutput.hidden = true;
+				return;
+			}
+			const rawJson = JSON.stringify(data, null, 2);
+			setRawJson(rawJson);
+			showResult(cardRawOutput, rawJson);
+			cardRawCopy.hidden = false;
+			cardRawToggle.hidden = false;
+		} catch (error) {
+			showError(cardOutput, error.message);
+		}
+	};
+
+	const onDeleteSubscriber = async (subscriber, deleteBtn, card) => {
+		const deleteDef = {
+			method: 'DELETE',
+			path: '/api/alert-subscribers/{id}',
+			label: 'Delete subscriber',
+			confirm: 'Delete this alert subscriber webhook?',
+			requiredRole: 'admin.operator',
+		};
+		try {
+			const data = await sendRequest({
+				definition: deleteDef,
+				path: `/api/alert-subscribers/${encodeURIComponent(subscriber.id)}`,
+				button: deleteBtn,
+				output,
+			});
+			if (data && data.success) {
+				card.remove();
+				if (data.storage) {
+					updateStorageBadge(data.storage);
+					if (typeof onStorageUpdate === 'function') onStorageUpdate(data.storage);
+				}
+				await loadSubscribers();
+			}
+		} catch (error) {
+			showError(output, error.message);
+		}
+	};
+
+	const loadSubscribers = async () => {
+		listContainer.replaceChildren(element('div', { className: 'loading-state', text: 'Loading subscribers…' }));
+		rawToggle.hidden = true;
+		try {
+			const data = await sendRequest({
+				definition,
+				path: definition.path,
+				button,
+				output,
+				formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+			});
+			if (!data) {
+				listContainer.replaceChildren();
+				return;
+			}
+			if (data.storage) {
+				updateStorageBadge(data.storage);
+				if (typeof onStorageUpdate === 'function') onStorageUpdate(data.storage);
+			}
+			lastListRawJson = JSON.stringify(data, null, 2);
+			showResult(rawOutput, lastListRawJson);
+			rawCopyButton.hidden = false;
+			rawToggle.hidden = false;
+
+			const subscribers = Array.isArray(data.subscribers) ? data.subscribers : [];
+			listContainer.replaceChildren();
+			if (!subscribers.length) {
+				listContainer.append(createEmptyState('No alert subscribers found.'));
+				return;
+			}
+			subscribers.forEach((subscriber) => {
+				const card = createSubscriberSummary(subscriber, {
+					onEdit,
+					onTest: onTestSubscriber,
+					onDelete: onDeleteSubscriber,
+				});
+				listContainer.append(card);
+			});
+		} catch (error) {
+			showError(output, error.message);
+		}
+	};
+
+	form.refresh = () => loadSubscribers();
+	form.updateStorage = (storage) => updateStorageBadge(storage);
+
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		Promise.resolve(loadSubscribers()).catch(() => {});
+	});
+
+	return form;
+};
+
+const addSubscriberStructuredFields = (form, contract, operation) => {
+	const bodyExample = getBodyExample(contract, operation) || {};
+	let isAdvancedDirty = false;
+
+	const urlInput = addField(form, 'Target URL', 'url', {
+		required: true,
+		placeholder: 'https://example.com/alerts/webhook',
+		value: bodyExample.url || '',
+	});
+
+	const secretInput = addField(form, 'Signing Secret (HMAC-SHA256)', 'secret', {
+		type: 'password',
+		placeholder: 'Optional signing secret',
+		value: bodyExample.secret || '',
+	});
+
+	const descInput = addField(form, 'Description', 'description', {
+		placeholder: 'e.g. My trading webhook bridge',
+		value: bodyExample.description || '',
+	});
+
+	const symbolsInput = addField(form, 'Filter symbols (comma-separated)', 'filterSymbols', {
+		placeholder: 'e.g. BTCUSDT, ETHUSDT',
+		value: (bodyExample.filter && Array.isArray(bodyExample.filter.symbols)) ? bodyExample.filter.symbols.join(', ') : '',
+	});
+
+	const sourcesInput = addField(form, 'Filter sources (comma-separated)', 'filterSources', {
+		placeholder: 'e.g. webhook-alert',
+		value: (bodyExample.filter && Array.isArray(bodyExample.filter.sources)) ? bodyExample.filter.sources.join(', ') : '',
+	});
+
+	const enabledLabel = element('label', { className: 'checkbox-label' });
+	const enabledCb = element('input', { type: 'checkbox' });
+	enabledCb.name = 'enabled';
+	enabledCb.checked = bodyExample.enabled !== false;
+	enabledLabel.append(enabledCb, element('span', { text: 'Subscriber enabled' }));
+	form.append(enabledLabel);
+
+	const syncBody = () => {
+		if (isAdvancedDirty) return;
+		const symbols = symbolsInput.value.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+		const sources = sourcesInput.value.split(',').map((s) => s.trim()).filter(Boolean);
+		const filter = {};
+		if (symbols.length) filter.symbols = symbols;
+		if (sources.length) filter.sources = sources;
+
+		const body = {
+			url: urlInput.value.trim(),
+			enabled: enabledCb.checked,
+		};
+		if (secretInput.value) body.secret = secretInput.value;
+		if (descInput.value.trim()) body.description = descInput.value.trim();
+		if (Object.keys(filter).length) body.filter = filter;
+
+		if (form.elements.body) {
+			form.elements.body.value = JSON.stringify(body, null, 2);
+		}
+	};
+
+	[urlInput, secretInput, descInput, symbolsInput, sourcesInput].forEach((input) => {
+		input.addEventListener('input', () => {
+			isAdvancedDirty = false;
+			syncBody();
+		});
+	});
+	enabledCb.addEventListener('change', () => {
+		isAdvancedDirty = false;
+		syncBody();
+	});
+
+	if (form.elements.body) {
+		form.elements.body.addEventListener('input', () => {
+			isAdvancedDirty = true;
+		});
+	}
+
+	form.populateSubscriber = (subscriber) => {
+		isAdvancedDirty = false;
+		if (form.elements['path-id'] && subscriber.id) {
+			form.elements['path-id'].value = subscriber.id;
+		}
+		urlInput.value = subscriber.url || '';
+		secretInput.value = '';
+		descInput.value = subscriber.description || '';
+		enabledCb.checked = subscriber.enabled !== false;
+		if (subscriber.filter && typeof subscriber.filter === 'object') {
+			symbolsInput.value = Array.isArray(subscriber.filter.symbols) ? subscriber.filter.symbols.join(', ') : '';
+			sourcesInput.value = Array.isArray(subscriber.filter.sources) ? subscriber.filter.sources.join(', ') : '';
+		} else {
+			symbolsInput.value = '';
+			sourcesInput.value = '';
+		}
+		syncBody();
+	};
+
+	syncBody();
+};
+
 const createOperationForm = (contract, definition, options = {}) => {
 	const operation = getOperation(contract, definition);
 	const form = element('form', { className: 'operation-card' });
@@ -5421,12 +5848,16 @@ const createOperationForm = (contract, definition, options = {}) => {
 
 	const isPresetUpsert = (definition.path === '/api/scanner-presets' && definition.method === 'POST') ||
 		(definition.path === '/api/scanner-presets/{id}' && definition.method === 'PUT');
+	const isSubscriberUpsert = (definition.path === '/api/alert-subscribers' && definition.method === 'POST') ||
+		(definition.path === '/api/alert-subscribers/{id}' && (definition.method === 'PUT' || definition.method === 'PATCH'));
 
 	if (definition.method === 'GET' || getParameters(contract, operation).some((parameter) => parameter.in === 'query')) {
 		addObjectField(form, 'Filters', 'query', getQueryExample(contract, operation), contract, getQuerySchema(contract, operation));
 	}
 	if (isPresetUpsert) {
 		addPresetStructuredFields(form, contract, operation);
+	} else if (isSubscriberUpsert) {
+		addSubscriberStructuredFields(form, contract, operation);
 	} else if (definition.method !== 'GET' && operation && operation.requestBody) {
 		addObjectField(form, 'Request options', 'body', getBodyExample(contract, operation), contract, getBodySchema(contract, operation));
 	}
@@ -5566,7 +5997,13 @@ const playgroundInputCache = new Map();
 const playgroundHistory = [];
 const sanitizeForHistory = (text) => {
 	if (!text || typeof text !== 'string') return text;
-	return text.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization)['"]?\s*[:=]\s*['"]?)[^'"\s,}\]]+/gi, '$1[REDACTED]');
+	if (typeof window !== 'undefined' && window.CabrosAdminRequest && typeof window.CabrosAdminRequest.sanitizeForHistory === 'function') {
+		return window.CabrosAdminRequest.sanitizeForHistory(text);
+	}
+	return text
+		.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization|discordWebhookUrl|webhookUrl)['"]?\s*[:=]\s*)(['"])(?:(?!\2).)*\2/gi, '$1$2[REDACTED]$2')
+		.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization|discordWebhookUrl|webhookUrl)['"]?\s*[:=]\s*)(?!['"])[^'"\s,}\]&]+/gi, '$1[REDACTED]')
+		.replace(/(https?:\/\/(?:[a-zA-Z0-9-]+\.)?discord(?:app)?\.com\/api\/webhooks\/)\d+(?:\/(?!\[REDACTED\])[^'"?\s/]*)?/gi, '$1[REDACTED]/[REDACTED]');
 };
 
 const renderPlayground = (contract, view) => {
@@ -7604,6 +8041,59 @@ const renderView = async (name) => {
 					},
 				});
 				if (definition.method === 'PUT') {
+					updateForm = form;
+				}
+				view.append(form);
+			});
+			return;
+		}
+		if (name === 'subscribers') {
+			let updateForm = null;
+			let listForm = null;
+			const onEdit = (subscriber) => {
+				if (updateForm && typeof updateForm.populateSubscriber === 'function') {
+					updateForm.populateSubscriber(subscriber);
+					if (typeof updateForm.scrollIntoView === 'function') {
+						updateForm.scrollIntoView({ behavior: 'smooth' });
+					}
+					if (updateForm.elements?.url && typeof updateForm.elements.url.focus === 'function') {
+						updateForm.elements.url.focus();
+					}
+				}
+			};
+			const onStorageUpdate = (storage) => {
+				if (listForm && typeof listForm.updateStorage === 'function') {
+					listForm.updateStorage(storage);
+				}
+			};
+			const onSubscriberMutated = async (storage) => {
+				if (storage) onStorageUpdate(storage);
+				if (listForm && typeof listForm.refresh === 'function') {
+					await listForm.refresh();
+				}
+			};
+			listForm = createSubscriberListForm(contract, { onEdit, onStorageUpdate });
+			view.append(listForm);
+
+			VIEWS.subscribers.forEach((definition) => {
+				if (definition.method === 'GET') return;
+				const form = createOperationForm(contract, definition, {
+					onStorageUpdate: onSubscriberMutated,
+					onSuccess: () => {
+						if (listForm && typeof listForm.refresh === 'function') listForm.refresh();
+					},
+				});
+				view.append(form);
+			});
+
+			VIEW_ACTIONS.subscribers.forEach((definition) => {
+				const form = createOperationForm(contract, definition, {
+					onStorageUpdate: onSubscriberMutated,
+					onSuccess: () => {
+						if (listForm && typeof listForm.refresh === 'function') listForm.refresh();
+					},
+				});
+				if (definition.method === 'PATCH' || definition.method === 'PUT') {
 					updateForm = form;
 				}
 				view.append(form);

@@ -565,6 +565,38 @@ describe('Idempotency Service & Middleware', () => {
 			expect(record).toBeNull();
 		});
 
+		test('should NOT cache transient rate-limit responses with status code 429 and should release reservation', async () => {
+			const key = 'transient-rate-limit-key';
+			req.headers['idempotency-key'] = key;
+
+			await idempotencyMiddleware(req, res, next);
+			res.status(429).json({ error: 'Too Many Requests', code: 'RATE_LIMITED' });
+
+			// Check that key is not in cache
+			const record = await idempotencyService.get(key, {
+				method: req.method,
+				path: req.url,
+				body: req.body,
+				query: req.query || {},
+			});
+			expect(record).toBeNull();
+
+			// Subsequent request with the same key should be treated as fresh (not waiting/pending/completed)
+			const req2 = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/webhook/alert',
+				headers: { 'idempotency-key': key },
+				body: { text: 'test alert' },
+			});
+			const res2 = httpMocks.createResponse();
+			const next2 = jest.fn();
+
+			await idempotencyMiddleware(req2, res2, next2);
+			expect(next2).toHaveBeenCalledTimes(1);
+			expect(res2.getHeader('Idempotency-Replay')).toBe('false');
+		});
+
+
 		test('should cache successful error responses with status code < 500 (e.g. 400)', async () => {
 			const key = 'client-error-key';
 			req.headers['idempotency-key'] = key;

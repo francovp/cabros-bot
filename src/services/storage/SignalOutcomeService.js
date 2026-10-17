@@ -15,6 +15,7 @@ const {
 	parseEntryPriceSources,
 	getEntryPriceSourceChains: buildEntryPriceSourceChains,
 } = require('../../lib/signalOutcomeEntryPriceSources');
+const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
 
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 
@@ -909,6 +910,7 @@ async function recordSignalInternal({
 	tokenUsage,
 	processingTimeMs,
 	assetClass,
+	session,
 } = {}) {
 	if (!isEnabled()) {
 		return null;
@@ -1138,6 +1140,11 @@ async function recordSignalInternal({
 			calendarId: sessionContext.calendarId,
 			calendarTimeZone: sessionContext.calendarTimeZone,
 			sessionContext: sessionContext.sessionContext,
+			session: typeof session === 'string' && session.trim()
+				? session.trim()
+				: (normSymbolInfo.exchange && require('./EquitySessionService').isEquityExchange(normSymbolInfo.exchange)
+					? require('./EquitySessionService').classifySession({ exchange: normSymbolInfo.exchange, symbol: normSymbolInfo.symbol, timestamp: now })
+					: '24/7'),
 			measurementCohort: sessionContext.measurementCohort,
 			expiresAt: buildRetentionExpiryTimestamp(now),
 			requestId: typeof requestId === 'string' ? requestId : 'unknown',
@@ -1174,6 +1181,7 @@ async function recordSignalInternal({
 			eligibilityReason: eligibility.reason || null,
 			outcomeEvaluated: !isEligible,
 			outcomes,
+			deployment: getDeploymentIdentity(),
 		};
 
 		let docRef;
@@ -2152,6 +2160,7 @@ function createEmptyMetricsSummary(breakdownTypes = []) {
 		providerBreakdown: {},
 		entryPriceSourceBreakdown: {},
 		eligibilityBreakdown: {},
+		bySession: {},
 		windows: {},
 		drawdownProxy: {
 			averageMaxAdverseExcursionPercent: 0,
@@ -2165,6 +2174,10 @@ function createEmptyMetricsSummary(breakdownTypes = []) {
 				inputTokens: 0,
 				outputTokens: 0,
 				totalCost: 0,
+				pricing: {
+					unknownModelPricing: false,
+					unknownModels: [],
+				},
 			},
 		},
 	};
@@ -2541,6 +2554,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 	const providerBreakdown = {};
 	const entryPriceSourceBreakdown = {};
 	const eligibilityBreakdown = {};
+	const bySession = {};
 	const symbolBreakdownBuckets = new Map();
 	const setupBreakdownBuckets = new Map();
 	const breakdownState = { truncated: false };
@@ -2552,6 +2566,34 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 		const docSymbol = doc.symbol || 'UNKNOWN';
 		const marketDataProvider = doc.marketDataProvider || (docExchange === 'BINANCE' ? 'binance' : 'none');
 		const entryPriceSource = doc.entryPriceSource || (doc.price !== null && doc.price !== undefined ? (doc.marketDataProvider || 'unknown') : 'none');
+
+		let docSession = doc.session;
+		if (!docSession || typeof docSession !== 'string') {
+			if (doc.sessionContext) {
+				const map = {
+					regular: 'regular',
+					pre_open: 'pre',
+					after_hours: 'post',
+					market_holiday: 'closed',
+					crypto_24_7: '24/7',
+				};
+				docSession = map[doc.sessionContext] || 'unknown';
+			} else {
+				docSession = 'unknown';
+			}
+		} else {
+			docSession = docSession.toLowerCase();
+		}
+
+		if (docSymbol !== 'UNKNOWN') {
+			if (!bySession[docSymbol]) {
+				bySession[docSymbol] = { regular: 0, pre: 0, post: 0, closed: 0, total: 0 };
+			}
+			if (Object.prototype.hasOwnProperty.call(bySession[docSymbol], docSession)) {
+				bySession[docSymbol][docSession]++;
+			}
+			bySession[docSymbol].total++;
+		}
 
 		let eligibilityState = doc.eligibilityState;
 		if (!eligibilityState) {
@@ -2695,6 +2737,8 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 	let totalTokenCost = 0;
 	let totalInputTokens = 0;
 	let totalOutputTokens = 0;
+	let unknownModelPricing = false;
+	const unknownModelsSet = new Set();
 	let totalProcessingTime = 0;
 	let processingTimeCount = 0;
 
@@ -2705,6 +2749,18 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 			totalTokenCost += signal.tokenUsage.totalCost || 0;
 			totalInputTokens += signal.tokenUsage.inputTokens || signal.tokenUsage.promptTokens || 0;
 			totalOutputTokens += signal.tokenUsage.outputTokens || signal.tokenUsage.completionTokens || 0;
+			if (signal.tokenUsage.pricing) {
+				if (signal.tokenUsage.pricing.unknownModelPricing) {
+					unknownModelPricing = true;
+				}
+				if (Array.isArray(signal.tokenUsage.pricing.unknownModels)) {
+					for (const model of signal.tokenUsage.pricing.unknownModels) {
+						if (typeof model === 'string' && model.trim()) {
+							unknownModelsSet.add(model.trim());
+						}
+					}
+				}
+			}
 		}
 		if (typeof signal.processingTimeMs === 'number') {
 			totalProcessingTime += signal.processingTimeMs;
@@ -2831,6 +2887,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 		providerBreakdown,
 		entryPriceSourceBreakdown,
 		eligibilityBreakdown,
+		bySession,
 		windows: windowStats,
 		drawdownProxy: {
 			averageMaxAdverseExcursionPercent: averageWorstMae,
@@ -2844,6 +2901,10 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 				inputTokens: totalInputTokens,
 				outputTokens: totalOutputTokens,
 				totalCost: parseFloat(totalTokenCost.toFixed(6)),
+				pricing: {
+					unknownModelPricing,
+					unknownModels: Array.from(unknownModelsSet),
+				},
 			},
 		},
 	};
@@ -2906,12 +2967,23 @@ function summarizeTokenUsage(tokenUsage) {
 		return null;
 	}
 
-	return {
+	const result = {
 		inputTokens: getNumericValue(tokenUsage.inputTokens || tokenUsage.promptTokens),
 		outputTokens: getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens),
 		totalTokens: getNumericValue(tokenUsage.totalTokens || tokenUsage.total),
 		totalCost: getNumericValue(tokenUsage.totalCost),
 	};
+
+	if (tokenUsage.pricing && typeof tokenUsage.pricing === 'object') {
+		result.pricing = {
+			unknownModelPricing: Boolean(tokenUsage.pricing.unknownModelPricing),
+			unknownModels: Array.isArray(tokenUsage.pricing.unknownModels)
+				? [...tokenUsage.pricing.unknownModels]
+				: [],
+		};
+	}
+
+	return result;
 }
 
 function getDocTimestamp(data) {
@@ -3012,6 +3084,15 @@ function formatOutcomeDocument(doc) {
 			observedPrice: typeof data.observedPrice === 'number' && Number.isFinite(data.observedPrice) ? data.observedPrice : null,
 			tradablePrice: typeof data.tradablePrice === 'number' && Number.isFinite(data.tradablePrice) ? data.tradablePrice : null,
 		});
+	}
+
+	if (data.deployment && typeof data.deployment === 'object') {
+		formatted.deployment = {
+			platform: typeof data.deployment.platform === 'string' ? data.deployment.platform : null,
+			gitSha: typeof data.deployment.gitSha === 'string' ? data.deployment.gitSha : null,
+			service: typeof data.deployment.service === 'string' ? data.deployment.service : null,
+			runtimeVersion: typeof data.deployment.runtimeVersion === 'string' ? data.deployment.runtimeVersion : null,
+		};
 	}
 
 	return formatted;
@@ -3641,5 +3722,7 @@ module.exports = {
 	LOCK_COLLECTION_NAME,
 	STORAGE_UNAVAILABLE_CODE,
 	INVALID_CURSOR_MESSAGE,
+	isUsMarketHalfDay,
+	isUsMarketHoliday,
 	_resetForTesting,
 };

@@ -73,7 +73,14 @@ class DiscordService extends NotificationChannel {
 			? config.rotationStrategy
 			: 'round-robin';
 		this.logger = config.logger;
-		this.formatter = config.formatter || new WhatsAppMarkdownFormatter();
+		this.urlShortener = config.urlShortener || null;
+		this.formatter = config.formatter || new WhatsAppMarkdownFormatter({
+			logger: this.logger,
+			urlShortener: this.urlShortener,
+		});
+		if (config.formatter && !this.formatter.urlShortener && this.urlShortener) {
+			this.formatter.urlShortener = this.urlShortener;
+		}
 		this.enabled = false;
 		this.rotationIndex = 0;
 		this.healthState = new Map();
@@ -459,12 +466,13 @@ class DiscordService extends NotificationChannel {
 
 	async formatAlert(alert = {}) {
 		const signalClass = alert.signalClass || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.signalClass : undefined);
+		const session = alert.session || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.session : undefined);
 		if (alert.enriched && typeof alert.enriched === 'object') {
-			return this.formatter.formatEnriched(alert.enriched, { signalClass });
+			return await this.formatter.formatEnriched(alert.enriched, { signalClass, session });
 		}
 
 		return typeof alert.text === 'string'
-			? this.formatter.format(alert.text, { signalClass })
+			? this.formatter.format(alert.text, { signalClass, session })
 			: '';
 	}
 

@@ -205,6 +205,20 @@ function idempotencyMiddleware(req, res, next) {
 			idempotencyService.release(key, requestFingerprint, releaseError);
 		};
 
+		const releaseReservation = (statusCode) => {
+			if (reservationReleased) return;
+			reservationReleased = true;
+			const isThrottled = statusCode === 429;
+			const releaseError = new Error(
+				isThrottled
+					? 'Initial idempotent request was rate limited or throttled'
+					: 'Initial idempotent request failed before a replayable response was available'
+			);
+			releaseError.code = 'IDEMPOTENCY_RELEASED';
+			releaseError.statusCode = 409;
+			idempotencyService.release(key, requestFingerprint, releaseError);
+		};
+
 		const cacheResponse = (body) => {
 			if (responseCached) {
 				return;
@@ -247,6 +261,10 @@ function idempotencyMiddleware(req, res, next) {
 				if (req.requestDeadlineExceeded) releaseTimedOutReservation();
 				return;
 			}
+			if (responseStatusCode === 429) {
+				releaseReservation(429);
+				return;
+			}
 			responseCached = true;
 
 			const contentType = res.get('content-type');
@@ -275,11 +293,8 @@ function idempotencyMiddleware(req, res, next) {
 		};
 
 		res.on('finish', () => {
-			if (!responseCached && res.statusCode >= 500) {
-				const releaseError = new Error('Initial idempotent request failed before a replayable response was available');
-				releaseError.code = 'IDEMPOTENCY_RELEASED';
-				releaseError.statusCode = 409;
-				idempotencyService.release(key, requestFingerprint, releaseError);
+			if (!responseCached && (res.statusCode >= 500 || res.statusCode === 429)) {
+				releaseReservation(res.statusCode);
 			}
 		});
 		res.end = function(...args) {

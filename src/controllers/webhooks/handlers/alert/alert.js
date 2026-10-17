@@ -24,6 +24,11 @@ const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { resolveDryRun } = require('../../../../lib/dryRunRequest');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
+const {
+	buildMinAlertContext,
+	applyMinAlertContext,
+	buildFooterPriceSourceLine,
+} = require('../../../../services/alerts/minAlertContext');
 const { outcomeAnnotationService, renderAnnotationLine } = require('../../../../services/alerts/outcomeAnnotationService');
 const { crossTimeframeCooldown } = require('../../../../services/alerts/crossTimeframeCooldown');
 const { burstAggregator, buildBurstGroupKey } = require('../../../../services/alerts/burstAggregator');
@@ -31,12 +36,18 @@ const { alertModeration } = require('../../../../services/alerts/alertModeration
 const { classifySignal } = require('../../../../services/alerts/signalClassifier');
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
+const { alertSubscriberDeliveryService } = require('../../../../services/subscribers/AlertSubscriberDeliveryService');
 const { buildReplyMarkup } = require('../../../../services/alerts/telegramAlertKeyboard');
 const {
 	buildErrorEnvelope,
 	sendError,
 	STANDARD_ERROR_CODES,
 } = require('../../../../lib/errorEnvelope');
+const {
+	isEquityExchange,
+	classifySession,
+	isEquitySessionTagEnabled,
+} = require('../../../../services/storage/EquitySessionService');
 
 const ENRICHMENT_PROVIDER_STATUSES = new Set(['full', 'partial', 'failed']);
 
@@ -237,6 +248,9 @@ async function processEnrichment(alert, options) {
 				parsedSignal: parsed,
 			});
 			if (enrichedAlert && typeof enrichedAlert === 'object') {
+				if (alert.session && !enrichedAlert.session) {
+					enrichedAlert.session = alert.session;
+				}
 				enrichedAlert.tokenUsage = tokenUsage && typeof tokenUsage.toJSON === 'function' ? tokenUsage.toJSON() : null;
 				enriched = true;
 				alert.enriched = enrichedAlert;
@@ -274,6 +288,33 @@ async function processEnrichment(alert, options) {
 		} finally {
 			sentryService.endSpan(enrichmentSpan);
 		}
+	}
+
+	// GH-581 / CB-269: minimum viable alert context — synthesize a degraded-but-honest
+	// decision package (entry reference + provisional invalidation/target) when both
+	// the configured enrichment pipeline is unavailable or returned an incomplete
+	// payload. Fail-open: any failure here is logged and never blocks delivery.
+	try {
+		const ctx = await buildMinAlertContext({
+			text: alert.text,
+			enriched: alert.enriched || null,
+			runtimeConfig,
+		});
+		if (ctx && ctx.applied) {
+			alert.minAlertContext = ctx;
+			alert.enriched = applyMinAlertContext(alert.enriched || null, ctx);
+			enriched = enriched || true;
+			const footerLine = buildFooterPriceSourceLine(ctx, runtimeConfig);
+			if (footerLine && alert.enriched) {
+				const existingExtra = typeof alert.enriched.extraText === 'string' ? alert.enriched.extraText : '';
+				const merged = existingExtra.includes(footerLine)
+					? existingExtra
+					: (existingExtra ? existingExtra + '\n' + footerLine : footerLine);
+				alert.enriched.extraText = merged;
+			}
+		}
+	} catch (error) {
+		console.warn('[Alert] Min alert context synthesis failed, continuing with original text:', error.message);
 	}
 
 	return enriched;
@@ -555,11 +596,10 @@ function postAlert(botOrGetter) {
 			const source = (typeof body === 'object' && body && typeof body.source === 'string' && body.source.trim())
 				? body.source.trim()
 				: 'webhook-alert';
-			alert = { text, source, signalClass, ...truncation };
-			// `alert.text` is immutable from here on, so the TradingView signal is parsed
-			// once and shared by the repeat-suppression, persistence, and outcome-eligibility
-			// paths below.
-			const parsedSignal = parseTradingViewSignal(alert.text);
+			const parsedSignal = parseTradingViewSignal(text);
+			const session = parsedSignal?.session
+				|| (parsedSignal?.exchange && isEquityExchange(parsedSignal.exchange) ? classifySession({ exchange: parsedSignal.exchange, symbol: parsedSignal.symbol }) : undefined);
+			alert = { text, source, signalClass, ...(session ? { session } : {}), ...truncation };
 
 			if (alertModeration.isEnabled()) {
 				alertModeration.refreshConfig();
@@ -813,6 +853,7 @@ function postAlert(botOrGetter) {
 						&& buildBurstGroupKey({ parsedSignal, routing: deliveryRouting }) !== null;
 					const dispatchOutcome = await burstAggregator.dispatch({
 						parsedSignal,
+						alert,
 						routing: deliveryRouting,
 						deliver: async (overrides = {}) => sendWithNotificationRouting(
 							notificationManager,
@@ -1014,6 +1055,7 @@ function postAlert(botOrGetter) {
 				discordWebhookUrl: routing.discordWebhookUrl,
 				alertId: inlineAlertId || undefined,
 				side: parsedSignal?.side || null,
+				session: alert.session || undefined,
 				burstAggregateId,
 				burstSignalCount,
 				decision: decisionAudit,
@@ -1029,8 +1071,22 @@ function postAlert(botOrGetter) {
 						aggregated,
 					});
 				})
-				.catch(() => {}); // errors already logged inside AlertStorageService
 			trackBackgroundTask(postPersistenceTask);
+
+			const subscriberDispatchTask = alertSubscriberDeliveryService.dispatchAlert({
+				alertId: inlineAlertId || undefined,
+				text: alert.text,
+				symbol: extracted.symbol !== 'unknown' ? extracted.symbol : null,
+				exchange: extracted.exchange || null,
+				side: parsedSignal?.side || null,
+				enriched,
+				enrichmentData: alert.enriched || null,
+				channels: requestedChannels,
+				source: body.source || 'webhook-alert',
+			}).catch((err) => {
+				console.warn('[WebhookAlert] Subscriber dispatch task failed:', err && err.message);
+			});
+			trackBackgroundTask(subscriberDispatchTask);
 
 			if (signalOutcomeService.isEnabled() && !suppressedRepeat) {
 				if (parsedSignal) {
@@ -1083,6 +1139,7 @@ function postAlert(botOrGetter) {
 								? Math.abs(alert.enriched.sentiment_score)
 								: null),
 						side: parsedSignal.side,
+						session: alert.session || parsedSignal.session || undefined,
 						price: mcpPrice,
 						stop: stopLevel,
 						target: targetLevel,

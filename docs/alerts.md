@@ -9,9 +9,11 @@ When `ENABLE_FIRESTORE_ALERT_STORAGE=true`, successful `POST /api/webhook/alert`
 Stored `alerts` and `alertReplays` records default to 90 days of retention. The service filters expired records before list, detail, export, and summary responses while Firestore's native TTL deletion is eventual. New records carry an `expiresAt` timestamp; `bash ops/configure-firestore-alert-retention.sh` backfills legacy records from `receivedAt`/`replayedAt` before enabling both TTL policies, shortens existing expiries when the configured deadline is earlier, removes legacy raw replay idempotency keys after hashing them, reports scanned/updated/skipped counts, and fails if a record has no usable timestamp. Replay audit documents retain only a SHA-256 `idempotencyKeyHash`, never the raw key. Inspect the TTL policies with `gcloud firestore fields ttls list`.
 
 All endpoints below require the same `x-api-key` header used by the webhook routes.
-If alert storage is enabled but Firestore cannot serve the request, they return `503 STORAGE_UNAVAILABLE` instead of a generic `500`. The body carries a sanitized `category` (and `missingIndex: true` for a missing composite index) so a rejected query is distinguishable from a credential/init failure — see the [runbook](troubleshooting.md#stored-alerts-return-503-storage_unavailable). Both fields are optional.
+If alert storage is enabled but Firestore cannot serve the request, they return `503 STORAGE_UNAVAILABLE` instead of a generic `500`. The body carries a sanitized `category` and may include `missingIndex: true` when the provider indicates a missing composite index — see the [runbook](troubleshooting.md#firestore-reads-return-503-storage_unavailable). Both fields are optional.
 
-List, summary, and export order by `receivedAt` **and** `FieldPath.documentId()` for deterministic pagination. Firestore sorts `__name__` ascending for free but requires a composite index for the descending direction, so `alerts { receivedAt DESC, __name__ DESC }` must be declared in `firestore.indexes.json` **and** deployed (`firebase deploy --only firestore:indexes`) or those three endpoints answer `503`. Detail reads (`GET /api/alerts/:alertId`) use a document get and need no index.
+List, summary, and export order by `receivedAt` and `FieldPath.documentId()` for deterministic pagination. Firestore's automatic single-field index serves this ordering; no `alerts` composite is required. Use `pnpm run deploy:firestore:indexes` to audit declared composites for queries that actually require them, and add `-- --apply` only when an index deployment is needed.
+
+Detail reads (`GET /api/alerts/:alertId`) are document gets and need no composite index. If even a nonexistent id returns `503` instead of `404`, deploying indexes will not fix the failure; inspect the sanitized response category and provider logs. The production read failure reported in issue #1285 remains unresolved and was not caused by a missing composite index. See the [runbook](troubleshooting.md#firestore-reads-return-503-storage_unavailable).
 
 When `ENABLE_ALERT_DECISION_AUDIT=true`, alert reads can expose a sanitized `decision` object containing the parsed signal, enrichment attempt/result, gate verdicts, requested and delivered channels, and request id. `decision.enrichment.providers` records the `full`, `partial`, or `failed` outcome for each attempted Gemini or TradingView MCP provider; a failed provider stays visible when the other provider supplies a fallback. This metadata is internal to the alert enrichment flow and is excluded from the public enrichment payload. `decision.dispatch.requestedChannelMode` is `explicit` when the request supplied `channels`, `symbol_route` when a configured `symbolRoutes` entry matched the alert, and `broadcast` when the enabled channel set handled the alert. For dry runs, a broadcast channel set is resolved only when the notification manager is already initialized. The sanitizer bounds nested values to depth 6, 32 object keys, 32 array entries, and 1000 characters per string to keep persisted audit data predictable and exclude unbounded provider or request payloads. The default is `false`; only webhook alert records carry this field. The request-time gate is eligible for Firebase Remote Config.
 
@@ -86,6 +88,8 @@ Each enriched alert records only safe prompt provenance (`name`, `source`, `labe
 Similarly, `enrichment.evidenceCoverage` tracks whether enriched alerts cited grounding sources, reporting `zeroSources`, `oneToTwoSources`, and `threePlusSources` distribution along with `averageSourceCount`, overall and grouped `byPromptProvenance`.
 
 `enrichment.sentimentCalibration` reports whether the stored `sentiment_score` distribution can still rank alerts. A near-constant score is worse than no score: it cannot separate a strong setup from a weak one, so it cannot be used to tune thresholds or compare signal quality over time. See [Sentiment score calibration](#sentiment-score-calibration) below.
+
+`summary.deployments` groups stored alerts by deployment environment identity (`platform`, `gitSha`, `service`, `runtimeVersion`), ordered descending by `lastSeen` with `count` as tie-breaker, capped at 50 entries. This enables operators to audit alert volume and timing across running replicas and platforms.
 
 **Query Parameters:**
 - `from` - Optional ISO-8601 lower bound; defaults to 24 hours before `to`
@@ -212,7 +216,11 @@ An alert that persisted no real token usage is not attributed to any feature. Pl
         "inputTokens": 10,
         "outputTokens": 20,
         "totalTokens": 30,
-        "totalCost": 0.001
+        "totalCost": 0.001,
+        "pricing": {
+          "unknownModelPricing": false,
+          "unknownModels": []
+        }
       }
     },
     "delivery": {
@@ -231,6 +239,16 @@ An alert that persisted no real token usage is not attributed to any feature. Pl
         }
       }
     },
+    "deployments": [
+      {
+        "platform": "railway",
+        "gitSha": "a1b2c3d4e5f6",
+        "service": "cabros-bot",
+        "runtimeVersion": "0.1.0",
+        "count": 2,
+        "lastSeen": "2026-06-06T12:00:00.000Z"
+      }
+    ],
     "latency": {
       "averageProcessingMs": 250,
       "averageDeliveryMs": 150,

@@ -300,7 +300,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		elementsById[id] = node;
 		body.append(node);
 	});
-	['overview', 'status', 'diagnostics', 'alerts', 'outcomes', 'presets', 'jobs', 'orders', 'analysis', 'newsMonitor', 'trading', 'playground'].forEach((view) => {
+	['overview', 'status', 'diagnostics', 'alerts', 'outcomes', 'presets', 'subscribers', 'jobs', 'orders', 'analysis', 'newsMonitor', 'trading', 'playground'].forEach((view) => {
 		const button = new FakeElement('button');
 		button.dataset.view = view;
 		body.append(button);
@@ -1967,6 +1967,81 @@ describe('admin browser client', () => {
 		expect(requests.at(-1)[0]).toBe('/api/alerts?limit=10&before=cursor-2&source=webhook');
 	});
 
+	it('exposes source suggestions while preserving custom alert sources', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		const sourceInput = listForm.elements.source;
+		const enrichedSelect = listForm.elements.enriched;
+		expect(sourceInput.tagName).toBe('INPUT');
+		expect(sourceInput.attributes.list).toBe('alert-source-options');
+		expect(enrichedSelect.tagName).toBe('SELECT');
+		const sourceOptions = find(listForm, (node) => node.tagName === 'DATALIST');
+		expect(sourceOptions.attributes.id).toBe('alert-source-options');
+		const sourceValues = sourceOptions.children.map((option) => option.value);
+		expect(sourceValues).toEqual([
+			'', 'webhook-alert', 'webhook-message', 'webhook', 'news-monitor',
+			'market-scanner', 'expanded-analysis', 'test-alert',
+		]);
+		const enrichedValues = enrichedSelect.children.map((option) => option.value);
+		expect(enrichedValues).toEqual(['', 'true', 'false']);
+	});
+
+	it('renders an active-filters header that reflects the current selection', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		const activeFilters = find(listForm, (node) => node.className === 'active-filters');
+		expect(activeFilters).toBeDefined();
+		expect(activeFilters.textContent).toBe('Active filters: none');
+
+		listForm.elements.source.value = 'webhook';
+		await listForm.elements.source.dispatch('change');
+		await flush();
+		expect(activeFilters.textContent).toContain('source=webhook');
+
+		listForm.elements.enriched.value = 'true';
+		await listForm.elements.enriched.dispatch('change');
+		await flush();
+		expect(activeFilters.textContent).toContain('source=webhook');
+		expect(activeFilters.textContent).toContain('enriched=true');
+	});
+
+	it('clears all filter selections when the Clear filters button is clicked', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		listForm.elements.source.value = 'news-monitor';
+		await listForm.elements.source.dispatch('change');
+		await flush();
+		listForm.elements.enriched.value = 'false';
+		await listForm.elements.enriched.dispatch('change');
+		await flush();
+
+		const clearButton = findButton(listForm, 'Clear filters');
+		expect(clearButton.disabled).toBe(false);
+		await clearButton.dispatch('click');
+		await flush();
+
+		expect(listForm.elements.source.value).toBe('');
+		expect(listForm.elements.enriched.value).toBe('');
+		const activeFilters = find(listForm, (node) => node.className === 'active-filters');
+		expect(activeFilters.textContent).toBe('Active filters: none');
+		expect(clearButton.disabled).toBe(true);
+	});
+
 	it('renders dedicated alert analytics and export forms with safe defaults', async () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
@@ -2494,6 +2569,69 @@ describe('admin browser client', () => {
 		expect(editBtn.title).toBe('Requires admin.operator role');
 		expect(deleteBtn.disabled).toBe(true);
 		expect(deleteBtn.title).toBe('Requires admin.operator role');
+	});
+
+	it('renders dedicated alert subscriber controls and structured fields', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+
+		await selectView(browser, 'subscribers');
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alert-subscribers');
+		const createForm = findForm(browser.elementsById.view, 'POST /api/alert-subscribers');
+		const updateForm = findForm(browser.elementsById.view, 'PATCH /api/alert-subscribers/{id}');
+
+		expect(listForm).toBeDefined();
+		expect(createForm).toBeDefined();
+		expect(updateForm).toBeDefined();
+
+		expect(createForm.elements.url).toBeDefined();
+		expect(createForm.elements.secret).toBeDefined();
+		expect(createForm.elements.description).toBeDefined();
+		expect(createForm.elements.filterSymbols).toBeDefined();
+		expect(createForm.elements.filterSources).toBeDefined();
+		expect(createForm.elements.enabled).toBeDefined();
+	});
+
+	it('renders subscribers as structured cards with HMAC badge, filters, and actions', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/alert-subscribers') {
+					return response({
+						success: true,
+						storage: { mode: 'durable', backend: 'firestore' },
+						subscribers: [
+							{
+								id: 'sub_test_1',
+								url: 'https://example.com/webhook',
+								description: 'Test Webhook Subscriber',
+								enabled: true,
+								hasSecret: true,
+								filter: { symbols: ['BTCUSDT'], sources: ['webhook-alert'] },
+								lastDeliveryStatus: 'success',
+								lastDeliveryAt: '2026-03-30T12:00:00.000Z',
+							},
+						],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+
+		await selectView(browser, 'subscribers');
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alert-subscribers');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('https://example.com/webhook');
+		expect(viewText).toContain('Test Webhook Subscriber');
+		expect(viewText).toContain('HMAC Signed');
+		expect(viewText).toContain('Symbols: BTCUSDT');
+		expect(viewText).toContain('Sources: webhook-alert');
 	});
 
 	it('loads recent jobs with bounded status, type, and limit filters', async () => {
@@ -7535,6 +7673,63 @@ describe('structured analysis forms', () => {
 			expect(currentSelected.textContent).toContain('POST /api/webhook/alert');
 			expect(playground.elements.body).toBeDefined();
 			expect(playground.elements.body.value).toContain('Buy BTC');
+			expect(playground.elements.body.value).toContain('[REDACTED]');
+		});
+
+		it('redacts Discord webhook URLs in request history and restored body (#1159)', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.includes('/api/webhook/alert')) {
+						return response({ success: true, messageId: 'm-102' });
+					}
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
+			await select.dispatch('change');
+			const liveToken = 'super-secret-discord-token-xyz';
+			const liveWebhookId = '9876543210';
+			playground.elements.body.value = JSON.stringify({
+				message: 'Breakout alert',
+				discordWebhookUrl: `https://discord.com/api/webhooks/${liveWebhookId}/${liveToken}`,
+			});
+			await playground.dispatch('submit');
+			await flush();
+
+			const historyItems = findAll(playground, (n) => n.className === 'history-item');
+			expect(historyItems.length).toBe(1);
+
+			// Verify webhook token and ID are redacted from history and playground text
+			expect(playground.textContent).not.toContain(liveToken);
+			expect(playground.textContent).not.toContain(liveWebhookId);
+
+			// Change the current form to another operation to clear inputs
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('GET /api/alerts —')).value;
+			await select.dispatch('change');
+			expect(playground.elements.body).toBeUndefined();
+
+			// Restore from history
+			const restoreBtn = find(historyItems[0], (n) => n.tagName === 'BUTTON' && n.textContent === 'Restore');
+			await restoreBtn.dispatch('click');
+			await flush();
+
+			// Form should be back to POST /api/webhook/alert with restored body
+			const currentSelected = find(select, (o) => o.value === select.value);
+			expect(currentSelected.textContent).toContain('POST /api/webhook/alert');
+			expect(playground.elements.body).toBeDefined();
+			expect(playground.elements.body.value).toContain('Breakout alert');
+			expect(playground.elements.body.value).not.toContain(liveToken);
+			expect(playground.elements.body.value).not.toContain(liveWebhookId);
 			expect(playground.elements.body.value).toContain('[REDACTED]');
 		});
 

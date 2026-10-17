@@ -27,6 +27,105 @@ function collectRequestItems(items, result = []) {
 	return result;
 }
 
+// Minimal `pm` harness that actually EXECUTES a Postman item's test script, so a
+// self-defeating assertion cannot ship. `pm.expect(raw).to.not.include('apiKey')`
+// reads as a no-credential-leak guard, but every /api/status body carries the
+// documented field name `apiKeyFallbackConfigured`, so it always fails in
+// Postman. The contract assertions in this file check `/authDomain/i` instead,
+// which is why nothing in CI can see that defect class. An unsupported matcher
+// throws rather than silently passing, so widening the subset is deliberate.
+function createPmHarness(response, onResult) {
+	const buildChain = (actual, negated) => {
+		const check = (passed, description) => {
+			if (passed === negated) {
+				throw new Error(`expected ${description} to ${negated ? 'NOT ' : ''}hold`);
+			}
+		};
+		const chain = {
+			get to() { return chain; },
+			get be() { return chain; },
+			get been() { return chain; },
+			get that() { return chain; },
+			get which() { return chain; },
+			get and() { return chain; },
+			get has() { return chain; },
+			get have() { return chain; },
+			get is() { return chain; },
+			get deep() { return chain; },
+			get not() { return buildChain(actual, !negated); },
+			eql(expected) {
+				check(
+					JSON.stringify(actual) === JSON.stringify(expected),
+					`${JSON.stringify(actual)} to eql ${JSON.stringify(expected)}`,
+				);
+				return chain;
+			},
+			equal(expected) { return chain.eql(expected); },
+			include(expected) {
+				const passed = typeof actual === 'string'
+					? actual.includes(expected)
+					: Array.isArray(actual) && actual.includes(expected);
+				check(passed, `${JSON.stringify(actual)} to include ${JSON.stringify(expected)}`);
+				return chain;
+			},
+			property(key) {
+				check(
+					actual !== null && actual !== undefined
+						&& Object.prototype.hasOwnProperty.call(actual, key),
+					`${JSON.stringify(actual)} to have property "${key}"`,
+				);
+				return chain;
+			},
+			an(type) {
+				const observed = Array.isArray(actual) ? 'array' : typeof actual;
+				check(observed === type, `${JSON.stringify(actual)} to be an ${type} (got ${observed})`);
+				return chain;
+			},
+			a(type) { return chain.an(type); },
+			above(limit) {
+				check(typeof actual === 'number' && actual > limit, `${actual} to be above ${limit}`);
+				return chain;
+			},
+			least(limit) {
+				check(typeof actual === 'number' && actual >= limit, `${actual} to be at least ${limit}`);
+				return chain;
+			},
+			below(limit) {
+				check(typeof actual === 'number' && actual < limit, `${actual} to be below ${limit}`);
+				return chain;
+			},
+		};
+		return chain;
+	};
+
+	return {
+		test(name, fn) {
+			try {
+				fn();
+				onResult({ name, passed: true, error: null });
+			} catch (error) {
+				onResult({ name, passed: false, error: error.message });
+			}
+		},
+		expect(actual) { return buildChain(actual, false); },
+		response: {
+			code: response.code,
+			text: () => response.body,
+			json: () => JSON.parse(response.body),
+		},
+	};
+}
+
+function runItemTestScript(item, response) {
+	const script = (item.event || []).find((event) => event.listen === 'test');
+	if (!script) throw new Error(`item "${item.name}" has no test script`);
+	const results = [];
+
+	const run = new Function('pm', script.script.exec.join('\n'));
+	run(createPmHarness(response, (result) => results.push(result)));
+	return results;
+}
+
 function collectRequestsAndSavedExamples(items, result = []) {
 	for (const item of items) {
 		if (item.request) result.push(item.request);
@@ -39,6 +138,25 @@ function collectRequestsAndSavedExamples(items, result = []) {
 }
 
 describe('Postman collection contract', () => {
+	it('documents webhook-message alert filtering with a matching response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'GET List Alerts (webhook-message)');
+		const customSource = findItem(collection.item, 'GET List Alerts (custom source)');
+		const invalid = findItem(collection.item, 'GET List Alerts (invalid include - 400 Bad Request)');
+
+		expect(item).toBeDefined();
+		expect(item.request.url.raw).toBe('{{baseUrl}}/api/alerts?limit=10&source=webhook-message');
+		expect(item.request.body).toBeUndefined();
+		const response = item.response.find((example) => example.code === 200);
+		expect(JSON.parse(response.body).alerts[0].source).toBe('webhook-message');
+
+		expect(customSource).toBeDefined();
+		expect(customSource.request.url.raw).toBe('{{baseUrl}}/api/alerts?limit=10&source=webhook-signal');
+		expect(JSON.parse(customSource.response.find((example) => example.code === 200).body).alerts[0].source)
+			.toBe('webhook-signal');
+		expect(invalid.response[0].code).toBe(400);
+	});
+
 	it('adds executable response assertions to each alert decision rollup and export variant', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const names = [
@@ -916,6 +1034,15 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(capabilities.response[0].body).featureFlags.symbolAnalysisMultiAgent).toBe(false);
 	});
 
+	it('documents api-only mode state in status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		expect(JSON.parse(status.response[0].body).featureFlags.apiOnlyMode).toBe(false);
+		expect(JSON.parse(capabilities.response[0].body).featureFlags.apiOnlyMode).toBe(false);
+	});
+
 	it('documents notificationRedrive and zeroChannelBroadcasts in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');
@@ -1335,6 +1462,176 @@ describe('Postman collection contract', () => {
 		}
 	});
 
+	it('ships executable Postman assertions that actually pass on every documented response', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - Firebase admin auth readiness (issue #1134)');
+
+		// Only the 200 variants: the script asserts on `dependencies.adminAuth`,
+		// which the documented 401 error envelope intentionally does not carry.
+		const successes = item.response.filter((res) => res.code === 200);
+		expect(successes).toHaveLength(5);
+
+		for (const res of successes) {
+			const results = runItemTestScript(item, { code: res.code, body: res.body });
+			const failures = results.filter((result) => !result.passed);
+
+			expect({
+				example: res.name,
+				failures: failures.map((failure) => `${failure.name}: ${failure.error}`),
+			}).toEqual({ example: res.name, failures: [] });
+		}
+	});
+
+	it('documents Firebase admin auth gate and proven readiness states for GET Status', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - Firebase admin auth readiness (issue #1134)');
+
+		expect(item).toBeDefined();
+
+		const disabled = item.response.find((res) => res.name.includes('disabled'));
+		const unverified = item.response.find((res) => res.name.includes('unverified'));
+		const ready = item.response.find((res) => res.name.includes('ready'));
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const misconfigured = item.response.find((res) => res.name.includes('misconfigured'));
+		const unauthorized = item.response.find((res) => res.code === 401);
+
+		// The gate must be mirrored exactly into featureFlags, or a client
+		// cannot reconcile the flag with the dependency it drives.
+		for (const res of [disabled, unverified, ready, degraded, misconfigured]) {
+			const body = JSON.parse(res.body);
+			expect(body.featureFlags.firebaseAdminAuth).toBe(body.dependencies.adminAuth.enabled);
+			expect(body.dependencies.adminAuth).not.toHaveProperty('config');
+		}
+
+		// Shape is not readiness: the pre-verification state documents as
+		// unverified, exactly like equityMarketData in issue #1116.
+		expect(JSON.parse(unverified.body).dependencies.adminAuth).toMatchObject({
+			enabled: true,
+			provider: 'firebase',
+			signIn: 'email-password',
+			verifierConfigured: true,
+			browserConfigConfigured: true,
+			ready: false,
+			status: 'unverified',
+			verificationSuccessCount: 0,
+			consecutiveFailures: 0,
+		});
+
+		expect(JSON.parse(ready.body).dependencies.adminAuth).toMatchObject({
+			ready: true,
+			status: 'ready',
+			verificationSuccessCount: 12,
+		});
+
+		// Only verifier-unavailability degrades the dependency. The degraded
+		// example must therefore carry no verification success, since a
+		// rejected bearer token is never counted as a failure.
+		expect(JSON.parse(degraded.body).dependencies.adminAuth).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			verifierConfigured: true,
+			verificationSuccessCount: 0,
+			verifierUnavailableCount: 3,
+			consecutiveFailures: 3,
+		});
+
+		expect(JSON.parse(misconfigured.body).dependencies.adminAuth).toMatchObject({
+			verifierConfigured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+
+		expect(JSON.parse(disabled.body).dependencies.adminAuth).toMatchObject({
+			enabled: false,
+			provider: null,
+			verifierConfigured: false,
+			ready: false,
+			status: 'disabled',
+		});
+
+		expect(unauthorized.code).toBe(401);
+		expect(JSON.parse(unauthorized.body)).toMatchObject({
+			success: false,
+			code: 'ADMIN_AUTH_REQUIRED',
+		});
+
+		for (const res of [disabled, unverified, ready, degraded, misconfigured]) {
+			expect(res.body).not.toMatch(/private_key/);
+			expect(res.body).not.toMatch(/service_account/);
+			expect(res.body).not.toMatch(/authDomain/i);
+		}
+	});
+
+	it('documents the admin auth gate in the primary status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+
+		for (const name of ['Get Status', 'Get Capabilities']) {
+			const item = findItem(collection.item, name);
+			const body = JSON.parse(item.response[0].body);
+			expect(body.featureFlags.firebaseAdminAuth).toBe(false);
+			expect(body.dependencies.adminAuth).toMatchObject({
+				enabled: false,
+				ready: false,
+				status: 'disabled',
+			});
+		}
+	});
+
+	it('documents cloudflareAig routing states for GET Status', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - cloudflareAig routing (issue #1115)');
+
+		expect(item).toBeDefined();
+
+		const inactive = item.response.find((res) => res.name.includes('inactive'));
+		const routed = item.response.find((res) => res.name.includes('ready - gateway is the routed'));
+		const misconfigured = item.response.find((res) => res.name.includes('misconfigured'));
+
+		// Issue #1115 acceptance: ENABLE_CLOUDFLARE_AIG alone does not route traffic, so
+		// credentials present under another provider must document ready:false/inactive
+		// rather than the ready:true the flag-plus-credentials steps used to produce.
+		expect(inactive.code).toBe(200);
+		expect(JSON.parse(inactive.body).dependencies.cloudflareAig).toMatchObject({
+			enabled: true,
+			configured: true,
+			routed: false,
+			provider: 'gemini',
+			ready: false,
+			status: 'inactive',
+		});
+
+		expect(routed.code).toBe(200);
+		expect(JSON.parse(routed.body).dependencies.cloudflareAig).toMatchObject({
+			enabled: true,
+			configured: true,
+			routed: true,
+			provider: 'cloudflare',
+			ready: true,
+			status: 'ready',
+		});
+
+		expect(misconfigured.code).toBe(200);
+		expect(JSON.parse(misconfigured.body).dependencies.cloudflareAig).toMatchObject({
+			enabled: true,
+			configured: false,
+			routed: true,
+			provider: 'cloudflare',
+			ready: false,
+			status: 'misconfigured',
+		});
+
+		for (const res of [inactive, routed, misconfigured]) {
+			const cf = JSON.parse(res.body).dependencies.cloudflareAig;
+			expect(cf.routed).toBe(cf.provider === 'cloudflare');
+			if (cf.ready) {
+				expect(cf.status).toBe('ready');
+				expect(cf.routed).toBe(true);
+			}
+			expect(res.body).not.toMatch(/CF_AIG_TOKEN/);
+			expect(res.body).not.toMatch(/CF_AIG_BASE_URL/);
+		}
+	});
+
 	it('documents both STORAGE_UNAVAILABLE classifications for GET List Alerts', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const item = findItem(collection.item, 'GET List Alerts');
@@ -1497,6 +1794,27 @@ describe('alert analytics summary examples (issue #731)', () => {
 		expect(directSummary.available).toBe(true);
 		expect(Object.keys(shadowMetrics)).toEqual(expect.arrayContaining(required));
 		expect(shadowMetrics).not.toHaveProperty('available');
+	});
+
+	it('documents deployments array in GET Alert Analytics Summary example (issue #1169)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const alertSummary = findItem(collection.item, 'GET Alert Analytics Summary');
+		expect(alertSummary).toBeDefined();
+
+		const summaryExample = alertSummary.response.find((response) => response.name === '200 OK - Analytics summary');
+		expect(summaryExample).toBeDefined();
+
+		const summary = JSON.parse(summaryExample.body).summary;
+		expect(Array.isArray(summary.deployments)).toBe(true);
+		expect(summary.deployments.length).toBeGreaterThan(0);
+		expect(summary.deployments[0]).toEqual(expect.objectContaining({
+			platform: expect.any(String),
+			gitSha: expect.any(String),
+			service: expect.any(String),
+			runtimeVersion: expect.any(String),
+			count: expect.any(Number),
+			lastSeen: expect.any(String),
+		}));
 	});
 });
 

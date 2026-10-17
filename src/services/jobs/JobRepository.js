@@ -4,6 +4,7 @@ const admin = require('firebase-admin');
 const alertStorageService = require('../storage/AlertStorageService');
 const { firestoreWriteMetricsService } = require('../storage/FirestoreWriteMetricsService');
 const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
+const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
 
 const WRITE_METRICS_DOMAIN_JOBS = 'jobs';
 
@@ -180,6 +181,10 @@ class JobRepository {
 
 		const version = (saveVersions.get(sanitized.jobId)?.version || 0) + 1;
 		saveVersions.set(sanitized.jobId, { version, job: cloneJob(sanitized) });
+
+		if (!sanitized.deployment) {
+			sanitized.deployment = getDeploymentIdentity();
+		}
 
 		let persistedJob = sanitized;
 		const durableJob = addTerminalExpiry(sanitized);

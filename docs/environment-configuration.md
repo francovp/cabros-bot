@@ -160,10 +160,13 @@ Unlike equity market data, this feature **does** run a bounded startup probe (5s
 - `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` - Total budget envelope for the synchronous webhook enrichment flow (default: `12000`, valid range: `1000`-`120000`). When exceeded, all in-flight MCP calls are aborted and the enrichment fails open, preventing the alert webhook from being blocked for too long.
 - `TRADINGVIEW_MCP_DEFAULT_EXCHANGE` - Default exchange when not present in signal (default: `BINANCE`; one exchange token starting with a letter or digit and containing letters, digits, `.`, `_`, or `-`); Firebase Remote Config can override this environment fallback
 - `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` - Default timeframe fallback (default: `1D` for `/api/webhook/expanded-analysis-alert`, `1h` for webhook signal enrichment)
+- `ENABLE_TRADINGVIEW_MCP_CACHE` - Enable a bounded, process-local TTL cache for successful identical MCP tool calls (`true` or `false`, default: `false`; Firebase Remote Config eligible)
+- `TRADINGVIEW_MCP_CACHE_TTL_MS` - Cache lifetime in milliseconds (`10000`-`600000`, default: `90000`; Firebase Remote Config eligible)
 - `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` - Enable volume confirmation validation for TradingView alerts (`true` or `false`, default: `false`)
 - `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` - Enable optional `combined_analysis` confluence enrichment for TradingView webhook alerts (`true` or `false`, default: `false`)
 - `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` - Also call `multi_timeframe_analysis` during confluence enrichment (`true` or `false`, default: `false`)
 - `ENABLE_ALERT_HTF_RENDER` - Enable rendering higher-timeframe trend alignment on enriched webhook alerts (`true` or `false`, default: `true`)
+- `ENABLE_EQUITY_SESSION_TAG` - Enable tagging equity webhook alerts with trading-session state (`regular`, `pre`, `post`, `closed`) (`true` or `false`, default: `true`, Remote Config supported)
 - `ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT` - Enable multi-agent consensus analysis fallback for `/api/webhook/symbol-analysis` (`true` or `false`, default: `false`)
 - `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` - Suppress duplicate channel delivery for the same `exchange|symbol|timeframe|side` signal within its cooldown window; suppressed alerts are still persisted with a `suppressedRepeat: true` marker and opposite-side flips always deliver (`true` or `false`, default: `false`)
 - `ALERT_SIGNAL_COOLDOWN_BARS` - Cooldown length in alert-timeframe bars for repeat suppression (`1`-`10`, default: `1`)
@@ -360,7 +363,7 @@ The `shadowModeMetrics` payload (also surfaced as the `X-Shadow-Mode-Metrics` re
 - `windows.<1h|4h|1D|1W>` — the same metric set scoped to a single evaluation window. Each block may include `bySide` (`BUY` / `SELL`) and `bySetupType` sub-blocks when at least one evaluated signal exists for that bucket.
 - `drawdownProxy` — `averageMaxAdverseExcursionPercent` (mean of per-signal worst excursion) and `absoluteMaxAdverseExcursionPercent` (single worst excursion observed).
 - `falsePositiveCandidates` / `falsePositiveCandidatesCount` — up to 5 high-confidence signals (`|score| >= 0.75`, or news-monitor `|score| >= 0.7`) with `return < -1%` or `maxAdverseExcursion < -3%`.
-- `latencyCostMetadata` — `averageProcessingTimeMs` and aggregated `tokenUsage` (numeric-only fields, `inputTokens` / `outputTokens` / `totalCost`).
+- `latencyCostMetadata` — `averageProcessingTimeMs` and aggregated `tokenUsage` (`inputTokens` / `outputTokens` / `totalCost` and `pricing` containing `unknownModelPricing` / `unknownModels`).
 
 When signal-outcome tracking is disabled, or when no measurements exist in the requested window, the field becomes the string sentinel `"No measurements found"` instead of an object payload. The same sentinel is emitted in the `X-Shadow-Mode-Metrics` response header on `GET /api/alerts/export`. Both surfaces honor the same fallback; filtered summaries/exports omit the field entirely because the shadow-mode metrics service has no matching source/enrichment filters.
 
@@ -387,17 +390,17 @@ The Remote Config bootstrap fetch uses environment values because the published 
 
 `GET /api/status` and `GET /api/capabilities` expose the effective values at `dependencies.startupJitter` as `global`, `signalOutcome`, `redrive`, `scannerPreset`, and `remoteConfig`.
 
-The allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `GENERIC_MESSAGE_MAX_LENGTH` (integer `1`-`20000`, default `4000`), `SIGNAL_OUTCOME_WINDOWS`, `SIGNAL_OUTCOME_WINDOW_LABELS`, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), the five startup-jitter settings (integer `0`-`30000`, default `5000`), `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_MAINTENANCE_MODE` (an operational incident-response kill switch), per-chat user preferences (`ENABLE_FIRESTORE_CHAT_PREFERENCES`, `CHAT_PREFERENCES_RETENTION_DAYS` between `1` and `365`, `CHAT_PREFERENCES_CACHE_TTL_MS` between `1000` and `3600000`), and the four Firestore storage gates (`ENABLE_FIRESTORE_ALERT_STORAGE`, `ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_FIRESTORE_JOB_STORAGE`, `ENABLE_FIRESTORE_SCANNER_PRESETS`, all boolean, default `false`). Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, permanent security controls, route/security gates, and Telegram destinations are never read from Remote Config.
+The allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `GENERIC_MESSAGE_MAX_LENGTH` (integer `1`-`20000`, default `4000`), `SIGNAL_OUTCOME_WINDOWS`, `SIGNAL_OUTCOME_WINDOW_LABELS`, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), the five startup-jitter settings (integer `0`-`30000`, default `5000`), `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_MAINTENANCE_MODE` (an operational incident-response kill switch), per-chat user preferences (`ENABLE_FIRESTORE_CHAT_PREFERENCES`, `CHAT_PREFERENCES_RETENTION_DAYS` between `1` and `365`, `CHAT_PREFERENCES_CACHE_TTL_MS` between `1000` and `3600000`), and the five Firestore storage gates (`ENABLE_FIRESTORE_ALERT_STORAGE`, `ENABLE_FIRESTORE_ALERT_SUBSCRIBERS`, `ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_FIRESTORE_JOB_STORAGE`, `ENABLE_FIRESTORE_SCANNER_PRESETS`, all boolean, default `false`). Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, permanent security controls, route/security gates, and Telegram destinations are never read from Remote Config.
 
 ##### Storage gates resolve `remote ?? env`, not `env || remote`
 
-The four Firestore storage gates are re-evaluated on every call (each gate is checked *before* the cached Firestore client is handed out), so a published value flips durable storage at runtime without a redeploy. That makes precedence load-bearing, and `render.yaml` pins three of them to `true` in production (`ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_FIRESTORE_JOB_STORAGE`, `ENABLE_FIRESTORE_SCANNER_PRESETS` on the web service):
+The five Firestore storage gates are re-evaluated on every call (each gate is checked *before* the cached Firestore client is handed out), so a published value flips durable storage at runtime without a redeploy. That makes precedence load-bearing, and `render.yaml` pins three of them to `true` in production (`ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_FIRESTORE_JOB_STORAGE`, `ENABLE_FIRESTORE_SCANNER_PRESETS` on the web service):
 
 - A **published value always wins**, including `false`. Combining the two sources with `env || remote` would let the `true` pin mask a remote `false`, which would make the gate impossible to switch off in production.
 - **No published value means the environment decides.** Remote Config being disabled, stale, or simply lacking the key is *not* evidence about the gate, so `undefined` falls through to `process.env` rather than being coerced to `false`.
 - Consumers read this through `getRemoteOverride(key)`, not `getRuntimeConfig()`. `getRuntimeConfig()` always returns a value for every schema key — environment-derived when the gate is off — so it cannot distinguish "Remote Config said `false`" from "the environment says `false`".
 
-`ENABLE_FIRESTORE_SCANNER_PRESETS`, `ENABLE_FIRESTORE_JOB_STORAGE`, `ENABLE_FIRESTORE_ALERT_STORAGE` and `ENABLE_FIRESTORE_IDEMPOTENCY` are all declared in the template with **`useInAppDefault: true`**, which means "no published value". That is deliberate, and it is not cosmetic:
+`ENABLE_FIRESTORE_ALERT_SUBSCRIBERS`, `ENABLE_FIRESTORE_SCANNER_PRESETS`, `ENABLE_FIRESTORE_JOB_STORAGE`, `ENABLE_FIRESTORE_ALERT_STORAGE` and `ENABLE_FIRESTORE_IDEMPOTENCY` are all declared in the template with **`useInAppDefault: true`**, which means "no published value". That is deliberate, and it is not cosmetic:
 
 > **A template `defaultValue` is an override, not a default.** When no condition matches, `firebase-admin` falls through to `parameter.defaultValue` and tags it with source `'remote'`, which this service accepts as a real override. Shipping `defaultValue: { "value": "false" }` would therefore have silently disabled the three storage modes `render.yaml` pins to `true` (idempotency, job storage, scanner presets) the first time the template was published, re-enabling duplicate alert delivery after every restart and replica. `useInAppDefault: true` makes the SDK skip the parameter, so nothing is overridden and the deployment value decides.
 
@@ -500,6 +503,7 @@ pnpm test:firebase
 - `NEWS_GEMINI_CONCURRENCY` - Max concurrent Gemini-backed symbol analyses. Production policy is `3`; unset keeps legacy parallel fan-out for backward compatibility.
 - `NEWS_GEMINI_QUOTA_MAX_RETRIES` - Max per-symbol retries for Gemini `429 RESOURCE_EXHAUSTED` errors (default: `2`)
 - `NEWS_GEMINI_QUOTA_RETRY_BASE_MS` - Base exponential backoff when Gemini does not provide retry delay metadata (default: `1000` ms)
+- `NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS` - Maximum process-level Gemini quota cooldown ceiling (default: `1800000` ms / 30 minutes, range: `1000`-`86400000`; Remote Config supported). Prevents upstream multi-hour quota resets from locking out Gemini grounding across all webhook alerts.
 - `NEWS_MAX_ALERTS_PER_BATCH` - Maximum alerts delivered per `/api/news-monitor` request (default: `10`, range: `1`-`50`; Remote Config supported)
 - `NEWS_MAX_ALERTS_PER_WINDOW` - Maximum alerts delivered by this process during the volume window (default: `20`, range: `1`-`200`; Remote Config supported)
 - `NEWS_MAX_ALERTS_PER_WINDOW_MS` - Sliding volume-window duration (default: `300000` ms / 5 minutes, range: `1000`-`3600000`; Remote Config supported)
@@ -532,6 +536,15 @@ The response and audit logs include only sanitized order metadata. API credentia
 - `AZURE_LLM_ENDPOINT` - Azure AI Inference endpoint URL (required if enrichment enabled)
 - `AZURE_LLM_KEY` - Azure AI Inference API key (required if enrichment enabled)
 - `AZURE_LLM_MODEL` - Azure AI LLM model name (e.g., `gpt-4o`, required if enrichment enabled)
+
+#### Binance Order Mutation Audit
+
+- `ENABLE_BINANCE_ORDER_AUDIT` - Persist a structured audit record for every Binance order mutation in the `binanceOrderAudit` Firestore collection (`true` or `false`, default: `false`; Remote Config supported)
+- `BINANCE_ORDER_AUDIT_RETENTION_DAYS` - Retention window in days applied to each audit document before Firestore TTL expiry (default: `30`, range: `1`-`365`; Remote Config supported)
+
+`GET /api/status` and `GET /api/capabilities` expose `featureFlags.binanceOrderAudit` and `dependencies.binanceOrderAudit`. `dependencies.binanceOrderAudit` reports `enabled`, `configured`, `ready`, `status` (`ready`, `misconfigured`, or `disabled`), `collection`, and `retentionDays`. `configured` reflects Firestore credential readiness **independently** of the gate, so an operator can distinguish "credentials present but audit off" (`enabled: false`, `configured: true`, `status: "disabled"`) from "audit on but storage unconfigured" (`enabled: true`, `configured: false`, `status: "misconfigured"`), where order mutations still execute but produce no audit trail. `ready` is credential readiness only (`enabled && configured`) and does not prove a write has succeeded, since audit writes are fail-open and a failed write is dropped with a warning. Operator identifiers are stored only as PBKDF2 hashes; no operator identifier, exchange credential, or API key is ever returned in the status payload.
+
+Audit writes are fail-open: a failed audit write is logged as a warning and never blocks or rejects an order.
 
 #### Runtime Error Monitoring (005-sentry-runtime-errors)
 
