@@ -11,6 +11,7 @@ const {
 	deriveAllowedAssets,
 	deriveSymbolAssets,
 } = require('../../src/services/trading/BinanceOrderService');
+const { resetOrderProvenanceForTesting } = require('../../src/services/trading/orderProvenance');
 const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 const { MainClient } = require('binance');
 
@@ -47,6 +48,7 @@ describe('BinanceOrderService', () => {
 	beforeEach(() => {
 		savedEnv = saveEnv();
 		configureTrading();
+		resetOrderProvenanceForTesting();
 	});
 
 	afterEach(() => {
@@ -788,6 +790,136 @@ describe('BinanceOrderService', () => {
 		});
 		expect(client.getExchangeInfo).not.toHaveBeenCalled();
 		expect(client.submitNewOrder).not.toHaveBeenCalled();
+	});
+
+	it('preserves bound provenance when an order is reconciled without or with matching provenance', async () => {
+		const client = {
+			getOrder: jest.fn().mockImplementation(async (params) => ({
+				symbol: 'BTCUSDT',
+				clientOrderId: params?.origClientOrderId,
+				orderId: 99,
+				status: 'NEW',
+				side: 'BUY',
+				type: 'LIMIT',
+				timeInForce: 'GTC',
+				origQty: '0.1',
+				price: '100',
+			})),
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			submitNewOrder: jest.fn(),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		// First: bind initial order with provenance
+		const first = await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+			origin: 'auto_trade',
+			alertId: 'alert-initial',
+			setupType: 'breakout',
+		}, { idempotencyKey: 'prov-test-key' });
+
+		expect(first.origin).toBe('auto_trade');
+		expect(first.alertId).toBe('alert-initial');
+		expect(first.setupType).toBe('breakout');
+
+		// Second: retry with matching or omitted provenance preserves initial values
+		const second = await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+		}, { idempotencyKey: 'prov-test-key' });
+
+		expect(second.origin).toBe('auto_trade');
+		expect(second.alertId).toBe('alert-initial');
+		expect(second.setupType).toBe('breakout');
+	});
+
+	it('rejects reconciled order when incoming provenance conflicts with bound provenance', async () => {
+		const client = {
+			getOrder: jest.fn().mockImplementation(async (params) => ({
+				symbol: 'BTCUSDT',
+				clientOrderId: params?.origClientOrderId,
+				orderId: 99,
+				status: 'NEW',
+				side: 'BUY',
+				type: 'LIMIT',
+				timeInForce: 'GTC',
+				origQty: '0.1',
+				price: '100',
+			})),
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			submitNewOrder: jest.fn(),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		// First: bind initial order
+		await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+			origin: 'auto_trade',
+			alertId: 'alert-1',
+			setupType: 'breakout',
+		}, { idempotencyKey: 'prov-conflict-key' });
+
+		// Retry with different origin
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+			origin: 'manual',
+			alertId: 'alert-1',
+			setupType: 'breakout',
+		}, { idempotencyKey: 'prov-conflict-key' })).rejects.toMatchObject({
+			code: 'BINANCE_ORDER_CONFLICT',
+			statusCode: 409,
+		});
+
+		// Retry with different alertId
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+			origin: 'auto_trade',
+			alertId: 'different-alert',
+			setupType: 'breakout',
+		}, { idempotencyKey: 'prov-conflict-key' })).rejects.toMatchObject({
+			code: 'BINANCE_ORDER_CONFLICT',
+			statusCode: 409,
+		});
+
+		// Retry with different setupType
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+			origin: 'auto_trade',
+			alertId: 'alert-1',
+			setupType: 'pullback',
+		}, { idempotencyKey: 'prov-conflict-key' })).rejects.toMatchObject({
+			code: 'BINANCE_ORDER_CONFLICT',
+			statusCode: 409,
+		});
 	});
 
 	it('requires a stable order identifier for live requests', async () => {
@@ -2429,4 +2561,78 @@ describe('BinanceOrderService', () => {
 		});
 	});
 
+	describe('provenance fields', () => {
+		it('accepts origin, alertId, and setupType in dry-run order requests', async () => {
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+				getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
+				testNewOrder: jest.fn().mockResolvedValue({}),
+			};
+			const service = createBinanceOrderService({ createClient: () => client });
+
+			const result = await service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: 0.001,
+				price: 50000,
+				dryRun: true,
+				origin: 'alert',
+				alertId: 'alert-123',
+				setupType: 'breakout',
+			});
+
+			expect(result.success).toBe(true);
+			expect(result.dryRun).toBe(true);
+		});
+
+		it('rejects invalid non-string origin, alertId, or setupType', async () => {
+			const service = createBinanceOrderService();
+
+			await expect(service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: 0.001,
+				price: 50000,
+				dryRun: true,
+				origin: 123,
+			})).rejects.toMatchObject({ message: 'origin must be a non-empty string' });
+
+			await expect(service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: 0.001,
+				price: 50000,
+				dryRun: true,
+				alertId: '   ',
+			})).rejects.toMatchObject({ message: 'alertId must be a non-empty string' });
+
+			await expect(service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: 0.001,
+				price: 50000,
+				dryRun: true,
+				setupType: '',
+			})).rejects.toMatchObject({ message: 'setupType must be a non-empty string' });
+		});
+
+		it('rejects origin values not in the allowed enum', async () => {
+			const service = createBinanceOrderService();
+
+			await expect(service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: 0.001,
+				price: 50000,
+				dryRun: true,
+				origin: 'invalid_origin',
+			})).rejects.toMatchObject({ message: expect.stringContaining('origin must be one of:') });
+		});
+	});
 });
+

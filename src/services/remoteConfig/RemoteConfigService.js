@@ -146,6 +146,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	REQUEST_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1000, max: 120000 },
 	ENABLE_BINANCE_ORDER_AUDIT: { type: 'boolean', defaultValue: false },
 	BINANCE_ORDER_AUDIT_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
+	TRADE_LEDGER_MAX_SCAN: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 20000 },
+	// ENABLE_TRADE_LEDGER excluded: environment-only gate controlling durable persistence.
 	// ENABLE_SYMBOL_ANALYSIS_STORAGE, SYMBOL_ANALYSIS_RETENTION_DAYS excluded:
 	// a process-startup gate that decides where a collection lives and its TTL
 	// horizon are deployment-controlled, matching ENABLE_FIRESTORE_IDEMPOTENCY,

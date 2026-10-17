@@ -532,6 +532,12 @@ pnpm test:firebase
 The response and audit logs include only sanitized order metadata. API credentials are never returned or logged.
 
 `GET /api/trading/binance/account/balances` is the read-only sibling used to size a `SELL` or a "close position" against the real free balance. It requires `admin.viewer` (or the API key) rather than `admin.operator`, and inherits the same `ENABLE_BINANCE_TRADING`, credentials and `BINANCE_TRADING_ALLOWED_SYMBOLS` gates, so a disabled or unconfigured deployment answers `403 FEATURE_DISABLED` / `503 BINANCE_TRADING_UNAVAILABLE` instead of reaching Binance. The allow-list is **derived**: base and quote assets are parsed from `BINANCE_TRADING_ALLOWED_SYMBOLS`, so `BTCUSDT,ETHUSDT` exposes exactly `BTC`, `ETH` and `USDT` and nothing else. Only `asset`, `free` and `locked` are returned, as unmodified decimal strings — no float conversion — and account identifiers, permissions, commission tiers and the raw Binance account payload are never exposed. Disallowed `asset`/`symbol` filters are rejected with `400 INVALID_ORDER_REQUEST` before any provider call; a provider timeout or failure returns `502 BINANCE_BALANCE_QUERY_FAILED` with no secret material in the body or the logs. Responses are cached in-process for `BINANCE_BALANCE_CACHE_MS` to keep dashboard polling from spiking Binance request weight; pass `refresh=true` when sizing a live order.
+
+#### Durable Trade Ledger & P&L Observability
+
+- `ENABLE_TRADE_LEDGER` - Master gate for persisting Binance Spot order fills to Firestore (`tradeFills` collection, no TTL) and enabling `GET /api/trading/positions`, `GET /api/trading/pnl/summary`, and `GET /api/trading/trades` (`true` or `false`, default: `false`). Environment-only (process-startup gate; excluded from Remote Config).
+- `TRADE_LEDGER_MAX_SCAN` - Maximum durable trade fill documents scanned from Firestore when aggregating open positions, round trips, and P&L summaries (integer, default `5000`, range `1`-`20000`). Remote Config eligible; fresh valid Remote Config overrides the environment setting, and invalid values fall back to the default or environment value.
+
 - `ENABLE_LLM_ALERT_ENRICHMENT` - Enable optional secondary LLM enrichment (`true` or `false`, default: `false`)
 - `AZURE_LLM_ENDPOINT` - Azure AI Inference endpoint URL (required if enrichment enabled)
 - `AZURE_LLM_KEY` - Azure AI Inference API key (required if enrichment enabled)

@@ -12296,7 +12296,7 @@
               "name": "200 OK - Shadow mode breakdowns",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"shadowModeMetrics\": {\n      \"totalSignalsReceived\": 10,\n      \"totalSignalsEligible\": 9,\n      \"totalSignalsEvaluated\": 8,\n      \"totalSignalsPending\": 1,\n      \"totalSignalsUnavailable\": 1,\n      \"coveragePercent\": 80,\n      \"isCoverageComplete\": false,\n      \"targetHitRatePercent\": 57.14,\n      \"stopHitRatePercent\": 14.29,\n      \"expectancyR\": 1.2,\n      \"populationNote\": \"Metrics represent 8 evaluated signals out of 10 total received signals (80% coverage).\",\n      \"exchangeBreakdown\": {\n        \"BINANCE\": {\n          \"received\": 10,\n          \"eligible\": 9,\n          \"evaluated\": 8,\n          \"pending\": 1,\n          \"unavailable\": 1\n        }\n      },\n      \"providerBreakdown\": {\n        \"binance\": {\n          \"received\": 10,\n          \"eligible\": 9,\n          \"evaluated\": 8,\n          \"pending\": 1,\n          \"unavailable\": 1\n        }\n      },\n      \"entryPriceSourceBreakdown\": {\n        \"binance\": 9\n      },\n      \"eligibilityBreakdown\": {\n        \"supported_provider\": 9\n      },\n      \"windows\": {\n        \"1h\": {\n          \"totalSignals\": 8,\n          \"hitRatePercent\": 50,\n          \"targetEligibleWindows\": 7,\n          \"stopEligibleWindows\": 7,\n          \"targetHitRatePercent\": 57.14,\n          \"stopHitRatePercent\": 14.29,\n          \"expectancyR\": 1.2,\n          \"averageReturnPercent\": 1.6,\n          \"averageMfePercent\": 2.15,\n          \"averageMaePercent\": -0.8,\n          \"maxAdverseExcursionPercent\": -3.5\n        }\n      },\n      \"drawdownProxy\": {\n        \"averageMaxAdverseExcursionPercent\": -0.8,\n        \"absoluteMaxAdverseExcursionPercent\": -3.5\n      },\n      \"falsePositiveCandidatesCount\": 0,\n      \"falsePositiveCandidates\": [],\n      \"latencyCostMetadata\": {\n        \"averageProcessingTimeMs\": 350,\n        \"tokenUsage\": {\n          \"inputTokens\": 1000,\n          \"outputTokens\": 250,\n          \"totalCost\": 0.00125,\n          \"pricing\": {\n            \"unknownModelPricing\": false,\n            \"unknownModels\": []\n          }\n        }\n      },\n      \"symbolBreakdown\": [\n        {\n          \"symbol\": \"BTCUSDT\",\n          \"exchange\": \"BINANCE\",\n          \"received\": 10,\n          \"eligible\": 9,\n          \"evaluated\": 8,\n          \"pending\": 1,\n          \"unavailable\": 1,\n          \"targetEligibleWindows\": 7,\n          \"stopEligibleWindows\": 7,\n          \"targetHitRate\": 0.5714,\n          \"stopHitRate\": 0.1429,\n          \"windows\": {\n            \"1h\": {\n              \"evaluatedWindows\": 8,\n              \"targetEligibleWindows\": 7,\n              \"stopEligibleWindows\": 7,\n              \"targetHitRate\": 0.5714,\n              \"stopHitRate\": 0.1429,\n              \"barrierEligibleWindows\": 7,\n              \"averageMfePercent\": 2.15,\n              \"averageMaePercent\": -0.8\n            }\n          }\n        }\n      ],\n      \"setupBreakdown\": [\n        {\n          \"setupType\": \"breakout\",\n          \"exchange\": \"BINANCE\",\n          \"received\": 10,\n          \"eligible\": 9,\n          \"evaluated\": 8,\n          \"pending\": 1,\n          \"unavailable\": 1,\n          \"targetEligibleWindows\": 7,\n          \"stopEligibleWindows\": 7,\n          \"targetHitRate\": 0.5714,\n          \"stopHitRate\": 0.1429,\n          \"windows\": {\n            \"1h\": {\n              \"evaluatedWindows\": 8,\n              \"targetEligibleWindows\": 7,\n              \"stopEligibleWindows\": 7,\n              \"targetHitRate\": 0.5714,\n              \"stopHitRate\": 0.1429,\n              \"barrierEligibleWindows\": 7,\n              \"averageMfePercent\": 2.15,\n              \"averageMaePercent\": -0.8\n            }\n          }\n        }\n      ],\n      \"truncated\": false\n    }\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"shadowModeMetrics\": {\n      \"totalSignalsReceived\": 10,\n      \"totalSignalsEligible\": 9,\n      \"totalSignalsEvaluated\": 8,\n      \"totalSignalsPending\": 1,\n      \"totalSignalsUnavailable\": 1,\n      \"coveragePercent\": 80,\n      \"isCoverageComplete\": false,\n      \"targetHitRatePercent\": 57.14,\n      \"stopHitRatePercent\": 14.29,\n      \"expectancyR\": 1.2,\n      \"populationNote\": \"Metrics represent 8 evaluated signals out of 10 total received signals (80% coverage).\",\n      \"exchangeBreakdown\": {\n        \"BINANCE\": {\n          \"received\": 10,\n          \"eligible\": 9,\n          \"evaluated\": 8,\n          \"pending\": 1,\n          \"unavailable\": 1\n        }\n      },\n      \"providerBreakdown\": {\n        \"binance\": {\n          \"received\": 10,\n          \"eligible\": 9,\n          \"evaluated\": 8,\n          \"pending\": 1,\n          \"unavailable\": 1\n        }\n      },\n      \"entryPriceSourceBreakdown\": {\n        \"binance\": 9\n      },\n      \"eligibilityBreakdown\": {\n        \"supported_provider\": 9\n      },\n      \"windows\": {\n        \"1h\": {\n          \"totalSignals\": 8,\n          \"hitRatePercent\": 50,\n          \"targetEligibleWindows\": 7,\n          \"stopEligibleWindows\": 7,\n          \"targetHitRatePercent\": 57.14,\n          \"stopHitRatePercent\": 14.29,\n          \"expectancyR\": 1.2,\n          \"averageReturnPercent\": 1.6,\n          \"averageMfePercent\": 2.15,\n          \"averageMaePercent\": -0.8,\n          \"maxAdverseExcursionPercent\": -3.5\n        }\n      },\n      \"drawdownProxy\": {\n        \"averageMaxAdverseExcursionPercent\": -0.8,\n        \"absoluteMaxAdverseExcursionPercent\": -3.5\n      },\n      \"falsePositiveCandidatesCount\": 0,\n      \"falsePositiveCandidates\": [],\n      \"reactions\": {\n        \"total\": 0,\n        \"approve\": 0,\n        \"reject\": 0,\n        \"approveRate\": 0,\n        \"weightedScore\": null\n      },\n      \"latencyCostMetadata\": {\n        \"averageProcessingTimeMs\": 350,\n        \"tokenUsage\": {\n          \"inputTokens\": 1000,\n          \"outputTokens\": 250,\n          \"totalCost\": 0.00125,\n          \"pricing\": {\n            \"unknownModelPricing\": false,\n            \"unknownModels\": []\n          }\n        }\n      },\n      \"symbolBreakdown\": [\n        {\n          \"symbol\": \"BTCUSDT\",\n          \"exchange\": \"BINANCE\",\n          \"received\": 10,\n          \"eligible\": 9,\n          \"evaluated\": 8,\n          \"pending\": 1,\n          \"unavailable\": 1,\n          \"targetEligibleWindows\": 7,\n          \"stopEligibleWindows\": 7,\n          \"targetHitRate\": 0.5714,\n          \"stopHitRate\": 0.1429,\n          \"windows\": {\n            \"1h\": {\n              \"evaluatedWindows\": 8,\n              \"targetEligibleWindows\": 7,\n              \"stopEligibleWindows\": 7,\n              \"targetHitRate\": 0.5714,\n              \"stopHitRate\": 0.1429,\n              \"barrierEligibleWindows\": 7,\n              \"averageMfePercent\": 2.15,\n              \"averageMaePercent\": -0.8\n            }\n          }\n        }\n      ],\n      \"setupBreakdown\": [\n        {\n          \"setupType\": \"breakout\",\n          \"exchange\": \"BINANCE\",\n          \"received\": 10,\n          \"eligible\": 9,\n          \"evaluated\": 8,\n          \"pending\": 1,\n          \"unavailable\": 1,\n          \"targetEligibleWindows\": 7,\n          \"stopEligibleWindows\": 7,\n          \"targetHitRate\": 0.5714,\n          \"stopHitRate\": 0.1429,\n          \"windows\": {\n            \"1h\": {\n              \"evaluatedWindows\": 8,\n              \"targetEligibleWindows\": 7,\n              \"stopEligibleWindows\": 7,\n              \"targetHitRate\": 0.5714,\n              \"stopHitRate\": 0.1429,\n              \"barrierEligibleWindows\": 7,\n              \"averageMfePercent\": 2.15,\n              \"averageMaePercent\": -0.8\n            }\n          }\n        }\n      ],\n      \"truncated\": false\n    }\n  }\n}"
             }
           ]
         },
@@ -13546,7 +13546,7 @@
               "name": "200 Success (breakdowns)",
               "status": "OK",
               "code": 200,
-              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"totalSignalsReceived\": 10,\n    \"totalSignalsEligible\": 9,\n    \"totalSignalsEvaluated\": 8,\n    \"totalSignalsPending\": 1,\n    \"totalSignalsUnavailable\": 1,\n    \"coveragePercent\": 80,\n    \"isCoverageComplete\": false,\n    \"targetHitRatePercent\": 57.14,\n    \"stopHitRatePercent\": 14.29,\n    \"expectancyR\": 1.2,\n    \"populationNote\": \"Metrics represent 8 evaluated signals out of 10 total received signals (80% coverage).\",\n    \"exchangeBreakdown\": {\n      \"BINANCE\": {\n        \"received\": 10,\n        \"eligible\": 9,\n        \"evaluated\": 8,\n        \"pending\": 1,\n        \"unavailable\": 1\n      }\n    },\n    \"providerBreakdown\": {\n      \"binance\": {\n        \"received\": 10,\n        \"eligible\": 9,\n        \"evaluated\": 8,\n        \"pending\": 1,\n        \"unavailable\": 1\n      }\n    },\n    \"entryPriceSourceBreakdown\": {\n      \"binance\": 9\n    },\n    \"eligibilityBreakdown\": {\n      \"supported_provider\": 9\n    },\n    \"windows\": {\n      \"1h\": {\n        \"totalSignals\": 8,\n        \"hitRatePercent\": 50,\n        \"targetEligibleWindows\": 7,\n        \"stopEligibleWindows\": 7,\n        \"targetHitRatePercent\": 57.14,\n        \"stopHitRatePercent\": 14.29,\n        \"expectancyR\": 1.2,\n        \"averageReturnPercent\": 1.6,\n        \"averageMfePercent\": 2.15,\n        \"averageMaePercent\": -0.8,\n        \"maxAdverseExcursionPercent\": -3.5\n      }\n    },\n    \"drawdownProxy\": {\n      \"averageMaxAdverseExcursionPercent\": -0.8,\n      \"absoluteMaxAdverseExcursionPercent\": -3.5\n    },\n    \"falsePositiveCandidatesCount\": 0,\n    \"falsePositiveCandidates\": [],\n    \"latencyCostMetadata\": {\n      \"averageProcessingTimeMs\": 350,\n      \"tokenUsage\": {\n        \"inputTokens\": 1000,\n        \"outputTokens\": 250,\n        \"totalCost\": 0.00125\n      }\n    },\n    \"symbolBreakdown\": [\n      {\n        \"symbol\": \"BTCUSDT\",\n        \"exchange\": \"BINANCE\",\n        \"received\": 10,\n        \"eligible\": 9,\n        \"evaluated\": 8,\n        \"pending\": 1,\n        \"unavailable\": 1,\n        \"targetEligibleWindows\": 7,\n        \"stopEligibleWindows\": 7,\n        \"targetHitRate\": 0.5714,\n        \"stopHitRate\": 0.1429,\n        \"windows\": {\n          \"1h\": {\n            \"evaluatedWindows\": 8,\n            \"targetEligibleWindows\": 7,\n            \"stopEligibleWindows\": 7,\n            \"targetHitRate\": 0.5714,\n            \"stopHitRate\": 0.1429,\n            \"barrierEligibleWindows\": 7,\n            \"averageMfePercent\": 2.15,\n            \"averageMaePercent\": -0.8\n          }\n        }\n      }\n    ],\n    \"setupBreakdown\": [\n      {\n        \"setupType\": \"breakout\",\n        \"exchange\": \"BINANCE\",\n        \"received\": 10,\n        \"eligible\": 9,\n        \"evaluated\": 8,\n        \"pending\": 1,\n        \"unavailable\": 1,\n        \"targetEligibleWindows\": 7,\n        \"stopEligibleWindows\": 7,\n        \"targetHitRate\": 0.5714,\n        \"stopHitRate\": 0.1429,\n        \"windows\": {\n          \"1h\": {\n            \"evaluatedWindows\": 8,\n            \"targetEligibleWindows\": 7,\n            \"stopEligibleWindows\": 7,\n            \"targetHitRate\": 0.5714,\n            \"stopHitRate\": 0.1429,\n            \"barrierEligibleWindows\": 7,\n            \"averageMfePercent\": 2.15,\n            \"averageMaePercent\": -0.8\n          }\n        }\n      }\n    ],\n    \"truncated\": false,\n    \"available\": true\n  }\n}"
+              "body": "{\n  \"success\": true,\n  \"summary\": {\n    \"totalSignalsReceived\": 10,\n    \"totalSignalsEligible\": 9,\n    \"totalSignalsEvaluated\": 8,\n    \"totalSignalsPending\": 1,\n    \"totalSignalsUnavailable\": 1,\n    \"coveragePercent\": 80,\n    \"isCoverageComplete\": false,\n    \"targetHitRatePercent\": 57.14,\n    \"stopHitRatePercent\": 14.29,\n    \"expectancyR\": 1.2,\n    \"populationNote\": \"Metrics represent 8 evaluated signals out of 10 total received signals (80% coverage).\",\n    \"exchangeBreakdown\": {\n      \"BINANCE\": {\n        \"received\": 10,\n        \"eligible\": 9,\n        \"evaluated\": 8,\n        \"pending\": 1,\n        \"unavailable\": 1\n      }\n    },\n    \"providerBreakdown\": {\n      \"binance\": {\n        \"received\": 10,\n        \"eligible\": 9,\n        \"evaluated\": 8,\n        \"pending\": 1,\n        \"unavailable\": 1\n      }\n    },\n    \"entryPriceSourceBreakdown\": {\n      \"binance\": 9\n    },\n    \"eligibilityBreakdown\": {\n      \"supported_provider\": 9\n    },\n    \"windows\": {\n      \"1h\": {\n        \"totalSignals\": 8,\n        \"hitRatePercent\": 50,\n        \"targetEligibleWindows\": 7,\n        \"stopEligibleWindows\": 7,\n        \"targetHitRatePercent\": 57.14,\n        \"stopHitRatePercent\": 14.29,\n        \"expectancyR\": 1.2,\n        \"averageReturnPercent\": 1.6,\n        \"averageMfePercent\": 2.15,\n        \"averageMaePercent\": -0.8,\n        \"maxAdverseExcursionPercent\": -3.5\n      }\n    },\n    \"drawdownProxy\": {\n      \"averageMaxAdverseExcursionPercent\": -0.8,\n      \"absoluteMaxAdverseExcursionPercent\": -3.5\n    },\n    \"falsePositiveCandidatesCount\": 0,\n    \"falsePositiveCandidates\": [],\n    \"reactions\": {\n      \"total\": 0,\n      \"approve\": 0,\n      \"reject\": 0,\n      \"approveRate\": 0,\n      \"weightedScore\": null\n    },\n    \"latencyCostMetadata\": {\n      \"averageProcessingTimeMs\": 350,\n      \"tokenUsage\": {\n        \"inputTokens\": 1000,\n        \"outputTokens\": 250,\n        \"totalCost\": 0.00125\n      }\n    },\n    \"symbolBreakdown\": [\n      {\n        \"symbol\": \"BTCUSDT\",\n        \"exchange\": \"BINANCE\",\n        \"received\": 10,\n        \"eligible\": 9,\n        \"evaluated\": 8,\n        \"pending\": 1,\n        \"unavailable\": 1,\n        \"targetEligibleWindows\": 7,\n        \"stopEligibleWindows\": 7,\n        \"targetHitRate\": 0.5714,\n        \"stopHitRate\": 0.1429,\n        \"windows\": {\n          \"1h\": {\n            \"evaluatedWindows\": 8,\n            \"targetEligibleWindows\": 7,\n            \"stopEligibleWindows\": 7,\n            \"targetHitRate\": 0.5714,\n            \"stopHitRate\": 0.1429,\n            \"barrierEligibleWindows\": 7,\n            \"averageMfePercent\": 2.15,\n            \"averageMaePercent\": -0.8\n          }\n        }\n      }\n    ],\n    \"setupBreakdown\": [\n      {\n        \"setupType\": \"breakout\",\n        \"exchange\": \"BINANCE\",\n        \"received\": 10,\n        \"eligible\": 9,\n        \"evaluated\": 8,\n        \"pending\": 1,\n        \"unavailable\": 1,\n        \"targetEligibleWindows\": 7,\n        \"stopEligibleWindows\": 7,\n        \"targetHitRate\": 0.5714,\n        \"stopHitRate\": 0.1429,\n        \"windows\": {\n          \"1h\": {\n            \"evaluatedWindows\": 8,\n            \"targetEligibleWindows\": 7,\n            \"stopEligibleWindows\": 7,\n            \"targetHitRate\": 0.5714,\n            \"stopHitRate\": 0.1429,\n            \"barrierEligibleWindows\": 7,\n            \"averageMfePercent\": 2.15,\n            \"averageMaePercent\": -0.8\n          }\n        }\n      }\n    ],\n    \"truncated\": false,\n    \"available\": true\n  }\n}"
             }
           ]
         },
@@ -15884,6 +15884,402 @@
               "status": "OK",
               "code": 200,
               "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"balances\": [\n    {\n      \"asset\": \"BTC\",\n      \"free\": \"0.10000000\",\n      \"locked\": \"0.00000000\"\n    }\n  ],\n  \"cached\": false\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Trading Positions",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"positions response has success and positions array\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.positions).to.be.an(\"array\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Returns open positions per symbol calculated via FIFO lot matching from durable trade fills, with live mark prices and unrealized P&L.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/positions?environment=testnet",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "positions"
+              ],
+              "query": [
+                {
+                  "key": "environment",
+                  "value": "testnet",
+                  "description": "Execution environment (testnet, demo, live)"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"positions\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"qty\": \"0.001\",\n      \"lotCount\": 1,\n      \"costBasis\": \"60\",\n      \"avgEntryPrice\": \"60000\",\n      \"markPrice\": \"61000\",\n      \"unrealizedPnl\": \"1\",\n      \"feesComplete\": true,\n      \"alertIds\": []\n    }\n  ],\n  \"count\": 1,\n  \"unmatchedSellQty\": {},\n  \"scanTruncated\": false,\n  \"maxScan\": 5000\n}"
+            },
+            {
+              "name": "Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Trade ledger is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Trade ledger is enabled but storage is not configured\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Trading Positions (invalid environment)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"error code is INVALID_REQUEST\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "An invalid environment is rejected with 400 INVALID_REQUEST.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/positions?environment=invalid_env",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "positions"
+              ],
+              "query": [
+                {
+                  "key": "environment",
+                  "value": "invalid_env",
+                  "description": "Invalid environment value"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Invalid Environment",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid environment: invalid_env. Must be one of: testnet, demo, live\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Trading PnL Summary",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"pnl summary response has summary object\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.summary).to.be.an(\"object\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Returns realized and unrealized P&L, ROI %, win rate, profit factor, max drawdown, and equity series with optional grouping.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/pnl/summary?environment=testnet&groupBy=origin",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "pnl",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "environment",
+                  "value": "testnet",
+                  "description": "Execution environment"
+                },
+                {
+                  "key": "groupBy",
+                  "value": "origin",
+                  "description": "Group by: symbol, origin, setupType, or day"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"summary\": {\n    \"tradeCount\": 1,\n    \"realizedPnl\": \"10\",\n    \"costBasisClosed\": \"100\",\n    \"roiPct\": \"10\",\n    \"winRate\": 1,\n    \"totalFees\": \"0.2\",\n    \"unrealizedPnl\": \"0\",\n    \"profitFactor\": null,\n    \"avgHoldMs\": 3600000,\n    \"maxDrawdown\": \"0\",\n    \"feesComplete\": true,\n    \"openPositionCount\": 0,\n    \"equitySeries\": [\n      {\n        \"date\": \"2026-10-01\",\n        \"realizedPnl\": \"10\",\n        \"cumulativePnl\": \"10\"\n      }\n    ],\n    \"groupBy\": \"origin\",\n    \"groups\": [\n      {\n        \"key\": \"manual\",\n        \"tradeCount\": 1,\n        \"realizedPnl\": \"10\",\n        \"costBasisClosed\": \"100\",\n        \"roiPct\": \"10\",\n        \"winRate\": 1,\n        \"totalFees\": \"0.2\"\n      }\n    ]\n  },\n  \"unmatchedSellQty\": {},\n  \"scanTruncated\": false,\n  \"maxScan\": 5000\n}"
+            },
+            {
+              "name": "Invalid Parameters",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid groupBy parameter. Must be one of: symbol, origin, setupType, day\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Trade ledger is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Trading PnL Summary (invalid groupBy)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"error code is INVALID_REQUEST\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "An unsupported groupBy value is rejected with 400 INVALID_REQUEST.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/pnl/summary?environment=testnet&groupBy=invalid_group",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "pnl",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "environment",
+                  "value": "testnet"
+                },
+                {
+                  "key": "groupBy",
+                  "value": "invalid_group"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Invalid groupBy",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Invalid groupBy parameter. Must be one of: symbol, origin, setupType, day\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Trading Trades",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"trades response has trades array\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.true;",
+                  "    pm.expect(json.trades).to.be.an(\"array\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Queries closed round-trip trades with realized P&L, ROI %, hold time, and linked alert IDs.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/trades?environment=testnet&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "trades"
+              ],
+              "query": [
+                {
+                  "key": "environment",
+                  "value": "testnet",
+                  "description": "Execution environment"
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Limit 1..100"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"trades\": [\n    {\n      \"id\": \"BTCUSDT:42\",\n      \"environment\": \"testnet\",\n      \"symbol\": \"BTCUSDT\",\n      \"origin\": \"manual\",\n      \"setupType\": \"unknown\",\n      \"exitOrderId\": \"42\",\n      \"qty\": \"0.001\",\n      \"entryPrice\": \"60000\",\n      \"exitPrice\": \"61000\",\n      \"costBasis\": \"60\",\n      \"proceeds\": \"60.95\",\n      \"fees\": \"0.05\",\n      \"feesComplete\": true,\n      \"realizedPnl\": \"0.95\",\n      \"roiPct\": \"1.5833\",\n      \"rMultiple\": null,\n      \"entryAt\": \"2026-10-01T12:00:00.000Z\",\n      \"exitAt\": \"2026-10-01T13:00:00.000Z\",\n      \"holdMs\": 3600000,\n      \"alertIds\": []\n    }\n  ],\n  \"count\": 1,\n  \"pagination\": {\n    \"hasMore\": false,\n    \"limit\": 50,\n    \"nextCursor\": null,\n    \"scanTruncated\": false,\n    \"maxScan\": 5000\n  }\n}"
+            },
+            {
+              "name": "Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Trade ledger is disabled\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Trading Trades (invalid limit)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"error code is INVALID_REQUEST\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "A limit outside 1..100 is rejected with 400 INVALID_REQUEST.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/trades?environment=testnet&limit=500",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "trades"
+              ],
+              "query": [
+                {
+                  "key": "environment",
+                  "value": "testnet"
+                },
+                {
+                  "key": "limit",
+                  "value": "500"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Invalid Limit",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"limit must be an integer between 1 and 100\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         }

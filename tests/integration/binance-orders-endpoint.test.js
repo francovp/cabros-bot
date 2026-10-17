@@ -236,6 +236,35 @@ describe('Binance orders API', () => {
 		});
 	});
 
+	it('records fills with normalized provenance values when spaced origin and mixed-case setupType are supplied', async () => {
+		const { tradeLedgerService } = require('../../src/services/trading/TradeLedgerService');
+		const recordSpy = jest.spyOn(tradeLedgerService, 'recordOrderFills').mockResolvedValue({ written: 1, duplicates: 0, failed: 0 });
+
+		await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.send({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+				quoteOrderQty: 50,
+				idempotencyKey: 'prov-test-1',
+				dryRun: false,
+				origin: '  ALERT  ',
+				setupType: '  Breakout  ',
+				alertId: '  alert-123  ',
+			})
+			.expect(201);
+
+		expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({
+			origin: 'alert',
+			setupType: 'breakout',
+			alertId: 'alert-123',
+		}));
+
+		recordSpy.mockRestore();
+	});
+
 	it('rejects quantity-based MARKET BUYs above the configured ceiling before submission', async () => {
 		process.env.BINANCE_TRADING_MAX_NOTIONAL = '10';
 		const response = await request(app)

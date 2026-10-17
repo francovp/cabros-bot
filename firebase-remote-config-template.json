@@ -756,6 +756,13 @@
       "description": "Audit log retention in days before Firestore TTL expiry",
       "valueType": "NUMBER"
     },
+    "TRADE_LEDGER_MAX_SCAN": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Maximum number of recent trade fills scanned for position and P&L calculations",
+      "valueType": "NUMBER"
+    },
     "ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT": {
       "defaultValue": {
         "value": "false"
