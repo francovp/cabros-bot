@@ -16,6 +16,7 @@ const {
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	reactionsCommand,
 	preferenciasCmd,
 	filtroCmd,
 	silencioCmd,
@@ -23,6 +24,7 @@ const {
 	categoriasCmd,
 	telegramCommandRateLimiter,
 } = require('./src/controllers/commands');
+const { telegramReactionService } = require('./src/services/telegram/telegramReactionService');
 const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
 const { getRoutes } = require('./src/routes');
@@ -200,7 +202,14 @@ async function bootstrapApplication() {
 		bot.command(['history', 'alertas'], alertHistoryCommand);
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
+		bot.command(['reactions', 'reacciones'], reactionsCommand);
 		bot.command(['preferencias', 'preferences'], preferenciasCmd);
+
+		if (process.env.ENABLE_TELEGRAM_REACTION_AGGREGATION === 'true') {
+			bot.on('message_reaction', async (ctx) => {
+				await telegramReactionService.handleReactionUpdate(ctx);
+			});
+		}
 		bot.command(['filtro', 'filter'], filtroCmd);
 		bot.command(['silencio', 'quiet'], silencioCmd);
 		bot.command(['umbral', 'threshold'], umbralCmd);
