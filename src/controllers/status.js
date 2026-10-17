@@ -56,6 +56,7 @@ const {
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
 } = require('../lib/deploymentEnvironment');
+const { getAggregateStats: getDiscordSourceRoutingAggregateStats } = require('../services/notification/discordSourceRouting');
 const {
 	getLastRunAt: getTestAlertLastRunAt,
 	getLastRunStatus: getTestAlertLastRunStatus,
@@ -387,6 +388,49 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		enabled: discordEnabled,
 		configured: hasValue(process.env.DISCORD_WEBHOOK_URL),
 	});
+	const discordSourceRoutingEnabled = isEnabled(process.env.ENABLE_DISCORD_SOURCE_ROUTING);
+	const discordSourceRouting = (() => {
+		if (!discordSourceRoutingEnabled) {
+			return {
+				enabled: false,
+				configured: false,
+				ready: false,
+				status: 'disabled',
+				routesConfigured: 0,
+				hasDefault: false,
+			};
+		}
+		const rawRoutes = process.env.DISCORD_SOURCE_ROUTING_JSON;
+		let parsedKeys = [];
+		let hasDefault = false;
+		if (typeof rawRoutes === 'string' && rawRoutes.trim().length > 0) {
+			const trimmed = rawRoutes.trim();
+			if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+				try {
+					const parsed = JSON.parse(trimmed);
+					if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+						parsedKeys = Object.keys(parsed).map((k) => k.toLowerCase());
+						hasDefault = parsedKeys.includes('default') || parsedKeys.includes('*');
+					}
+				} catch (_) {
+					// invalid JSON; surfaced via discordSourceRouting warning logs in the service
+				}
+			}
+		}
+		const configured = parsedKeys.length > 0;
+		const aggregate = getDiscordSourceRoutingAggregateStats();
+		return {
+			enabled: discordSourceRoutingEnabled,
+			configured,
+			ready: configured,
+			status: configured ? 'ready' : 'misconfigured',
+			routesConfigured: parsedKeys.length,
+			hasDefault,
+			keys: parsedKeys.sort(),
+			decisions: aggregate.decisions || 0,
+			fallbacks: aggregate.fallbacks || 0,
+		};
+	})();
 	const gemini = getGeminiDependency({
 		enabled: geminiEnabled,
 		geminiGroundingEnabled,
@@ -551,6 +595,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			telegramBot: telegramFlagEnabled,
 			whatsappAlerts: whatsappEnabled,
 			discordAlerts: discordEnabled,
+			discordSourceRouting: discordSourceRoutingEnabled,
 			geminiGrounding: geminiGroundingEnabled,
 			newsMonitor: newsMonitorEnabled,
 			newsMonitorPaused: isNewsMonitorPaused(),
@@ -655,6 +700,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			telegram,
 			whatsapp,
 			discord,
+			discordSourceRouting,
 			webhookAuth,
 			adminApiKey,
 			binanceTradingApiKey,
