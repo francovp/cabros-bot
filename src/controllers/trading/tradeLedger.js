@@ -126,6 +126,13 @@ async function getPnlSummary(req, res) {
 			code: 'INVALID_REQUEST',
 		});
 	}
+	if (fromMs !== null && toMs !== null && fromMs > toMs) {
+		return res.status(400).json({
+			success: false,
+			error: 'from date must be earlier than or equal to to date',
+			code: 'INVALID_REQUEST',
+		});
+	}
 
 	const groupBy = req.query.groupBy;
 	if (groupBy && !GROUP_BY_VALUES.includes(groupBy)) {

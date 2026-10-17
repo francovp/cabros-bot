@@ -363,6 +363,59 @@ describe('TradeLedgerService', () => {
 		});
 	});
 
+	it('keeps write failures degraded even after a successful listFills read', async () => {
+		process.env.ENABLE_TRADE_LEDGER = 'true';
+		const mock = createFirestoreMock({
+			createImpl: async () => {
+				throw new Error('permission-denied: writes not allowed');
+			},
+		});
+		const service = new TradeLedgerService({ firestore: mock.firestore });
+
+		// 1. Initial write failure degrades service
+		await service.recordOrderFills({
+			environment: 'testnet',
+			order: ORDER,
+		});
+		expect(service.getStatus()).toMatchObject({
+			status: 'degraded',
+			readiness: 'degraded',
+			ready: false,
+			consecutiveFailures: 1,
+			consecutiveWriteFailures: 1,
+			consecutiveReadFailures: 0,
+			lastErrorReason: 'firestore_unavailable',
+		});
+
+		// 2. Subsequent successful listFills read must NOT clear write degradation
+		await service.listFills({ environment: 'testnet' });
+		expect(service.getStatus()).toMatchObject({
+			status: 'degraded',
+			readiness: 'degraded',
+			ready: false,
+			consecutiveFailures: 1,
+			consecutiveWriteFailures: 1,
+			consecutiveReadFailures: 0,
+			lastErrorReason: 'firestore_unavailable',
+		});
+
+		// 3. Only a successful write clears write degradation
+		mock.create.mockImplementation(async () => {});
+		await service.recordOrderFills({
+			environment: 'testnet',
+			order: ORDER,
+		});
+		expect(service.getStatus()).toMatchObject({
+			status: 'ready',
+			readiness: 'verified',
+			ready: true,
+			consecutiveFailures: 0,
+			consecutiveWriteFailures: 0,
+			consecutiveReadFailures: 0,
+			lastErrorReason: null,
+		});
+	});
+
 	it('falls back to the default scan bound on invalid values', () => {
 		process.env.TRADE_LEDGER_MAX_SCAN = 'nope';
 		expect(new TradeLedgerService().getMaxScan()).toBe(5000);

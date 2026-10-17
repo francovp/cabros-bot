@@ -11,6 +11,7 @@ const {
 	deriveAllowedAssets,
 	deriveSymbolAssets,
 } = require('../../src/services/trading/BinanceOrderService');
+const { resetOrderProvenanceForTesting } = require('../../src/services/trading/orderProvenance');
 const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 const { MainClient } = require('binance');
 
@@ -47,6 +48,7 @@ describe('BinanceOrderService', () => {
 	beforeEach(() => {
 		savedEnv = saveEnv();
 		configureTrading();
+		resetOrderProvenanceForTesting();
 	});
 
 	afterEach(() => {
@@ -788,6 +790,136 @@ describe('BinanceOrderService', () => {
 		});
 		expect(client.getExchangeInfo).not.toHaveBeenCalled();
 		expect(client.submitNewOrder).not.toHaveBeenCalled();
+	});
+
+	it('preserves bound provenance when an order is reconciled without or with matching provenance', async () => {
+		const client = {
+			getOrder: jest.fn().mockImplementation(async (params) => ({
+				symbol: 'BTCUSDT',
+				clientOrderId: params?.origClientOrderId,
+				orderId: 99,
+				status: 'NEW',
+				side: 'BUY',
+				type: 'LIMIT',
+				timeInForce: 'GTC',
+				origQty: '0.1',
+				price: '100',
+			})),
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			submitNewOrder: jest.fn(),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		// First: bind initial order with provenance
+		const first = await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+			origin: 'auto_trade',
+			alertId: 'alert-initial',
+			setupType: 'breakout',
+		}, { idempotencyKey: 'prov-test-key' });
+
+		expect(first.origin).toBe('auto_trade');
+		expect(first.alertId).toBe('alert-initial');
+		expect(first.setupType).toBe('breakout');
+
+		// Second: retry with matching or omitted provenance preserves initial values
+		const second = await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+		}, { idempotencyKey: 'prov-test-key' });
+
+		expect(second.origin).toBe('auto_trade');
+		expect(second.alertId).toBe('alert-initial');
+		expect(second.setupType).toBe('breakout');
+	});
+
+	it('rejects reconciled order when incoming provenance conflicts with bound provenance', async () => {
+		const client = {
+			getOrder: jest.fn().mockImplementation(async (params) => ({
+				symbol: 'BTCUSDT',
+				clientOrderId: params?.origClientOrderId,
+				orderId: 99,
+				status: 'NEW',
+				side: 'BUY',
+				type: 'LIMIT',
+				timeInForce: 'GTC',
+				origQty: '0.1',
+				price: '100',
+			})),
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+			submitNewOrder: jest.fn(),
+		};
+		const service = createBinanceOrderService({ createClient: () => client });
+
+		// First: bind initial order
+		await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+			origin: 'auto_trade',
+			alertId: 'alert-1',
+			setupType: 'breakout',
+		}, { idempotencyKey: 'prov-conflict-key' });
+
+		// Retry with different origin
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+			origin: 'manual',
+			alertId: 'alert-1',
+			setupType: 'breakout',
+		}, { idempotencyKey: 'prov-conflict-key' })).rejects.toMatchObject({
+			code: 'BINANCE_ORDER_CONFLICT',
+			statusCode: 409,
+		});
+
+		// Retry with different alertId
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+			origin: 'auto_trade',
+			alertId: 'different-alert',
+			setupType: 'breakout',
+		}, { idempotencyKey: 'prov-conflict-key' })).rejects.toMatchObject({
+			code: 'BINANCE_ORDER_CONFLICT',
+			statusCode: 409,
+		});
+
+		// Retry with different setupType
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'LIMIT',
+			quantity: 0.1,
+			price: 100,
+			dryRun: false,
+			origin: 'auto_trade',
+			alertId: 'alert-1',
+			setupType: 'pullback',
+		}, { idempotencyKey: 'prov-conflict-key' })).rejects.toMatchObject({
+			code: 'BINANCE_ORDER_CONFLICT',
+			statusCode: 409,
+		});
 	});
 
 	it('requires a stable order identifier for live requests', async () => {

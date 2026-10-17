@@ -232,6 +232,16 @@ describe('Trade Ledger Endpoints (Integration)', () => {
 			expect(res.status).toBe(400);
 			expect(res.body.code).toBe('INVALID_REQUEST');
 		});
+
+		it('returns 400 when from date is later than to date', async () => {
+			const res = await request(app)
+				.get('/api/trading/pnl/summary?environment=testnet&from=2026-10-15T00:00:00Z&to=2026-10-10T00:00:00Z')
+				.set('x-api-key', 'test-api-key');
+
+			expect(res.status).toBe(400);
+			expect(res.body.code).toBe('INVALID_REQUEST');
+			expect(res.body.error).toMatch(/from date must be earlier than or equal to to date/);
+		});
 	});
 
 	describe('GET /api/trading/trades', () => {

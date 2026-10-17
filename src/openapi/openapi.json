@@ -4221,6 +4221,9 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -4314,6 +4317,9 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           }
@@ -4403,6 +4409,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           },
           "503": {
             "$ref": "#/components/responses/Error"
@@ -15893,7 +15902,16 @@
         "required": [
           "success",
           "environment",
+          "tradeCount",
+          "realizedPnl",
+          "costBasisClosed",
+          "totalFees",
+          "maxDrawdown",
+          "feesComplete",
+          "openPositionCount",
+          "equitySeries",
           "summary",
+          "unmatchedSellQty",
           "scanTruncated",
           "maxScan"
         ],
@@ -15906,8 +15924,83 @@
             "type": "string",
             "example": "testnet"
           },
+          "tradeCount": {
+            "type": "integer",
+            "example": 2
+          },
+          "realizedPnl": {
+            "type": "string",
+            "example": "10"
+          },
+          "costBasisClosed": {
+            "type": "string",
+            "example": "200"
+          },
+          "roiPct": {
+            "type": "string",
+            "nullable": true,
+            "example": "5"
+          },
+          "winRate": {
+            "type": "number",
+            "nullable": true,
+            "example": 0.5
+          },
+          "totalFees": {
+            "type": "string",
+            "example": "0.2"
+          },
+          "unrealizedPnl": {
+            "type": "string",
+            "nullable": true,
+            "example": "0"
+          },
+          "profitFactor": {
+            "type": "string",
+            "nullable": true,
+            "example": "2"
+          },
+          "avgHoldMs": {
+            "type": "integer",
+            "nullable": true,
+            "example": 3600000
+          },
+          "maxDrawdown": {
+            "type": "string",
+            "example": "10"
+          },
+          "feesComplete": {
+            "type": "boolean",
+            "example": true
+          },
+          "openPositionCount": {
+            "type": "integer",
+            "example": 1
+          },
+          "equitySeries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TradingPnlEquityPoint"
+            }
+          },
+          "groupBy": {
+            "type": "string",
+            "example": "origin"
+          },
+          "groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TradingPnlGroup"
+            }
+          },
           "summary": {
             "$ref": "#/components/schemas/TradingPnlSummary"
+          },
+          "unmatchedSellQty": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
           },
           "scanTruncated": {
             "type": "boolean",
@@ -16035,7 +16128,9 @@
         "required": [
           "limit",
           "hasMore",
-          "nextCursor"
+          "nextCursor",
+          "scanTruncated",
+          "maxScan"
         ],
         "properties": {
           "limit": {
@@ -16050,6 +16145,14 @@
             "type": "string",
             "nullable": true,
             "example": null
+          },
+          "scanTruncated": {
+            "type": "boolean",
+            "example": false
+          },
+          "maxScan": {
+            "type": "integer",
+            "example": 5000
           }
         },
         "additionalProperties": false

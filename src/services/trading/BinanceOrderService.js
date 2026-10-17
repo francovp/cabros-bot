@@ -3,6 +3,10 @@
 const crypto = require('crypto');
 const { MainClient } = require('binance');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const {
+	bindOrderProvenance,
+	resolveOrderProvenance,
+} = require('./orderProvenance');
 
 const TESTNET_BASE_URL = 'https://testnet.binance.vision';
 const DEMO_BASE_URL = 'https://demo-api.binance.com';
@@ -1282,14 +1286,24 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 							409,
 						);
 					}
+					const provenance = await resolveOrderProvenance({
+						environment: config.environment,
+						symbol: order.symbol,
+						clientOrderId,
+						binanceOrderId: existingOrder.orderId,
+						origin: order.origin,
+						alertId: order.alertId,
+						setupType: order.setupType,
+						ErrorClass: BinanceOrderRequestError,
+					});
 					return {
 						success: true,
 						dryRun: false,
 						environment: config.environment,
 						order: sanitizeOrderResponse(existingOrder),
-						origin: order.origin,
-						alertId: order.alertId,
-						setupType: order.setupType,
+						origin: provenance.origin,
+						alertId: provenance.alertId,
+						setupType: provenance.setupType,
 					};
 				}
 			}
@@ -1376,8 +1390,27 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			}
 
 			await validateOrderTestFilters(client, boundedOrder, orderParams, filters);
+			await bindOrderProvenance({
+				environment: config.environment,
+				symbol: order.symbol,
+				clientOrderId,
+				origin: order.origin,
+				alertId: order.alertId,
+				setupType: order.setupType,
+			});
 			try {
 				const response = await client.submitNewOrder(orderParams);
+				if (response?.orderId) {
+					bindOrderProvenance({
+						environment: config.environment,
+						symbol: order.symbol,
+						clientOrderId,
+						binanceOrderId: response.orderId,
+						origin: order.origin,
+						alertId: order.alertId,
+						setupType: order.setupType,
+					}).catch(() => {});
+				}
 				return {
 					success: true,
 					dryRun: false,

@@ -151,6 +151,8 @@ class TradeLedgerService {
 			readsSucceeded: 0,
 			readsFailed: 0,
 			consecutiveFailures: 0,
+			consecutiveWriteFailures: 0,
+			consecutiveReadFailures: 0,
 			lastWriteAt: null,
 			lastReadAt: null,
 			lastFailureAt: null,
@@ -171,7 +173,7 @@ class TradeLedgerService {
 	}
 
 	_resolveReadiness() {
-		if (this.durability.consecutiveFailures > 0) {
+		if (this.durability.consecutiveWriteFailures > 0 || this.durability.consecutiveReadFailures > 0) {
 			return READINESS.DEGRADED;
 		}
 		if (this.durability.writesSucceeded > 0) {
@@ -213,7 +215,9 @@ class TradeLedgerService {
 			readsAttempted: this.durability.readsAttempted,
 			readsSucceeded: this.durability.readsSucceeded,
 			readsFailed: this.durability.readsFailed,
-			consecutiveFailures: this.durability.consecutiveFailures,
+			consecutiveFailures: this.durability.consecutiveWriteFailures + this.durability.consecutiveReadFailures,
+			consecutiveWriteFailures: this.durability.consecutiveWriteFailures,
+			consecutiveReadFailures: this.durability.consecutiveReadFailures,
 			lastWriteAt: this.durability.lastWriteAt,
 			lastReadAt: this.durability.lastReadAt,
 			lastFailureAt: this.durability.lastFailureAt,
@@ -229,6 +233,8 @@ class TradeLedgerService {
 		this.durability.readsSucceeded = 0;
 		this.durability.readsFailed = 0;
 		this.durability.consecutiveFailures = 0;
+		this.durability.consecutiveWriteFailures = 0;
+		this.durability.consecutiveReadFailures = 0;
 		this.durability.lastWriteAt = null;
 		this.durability.lastReadAt = null;
 		this.durability.lastFailureAt = null;
@@ -250,7 +256,8 @@ class TradeLedgerService {
 			if (!firestore) {
 				this.durability.writesAttempted += records.length;
 				this.durability.writesFailed += records.length;
-				this.durability.consecutiveFailures += 1;
+				this.durability.consecutiveWriteFailures += 1;
+				this.durability.consecutiveFailures = this.durability.consecutiveWriteFailures + this.durability.consecutiveReadFailures;
 				this.durability.lastFailureAt = new Date().toISOString();
 				this.durability.lastErrorReason = REASONS.UNINITIALIZED;
 				result.failed += records.length;
@@ -295,13 +302,16 @@ class TradeLedgerService {
 			}
 
 			if (batchFailed > 0) {
-				this.durability.consecutiveFailures += 1;
+				this.durability.consecutiveWriteFailures += 1;
 				this.durability.lastFailureAt = lastFailureAt || recordedAt;
 				this.durability.lastErrorReason = REASONS.UNAVAILABLE;
 			} else if (batchWritten > 0 || batchDuplicates > 0) {
-				this.durability.consecutiveFailures = 0;
-				this.durability.lastErrorReason = null;
+				this.durability.consecutiveWriteFailures = 0;
+				if (this.durability.consecutiveReadFailures === 0) {
+					this.durability.lastErrorReason = null;
+				}
 			}
+			this.durability.consecutiveFailures = this.durability.consecutiveWriteFailures + this.durability.consecutiveReadFailures;
 		} catch (error) {
 			console.warn('[TradeLedgerService] recordOrderFills failed:', error?.message || error);
 		}
@@ -313,7 +323,8 @@ class TradeLedgerService {
 		const firestore = this._getFirestore();
 		if (!firestore) {
 			this.durability.readsFailed += 1;
-			this.durability.consecutiveFailures += 1;
+			this.durability.consecutiveReadFailures += 1;
+			this.durability.consecutiveFailures = this.durability.consecutiveWriteFailures + this.durability.consecutiveReadFailures;
 			this.durability.lastFailureAt = new Date().toISOString();
 			this.durability.lastErrorReason = REASONS.UNINITIALIZED;
 			this.metrics.recordReadFailure(METRICS_DOMAIN, FIRESTORE_ERROR_CATEGORIES.UNINITIALIZED);
@@ -352,12 +363,17 @@ class TradeLedgerService {
 				if (docs.length < fetchLimit) break;
 			}
 			this.durability.readsSucceeded += 1;
-			this.durability.consecutiveFailures = 0;
+			this.durability.consecutiveReadFailures = 0;
+			this.durability.consecutiveFailures = this.durability.consecutiveWriteFailures;
+			if (this.durability.consecutiveWriteFailures === 0) {
+				this.durability.lastErrorReason = null;
+			}
 			this.durability.lastReadAt = new Date().toISOString();
 			this.metrics.recordReadSuccess(METRICS_DOMAIN);
 		} catch (error) {
 			this.durability.readsFailed += 1;
-			this.durability.consecutiveFailures += 1;
+			this.durability.consecutiveReadFailures += 1;
+			this.durability.consecutiveFailures = this.durability.consecutiveWriteFailures + this.durability.consecutiveReadFailures;
 			this.durability.lastFailureAt = new Date().toISOString();
 			this.durability.lastErrorReason = REASONS.UNAVAILABLE;
 			const category = classifyFirestoreError(error);
