@@ -152,6 +152,24 @@ describe('validate-env', () => {
 		expect(validateEnv().map((warning) => warning.variable)).toContain('SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES');
 	});
 
+	it('validates TRADINGVIEW_MCP_WARMUP_INTERVAL_MS and TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS bounds', () => {
+		process.env.TRADINGVIEW_MCP_WARMUP_INTERVAL_MS = '1000'; // below 60000
+		let warnings = validateEnv();
+		expect(warnings.map((w) => w.variable)).toContain('TRADINGVIEW_MCP_WARMUP_INTERVAL_MS');
+
+		process.env.TRADINGVIEW_MCP_WARMUP_INTERVAL_MS = '600000';
+		warnings = validateEnv();
+		expect(warnings.map((w) => w.variable)).not.toContain('TRADINGVIEW_MCP_WARMUP_INTERVAL_MS');
+
+		process.env.TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS = '1000'; // below 5000
+		warnings = validateEnv();
+		expect(warnings.map((w) => w.variable)).toContain('TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS');
+
+		process.env.TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS = '60000';
+		warnings = validateEnv();
+		expect(warnings.map((w) => w.variable)).not.toContain('TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS');
+	});
+
 	it('formats warnings with remediation and no raw value', () => {
 		const warning = formatWarning({ variable: 'GEMINI_API_KEY', message: 'is missing' });
 

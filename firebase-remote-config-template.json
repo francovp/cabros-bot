@@ -112,6 +112,27 @@
       "description": "TTL for successful process-local TradingView MCP tool results in milliseconds",
       "valueType": "NUMBER"
     },
+    "ENABLE_TRADINGVIEW_MCP_WARMUP": {
+      "defaultValue": {
+        "value": "true"
+      },
+      "description": "Enable proactive periodic background keepalive probe to prevent TradingView MCP cold starts",
+      "valueType": "BOOLEAN"
+    },
+    "TRADINGVIEW_MCP_WARMUP_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "600000"
+      },
+      "description": "Interval in milliseconds between proactive TradingView MCP keepalive probes (default 10m)",
+      "valueType": "NUMBER"
+    },
+    "TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Timeout in milliseconds for TradingView MCP keepalive probe allowing for cold start latency (default 60s)",
+      "valueType": "NUMBER"
+    },
     "ENABLE_MESSAGE_FOOTER_METADATA": {
       "defaultValue": {
         "value": "true"

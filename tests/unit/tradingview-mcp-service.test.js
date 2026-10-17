@@ -3284,5 +3284,174 @@ describe('TradingViewMcpService', () => {
 			}));
 		});
 	});
+
+	describe('warm-up keepalive and cold-start resilience (#1369, #1302)', () => {
+		let fakeServer;
+
+		afterEach(async () => {
+			if (fakeServer) {
+				await fakeServer.close();
+				fakeServer = null;
+			}
+			jest.restoreAllMocks();
+		});
+
+		it('reports timeoutMs, enrichmentBudgetMs, resolved sources, and warmup status in getStatus()', () => {
+			const service = new TradingViewMcpService({
+				timeoutMs: 15000,
+				enrichmentBudgetMs: 20000,
+			});
+
+			const status = service.getStatus();
+			expect(status.timeoutMs).toBe(15000);
+			expect(status.timeoutSource).toBe('override');
+			expect(status.enrichmentBudgetMs).toBe(20000);
+			expect(status.enrichmentBudgetSource).toBe('override');
+			expect(status.warmup).toEqual(expect.objectContaining({
+				enabled: expect.any(Boolean),
+				running: false,
+				intervalMs: 600000,
+				timeoutMs: 60000,
+				lastProbeAt: null,
+				lastSuccessAt: null,
+				lastFailureAt: null,
+				lastDurationMs: null,
+				lastStatus: 'not_attempted',
+				lastErrorReason: null,
+				consecutiveFailures: 0,
+				totalProbes: 0,
+				successCount: 0,
+				failureCount: 0,
+			}));
+		});
+
+		it('resolves remote config source when remote overrides are present', () => {
+			jest.spyOn(remoteConfigService, 'getRemoteOverride').mockImplementation((key) => {
+				if (key === 'TRADINGVIEW_MCP_TIMEOUT_MS') return 18000;
+				if (key === 'TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS') return 18000;
+				return undefined;
+			});
+
+			const service = new TradingViewMcpService();
+			const status = service.getStatus();
+			expect(status.timeoutMs).toBe(18000);
+			expect(status.timeoutSource).toBe('remote');
+			expect(status.enrichmentBudgetMs).toBe(18000);
+			expect(status.enrichmentBudgetSource).toBe('remote');
+		});
+
+		it('executes successful warmup probe and records telemetry without affecting alert breaker', async () => {
+			fakeServer = await startFakeMcpServer();
+
+			const service = new TradingViewMcpService({
+				url: fakeServer.url,
+				warmupTimeoutMs: 10000,
+				logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
+			});
+
+			const result = await service.probeWarmup();
+			expect(result.success).toBe(true);
+			expect(fakeServer.calls.initialize).toBe(1);
+
+			const warmupStatus = service.getWarmupStatus();
+			expect(warmupStatus.totalProbes).toBe(1);
+			expect(warmupStatus.successCount).toBe(1);
+			expect(warmupStatus.failureCount).toBe(0);
+			expect(warmupStatus.lastStatus).toBe('success');
+			expect(warmupStatus.lastSuccessAt).toBeTruthy();
+			expect(warmupStatus.lastDurationMs).toBeGreaterThanOrEqual(0);
+
+			// Alert circuit breaker counter must remain untouched
+			expect(service.consecutiveFailures).toBe(0);
+		});
+
+		it('resets open or half-open circuit breaker when warmup probe succeeds', async () => {
+			fakeServer = await startFakeMcpServer();
+
+			const service = new TradingViewMcpService({
+				url: fakeServer.url,
+				logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
+			});
+
+			// Manually trip circuit breaker to open
+			service.breakerState = 'open';
+			service.breakerOpenedAt = new Date().toISOString();
+			service.consecutiveFailures = 5;
+
+			const result = await service.probeWarmup();
+			expect(result.success).toBe(true);
+			expect(service.breakerState).toBe('closed');
+			expect(service.breakerOpenedAt).toBeNull();
+			expect(service.consecutiveFailures).toBe(0);
+		});
+
+		it('fails open on warmup probe error without throwing or tripping the alert breaker', async () => {
+			const service = new TradingViewMcpService({
+				url: 'http://127.0.0.1:1/nonexistent',
+				warmupTimeoutMs: 200,
+				logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
+			});
+
+			// Must not reject
+			const result = await service.probeWarmup();
+			expect(result.success).toBe(false);
+			expect(result.error).toBeTruthy();
+
+			const warmupStatus = service.getWarmupStatus();
+			expect(warmupStatus.totalProbes).toBe(1);
+			expect(warmupStatus.successCount).toBe(0);
+			expect(warmupStatus.failureCount).toBe(1);
+			expect(warmupStatus.consecutiveFailures).toBe(1);
+			expect(warmupStatus.lastStatus).toMatch(/failed|timeout/);
+			expect(warmupStatus.lastFailureAt).toBeTruthy();
+
+			// Alert breaker consecutive failures must NOT be incremented
+			expect(service.consecutiveFailures).toBe(0);
+			expect(service.breakerState).toBe('closed');
+		});
+
+		it('manages warmup scheduler lifecycle with unref timer and safe shutdown', async () => {
+			fakeServer = await startFakeMcpServer();
+
+			const service = new TradingViewMcpService({
+				url: fakeServer.url,
+				warmupIntervalMs: 50,
+				warmupTimeoutMs: 500,
+				logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
+			});
+
+			// Force feature flag
+			jest.spyOn(service, 'isWarmupEnabled').mockReturnValue(true);
+
+			const started = service.startWarmupScheduler();
+			expect(started).toBe(true);
+			expect(service.getWarmupStatus().running).toBe(true);
+
+			// Calling start again is idempotent
+			expect(service.startWarmupScheduler()).toBe(true);
+
+			// Stop scheduler
+			await service.stopWarmupScheduler();
+			expect(service.getWarmupStatus().running).toBe(false);
+		});
+
+		it('coalesces concurrent probeWarmup calls into a single in-flight probe', async () => {
+			fakeServer = await startFakeMcpServer({ perHopDelayMs: 20 });
+
+			const service = new TradingViewMcpService({
+				url: fakeServer.url,
+				logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn() },
+			});
+
+			const [res1, res2] = await Promise.all([
+				service.probeWarmup(),
+				service.probeWarmup(),
+			]);
+
+			expect(res1.success).toBe(true);
+			expect(res2.success).toBe(true);
+			expect(fakeServer.calls.initialize).toBe(1);
+		});
+	});
 });
 

@@ -15714,6 +15714,128 @@
                 }
               }
             }
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 1000
+          },
+          "timeoutSource": {
+            "type": "string",
+            "enum": [
+              "override",
+              "remote",
+              "env",
+              "default"
+            ]
+          },
+          "enrichmentBudgetMs": {
+            "type": "integer",
+            "minimum": 1000
+          },
+          "enrichmentBudgetSource": {
+            "type": "string",
+            "enum": [
+              "override",
+              "remote",
+              "env",
+              "default"
+            ]
+          },
+          "warmup": {
+            "type": "object",
+            "description": "Fail-open keepalive warmup probe telemetry and scheduler state (#1369, #1302).",
+            "required": [
+              "enabled",
+              "running",
+              "intervalMs",
+              "timeoutMs",
+              "lastProbeAt",
+              "lastSuccessAt",
+              "lastFailureAt",
+              "lastDurationMs",
+              "lastStatus",
+              "lastErrorReason",
+              "consecutiveFailures",
+              "totalProbes",
+              "successCount",
+              "failureCount"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "running": {
+                "type": "boolean"
+              },
+              "intervalMs": {
+                "type": "integer",
+                "minimum": 60000
+              },
+              "timeoutMs": {
+                "type": "integer",
+                "minimum": 5000
+              },
+              "lastProbeAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "lastSuccessAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "lastFailureAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "lastDurationMs": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "lastStatus": {
+                "type": "string",
+                "enum": [
+                  "not_attempted",
+                  "running",
+                  "success",
+                  "failed",
+                  "timeout"
+                ]
+              },
+              "lastErrorReason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "consecutiveFailures": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "totalProbes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "successCount": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "failureCount": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
           }
         },
         "additionalProperties": true
@@ -15886,13 +16008,25 @@
             "description": "ENABLE_FIREBASE_ADMIN_AUTH gate."
           },
           "provider": {
-            "type": ["string", "null"],
-            "enum": ["firebase", null],
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "firebase",
+              null
+            ],
             "description": "Identity provider for admin token verification; null while the gate is off."
           },
           "signIn": {
-            "type": ["string", "null"],
-            "enum": ["email-password", null],
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "email-password",
+              null
+            ],
             "description": "Browser sign-in method; null while the gate is off."
           },
           "browserConfigConfigured": {
@@ -15937,11 +16071,17 @@
             "description": "Consecutive verifier-unavailable events; reset by the next successful verification, so recovery needs no restart."
           },
           "lastSuccessAt": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time"
           },
           "lastUnavailableAt": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time"
           }
         }

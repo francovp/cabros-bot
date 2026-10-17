@@ -54,6 +54,7 @@ const { alertSchedulerService } = require('./src/services/scheduler');
 const { adminSseService } = require('./src/services/sse/AdminSseService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
+const { tradingViewMcpService } = require('./src/services/tradingview/TradingViewMcpService');
 const { probeManagedPromptReadiness } = require('./src/services/prompts');
 const { configureServerTimeouts } = require('./src/lib/serverTimeouts');
 const expressErrorHandler = require('./src/lib/expressErrorHandler');
@@ -99,6 +100,7 @@ const lifecycle = createProcessLifecycle({
 	stopUserPriceAlertWorker: (options) => userPriceAlertService.stopWorker(options),
 	stopNewsMonitorScheduler: (options) => newsMonitorSchedulerService.stopWorker(options),
 	stopAlertScheduler: (options) => alertSchedulerService.stopWorker(options),
+	stopTradingViewMcpWarmup: () => tradingViewMcpService.stopWarmupScheduler(),
 	stopRemoteConfig: () => remoteConfigService.stop(),
 	closeAllSseConnections: () => adminSseService.closeAll(),
 	stopTelegramHealthProbe: () => stopTelegramHealthProbe(),
@@ -160,6 +162,8 @@ async function bootstrapApplication() {
 			// Start background alert scheduler (JSON-defined news + scanner schedules) if enabled
 			alertSchedulerService.botGetter = () => bot;
 			alertSchedulerService.startWorker({ source: 'web' });
+			// Start proactive TradingView MCP keepalive warm-up probe if enabled
+			tradingViewMcpService.startWarmupScheduler();
 		})
 		.catch((error) => {
 			bootstrapReadiness.fail(error);
