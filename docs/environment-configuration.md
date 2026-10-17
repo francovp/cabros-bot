@@ -96,7 +96,7 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 #### Token Spend Tracking & Cost Budgeting
 
 - `ENABLE_TOKEN_COST_BUDGET` - Enable daily LLM token cost tracking and budget limits (`true` or `false`, default: `false`; Remote Config supported)
-- `TOKEN_COST_DAILY_BUDGET_USD` - Maximum daily spend in USD before LLM calls fail open safely (default: `5.00`, range `0.01`-`1000.00`; Remote Config supported)
+- `TOKEN_COST_DAILY_BUDGET_USD` - Maximum daily spend in USD before LLM calls fail open safely (default: `5.00`, range `0.01`-`10000.00`; Remote Config supported)
 - `TOKEN_COST_WARN_THRESHOLD_PCT` - Percentage of daily budget that triggers an admin Telegram alert (default: `80`, range `1`-`100`; Remote Config supported)
 
 #### Cloudflare AI Gateway
