@@ -588,10 +588,16 @@ function postAlert(botOrGetter) {
 		const requestId = req.requestId || resolveRequestId(req);
 		const startTime = Date.now();
 		const { body } = req;
-		if (body && typeof body === 'object'
+		const invalidBodyFlag = body && typeof body === 'object'
 			&& Object.prototype.hasOwnProperty.call(body, 'autoTrade')
-			&& typeof body.autoTrade !== 'boolean') {
-			return res.status(400).json({ success: false, error: 'INVALID_AUTO_TRADE_FLAG' });
+			&& typeof body.autoTrade !== 'boolean';
+		const queryFlag = req.query && req.query.autoTrade;
+		const invalidQueryFlag = req.query && Object.prototype.hasOwnProperty.call(req.query, 'autoTrade')
+			&& queryFlag !== true && queryFlag !== false && queryFlag !== 'true' && queryFlag !== 'false';
+		if (invalidBodyFlag || invalidQueryFlag) {
+			return sendError(res, 400, {
+				error: 'INVALID_AUTO_TRADE_FLAG', code: STANDARD_ERROR_CODES.INVALID_REQUEST, requestId,
+			});
 		}
 		const useTradingViewData = req.query && (req.query.useTradingViewData === true || req.query.useTradingViewData === 'true');
 		const dryRun = resolveDryRun(req);

@@ -187,9 +187,26 @@ describe('Alert auto-trade endpoint wiring', () => {
 			.send({ text: 'BINANCE:BTCUSDT(1h) COMPRA', autoTrade: 'yes' })
 			.expect(400);
 		expect(response.body.error).toBe('INVALID_AUTO_TRADE_FLAG');
+		expect(response.body).toMatchObject({ code: 'INVALID_REQUEST', requestId: expect.any(String), retryable: false });
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 		expect(mockPlaceOrder).not.toHaveBeenCalled();
 	});
+
+	it.each(['?autoTrade=tru', '?autoTrade', '?autoTrade=true&autoTrade=false'])(
+		'rejects malformed query flag %s before delivery or trading', async (query) => {
+			process.env.ENABLE_AUTO_TRADE = 'true';
+			const response = await request(app)
+				.post(`/api/webhook/alert${query}`)
+				.set('x-api-key', 'test-key')
+				.send({ text: 'BINANCE:BTCUSDT(1h) COMPRA' })
+				.expect(400);
+			expect(response.body).toMatchObject({
+				error: 'INVALID_AUTO_TRADE_FLAG', code: 'INVALID_REQUEST', requestId: expect.any(String), retryable: false,
+			});
+			expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+			expect(mockPlaceOrder).not.toHaveBeenCalled();
+		},
+	);
 
 	it('passes the body signalId to the durable live reservation', async () => {
 		process.env.ENABLE_AUTO_TRADE = 'true';

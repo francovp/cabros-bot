@@ -43,12 +43,16 @@ describe('Postman collection contract', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const valid = findItem(collection.item, 'POST Send Alert (autoTrade body only)');
 		const invalid = findItem(collection.item, 'POST Send Alert (invalid autoTrade body - 400)');
+		const invalidQuery = findItem(collection.item, 'POST Send Alert (invalid autoTrade query - 400)');
 		expect(valid.request.url.raw).toBe('{{baseUrl}}/api/webhook/alert');
 		expect(JSON.parse(valid.request.body.raw)).toMatchObject({ autoTrade: true, signalId: 'bar-123' });
 		expect(valid.response[0].code).toBe(200);
 		expect(invalid.request.url.raw).toBe('{{baseUrl}}/api/webhook/alert');
 		expect(JSON.parse(invalid.request.body.raw).autoTrade).toBe('yes');
 		expect(invalid.response[0].code).toBe(400);
+		expect(JSON.parse(invalid.response[0].body)).toMatchObject({ code: 'INVALID_REQUEST', retryable: false });
+		expect(invalidQuery.request.url.raw).toContain('?autoTrade=tru');
+		expect(JSON.parse(invalidQuery.response[0].body)).toMatchObject({ code: 'INVALID_REQUEST', retryable: false });
 	});
 	it('documents webhook-message alert filtering with a matching response example', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));

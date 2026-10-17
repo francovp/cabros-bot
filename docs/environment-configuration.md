@@ -535,7 +535,7 @@ The response and audit logs include only sanitized order metadata. API credentia
 
 Opt-in bridging of an enriched TradingView alert to a Binance Spot order. This closes the alerting-to-execution gap tracked in #955; advanced order types (OCO, trailing-stop, bracket) remain #805.
 
-Auto-trade is opt-in **twice** — the operator sets `ENABLE_AUTO_TRADE=true` and the caller additionally passes `autoTrade=true` to `POST /api/webhook/alert`. It never runs in preview deployments. **Dry-run is the default**, so enabling the flag alone validates the entire path (request validation, exchange-info filters, notional bounds) without mutating Binance.
+Auto-trade is opt-in **twice** — the operator sets `ENABLE_AUTO_TRADE=true` and the caller additionally passes `autoTrade=true` to `POST /api/webhook/alert`. Explicit query values must be `true` or `false`; malformed or repeated query values and non-boolean body values return HTTP 400 with the standard `INVALID_REQUEST` envelope before delivery. It never runs in preview deployments. **Dry-run is the default**, so enabling the flag alone validates the entire path (request validation, exchange-info filters, notional bounds) without mutating Binance.
 
 - `ENABLE_AUTO_TRADE` - Master operator switch (`true` or `false`, default: `false`). Security control; environment-only and excluded from Firebase Remote Config.
 - `AUTO_TRADE_DRY_RUN` - Validate without submitting (`true` or `false`, default: `true`). Set to `false` only after testnet and demo validation.
@@ -551,7 +551,7 @@ Live Binance work runs as a tracked background task after the reservation. The w
 
 `ENABLE_AUTO_TRADE`, `AUTO_TRADE_DRY_RUN`, `AUTO_TRADE_MAX_NOTIONAL`, `AUTO_TRADE_MIN_ABS_SENTIMENT`, and `AUTO_TRADE_COOLDOWN_BARS` remain environment-only. Each directly controls whether, when, or how much money may be ordered; remote changes to these safety controls would bypass deployment review. They are therefore excluded from Firebase Remote Config.
 
-Auto-trade **never blocks alert delivery**. Every outcome returns HTTP 200 with the alert delivered and reports a non-sensitive `autoTrade` summary instead:
+For valid requests, auto-trade failures **never block alert delivery**. The alert response remains HTTP 200 and reports a non-sensitive `autoTrade` summary instead:
 
 ```json
 { "success": true, "autoTrade": { "requested": true, "executed": false, "reason": "SENTIMENT_BELOW_THRESHOLD" } }

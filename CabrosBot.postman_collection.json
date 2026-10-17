@@ -2723,7 +2723,55 @@
               "status": "Bad Request",
               "code": 400,
               "_postman_previewlanguage": "json",
-              "body": "{\"success\":false,\"error\":\"INVALID_AUTO_TRADE_FLAG\"}"
+              "body": "{\"success\":false,\"error\":\"INVALID_AUTO_TRADE_FLAG\",\"code\":\"INVALID_REQUEST\",\"requestId\":\"req-12345\",\"retryable\":false}"
+            }
+          ]
+        },
+        {
+          "name": "POST Send Alert (invalid autoTrade query - 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BINANCE:BTCUSDT(1h) COMPRA\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert?autoTrade=tru",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ],
+              "query": [
+                {
+                  "key": "autoTrade",
+                  "value": "tru"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid autoTrade flag",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "body": "{\"success\":false,\"error\":\"INVALID_AUTO_TRADE_FLAG\",\"code\":\"INVALID_REQUEST\",\"requestId\":\"req-12345\",\"retryable\":false}"
             }
           ]
         },

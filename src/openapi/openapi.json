@@ -5369,7 +5369,7 @@
       "AutoTrade": {
         "name": "autoTrade",
         "in": "query",
-        "description": "When true, the enriched alert signal may be bridged to a Binance Spot order. Requires the server-side ENABLE_AUTO_TRADE flag and is ignored in preview deployments. Dry-run remains the default, so this only routes the signal unless AUTO_TRADE_DRY_RUN=false is explicitly configured. Auto-trade never blocks alert delivery; failures are reported in the non-sensitive autoTrade object.",
+        "description": "When true, the enriched alert signal may be bridged to a Binance Spot order. Explicit query values must be true or false; malformed or repeated values return HTTP 400 with the standard INVALID_REQUEST envelope. Requires the server-side ENABLE_AUTO_TRADE flag and is ignored in preview deployments. Dry-run remains the default, so this only routes the signal unless AUTO_TRADE_DRY_RUN=false is explicitly configured. Auto-trade never blocks alert delivery; failures are reported in the non-sensitive autoTrade object.",
         "schema": {
           "type": "boolean",
           "default": false
