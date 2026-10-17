@@ -5401,11 +5401,13 @@
                 "alertIds": {
                   "type": "array",
                   "items": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
                   },
                   "minItems": 1,
                   "maxItems": 500,
-                  "description": "Array of stored alert IDs to delete"
+                  "description": "Array of stored alert IDs to delete (empty or whitespace-only IDs are rejected)"
                 }
               }
             },
@@ -5431,11 +5433,13 @@
                 "alertIds": {
                   "type": "array",
                   "items": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
                   },
                   "minItems": 1,
                   "maxItems": 1000,
-                  "description": "Array of stored alert IDs to export"
+                  "description": "Array of stored alert IDs to export (empty or whitespace-only IDs are rejected)"
                 },
                 "format": {
                   "type": "string",
@@ -5480,11 +5484,13 @@
                 "alertIds": {
                   "type": "array",
                   "items": {
-                    "type": "string"
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "\\S"
                   },
                   "minItems": 1,
                   "maxItems": 50,
-                  "description": "Array of stored alert IDs to replay"
+                  "description": "Array of stored alert IDs to replay (empty or whitespace-only IDs are rejected)"
                 },
                 "channels": {
                   "type": "array",

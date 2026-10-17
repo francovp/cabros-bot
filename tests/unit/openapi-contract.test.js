@@ -1146,4 +1146,34 @@ describe('status dependency contract drift', () => {
 		expect(deploymentIdentity.properties).toHaveProperty('runtimeVersion');
 		expect(deploymentSummaryItem.required).toEqual(expect.arrayContaining(['count', 'lastSeen']));
 	});
+
+	describe('Batch alert IDs nonblank contract (GH-1174)', () => {
+		const requestBodies = ['BatchDeleteAlerts', 'BatchExportAlerts', 'BatchReplayAlerts'];
+		const spec = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+		it.each(requestBodies)('declares minLength: 1 and pattern: "\\S" on alertIds items in %s', (bodyName) => {
+			const schema = spec.components.requestBodies[bodyName].content['application/json'].schema;
+			const alertIdsProp = schema.properties.alertIds;
+
+			expect(alertIdsProp.type).toBe('array');
+			expect(alertIdsProp.items).toEqual(expect.objectContaining({
+				type: 'string',
+				minLength: 1,
+				pattern: '\\S',
+			}));
+		});
+
+		it('matches non-empty string and rejects empty/whitespace-only with regex pattern "\\S"', () => {
+			const regex = new RegExp('\\S');
+
+			expect(regex.test('')).toBe(false);
+			expect(regex.test(' ')).toBe(false);
+			expect(regex.test('   ')).toBe(false);
+			expect(regex.test('\t')).toBe(false);
+			expect(regex.test('\n')).toBe(false);
+			expect(regex.test('alert-1')).toBe(true);
+			expect(regex.test('doc_123456')).toBe(true);
+			expect(regex.test('a')).toBe(true);
+		});
+	});
 });
