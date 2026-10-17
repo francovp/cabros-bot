@@ -78,7 +78,11 @@ Query durably recorded signal outcomes record-by-record with pagination and filt
         "inputTokens": 100,
         "outputTokens": 40,
         "totalTokens": 140,
-        "totalCost": 0.00003
+        "totalCost": 0.00003,
+        "pricing": {
+          "unknownModelPricing": false,
+          "unknownModels": []
+        }
       },
       "processingTimeMs": 150
     }
@@ -175,7 +179,11 @@ Query aggregated performance and coverage metrics for recorded signal outcomes, 
       "tokenUsage": {
         "inputTokens": 1200,
         "outputTokens": 400,
-        "totalCost": 0.0035
+        "totalCost": 0.0035,
+        "pricing": {
+          "unknownModelPricing": false,
+          "unknownModels": []
+        }
       }
     }
   }

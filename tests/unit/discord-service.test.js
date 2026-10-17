@@ -1,4 +1,5 @@
 const DiscordService = require('../../src/services/notification/DiscordService');
+const WhatsAppMarkdownFormatter = require('../../src/services/notification/formatters/whatsappMarkdownFormatter');
 
 describe('DiscordService', () => {
 	let service;
@@ -521,6 +522,94 @@ describe('DiscordService', () => {
 			expect(calledUrls).toContain(SECONDARY);
 		});
 
+		it('formats the alert once while failing over across webhooks', async () => {
+			const formatter = {
+				formatEnriched: jest.fn().mockResolvedValue('formatted alert'),
+			};
+			service = new DiscordService({ logger: mockLogger, formatter });
+			await service.validate();
+			global.fetch.mockReset();
+			global.fetch = jest.fn().mockImplementation(async (url) => {
+				if (url.startsWith(PRIMARY)) {
+					return { ok: false, status: 503, text: async () => 'service unavailable' };
+				}
+				return { ok: true, status: 200, json: async () => ({ id: 'msg-secondary' }) };
+			});
+
+			const result = await service.send({ enriched: { original_text: 'alert' } });
+
+			expect(result.success).toBe(true);
+			expect(formatter.formatEnriched).toHaveBeenCalledTimes(1);
+			expect(global.fetch).toHaveBeenCalledTimes(2);
+		});
+
+		it('passes the cancellation signal into formatting and stops before webhook delivery', async () => {
+			const controller = new AbortController();
+			const urlShortener = {
+				shortenUrlsParallel: jest.fn(async () => {
+					controller.abort(new Error('caller cancelled'));
+					return {};
+				}),
+			};
+			service = new DiscordService({ logger: mockLogger, urlShortener });
+			await service.validate();
+			global.fetch.mockReset();
+
+			const result = await service.send({
+				enriched: {
+					original_text: 'alert',
+					sources: [{ title: 'source', url: 'https://example.com/source' }],
+				},
+			}, { signal: controller.signal });
+
+			expect(urlShortener.shortenUrlsParallel).toHaveBeenCalledWith(
+				['https://example.com/source'],
+				{ signal: controller.signal },
+			);
+			expect(result).toMatchObject({ success: false, aborted: true });
+			expect(global.fetch).not.toHaveBeenCalled();
+		});
+
+		it('stops webhook failover when a candidate aborts', async () => {
+			service = new DiscordService({ logger: mockLogger, maxUnhealthyDurationMs: 60000 });
+			await service.validate();
+			global.fetch.mockReset();
+			const controller = new AbortController();
+			global.fetch = jest.fn().mockImplementation(async (url) => {
+				if (url.startsWith(PRIMARY)) {
+					controller.abort(new Error('caller cancelled'));
+					return { ok: false, status: 503, text: async () => 'service unavailable' };
+				}
+				return { ok: true, status: 200, json: async () => ({ id: 'unexpected-fallback' }) };
+			});
+
+			const result = await service.send({ text: 'alert' }, { signal: controller.signal });
+
+			expect(result).toMatchObject({ success: false, aborted: true });
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+			expect(global.fetch.mock.calls[0][0]).toContain('/111/primary');
+		});
+
+		it('keeps a confirmed webhook delivery successful if cancellation arrives afterward', async () => {
+			service = new DiscordService({ logger: mockLogger, maxUnhealthyDurationMs: 60000 });
+			await service.validate();
+			global.fetch.mockReset();
+			const controller = new AbortController();
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => {
+					controller.abort(new Error('late cancellation'));
+					return { id: 'confirmed-delivery' };
+				},
+			});
+
+			const result = await service.send({ text: 'alert' }, { signal: controller.signal });
+
+			expect(result).toMatchObject({ success: true, messageId: 'confirmed-delivery' });
+			expect(global.fetch).toHaveBeenCalledTimes(1);
+		});
+
 		it('marks a failing webhook unhealthy and avoids it on the next attempt', async () => {
 			service = new DiscordService({
 				logger: mockLogger,
@@ -771,4 +860,162 @@ describe('DiscordService', () => {
 			expect(missingUrlService.isConfigured()).toBe(false);
 		});
 	});
+
+	describe('formatAlert', () => {
+		it('forwards session and signalClass to formatter', async () => {
+			const mockFormatter = {
+				format: jest.fn().mockReturnValue('formatted text'),
+				formatEnriched: jest.fn().mockReturnValue('formatted enriched'),
+			};
+			const svc = new DiscordService({
+				formatter: mockFormatter,
+			});
+
+			await svc.formatAlert({ text: 'plain alert', session: 'regular', signalClass: 'A' });
+			expect(mockFormatter.format).toHaveBeenCalledWith('plain alert', { signalClass: 'A', session: 'regular' });
+
+			await svc.formatAlert({ text: 'enriched alert', enriched: { summary: 'data' }, session: 'post', signalClass: 'B' });
+			expect(mockFormatter.formatEnriched).toHaveBeenCalledWith({ summary: 'data' }, { signalClass: 'B', session: 'post' });
+		});
+	});
+
+	describe('urlShortener integration', () => {
+		let mockUrlShortener;
+
+		beforeEach(() => {
+			mockUrlShortener = {
+				shortenUrlsParallel: jest.fn(),
+			};
+		});
+
+		it('accepts urlShortener in constructor config and wires it to default formatter', () => {
+			const svc = new DiscordService({
+				logger: mockLogger,
+				urlShortener: mockUrlShortener,
+			});
+
+			expect(svc.urlShortener).toBe(mockUrlShortener);
+			expect(svc.formatter.urlShortener).toBe(mockUrlShortener);
+		});
+
+		it('handles missing or null urlShortener gracefully', () => {
+			const svc = new DiscordService({ logger: mockLogger });
+			expect(svc.urlShortener).toBeNull();
+			expect(svc.formatter.urlShortener).toBeNull();
+
+			const svcNull = new DiscordService({ logger: mockLogger, urlShortener: null });
+			expect(svcNull.urlShortener).toBeNull();
+			expect(svcNull.formatter.urlShortener).toBeNull();
+		});
+
+		it('passes urlShortener to custom formatter if not already set', () => {
+			const customFormatter = new WhatsAppMarkdownFormatter();
+			expect(customFormatter.urlShortener).toBeNull();
+
+			const svc = new DiscordService({
+				logger: mockLogger,
+				urlShortener: mockUrlShortener,
+				formatter: customFormatter,
+			});
+
+			expect(svc.formatter).toBe(customFormatter);
+			expect(svc.formatter.urlShortener).toBe(mockUrlShortener);
+		});
+
+		it('preserves urlShortener on custom formatter if already set', () => {
+			const existingShortener = { shortenUrlsParallel: jest.fn() };
+			const customFormatter = new WhatsAppMarkdownFormatter({ urlShortener: existingShortener });
+
+			const svc = new DiscordService({
+				logger: mockLogger,
+				urlShortener: mockUrlShortener,
+				formatter: customFormatter,
+			});
+
+			expect(svc.formatter.urlShortener).toBe(existingShortener);
+		});
+
+		it('shortens URLs in enriched alert sources during send', async () => {
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+
+			mockUrlShortener.shortenUrlsParallel.mockResolvedValue({
+				'https://tradingview.com/chart/abc': 'https://picsee.io/short1',
+			});
+
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => ({ id: 'msg-short-1' }),
+				text: async () => JSON.stringify({ id: 'msg-short-1' }),
+			});
+
+			const svc = new DiscordService({
+				logger: mockLogger,
+				urlShortener: mockUrlShortener,
+			});
+			await svc.validate();
+
+			const alert = {
+				text: 'Alert text',
+				enriched: {
+					original_text: 'BTC Breakout',
+					sources: [
+						{ title: 'TradingView Chart', url: 'https://tradingview.com/chart/abc' },
+					],
+				},
+			};
+
+			const result = await svc.send(alert);
+
+			expect(result.success).toBe(true);
+			expect(mockUrlShortener.shortenUrlsParallel).toHaveBeenCalledWith(['https://tradingview.com/chart/abc']);
+
+			expect(global.fetch).toHaveBeenCalledTimes(2); // 1 probe + 1 send
+			const sendCall = global.fetch.mock.calls.find((call) => call[1]?.method === 'POST');
+			expect(sendCall).toBeDefined();
+			const requestBody = JSON.parse(sendCall[1].body);
+			expect(requestBody.content).toContain('https://picsee.io/short1');
+			expect(requestBody.content).not.toContain('https://tradingview.com/chart/abc');
+		});
+
+		it('degrades gracefully and preserves original URL when urlShortener rejects', async () => {
+			process.env.ENABLE_DISCORD_ALERTS = 'true';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+
+			mockUrlShortener.shortenUrlsParallel.mockRejectedValue(new Error('Shortening service rate limited'));
+
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => ({ id: 'msg-short-2' }),
+				text: async () => JSON.stringify({ id: 'msg-short-2' }),
+			});
+
+			const svc = new DiscordService({
+				logger: mockLogger,
+				urlShortener: mockUrlShortener,
+			});
+			await svc.validate();
+
+			const alert = {
+				text: 'Alert text',
+				enriched: {
+					original_text: 'BTC Breakout',
+					sources: [
+						{ title: 'TradingView Chart', url: 'https://tradingview.com/chart/abc' },
+					],
+				},
+			};
+
+			const result = await svc.send(alert);
+
+			expect(result.success).toBe(true);
+			const sendCall = global.fetch.mock.calls.find((call) => call[1]?.method === 'POST');
+			expect(sendCall).toBeDefined();
+			const requestBody = JSON.parse(sendCall[1].body);
+			expect(requestBody.content).toContain('https://tradingview.com/chart/abc');
+		});
+	});
 });
+

@@ -12,6 +12,7 @@ const {
 	expandedAnalysisCmd,
 	marketScannerCmd,
 	jobsCommand,
+	alertHistoryCommand,
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
@@ -53,8 +54,10 @@ const { alertSchedulerService } = require('./src/services/scheduler');
 const { adminSseService } = require('./src/services/sse/AdminSseService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
+const { tradingViewMcpService } = require('./src/services/tradingview/TradingViewMcpService');
 const { probeManagedPromptReadiness } = require('./src/services/prompts');
 const { configureServerTimeouts } = require('./src/lib/serverTimeouts');
+const expressErrorHandler = require('./src/lib/expressErrorHandler');
 const Sentry = require('@sentry/node');
 
 const { token, shouldStartTelegramBot } = getTelegramBootstrapConfig();
@@ -79,14 +82,7 @@ registerDebugSentryRoute(app);
 
 // The error handler must be registered before any other error middleware and after all controllers
 Sentry.setupExpressErrorHandler(app);
-
-// Optional fallthrough error handler
-app.use(function onError(err, req, res, next) {
-	// The error id is attached to `res.sentry` to be returned
-	// and optionally displayed to the user for support.
-	res.statusCode = 500;
-	res.end(res.sentry + '\n');
-});
+app.use(expressErrorHandler);
 
 const lifecycle = createProcessLifecycle({
 	getServer: () => server,
@@ -104,6 +100,7 @@ const lifecycle = createProcessLifecycle({
 	stopUserPriceAlertWorker: (options) => userPriceAlertService.stopWorker(options),
 	stopNewsMonitorScheduler: (options) => newsMonitorSchedulerService.stopWorker(options),
 	stopAlertScheduler: (options) => alertSchedulerService.stopWorker(options),
+	stopTradingViewMcpWarmup: () => tradingViewMcpService.stopWarmupScheduler(),
 	stopRemoteConfig: () => remoteConfigService.stop(),
 	closeAllSseConnections: () => adminSseService.closeAll(),
 	stopTelegramHealthProbe: () => stopTelegramHealthProbe(),
@@ -165,6 +162,8 @@ async function bootstrapApplication() {
 			// Start background alert scheduler (JSON-defined news + scanner schedules) if enabled
 			alertSchedulerService.botGetter = () => bot;
 			alertSchedulerService.startWorker({ source: 'web' });
+			// Start proactive TradingView MCP keepalive warm-up probe if enabled
+			tradingViewMcpService.startWarmupScheduler();
 		})
 		.catch((error) => {
 			bootstrapReadiness.fail(error);
@@ -202,6 +201,7 @@ async function bootstrapApplication() {
 		bot.command(['analisis', 'analysis'], expandedAnalysisCmd);
 		bot.command(['scanner'], marketScannerCmd);
 		bot.command(['jobs', 'trabajos'], jobsCommand);
+		bot.command(['history', 'alertas'], alertHistoryCommand);
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
 		bot.command(['preferencias', 'preferences'], preferenciasCmd);

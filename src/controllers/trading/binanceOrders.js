@@ -398,7 +398,7 @@ async function getBinanceOrderAudit(req, res) {
 			to: effectiveTo,
 			environment,
 			orderId,
-			signal: req.signal,
+			signal: req.requestDeadlineSignal || req.signal,
 		});
 
 		const records = result?.records || [];

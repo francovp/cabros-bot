@@ -37,6 +37,14 @@ const {
 const { listOutcomes, summarizeOutcomes, getOutcomesCalibration } = require('../controllers/outcomes/outcomes');
 const { listSymbolAnalyses, summarizeSymbolAnalyses } = require('../controllers/symbolAnalyses/symbolAnalyses');
 const { getPreferencesHandler, putPreferencesHandler, deletePreferencesHandler } = require('../controllers/preferences/preferences');
+const {
+	listSubscribers,
+	postSubscriber,
+	getSubscriber,
+	updateSubscriber,
+	deleteSubscriber,
+	testSubscriber,
+} = require('../controllers/subscribers/alertSubscribers');
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
 const {
@@ -110,6 +118,15 @@ function getRoutes(botOrGetter) {
 	router.put('/scanner-presets/:id', ...adminWrite, updatePreset);
 	router.delete('/scanner-presets/:id', ...adminWrite, deletePreset);
 	router.post('/scanner-presets/:id/run', ...adminWrite, idempotencyMiddleware, postRunPreset(botOrGetter));
+
+	// Alert subscriber webhook endpoints
+	router.get('/alert-subscribers', ...adminRead, listSubscribers);
+	router.post('/alert-subscribers', ...adminWrite, idempotencyMiddleware, postSubscriber);
+	router.get('/alert-subscribers/:id', ...adminRead, getSubscriber);
+	router.put('/alert-subscribers/:id', ...adminWrite, updateSubscriber);
+	router.patch('/alert-subscribers/:id', ...adminWrite, updateSubscriber);
+	router.delete('/alert-subscribers/:id', ...adminWrite, deleteSubscriber);
+	router.post('/alert-subscribers/:id/test', ...adminWrite, idempotencyMiddleware, testSubscriber);
 
 	// Per-chat alert preferences endpoints
 	router.get('/preferences/:channel/:chatId', ...adminRead, getPreferencesHandler);

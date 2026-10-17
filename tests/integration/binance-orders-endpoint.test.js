@@ -1218,8 +1218,43 @@ describe('Binance orders API', () => {
 					symbol: 'BTCUSDT',
 					status: 'dry_run',
 					limit: 25,
+					signal: expect.anything(),
 				}),
 			);
+			const callArg = listAuditRecordsSpy.mock.calls[0][0];
+			expect(callArg.signal).toBeDefined();
+			expect(typeof callArg.signal?.aborted).toBe('boolean');
+
+			isEnabledSpy.mockRestore();
+			isConfiguredSpy.mockRestore();
+			listAuditRecordsSpy.mockRestore();
+		});
+
+		it('forwards req.requestDeadlineSignal to listAuditRecords and handles abort', async () => {
+			const isEnabledSpy = jest.spyOn(binanceOrderAuditService, 'isEnabled').mockReturnValue(true);
+			const isConfiguredSpy = jest.spyOn(binanceOrderAuditService, 'isConfigured').mockReturnValue(true);
+
+			const customSignal = new AbortController().signal;
+			const listAuditRecordsSpy = jest.spyOn(binanceOrderAuditService, 'listAuditRecords').mockResolvedValue({
+				records: [],
+				hasMore: false,
+				nextBefore: null,
+			});
+
+			const customApp = express();
+			customApp.use((req, res, next) => {
+				req.requestDeadlineSignal = customSignal;
+				next();
+			});
+			customApp.use('/api', getRoutes(null));
+
+			await request(customApp)
+				.get('/api/trading/binance/orders/audit?symbol=BTCUSDT&limit=10')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			const callArg = listAuditRecordsSpy.mock.calls[0][0];
+			expect(callArg.signal === customSignal).toBe(true);
 
 			isEnabledSpy.mockRestore();
 			isConfiguredSpy.mockRestore();

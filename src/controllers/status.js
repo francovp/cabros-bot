@@ -7,6 +7,7 @@ const {
 } = require('../services/scannerPresets');
 const { newsMonitorSchedulerService } = require('../services/newsMonitorScheduler');
 const { alertSchedulerService } = require('../services/scheduler');
+const { alertSubscriberService } = require('../services/subscribers/AlertSubscriberService');
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const alertFeedbackStorageService = require('../services/storage/AlertFeedbackStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
@@ -49,6 +50,7 @@ const {
 const { getVolumeTracker } = require('./webhooks/handlers/newsMonitor/volumeTracker');
 const { getSelfTestService } = require('./diagnostics/selftest');
 const telegramCommandAuth = require('../lib/telegramCommandAuth');
+const { getAdminAuthStatus } = require('../lib/adminAuth');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -203,6 +205,36 @@ function withFirestoreReadHealth(status) {
 	};
 }
 
+/**
+ * Cloudflare AI Gateway readiness, including whether the gateway is in the
+ * runtime request path at all.
+ *
+ * Issue #1115: `ENABLE_CLOUDFLARE_AIG` never selected the runtime provider —
+ * `MODEL_PROVIDER` does — so deriving `ready` from `enabled && configured` alone
+ * let the documented enablement steps report `ready: true` while
+ * `MODEL_PROVIDER=gemini` sent every LLM call straight to Google and no request
+ * touched the gateway. Credentials present but unrouted now report
+ * `status: "inactive"` and `ready: false`.
+ */
+function cloudflareAigDependencyStatus({ enabled, configured }) {
+	const provider = getModelProvider();
+	const routed = provider === 'cloudflare';
+	if (!enabled) {
+		return { enabled, configured, routed, provider, ready: false, status: 'disabled' };
+	}
+	if (!configured) {
+		return { enabled, configured, routed, provider, ready: false, status: 'misconfigured' };
+	}
+	return {
+		enabled,
+		configured,
+		routed,
+		provider,
+		ready: routed,
+		status: routed ? 'ready' : 'inactive',
+	};
+}
+
 function getNewsMonitorLlmDependency({ enabled, provider }) {
 	switch (provider) {
 	case 'gemini':
@@ -319,6 +351,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	// toggle failed (or that it worked) when the opposite is true.
 	const firestoreEnabled = resolveStorageGate('ENABLE_FIRESTORE_ALERT_STORAGE');
 	const firestoreScannerPresetsEnabled = resolveStorageGate('ENABLE_FIRESTORE_SCANNER_PRESETS');
+	const firestoreAlertSubscribersEnabled = resolveStorageGate('ENABLE_FIRESTORE_ALERT_SUBSCRIBERS');
 	const firestoreJobStorageEnabled = resolveStorageGate('ENABLE_FIRESTORE_JOB_STORAGE')
 		|| firestoreEnabled;
 	const sentryEnabled = isEnabled(process.env.ENABLE_SENTRY);
@@ -333,6 +366,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	const remoteConfigStatus = remoteConfigService.getStatus();
 	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING);
 	const equityMarketDataStatus = equityMarketDataService.getStatus();
+	const adminAuthStatus = getAdminAuthStatus();
 	const llmAlertEnrichmentDependencyEnabled = llmAlertEnrichmentEnabled && newsMonitorEnabled;
 
 	const telegram = dependencyStatus({
@@ -528,6 +562,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
 			firestoreAlertStorage: firestoreEnabled,
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
+			firestoreAlertSubscribers: firestoreAlertSubscribersEnabled,
 			firestoreJobStorage: firestoreJobStorageEnabled,
 			firestoreNewsAnalysis: newsAnalysisStorageService.isEnabled(),
 			firestoreChatPreferences: chatPreferenceService.isEnabled(),
@@ -562,12 +597,15 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			alertFeedback: alertFeedbackStorageService.isEnabled(),
 			symbolAnalysisStorage: symbolAnalysisStorageService.isEnabled(),
 			symbolAnalysisMultiAgent: runtimeConfig.ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT,
+			apiOnlyMode: runtimeConfig.ENABLE_API_ONLY_MODE,
 			whatsappTemplateMode: !!process.env.WHATSAPP_TEMPLATE_NAME,
 			testAlert: isTestAlertEnabled(),
 			tokenCostBudget: tokenCostBudgetService.isEnabled(),
 			signalClassMarker: signalClassMarkerEnabled,
+			equitySessionTag: runtimeConfig.ENABLE_EQUITY_SESSION_TAG,
 			maintenanceMode: isMaintenanceModeEnabled(),
 			telegramCommandAuth: telegramCommandAuth.getStatus().enabled,
+			firebaseAdminAuth: adminAuthStatus.enabled,
 		},
 		deliveryChannels: {
 			telegram: {
@@ -656,7 +694,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			},
 			newsMonitorLlm,
 			llmAlertEnrichment,
-			cloudflareAig: dependencyStatus({
+			cloudflareAig: cloudflareAigDependencyStatus({
 				enabled: isEnabled(process.env.ENABLE_CLOUDFLARE_AIG),
 				configured:
 					hasValue(process.env.CF_AIG_TOKEN)
@@ -668,6 +706,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			firebaseRemoteConfig: remoteConfigStatus,
 			chatPreferences: chatPreferenceService.getStatus(),
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
+			alertSubscribers: alertSubscriberService.getStorageStatus(),
 			newsAnalysisStorage: newsAnalysisStorageService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
 			userPriceAlertWorker: userPriceAlertService.getStatus(),
@@ -767,6 +806,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			tokenCostBudget: tokenCostBudgetService.getBudgetStatus(),
 			selfTest: getSelfTestService().getStatus(),
 			telegramCommandAuth: telegramCommandAuth.getStatus(),
+			adminAuth: adminAuthStatus,
 		},
 	};
 }

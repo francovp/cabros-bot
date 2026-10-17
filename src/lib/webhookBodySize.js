@@ -104,7 +104,7 @@ function buildWebhookBodySize(options = {}) {
 			error: 'PAYLOAD_TOO_LARGE',
 			message: `Request body exceeds maximum size of ${limitString}`,
 			limit: limitString,
-		});
+		}, { req });
 	};
 
 	// 4-arg signature is required for Express to recognize this as an error-handling middleware.

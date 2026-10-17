@@ -252,10 +252,13 @@ describe('sendStartupDeploymentNotification', () => {
 		);
 		expect(mockSentry.captureExternalFailure).toHaveBeenCalledWith(
 			expect.objectContaining({
-				provider: 'telegram-api',
-				attemptCount: 1,
-				lastErrorMessage: '400: Bad Request: chat not found',
-				lastErrorCode: 400,
+				channel: 'telegram',
+				external: expect.objectContaining({
+					provider: 'telegram-api',
+					attemptCount: 1,
+					lastErrorMessage: '400: Bad Request: chat not found',
+					lastErrorCode: 400,
+				}),
 			}),
 		);
 	});
@@ -289,9 +292,51 @@ describe('sendStartupDeploymentNotification', () => {
 		);
 		expect(mockSentry.captureExternalFailure).toHaveBeenCalledWith(
 			expect.objectContaining({
-				provider: 'telegram-api',
-				lastErrorCode: 'TIMEOUT',
+				channel: 'telegram',
+				external: expect.objectContaining({
+					provider: 'telegram-api',
+					lastErrorCode: 'TIMEOUT',
+				}),
 			}),
 		);
+	});
+
+	it('safely interoperates with real SentryService.captureExternalFailure without throwing', async () => {
+		process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '987654321';
+		process.env.RENDER = 'true';
+		process.env.RENDER_GIT_COMMIT = 'abcdef123456';
+
+		const { SentryService } = require('../../src/services/monitoring/SentryService');
+		const sentry = new SentryService();
+		const captureEventSpy = jest.spyOn(sentry, 'captureEvent').mockReturnValue({ success: true });
+
+		const telegramError = new Error('401: Unauthorized: invalid bot token');
+		telegramError.response = { error_code: 401 };
+
+		const mockBot = { telegram: { sendMessage: jest.fn().mockRejectedValue(telegramError) } };
+		const mockLogger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+
+		const result = await sendStartupDeploymentNotification({
+			bot: mockBot,
+			logger: mockLogger,
+			sentry,
+		});
+
+		expect(result.sent).toBe(false);
+		expect(captureEventSpy).toHaveBeenCalledWith(
+			expect.objectContaining({
+				event: expect.objectContaining({
+					type: 'external_failure',
+					channel: 'telegram',
+					external: expect.objectContaining({
+						provider: 'telegram-api',
+						attemptCount: 1,
+						lastErrorMessage: '401: Unauthorized: invalid bot token',
+						lastErrorCode: 401,
+					}),
+				}),
+			}),
+		);
+		captureEventSpy.mockRestore();
 	});
 });

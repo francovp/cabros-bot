@@ -276,7 +276,7 @@ function postMessage(botOrGetter) {
 				},
 			});
 
-			res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				success: false,
 				error: 'Internal server error',
 				requestId,

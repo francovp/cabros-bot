@@ -302,10 +302,22 @@ describe('RemoteConfigService', () => {
 			['ALERT_SCHEDULER_INTERVAL_MS', '4000000', 60000],
 			['ALERT_SCHEDULER_BATCH_LIMIT', '0', 10],
 			['ALERT_SCHEDULER_BATCH_LIMIT', '101', 10],
+			['TRADINGVIEW_MCP_CACHE_TTL_MS', '9999', 90000],
+			['TRADINGVIEW_MCP_CACHE_TTL_MS', '600001', 90000],
 		].forEach(([key, value, expected]) => {
 			process.env[key] = value;
 			expect(remoteConfigService.getRuntimeConfig()[key]).toBe(expected);
 		});
+	});
+
+	it('preserves valid TradingView MCP cache environment settings', () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_CACHE = 'true';
+		process.env.TRADINGVIEW_MCP_CACHE_TTL_MS = '120000';
+
+		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
+			ENABLE_TRADINGVIEW_MCP_CACHE: true,
+			TRADINGVIEW_MCP_CACHE_TTL_MS: 120000,
+		}));
 	});
 
 	it('preserves valid environment values when Remote Config is disabled', async () => {
@@ -617,6 +629,7 @@ describe('RemoteConfigService', () => {
 			NEWS_MAX_ALERTS_PER_BATCH: 15,
 			NEWS_MAX_ALERTS_PER_WINDOW: 30,
 			NEWS_MAX_ALERTS_PER_WINDOW_MS: 600000,
+			NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS: 3600000,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
 
@@ -626,6 +639,7 @@ describe('RemoteConfigService', () => {
 		expect(config.NEWS_MAX_ALERTS_PER_BATCH).toBe(15);
 		expect(config.NEWS_MAX_ALERTS_PER_WINDOW).toBe(30);
 		expect(config.NEWS_MAX_ALERTS_PER_WINDOW_MS).toBe(600000);
+		expect(config.NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS).toBe(3600000);
 		expect(config.GROUNDING_MAX_SOURCES).toBe(5);
 		expect(config.GROUNDING_TIMEOUT_MS).toBe(45000);
 		expect(config.GROUNDING_MAX_LENGTH).toBe(3000);
