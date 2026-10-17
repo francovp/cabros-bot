@@ -65,6 +65,48 @@ describe('WhatsAppCommandBridgeService', () => {
 			const service = new WhatsAppCommandBridgeService({ pollIntervalMs: 1500 });
 			expect(service.pollIntervalMs).toBe(1500);
 		});
+
+		test('pollIntervalMs reads published Remote Config override when env var is unset', () => {
+			delete process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS;
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			const remoteConfig = require('../../src/services/remoteConfig/RemoteConfigService');
+			remoteConfig._setRemoteOverridesForTesting({ WHATSAPP_COMMAND_POLL_INTERVAL_MS: 8000 });
+			try {
+				const service = new WhatsAppCommandBridgeService();
+				expect(service.pollIntervalMs).toBe(8000);
+			} finally {
+				delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+				remoteConfig._resetForTesting();
+			}
+		});
+
+		test('pollIntervalMs prefers Remote Config override over env var when constructor option is omitted', () => {
+			process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS = '5000';
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			const remoteConfig = require('../../src/services/remoteConfig/RemoteConfigService');
+			remoteConfig._setRemoteOverridesForTesting({ WHATSAPP_COMMAND_POLL_INTERVAL_MS: 12000 });
+			try {
+				const service = new WhatsAppCommandBridgeService();
+				expect(service.pollIntervalMs).toBe(12000);
+			} finally {
+				delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+				remoteConfig._resetForTesting();
+			}
+		});
+
+		test('pollIntervalMs bounds invalid/negative env var to safe default', () => {
+			process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS = '-1000';
+			expect(new WhatsAppCommandBridgeService().pollIntervalMs).toBe(3000);
+
+			process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS = '0';
+			expect(new WhatsAppCommandBridgeService().pollIntervalMs).toBe(3000);
+
+			process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS = '100'; // below min 500
+			expect(new WhatsAppCommandBridgeService().pollIntervalMs).toBe(3000);
+
+			process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS = '999999'; // above max 60000
+			expect(new WhatsAppCommandBridgeService().pollIntervalMs).toBe(3000);
+		});
 	});
 
 	describe('Command Handling', () => {

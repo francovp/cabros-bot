@@ -878,6 +878,44 @@ describe('RemoteConfigService', () => {
 		expect(config.JOB_QUEUE_PROBE_TIMEOUT_MS).toBe(5000); // fallback to default
 	});
 
+	it('supports WHATSAPP_COMMAND_POLL_INTERVAL_MS via Remote Config with bounds enforcement', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS = '4000';
+		mockTemplate({
+			WHATSAPP_COMMAND_POLL_INTERVAL_MS: 10000,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.WHATSAPP_COMMAND_POLL_INTERVAL_MS).toBe(10000);
+
+		// Test out of range remote values fall back to environment/default
+		mockTemplate({
+			WHATSAPP_COMMAND_POLL_INTERVAL_MS: 100, // below min: 500
+		});
+		await remoteConfigService.loadNow();
+		expect(remoteConfigService.getRuntimeConfig().WHATSAPP_COMMAND_POLL_INTERVAL_MS).toBe(4000);
+
+		mockTemplate({
+			WHATSAPP_COMMAND_POLL_INTERVAL_MS: 70000, // above max: 60000
+		});
+		await remoteConfigService.loadNow();
+		expect(remoteConfigService.getRuntimeConfig().WHATSAPP_COMMAND_POLL_INTERVAL_MS).toBe(4000);
+	});
+
+	it('enforces bounds on WHATSAPP_COMMAND_POLL_INTERVAL_MS in environment parsing', () => {
+		process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS = '200'; // min: 500
+		expect(remoteConfigService.getRuntimeConfig().WHATSAPP_COMMAND_POLL_INTERVAL_MS).toBe(3000);
+
+		process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS = '90000'; // max: 60000
+		expect(remoteConfigService.getRuntimeConfig().WHATSAPP_COMMAND_POLL_INTERVAL_MS).toBe(3000);
+
+		process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS = '5000';
+		expect(remoteConfigService.getRuntimeConfig().WHATSAPP_COMMAND_POLL_INTERVAL_MS).toBe(5000);
+	});
+
 	it('keeps process-startup gates and security controls out of Remote Config', async () => {
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 		process.env.JOB_EXECUTION_MODE = 'local';
