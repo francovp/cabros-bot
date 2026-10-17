@@ -9,6 +9,7 @@
   },
   "scripts": {
     "setup:worktree": "bash scripts/setup-worktree.sh",
+    "preflight:deployment": "bash scripts/preflight-deployment.sh",
     "build:hosting": "node scripts/build-hosting.js",
     "deploy:firebase-remote-config:server": "node scripts/deploy-server-remote-config.js",
     "deploy:firestore:indexes": "node scripts/deploy-firestore-indexes.js",
