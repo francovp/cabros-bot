@@ -245,7 +245,7 @@ describe('ScannerPresetSchedulerService', () => {
 				nextRunAt: new Date(Date.now() - 1000).toISOString(),
 			});
 			const fresh = await scannerPresetService.getPreset(created.id);
-			const claimed = await scheduler._claimPreset(fresh, Date.now(), 60000);
+			const claimed = await scheduler._claimPreset(fresh, 60000);
 			expect(claimed).toBe(true);
 
 			const afterClaim = await scannerPresetService.getPreset(created.id);
@@ -446,9 +446,14 @@ describe('ScannerPresetSchedulerService', () => {
 
 		it('does not starve ready presets when earlier due presets are floor deferred', async () => {
 			// Preset 1 is young (deferred)
-			await createPresetWithLastRunAt('Young preset at front', 30000);
+			const youngId = await createPresetWithLastRunAt('Young preset at front', 30000);
 			// Preset 2 is ready (old lastRunAt)
 			const readyId = await createPresetWithLastRunAt('Ready preset behind', 90000);
+			const presetsById = new Map((await scannerPresetService.listPresets()).map((preset) => [preset.id, preset]));
+			jest.spyOn(scannerPresetService, 'listPresets').mockResolvedValue([
+				presetsById.get(youngId),
+				presetsById.get(readyId),
+			]);
 
 			jest.spyOn(marketScannerController, 'runScans').mockResolvedValue([
 				{ scan: 'top_gainers', status: 'success', items: [] },
@@ -467,6 +472,183 @@ describe('ScannerPresetSchedulerService', () => {
 			expect(updated.lastStatus).toBe('success');
 		});
 
+		it('scans past a 50-preset deferred prefix to execute the first ready preset', async () => {
+			const nowMs = Date.now();
+			const dueAt = new Date(nowMs - 1000).toISOString();
+			const deferredPresets = Array.from({ length: 50 }, (_, index) => ({
+				id: `deferred-${index}`,
+				schedule: { enabled: true },
+				nextRunAt: dueAt,
+				lastRunAt: new Date(nowMs - 30000).toISOString(),
+			}));
+			const readyPreset = {
+				id: 'ready-after-deferred-prefix',
+				schedule: { enabled: true },
+				nextRunAt: dueAt,
+				lastRunAt: new Date(nowMs - 90000).toISOString(),
+			};
+			const orderedPresetService = {
+				_getFirestore: () => null,
+				listPresets: jest.fn().mockResolvedValue([...deferredPresets, readyPreset]),
+			};
+			const orderedScheduler = new ScannerPresetSchedulerService({ presetService: orderedPresetService });
+			const claimSpy = jest.spyOn(orderedScheduler, '_claimPreset').mockResolvedValue(true);
+			const executeSpy = jest.spyOn(orderedScheduler, '_executePreset').mockResolvedValue({ status: 'success' });
+
+			const result = await orderedScheduler.sweep({ batchLimit: 1 });
+
+			expect(result.scannedCount).toBe(51);
+			expect(result.deferredByFloorCount).toBe(50);
+			expect(result.executedCount).toBe(1);
+			expect(claimSpy).toHaveBeenCalledTimes(1);
+			expect(claimSpy.mock.calls[0][0].id).toBe(readyPreset.id);
+			expect(executeSpy.mock.calls[0][0].id).toBe(readyPreset.id);
+		});
+
+		it('scans past a 50-preset deferred prefix in Firestore to execute the first ready preset', async () => {
+			const nowMs = Date.now();
+			const dueAt = new Date(nowMs - 1000).toISOString();
+			const deferredPresets = Array.from({ length: 50 }, (_, index) => ({
+				id: `firestore-deferred-${index}`,
+				schedule: { enabled: true },
+				nextRunAt: dueAt,
+				lastRunAt: new Date(nowMs - 30000).toISOString(),
+			}));
+			const readyPreset = {
+				id: 'firestore-ready-after-deferred-prefix',
+				schedule: { enabled: true },
+				nextRunAt: dueAt,
+				lastRunAt: new Date(nowMs - 90000).toISOString(),
+			};
+			const docs = [...deferredPresets, readyPreset].map((preset) => ({
+				id: preset.id,
+				data: () => preset,
+			}));
+			const collectionRef = {
+				where: jest.fn().mockReturnThis(),
+				get: jest.fn().mockResolvedValue({ docs }),
+			};
+			const firestore = { collection: jest.fn(() => collectionRef) };
+			const orderedPresetService = {
+				_getFirestore: () => firestore,
+				_formatFirestoreDoc: (doc) => ({ ...doc.data(), id: doc.id }),
+			};
+			const orderedScheduler = new ScannerPresetSchedulerService({ presetService: orderedPresetService });
+			const claimSpy = jest.spyOn(orderedScheduler, '_claimPreset').mockResolvedValue(true);
+			const executeSpy = jest.spyOn(orderedScheduler, '_executePreset').mockResolvedValue({ status: 'success' });
+
+			const result = await orderedScheduler.sweep({ batchLimit: 1 });
+
+			expect(result.scannedCount).toBe(51);
+			expect(result.deferredByFloorCount).toBe(50);
+			expect(result.executedCount).toBe(1);
+			expect(claimSpy).toHaveBeenCalledTimes(1);
+			expect(claimSpy.mock.calls[0][0].id).toBe(readyPreset.id);
+			expect(executeSpy.mock.calls[0][0].id).toBe(readyPreset.id);
+		});
+
+		it('treats a future lastRunAt as still inside the 60s floor', () => {
+			const nowMs = Date.now();
+			const preset = { lastRunAt: new Date(nowMs + 30000).toISOString() };
+
+			expect(scheduler._isFloorDeferred(preset, nowMs)).toBe(true);
+		});
+
+		it('sweep claim rechecks the floor after another replica runs while the sweep is waiting', async () => {
+			const sweepNowMs = Date.now();
+			const liveNowMs = sweepNowMs + 20000;
+			const docRef = { id: 'raced-preset' };
+			const updateSpy = jest.fn();
+			const snapshotPreset = {
+				id: docRef.id,
+				schedule: { enabled: true },
+				nextRunAt: new Date(sweepNowMs - 1000).toISOString(),
+				lastRunAt: new Date(sweepNowMs - 90000).toISOString(),
+			};
+			const liveData = {
+				schedule: { enabled: true },
+				nextRunAt: new Date(sweepNowMs - 1000).toISOString(),
+				lastRunAt: new Date(liveNowMs - 5000).toISOString(),
+				version: 1,
+			};
+			const collectionRef = {
+				where: jest.fn().mockReturnThis(),
+				get: jest.fn().mockResolvedValue({
+					docs: [{ id: docRef.id, data: () => snapshotPreset }],
+				}),
+				doc: jest.fn(() => docRef),
+			};
+			const firestore = {
+				collection: () => collectionRef,
+				runTransaction: async (callback) => callback({
+					get: async () => ({ exists: true, data: () => liveData }),
+					update: updateSpy,
+				}),
+			};
+			const transactionScheduler = new ScannerPresetSchedulerService({
+				presetService: {
+					_getFirestore: () => firestore,
+					_formatFirestoreDoc: (doc) => ({ ...doc.data(), id: doc.id }),
+				},
+			});
+			const executeSpy = jest.spyOn(transactionScheduler, '_executePreset').mockResolvedValue({ status: 'success' });
+			let nowCalls = 0;
+			const nowSpy = jest.spyOn(Date, 'now').mockImplementation(() => {
+				nowCalls += 1;
+				return nowCalls <= 2 ? sweepNowMs : liveNowMs;
+			});
+
+			let result;
+			try {
+				result = await transactionScheduler.sweep({ batchLimit: 1, leaseMs: 60000 });
+			} finally {
+				nowSpy.mockRestore();
+			}
+
+			expect(result.scannedCount).toBe(1);
+			expect(result.executedCount).toBe(0);
+			expect(updateSpy).not.toHaveBeenCalled();
+			expect(executeSpy).not.toHaveBeenCalled();
+		});
+
+		it('uses current time when creating non-transaction Firestore claims', async () => {
+			const nowMs = Date.now();
+			const updateSpy = jest.fn();
+			const docRef = {
+				get: async () => ({
+					exists: true,
+					data: () => ({
+						schedule: { enabled: true },
+						nextRunAt: new Date(nowMs - 1000).toISOString(),
+						lastRunAt: new Date(nowMs - 90000).toISOString(),
+						version: 1,
+					}),
+				}),
+				update: updateSpy,
+			};
+			const firestore = { collection: () => ({ doc: () => docRef }) };
+			const fallbackScheduler = new ScannerPresetSchedulerService({
+				presetService: { _getFirestore: () => firestore },
+			});
+
+			const claimed = await fallbackScheduler._claimPreset({ id: 'due-preset' }, 60000);
+
+			expect(claimed).toBe(true);
+			expect(new Date(updateSpy.mock.calls[0][0].lockedUntil).getTime()).toBeGreaterThan(nowMs);
+		});
+
+		it('uses current time when creating in-memory claims', async () => {
+			const presetId = await createPresetWithLastRunAt('Delayed memory claim', 90000);
+			const preset = await scannerPresetService.getPreset(presetId);
+			const nowMs = Date.now();
+
+			const claimed = await scheduler._claimPreset(preset, 60000);
+
+			expect(claimed).toBe(true);
+			const updated = await scannerPresetService.getPreset(presetId);
+			expect(new Date(updated.lockedUntil).getTime()).toBeGreaterThan(nowMs);
+		});
+
 		it('atomic claim recheck rejects claim if lastRunAt was updated inside floor window', async () => {
 			const presetId = await createPresetWithLastRunAt('Race preset', 90000);
 			const preset = await scannerPresetService.getPreset(presetId);
@@ -476,7 +658,7 @@ describe('ScannerPresetSchedulerService', () => {
 				lastRunAt: new Date(Date.now() - 5000).toISOString(),
 			});
 
-			const claimed = await scheduler._claimPreset(preset, Date.now(), 60000);
+			const claimed = await scheduler._claimPreset(preset, 60000);
 			expect(claimed).toBe(false);
 		});
 
