@@ -530,6 +530,9 @@
             "$ref": "#/components/parameters/DryRun"
           },
           {
+            "$ref": "#/components/parameters/AutoTrade"
+          },
+          {
             "$ref": "#/components/parameters/UseTradingViewData"
           },
           {
@@ -5636,6 +5639,15 @@
         "name": "includeDecisionRollup",
         "in": "query",
         "description": "When true, the summary includes per-gate decision counts when ENABLE_ALERT_DECISION_AUDIT is enabled; otherwise the decision section is omitted.",
+        "schema": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "AutoTrade": {
+        "name": "autoTrade",
+        "in": "query",
+        "description": "When true, the enriched alert signal may be bridged to a Binance Spot order. Explicit query values must be true or false; malformed or repeated values return HTTP 400 with the standard INVALID_REQUEST envelope. Requires the server-side ENABLE_AUTO_TRADE flag and is ignored in preview deployments. Dry-run remains the default, so this only routes the signal unless AUTO_TRADE_DRY_RUN=false is explicitly configured. Auto-trade never blocks alert delivery; failures are reported in the non-sensitive autoTrade object.",
         "schema": {
           "type": "boolean",
           "default": false
@@ -12460,6 +12472,18 @@
               "unknown"
             ],
             "description": "Classification category for the alert signal."
+          },
+          "autoTrade": {
+            "type": "boolean",
+            "default": false,
+            "description": "Opt in to the alert-to-order bridge. Live execution additionally requires signalId and server-side trading gates."
+          },
+          "signalId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9._:-]+$",
+            "description": "Stable occurrence ID supplied by the signal producer. Required for live auto-trade; reuse the same ID on retries and use a new ID for each new signal occurrence."
           }
         }
       },
@@ -14818,6 +14842,10 @@
             "items": {
               "type": "string"
             }
+          },
+          "autoTrade": {
+            "$ref": "#/components/schemas/AutoTradeOutcome",
+            "description": "Present only when auto-trade was requested and the ENABLE_AUTO_TRADE flag is enabled. Omitted when auto-trade is disabled."
           },
           "alertId": {
             "type": "string",
@@ -19131,6 +19159,66 @@
             }
           }
         }
+      },
+      "AutoTradeOutcome": {
+        "type": "object",
+        "description": "Non-sensitive summary of the alert-to-order bridge. Present only when the request opted in with autoTrade=true and the server-side ENABLE_AUTO_TRADE flag is enabled. Auto-trade never blocks alert delivery: an executed:false outcome still returns HTTP 200 with the alert delivered.",
+        "additionalProperties": false,
+        "properties": {
+          "requested": {
+            "type": "boolean",
+            "description": "Always true when this object is present."
+          },
+          "executed": {
+            "type": "boolean",
+            "description": "True only when an order was accepted by the Binance order service."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why no order was placed.",
+            "enum": [
+              "AUTO_TRADE_DISABLED",
+              "BINANCE_TRADING_NOT_CONFIGURED",
+              "NO_ENRICHED_ALERT",
+              "NO_SYMBOL",
+              "NO_PARSED_SIDE",
+              "SENTIMENT_BELOW_THRESHOLD",
+              "SELL_NOT_SUPPORTED_PENDING_BALANCE_LOOKUP",
+              "NO_CURRENT_PRICE",
+              "INVALID_MAX_NOTIONAL",
+              "SYMBOL_NOT_ALLOWED",
+              "UNKNOWN_TIMEFRAME_CANNOT_DEDUPLICATE",
+              "LIVE_ORDER_REQUIRES_REPEAT_SUPPRESSION",
+              "COOLDOWN_ACTIVE",
+              "ORDER_FAILED",
+              "AUTO_TRADE_BRIDGE_ERROR",
+              "SENTIMENT_SCORE_REQUIRED",
+              "SENTIMENT_DIRECTION_MISMATCH",
+              "SIGNAL_ID_REQUIRED",
+              "DURABLE_RESERVATION_UNAVAILABLE",
+              "SIGNAL_ID_CONFLICT",
+              "SIGNAL_ALREADY_RESERVED",
+              "ORDER_PENDING",
+              "EXCHANGE_NOT_SUPPORTED"
+            ]
+          },
+          "symbol": {
+            "type": "string",
+            "description": "Binance Spot symbol the order targeted."
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "True when the order was validated without mutating Binance. Dry-run is the default."
+          },
+          "orderId": {
+            "type": "integer",
+            "description": "Binance order id, present only when executed."
+          }
+        },
+        "required": [
+          "requested",
+          "executed"
+        ]
       }
     },
     "headers": {

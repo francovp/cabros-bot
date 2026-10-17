@@ -531,6 +531,34 @@ pnpm test:firebase
 
 The response and audit logs include only sanitized order metadata. API credentials are never returned or logged.
 
+#### Auto-Trade (Alert-to-Order Bridge)
+
+Opt-in bridging of an enriched TradingView alert to a Binance Spot order. This closes the alerting-to-execution gap tracked in #955; advanced order types (OCO, trailing-stop, bracket) remain #805.
+
+Auto-trade is opt-in **twice** — the operator sets `ENABLE_AUTO_TRADE=true` and the caller additionally passes `autoTrade=true` to `POST /api/webhook/alert`. Explicit query values must be `true` or `false`; malformed or repeated query values and non-boolean body values return HTTP 400 with the standard `INVALID_REQUEST` envelope before delivery. It never runs in preview deployments. **Dry-run is the default**, so enabling the flag alone validates the entire path (request validation, exchange-info filters, notional bounds) without mutating Binance.
+
+- `ENABLE_AUTO_TRADE` - Master operator switch (`true` or `false`, default: `false`). Security control; environment-only and excluded from Firebase Remote Config.
+- `AUTO_TRADE_DRY_RUN` - Validate without submitting (`true` or `false`, default: `true`). Set to `false` only after testnet and demo validation.
+- `AUTO_TRADE_MAX_NOTIONAL` - Per-order quote-asset cap (default: `100`). The effective cap is the **lower** of this and `BINANCE_TRADING_MAX_NOTIONAL`, so it can only tighten the existing limit.
+- `AUTO_TRADE_MIN_ABS_SENTIMENT` - Minimum positive `sentiment_score` before a BUY may trigger an order (default: `0.3`, range `0`-`1`); missing or bearish scores are rejected.
+- `AUTO_TRADE_COOLDOWN_BARS` - Duplicate-signal cooldown in bars (default: `1`, range `1`-`10`; out-of-range integers clamp). The key includes the side, so an opposite-side flip is never suppressed.
+
+The bridge is deliberately conservative. It only submits a `MARKET` `BUY`, and only when the alert was parsed as a TradingView signal (`EXCHANGE:SYMBOL(TIMEFRAME) COMPRA|VENTA|BUY|SELL`) and enrichment produced both a sentiment score and an observed price. It never infers trade direction from sentiment, because that would risk inverting a trader's intent.
+
+**Live (non-dry-run) orders additionally require** an explicit `BINANCE` signal exchange, a supported raw timeframe, `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true`, and a request-body `signalId` (`1`-`128` ASCII letters, digits, `.`, `_`, `:`, or `-`). The signal producer must reuse the same ID on retries and send a new ID for each new bar or signal occurrence. A Firestore transaction atomically creates a permanent occurrence reservation and updates a shared `(exchange, symbol, timeframe, side)` cooldown slot before submitting to Binance. An unavailable reservation fails closed for trading. A duplicate or conflicting occurrence cannot submit again, including after a process restart; distinct occurrences inside the cooldown cannot race across replicas. The Binance client-order ID also includes `signalId` for exchange reconciliation. Ambiguous submissions retain the reservation for manual reconciliation.
+
+Live Binance work runs as a tracked background task after the reservation. The webhook returns `200` with `autoTrade.reason: "ORDER_PENDING"` while the order is in flight; that response does not claim that Binance accepted the order. The reservation records `submitted`, `failed`, or `unknown` when the task finishes. Shutdown drains tracked tasks, and a process crash leaves a pending reservation that cannot be replayed automatically.
+
+`ENABLE_AUTO_TRADE`, `AUTO_TRADE_DRY_RUN`, `AUTO_TRADE_MAX_NOTIONAL`, `AUTO_TRADE_MIN_ABS_SENTIMENT`, and `AUTO_TRADE_COOLDOWN_BARS` remain environment-only. Each directly controls whether, when, or how much money may be ordered; remote changes to these safety controls would bypass deployment review. They are therefore excluded from Firebase Remote Config.
+
+For valid requests, auto-trade failures **never block alert delivery**. The alert response remains HTTP 200 and reports a non-sensitive `autoTrade` summary instead:
+
+```json
+{ "success": true, "autoTrade": { "requested": true, "executed": false, "reason": "SENTIMENT_BELOW_THRESHOLD" } }
+```
+
+`SELL` signals are intentionally **not** auto-executed. The read-only balances endpoint exists, but a safe SELL sizing and reservation workflow is deferred to #955 Phase 2.
+
 `GET /api/trading/binance/account/balances` is the read-only sibling used to size a `SELL` or a "close position" against the real free balance. It requires `admin.viewer` (or the API key) rather than `admin.operator`, and inherits the same `ENABLE_BINANCE_TRADING`, credentials and `BINANCE_TRADING_ALLOWED_SYMBOLS` gates, so a disabled or unconfigured deployment answers `403 FEATURE_DISABLED` / `503 BINANCE_TRADING_UNAVAILABLE` instead of reaching Binance. The allow-list is **derived**: base and quote assets are parsed from `BINANCE_TRADING_ALLOWED_SYMBOLS`, so `BTCUSDT,ETHUSDT` exposes exactly `BTC`, `ETH` and `USDT` and nothing else. Only `asset`, `free` and `locked` are returned, as unmodified decimal strings — no float conversion — and account identifiers, permissions, commission tiers and the raw Binance account payload are never exposed. Disallowed `asset`/`symbol` filters are rejected with `400 INVALID_ORDER_REQUEST` before any provider call; a provider timeout or failure returns `502 BINANCE_BALANCE_QUERY_FAILED` with no secret material in the body or the logs. Responses are cached in-process for `BINANCE_BALANCE_CACHE_MS` to keep dashboard polling from spiking Binance request weight; pass `refresh=true` when sizing a live order.
 
 #### Durable Trade Ledger & P&L Observability

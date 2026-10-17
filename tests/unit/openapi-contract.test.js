@@ -42,6 +42,14 @@ function getDocumentedApiOperations(contract) {
 }
 
 describe('OpenAPI contract', () => {
+	it('documents body-only auto-trade and the live occurrence identity', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const properties = contract.components.schemas.AlertRequest.properties;
+		expect(properties.autoTrade.type).toBe('boolean');
+		expect(properties.signalId).toMatchObject({ type: 'string', minLength: 1, maxLength: 128 });
+		expect(contract.components.schemas.AutoTradeOutcome.properties.reason.enum)
+			.toEqual(expect.arrayContaining(['ORDER_PENDING', 'SIGNAL_ID_REQUIRED', 'DURABLE_RESERVATION_UNAVAILABLE']));
+	});
 	it('documents all decision-audit dispatch channel modes', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 
