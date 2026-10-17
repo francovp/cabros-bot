@@ -44,13 +44,21 @@ jobs:
       uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
       with:
         path: ~/.cache/firebase/emulators
-        key: firebase-tools-15.25.1-${{ runner.os }}
+        # Keyed on the pinned firebase-tools version: the emulator binary is that
+        # version's, so bumping the dep must miss the cache (#872 bumped to 15.32.1).
+        key: firebase-tools-15.32.1-${{ runner.os }}
     # ESLint gate. Currently the tree has ~800 pre-existing findings from the
     # deferred-cleanup convention, so the step is non-blocking with a fast-follow
     # plan to flip `continue-on-error` once the codebase is lint-clean (#565).
     - name: Lint
       run: pnpm run lint
       continue-on-error: true
+    # Dependency advisory gate (#872). This queries the npm registry, so it is a
+    # separate CI step rather than part of `pnpm test`, which must stay runnable
+    # offline. `--ignore-registry-errors` inside the script keeps a registry
+    # outage from being reported as a vulnerable tree.
+    - name: Dependency advisory gate
+      run: pnpm run audit:gate
     - name: Run Firestore emulator integration tests
       run: pnpm test:firebase
     # - run: pnpm run build --if-present # No build step needed for this project, yet.
