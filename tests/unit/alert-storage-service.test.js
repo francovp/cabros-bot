@@ -75,11 +75,17 @@ describe('AlertStorageService', () => {
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+		delete process.env.RENDER_SERVICE_NAME;
+		delete process.env.SERVICE_NAME;
+		delete process.env.RENDER;
 		jest.useFakeTimers().setSystemTime(new Date('2026-08-13T00:00:00.000Z'));
 	});
 
 	afterEach(() => {
 		jest.useRealTimers();
+		delete process.env.RENDER_SERVICE_NAME;
+		delete process.env.SERVICE_NAME;
+		delete process.env.RENDER;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;

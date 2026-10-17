@@ -3040,6 +3040,13 @@ describe('SignalOutcomeService', () => {
 				},
 				falsePositiveCandidatesCount: 0,
 				falsePositiveCandidates: [],
+				reactions: {
+					total: 0,
+					approve: 0,
+					reject: 0,
+					approveRate: 0,
+					weightedScore: null,
+				},
 				latencyCostMetadata: {
 					averageProcessingTimeMs: null,
 					tokenUsage: {

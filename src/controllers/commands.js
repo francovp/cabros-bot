@@ -1,5 +1,6 @@
 const { fetchSymbolPrice } = require('./commands/handlers/core/fetchPriceCryptoSymbol');
 const { userPriceAlertCmd } = require('./commands/handlers/core/userPriceAlertHandler');
+const { reactionsSymbol } = require('./commands/handlers/reactionsSymbol');
 const { jobService } = require('../services/jobs/JobService');
 const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor');
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
@@ -69,6 +70,7 @@ const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
 	categorias: { max: 20, windowMs: 60_000 },
 	alerta: { max: 10, windowMs: 60_000 },
 	history: { max: 10, windowMs: 60_000 },
+	reactions: { max: 10, windowMs: 60_000 },
 });
 const TELEGRAM_COMMAND_ALIASES = Object.freeze({
 	analysis: 'analisis',
@@ -80,6 +82,7 @@ const TELEGRAM_COMMAND_ALIASES = Object.freeze({
 	categories: 'categorias',
 	alert: 'alerta',
 	alertas: 'history',
+	reacciones: 'reactions',
 });
 const MAX_TELEGRAM_COMMAND_RATE_LIMIT = 1_000;
 const MAX_TELEGRAM_COMMAND_WINDOW_MS = 86_400_000;
@@ -1269,6 +1272,14 @@ async function replyValidationError(context, error) {
 	await context.reply(`Comando inválido: ${suffix}`);
 }
 
+const reactionsCommand = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
+	return reactionsSymbol(context);
+};
+
 module.exports = {
 	getPrice,
 	userPriceAlertCmd,
@@ -1280,6 +1291,8 @@ module.exports = {
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	reactionsCommand,
+	reactionsSymbol,
 	preferenciasCmd,
 	filtroCmd,
 	silencioCmd,
