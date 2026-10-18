@@ -144,6 +144,75 @@ describe('Cache Max Entries / LRU Eviction', () => {
 			}
 		});
 
+		it('batch rebuilds the expiry index when a large capacity reduction evicts many entries', async () => {
+			const c = new NewsCache(undefined, { maxEntries: 128 });
+			const mockNow = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+			try {
+				c._setCacheEntry('ACTIVE:price_surge', {
+					timestamp: 0,
+					expiresAt: 2_000,
+					data: { status: 'claiming' },
+				});
+				for (let index = 0; index < 100; index++) {
+					c._setCacheEntry(`ENTRY_${index}:price_surge`, {
+						timestamp: 0,
+						expiresAt: index < 91 ? 1_500 : index < 95 ? 999 : 1_001,
+						data: { index },
+					});
+				}
+				const removeExpirationIndex = jest.spyOn(c, '_removeExpirationIndex');
+
+				c.maxEntries = 10;
+
+				const retainedEntries = Array.from(c.cache.keys());
+				const expectedMemoryBytes = Array.from(c.cache.values())
+					.reduce((total, entry) => total + c._estimatedEntryBytes.get(entry), 0);
+				expect(c.cache.size).toBe(10);
+				expect(c.cache.has('ACTIVE:price_surge')).toBe(true);
+				expect(retainedEntries.slice(1)).toEqual(
+					Array.from({ length: 9 }, (_, index) => `ENTRY_${index + 91}:price_surge`),
+				);
+				expect(removeExpirationIndex).not.toHaveBeenCalled();
+				expect(c._expirationNodesByKey.size).toBe(10);
+				expect(c._expirationRoot.size).toBe(10);
+				expect(c.getMetrics().totalEntries).toBe(6);
+				expect(c.getMetrics().evictions).toBe(91);
+				expect(c._estimatedMemoryBytes).toBe(expectedMemoryBytes);
+
+				c.cleanup();
+				expect(c.cache.size).toBe(6);
+				expect(c._expirationNodesByKey.size).toBe(6);
+				expect(c._expirationRoot.size).toBe(6);
+				expect(c.cache.has('ACTIVE:price_surge')).toBe(true);
+				expect(c.cache.has('ENTRY_95:price_surge')).toBe(true);
+				expect(c.cache.has('ENTRY_99:price_surge')).toBe(true);
+				expect(c.getMetrics()).toEqual(expect.objectContaining({ evictions: 95, totalEntries: 6 }));
+			} finally {
+				c.shutdown();
+				mockNow.mockRestore();
+			}
+		});
+
+		it('keeps individual expiry removals when a small batch would scan a larger index', async () => {
+			const c = new NewsCache(undefined, { maxEntries: 2048 });
+			try {
+				for (let index = 0; index < 2048; index++) {
+					await c.set(`ENTRY_${index}`, EventCategory.PRICE_SURGE, { index });
+				}
+				const removeExpirationIndex = jest.spyOn(c, '_removeExpirationIndex');
+
+				c.maxEntries = 1984;
+
+				expect(c.cache.size).toBe(1984);
+				expect(removeExpirationIndex).toHaveBeenCalledTimes(64);
+				expect(c._expirationNodesByKey.size).toBe(1984);
+				expect(c._expirationRoot.size).toBe(1984);
+				expect(c.getMetrics().evictions).toBe(64);
+			} finally {
+				c.shutdown();
+			}
+		});
+
 		it('evicts over-capacity entries when read via get() after capacity is reduced', async () => {
 			const c = new NewsCache(undefined, { maxEntries: 4 });
 			try {
