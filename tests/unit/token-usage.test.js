@@ -268,3 +268,59 @@ describe('TokenUsageTracker enrichment cost attribution', () => {
 		expect(tracker.toJSON().byFeature.enrichment.totalCost).toBe(0);
 	});
 });
+
+describe('TokenUsageTracker source attribution', () => {
+	it('normalizes and aggregates usage by source while retaining feature totals', () => {
+		const tracker = new TokenUsageTracker('grounding');
+		tracker.addSource('geminiGrounding', { inputTokens: 800, outputTokens: 400, inputCost: 0.00012, outputCost: 0.00024 });
+		tracker.addSource('tradingviewMcp', { inputTokens: 1000, outputTokens: 200 });
+
+		expect(tracker.toJSON()).toMatchObject({
+			inputTokens: 1800,
+			outputTokens: 600,
+			totalTokens: 2400,
+			bySource: {
+				geminiGrounding: { inputTokens: 800, outputTokens: 400, totalTokens: 1200 },
+				tradingviewMcp: { inputTokens: 1000, outputTokens: 200, totalTokens: 1200 },
+			},
+			byFeature: {
+				grounding: { calls: 2, inputTokens: 1800, outputTokens: 600, totalTokens: 2400 },
+			},
+		});
+	});
+
+	it('merges source buckets and accepts plain usage objects', () => {
+		const tracker = new TokenUsageTracker();
+		tracker.addSource('geminiGrounding', { inputTokens: 500, outputTokens: 200 });
+		tracker.merge({
+			inputTokens: 300,
+			outputTokens: 100,
+			bySource: { tradingviewMcp: { inputTokens: 300, outputTokens: 100, totalTokens: 400 } },
+		});
+
+		expect(tracker.toJSON().bySource).toEqual({
+			geminiGrounding: { inputTokens: 500, outputTokens: 200, totalTokens: 700 },
+			tradingviewMcp: { inputTokens: 300, outputTokens: 100, totalTokens: 400 },
+		});
+	});
+
+	it('does not emit empty source data and resets source and feature buckets', () => {
+		const tracker = new TokenUsageTracker('grounding');
+		tracker.addSource('', { inputTokens: 100, outputTokens: 20 });
+		expect(tracker.toJSON()).not.toHaveProperty('bySource');
+
+		tracker.addSource('geminiGrounding', { inputTokens: 100, outputTokens: 20 });
+		tracker.reset();
+		expect(tracker.toJSON()).not.toHaveProperty('bySource');
+		expect(tracker.toJSON()).not.toHaveProperty('byFeature');
+	});
+
+	it('includes source breakdowns in formatted output when multiple sources are present', () => {
+		const tracker = new TokenUsageTracker();
+		tracker.addSource('geminiGrounding', { inputTokens: 800, outputTokens: 400 });
+		tracker.addSource('tradingviewMcp', { inputTokens: 1000, outputTokens: 200 });
+
+		expect(tracker.formatSummary()).toContain('By source:');
+		expect(tracker.formatSummary()).toContain('geminiGrounding: 1200');
+	});
+});

@@ -3455,3 +3455,71 @@ describe('TradingViewMcpService', () => {
 	});
 });
 
+describe('TradingView MCP token usage attribution', () => {
+	const { TokenUsageTracker } = require('../../src/lib/tokenUsage');
+
+	it.each([
+		['usage', { prompt_tokens: 120, completion_tokens: 45 }],
+		['_meta.usage', { prompt_tokens: 200, completion_tokens: 80 }],
+	])('normalizes MCP %s metadata from the tool response', async (_label, usage) => {
+		const service = new TradingViewMcpService({ cacheEnabled: false });
+		const callResult = {
+			structuredContent: { price_data: { current_price: 50000 } },
+			...(_label === 'usage' ? { usage } : { _meta: { usage } }),
+		};
+		service._rpcRequest = jest.fn()
+			.mockResolvedValueOnce({ sessionId: 'session-1' })
+			.mockResolvedValueOnce({})
+			.mockResolvedValueOnce({ rpc: { result: callResult } });
+
+		const result = await service._callTool('coin_analysis', { symbol: 'BTCUSDT' });
+		expect(result.tokenUsage).toEqual({
+			inputTokens: usage.prompt_tokens,
+			outputTokens: usage.completion_tokens,
+			totalTokens: usage.prompt_tokens + usage.completion_tokens,
+		});
+	});
+
+	it('attributes base and optional analysis usage by source', async () => {
+		const previousVolumeFlag = process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
+		const previousConfluenceFlag = process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT;
+		const previousMultiTimeframeFlag = process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME;
+		process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION = 'true';
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = 'false';
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = 'false';
+
+		try {
+			const service = new TradingViewMcpService();
+			service.callCoinAnalysis = jest.fn().mockResolvedValue({
+				price_data: { current_price: 50000 },
+				market_sentiment: { overall_rating: 5 },
+				tokenUsage: { inputTokens: 500, outputTokens: 100 },
+			});
+			service.callVolumeConfirmation = jest.fn().mockResolvedValue({
+				volume_analysis: { volume_ratio: 1.5 },
+				tokenUsage: { inputTokens: 80, outputTokens: 20 },
+			});
+			const tracker = new TokenUsageTracker('grounding');
+
+			const result = await service.enrichFromSignal(
+				{ symbol: 'BTCUSDT', exchange: 'BINANCE', timeframe: '1h', side: 'BUY' },
+				{ tokenUsage: tracker },
+			);
+
+			expect(result.tokenUsage).toEqual({ inputTokens: 500, outputTokens: 100 });
+			expect(result.volumeTokenUsage).toEqual({ inputTokens: 80, outputTokens: 20 });
+			expect(tracker.toJSON().bySource).toEqual({
+				tradingviewMcp: { inputTokens: 500, outputTokens: 100, totalTokens: 600 },
+				volumeConfirmation: { inputTokens: 80, outputTokens: 20, totalTokens: 100 },
+			});
+		} finally {
+			if (previousVolumeFlag === undefined) delete process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
+			else process.env.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION = previousVolumeFlag;
+			if (previousConfluenceFlag === undefined) delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT;
+			else process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT = previousConfluenceFlag;
+			if (previousMultiTimeframeFlag === undefined) delete process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME;
+			else process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = previousMultiTimeframeFlag;
+		}
+	});
+});
+
