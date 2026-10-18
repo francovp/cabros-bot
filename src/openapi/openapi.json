@@ -19315,7 +19315,7 @@
               },
               "estimatedMemoryBytes": {
                 "type": "integer",
-                "description": "Approximate memory consumption of in-memory cache entries in bytes."
+                "description": "Approximate resident in-memory cache size in bytes, including expired entries still held until retrieval or cleanup."
               },
               "lastHitAt": {
                 "type": [

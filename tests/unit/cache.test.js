@@ -366,13 +366,99 @@ describe('Cache Module - Unit Tests', () => {
 		it('should exclude expired entries from totalEntries', async () => {
 			const data = { alert: { symbol: 'BTCUSDT' } };
 			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data);
+			const residentMemoryBytes = cache.getMetrics().estimatedMemoryBytes;
 
 			expect(cache.getMetrics().totalEntries).toBe(1);
 
 			// Wait for expiry (ttlMs is 1000)
 			await new Promise(resolve => setTimeout(resolve, 1100));
 
+			const metrics = cache.getMetrics();
+			expect(metrics.totalEntries).toBe(0);
+			// Expired values remain resident until retrieval or periodic cleanup removes them.
+			expect(metrics.estimatedMemoryBytes).toBe(residentMemoryBytes);
+			expect(cache.cache.size).toBe(1);
+		});
+
+		it('should report metrics without iterating every cache entry', async () => {
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: { symbol: 'BTCUSDT' } });
+			await cache.set('ETHUSD', EventCategory.PRICE_SURGE, { alert: { symbol: 'ETHUSD' } });
+
+			const originalEntries = cache.cache.entries;
+			cache.cache.entries = () => {
+				throw new Error('metrics must not scan cache entries');
+			};
+			try {
+				expect(cache.getMetrics()).toEqual(expect.objectContaining({
+					totalEntries: 2,
+					estimatedMemoryBytes: expect.any(Number),
+				}));
+			} finally {
+				cache.cache.entries = originalEntries;
+			}
+		});
+
+		it('should count expired entries without draining the expiry index', async () => {
+			cache.ttlMs = 1;
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: { symbol: 'BTCUSDT' } });
+			await cache.set('ETHUSD', EventCategory.PRICE_SURGE, { alert: { symbol: 'ETHUSD' } });
+			await new Promise(resolve => setTimeout(resolve, 10));
+
+			const removeExpirationIndex = jest.spyOn(cache, '_removeExpirationIndex');
 			expect(cache.getMetrics().totalEntries).toBe(0);
+			expect(removeExpirationIndex).not.toHaveBeenCalled();
+		});
+
+		it('should count expired entries when active entries share the expiry index', () => {
+			const mockNow = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+			try {
+				cache._setCacheEntry('BTCUSDT:expired', {
+					timestamp: 0,
+					expiresAt: 999,
+					data: { alert: { symbol: 'BTCUSDT' } },
+				});
+				cache._setCacheEntry('ETHUSD:expired', {
+					timestamp: 0,
+					expiresAt: 1_000,
+					data: { alert: { symbol: 'ETHUSD' } },
+				});
+				cache._setCacheEntry('AAPL:active', {
+					timestamp: 0,
+					expiresAt: 1_001,
+					data: { alert: { symbol: 'AAPL' } },
+				});
+
+				expect(cache.getMetrics().totalEntries).toBe(1);
+				cache.cleanup();
+				expect(cache.cache.size).toBe(1);
+				expect(cache.cache.has('AAPL:active')).toBe(true);
+				expect(cache.getMetrics()).toEqual(expect.objectContaining({
+					evictions: 2,
+					totalEntries: 1,
+				}));
+			} finally {
+				mockNow.mockRestore();
+			}
+		});
+
+		it('should prune expired entries as one expiry-index batch during cleanup', async () => {
+			cache.ttlMs = 1;
+			for (let index = 0; index < 25; index++) {
+				await cache.set(`SYMBOL${index}`, EventCategory.PRICE_SURGE, { alert: { index } });
+			}
+			await new Promise(resolve => setTimeout(resolve, 10));
+
+			const removeExpirationIndex = jest.spyOn(cache, '_removeExpirationIndex');
+			cache.cleanup();
+
+			expect(removeExpirationIndex).not.toHaveBeenCalled();
+			expect(cache.cache.size).toBe(0);
+			expect(cache._expirationNodesByKey.size).toBe(0);
+			expect(cache.getMetrics()).toEqual(expect.objectContaining({
+				evictions: 25,
+				totalEntries: 0,
+				estimatedMemoryBytes: 0,
+			}));
 		});
 
 		it('should track evictions when reading expired entry and during cleanup', async () => {

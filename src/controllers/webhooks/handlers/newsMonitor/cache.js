@@ -164,11 +164,16 @@ const DEFAULT_NEWS_CACHE_MAX_ENTRIES = 5000;
 const MAX_NEWS_CACHE_ENTRIES = 1_000_000;
 const DEFAULT_NEWS_DELIVERY_LOCK_MAX_ENTRIES = 1000;
 const MAX_NEWS_DELIVERY_LOCK_ENTRIES = 100_000;
+const ESTIMATED_CACHE_ENTRY_OVERHEAD_BYTES = 128;
+const BATCH_CACHE_EVICTION_THRESHOLD = 64;
 
 class NewsCache {
 	constructor(ttlHours, options = {}) {
 		this.cache = new Map();
 		this._estimatedEntryBytes = new WeakMap();
+		this._expirationRoot = null;
+		this._expirationNodesByKey = new Map();
+		this._estimatedMemoryBytes = 0;
 		this._explicitTtlHours = ttlHours;
 		if (ttlHours !== undefined) {
 			this._explicitTtlHours = parseNewsCacheTtlHours(ttlHours);
@@ -244,16 +249,262 @@ class NewsCache {
 	 * Insert or update a cache entry, refreshing LRU recency and enforcing maxEntries.
 	 */
 	_setCacheEntry(key, entry) {
-		this.cache.delete(key);
-		this.cache.set(key, entry);
+		const previous = this._removeCacheEntry(key);
+		if (previous && this.isExpired(previous)) {
+			this._metrics.evictions++;
+		}
+		const cacheEntry = Number.isFinite(entry.expiresAt)
+			? entry
+			: { ...entry, expiresAt: entry.timestamp + this.ttlMs };
+		this.cache.set(key, cacheEntry);
 		let dataBytes = 0;
 		try {
-			dataBytes = Buffer.byteLength(JSON.stringify(entry.data ?? null) || '', 'utf8');
+			dataBytes = Buffer.byteLength(JSON.stringify(cacheEntry.data ?? null) || '', 'utf8');
 		} catch {
 			// Keep cache writes fail-open when a value cannot be serialized for metrics.
 		}
-		this._estimatedEntryBytes.set(entry, Buffer.byteLength(key, 'utf8') + 64 + dataBytes);
+		const estimatedEntryBytes = Buffer.byteLength(key, 'utf8') + ESTIMATED_CACHE_ENTRY_OVERHEAD_BYTES + dataBytes;
+		this._estimatedEntryBytes.set(cacheEntry, estimatedEntryBytes);
+		this._estimatedMemoryBytes += estimatedEntryBytes;
+		this._addExpirationIndex(key, cacheEntry);
 		this._evictIfOverCapacity();
+	}
+
+	// An expiry-ordered treap provides exact expired-entry counts in O(log n).
+	_addExpirationIndex(key, entry) {
+		const node = {
+			key,
+			expiresAt: entry.expiresAt,
+			priority: Math.random(),
+			size: 1,
+			left: null,
+			right: null,
+		};
+		this._expirationNodesByKey.set(key, node);
+		this._expirationRoot = this._insertExpirationNode(this._expirationRoot, node);
+	}
+
+	_expirationSubtreeSize(node) {
+		return node?.size ?? 0;
+	}
+
+	_compareExpirationNodes(left, right) {
+		if (left.expiresAt !== right.expiresAt) {
+			return left.expiresAt - right.expiresAt;
+		}
+		return left.key < right.key ? -1 : left.key > right.key ? 1 : 0;
+	}
+
+	_updateExpirationNode(node) {
+		node.size = 1 + this._expirationSubtreeSize(node.left) + this._expirationSubtreeSize(node.right);
+		return node;
+	}
+
+	_rotateExpirationRight(root) {
+		const pivot = root.left;
+		root.left = pivot.right;
+		pivot.right = this._updateExpirationNode(root);
+		return this._updateExpirationNode(pivot);
+	}
+
+	_rotateExpirationLeft(root) {
+		const pivot = root.right;
+		root.right = pivot.left;
+		pivot.left = this._updateExpirationNode(root);
+		return this._updateExpirationNode(pivot);
+	}
+
+	_insertExpirationNode(root, node) {
+		if (!root) {
+			return node;
+		}
+		if (this._compareExpirationNodes(node, root) < 0) {
+			root.left = this._insertExpirationNode(root.left, node);
+			if (root.left.priority < root.priority) {
+				root = this._rotateExpirationRight(root);
+			}
+		} else {
+			root.right = this._insertExpirationNode(root.right, node);
+			if (root.right.priority < root.priority) {
+				root = this._rotateExpirationLeft(root);
+			}
+		}
+		return this._updateExpirationNode(root);
+	}
+
+	_mergeExpirationTrees(left, right) {
+		if (!left) return right;
+		if (!right) return left;
+		if (left.priority < right.priority) {
+			left.right = this._mergeExpirationTrees(left.right, right);
+			return this._updateExpirationNode(left);
+		}
+		right.left = this._mergeExpirationTrees(left, right.left);
+		return this._updateExpirationNode(right);
+	}
+
+	_removeExpirationNode(root, target) {
+		if (!root) {
+			return null;
+		}
+		const comparison = this._compareExpirationNodes(target, root);
+		if (comparison === 0) {
+			return this._mergeExpirationTrees(root.left, root.right);
+		}
+		if (comparison < 0) {
+			root.left = this._removeExpirationNode(root.left, target);
+		} else {
+			root.right = this._removeExpirationNode(root.right, target);
+		}
+		return this._updateExpirationNode(root);
+	}
+
+	_removeExpirationIndex(key) {
+		const node = this._expirationNodesByKey.get(key);
+		if (!node) {
+			return;
+		}
+		this._expirationNodesByKey.delete(key);
+		this._expirationRoot = this._removeExpirationNode(this._expirationRoot, node);
+	}
+
+	_countExpiredEntries(now) {
+		let count = 0;
+		let node = this._expirationRoot;
+		while (node) {
+			if (node.expiresAt <= now) {
+				count += 1 + this._expirationSubtreeSize(node.left);
+				node = node.right;
+			} else {
+				node = node.left;
+			}
+		}
+		return count;
+	}
+
+	_splitExpiredExpirationNodes(root, now) {
+		if (!root) {
+			return [null, null];
+		}
+		if (root.expiresAt <= now) {
+			const [expiredRight, activeRight] = this._splitExpiredExpirationNodes(root.right, now);
+			root.right = expiredRight;
+			return [this._updateExpirationNode(root), activeRight];
+		}
+		const [expiredLeft, activeLeft] = this._splitExpiredExpirationNodes(root.left, now);
+		root.left = activeLeft;
+		return [expiredLeft, this._updateExpirationNode(root)];
+	}
+
+	_removeExpiredCacheEntries(now) {
+		const [expiredRoot, activeRoot] = this._splitExpiredExpirationNodes(this._expirationRoot, now);
+		this._expirationRoot = activeRoot;
+		if (!expiredRoot) {
+			return 0;
+		}
+
+		let removed = 0;
+		const pending = [expiredRoot];
+		while (pending.length > 0) {
+			const node = pending.pop();
+			if (node.left) pending.push(node.left);
+			if (node.right) pending.push(node.right);
+			this._expirationNodesByKey.delete(node.key);
+
+			const entry = this.cache.get(node.key);
+			if (!entry) {
+				continue;
+			}
+			this.cache.delete(node.key);
+			const estimatedEntryBytes = this._estimatedEntryBytes.get(entry) ?? 0;
+			this._estimatedMemoryBytes = Math.max(0, this._estimatedMemoryBytes - estimatedEntryBytes);
+			this._estimatedEntryBytes.delete(entry);
+			removed++;
+			this._metrics.evictions++;
+		}
+		return removed;
+	}
+
+	_removeCacheEntry(key) {
+		if (!this.cache.has(key)) {
+			return null;
+		}
+		const entry = this.cache.get(key);
+		this.cache.delete(key);
+		this._removeExpirationIndex(key);
+		const estimatedEntryBytes = this._estimatedEntryBytes.get(entry) ?? 0;
+		this._estimatedMemoryBytes = Math.max(0, this._estimatedMemoryBytes - estimatedEntryBytes);
+		this._estimatedEntryBytes.delete(entry);
+		return entry;
+	}
+
+	_removeCacheEntries(keys) {
+		let removed = 0;
+		for (const key of keys) {
+			const entry = this.cache.get(key);
+			if (!entry) {
+				continue;
+			}
+			this.cache.delete(key);
+			this._expirationNodesByKey.delete(key);
+			const estimatedEntryBytes = this._estimatedEntryBytes.get(entry) ?? 0;
+			this._estimatedMemoryBytes = Math.max(0, this._estimatedMemoryBytes - estimatedEntryBytes);
+			this._estimatedEntryBytes.delete(entry);
+			removed++;
+		}
+
+		if (removed > 0) {
+			this._rebuildExpirationIndex();
+		}
+		return removed;
+	}
+
+	_rebuildExpirationIndex() {
+		const orderedNodes = [];
+		const traversal = [];
+		let node = this._expirationRoot;
+		while (node || traversal.length > 0) {
+			while (node) {
+				traversal.push(node);
+				node = node.left;
+			}
+			node = traversal.pop();
+			if (this._expirationNodesByKey.has(node.key)) {
+				orderedNodes.push(node);
+			}
+			node = node.right;
+		}
+
+		const treapStack = [];
+		for (const orderedNode of orderedNodes) {
+			orderedNode.left = null;
+			orderedNode.right = null;
+			orderedNode.size = 1;
+			let previous = null;
+			while (treapStack.length > 0 && treapStack[treapStack.length - 1].priority > orderedNode.priority) {
+				previous = treapStack.pop();
+			}
+			orderedNode.left = previous;
+			if (treapStack.length > 0) {
+				treapStack[treapStack.length - 1].right = orderedNode;
+			}
+			treapStack.push(orderedNode);
+		}
+		this._expirationRoot = treapStack[0] ?? null;
+
+		if (this._expirationRoot) {
+			const pending = [[this._expirationRoot, false]];
+			while (pending.length > 0) {
+				const [current, visited] = pending.pop();
+				if (visited) {
+					this._updateExpirationNode(current);
+					continue;
+				}
+				pending.push([current, true]);
+				if (current.right) pending.push([current.right, false]);
+				if (current.left) pending.push([current.left, false]);
+			}
+		}
 	}
 
 	_isActiveClaimEntry(entry) {
@@ -270,16 +521,21 @@ class NewsCache {
 		if (this.cache.size <= max) {
 			return;
 		}
-		let evicted = 0;
+		const keysToEvict = [];
 		for (const [key, entry] of this.cache.entries()) {
-			if (this.cache.size <= max) {
+			if (this.cache.size - keysToEvict.length <= max) {
 				break;
 			}
 			if (!this._isActiveClaimEntry(entry)) {
-				this.cache.delete(key);
-				evicted++;
+				keysToEvict.push(key);
 			}
 		}
+		const estimatedIndividualRemovalWork = keysToEvict.length * Math.log2(this.cache.size);
+		const shouldBatchEvictions = keysToEvict.length >= BATCH_CACHE_EVICTION_THRESHOLD
+			&& estimatedIndividualRemovalWork >= this.cache.size;
+		const evicted = shouldBatchEvictions
+			? this._removeCacheEntries(keysToEvict)
+			: keysToEvict.reduce((count, key) => count + (this._removeCacheEntry(key) ? 1 : 0), 0);
 		if (evicted > 0) {
 			this._evictionCount += evicted;
 			this._metrics.evictions += evicted;
@@ -394,8 +650,10 @@ class NewsCache {
 		let localData = null;
 		if (entry) {
 			if (this.isExpired(entry)) {
-				this.cache.delete(key);
-				this._metrics.evictions++;
+				const removed = this._removeCacheEntry(key);
+				if (removed) {
+					this._metrics.evictions++;
+				}
 				this._evictIfOverCapacity();
 			} else {
 				// Refresh LRU recency on hit: move entry to the most-recently used position in the Map
@@ -427,6 +685,7 @@ class NewsCache {
 						? mergeDeliveryData(entryRecord.data, refreshedLocalData, localOnlyChannels)
 						: entryRecord.data;
 					if (abandonedClaim && entryRecord.data?.status === 'claiming') {
+						this._recordHit();
 						return null;
 					}
 					if (refreshedLocalData && refreshedLocalData.status !== 'claiming' && entryRecord.data?.status === 'claiming') {
@@ -972,7 +1231,8 @@ class NewsCache {
 		const entry = this.cache.get(key);
 
 		if (entry) {
-			if (!this.isExpired(entry)) {
+			const expired = this.isExpired(entry);
+			if (!expired) {
 				if (entry.data?.status !== 'claiming-abandoned') {
 					return false;
 				}
@@ -987,8 +1247,10 @@ class NewsCache {
 					}
 				}
 			}
-			this.cache.delete(key);
-			this._metrics.evictions++;
+			const removed = this._removeCacheEntry(key);
+			if (removed) {
+				this._metrics.evictions++;
+			}
 		}
 
 		if (this.cache.size >= this.maxEntries) {
@@ -1023,7 +1285,7 @@ class NewsCache {
 					return true;
 				}
 				// Remote claim was denied (already claimed/exists elsewhere)
-				this.cache.delete(key);
+				this._removeCacheEntry(key);
 				return false;
 			} catch (error) {
 				console.warn('[NewsCache] Firestore claimEntry failed (fail-open):', error.message);
@@ -1062,7 +1324,7 @@ class NewsCache {
 			}
 		}
 		if (entry?.data?.status === 'claiming') {
-			this.cache.delete(key);
+			this._removeCacheEntry(key);
 		}
 	}
 
@@ -1071,20 +1333,14 @@ class NewsCache {
    * Called periodically by setInterval
    */
 	cleanup() {
-		let removed = 0;
-		for (const [key, entry] of this.cache.entries()) {
-			if (this.isExpired(entry)) {
-				this.cache.delete(key);
-				removed++;
-				this._metrics.evictions++;
-			}
-		}
+		const now = Date.now();
+		const removed = this._removeExpiredCacheEntries(now);
 		if (removed > 0) {
 			console.debug('[NewsCache] Cleanup removed', removed, 'expired entries. Cache size:', this.cache.size);
 		}
 		this._evictIfOverCapacity();
 		for (const [key, lease] of this.deliveryLocks.entries()) {
-			if (!lease.active && lease.persistentUntil <= Date.now()) {
+			if (!lease.active && lease.persistentUntil <= now) {
 				this.deliveryLocks.delete(key);
 			}
 		}
@@ -1096,6 +1352,10 @@ class NewsCache {
    */
 	clear() {
 		this.cache.clear();
+		this._expirationRoot = null;
+		this._expirationNodesByKey.clear();
+		this._estimatedEntryBytes = new WeakMap();
+		this._estimatedMemoryBytes = 0;
 		this.deliveryLocks.clear();
 	}
 
@@ -1120,22 +1380,12 @@ class NewsCache {
 	}
 
 	getMetrics() {
-		let totalEntries = 0;
-		let estimatedMemoryBytes = 0;
-		for (const [key, entry] of this.cache.entries()) {
-			if (this.isExpired(entry)) {
-				continue;
-			}
-			totalEntries++;
-			estimatedMemoryBytes += this._estimatedEntryBytes.get(entry) ?? Buffer.byteLength(key, 'utf8') + 64;
-		}
-
 		const readCount = this._metrics.hits + this._metrics.misses;
 		return {
 			...this._metrics,
 			hitRate: readCount === 0 ? 0 : Math.round((this._metrics.hits / readCount) * 1000) / 1000,
-			totalEntries,
-			estimatedMemoryBytes,
+			totalEntries: Math.max(0, this.cache.size - this._countExpiredEntries(Date.now())),
+			estimatedMemoryBytes: this._estimatedMemoryBytes,
 		};
 	}
 
