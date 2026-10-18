@@ -196,6 +196,10 @@ describe('NewsCache — Persistent Dedup Backend (Issue #120)', () => {
 				expiresAtMs: Date.now() + cache.ttlMs,
 			});
 			await expect(cache.get('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toBeNull();
+			expect(cache.getMetrics()).toEqual(expect.objectContaining({
+				hits: 1,
+				misses: 0,
+			}));
 
 			await expect(cache.claim('BTCUSDT', EventCategory.PRICE_SURGE)).resolves.toBe(true);
 			expect(mockDeleteEntry).toHaveBeenCalledTimes(2);

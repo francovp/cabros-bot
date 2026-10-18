@@ -3,7 +3,7 @@
 [![Node.js CI](https://github.com/francovp/cabros-bot/actions/workflows/node.js.yml/badge.svg)](https://github.com/francovp/cabros-bot/actions/workflows/node.js.yml)
 [![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](https://github.com/francovp/cabros-bot)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC)
-[![Node Version](https://img.shields.io/badge/node-%3E%3D24.18.0%20%3C25-brightgreen.svg)](https://nodejs.org/)
+[![Node Version](https://img.shields.io/badge/node-%3E%3D24.18.0%20%3C27-brightgreen.svg)](https://nodejs.org/)
 
 A high-performance crypto, equity, and market intelligence bot service built with Node.js and Express. It connects incoming TradingView alerts and scheduled event monitors with Gemini Grounding, TradingView MCP analysis, and Binance Spot execution, dispatching formatted alerts concurrently across Telegram, WhatsApp, and Discord.
 
@@ -53,7 +53,7 @@ Comprehensive guides and technical documentation are maintained inside the [`doc
 
 ### 1. Prerequisites
 
-- **Node.js**: `>=24.18.0 <25` (enforced via `.node-version` and `package.json` engines)
+- **Node.js**: `>=24.18.0 <27` (enforced via `.node-version` and `package.json` engines)
 - **Package Manager**: `pnpm` (`pnpm@10.34.1` recommended)
 - **Telegram Bot Token**: Created via [@BotFather](https://t.me/botfather)
 
@@ -133,7 +133,7 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | :--- | :--- | :--- | :--- |
 | `GET` | `/healthcheck` | Process liveness probe; `?deep=true` = channel readiness, `?depth=readiness` = dependency report (advisory, always 200) | [API Reference](docs/api-reference.md#get-healthcheck) |
 | `GET` | `/ready` | Bootstrap gate; `?depth=dependencies` adds a fail-closed dependency probe | [API Reference](docs/api-reference.md#get-ready) |
-| `GET` | `/api/status` | Comprehensive system capabilities & dependency matrix | [API Reference](docs/api-reference.md#get-apistatus) |
+| `GET` | `/api/status` | System capabilities and dependency matrix, including news-monitor cache hit/miss, entry, eviction, and memory metrics when enabled | [API Reference](docs/api-reference.md#get-apistatus) |
 | `GET` | `/api/public/status` | Safe public subset of capabilities & channel statuses | [API Reference](docs/api-reference.md#get-apipublicstatus) |
 | `POST` | `/api/webhook/alert` | Ingest and dispatch alert to configured channels | [Webhook Alerts](docs/webhooks.md#post-apiwebhookalert) |
 | `POST` | `/api/webhook/expanded-analysis-alert` | TradingView MCP technical analysis report | [Webhook Alerts](docs/webhooks.md#post-apiwebhookexpanded-analysis-alert) |
@@ -619,6 +619,18 @@ Every run resolves to exactly one named outcome (`ok`, `down`, `stale`, `degrade
 
 Set the `PRODUCTION_REQUIRE_ENABLED_FLAGS` repository variable to a comma-separated flag list; it defaults to empty, so it adds no failure mode until you enable it. Every failure message ends with `(probed <base_url>)`, so a misconfigured target is never mistaken for a real outage. See [Observability & Monitoring](docs/monitoring.md#production-smoke-probe).
 
+### Backlog Hygiene Automation
+
+The opt-in `.github/workflows/backlog-hygiene.yml` workflow periodically audits and normalizes GitHub issue metadata using `scripts/backlog-hygiene.js`:
+- **Status label normalization**: Ensures exactly one status label (`status/needs-triage`, `status/ready`, `status/in-progress`, `status/blocked`) is present without demoting issues under review.
+- **Duplicate detection**: Flags possible duplicate open/closed issues via lexical + label overlap similarity (>0.7 threshold).
+- **Stale `agent-working` retirement**: Identifies issues carrying `agent-working` for >14 days without referencing PRs or active commits and applies `stale/agent-working`.
+- **Scheduled execution toggle**: By default, the workflow is manual `workflow_dispatch` only. Scheduled runs (monthly) are gated by setting the repository variable `BACKLOG_HYGIENE_CRON` (e.g. `0 4 1 * *`).
+- Run dry-run locally:
+  ```bash
+  pnpm run hygiene:backlog --dry-run
+  ```
+
 ### TradingView Confluence Enrichment
 
 `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true` are declared `true` in `render.yaml` on the **web service only** (previews off). Treat the Blueprint entry as intent and `/api/status` as runtime state. The confluence flag enables an optional `combined_analysis` call; the independent multi-timeframe flag enables `multi_timeframe_analysis`, whether or not confluence is enabled. Both are fail-open: a failure or budget skip never blocks alert delivery and marks the enrichment as `partial`.
@@ -706,6 +718,9 @@ pnpm run test:firebase
 
 # Run linter
 pnpm run lint
+
+# Set up a secondary git worktree with symlinked node_modules and shared caches
+pnpm run setup:worktree
 ```
 
 ---

@@ -138,6 +138,21 @@ function collectRequestsAndSavedExamples(items, result = []) {
 }
 
 describe('Postman collection contract', () => {
+	it('covers valid and invalid body-only auto-trade requests', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const valid = findItem(collection.item, 'POST Send Alert (autoTrade body only)');
+		const invalid = findItem(collection.item, 'POST Send Alert (invalid autoTrade body - 400)');
+		const invalidQuery = findItem(collection.item, 'POST Send Alert (invalid autoTrade query - 400)');
+		expect(valid.request.url.raw).toBe('{{baseUrl}}/api/webhook/alert');
+		expect(JSON.parse(valid.request.body.raw)).toMatchObject({ autoTrade: true, signalId: 'bar-123' });
+		expect(valid.response[0].code).toBe(200);
+		expect(invalid.request.url.raw).toBe('{{baseUrl}}/api/webhook/alert');
+		expect(JSON.parse(invalid.request.body.raw).autoTrade).toBe('yes');
+		expect(invalid.response[0].code).toBe(400);
+		expect(JSON.parse(invalid.response[0].body)).toMatchObject({ code: 'INVALID_REQUEST', retryable: false });
+		expect(invalidQuery.request.url.raw).toContain('?autoTrade=tru');
+		expect(JSON.parse(invalidQuery.response[0].body)).toMatchObject({ code: 'INVALID_REQUEST', retryable: false });
+	});
 	it('documents webhook-message alert filtering with a matching response example', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const item = findItem(collection.item, 'GET List Alerts (webhook-message)');
@@ -1043,6 +1058,15 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(capabilities.response[0].body).featureFlags.apiOnlyMode).toBe(false);
 	});
 
+	it('documents telegram command rate limiting state in status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		expect(JSON.parse(status.response[0].body).featureFlags.telegramCommandRateLimiting).toBe(true);
+		expect(JSON.parse(capabilities.response[0].body).featureFlags.telegramCommandRateLimiting).toBe(true);
+	});
+
 	it('documents notificationRedrive and zeroChannelBroadcasts in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');
@@ -1730,6 +1754,74 @@ describe('Postman collection contract', () => {
 		);
 
 		[invalidLimit, invalidStatus, invalidWindow, malformedFrom, malformedTo, reversedRange].forEach((item) => {
+			expect(item.event).toBeDefined();
+			const testEvent = item.event.find((e) => e.listen === 'test');
+			expect(testEvent).toBeDefined();
+			const scriptText = testEvent.script.exec.join('\n');
+			expect(scriptText).toContain('pm.response.to.have.status(400)');
+			expect(scriptText).toContain('INVALID_REQUEST');
+		});
+	});
+
+	it('documents distinct invalid query variants for GET Signal Outcomes Confidence Calibration (issue #1240)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const invalidLimit = findItem(collection.item, 'GET Signal Outcomes Confidence Calibration (invalid limit)');
+		const invalidWindow = findItem(collection.item, 'GET Signal Outcomes Confidence Calibration (invalid window)');
+		const malformedFrom = findItem(collection.item, 'GET Signal Outcomes Confidence Calibration (malformed from timestamp)');
+		const malformedTo = findItem(collection.item, 'GET Signal Outcomes Confidence Calibration (malformed to timestamp)');
+		const reversedRange = findItem(collection.item, 'GET Signal Outcomes Confidence Calibration (reversed time range)');
+
+		expect(invalidLimit).toBeDefined();
+		expect(invalidLimit.request.url.raw).toContain('limit=2000');
+		expect(invalidLimit.response[0].code).toBe(400);
+		expect(JSON.parse(invalidLimit.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid limit. Use an integer between 1 and 1000.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(invalidWindow).toBeDefined();
+		expect(invalidWindow.request.url.raw).toContain('window=invalid');
+		expect(invalidWindow.response[0].code).toBe(400);
+		expect(JSON.parse(invalidWindow.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(malformedFrom).toBeDefined();
+		expect(malformedFrom.request.url.raw).toContain('from=not-a-date');
+		expect(malformedFrom.response[0].code).toBe(400);
+		expect(JSON.parse(malformedFrom.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(malformedTo).toBeDefined();
+		expect(malformedTo.request.url.raw).toContain('to=not-a-date');
+		expect(malformedTo.response[0].code).toBe(400);
+		expect(JSON.parse(malformedTo.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(reversedRange).toBeDefined();
+		expect(reversedRange.request.url.raw).toContain('from=2026-08-30T00:00:00.000Z&to=2026-08-01T00:00:00.000Z');
+		expect(reversedRange.response[0].code).toBe(400);
+		expect(JSON.parse(reversedRange.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid time window. from must be before or equal to to.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		[invalidLimit, invalidWindow, malformedFrom, malformedTo, reversedRange].forEach((item) => {
 			expect(item.event).toBeDefined();
 			const testEvent = item.event.find((e) => e.listen === 'test');
 			expect(testEvent).toBeDefined();

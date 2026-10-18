@@ -42,6 +42,14 @@ function getDocumentedApiOperations(contract) {
 }
 
 describe('OpenAPI contract', () => {
+	it('documents body-only auto-trade and the live occurrence identity', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const properties = contract.components.schemas.AlertRequest.properties;
+		expect(properties.autoTrade.type).toBe('boolean');
+		expect(properties.signalId).toMatchObject({ type: 'string', minLength: 1, maxLength: 128 });
+		expect(contract.components.schemas.AutoTradeOutcome.properties.reason.enum)
+			.toEqual(expect.arrayContaining(['ORDER_PENDING', 'SIGNAL_ID_REQUIRED', 'DURABLE_RESERVATION_UNAVAILABLE']));
+	});
 	it('documents all decision-audit dispatch channel modes', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 
@@ -1129,6 +1137,15 @@ describe('status dependency contract drift', () => {
 			scannerPreset: 5000,
 			remoteConfig: 5000,
 		});
+	});
+
+	it('documents telegramCommandRateLimiting on the status schema and StatusResult example (issue #1183)', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const statusDescription = spec.components.schemas.Status.description;
+		const statusExample = spec.components.responses.StatusResult.content['application/json'].example;
+
+		expect(statusDescription).toContain('featureFlags.telegramCommandRateLimiting reports ENABLE_TELEGRAM_COMMAND_RATE_LIMITING');
+		expect(statusExample.featureFlags.telegramCommandRateLimiting).toBe(true);
 	});
 
 	it('documents deployment provenance identity on stored alerts and rollup on alert summary (issue #1169)', () => {

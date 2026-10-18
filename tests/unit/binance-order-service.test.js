@@ -2794,4 +2794,3 @@ describe('BinanceOrderService', () => {
 		});
 	});
 });
-

@@ -5,9 +5,12 @@
   "main": "index.js",
   "packageManager": "pnpm@10.34.1",
   "engines": {
-    "node": ">=24.18.0 <25"
+    "node": ">=24.18.0 <27"
   },
   "scripts": {
+    "setup:worktree": "bash scripts/setup-worktree.sh",
+    "preflight:deployment": "bash scripts/preflight-deployment.sh",
+    "hygiene:backlog": "node scripts/backlog-hygiene.js",
     "build:hosting": "node scripts/build-hosting.js",
     "deploy:firebase-remote-config:server": "node scripts/deploy-server-remote-config.js",
     "deploy:firestore:indexes": "node scripts/deploy-firestore-indexes.js",

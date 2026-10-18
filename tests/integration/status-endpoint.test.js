@@ -1,6 +1,15 @@
 /* global saveEnv, restoreEnv */
 const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('fs');
-const request = require('supertest');
+const realSupertest = require('supertest');
+const http = require('http');
+
+let persistentServer;
+let currentApp;
+
+const request = (app) => {
+	currentApp = app;
+	return realSupertest(persistentServer || app);
+};
 const express = require('express');
 const { generateKeyPairSync } = require('crypto');
 const { tmpdir } = require('os');
@@ -54,6 +63,42 @@ describe('Status endpoints', () => {
 	let app;
 	let tempDir;
 	let promptStatusSpies = [];
+	beforeAll(async () => {
+		for (let attempt = 0; attempt < 10; attempt++) {
+			const candidateServer = http.createServer((req, res) => {
+				if (currentApp) {
+					currentApp(req, res);
+				} else {
+					res.writeHead(500);
+					res.end('App not initialized');
+				}
+			});
+			await new Promise((resolve) => candidateServer.listen(0, '127.0.0.1', resolve));
+			const port = candidateServer.address().port;
+			try {
+				const probeRes = await new Promise((resolve, reject) => {
+					const req = http.get(`http://127.0.0.1:${port}/healthcheck-probe`, (res) => {
+						let data = '';
+						res.on('data', (c) => { data += c; });
+						res.on('end', () => resolve({ status: res.statusCode, data }));
+					});
+					req.on('error', reject);
+				});
+				if (probeRes.status !== 400 && !probeRes.data.includes('explicit proxy')) {
+					persistentServer = candidateServer;
+					break;
+				}
+			} catch (_) {}
+			await new Promise((resolve) => candidateServer.close(resolve));
+		}
+	});
+
+	afterAll(async () => {
+		if (persistentServer) {
+			await new Promise((resolve) => persistentServer.close(resolve));
+			persistentServer = null;
+		}
+	});
 
 	beforeEach(() => {
 		savedEnv = saveEnv();
@@ -810,6 +855,28 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.signalClassMarker).toBe(false);
+	});
+
+	it('reports telegram command rate limiting as enabled by default in featureFlags and dependencies.telegram', async () => {
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.telegramCommandRateLimiting).toBe(true);
+		expect(response.body.dependencies.telegram.commandRateLimiting).toBe(true);
+	});
+
+	it('reports telegram command rate limiting as disabled when explicitly disabled', async () => {
+		process.env.ENABLE_TELEGRAM_COMMAND_RATE_LIMITING = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.telegramCommandRateLimiting).toBe(false);
+		expect(response.body.dependencies.telegram.commandRateLimiting).toBe(false);
 	});
 
 	it('omits signal classification metrics until an alert has been classified', async () => {
@@ -3217,6 +3284,47 @@ describe('Status endpoints', () => {
 		});
 	});
 
+	it('reports newsMonitorCache metrics under dependencies when ENABLE_NEWS_MONITOR is true', async () => {
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.newsMonitorCache).toBeDefined();
+		expect(response.body.dependencies.newsMonitorCache).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			mode: 'in-memory',
+			backend: null,
+			metrics: expect.objectContaining({
+				hits: expect.any(Number),
+				misses: expect.any(Number),
+				hitRate: expect.any(Number),
+				totalEntries: expect.any(Number),
+				evictions: expect.any(Number),
+				estimatedMemoryBytes: expect.any(Number),
+				lastHitAt: null,
+				lastMissAt: null,
+			}),
+		});
+	});
+
+	it('omits newsMonitorCache from dependencies when ENABLE_NEWS_MONITOR is false', async () => {
+		process.env.ENABLE_NEWS_MONITOR = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.newsMonitorCache).toBeUndefined();
+	});
+
 	it('reports Cloudflare as the primary news monitor provider and fallback model as configured', async () => {
 		process.env.ENABLE_GEMINI_GROUNDING = 'false';
 		process.env.ENABLE_NEWS_MONITOR = 'true';
@@ -3577,6 +3685,66 @@ describe('Status endpoints', () => {
 				discord: expect.objectContaining({ successRate: 1.0 }),
 			}),
 		}));
+	});
+
+	describe('discord source routing feature flag', () => {
+		afterEach(() => {
+			delete process.env.ENABLE_DISCORD_SOURCE_ROUTING;
+			delete process.env.DISCORD_SOURCE_ROUTING_JSON;
+		});
+
+		it('reports discordSourceRouting as disabled when env var is not set', async () => {
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.discordSourceRouting).toBe(false);
+			expect(response.body.dependencies.discordSourceRouting).toEqual(expect.objectContaining({
+				enabled: false,
+				configured: false,
+				status: 'disabled',
+			}));
+		});
+
+		it('reports discordSourceRouting as misconfigured when enabled without routes', async () => {
+			process.env.ENABLE_DISCORD_SOURCE_ROUTING = 'true';
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.discordSourceRouting).toBe(true);
+			expect(response.body.dependencies.discordSourceRouting).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: false,
+				status: 'misconfigured',
+				routesConfigured: 0,
+			}));
+		});
+
+		it('reports discordSourceRouting as ready when enabled with valid JSON routes', async () => {
+			process.env.ENABLE_DISCORD_SOURCE_ROUTING = 'true';
+			process.env.DISCORD_SOURCE_ROUTING_JSON = JSON.stringify({
+				scanner: 'https://discord.com/api/webhooks/111/scanner',
+				'news-monitor': 'https://discord.com/api/webhooks/222/news',
+				default: 'https://discord.com/api/webhooks/000/default',
+			});
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.discordSourceRouting).toBe(true);
+			expect(response.body.dependencies.discordSourceRouting).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				status: 'ready',
+				routesConfigured: 3,
+				hasDefault: true,
+				keys: expect.arrayContaining(['default', 'scanner', 'news-monitor']),
+			}));
+		});
 	});
 
 	it('omits firestoreWriteMetrics when no writes have been recorded', async () => {
