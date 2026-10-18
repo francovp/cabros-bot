@@ -422,6 +422,28 @@ describe('SentryService', () => {
 		});
 	});
 
+	describe('captureInfo()', () => {
+		it('captures a sanitized info message with structured timer drain metrics', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			service.init();
+			expect(typeof service.captureInfo).toBe('function');
+
+			const result = service.captureInfo({
+				message: 'shutdown.timer_drain',
+				feature: 'shutdown.timer_drain',
+				extra: { registered: 2, drained: 1, failed: 1 },
+			});
+
+			expect(result).toMatchObject({ captured: true, eventId: 'mock-event-id' });
+			expect(Sentry.captureMessage).toHaveBeenCalledWith('shutdown.timer_drain', expect.objectContaining({
+				level: 'info',
+				tags: expect.objectContaining({ feature: 'shutdown.timer_drain', channel: 'process' }),
+				extra: { registered: 2, drained: 1, failed: 1 },
+			}));
+		});
+	});
+
 	describe('ErrorEvent Building (T010)', () => {
 		beforeEach(() => {
 			process.env.ENABLE_SENTRY = 'true';

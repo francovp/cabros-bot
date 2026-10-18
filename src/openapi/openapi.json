@@ -7723,7 +7723,7 @@
         }
       },
       "StatusResult": {
-        "description": "Non-sensitive runtime readiness. featureFlags.newsMonitorClassifier reports whether optional classifier.dev rechecks are enabled. When Firebase Remote Config is enabled, dependencies.firebaseRemoteConfig reports loader metadata only; it never exposes remote parameter values or credentials. dependencies.langfuse reports proven Langfuse prompt readiness: `ready` becomes true only after an observed successful prompt resolution, `status` distinguishes disabled, misconfigured, unverified, ready and degraded, and `lastErrorReason` is a closed enum. Credentials are never returned; only the LANGFUSE_BASE_URL host is. dependencies.startupJitter reports effective per-worker startup-jitter bounds without secrets.",
+        "description": "Non-sensitive runtime readiness. featureFlags.newsMonitorClassifier reports whether optional classifier.dev rechecks are enabled. When Firebase Remote Config is enabled, dependencies.firebaseRemoteConfig reports loader metadata only; it never exposes remote parameter values or credentials. dependencies.langfuse reports proven Langfuse prompt readiness: `ready` becomes true only after an observed successful prompt resolution, `status` distinguishes disabled, misconfigured, unverified, ready and degraded, and `lastErrorReason` is a closed enum. Credentials are never returned; only the LANGFUSE_BASE_URL host is. dependencies.startupJitter reports effective per-worker startup-jitter bounds without secrets. dependencies.backgroundTimers reports only process-local registered, drained, and failed timer counts; timer names and callbacks are never exposed.",
         "content": {
           "application/json": {
             "schema": {
@@ -8105,6 +8105,11 @@
                   "redrive": 5000,
                   "scannerPreset": 5000,
                   "remoteConfig": 5000
+                },
+                "backgroundTimers": {
+                  "registered": 0,
+                  "drained": 0,
+                  "failed": 0
                 }
               }
             }
@@ -16336,7 +16341,8 @@
             "type": "object",
             "additionalProperties": true,
             "required": [
-              "persistentWriteHealth"
+              "persistentWriteHealth",
+              "backgroundTimers"
             ],
             "properties": {
               "tradingViewMcp": {
@@ -16413,6 +16419,9 @@
               },
               "newsMonitorCache": {
                 "$ref": "#/components/schemas/NewsMonitorCacheDependency"
+              },
+              "backgroundTimers": {
+                "$ref": "#/components/schemas/BackgroundTimerStats"
               }
             }
           }
@@ -19336,6 +19345,29 @@
             }
           }
         }
+      },
+      "BackgroundTimerStats": {
+        "type": "object",
+        "required": [
+          "registered",
+          "drained",
+          "failed"
+        ],
+        "properties": {
+          "registered": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "drained": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "failed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
       }
     },
     "headers": {

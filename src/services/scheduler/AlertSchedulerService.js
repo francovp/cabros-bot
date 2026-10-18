@@ -13,6 +13,7 @@ const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { getAnalyzer, setNotificationManager } = require('../../controllers/webhooks/handlers/newsMonitor/analyzer');
 const { isNewsMonitorPaused } = require('../../controllers/webhooks/handlers/newsMonitor/pauseState');
 const { alertStorageService } = require('../storage/AlertStorageService');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 
 const COLLECTION_NAME = 'alertSchedulerLocks';
 
@@ -648,8 +649,8 @@ class AlertSchedulerService {
 		const sweepTimer = setTimeout(() => controller.abort(), timeoutMs);
 
 		const renewIntervalMs = Math.max(1000, Math.floor(leaseMs / 2));
-		const renewHandle = setInterval(() => {
-			this._renewLease(Date.now(), leaseMs).catch((err) => {
+		const renewHandle = createManagedInterval('alert-scheduler-lease-renewal', () => {
+			return this._renewLease(Date.now(), leaseMs).catch((err) => {
 				console.warn('[AlertScheduler] Lease renew tick failed:', err.message);
 			});
 		}, renewIntervalMs);
@@ -719,7 +720,7 @@ class AlertSchedulerService {
 				error: err,
 			});
 		} finally {
-			clearInterval(renewHandle);
+			await renewHandle.stop();
 			clearTimeout(sweepTimer);
 			this.activeSweepController = null;
 			const intervalMs = options.intervalMs || this.getIntervalMs();

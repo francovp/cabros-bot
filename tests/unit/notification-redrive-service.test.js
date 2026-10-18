@@ -2,6 +2,7 @@ const { NotificationRedriveService, notificationRedriveService, calculateBackoff
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const { signalRepeatCooldown } = require('../../src/services/alerts/signalRepeatCooldown');
 const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
+const { getBackgroundTimerStats } = require('../../src/lib/backgroundTimerRegistry');
 const admin = require('firebase-admin');
 
 describe('NotificationRedriveService', () => {
@@ -1779,6 +1780,7 @@ describe('NotificationRedriveService', () => {
 		});
 
 		it('waits for startup jitter before starting the first and periodic redrive sweeps', async () => {
+			const registeredBefore = getBackgroundTimerStats().registered;
 			jest.useFakeTimers();
 			process.env.WORKER_STARTUP_JITTER_MS = '1000';
 			process.env.NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS = '50';
@@ -1795,8 +1797,10 @@ describe('NotificationRedriveService', () => {
 				await jest.advanceTimersByTimeAsync(50);
 				expect(sweepSpy).toHaveBeenCalledTimes(1);
 				expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+				expect(getBackgroundTimerStats().registered).toBe(registeredBefore + 1);
 			} finally {
 				await service.stopWorker({ drain: false });
+				expect(getBackgroundTimerStats().registered).toBe(registeredBefore);
 				randomIntSpy.mockRestore();
 				setIntervalSpy.mockRestore();
 				jest.useRealTimers();
