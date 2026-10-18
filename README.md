@@ -619,6 +619,18 @@ Every run resolves to exactly one named outcome (`ok`, `down`, `stale`, `degrade
 
 Set the `PRODUCTION_REQUIRE_ENABLED_FLAGS` repository variable to a comma-separated flag list; it defaults to empty, so it adds no failure mode until you enable it. Every failure message ends with `(probed <base_url>)`, so a misconfigured target is never mistaken for a real outage. See [Observability & Monitoring](docs/monitoring.md#production-smoke-probe).
 
+### Backlog Hygiene Automation
+
+The opt-in `.github/workflows/backlog-hygiene.yml` workflow periodically audits and normalizes GitHub issue metadata using `scripts/backlog-hygiene.js`:
+- **Status label normalization**: Ensures exactly one status label (`status/needs-triage`, `status/ready`, `status/in-progress`, `status/blocked`) is present without demoting issues under review.
+- **Duplicate detection**: Flags possible duplicate open/closed issues via lexical + label overlap similarity (>0.7 threshold).
+- **Stale `agent-working` retirement**: Identifies issues carrying `agent-working` for >14 days without referencing PRs or active commits and applies `stale/agent-working`.
+- **Scheduled execution toggle**: By default, the workflow is manual `workflow_dispatch` only. Scheduled runs (monthly) are gated by setting the repository variable `BACKLOG_HYGIENE_CRON` (e.g. `0 4 1 * *`).
+- Run dry-run locally:
+  ```bash
+  pnpm run hygiene:backlog --dry-run
+  ```
+
 ### TradingView Confluence Enrichment
 
 `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true` are declared `true` in `render.yaml` on the **web service only** (previews off). Treat the Blueprint entry as intent and `/api/status` as runtime state. The confluence flag enables an optional `combined_analysis` call; the independent multi-timeframe flag enables `multi_timeframe_analysis`, whether or not confluence is enabled. Both are fail-open: a failure or budget skip never blocks alert delivery and marks the enrichment as `partial`.
