@@ -19311,7 +19311,7 @@
               },
               "evictions": {
                 "type": "integer",
-                "description": "Cumulative expired entries removed from cache."
+                "description": "Cumulative entries removed by expiration, capacity eviction, or abandoned-claim replacement."
               },
               "estimatedMemoryBytes": {
                 "type": "integer",

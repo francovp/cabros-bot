@@ -168,6 +168,7 @@ const MAX_NEWS_DELIVERY_LOCK_ENTRIES = 100_000;
 class NewsCache {
 	constructor(ttlHours, options = {}) {
 		this.cache = new Map();
+		this._estimatedEntryBytes = new WeakMap();
 		this._explicitTtlHours = ttlHours;
 		if (ttlHours !== undefined) {
 			this._explicitTtlHours = parseNewsCacheTtlHours(ttlHours);
@@ -184,6 +185,13 @@ class NewsCache {
 			: undefined;
 		this._evictionCount = 0;
 		this._deliveryLockEvictionCount = 0;
+		this._metrics = {
+			hits: 0,
+			misses: 0,
+			evictions: 0,
+			lastHitAt: null,
+			lastMissAt: null,
+		};
 	}
 
 	get ttlMs() {
@@ -238,6 +246,13 @@ class NewsCache {
 	_setCacheEntry(key, entry) {
 		this.cache.delete(key);
 		this.cache.set(key, entry);
+		let dataBytes = 0;
+		try {
+			dataBytes = Buffer.byteLength(JSON.stringify(entry.data ?? null) || '', 'utf8');
+		} catch {
+			// Keep cache writes fail-open when a value cannot be serialized for metrics.
+		}
+		this._estimatedEntryBytes.set(entry, Buffer.byteLength(key, 'utf8') + 64 + dataBytes);
 		this._evictIfOverCapacity();
 	}
 
@@ -267,6 +282,7 @@ class NewsCache {
 		}
 		if (evicted > 0) {
 			this._evictionCount += evicted;
+			this._metrics.evictions += evicted;
 			console.debug('[NewsCache] Evicted', evicted, 'LRU entries; cache size:', this.cache.size);
 		}
 	}
@@ -379,6 +395,7 @@ class NewsCache {
 		if (entry) {
 			if (this.isExpired(entry)) {
 				this.cache.delete(key);
+				this._metrics.evictions++;
 				this._evictIfOverCapacity();
 			} else {
 				// Refresh LRU recency on hit: move entry to the most-recently used position in the Map
@@ -971,6 +988,7 @@ class NewsCache {
 				}
 			}
 			this.cache.delete(key);
+			this._metrics.evictions++;
 		}
 
 		if (this.cache.size >= this.maxEntries) {
@@ -1079,6 +1097,60 @@ class NewsCache {
 	clear() {
 		this.cache.clear();
 		this.deliveryLocks.clear();
+	}
+
+	_recordHit() {
+		this._metrics.hits++;
+		this._metrics.lastHitAt = new Date().toISOString();
+	}
+
+	_recordMiss() {
+		this._metrics.misses++;
+		this._metrics.lastMissAt = new Date().toISOString();
+	}
+
+	resetMetrics() {
+		this._metrics = {
+			hits: 0,
+			misses: 0,
+			evictions: 0,
+			lastHitAt: null,
+			lastMissAt: null,
+		};
+	}
+
+	getMetrics() {
+		let totalEntries = 0;
+		let estimatedMemoryBytes = 0;
+		for (const [key, entry] of this.cache.entries()) {
+			if (this.isExpired(entry)) {
+				continue;
+			}
+			totalEntries++;
+			estimatedMemoryBytes += this._estimatedEntryBytes.get(entry) ?? Buffer.byteLength(key, 'utf8') + 64;
+		}
+
+		const readCount = this._metrics.hits + this._metrics.misses;
+		return {
+			...this._metrics,
+			hitRate: readCount === 0 ? 0 : Math.round((this._metrics.hits / readCount) * 1000) / 1000,
+			totalEntries,
+			estimatedMemoryBytes,
+		};
+	}
+
+	getStatus(enabled) {
+		const isEnabled = Boolean(enabled);
+		const dedupMode = this.dedupMode;
+		return {
+			enabled: isEnabled,
+			configured: isEnabled,
+			ready: isEnabled,
+			status: isEnabled ? 'ready' : 'disabled',
+			mode: dedupMode.mode,
+			backend: dedupMode.backend,
+			metrics: this.getMetrics(),
+		};
 	}
 
 	/**

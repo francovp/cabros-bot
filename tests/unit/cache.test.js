@@ -395,6 +395,17 @@ describe('Cache Module - Unit Tests', () => {
 			expect(cache.getMetrics().evictions).toBe(2);
 		});
 
+		it('should include cache capacity evictions in metrics', async () => {
+			cache.maxEntries = 1;
+			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, { alert: { symbol: 'BTCUSDT' } });
+			await cache.set('ETHUSD', EventCategory.PRICE_SURGE, { alert: { symbol: 'ETHUSD' } });
+
+			expect(cache.getMetrics()).toEqual(expect.objectContaining({
+				evictions: 1,
+				totalEntries: 1,
+			}));
+		});
+
 		it('should reset metrics when resetMetrics is called', async () => {
 			const data = { alert: { symbol: 'BTCUSDT' } };
 			await cache.set('BTCUSDT', EventCategory.PRICE_SURGE, data);

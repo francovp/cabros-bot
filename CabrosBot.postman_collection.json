@@ -19531,7 +19531,7 @@
         "header": [
           {
             "key": "x-api-key",
-            "value": "{{apiKey}}",
+            "value": "{{adminApiKey}}",
             "type": "text"
           }
         ],
