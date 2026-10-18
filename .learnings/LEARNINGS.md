@@ -1030,3 +1030,29 @@ PR #1380 adds dedupeSymbolIdentifiers() to the shared expanded-analysis parser s
 
 <sub>Posted by cubefarm · merges automatically once GitHub's checks pass</sub>
 
+
+---
+
+## [LRN-20261018-001] correction
+
+**Logged**: 2026-10-18T10:14:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+PR #1365 was deleting previous learnings instead of appending new ones.
+
+### Details
+On PR #1365 (docs(learnings): log corrections from @francovp on PR #1356 and PR #1352), @francovp provided correction on 2026-10-11T02:16:08Z: "PR is deleting too many learnings, don't remove previous learnings". The Virgin Trainee's PR was replacing the entire LEARNINGS.md file instead of appending new learning entries, causing loss of historical learnings.
+
+### Suggested Action
+When updating LEARNINGS.md, always append new entries to the end of the file rather than overwriting the entire file. Use the established format with proper ID generation (LRN-YYYYMMDD-XXX) and maintain all existing entries.
+
+### Metadata
+- Source: user_feedback
+- Related Files: .learnings/LEARNINGS.md
+- Tags: learnings, data-preservation, file-operations
+- See Also: PR #1365
+- Pattern-Key: harden.data_preservation
+
