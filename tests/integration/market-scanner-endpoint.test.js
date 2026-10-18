@@ -1,13 +1,14 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
 		callScanTool: jest.fn(),
 		callMultiTimeframeAnalysis: jest.fn(),
+		getStatus: jest.fn(),
 	},
 }));
 
@@ -29,6 +30,8 @@ describe('Market Scanner Alert endpoint', () => {
 		});
 
 		jest.clearAllMocks();
+		tradingViewMcpService.getStatus.mockReset().mockReturnValue(undefined);
+		resetNotificationManagerForTesting();
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'scan-msg-id' });
 		mockBot = {
@@ -104,6 +107,8 @@ describe('Market Scanner Alert endpoint', () => {
 				unknown: 0,
 			},
 		});
+		expect(res.body.processingTimeMs).toEqual(expect.any(Number));
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.deliveryResults).toEqual([
 			expect.objectContaining({ success: true, channel: 'telegram', messageId: 'scan-msg-id' }),
 		]);
@@ -114,6 +119,41 @@ describe('Market Scanner Alert endpoint', () => {
 		);
 		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
 		expect(mockTelegramSendMessage.mock.calls[0][1]).toContain('SCANNER DE MERCADO');
+	});
+
+	it('persists ranked scanner scores as signed normalized values', async () => {
+		const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+		jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
+		const recordedCalls = [];
+		const recordSignalSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockImplementation(async (params) => {
+			recordedCalls.push(params);
+			return {};
+		});
+		const item = {
+			symbol: 'BINANCE:BTCUSDT',
+			changePercent: -5,
+			indicators: { close: 60000, RSI: 40 },
+		};
+
+		tradingViewMcpService.callScanTool.mockImplementation(async (scanType) => (
+			scanType === 'top_losers' ? [item] : []
+		));
+
+		try {
+			await request(app)
+				.post('/api/webhook/market-scanner-alert')
+				.set('x-api-key', 'test-key')
+				.send({ scans: ['top_losers'], timeframe: '4h', exchange: 'BINANCE', ranked: true })
+				.expect(200);
+
+			expect(recordedCalls).toHaveLength(1);
+			expect(recordedCalls[0].side).toBe('SELL');
+			expect(recordedCalls[0].score).toBeLessThan(0);
+			expect(Math.abs(recordedCalls[0].score)).toBeLessThanOrEqual(1);
+		} finally {
+			recordSignalSpy.mockRestore();
+			signalOutcomeService.isEnabled.mockRestore();
+		}
 	});
 
 	it('routes market scanner delivery to requested channels only', async () => {
@@ -414,6 +454,96 @@ describe('Market Scanner Alert endpoint', () => {
 		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 	});
 
+	it('fails fast with skipped scans while the MCP circuit breaker is open', async () => {
+		tradingViewMcpService.getStatus.mockReturnValue({
+			status: 'degraded',
+			lastErrorCategory: 'request_failed',
+			circuitBreaker: { state: 'open', cooldownMs: 600000 },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.send({ scans: ['top_gainers', 'top_losers'] })
+			.expect(502);
+
+		expect(res.body.code).toBe('TRADINGVIEW_MCP_UNAVAILABLE');
+		expect(res.body.scanResults).toEqual([
+			{
+				scan: 'top_gainers',
+				status: 'skipped',
+				reason: expect.stringContaining('request_failed'),
+			},
+			{
+				scan: 'top_losers',
+				status: 'skipped',
+				reason: expect.stringContaining('request_failed'),
+			},
+		]);
+		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+		expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+	});
+
+	// Self-recovery contract: a transient outage must not lock the scanner out forever.
+	// Once the breaker cooldown expires (state 'half-open'), the endpoint must probe again
+	// instead of returning 502 indefinitely (Codex P1 on this PR).
+	it('recovers by probing again after a transient failure once the breaker cooldown expires', async () => {
+		tradingViewMcpService.getStatus.mockReturnValue({
+			status: 'degraded',
+			lastErrorCategory: 'request_failed',
+			circuitBreaker: { state: 'open', cooldownMs: 600000 },
+		});
+		tradingViewMcpService.callScanTool.mockRejectedValue(new Error('Connection failure'));
+
+		const blocked = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.send({ scans: ['top_gainers'] })
+			.expect(502);
+
+		expect(blocked.body.code).toBe('TRADINGVIEW_MCP_UNAVAILABLE');
+		expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+
+		// Breaker cooldown elapsed -> half-open -> recovery probe is allowed through.
+		tradingViewMcpService.getStatus.mockReturnValue({
+			status: 'degraded',
+			lastErrorCategory: 'request_failed',
+			circuitBreaker: { state: 'half-open', cooldownMs: 600000 },
+		});
+		tradingViewMcpService.callScanTool.mockReset();
+		tradingViewMcpService.callScanTool.mockResolvedValue([
+			{ symbol: 'BINANCE:BTCUSDT', changePercent: 2.5 },
+		]);
+
+		const recovered = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.send({ scans: ['top_gainers'] })
+			.expect(200);
+
+		expect(recovered.body.success).toBe(true);
+		expect(tradingViewMcpService.callScanTool).toHaveBeenCalledTimes(1);
+		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
+	});
+
+	// Contract check for Codex P2: 502 has two shapes -- the skip-path
+	// TRADINGVIEW_MCP_UNAVAILABLE and the attempt-path ALL_SCANS_FAILED (asserted above).
+	// The OpenAPI 502 response must describe both.
+	it('documents both 502 variants in the OpenAPI contract', async () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const response = spec.paths['/api/webhook/market-scanner-alert'].post.responses['502'];
+		const ref = response.$ref.split('/').pop();
+		const examples = spec.components.responses[ref].content['application/json'].examples;
+
+		expect(Object.keys(examples)).toEqual(
+			expect.arrayContaining(['mcpUnavailable', 'allScansFailed']),
+		);
+		expect(examples.mcpUnavailable.value.code).toBe('TRADINGVIEW_MCP_UNAVAILABLE');
+		expect(examples.mcpUnavailable.value.scanResults[0].status).toBe('skipped');
+		expect(examples.allScansFailed.value.code).toBe('ALL_SCANS_FAILED');
+		expect(examples.allScansFailed.value.scanResults[0].status).toBe('error');
+	});
+
 	it('returns 504 when the scanner times out', async () => {
 		process.env.MARKET_SCANNER_TIMEOUT_MS = '10';
 
@@ -428,7 +558,7 @@ describe('Market Scanner Alert endpoint', () => {
 						reject(new Error('AbortError'));
 					});
 				}
-			})
+			}),
 		);
 
 		const res = await request(app)

@@ -20,6 +20,11 @@ const { randomUUID } = require('node:crypto');
 
 const DELIVERY_LOCK_TTL_MS = 30_000;
 const DELIVERY_LOCK_RENEW_INTERVAL_MS = 10_000;
+const USAGE_CLAIM_LEASE_MS = 120_000;
+const USAGE_CLAIM_RENEW_INTERVAL_MS = 30_000;
+const USAGE_CLAIM_STATE = 'claimed';
+const USAGE_CLAIM_TOKEN_FIELD = 'usageClaimToken';
+const USAGE_CLAIM_EXPIRES_FIELD = 'usageClaimExpiresAt';
 const DELIVERY_ROUTING_FIELDS = {
 	telegram: 'telegramChatId',
 	whatsapp: 'whatsappChatId',
@@ -77,6 +82,11 @@ function mergeDeliveryData(existingData = {}, updatedData = {}, channels) {
 	}
 
 	return mergedData;
+}
+
+function isUsageClaimExpired(data, nowMs = Date.now()) {
+	const deadline = data ? data[USAGE_CLAIM_EXPIRES_FIELD] : undefined;
+	return !(typeof deadline === 'number' && Number.isFinite(deadline) && deadline > nowMs);
 }
 
 function getDeliveryDelta(data = {}, channels = []) {
@@ -363,6 +373,7 @@ class NewsCache {
 	async get(symbol, eventCategory) {
 		const key = this.generateKey(symbol, eventCategory);
 		const entry = this.cache.get(key);
+		const abandonedClaim = entry?.data?.status === 'claiming-abandoned';
 
 		let localData = null;
 		if (entry) {
@@ -374,7 +385,9 @@ class NewsCache {
 				this.cache.delete(key);
 				this.cache.set(key, entry);
 				this._evictIfOverCapacity();
-				localData = entry.data;
+				if (!abandonedClaim) {
+					localData = entry.data;
+				}
 			}
 		} else {
 			this._evictIfOverCapacity();
@@ -396,6 +409,9 @@ class NewsCache {
 					const refreshedData = refreshedLocalData && localOnlyChannels.length > 0
 						? mergeDeliveryData(entryRecord.data, refreshedLocalData, localOnlyChannels)
 						: entryRecord.data;
+					if (abandonedClaim && entryRecord.data?.status === 'claiming') {
+						return null;
+					}
 					if (refreshedLocalData && refreshedLocalData.status !== 'claiming' && entryRecord.data?.status === 'claiming') {
 						this._recordHit();
 						return refreshedLocalData;
@@ -499,25 +515,64 @@ class NewsCache {
 	 * field into the durable Firestore payload transactionally so concurrent
 	 * delivery updates from other replicas are preserved. Fail-open.
 	 *
+	 * `options.allowedCurrentStates` guards the shared durable state so an
+	 * ordering mistake cannot regress it: a late 'pending' can no longer bury a
+	 * terminal 'owned'/'none', and a terminal write cannot undo a newer one.
+	 * `options.claimToken` additionally pins the transition to the owner of the
+	 * current usage claim. The local mirror is refreshed from Firestore on the
+	 * next get(), so it never outranks the durable value for long.
+	 *
 	 * @param {string} symbol
 	 * @param {string} eventCategory
 	 * @param {'pending'|'owned'|'none'} state
+	 * @param {{allowedCurrentStates?: Array, claimToken?: string|null, clearUsageClaim?: boolean}} [options]
 	 * @returns {Promise<void>}
 	 */
-	async markOriginalPersistState(symbol, eventCategory, state) {
+	async markOriginalPersistState(symbol, eventCategory, state, options = {}) {
 		const key = this.generateKey(symbol, eventCategory);
 		const entry = this.cache.get(key);
 		if (!entry || this.isExpired(entry)) {
 			return;
 		}
-		entry.data = { ...entry.data, originalPersistedState: state };
+		if (options.claimToken !== undefined
+			&& entry.data[USAGE_CLAIM_TOKEN_FIELD]
+			&& entry.data[USAGE_CLAIM_TOKEN_FIELD] !== options.claimToken) {
+			console.debug('[NewsCache] Skipping persist-state write for a usage claim this replica does not own');
+			return;
+		}
+
+		const mergeFields = ['originalPersistedState'];
+		if (options.clearUsageClaim) {
+			mergeFields.push(USAGE_CLAIM_TOKEN_FIELD, USAGE_CLAIM_EXPIRES_FIELD);
+		}
+
+		entry.data = {
+			...entry.data,
+			originalPersistedState: state,
+			...(options.clearUsageClaim
+				? { [USAGE_CLAIM_TOKEN_FIELD]: null, [USAGE_CLAIM_EXPIRES_FIELD]: null }
+				: {}),
+		};
 
 		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
 			try {
 				await newsDedupStorageService.updateEntry(
 					key,
-					{ originalPersistedState: state },
-					{ mergeFields: ['originalPersistedState'] },
+					{ originalPersistedState: state, ...(options.clearUsageClaim
+						? { [USAGE_CLAIM_TOKEN_FIELD]: null, [USAGE_CLAIM_EXPIRES_FIELD]: null }
+						: {}) },
+					{
+						mergeFields,
+						...(Array.isArray(options.allowedCurrentStates)
+							? {
+								expectedField: 'originalPersistedState',
+								expectedValues: options.allowedCurrentStates,
+							}
+							: {}),
+						...(options.claimToken
+							? { expectedTokenField: USAGE_CLAIM_TOKEN_FIELD, expectedToken: options.claimToken }
+							: {}),
+					},
 				);
 			} catch (error) {
 				console.warn('[NewsCache] Failed to persist original-write state (fail-open):', error.message);
@@ -531,64 +586,165 @@ class NewsCache {
 	 * Performs a synchronized local check-and-set first, then — when
 	 * persistent dedup is enabled — commits the claim with an expected-state
 	 * guard inside the Firestore transaction so concurrent replicas cannot
-	 * double-claim. Callers must release via markOriginalPersistState('none')
-	 * when the claimed record fails to persist. Fail-open: storage errors
-	 * roll the local claim back.
+	 * double-claim. The claim carries an owner token and a bounded deadline, so
+	 * a process that crashes between the claim and its terminal write releases
+	 * the field within USAGE_CLAIM_LEASE_MS instead of stranding it until the
+	 * dedup TTL. Callers must release via releaseUsageOwnershipClaim() with the
+	 * returned token when the claimed record fails to persist. Fail-open:
+	 * storage errors roll the local claim back.
 	 *
 	 * @param {string} symbol
 	 * @param {string} eventCategory
-	 * @returns {Promise<boolean>} true when the caller holds the usage claim
+	 * @returns {Promise<string|null>} owner token when the caller holds the claim, else null
 	 */
 	async claimUsageOwnership(symbol, eventCategory) {
 		const key = this.generateKey(symbol, eventCategory);
 		const entry = this.cache.get(key);
 		if (!entry || this.isExpired(entry)) {
-			return false;
+			return null;
 		}
 		const previousState = entry.data.originalPersistedState;
-		if (previousState === 'owned' || previousState === 'pending' || previousState === 'claimed') {
-			return false;
+		if (previousState === 'owned' || previousState === 'pending') {
+			return null;
 		}
-		entry.data = { ...entry.data, originalPersistedState: 'claimed' };
+		if (previousState === USAGE_CLAIM_STATE && !isUsageClaimExpired(entry.data)) {
+			return null;
+		}
+
+		const claimToken = randomUUID();
+		const claimExpiresAt = Date.now() + USAGE_CLAIM_LEASE_MS;
+		entry.data = {
+			...entry.data,
+			originalPersistedState: USAGE_CLAIM_STATE,
+			[USAGE_CLAIM_TOKEN_FIELD]: claimToken,
+			[USAGE_CLAIM_EXPIRES_FIELD]: claimExpiresAt,
+		};
 
 		if (!newsDedupStorageService.isEnabled() || !newsDedupStorageService.isReady()) {
-			return true;
+			return claimToken;
 		}
 		try {
 			const committed = await newsDedupStorageService.updateEntry(
 				key,
-				{ originalPersistedState: 'claimed' },
 				{
-					mergeFields: ['originalPersistedState'],
+					originalPersistedState: USAGE_CLAIM_STATE,
+					[USAGE_CLAIM_TOKEN_FIELD]: claimToken,
+					[USAGE_CLAIM_EXPIRES_FIELD]: claimExpiresAt,
+				},
+				{
+					mergeFields: ['originalPersistedState', USAGE_CLAIM_TOKEN_FIELD, USAGE_CLAIM_EXPIRES_FIELD],
 					expectedField: 'originalPersistedState',
 					expectedValues: ['none'],
+					reclaimStale: { states: [USAGE_CLAIM_STATE], expiresField: USAGE_CLAIM_EXPIRES_FIELD },
 				},
 			);
 			if (committed) {
-				return true;
+				return claimToken;
 			}
 		} catch (error) {
 			console.warn('[NewsCache] Usage-ownership claim failed (fail-open):', error.message);
 		}
 		entry.data = { ...entry.data, originalPersistedState: previousState ?? 'none' };
-		return false;
+		return null;
+	}
+
+	/**
+	 * Extend a usage-ownership claim that is still being persisted.
+	 *
+	 * The claim lease is a fixed deadline, but the Firestore `add()` that
+	 * follows it has no application-level deadline. A save that outlives the
+	 * lease would otherwise let another replica reclaim the state and persist
+	 * a SECOND document carrying the same token usage — the token-pinned
+	 * terminal write would then be refused, but the duplicate alert document
+	 * is already written and `/api/alerts/summary` double-counts. Renewing
+	 * keeps the claim alive for as long as the write is genuinely in flight,
+	 * while a crashed owner still releases it within USAGE_CLAIM_LEASE_MS
+	 * because a dead process cannot renew.
+	 *
+	 * Only the deadline is extended; the claim state and owner token are
+	 * untouched, and the write is token-pinned so a replica that lost the
+	 * claim can never resurrect it. Fail-open on storage errors.
+	 *
+	 * Returns false for a refused write and for a storage fault alike:
+	 * updateEntry() swallows Firestore errors, so the two are not
+	 * distinguishable here. Callers must treat renewal as best-effort.
+	 *
+	 * @param {string} symbol
+	 * @param {string} eventCategory
+	 * @param {string} claimToken - Token returned by claimUsageOwnership
+	 * @returns {Promise<boolean>} true when the durable deadline was extended
+	 */
+	async renewUsageOwnership(symbol, eventCategory, claimToken) {
+		const key = this.generateKey(symbol, eventCategory);
+		const entry = this.cache.get(key);
+		if (!entry || this.isExpired(entry)) {
+			return false;
+		}
+		if (!claimToken || entry.data[USAGE_CLAIM_TOKEN_FIELD] !== claimToken) {
+			return false;
+		}
+		const claimExpiresAt = Date.now() + USAGE_CLAIM_LEASE_MS;
+		if (!newsDedupStorageService.isEnabled() || !newsDedupStorageService.isReady()) {
+			entry.data = { ...entry.data, [USAGE_CLAIM_EXPIRES_FIELD]: claimExpiresAt };
+			return true;
+		}
+		try {
+			const renewed = await newsDedupStorageService.updateEntry(
+				key,
+				{ [USAGE_CLAIM_EXPIRES_FIELD]: claimExpiresAt },
+				{
+					mergeFields: [USAGE_CLAIM_EXPIRES_FIELD],
+					expectedField: 'originalPersistedState',
+					expectedValues: [USAGE_CLAIM_STATE],
+					expectedTokenField: USAGE_CLAIM_TOKEN_FIELD,
+					expectedToken: claimToken,
+				},
+			);
+			if (renewed) {
+				entry.data = { ...entry.data, [USAGE_CLAIM_EXPIRES_FIELD]: claimExpiresAt };
+			}
+			return renewed;
+		} catch (error) {
+			console.warn('[NewsCache] Usage-ownership renewal failed (fail-open):', error.message);
+			return false;
+		}
+	}
+
+	/**
+	 * Return the interval callers use to keep a usage claim alive while the
+	 * alert document is being persisted.
+	 *
+	 * @returns {number}
+	 */
+	getUsageClaimRenewIntervalMs() {
+		return USAGE_CLAIM_RENEW_INTERVAL_MS;
 	}
 
 	/**
 	 * Release a claim acquired via claimUsageOwnership after its record
 	 * failed to persist, restoring 'none' so a later redelivery can own it.
 	 *
+	 * Defaults to the token held by the local entry so the owner token always
+	 * matches the claim this replica took, even when the caller loses it.
+	 *
 	 * @param {string} symbol
 	 * @param {string} eventCategory
+	 * @param {string} [claimToken] - Token returned by claimUsageOwnership
 	 * @returns {Promise<void>}
 	 */
-	async releaseUsageOwnershipClaim(symbol, eventCategory) {
-		await this.markOriginalPersistState(symbol, eventCategory, 'none');
+	async releaseUsageOwnershipClaim(symbol, eventCategory, claimToken) {
+		const key = this.generateKey(symbol, eventCategory);
+		const entry = this.cache.get(key);
+		const ownedToken = claimToken ?? (entry?.data?.[USAGE_CLAIM_TOKEN_FIELD] ?? null);
+		await this.markOriginalPersistState(symbol, eventCategory, 'none', {
+			allowedCurrentStates: [USAGE_CLAIM_STATE],
+			claimToken: ownedToken,
+			clearUsageClaim: true,
+		});
 	}
 
 	/**
-	 * Claim a channel-specific cached redelivery lease.
-	 *
+	 * Acquire an atomic delivery lease for an individual channel retry.
 	 * Local leases suppress same-process races. Persistent leases use the same
 	 * atomic Firestore claim primitive so separate replicas cannot retry the
 	 * same channel concurrently.
@@ -596,9 +752,10 @@ class NewsCache {
 	 * @param {string} symbol
 	 * @param {string} eventCategory
 	 * @param {string} channel
+	 * @param {Object} [options]
 	 * @returns {Promise<boolean>} true when this process may deliver
 	 */
-	async claimDelivery(symbol, eventCategory, channel) {
+	async claimDelivery(symbol, eventCategory, channel, options = {}) {
 		const key = `${this.generateKey(symbol, eventCategory)}:delivery:${channel}`;
 		const existingLease = this.deliveryLocks.get(key);
 		const now = Date.now();
@@ -609,14 +766,16 @@ class NewsCache {
 		// Prune inactive/expired leases before capacity check
 		this._evictDeliveryLocksIfOverCapacity({ reserveSlot: !existingLease });
 
-		// If this is a new lease and capacity is already saturated with active leases,
+		const isNewOrEvicted = !this.deliveryLocks.has(key);
+
+		// If this is a new lease (or was evicted during pruning) and capacity is already saturated with active leases,
 		// reject the claim to preserve existing active leases from eviction.
-		if (!existingLease && this.deliveryLocks.size >= this.deliveryLockMaxEntries) {
+		if (isNewOrEvicted && this.deliveryLocks.size >= this.deliveryLockMaxEntries) {
 			console.warn('[NewsCache] Delivery lock capacity saturated with active leases; rejecting new claim');
 			return false;
 		}
 
-		const persistentLeaseActive = existingLease && existingLease.persistentUntil > now;
+		const persistentLeaseActive = !isNewOrEvicted && existingLease && existingLease.persistentUntil > now;
 		const claimToken = persistentLeaseActive && existingLease.claimToken
 			? existingLease.claimToken
 			: randomUUID();
@@ -631,7 +790,10 @@ class NewsCache {
 		}
 
 		try {
-			const claimed = await newsDedupStorageService.claimEntry(key, DELIVERY_LOCK_TTL_MS, claimToken);
+			const claimed = await this._executeBoundedClaim(
+				() => newsDedupStorageService.claimEntry(key, DELIVERY_LOCK_TTL_MS, claimToken),
+				options,
+			);
 			if (!claimed) {
 				this.deliveryLocks.delete(key);
 				return false;
@@ -681,9 +843,7 @@ class NewsCache {
 	}
 
 	/**
-	 * Release the local portion of a channel-specific cached redelivery lease.
-	 * Persistent leases expire automatically so another replica cannot race the
-	 * cache update immediately after delivery.
+	 * Release a local and/or persistent channel delivery lease.
 	 */
 	releaseDelivery(symbol, eventCategory, channel) {
 		const key = `${this.generateKey(symbol, eventCategory)}:delivery:${channel}`;
@@ -699,19 +859,116 @@ class NewsCache {
 	}
 
 	/**
+	 * Execute a durable claim bounded by deadline, timeout, and abort signal.
+	 * Fails open (resolves true) when remaining delivery budget expires or signal aborts.
+	 *
+	 * @param {Function} fn
+	 * @param {Object} [options]
+	 * @returns {Promise<boolean>}
+	 * @private
+	 */
+	async _executeBoundedClaim(fn, options = {}) {
+		const { signal } = options;
+		const deadline = typeof options.deliveryDeadline === 'number'
+			? options.deliveryDeadline
+			: (typeof options.deadline === 'number' ? options.deadline : undefined);
+
+		let timeoutMs = typeof options.timeoutMs === 'number' ? options.timeoutMs : undefined;
+		if (typeof deadline === 'number') {
+			const remainingMs = Math.max(0, deadline - Date.now());
+			timeoutMs = typeof timeoutMs === 'number' ? Math.min(timeoutMs, remainingMs) : remainingMs;
+		}
+
+		if (signal?.aborted) {
+			console.warn('[NewsCache] Claim aborted by signal (fail-open)');
+			return true;
+		}
+
+		if (typeof timeoutMs === 'number' && timeoutMs <= 0) {
+			console.warn('[NewsCache] Claim delivery budget expired (fail-open)');
+			return true;
+		}
+
+		return new Promise((resolve, reject) => {
+			let settled = false;
+			let timer = null;
+			let abortListener = null;
+
+			const cleanup = () => {
+				if (timer) {
+					clearTimeout(timer);
+					timer = null;
+				}
+				if (signal && abortListener) {
+					signal.removeEventListener('abort', abortListener);
+					abortListener = null;
+				}
+			};
+
+			const failOpen = (reason) => {
+				if (!settled) {
+					settled = true;
+					cleanup();
+					console.warn(`[NewsCache] Firestore claimEntry ${reason} (fail-open)`);
+					resolve(true);
+				}
+			};
+
+			if (signal) {
+				abortListener = () => failOpen('aborted by signal');
+				signal.addEventListener('abort', abortListener, { once: true });
+			}
+
+			if (typeof timeoutMs === 'number' && Number.isFinite(timeoutMs)) {
+				timer = setTimeout(() => failOpen('budget expired'), timeoutMs);
+			}
+
+			Promise.resolve()
+				.then(fn)
+				.then((result) => {
+					if (!settled) {
+						settled = true;
+						cleanup();
+						resolve(result);
+					}
+				})
+				.catch((error) => {
+					if (!settled) {
+						settled = true;
+						cleanup();
+						reject(error);
+					}
+				});
+		});
+	}
+
+	/**
 	 * Claim a cache key atomically to prevent concurrent replica alerts.
 	 *
 	 * @param {string} symbol
 	 * @param {string} eventCategory
+	 * @param {Object} [options]
 	 * @returns {Promise<boolean>} true if claim succeeded, false if already claimed/exists
 	 */
-	async claim(symbol, eventCategory) {
+	async claim(symbol, eventCategory, options = {}) {
 		const key = this.generateKey(symbol, eventCategory);
 		const entry = this.cache.get(key);
 
 		if (entry) {
 			if (!this.isExpired(entry)) {
-				return false;
+				if (entry.data?.status !== 'claiming-abandoned') {
+					return false;
+				}
+				if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
+					try {
+						await this._executeBoundedClaim(
+							() => newsDedupStorageService.deleteEntry(key),
+							options,
+						);
+					} catch (error) {
+						console.warn('[NewsCache] Retrying abandoned claim deletion failed:', error.message);
+					}
+				}
 			}
 			this.cache.delete(key);
 		}
@@ -740,7 +997,10 @@ class NewsCache {
 		// Persistent check/write
 		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
 			try {
-				const claimed = await newsDedupStorageService.claimEntry(key, this.ttlMs);
+				const claimed = await this._executeBoundedClaim(
+					() => newsDedupStorageService.claimEntry(key, this.ttlMs),
+					options,
+				);
 				if (claimed) {
 					return true;
 				}
@@ -755,6 +1015,37 @@ class NewsCache {
 		}
 
 		return true;
+	}
+
+	/**
+	 * Release an in-flight claim when delivery is aborted or abandoned before dispatch.
+	 *
+	 * @param {string} symbol
+	 * @param {string} eventCategory
+	 * @returns {Promise<void>}
+	 */
+	async releaseClaim(symbol, eventCategory) {
+		const key = this.generateKey(symbol, eventCategory);
+		const entry = this.cache.get(key);
+		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
+			let deleted = false;
+			try {
+				deleted = await newsDedupStorageService.deleteEntry(key);
+			} catch (error) {
+				console.warn('[NewsCache] Firestore releaseClaim/deleteEntry failed (fail-open):', error.message);
+			}
+			if (!deleted && entry?.data?.status === 'claiming') {
+				this._setCacheEntry(key, {
+					...entry,
+					timestamp: Date.now(),
+					data: { status: 'claiming-abandoned' },
+				});
+				return;
+			}
+		}
+		if (entry?.data?.status === 'claiming') {
+			this.cache.delete(key);
+		}
 	}
 
 	/**
@@ -835,4 +1126,6 @@ module.exports = {
 	getCacheInstance,
 	NewsCache,
 	parseNewsCacheTtlHours,
+	USAGE_CLAIM_LEASE_MS,
+	USAGE_CLAIM_RENEW_INTERVAL_MS,
 };

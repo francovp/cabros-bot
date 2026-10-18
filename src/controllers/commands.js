@@ -1,10 +1,22 @@
 const { fetchSymbolPrice } = require('./commands/handlers/core/fetchPriceCryptoSymbol');
+const { userPriceAlertCmd } = require('./commands/handlers/core/userPriceAlertHandler');
+const { reactionsSymbol } = require('./commands/handlers/reactionsSymbol');
 const { jobService } = require('../services/jobs/JobService');
 const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor');
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const signalOutcomeService = require('../services/storage/SignalOutcomeService');
+const alertStorageService = require('../services/storage/AlertStorageService');
 const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
+const { isChatAuthorized } = require('../lib/telegramCommandAuth');
+const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
+const { smartEscapeMarkdownV2 } = require('../services/notification/formatters/markdownV2Formatter');
+const {
+	isMaintenanceModeEnabled,
+	telegramMaintenanceMode,
+	sendMaintenanceReply,
+	TELEGRAM_MAINTENANCE_NOTICE,
+} = require('../lib/maintenanceMode');
 
 const READINESS_ERROR_LABELS = {
 	http_5xx: 'error HTTP 5xx del servidor TradingView',
@@ -51,6 +63,26 @@ const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
 	analisis: { max: 3, windowMs: 3_600_000 },
 	scanner: { max: 3, windowMs: 3_600_000 },
 	noticias: { max: 3, windowMs: 3_600_000 },
+	preferencias: { max: 20, windowMs: 60_000 },
+	filtro: { max: 20, windowMs: 60_000 },
+	silencio: { max: 20, windowMs: 60_000 },
+	umbral: { max: 20, windowMs: 60_000 },
+	categorias: { max: 20, windowMs: 60_000 },
+	alerta: { max: 10, windowMs: 60_000 },
+	history: { max: 10, windowMs: 60_000 },
+	reactions: { max: 10, windowMs: 60_000 },
+});
+const TELEGRAM_COMMAND_ALIASES = Object.freeze({
+	analysis: 'analisis',
+	news: 'noticias',
+	preferences: 'preferencias',
+	filter: 'filtro',
+	quiet: 'silencio',
+	threshold: 'umbral',
+	categories: 'categorias',
+	alert: 'alerta',
+	alertas: 'history',
+	reacciones: 'reactions',
 });
 const MAX_TELEGRAM_COMMAND_RATE_LIMIT = 1_000;
 const MAX_TELEGRAM_COMMAND_WINDOW_MS = 86_400_000;
@@ -88,7 +120,7 @@ async function telegramCommandRateLimiter(context, next) {
 	const [rawCommand, recipient] = commandToken.slice(1).split('@', 2);
 	if (recipient !== undefined
 		&& (!context.me || recipient.toLowerCase() !== String(context.me).replace(/^@/, '').toLowerCase())) return next();
-	const command = { analysis: 'analisis', news: 'noticias' }[rawCommand] || rawCommand;
+	const command = TELEGRAM_COMMAND_ALIASES[rawCommand] || rawCommand;
 	const rule = getTelegramCommandRateLimits()[command];
 	const chatId = getChatId(context);
 	if (!rule || chatId === undefined || chatId === null) return next();
@@ -132,6 +164,10 @@ async function telegramCommandRateLimiter(context, next) {
 
 telegramCommandRateLimiter.reset = () => telegramCommandRateLimitBuckets.clear();
 const getPrice = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
 	const chatId = getChatId(context);
 	const text = (context.message && context.message.text) || '';
 	const messageSplited = text.trim().split(/\s+/);
@@ -205,7 +241,28 @@ function sendReadinessWarning(context, warningText, signal) {
 	return Promise.resolve();
 }
 
+/**
+ * Routing merged into a created job's payload.
+ *
+ * Telegram contexts carry no `notificationRouting` and keep `{ telegramChatId }`
+ * unchanged. Issue #886's WhatsApp bridge sets it so a job is delivered to the chat
+ * the command arrived in rather than to a GreenAPI chat id shaped like a Telegram
+ * one. A malformed override is ignored: dropping routing would turn the job into an
+ * unintended broadcast.
+ */
+function resolveJobRouting(context, chatId) {
+	const override = context && context.notificationRouting;
+	if (override && typeof override === 'object' && !Array.isArray(override)) {
+		return { ...override };
+	}
+	return chatId !== undefined && chatId !== null ? { telegramChatId: String(chatId) } : {};
+}
+
 const createTradingViewJobCommand = (type, command, buildPayload) => async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
 	const chatId = getChatId(context);
 	const args = parseCommandArgs(context);
 	const commandSpan = sentryService.startInactiveSpan({
@@ -222,7 +279,7 @@ const createTradingViewJobCommand = (type, command, buildPayload) => async (cont
 	try {
 		const payload = {
 			...buildPayload(args),
-			...(chatId !== undefined && chatId !== null ? { telegramChatId: String(chatId) } : {}),
+			...resolveJobRouting(context, chatId),
 		};
 		if (typeof jobService.validateJobRequest === 'function') {
 			jobService.validateJobRequest(type, payload);
@@ -314,6 +371,10 @@ function formatJobDetail(job) {
 }
 
 const jobsCommand = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
 	const chatId = getChatId(context);
 	const args = parseCommandArgs(context);
 	const commandSpan = sentryService.startInactiveSpan({
@@ -371,6 +432,164 @@ const jobsCommand = async (context) => {
 	}
 };
 
+const HISTORY_DEFAULT_LIMIT = 5;
+const HISTORY_MAX_LIMIT = 20;
+const HISTORY_FETCH_LIMIT = 100;
+const HISTORY_COMMAND_TIMEOUT_MS = 8000;
+const HISTORY_STATUS_VALUES = new Set(['delivered', 'failed', 'partial', 'skipped']);
+
+function parseHistoryFilters(args) {
+	const first = String(args.positionals[0] || '').trim();
+	const second = String(args.positionals[1] || '').trim();
+	const isStatusCommand = ['status', 'estado'].includes(first.toLowerCase());
+	const rawStatus = isStatusCommand ? (second || args.options.status) : args.options.status;
+
+	let positionalLimit;
+	let symbol;
+
+	if (isStatusCommand) {
+		const third = String(args.positionals[2] || '').trim();
+		if (/^\d+$/.test(third)) {
+			positionalLimit = Number(third);
+		}
+	} else if (/^\d+$/.test(first)) {
+		positionalLimit = Number(first);
+	} else if (first) {
+		symbol = first.toUpperCase();
+		if (/^\d+$/.test(second)) {
+			positionalLimit = Number(second);
+		}
+	}
+
+	const rawLimit = args.options.limit !== undefined ? Number(args.options.limit) : positionalLimit;
+	const parsedLimit = Number(rawLimit);
+
+	return {
+		symbol,
+		status: HISTORY_STATUS_VALUES.has(String(rawStatus || '').toLowerCase())
+			? String(rawStatus).toLowerCase()
+			: undefined,
+		limit: Number.isInteger(parsedLimit) && parsedLimit > 0
+			? Math.min(parsedLimit, HISTORY_MAX_LIMIT)
+			: HISTORY_DEFAULT_LIMIT,
+	};
+}
+
+function getAlertDeliveryStatus(alert) {
+	const results = Array.isArray(alert.deliveryResults) ? alert.deliveryResults : [];
+	if (results.length === 0) return 'unknown';
+	const nonSkipped = results.filter((result) => result && !result.skipped);
+	if (nonSkipped.length === 0) return 'skipped';
+	const delivered = nonSkipped.filter((result) => result.success).length;
+	if (delivered === nonSkipped.length) return 'delivered';
+	if (delivered === 0) return 'failed';
+	return 'partial';
+}
+
+function matchesHistoryFilters(alert, filters) {
+	if (filters.symbol) {
+		const symbol = String(alert.symbol || '').toUpperCase();
+		const exchange = alert.exchange ? `${String(alert.exchange).toUpperCase()}:${symbol}` : symbol;
+		if (filters.symbol !== symbol && filters.symbol !== exchange) return false;
+	}
+	return !filters.status || getAlertDeliveryStatus(alert) === filters.status;
+}
+
+function escapeTelegramText(value) {
+	return String(value ?? '').replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+}
+
+function formatHistoryTime(receivedAt) {
+	const date = new Date(receivedAt);
+	return Number.isNaN(date.getTime()) ? 'fecha desconocida' : `${date.toISOString().slice(11, 16)} UTC`;
+}
+
+function formatHistoryDelivery(results) {
+	if (!Array.isArray(results) || results.length === 0) return 'no registrada';
+	return results
+		.filter((result) => result && result.channel)
+		.map((result) => {
+			const channel = escapeTelegramText(result.channel);
+			if (result.skipped) {
+				return `${channel} OMITIDO`;
+			}
+			return `${channel} ${result.success ? 'OK' : 'FALLÓ'}`;
+		})
+		.join(', ') || 'no registrada';
+}
+
+function formatAlertHistory(alerts, limit) {
+	const lines = [`*Historial de alertas* \\(últimas ${limit}\\)`, ''];
+	alerts.forEach((alert, index) => {
+		const symbol = escapeTelegramText(alert.symbol || 'desconocido');
+		const sentiment = escapeTelegramText(alert.enrichmentData?.sentiment || 'N/D');
+		lines.push(`${index + 1}\\. *${symbol}* \\- ${escapeTelegramText(formatHistoryTime(alert.receivedAt))}`);
+		lines.push(`   Sentimiento: ${sentiment} \\| Enriquecida: ${alert.enriched ? 'sí' : 'no'}`);
+		lines.push(`   Entrega: ${formatHistoryDelivery(alert.deliveryResults)}`);
+		lines.push('');
+	});
+	return lines.join('\n').trim();
+}
+
+const alertHistoryCommand = async (context) => {
+	const chatId = getChatId(context);
+	if (!isChatAuthorized(chatId)) {
+		console.warn('[commands] /history requested from unauthorized chat:', chatId);
+		await context.reply('No tienes autorización para consultar el historial de alertas.');
+		return;
+	}
+	const args = parseCommandArgs(context);
+	const filters = parseHistoryFilters(args);
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.history',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/history',
+			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
+			'query.symbol': filters.symbol || 'all',
+		},
+	});
+
+	try {
+		if (!alertStorageService.isEnabled()) {
+			await context.reply('El historial de alertas está desactivado — pide a un operador que active ENABLE_FIRESTORE_ALERT_STORAGE');
+			return;
+		}
+
+		const result = await withTimeout(
+			() => alertStorageService.listAlerts({ limit: HISTORY_FETCH_LIMIT }),
+			HISTORY_COMMAND_TIMEOUT_MS,
+			'alert history read timed out',
+		);
+		const alerts = (Array.isArray(result?.alerts) ? result.alerts : [])
+			.filter((alert) => matchesHistoryFilters(alert, filters))
+			.slice(0, filters.limit);
+		if (alerts.length === 0) {
+			const suffix = filters.symbol ? ` para ${escapeTelegramText(filters.symbol)}` : '';
+			await context.reply(`No hay alertas recientes${suffix}\\.`, { parse_mode: 'MarkdownV2' });
+			return;
+		}
+		await context.reply(formatAlertHistory(alerts, filters.limit), { parse_mode: 'MarkdownV2' });
+	} catch (error) {
+		console.error('[commands] /history failed:', error.message);
+		const expected = error.name === 'AbortError'
+			|| error.name === 'TimeoutError'
+			|| error.code === 'TIMEOUT'
+			|| error.code === alertStorageService.STORAGE_UNAVAILABLE_CODE;
+		if (!expected) {
+			sentryService.captureRuntimeError({ channel: 'telegram', error, extra: { command: 'history', chatId } });
+		}
+		try {
+			await context.reply('No pude consultar el historial ahora mismo. Intenta nuevamente más tarde.');
+		} catch (replyError) {
+			console.error('Failed to send error reply:', replyError);
+		}
+	} finally {
+		sentryService.endSpan(commandSpan);
+	}
+};
+
 const expandedAnalysisCmd = createTradingViewJobCommand(
 	'expanded-analysis',
 	'analisis',
@@ -398,6 +617,10 @@ const marketScannerCmd = createTradingViewJobCommand(
 );
 
 const newsMonitorCmd = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
 	const chatId = getChatId(context);
 	const args = parseCommandArgs(context);
 	const commandSpan = sentryService.startInactiveSpan({
@@ -445,6 +668,10 @@ const newsMonitorCmd = async (context) => {
 };
 
 const cryptoBotCmd = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
 	const chatId = getChatId(context);
 	const commandSpan = sentryService.startInactiveSpan({
 		name: 'telegram.command.cryptobot',
@@ -486,8 +713,6 @@ const cryptoBotCmd = async (context) => {
 
 const OUTCOMES_COMMAND_LIMIT = 5;
 const OUTCOMES_COMMAND_MAX_SCAN_DOCS = 300;
-const OUTCOME_WINDOW_KEYS = ['1h', '4h', '1D', '1W'];
-const OUTCOME_WINDOW_LABELS = { '1h': '1h', '4h': '4h', '1D': '1D', '1W': '1S' };
 const OUTCOME_EXCHANGE_PATTERN = /^[A-Z0-9_]{1,30}$/;
 const OUTCOME_SYMBOL_PATTERN = /^[A-Z0-9._-]{1,30}$/;
 // Bounded deadline for the outcome store read so a chat command can never hold
@@ -499,6 +724,10 @@ function escapeOutcomeText(value) {
 }
 
 const outcomesCommand = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
 	const chatId = getChatId(context);
 	const args = parseCommandArgs(context);
 	const rawSymbol = (args.positionals[0] || '').trim();
@@ -631,16 +860,20 @@ function formatOutcomesMessage(symbol, outcomes) {
 		`*📊 Rendimiento reciente — ${escapeOutcomeText(symbol)}*`,
 		'',
 	];
+	const configuredLabels = typeof signalOutcomeService.getOutcomeWindowLabels === 'function'
+		? signalOutcomeService.getOutcomeWindowLabels()
+		: {};
 	outcomes.slice(0, OUTCOMES_COMMAND_LIMIT).forEach((outcome) => {
 		const sideLabel = outcome.side === 'SELL' ? 'Venta' : 'Compra';
 		const entry = Number.isFinite(outcome.price) ? escapeOutcomeText(outcome.price) : null;
 		const receivedAt = outcome.receivedAt ? String(outcome.receivedAt).slice(0, 10) : '';
 		lines.push(`• ${sideLabel}${entry !== null ? ` @ ${entry}` : ''}${receivedAt ? ` \\(${escapeOutcomeText(receivedAt)}\\)` : ''}`);
 
-		OUTCOME_WINDOW_KEYS.forEach((winKey) => {
+		const windowKeys = Object.keys(outcome.outcomes || {});
+		windowKeys.forEach((winKey) => {
 			const win = outcome.outcomes && outcome.outcomes[winKey];
 			if (!win || win.status !== 'evaluated') return;
-			const label = OUTCOME_WINDOW_LABELS[winKey] || winKey;
+			const label = configuredLabels[winKey] || winKey;
 			const returnPct = Number.isFinite(win.return)
 				? `${escapeOutcomeText(`${win.return >= 0 ? '+' : ''}${win.return.toFixed(2)}%`)}`
 				: 'n/d';
@@ -657,11 +890,255 @@ function formatOutcomesMessage(symbol, outcomes) {
 	return lines.join('\n');
 }
 
+function formatPreferencesMessage(prefs) {
+	const symFilter = prefs.symbolFilter && prefs.symbolFilter.length > 0
+		? prefs.symbolFilter.map((s) => `\`${smartEscapeMarkdownV2(s)}\``).join(', ')
+		: '_Todos los símbolos_';
+	const symExclude = prefs.symbolExclude && prefs.symbolExclude.length > 0
+		? prefs.symbolExclude.map((s) => `\`${smartEscapeMarkdownV2(s)}\``).join(', ')
+		: '_Ninguno_';
+	const cats = prefs.categories && prefs.categories.length > 0
+		? prefs.categories.map((c) => `\`${smartEscapeMarkdownV2(c)}\``).join(', ')
+		: '_Todas_ \\(scanner, news, expanded, core, volume\\)';
+	const conf = typeof prefs.minConfidence === 'number' && prefs.minConfidence > 0
+		? `${Math.round(prefs.minConfidence * 100)}\\%`
+		: '_Sin filtro_';
+	const quiet = prefs.quietHoursStart !== null && prefs.quietHoursEnd !== null
+		? `${String(prefs.quietHoursStart).padStart(2, '0')}:00 \\- ${String(prefs.quietHoursEnd).padStart(2, '0')}:00 \\(${smartEscapeMarkdownV2(prefs.timezone || 'America/Santiago')}\\)`
+		: '_Desactivado_';
+
+	return [
+		'*⚙️ Preferencias para este chat*',
+		'',
+		`• *Símbolos permitidos*: ${symFilter}`,
+		`• *Símbolos excluidos*: ${symExclude}`,
+		`• *Categorías activas*: ${cats}`,
+		`• *Confianza mínima*: ${conf}`,
+		`• *Horas de silencio*: ${quiet}`,
+		'',
+		'*Comandos de configuración:*',
+		'• `/filtro <simbolos>` \\(ej: `/filtro BTC,ETH` o `/filtro clear`\\)',
+		'• `/filtro excluir <simbolos>` \\(ej: `/filtro excluir DOGEUSDT`\\)',
+		'• `/silencio <inicio>,<fin>` \\(ej: `/silencio 23,7` o `/silencio off`\\)',
+		'• `/umbral <min>` \\(ej: `/umbral 0.8` o `/umbral 80` o `/umbral off`\\)',
+		'• `/categorias <lista>` \\(ej: `/categorias scanner,news` o `/categorias all`\\)',
+	].join('\n');
+}
+
+const preferenciasCmd = async (context) => {
+	const chatId = getChatId(context);
+	if (!chatId) return;
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.preferencias',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/preferencias',
+			'telegram.chat_id': String(chatId),
+		},
+	});
+
+	try {
+		const prefs = await chatPreferenceService.getPreferences(chatId, 'telegram');
+		const message = formatPreferencesMessage(prefs);
+		await context.reply(message, { parse_mode: 'MarkdownV2' });
+	} catch (error) {
+		console.error(error);
+		sentryService.captureRuntimeError({
+			channel: 'telegram',
+			error,
+			extra: { command: 'preferenciasCmd', chatId },
+		});
+		await context.reply('Error al obtener preferencias.');
+	} finally {
+		sentryService.endSpan(commandSpan);
+	}
+};
+
+const filtroCmd = async (context) => {
+	const chatId = getChatId(context);
+	if (!chatId) return;
+	const { positionals } = parseCommandArgs(context);
+
+	try {
+		if (positionals.length === 0) {
+			const prefs = await chatPreferenceService.getPreferences(chatId, 'telegram');
+			const symList = prefs.symbolFilter.length > 0 ? prefs.symbolFilter.join(', ') : 'Todos';
+			const excList = prefs.symbolExclude.length > 0 ? prefs.symbolExclude.join(', ') : 'Ninguno';
+			return await context.reply(
+				`*Filtro actual:*\n• Permitidos: \`${smartEscapeMarkdownV2(symList)}\`\n• Excluidos: \`${smartEscapeMarkdownV2(excList)}\`\n\nUso: \`/filtro BTC,ETH\` o \`/filtro clear\` o \`/filtro excluir DOGE\``,
+				{ parse_mode: 'MarkdownV2' },
+			);
+		}
+
+		const firstArg = positionals[0].toLowerCase();
+		if (firstArg === 'excluir' || firstArg === 'exclude') {
+			if (positionals.length === 1 || ['clear', 'off', 'none', 'ninguno'].includes(positionals[1]?.toLowerCase())) {
+				await chatPreferenceService.setPreferences(chatId, 'telegram', { symbolExclude: [] });
+				return await context.reply('*Filtro de exclusión desactivado*', { parse_mode: 'MarkdownV2' });
+			}
+			const rawSymbols = positionals.slice(1).join(' ').replace(/,/g, ' ');
+			const symbols = rawSymbols.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+			const updated = await chatPreferenceService.setPreferences(chatId, 'telegram', { symbolExclude: symbols });
+			const list = updated.symbolExclude.join(', ');
+			return await context.reply(
+				`*Símbolos excluidos actualizados:*\n\`${smartEscapeMarkdownV2(list)}\``,
+				{ parse_mode: 'MarkdownV2' },
+			);
+		}
+
+		if (['clear', 'off', 'none', 'todos', 'all'].includes(firstArg)) {
+			await chatPreferenceService.setPreferences(chatId, 'telegram', { symbolFilter: [] });
+			return await context.reply('*Filtro de símbolos desactivado*: recibirás todos los símbolos', { parse_mode: 'MarkdownV2' });
+		}
+
+		const rawSymbols = positionals.join(' ').replace(/,/g, ' ');
+		const symbols = rawSymbols.split(/\s+/).map((s) => s.trim()).filter(Boolean);
+		const updated = await chatPreferenceService.setPreferences(chatId, 'telegram', { symbolFilter: symbols });
+		const list = updated.symbolFilter.join(', ');
+		return await context.reply(
+			`*Filtro de símbolos actualizado:*\n\`${smartEscapeMarkdownV2(list)}\``,
+			{ parse_mode: 'MarkdownV2' },
+		);
+	} catch (error) {
+		console.error(error);
+		await context.reply(`Error en filtro: ${error.message}`);
+	}
+};
+
+const silencioCmd = async (context) => {
+	const chatId = getChatId(context);
+	if (!chatId) return;
+	const { positionals, options } = parseCommandArgs(context);
+
+	try {
+		if (positionals.length === 0) {
+			const prefs = await chatPreferenceService.getPreferences(chatId, 'telegram');
+			const current = prefs.quietHoursStart !== null && prefs.quietHoursEnd !== null
+				? `${prefs.quietHoursStart}:00 - ${prefs.quietHoursEnd}:00 (${prefs.timezone})`
+				: 'Desactivado';
+			return await context.reply(
+				`*Horas de silencio actuales:* ${smartEscapeMarkdownV2(current)}\n\nUso: \`/silencio 23,7\` o \`/silencio off\``,
+				{ parse_mode: 'MarkdownV2' },
+			);
+		}
+
+		const firstArg = positionals[0].toLowerCase();
+		if (['off', 'clear', 'disable', 'ninguno'].includes(firstArg)) {
+			await chatPreferenceService.setPreferences(chatId, 'telegram', {
+				quietHoursStart: null,
+				quietHoursEnd: null,
+			});
+			return await context.reply('*Horas de silencio desactivadas*', { parse_mode: 'MarkdownV2' });
+		}
+
+		// Support '23,7', '23-7', '23 7', '23:00,7:00'
+		const rawTime = positionals.join(' ').replace(/[:]/g, '');
+		const parts = rawTime.split(/[,-/\s]+/).filter(Boolean).map((p) => {
+			const num = parseInt(p, 10);
+			return num > 24 ? Math.floor(num / 100) : num;
+		});
+
+		if (parts.length < 2 || isNaN(parts[0]) || isNaN(parts[1]) || parts[0] < 0 || parts[0] > 23 || parts[1] < 0 || parts[1] > 23) {
+			return await context.reply('Formato inválido. Usa: `/silencio <inicio>,<fin>` (ej: `/silencio 23,7` o `/silencio off`)');
+		}
+
+		const tz = options.tz || options.timezone;
+		const update = {
+			quietHoursStart: parts[0],
+			quietHoursEnd: parts[1],
+			...(tz ? { timezone: tz } : {}),
+		};
+		const updated = await chatPreferenceService.setPreferences(chatId, 'telegram', update);
+		return await context.reply(
+			`*Horas de silencio configuradas:* ${updated.quietHoursStart}:00 \\- ${updated.quietHoursEnd}:00 \\(${smartEscapeMarkdownV2(updated.timezone)}\\)`,
+			{ parse_mode: 'MarkdownV2' },
+		);
+	} catch (error) {
+		console.error(error);
+		await context.reply(`Error en silencio: ${error.message}`);
+	}
+};
+
+const umbralCmd = async (context) => {
+	const chatId = getChatId(context);
+	if (!chatId) return;
+	const { positionals } = parseCommandArgs(context);
+
+	try {
+		if (positionals.length === 0) {
+			const prefs = await chatPreferenceService.getPreferences(chatId, 'telegram');
+			const current = prefs.minConfidence > 0 ? `${Math.round(prefs.minConfidence * 100)}%` : 'Sin umbral';
+			return await context.reply(
+				`*Umbral de confianza actual:* ${smartEscapeMarkdownV2(current)}\n\nUso: \`/umbral 0.8\` o \`/umbral 80\` o \`/umbral off\``,
+				{ parse_mode: 'MarkdownV2' },
+			);
+		}
+
+		const firstArg = positionals[0].toLowerCase();
+		if (['off', 'clear', '0', 'none'].includes(firstArg)) {
+			await chatPreferenceService.setPreferences(chatId, 'telegram', { minConfidence: 0 });
+			return await context.reply('*Umbral de confianza desactivado*: recibirás todas las señales', { parse_mode: 'MarkdownV2' });
+		}
+
+		const rawVal = parseFloat(firstArg.replace('%', ''));
+		if (isNaN(rawVal) || rawVal < 0) {
+			return await context.reply('Valor inválido. Usa: `/umbral 0.8` o `/umbral 80` o `/umbral off`');
+		}
+
+		const updated = await chatPreferenceService.setPreferences(chatId, 'telegram', { minConfidence: rawVal });
+		return await context.reply(
+			`*Umbral de confianza actualizado:* ${Math.round(updated.minConfidence * 100)}\\%`,
+			{ parse_mode: 'MarkdownV2' },
+		);
+	} catch (error) {
+		console.error(error);
+		await context.reply(`Error en umbral: ${error.message}`);
+	}
+};
+
+const categoriasCmd = async (context) => {
+	const chatId = getChatId(context);
+	if (!chatId) return;
+	const { positionals } = parseCommandArgs(context);
+
+	try {
+		if (positionals.length === 0) {
+			const prefs = await chatPreferenceService.getPreferences(chatId, 'telegram');
+			const current = prefs.categories.length > 0 ? prefs.categories.join(', ') : 'Todas';
+			return await context.reply(
+				`*Categorías actuales:* \`${smartEscapeMarkdownV2(current)}\`\n\nCategorías válidas: \`scanner\`, \`news\`, \`expanded\`, \`core\`, \`volume\`\nUso: \`/categorias scanner,news\` o \`/categorias all\``,
+				{ parse_mode: 'MarkdownV2' },
+			);
+		}
+
+		const firstArg = positionals[0].toLowerCase();
+		if (['all', 'clear', 'todas', 'off'].includes(firstArg)) {
+			await chatPreferenceService.setPreferences(chatId, 'telegram', { categories: [] });
+			return await context.reply('*Categorías actualizadas*: recibirás todas las alertas', { parse_mode: 'MarkdownV2' });
+		}
+
+		const rawCats = positionals.join(' ').replace(/,/g, ' ');
+		const cats = rawCats.split(/\s+/).map((c) => c.trim()).filter(Boolean);
+		const updated = await chatPreferenceService.setPreferences(chatId, 'telegram', { categories: cats });
+		const list = updated.categories.length > 0 ? updated.categories.join(', ') : 'Todas';
+		return await context.reply(
+			`*Categorías actualizadas:*\n\`${smartEscapeMarkdownV2(list)}\``,
+			{ parse_mode: 'MarkdownV2' },
+		);
+	} catch (error) {
+		console.error(error);
+		await context.reply(`Error en categorías: ${error.message}`);
+	}
+};
+
 function buildHelpMessage() {
 	return [
 		'*🤖 Comandos disponibles en Cabros Bot*',
 		'',
 		'• `/precio <simbolo>` — Consulta el precio en Binance o Twelve Data \\(ej: `/precio BTCUSDT`, `/precio NVDA`\\)',
+		'• `/alerta <simbolo> <operador> <precio>` — Configura o gestiona alertas de precio \\(alias: `/alert`\\)',
+		'  _Opciones: `/alerta BTCUSDT < 60000`, `/alerta list`, `/alerta cancel <id>`_',
 		'• `/cryptobot id` — Muestra el Chat ID actual de Telegram',
 		'• `/analisis <simbolos>` — Crea un análisis técnico en TradingView \\(alias: `/analysis`\\)',
 		'  _Opciones: `timeframe=1D`, `mtf=true`, `timeoutMs=300000`_',
@@ -671,12 +1148,19 @@ function buildHelpMessage() {
 		'  _Opciones: `crypto=BTCUSDT,ETHUSDT`, `stocks=NVDA`_',
 		'• `/outcomes <simbolo>` — Rendimiento reciente de señales evaluadas \\(alias: `/rendimiento`\\)',
 		'  _Ej: `/outcomes BINANCE:BTCUSDT`_',
+		'• `/preferencias` — Preferencias de alertas para este chat \\(símbolos, silencio, umbral, categorías\\)',
+		'  _Comandos rápidos: `/filtro`, `/silencio`, `/umbral`, `/categorias`_',
 		'• `/jobs [jobId]` — Lista jobs recientes o muestra su estado \\(alias: `/trabajos`\\)',
+		'• `/history [simbolo] [limit]` — Consulta alertas recientes \\(alias: `/alertas`; admite `status=failed|partial|delivered`\\)',
 		'• `/help` / `/start` — Muestra este mensaje de ayuda',
 	].join('\n');
 }
 
 const helpCmd = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
 	const chatId = getChatId(context);
 	const commandSpan = sentryService.startInactiveSpan({
 		name: 'telegram.command.help',
@@ -788,15 +1272,33 @@ async function replyValidationError(context, error) {
 	await context.reply(`Comando inválido: ${suffix}`);
 }
 
+const reactionsCommand = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
+	return reactionsSymbol(context);
+};
+
 module.exports = {
 	getPrice,
+	userPriceAlertCmd,
 	cryptoBotCmd,
 	expandedAnalysisCmd,
 	marketScannerCmd,
 	jobsCommand,
+	alertHistoryCommand,
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	reactionsCommand,
+	reactionsSymbol,
+	preferenciasCmd,
+	filtroCmd,
+	silencioCmd,
+	umbralCmd,
+	categoriasCmd,
+	formatPreferencesMessage,
 	buildHelpMessage,
 	getTelegramCommandMenu,
 	parseCommandArgs,
@@ -804,5 +1306,7 @@ module.exports = {
 	formatReadinessErrorLabel,
 	sendReadinessWarning,
 	telegramCommandRateLimiter,
+	telegramMaintenanceMode,
 	setWarningReplyTimeoutMsForTest,
+	resolveJobRouting,
 };

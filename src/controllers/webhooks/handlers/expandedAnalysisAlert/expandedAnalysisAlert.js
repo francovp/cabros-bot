@@ -1,16 +1,18 @@
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
+const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
 	ExpandedAnalysisAlertRequestError,
 	parseExpandedAnalysisAlertRequest,
 	buildExpandedAnalysisAlertReport,
-	buildReportRow,
+	deriveItemSide,
+	recordExpandedAnalysisOutcomes,
 } = require('../../../../services/tradingview/expandedAnalysisAlertReport');
 const {
 	getNotificationManager,
-	initializeNotificationServices,
+	getOrInitializeNotificationManager,
 } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const {
@@ -41,26 +43,18 @@ function resolveDryRun(req) {
 	return queryFlag || bodyFlag;
 }
 
-function deriveItemSide(analysis = {}) {
-	const sentiment = String(analysis.sentiment || analysis.market_sentiment?.overall_sentiment || '').toUpperCase();
-	const confluence = String(analysis.confluence?.recommendation || analysis.confluence?.action || '').toUpperCase();
-	if (confluence.includes('SELL') || sentiment.includes('BEARISH') || sentiment.includes('BAJISTA')) {
-		return 'SELL';
-	}
-	return 'BUY';
-}
-
 function postExpandedAnalysisAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 
 		try {
 			const requestSpan = sentryService.getActiveSpan();
 			const routing = parseNotificationRouting(req.body);
 			const parsed = parseExpandedAnalysisAlertRequest(req);
+			const duplicatesRemoved = parsed.duplicatesRemoved;
 			const timeoutMs = getAlertTimeoutMs();
-			const deadline = createAlertDeadline(timeoutMs);
+			const deadline = createAlertDeadline(timeoutMs, req.requestDeadlineSignal);
 			let results;
 
 			try {
@@ -81,7 +75,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 
 			if (analyzedItems.length === 0) {
 				const timeoutError = timedOut;
-				return res.status(timeoutError ? 504 : 502).json({
+				return sendErrorFrom(res, timeoutError ? 504 : 502, {
 					success: false,
 					code: timeoutError ? 'EXPANDED_ANALYSIS_ALERT_TIMEOUT' : 'ALL_SYMBOLS_FAILED',
 					error: timeoutError
@@ -89,6 +83,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 						: 'TradingView MCP failed for all requested symbols.',
 					results: compactResults(results),
 					summary: buildSummary(results, []),
+					duplicatesRemoved,
 					timedOut,
 					timeoutMs,
 					requestId,
@@ -106,6 +101,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					payload: { alertText },
 					results: compactResults(results),
 					summary: buildSummary(results, []),
+					duplicatesRemoved,
 					timedOut,
 					timeoutMs,
 					requestId,
@@ -115,7 +111,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
-				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
+				notificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
 			}
 
 			const deliveryResults = await sendWithNotificationRouting(
@@ -141,6 +137,12 @@ function postExpandedAnalysisAlert(botOrGetter) {
 					requestId,
 					text: alertText,
 					symbol: firstSymbol,
+					// One document covers the whole report; persist the full symbol set
+					// so summary symbol counts are not limited to the first symbol.
+					symbols: analyzedItems
+						.map((item) => (item.input && (item.input.symbol || item.input.raw)) || item.symbol)
+						.filter(Boolean),
+					batchId: requestId,
 					exchange: firstExchange,
 					enriched: false,
 					enrichmentData: null,
@@ -156,34 +158,11 @@ function postExpandedAnalysisAlert(botOrGetter) {
 				}).catch(() => {});
 			}
 
-			const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
-			if (signalOutcomeService.isEnabled()) {
-				for (const item of analyzedItems) {
-					const itemSide = item.side;
-					const row = buildReportRow(item);
-					const tech = item.analysis.technical || item.analysis || {};
-					const closePrice = row.price ?? tech.price_data?.current_price ?? tech.price_data?.close ?? null;
-					const score = item.analysis.market_sentiment?.overall_rating ?? tech.market_sentiment?.overall_rating ?? null;
-
-					signalOutcomeService.recordSignal({
-						requestId,
-						source: 'expanded-analysis',
-						symbol: item.input.symbol,
-						exchange: item.input.exchange,
-						timeframe: parsed.timeframe,
-						setupType: 'expanded-analysis',
-						score,
-						side: itemSide,
-						price: typeof closePrice === 'number' ? closePrice : null,
-						priceSource: typeof closePrice === 'number' ? 'tradingview-mcp' : null,
-						stop: typeof row.stopLoss === 'number' ? row.stopLoss : null,
-						target: typeof row.takeProfit === 'number' ? row.takeProfit : null,
-						sources: [],
-						tokenUsage: null,
-						processingTimeMs: Date.now() - startTime,
-					}).catch(() => {});
-				}
-			}
+			recordExpandedAnalysisOutcomes(analyzedItems, parsed, {
+				requestId,
+				startTime,
+				source: 'expanded-analysis',
+			});
 
 			return res.status(200).json({
 				success: true,
@@ -193,6 +172,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 				requestedChannels,
 				deliveredChannels,
 				summary,
+				duplicatesRemoved,
 				timedOut,
 				timeoutMs,
 				requestId,
@@ -200,7 +180,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 			});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: error.message,
 					code: 'INVALID_REQUEST',
 					requestId,
@@ -208,7 +188,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 			}
 
 			if (error instanceof ExpandedAnalysisAlertRequestError) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: error.message,
 					code: error.code,
 					requestId,
@@ -227,7 +207,7 @@ function postExpandedAnalysisAlert(botOrGetter) {
 				},
 			});
 
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error. Please try again later.',
 				code: 'INTERNAL_ERROR',
 				requestId,
@@ -332,14 +312,14 @@ function getAlertTimeoutMs() {
 	return Math.min(parsedTimeout, MAX_ALERT_TIMEOUT_MS);
 }
 
-function createAlertDeadline(timeoutMs) {
+function createAlertDeadline(timeoutMs, parentSignal) {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => {
 		controller.abort(new Error(`Expanded analysis alert timeout after ${timeoutMs}ms`));
 	}, timeoutMs);
 
 	return {
-		signal: controller.signal,
+		signal: parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal,
 		clear: () => clearTimeout(timeoutId),
 	};
 }

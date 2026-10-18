@@ -57,6 +57,9 @@ const ENVIRONMENT_CLASSIFICATIONS = {
 	RAILWAY_GIT_REPO_OWNER: 'platform-injected release metadata',
 	RENDER_INSTANCE_ID: 'platform-injected runtime metadata',
 	RENDER_SERVICE_ID: 'platform-injected runtime metadata',
+	RENDER_SERVICE_NAME: 'platform-injected runtime metadata',
+	RAILWAY_SERVICE_ID: 'platform-injected runtime metadata',
+	RAILWAY_SERVICE_NAME: 'platform-injected runtime metadata',
 	SIGNAL_OUTCOME_EVALUATION_CADENCE_MS: 'deprecated compatibility alias',
 	SOURCE_VERSION: 'platform-injected release metadata',
 };
@@ -160,6 +163,7 @@ describe('Documentation Alignment Policy', () => {
       path.join(repoRoot, 'README.md'),
 		path.join(repoRoot, 'AGENTS.md'),
       ...getAllFiles(path.join(repoRoot, 'specs', '003-news-monitor')),
+      ...getAllFiles(path.join(repoRoot, 'docs')).filter(f => !f.includes(`${path.sep}superpowers${path.sep}`)),
     ];
     const staleConfigurationPatterns = [
       /\bAZURE_AI_(?:ENDPOINT|API_KEY|MODEL)\s*=/i,
@@ -183,6 +187,12 @@ describe('Documentation Alignment Policy', () => {
     expect(envExample).toContain('PICSEE_API_KEY=');
     expect(envExample).toContain('CUTTLY_API_KEY=');
 		expect(envExample).toContain('AZURE_LLM_ENDPOINT=');
+	});
+
+	test('news-monitor documentation includes throttled status in README', () => {
+		const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
+		expect(readme).toMatch(/"throttled":\s*0/);
+		expect(readme).toMatch(/- `?throttled`? -/);
 	});
 
 	test('Cloudflare documentation separates provider routing from status exposure', () => {
@@ -228,6 +238,18 @@ describe('Documentation Alignment Policy', () => {
 		expect(readme).toContain('DISCORD_MAX_TOTAL_RETRY_WAIT_MS');
 		expect(readme).toMatch(/split(?:s|ting)? into (?:ordered|sequential) chunks/i);
 	});
+
+	test('TOKEN_COST_DAILY_BUDGET_USD documented ceiling matches RemoteConfig schema', () => {
+		const envConfigDoc = fs.readFileSync(path.join(repoRoot, 'docs/environment-configuration.md'), 'utf8');
+		const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+		const schema = remoteConfigService.PARAMETER_SCHEMA.TOKEN_COST_DAILY_BUDGET_USD;
+
+		expect(schema.min).toBe(0.01);
+		expect(schema.max).toBe(10000);
+		expect(envConfigDoc).toContain('TOKEN_COST_DAILY_BUDGET_USD');
+		expect(envConfigDoc).toMatch(/TOKEN_COST_DAILY_BUDGET_USD.*range `0\.01`-`10000\.00`/);
+		expect(envConfigDoc).not.toContain('1000.00');
+	});
 });
 
 describe('Node.js runtime contract', () => {
@@ -242,7 +264,7 @@ describe('Node.js runtime contract', () => {
 
     expect(fs.existsSync(nodeVersionPath)).toBe(true);
     expect(fs.readFileSync(nodeVersionPath, 'utf8').trim()).toBe(nodeVersion);
-    expect(packageJson.engines.node).toBe(`>=${nodeVersion} <25`);
+    expect(packageJson.engines.node).toBe(`>=${nodeVersion} <27`);
     expect(workflow).toContain('node-version-file: .node-version');
     expect(workflow).not.toMatch(/node-version:\s*20\b/i);
     expect(devcontainer).toContain(`FROM node:${nodeVersion}`);
@@ -253,6 +275,7 @@ describe('Node.js runtime contract', () => {
       path.join(repoRoot, 'README.md'),
 		path.join(repoRoot, 'AGENTS.md'),
       ...getAllFiles(path.join(repoRoot, 'specs')),
+      ...getAllFiles(path.join(repoRoot, 'docs')).filter(f => !f.includes(`${path.sep}superpowers${path.sep}`)),
     ];
     const staleNode20Pattern = /\bNode(?:\.js)?\s*20(?:\.x)?\b|\bnode:20\b/i;
 

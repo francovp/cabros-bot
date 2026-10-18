@@ -1,7 +1,9 @@
 /* global AbortController */
 
-const { v4: uuidv4 } = require('uuid');
+const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
+const { hasConfluenceEvidence } = require('../../../../services/tradingview/confluenceEvidence');
+const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
 	ExpandedAnalysisAlertRequestError,
 	parseExpandedAnalysisAlertRequest,
@@ -15,15 +17,41 @@ const sentryService = require('../../../../services/monitoring/SentryService');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const symbolAnalysisStorageService = require('../../../../services/storage/SymbolAnalysisStorageService');
 
+function resolveDryRun(req) {
+	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
+	const bodyFlag = req.body && typeof req.body === 'object' && (req.body.dryRun === true || req.body.dryRun === 'true');
+	return queryFlag || bodyFlag;
+}
+
 function postSymbolAnalysis() {
 	return async (req, res) => {
-		const requestId = uuidv4();
+		const requestId = resolveRequestId(req);
 		const startTime = Date.now();
 		let deadline;
 
 		try {
 			const parsed = parseSymbolAnalysisRequest(req);
-			deadline = createDeadline(getTimeoutMs());
+			if (resolveDryRun(req)) {
+				const input = parsed.symbols[0];
+				console.debug('[SymbolAnalysis] Dry-run mode: skipping TradingView MCP call');
+				return res.status(200).json({
+					success: true,
+					dryRun: true,
+					symbol: input.raw,
+					exchange: input.exchange,
+					asset: input.symbol,
+					timeframe: parsed.timeframe,
+					analysisMode: parsed.analysisMode,
+					includeMultiTimeframe: parsed.includeMultiTimeframe,
+					side: null,
+					analysis: null,
+					analysisStatus: 'dry-run',
+					requestId,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
+				});
+			}
+			deadline = createDeadline(getTimeoutMs(), req.requestDeadlineSignal);
+
 			const input = parsed.symbols[0];
 			const analysis = await tradingViewMcpService.analyzeSymbolIdentifier({
 				...input,
@@ -70,6 +98,7 @@ function postSymbolAnalysis() {
 			const normalized = normalizeAnalysis({ analysis, input, parsed, multiTimeframe, multiAgent, side });
 			const reportAnalysis = {
 				...analysis,
+				confluence: hasConfluenceEvidence(analysis) ? analysis.confluence : null,
 				technical: {
 					...(analysis.technical || analysis),
 					price_data: normalized.price_data,
@@ -146,7 +175,7 @@ function postSymbolAnalysis() {
 				} catch (monitoringError) {
 					console.warn('[SymbolAnalysis] Sentry timeout capture failed:', monitoringError.message);
 				}
-				return res.status(504).json({
+				return sendErrorFrom(res, 504, {
 					success: false,
 					error: 'Symbol analysis timed out.',
 					code: 'SYMBOL_ANALYSIS_TIMEOUT',
@@ -167,7 +196,7 @@ function postSymbolAnalysis() {
 				} catch (monitoringError) {
 					console.warn('[SymbolAnalysis] Sentry capture failed:', monitoringError.message);
 				}
-				return res.status(502).json({
+				return sendErrorFrom(res, 502, {
 					success: false,
 					error: error.message,
 					code: 'SYMBOL_ANALYSIS_FAILED',
@@ -181,7 +210,7 @@ function postSymbolAnalysis() {
 				error,
 				http: { endpoint: '/api/webhook/symbol-analysis', method: 'POST', statusCode: 500, requestId },
 			});
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				success: false,
 				error: 'Internal server error. Please try again later.',
 				code: 'INTERNAL_ERROR',
@@ -352,7 +381,7 @@ function emptyRisk(side, price) {
 function buildDecision({ analysis, technical, side, risk, price, technicalIndicators, multiAgent }) {
 	const reasons = [];
 	const warnings = [];
-	const confluence = analysis.confluence || {};
+	const confluence = hasConfluenceEvidence(analysis) ? analysis.confluence || {} : {};
 	const dataSufficient = Boolean(price !== null && technicalIndicators.RSI !== null && side && risk.valid);
 	if (confluence.recommendation || confluence.action) reasons.push(`Confluencia: ${confluence.recommendation || confluence.action}`);
 	if (technicalIndicators.RSI !== null) reasons.push(`RSI: ${technicalIndicators.RSI}`);
@@ -390,7 +419,9 @@ function buildDecision({ analysis, technical, side, risk, price, technicalIndica
 }
 
 function inferSide(analysis = {}) {
-	const confluence = String(analysis.confluence?.recommendation || analysis.confluence?.action || '').toUpperCase();
+	const confluence = hasConfluenceEvidence(analysis)
+		? String(analysis.confluence?.recommendation || analysis.confluence?.action || '').toUpperCase()
+		: '';
 	if (confluence.includes('SELL')) return 'SELL';
 	if (confluence.includes('BUY')) return 'BUY';
 	const sentiment = String(analysis.sentiment?.sentiment_label || analysis.market_sentiment?.overall_sentiment || '').toUpperCase();
@@ -406,10 +437,13 @@ function getTimeoutMs() {
 	return Number.isFinite(value) && value > 0 ? Math.min(value, 120000) : 60000;
 }
 
-function createDeadline(timeoutMs) {
+function createDeadline(timeoutMs, parentSignal) {
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(new Error(`Symbol analysis timeout after ${timeoutMs}ms`)), timeoutMs);
-	return { signal: controller.signal, clear: () => clearTimeout(timeoutId) };
+	return {
+		signal: parentSignal ? AbortSignal.any([parentSignal, controller.signal]) : controller.signal,
+		clear: () => clearTimeout(timeoutId),
+	};
 }
 
 function numberOrNull(value) {
