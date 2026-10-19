@@ -723,7 +723,7 @@ async function start() {
 				refreshTimeout.unref();
 			}
 		} else {
-		refreshTimer = createManagedInterval('remote-config-refresh', () => loadNow(), getRefreshIntervalMs());
+			refreshTimer = createManagedInterval('remote-config-refresh', () => loadNow(), getRefreshIntervalMs());
 			if (typeof refreshTimer.unref === 'function') {
 				refreshTimer.unref();
 			}

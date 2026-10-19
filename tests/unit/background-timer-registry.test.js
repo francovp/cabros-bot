@@ -32,6 +32,7 @@ describe('background timer registry', () => {
 		await Promise.all([timer.stop(), timer.stop()]);
 
 		expect(stop).toHaveBeenCalledTimes(1);
+		expect(stop).toHaveBeenCalledWith({ timeoutMs: 2000 });
 		expect(getBackgroundTimerStats()).toEqual({ registered: 0, drained: 1, failed: 0 });
 		expect(jest.getTimerCount()).toBe(0);
 	});
@@ -91,6 +92,35 @@ describe('background timer registry', () => {
 		expect(jest.getTimerCount()).toBe(0);
 	});
 
+	it('bounds direct timer stop calls when a callback does not finish', async () => {
+		const { createManagedInterval, getBackgroundTimerStats } = getRegistry();
+		jest.spyOn(console, 'error').mockImplementation(() => undefined);
+		const timer = createManagedInterval('direct-stop-timeout', () => new Promise(() => undefined), 10);
+
+		jest.advanceTimersByTime(10);
+		const stopping = timer.stop();
+		await jest.advanceTimersByTimeAsync(2000);
+		const result = await Promise.race([stopping, Promise.resolve('still-pending')]);
+
+		expect(result).toEqual({ status: 'failed', timedOut: true });
+		expect(getBackgroundTimerStats()).toEqual({ registered: 0, drained: 0, failed: 1 });
+	});
+
+	it('contains synchronous callback failures and stops future ticks on drain', async () => {
+		const { createManagedInterval, stopAllBackgroundTimers } = getRegistry();
+		const errorLog = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+		const callback = jest.fn(() => { throw new Error('sync callback failed'); });
+		createManagedInterval('sync-failure', callback, 10);
+
+		jest.advanceTimersByTime(10);
+		expect(callback).toHaveBeenCalledTimes(1);
+		await stopAllBackgroundTimers({ timeoutMs: 100 });
+		jest.advanceTimersByTime(100);
+
+		expect(callback).toHaveBeenCalledTimes(1);
+		expect(errorLog).toHaveBeenCalledTimes(1);
+	});
+
 	it('clears a registered interval with clearInterval when no stopper is supplied', async () => {
 		const { registerBackgroundTimer, getBackgroundTimerStats } = getRegistry();
 		const interval = setInterval(() => undefined, 1000);
@@ -103,6 +133,47 @@ describe('background timer registry', () => {
 		});
 		expect(getBackgroundTimerStats()).toEqual({ registered: 0, drained: 1, failed: 0 });
 		expect(jest.getTimerCount()).toBe(0);
+	});
+
+	it('continues stopping other timers when one timer clear throws', async () => {
+		const { registerBackgroundTimer, stopAllBackgroundTimers } = getRegistry();
+		jest.spyOn(console, 'error').mockImplementation(() => undefined);
+		const brokenInterval = setInterval(() => undefined, 1000);
+		const healthyInterval = setInterval(() => undefined, 1000);
+		const healthyClear = jest.fn();
+		registerBackgroundTimer({
+			name: 'broken-clear',
+			interval: brokenInterval,
+			clear: () => { throw new Error('clear failed'); },
+		});
+		registerBackgroundTimer({
+			name: 'healthy-clear',
+			interval: healthyInterval,
+			clear: healthyClear,
+		});
+
+		await expect(stopAllBackgroundTimers({ timeoutMs: 100 })).resolves.toEqual({
+			registered: 2,
+			drained: 1,
+			failed: 1,
+		});
+		expect(healthyClear).toHaveBeenCalledTimes(1);
+	});
+
+	it('preserves an earlier timer stop failure when stop is called again', async () => {
+		const { registerBackgroundTimer } = getRegistry();
+		jest.spyOn(console, 'error').mockImplementation(() => undefined);
+		const timer = registerBackgroundTimer({
+			name: 'failed-before-retry',
+			interval: setInterval(() => undefined, 1000),
+			clear: () => { throw new Error('clear failed'); },
+		});
+
+		expect(() => timer.clear()).toThrow('clear failed');
+		await expect(timer.stop()).resolves.toEqual({
+			status: 'failed',
+			error: expect.objectContaining({ message: 'clear failed' }),
+		});
 	});
 
 	it('removes successfully drained timers from the registry', async () => {

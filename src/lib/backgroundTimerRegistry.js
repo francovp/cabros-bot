@@ -4,6 +4,7 @@ const registeredTimers = new Map();
 let nextTimerId = 1;
 let drainedTimers = 0;
 let failedTimers = 0;
+const DEFAULT_TIMER_DRAIN_TIMEOUT_MS = 2000;
 
 function getBackgroundTimerStats() {
 	return {
@@ -26,11 +27,13 @@ function registerBackgroundTimer({ name, interval, intervalMs, stop, clear, hasP
 	let stopPromise;
 	let cleared = false;
 	let didRecordResult = false;
+	let recordedResult;
 	let entry;
 
 	const recordResult = (result) => {
-		if (didRecordResult) return result;
+		if (didRecordResult) return recordedResult;
 		didRecordResult = true;
+		recordedResult = result;
 		registeredTimers.delete(id);
 		if (result.status === 'drained') {
 			drainedTimers += 1;
@@ -70,11 +73,14 @@ function registerBackgroundTimer({ name, interval, intervalMs, stop, clear, hasP
 		stop: ({ timeoutMs } = {}) => {
 			if (stopPromise) return stopPromise;
 			clearTimer();
-			if (didRecordResult) return Promise.resolve({ status: 'drained' });
+			if (didRecordResult) return Promise.resolve(recordedResult);
+			const drainTimeoutMs = timeoutMs === undefined
+				? DEFAULT_TIMER_DRAIN_TIMEOUT_MS
+				: timeoutMs;
 
 			const operations = [];
 			try {
-				if (typeof stop === 'function') operations.push(Promise.resolve(stop({ timeoutMs })));
+				if (typeof stop === 'function') operations.push(Promise.resolve(stop({ timeoutMs: drainTimeoutMs })));
 				if (typeof drain === 'function') operations.push(Promise.resolve(drain()));
 			} catch (error) {
 				operations.push(Promise.reject(error));
@@ -84,11 +90,11 @@ function registerBackgroundTimer({ name, interval, intervalMs, stop, clear, hasP
 				() => ({ status: 'drained' }),
 				(error) => ({ status: 'failed', error }),
 			);
-			const bounded = Number.isFinite(timeoutMs) && timeoutMs > 0
+			const bounded = Number.isFinite(drainTimeoutMs) && drainTimeoutMs > 0
 				? new Promise((resolve) => {
 					const timeoutHandle = setTimeout(() => {
 						resolve({ status: 'failed', timedOut: true });
-					}, timeoutMs);
+					}, drainTimeoutMs);
 					stopOperation.then((result) => {
 						clearTimeout(timeoutHandle);
 						resolve(result);
@@ -119,7 +125,13 @@ function createManagedInterval(name, callback, intervalMs) {
 	const interval = setInterval(() => {
 		if (stopping) return;
 
-		const callbackResult = callback();
+		let callbackResult;
+		try {
+			callbackResult = callback();
+		} catch (error) {
+			reportTimerFailure(name, error);
+			return;
+		}
 		if (!callbackResult || typeof callbackResult.then !== 'function') return;
 
 		const callbackPromise = Promise.resolve(callbackResult);
@@ -163,7 +175,13 @@ function createManagedInterval(name, callback, intervalMs) {
 
 async function stopAllBackgroundTimers({ timeoutMs } = {}) {
 	const entries = [...registeredTimers.values()];
-	const results = await Promise.all(entries.map((entry) => entry.stop({ timeoutMs })));
+	const results = await Promise.all(entries.map(async (entry) => {
+		try {
+			return await entry.stop({ timeoutMs });
+		} catch (error) {
+			return { status: 'failed', error };
+		}
+	}));
 	return {
 		registered: entries.length,
 		drained: results.filter((result) => result.status === 'drained').length,
