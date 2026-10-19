@@ -4980,6 +4980,362 @@
           ]
         },
         {
+          "name": "GET News Monitor Analysis Summary",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor/summary?limit=50&threshold=0.7&symbol=BTCUSDT",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "threshold",
+                  "value": "0.7"
+                },
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                }
+              ]
+            },
+            "description": "Summarize stored news-monitor analysis and false-positive proxy metrics. Threshold must be from 0 to 1; symbol is optional."
+          },
+          "response": [
+            {
+              "name": "200 OK - Summary",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"window\": {\n    \"from\": \"2026-10-18T00:00:00.000Z\",\n    \"to\": \"2026-10-19T00:00:00.000Z\",\n    \"limit\": 50\n  },\n  \"totalAnalyses\": 1,\n  \"totalAlertsSent\": 1,\n  \"bySymbol\": {\n    \"BTCUSDT\": {\n      \"totalAnalyses\": 1,\n      \"alertsSent\": 1,\n      \"averageConfidence\": 0.85\n    }\n  },\n  \"byEventCategory\": {\n    \"price_surge\": {\n      \"total\": 1,\n      \"alertsSent\": 1,\n      \"averageConfidence\": 0.85\n    }\n  },\n  \"falsePositiveProxy\": {\n    \"threshold\": 0.7,\n    \"totalEvaluated\": 1,\n    \"noFollowupCount\": 1,\n    \"ratePercent\": 100\n  }\n}"
+            },
+            {
+              "name": "401 Unauthorized - Missing API key",
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+            },
+            {
+              "name": "403 Forbidden - Feature disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"News analysis storage feature is disabled.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            },
+            {
+              "name": "503 Service Unavailable - Storage unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"News analysis storage is enabled but Firestore is unavailable.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET News Monitor Analysis Summary (invalid threshold)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor/summary?threshold=1.5",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "threshold",
+                  "value": "1.5"
+                }
+              ]
+            },
+            "description": "Invalid-input variant: threshold must be a number from 0 to 1."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid threshold",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Invalid threshold. Use a number between 0 and 1.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "401 Unauthorized - Missing API key",
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET News Monitor Analyses",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor/analyses?limit=50&symbol=BTCUSDT&eventCategory=price_surge",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor",
+                "analyses"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "50"
+                },
+                {
+                  "key": "symbol",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "eventCategory",
+                  "value": "price_surge"
+                }
+              ]
+            },
+            "description": "List stored news-monitor analyses with pagination and optional symbol and event-category filters."
+          },
+          "response": [
+            {
+              "name": "200 OK - Analyses",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"analyses\": [\n    {\n      \"id\": \"news-analysis-btc-001\",\n      \"createdAt\": \"2026-10-19T00:00:00.000Z\",\n      \"symbol\": \"BTCUSDT\",\n      \"eventCategory\": \"price_surge\",\n      \"sentiment\": 0.75,\n      \"confidence\": 0.85,\n      \"headline\": \"Bitcoin surges past resistance\",\n      \"alertSent\": true,\n      \"promptVersion\": \"v1.0.0\",\n      \"tokens\": 1420,\n      \"expiresAt\": \"2027-01-17T00:00:00.000Z\"\n    }\n  ],\n  \"nextCursor\": null\n}"
+            },
+            {
+              "name": "401 Unauthorized - Missing API key",
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+            },
+            {
+              "name": "403 Forbidden - Feature disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"News analysis storage feature is disabled.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            },
+            {
+              "name": "503 Service Unavailable - Storage unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"News analysis storage is enabled but Firestore is unavailable.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET News Monitor Analyses (invalid limit)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor/analyses?limit=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor",
+                "analyses"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "Invalid-input variant: limit must be an integer from 1 to 100."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid limit",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "401 Unauthorized - Missing API key",
+              "status": "Unauthorized",
+              "code": 401,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ]
+        },
+        {
           "name": "POST News Monitor (dry run)",
           "request": {
             "method": "POST",

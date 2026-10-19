@@ -22,6 +22,15 @@ function findHeader(item, key) {
 	return item.request.header.find((header) => header.key === key);
 }
 
+function collectRequestItems(items, requests = []) {
+	if (!Array.isArray(items)) return requests;
+	for (const item of items) {
+		if (item && item.request) requests.push(item);
+		if (item && Array.isArray(item.item)) collectRequestItems(item.item, requests);
+	}
+	return requests;
+}
+
 function normalizeParamPath(routePath) {
 	if (typeof routePath !== 'string') return '';
 	return routePath
@@ -68,7 +77,24 @@ function extractPostmanApiOperations(items, ops = new Set()) {
 
 function findMissingPostmanOperations(mountedOperations, postmanOperations) {
 	const postmanSet = postmanOperations instanceof Set ? postmanOperations : new Set(postmanOperations);
-	return mountedOperations.filter((op) => !postmanSet.has(op));
+	return mountedOperations.filter((mountedOperation) => {
+		if (postmanSet.has(mountedOperation)) return false;
+
+		const separator = mountedOperation.indexOf(' ');
+		if (separator === -1) return true;
+		const method = mountedOperation.slice(0, separator);
+		const routePath = mountedOperation.slice(separator + 1).split('/');
+
+		return !Array.from(postmanSet).some((postmanOperation) => {
+			const postmanSeparator = postmanOperation.indexOf(' ');
+			if (postmanSeparator === -1 || postmanOperation.slice(0, postmanSeparator) !== method) return false;
+
+			const postmanPath = postmanOperation.slice(postmanSeparator + 1).split('/');
+			return routePath.length === postmanPath.length && routePath.every((segment, index) => (
+				/^\{[^/]+\}$/.test(segment) || segment === postmanPath[index]
+			));
+		});
+	});
 }
 
 function extractReadmeApiPaths(readmeContent) {
@@ -471,6 +497,8 @@ describe('Postman collection contract', () => {
 			'/api/news-monitor/pause',
 			'/api/news-monitor/resume',
 			'/api/news-monitor/status',
+			'/api/news-monitor/summary',
+			'/api/news-monitor/analyses',
 			'/api/symbol-analyses',
 			'/api/symbol-analyses/summary',
 		];
@@ -1218,6 +1246,30 @@ describe('CI coverage guards (Postman collection and README endpoints)', () => {
 		expect(missing).toEqual([]);
 	});
 
+	it('documents valid and invalid query examples for news analysis endpoints', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const summary = findItem(collection.item, 'GET News Monitor Analysis Summary');
+		const invalidSummary = findItem(collection.item, 'GET News Monitor Analysis Summary (invalid threshold)');
+		const analyses = findItem(collection.item, 'GET News Monitor Analyses');
+		const invalidAnalyses = findItem(collection.item, 'GET News Monitor Analyses (invalid limit)');
+
+		expect(summary.request.url.raw).toContain('/api/news-monitor/summary?limit=50&threshold=0.7');
+		expect(JSON.parse(summary.response.find((response) => response.code === 200).body)).toEqual(expect.objectContaining({
+			totalAnalyses: 1,
+			falsePositiveProxy: expect.objectContaining({ threshold: 0.7 }),
+		}));
+		expect(invalidSummary.request.url.raw).toContain('threshold=1.5');
+		expect(JSON.parse(invalidSummary.response.find((response) => response.code === 400).body).code).toBe('INVALID_REQUEST');
+
+		expect(analyses.request.url.raw).toContain('/api/news-monitor/analyses?limit=50&symbol=BTCUSDT');
+		expect(JSON.parse(analyses.response.find((response) => response.code === 200).body).analyses[0]).toEqual(expect.objectContaining({
+			symbol: 'BTCUSDT',
+			createdAt: expect.any(String),
+		}));
+		expect(invalidAnalyses.request.url.raw).toContain('limit=0');
+		expect(JSON.parse(invalidAnalyses.response.find((response) => response.code === 400).body).code).toBe('INVALID_REQUEST');
+	});
+
 	it('fails when a mounted route is missing from the Postman collection (fixture negative case)', () => {
 		const mockMounted = [
 			'GET /api/status',
@@ -1243,6 +1295,28 @@ describe('CI coverage guards (Postman collection and README endpoints)', () => {
 
 		const missing = findMissingPostmanOperations(mockMounted, mockPostmanOps);
 		expect(missing).toEqual([]);
+	});
+
+	it('matches literal Postman values to route parameters without ignoring static path segments', () => {
+		const mockMounted = [
+			'GET /api/preferences/{param}/{param}',
+			'PUT /api/preferences/{param}/{param}',
+			'GET /api/preferences/{param}/notifications/{param}',
+		];
+		const mockPostmanOps = new Set([
+			'GET /api/preferences/telegram/123456789',
+			'PUT /api/preferences/telegram/123456789',
+			'GET /api/preferences/telegram/notifications/123456789',
+			'GET /api/preferences/discord/987654321/extra',
+			'GET /api/preferences/discord/wrong/987654321',
+		]);
+
+		const missing = findMissingPostmanOperations(mockMounted, mockPostmanOps);
+		expect(missing).toEqual([]);
+		expect(findMissingPostmanOperations(
+			['GET /api/preferences/{param}/notifications/{param}'],
+			new Set(['GET /api/preferences/telegram/unread/123456789']),
+		)).toEqual(['GET /api/preferences/{param}/notifications/{param}']);
 	});
 
 	it('asserts every unique /api endpoint path referenced in README exists in openapi.json', () => {
