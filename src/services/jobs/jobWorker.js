@@ -3,6 +3,7 @@
 const { jobQueue } = require('./JobQueue');
 const { JobService } = require('./JobService');
 const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 function getWorkerId() {
@@ -124,9 +125,11 @@ async function startJobWorker({
 				return;
 			}
 			void reconcileQueuedJobs();
-			reconciliationTimer = globalThis.setInterval(() => {
-				void reconcileQueuedJobs();
-			}, JOB_QUEUE_RECONCILIATION_INTERVAL_MS);
+			reconciliationTimer = createManagedInterval(
+				'job-worker-reconciliation',
+				() => reconcileQueuedJobs(),
+				JOB_QUEUE_RECONCILIATION_INTERVAL_MS,
+			);
 			if (typeof reconciliationTimer.unref === 'function') {
 				reconciliationTimer.unref();
 			}
@@ -197,7 +200,7 @@ async function startJobWorker({
 				stopped = true;
 				startupAbortController.abort();
 				if (reconciliationTimer) {
-					globalThis.clearInterval(reconciliationTimer);
+					reconciliationTimer.clear();
 				}
 				if (worker) {
 					await queue.closeWorker(worker);

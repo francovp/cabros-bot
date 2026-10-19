@@ -5,6 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const { Agent, fetch: undiciFetch } = require('undici');
 const dns = require('dns');
 const net = require('net');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 const { tradingViewMcpService } = require('../tradingview/TradingViewMcpService');
 const {
 	parseExpandedAnalysisAlertRequest,
@@ -981,8 +982,8 @@ class JobService {
 				? configuredLeaseMs
 				: 60000;
 			const heartbeatMs = Math.max(1, Math.floor(leaseMs / 2));
-			claimHeartbeat = globalThis.setInterval(() => {
-				Promise.resolve(this.repository.renewClaim(jobId, workerId, claimAttempt))
+			claimHeartbeat = createManagedInterval('job-claim-lease-renewal', () => {
+				return Promise.resolve(this.repository.renewClaim(jobId, workerId, claimAttempt))
 					.then((renewed) => {
 						if (!renewed) {
 							markClaimLost();
@@ -1071,7 +1072,7 @@ class JobService {
 		} finally {
 			clearTimeout(timeoutId);
 			if (claimHeartbeat) {
-				globalThis.clearInterval(claimHeartbeat);
+				await claimHeartbeat.stop();
 			}
 			this.activeControllers.delete(jobId);
 			if (claimLost) {

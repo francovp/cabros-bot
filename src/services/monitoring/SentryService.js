@@ -721,6 +721,44 @@ class SentryService {
 	}
 
 	/**
+	 * Capture a sanitized informational event without treating it as an error.
+	 * @param {{message: string, feature?: string, extra?: Object<string, unknown>}} request
+	 * @returns {MonitoringCaptureResult}
+	 */
+	captureInfo(request = {}) {
+		try {
+			if (!this.state.enabled) {
+				return {
+					captured: false,
+					skippedReason: this.state.lastInitError || 'Monitoring disabled',
+				};
+			}
+
+			const message = this._sanitizeString(String(request.message || 'process.info'));
+			const feature = this._sanitizeString(String(request.feature || 'process.info'));
+			const eventId = Sentry.captureMessage(message, {
+				level: 'info',
+				tags: {
+					channel: 'process',
+					feature,
+					environment: this.config?.environment || 'unknown',
+				},
+				extra: this._sanitizeObject(request.extra || {}),
+			});
+
+			console.debug(`[SentryService] Info captured: ${eventId} (feature=${feature})`);
+			return { captured: true, eventId };
+		} catch (error) {
+			// Monitoring failures must never affect shutdown or other application behavior.
+			console.warn(`[SentryService] Failed to capture info: ${error.message}`);
+			return {
+				captured: false,
+				skippedReason: `Capture error: ${error.message}`,
+			};
+		}
+	}
+
+	/**
 	 * Build alert context, respecting sendAlertContent policy
 	 * @param {AlertContext} alertContext
 	 * @returns {{alert: Object}}

@@ -35,6 +35,7 @@ const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
 const { resolveStartupJitterMs } = require('../lib/startupJitter');
+const { getBackgroundTimerStats } = require('../lib/backgroundTimerRegistry');
 const { outcomeAnnotationService } = require('../services/alerts/outcomeAnnotationService');
 const { crossTimeframeCooldown } = require('../services/alerts/crossTimeframeCooldown');
 const { burstAggregator } = require('../services/alerts/burstAggregator');
@@ -734,6 +735,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				? { firestoreReadMetrics: firestoreWriteMetricsService.getReadSnapshot() }
 				: {}),
 			persistentWriteHealth: firestoreWriteMetricsService.getPersistentWriteHealthSnapshot(),
+			backgroundTimers: getBackgroundTimerStats(),
 			sentry,
 			langfuse,
 			...(langfusePrompts ? { langfusePrompts } : {}),

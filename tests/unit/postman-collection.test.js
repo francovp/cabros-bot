@@ -1138,6 +1138,21 @@ describe('Postman collection contract', () => {
 		expect(JSON.parse(unauthorized.body).error).toContain('Unauthorized');
 	});
 
+	it('documents background timer counts in successful status examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - firestore write metrics');
+		const successResponses = item.response.filter((response) => response.code === 200);
+
+		expect(successResponses.length).toBeGreaterThan(0);
+		for (const response of successResponses) {
+			expect(JSON.parse(response.body).dependencies.backgroundTimers).toEqual({
+				registered: expect.any(Number),
+				drained: expect.any(Number),
+				failed: expect.any(Number),
+			});
+		}
+	});
+
 	it('documents the job queue broker readiness variants for the #1117 cutover', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const item = findItem(collection.item, 'Get Capabilities - job queue broker readiness (#1117)');

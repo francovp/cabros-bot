@@ -25,6 +25,8 @@ const { deliveryMetricsService } = require('../../src/services/notification/Deli
 const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 const persistentWriteHealthSchema = require('../../src/openapi/openapi.json')
 	.components.schemas.PersistentWriteDomainHealth;
+const backgroundTimerStatsSchema = require('../../src/openapi/openapi.json')
+	.components.schemas.BackgroundTimerStats;
 const { getPromptService } = require('../../src/services/prompts');
 const { signalClassMetrics } = require('../../src/services/alerts/signalClassifier');
 const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
@@ -383,6 +385,27 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.binanceTradingApiKey).toEqual(expect.objectContaining({
 			scope: 'binance-trading',
 		}));
+	});
+
+	it('exposes only numeric background timer counts on both status aliases', async () => {
+		const status = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		const capabilities = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(status.status).toBe(200);
+		expect(capabilities.status).toBe(200);
+		const stats = status.body.dependencies.backgroundTimers;
+		expect(Object.keys(stats).sort()).toEqual(['drained', 'failed', 'registered']);
+		for (const [field, value] of Object.entries(stats)) {
+			expect(Number.isInteger(value)).toBe(true);
+			expect(value).toBeGreaterThanOrEqual(0);
+			expect(backgroundTimerStatsSchema.properties[field].type).toBe('integer');
+		}
+		expect(capabilities.body.dependencies.backgroundTimers).toEqual(stats);
+		expect(status.text).not.toMatch(/notification-redrive|idempotency-cleanup|lease-renewal/);
 	});
 
 	it('exposes rolling alert-path MCP enrichment rates', async () => {
