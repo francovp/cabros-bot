@@ -8,6 +8,7 @@ const equityMarketDataService = require('./EquityMarketDataService');
 const geminiPriceService = require('../grounding/geminiPriceService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { fireAndForget } = require('../../lib/fireAndForget');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
 const { MainClient } = require('binance');
@@ -1284,7 +1285,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 		// so it is recorded instead of discarded. Renewals are serialized on one
 		// chain, and `finally` awaits it, so ownership is never classified while a
 		// renewal is still in flight.
-		leaseRenewHandle = setInterval(() => {
+		leaseRenewHandle = createManagedInterval('signal-outcome-lease-renewal', () => {
 			leaseRenewPromise = leaseRenewPromise
 				.then(() => renewSweepLease(Date.now(), leaseMs))
 				.then((renewal) => {
@@ -1297,6 +1298,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 				.catch((error) => {
 					console.warn('[SignalOutcomeService] Lease renewal sweep failed:', error.message);
 				});
+			return leaseRenewPromise;
 		}, renewIntervalMs);
 		if (leaseRenewHandle && typeof leaseRenewHandle.unref === 'function') {
 			leaseRenewHandle.unref();
@@ -1891,7 +1893,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 		return { scannedCount, evaluatedCount, error: error.message };
 	} finally {
 		if (leaseRenewHandle) {
-			clearInterval(leaseRenewHandle);
+			await leaseRenewHandle.stop();
 			leaseRenewHandle = null;
 		}
 		// Settle the renewal already in flight before deciding whether this sweep
@@ -1932,10 +1934,10 @@ function evaluatePendingOutcomes(options = {}) {
 
 function runScheduledSweep() {
 	if (shutdownRequested) {
-		return;
+		return undefined;
 	}
 
-	evaluatePendingOutcomes()
+	return evaluatePendingOutcomes()
 		.then(() => persistWorkerHeartbeat())
 		.catch((err) => {
 			console.warn('[SignalOutcomeService] Scheduled worker sweep failed:', err.message);
@@ -2011,7 +2013,7 @@ function startWorker(options = {}) {
 			workerStartupAbortController = null;
 		}
 		workerStartupPending = false;
-		workerTimer = setInterval(runScheduledSweep, intervalMs);
+		workerTimer = createManagedInterval('signal-outcome-worker-sweep', runScheduledSweep, intervalMs);
 		if (workerTimer && options.unref !== false && typeof workerTimer.unref === 'function') {
 			workerTimer.unref();
 		}
@@ -2054,7 +2056,7 @@ function stopWorker(options = {}) {
 	}
 	workerStartupPending = false;
 	if (workerTimer) {
-		clearInterval(workerTimer);
+		workerTimer.clear();
 		workerTimer = null;
 	}
 	activeIntervalMs = null;

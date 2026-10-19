@@ -109,6 +109,11 @@ const lifecycle = createProcessLifecycle({
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
 	flushAlertBurstWindows: () => burstAggregator.flushAll('shutdown'),
 	flushSentry: (timeout) => sentryService.flush(timeout),
+	reportBackgroundTimerDrain: (stats) => sentryService.captureInfo({
+		message: 'shutdown.timer_drain',
+		feature: 'shutdown.timer_drain',
+		extra: stats,
+	}),
 	timeoutMs: process.env.SHUTDOWN_TIMEOUT_MS,
 });
 lifecycle.register();

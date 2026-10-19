@@ -4,6 +4,7 @@ const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 const alertStorageService = require('../storage/AlertStorageService');
 const { parseEntryPriceSources } = require('../../lib/signalOutcomeEntryPriceSources');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 const {
 	applyStartupJitter,
 	getStartupJitterDelayMs,
@@ -711,9 +712,7 @@ async function start() {
 				return;
 			}
 			void loadNow();
-			refreshTimer = setInterval(() => {
-				void loadNow();
-			}, getRefreshIntervalMs());
+			refreshTimer = createManagedInterval('remote-config-refresh', () => loadNow(), getRefreshIntervalMs());
 			if (typeof refreshTimer.unref === 'function') {
 				refreshTimer.unref();
 			}
@@ -724,9 +723,7 @@ async function start() {
 				refreshTimeout.unref();
 			}
 		} else {
-			refreshTimer = setInterval(() => {
-				void loadNow();
-			}, getRefreshIntervalMs());
+			refreshTimer = createManagedInterval('remote-config-refresh', () => loadNow(), getRefreshIntervalMs());
 			if (typeof refreshTimer.unref === 'function') {
 				refreshTimer.unref();
 			}
@@ -752,7 +749,7 @@ function stop() {
 		refreshTimeout = null;
 	}
 	if (refreshTimer) {
-		clearInterval(refreshTimer);
+		refreshTimer.clear();
 		refreshTimer = null;
 	}
 }

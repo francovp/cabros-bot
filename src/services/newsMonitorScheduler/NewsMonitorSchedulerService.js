@@ -10,6 +10,7 @@ const { isNewsMonitorPaused } = require('../../controllers/webhooks/handlers/new
 const alertStorageService = require('../storage/AlertStorageService');
 const sentryService = require('../monitoring/SentryService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 
 const COLLECTION_NAME = 'newsMonitorSchedulerLocks';
 
@@ -527,8 +528,8 @@ class NewsMonitorSchedulerService {
 		const leaseMs = options.leaseMs || this.getLeaseMs();
 		const renewIntervalMs = Math.max(1000, Math.floor(leaseMs / 2));
 		const renewHandle = renewLease
-			? setInterval(() => {
-				renewLease(Date.now()).catch((err) => {
+			? createManagedInterval('news-monitor-lease-renewal', () => {
+				return renewLease(Date.now()).catch((err) => {
 					console.warn('[NewsMonitorScheduler] Lease renew tick failed:', err.message);
 				});
 			}, renewIntervalMs)
@@ -599,7 +600,7 @@ class NewsMonitorSchedulerService {
 			});
 		} finally {
 			clearTimeout(timer);
-			if (renewHandle) clearInterval(renewHandle);
+			if (renewHandle) await renewHandle.stop();
 			this.activeSweepController = null;
 		}
 
