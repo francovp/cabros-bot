@@ -24,7 +24,9 @@
 
 #### Security
 
-- `WEBHOOK_API_KEY` - API key used to secure `/api/*` webhook endpoints. Required in production-like environments (`NODE_ENV=production`, Render, Vercel, Railway), where endpoints fail-closed with HTTP 503 if unset. When configured, clients must provide the key via the `x-api-key` header. The legacy `api-key` query parameter is deprecated ([GH-756](https://github.com/francovp/cabros-bot/issues/756)) — query strings may leak through reverse-proxy access logs, so a one-time deprecation warning is emitted on use; migrate to the header before the announced sunset date.
+- `WEBHOOK_API_KEY` - API key for webhook ingest, including `/api/webhook/*` and `/api/news-monitor`. Required in production-like environments (`NODE_ENV=production`, Render, Vercel, Railway), where webhook endpoints fail closed with HTTP 503 if unset. The legacy `api-key` query parameter is deprecated ([GH-756](https://github.com/francovp/cabros-bot/issues/756)); query strings may leak through reverse-proxy access logs, so a one-time warning is emitted on use. When the dedicated keys below are unset, this remains the backward-compatible admin or Binance credential fallback.
+- `ADMIN_API_KEY` - Optional dedicated secret for admin/operator routes. When configured, it is accepted only through the `x-api-key` header and replaces `WEBHOOK_API_KEY` for API-key authentication on those routes; Firebase ID-token auth remains available. When unset, admin API-key auth keeps the legacy webhook-key behavior. Environment-only; excluded from Firebase Remote Config.
+- `BINANCE_TRADING_API_KEY` - Optional dedicated secret for Binance trading routes. When configured, it is accepted only through the `x-api-key` header and is the only API-key credential accepted on that surface. When unset, admin authentication remains the fallback. Environment-only; excluded from Firebase Remote Config.
 - `API_KEY_QUERY_SUNSET` - Optional UTC sunset date (`YYYY-MM-DD`) for the deprecated `api-key` query-parameter auth path. After this date, requests authenticated only via `?api-key=...` are rejected with `401 API_KEY_QUERY_REMOVED`; the `x-api-key` header continues to work. Leave unset to keep accepting the legacy query parameter indefinitely. Classified as environment-only for Remote Config parity (auth/transport sunset policy; excluded from the Remote Config template).
 - `WEBHOOK_MAX_BODY_SIZE` - Maximum accepted webhook request body size for `/api/webhook/*` and `/api/news-monitor` (default `256kb`). Applies to `application/json`, `text/plain`, and `application/x-www-form-urlencoded` bodies. Accepts human-readable units (`b`, `kb`, `mb`, `gb`). Values outside `[1kb, 10mb]` or malformed strings fall back to the default with a startup warning. Oversized payloads are rejected with a structured `413 PAYLOAD_TOO_LARGE` response before any controller or middleware downstream of the body parsers runs, so a misconfigured client cannot consume CPU/memory by streaming a 10 MB body. Classified as environment-only (security control; excluded from Remote Config).
 - `ENABLE_FIREBASE_ADMIN_AUTH` - Enable opt-in Firebase email/password authentication for the browser admin console (`false` by default)
@@ -36,13 +38,17 @@
 
 To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project documents a private disclosure channel, scope, and safe-harbor guidance. Do not file security issues as public GitHub issues.
 
+#### Generic Message Webhook
+
+- `GENERIC_MESSAGE_MAX_LENGTH` - Maximum inbound characters for `POST /api/webhook/message` before truncation (integer `1`-`20000`, default `4000`). Invalid environment values use `4000`; invalid Remote Config values are ignored, leaving the environment value (or `4000` when unset/invalid) effective. A fresh valid Remote Config value takes precedence over the environment setting.
+
 #### WhatsApp Alerts & Commands (GreenAPI)
 
 - `ENABLE_WHATSAPP_ALERTS` - Enable WhatsApp alerts (`true` or `false`, default: `false`)
 - `WHATSAPP_API_URL` - GreenAPI endpoint URL (e.g., `https://7107.api.green-api.com/waInstance7107356806/`)
 - `WHATSAPP_API_KEY` - GreenAPI API key for authentication
 - `WHATSAPP_CHAT_ID` - Destination WhatsApp chat/group ID (format: `120363xxxxx@g.us`)
-- `ENABLE_WHATSAPP_COMMANDS` - Enable WhatsApp inbound commands poller (`!precio`, `!help`) (`true` or `false`, default: `false`)
+- `ENABLE_WHATSAPP_COMMANDS` - Enable WhatsApp inbound commands poller (`!precio`, `!analisis`, `!scanner`, `!noticias`, `!outcomes`/`!rendimiento`, `!help`) (`true` or `false`, default: `false`)
 - `WHATSAPP_COMMAND_CHAT_IDS` - Comma-separated list of WhatsApp chat/group IDs permitted to run commands (e.g., `120363025492938@g.us`)
 - `WHATSAPP_COMMAND_POLL_INTERVAL_MS` - Inbound command polling interval in milliseconds (default: `3000`)
 
@@ -90,7 +96,7 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 #### Token Spend Tracking & Cost Budgeting
 
 - `ENABLE_TOKEN_COST_BUDGET` - Enable daily LLM token cost tracking and budget limits (`true` or `false`, default: `false`; Remote Config supported)
-- `TOKEN_COST_DAILY_BUDGET_USD` - Maximum daily spend in USD before LLM calls fail open safely (default: `5.00`, range `0.01`-`1000.00`; Remote Config supported)
+- `TOKEN_COST_DAILY_BUDGET_USD` - Maximum daily spend in USD before LLM calls fail open safely (default: `5.00`, range `0.01`-`10000.00`; Remote Config supported)
 - `TOKEN_COST_WARN_THRESHOLD_PCT` - Percentage of daily budget that triggers an admin Telegram alert (default: `80`, range `1`-`100`; Remote Config supported)
 
 #### Cloudflare AI Gateway
@@ -148,33 +154,48 @@ Unlike equity market data, this feature **does** run a bounded startup probe (5s
 - `EXPANDED_ANALYSIS_ALERT_SYMBOLS` - Comma-separated fallback symbols for `/api/webhook/expanded-analysis-alert` using `EXCHANGE:SYMBOL` format (for example `BINANCE:BTCUSDT,NASDAQ:NVDA`)
 - `EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS` - Total analysis deadline for `/api/webhook/expanded-analysis-alert` in milliseconds (default: `60000`, capped at `120000`)
 - `EXPANDED_ANALYSIS_ALERT_CONCURRENCY` - Maximum concurrent expanded-analysis MCP calls in webhook and job paths (default: `3`, valid range: `1`-`10`)
-- `TRADINGVIEW_MCP_URL` - MCP server HTTP endpoint (default: `https://tradingview-mcp-yp6b.onrender.com/mcp`)
+- `TRADINGVIEW_MCP_URL` - MCP server HTTP endpoint (default: `https://tradingview-mcp-yp6b.onrender.com/mcp`); endpoint destinations remain environment-only for Remote Config
 - `TRADINGVIEW_MCP_TIMEOUT_MS` - Timeout per MCP request in milliseconds (default: `12000`, valid range: `1000`-`120000`)
 - `TRADINGVIEW_MCP_MAX_RETRIES` - Retries for MCP failures (default: `3`, valid range: `1`-`5`)
 - `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` - Total budget envelope for the synchronous webhook enrichment flow (default: `12000`, valid range: `1000`-`120000`). When exceeded, all in-flight MCP calls are aborted and the enrichment fails open, preventing the alert webhook from being blocked for too long.
-- `TRADINGVIEW_MCP_DEFAULT_EXCHANGE` - Default exchange when not present in signal (default: `BINANCE`)
+- `TRADINGVIEW_MCP_DEFAULT_EXCHANGE` - Default exchange when not present in signal (default: `BINANCE`; one exchange token starting with a letter or digit and containing letters, digits, `.`, `_`, or `-`); Firebase Remote Config can override this environment fallback
 - `TRADINGVIEW_MCP_DEFAULT_TIMEFRAME` - Default timeframe fallback (default: `1D` for `/api/webhook/expanded-analysis-alert`, `1h` for webhook signal enrichment)
+- `ENABLE_TRADINGVIEW_MCP_CACHE` - Enable a bounded, process-local TTL cache for successful identical MCP tool calls (`true` or `false`, default: `false`; Firebase Remote Config eligible)
+- `TRADINGVIEW_MCP_CACHE_TTL_MS` - Cache lifetime in milliseconds (`10000`-`600000`, default: `90000`; Firebase Remote Config eligible)
 - `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` - Enable volume confirmation validation for TradingView alerts (`true` or `false`, default: `false`)
 - `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT` - Enable optional `combined_analysis` confluence enrichment for TradingView webhook alerts (`true` or `false`, default: `false`)
 - `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` - Also call `multi_timeframe_analysis` during confluence enrichment (`true` or `false`, default: `false`)
 - `ENABLE_ALERT_HTF_RENDER` - Enable rendering higher-timeframe trend alignment on enriched webhook alerts (`true` or `false`, default: `true`)
+- `ENABLE_EQUITY_SESSION_TAG` - Enable tagging equity webhook alerts with trading-session state (`regular`, `pre`, `post`, `closed`) (`true` or `false`, default: `true`, Remote Config supported)
 - `ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT` - Enable multi-agent consensus analysis fallback for `/api/webhook/symbol-analysis` (`true` or `false`, default: `false`)
 - `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` - Suppress duplicate channel delivery for the same `exchange|symbol|timeframe|side` signal within its cooldown window; suppressed alerts are still persisted with a `suppressedRepeat: true` marker and opposite-side flips always deliver (`true` or `false`, default: `false`)
 - `ALERT_SIGNAL_COOLDOWN_BARS` - Cooldown length in alert-timeframe bars for repeat suppression (`1`-`10`, default: `1`)
+- `ENABLE_ALERT_DECISION_AUDIT` - Persist bounded decision details (parsed signal, enrichment outcome, gates, and channel dispatch) on stored webhook alerts (`true` or `false`, default: `false`; request-time Remote Config eligible)
+- `ENABLE_OUTCOME_INFORMED_DELIVERY` - Append a bounded per-(exchange, symbol, side, setupType) historical outcome annotation to webhook alerts when evaluations exist; this phase annotates only and does not suppress delivery (`true` or `false`, default: `false`; Remote Config eligible)
+- `OUTCOME_ANNOTATION_LOOKBACK_DAYS` - Lookback window for outcome annotation aggregation (`1`-`365`, default: `30`; Remote Config eligible)
+- `OUTCOME_ANNOTATION_MIN_SAMPLE` - Minimum historical sample size required to render an annotation (`1`-`100`, default: `5`; Remote Config eligible)
+- `OUTCOME_ANNOTATION_TIMEOUT_MS` - Bounded outcome lookup timeout in milliseconds (`50`-`10000`, default: `2000`; Remote Config eligible)
+- `ENABLE_ALERT_CROSS_TF_SUPPRESSION` - Collapse cross-timeframe duplicates: suppress channel delivery when the same `exchange|symbol|side` already fired inside the window on a **different** timeframe (e.g. `BINANCE:BTCUSDT(D)` VENTA followed by `BINANCE:BTCUSDT(240)` VENTA seconds apart). `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION` cannot catch this because its key includes timeframe. The first signal to arrive is delivered and the later one is collapsed into it; opposite sides are never collapsed and a delivered flip clears the stale opposite-side entry. Reservations are keyed per `(channel, destination)` (the request's `telegramChatId`/`telegramThreadId`, `whatsappChatId` or `discordWebhookUrl` override, else the channel default), so a reservation for one chat never suppresses a signal routed to another, and a destination whose delivery produced nothing is released again so an undelivered leg cannot swallow the next signal on another timeframe. Suppressed alerts are still persisted with `suppressedRepeat: true` and `suppressionReason: "cross_timeframe_duplicate"`. The store is in-process and per replica, so each replica may still deliver one copy (`true` or `false`, default: `false`)
+- `ALERT_CROSS_TF_WINDOW_MS` - Collapse window in milliseconds for cross-timeframe suppression (`0`-`600000`, default: `60000`; `0` keeps the flag enabled but never collapses)
+- `ENABLE_ALERT_SYNTH_BURST_AGGREGATION` - Collapse same-direction multi-symbol alert bursts into one regime message per channel (`true` or `false`, default: `false`)
+- `ALERT_BURST_WINDOW_MS` - Buffered window in milliseconds before a burst is evaluated; also the maximum latency added to a parsed alert (`1000`-`15000`, default: `3000`)
+- `ALERT_BURST_MIN_SIGNALS` - Minimum same-direction signals inside the window required to send one aggregate message; below it every alert is delivered individually (`2`-`20`, default: `3`)
 - Runtime gate: TradingView MCP data is only used when webhook requests include `?useTradingViewData=true`
 
 #### Firestore Alert Storage
 
-- `ENABLE_FIRESTORE_ALERT_STORAGE` - Enable Firestore persistence and alert read API (`true` or `false`, default: `false`)
+- `ENABLE_FIRESTORE_ALERT_STORAGE` - Enable Firestore persistence and alert read API (`true` or `false`, default: `false`). Remote Config eligible.
 - `ALERT_STORAGE_RETENTION_DAYS` - Retention for `alerts` and `alertReplays` records in days (`1`-`3650`, default: `90`). New records get `expiresAt`; run `bash ops/configure-firestore-alert-retention.sh` once per Firebase project to backfill legacy records and enable native Firestore TTL deletion.
 - **Backup & Disaster Recovery**: To safeguard high-value analytical history (`alerts`, `alertReplays`, `tradingSignalOutcomes`, `scannerPresets`) against permanent TTL deletion, automated scheduled workflows (`.github/workflows/firestore-backup.yml`), managed GCS exports (`ops/export-firestore-managed.sh`), and selective JSONL exports (`pnpm run backup:firestore`, `pnpm run restore:firestore`) are provided. See [`docs/firestore-backup-and-restore.md`](firestore-backup-and-restore.md) for the complete runbook and restore procedures.
-- `ENABLE_FIRESTORE_JOB_STORAGE` - Enable Firestore persistence for async TradingView jobs without enabling alert read APIs (`true` or `false`, default: `false`)
-- `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`). **Enabled in production** via `render.yaml` on the web service only (issue #1111). Read [`dependencies.idempotencyStorage`](#verifying-idempotency-storage-is-actually-durable) before treating it as working.
+- `ENABLE_FIRESTORE_JOB_STORAGE` - Enable Firestore persistence for async TradingView jobs without enabling alert read APIs (`true` or `false`, default: `false`). Remote Config eligible.
+- `ENABLE_FIRESTORE_IDEMPOTENCY` - Enable durable webhook idempotency persistence in Cloud Firestore (`true` or `false`, default: `false`). Remote Config eligible. **Enabled in production** via `render.yaml` on the web service only (issue #1111). Read [`dependencies.idempotencyStorage`](#verifying-idempotency-storage-is-actually-durable) before treating it as working.
 - `ENABLE_FIRESTORE_ALERT_FEEDBACK` - Enable Firestore persistence for trader alert feedback (👍/👎 verdicts from inline keyboard callbacks) (`true` or `false`, default: `false`). Disabled falls back to a process-local in-memory surface so the summary endpoints still return aggregate counts in development.
 - `ALERT_FEEDBACK_RETENTION_DAYS` - Retention for `alertFeedback` records in days (`1`-`3650`, default: `90`, matches alert retention). New records get `expiresAt`; backfill + native TTL can be enabled via `ops/configure-firestore-alert-retention.sh` once per Firebase project.
 - `ENABLE_SIGNAL_OUTCOME_TRACKING` - Enable shadow-mode signal outcome recording and evaluation (`true` or `false`, default: `false`)
 - `SIGNAL_OUTCOME_RETENTION_DAYS` - Retention for `tradingSignalOutcomes` records in days (`1`-`3650`, default: `365`). New records get `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` (or with `BACKFILL=true`) once per Firebase project to backfill legacy records and enable native Firestore TTL deletion.
 - `SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES` - Optional comma-separated first-success provider chain (`mcp`, `binance`, `twelve-data`, `gemini`); empty preserves the existing crypto (`mcp,binance,gemini`) and equity (`twelve-data`) defaults. Active chains are reported under `dependencies.signalOutcomeWorker.entryPriceSources`.
+- `SIGNAL_OUTCOME_WINDOWS` - Ordered comma-separated evaluation windows (`1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1D`, `1W`, or `1M`; default: `1h,4h,1D,1W`). Invalid, duplicate, or empty values fall back to the default. Remote Config eligible.
+- `SIGNAL_OUTCOME_WINDOW_LABELS` - Optional JSON object mapping configured window keys to display labels (default: empty; omitted labels use the window key). Remote Config eligible.
 - `ENABLE_EQUITY_MARKET_DATA` - Opt in to equity/forex/index outcome evaluation for `NASDAQ`, `BATS`, `NYSE`, `AMEX`, `NYSE ARCA`, `FX_IDC`, and `SPCFD` signals (`true` or `false`, default: `false`)
 - `EQUITY_MARKET_DATA_PROVIDER` - Equity provider name; currently `twelve-data`
 - `TWELVE_DATA_API_KEY` - Twelve Data API key; sent in the `Authorization` header and never returned by status endpoints
@@ -242,6 +263,57 @@ bash ops/configure-operational-collection-retention.sh   # covers idempotency_ke
 Until that runs, the collection grows without bound. This is the same eventual deletion the other operational collections depend on, and it is a deployment step — it is not something this repository can apply for you.
 
 **Rollback.** Set the variable back to `false` and redeploy; the service falls back to in-memory idempotency on the next request and no code change is needed. Nothing is lost that matters — unexpired reservations simply stop being shared, so a duplicate is possible again, which is the pre-#1111 behaviour.
+
+#### Symbol Analysis Persistence
+
+- `ENABLE_SYMBOL_ANALYSIS_STORAGE` - Store `/api/webhook/symbol-analysis` results in the Firestore `symbolAnalyses` collection so they are readable from `/api/symbol-analyses` (`true` or `false`, default: `false`). **Enabled in production** via `render.yaml` on the web service only, with previews off (issue #1179). Read [`dependencies.symbolAnalysisStorage`](#verifying-symbol-analysis-persistence-is-actually-working) before treating it as working. **Environment-only** — excluded from Remote Config (see the note below).
+- `SYMBOL_ANALYSIS_RETENTION_DAYS` - Retention for stored symbol analyses in days (`1`-`365`, default: `7`). New records write `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` once per Firebase project to enable native Firestore TTL deletion on `expiresAt`. **Environment-only** — excluded from Remote Config.
+
+The flag is declared on the **web service only**. The single writer is the HTTP route layer in `src/controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis.js`, and `worker.js` never mounts routes, so the worker stays off rather than becoming a second writer on the collection. Previews stay off because previews share the production Firestore project: a preview would write throwaway rows into the collection operators read.
+
+**Both keys are excluded from Remote Config on purpose.** A gate that decides where a collection lives is a process-startup decision, not a runtime tuning knob, so neither key is in `RemoteConfigService.js` `PARAMETER_SCHEMA` nor in `firebase-remote-config-template.json`. This is not cosmetic: `getRemoteValue()` accepts a published template parameter with a plain `defaultValue`, and a published template outranks `render.yaml` for every allow-listed key. An allow-listed gate whose template value disagrees with the blueprint therefore reports the blueprint's value in `/api/capabilities` while the template keeps the feature silently off. `tests/unit/remote-config-service.test.js` fails if the blueprint and the template ever disagree for a shared key.
+
+#### Verifying symbol analysis persistence is actually working
+
+`ENABLE_SYMBOL_ANALYSIS_STORAGE=true` is **enabled in production** (issue #1179, declared on the web service in `render.yaml`), but the gate alone is not proof that analyses are being stored. `SymbolAnalysisStorageService` is fail-open by design: every Firestore error is logged and swallowed, the record is dropped, and the symbol analysis still returns `200`. A deployment whose credentials look valid but cannot reach Firestore behaves exactly as it did before the flag existed, so the reported state is derived from an observed **write** instead:
+
+| Field | Meaning |
+| :--- | :--- |
+| `featureFlags.symbolAnalysisStorage` | The `ENABLE_SYMBOL_ANALYSIS_STORAGE` gate only. |
+| `dependencies.symbolAnalysisStorage.configured` | Credential **shape** only. Not proof that writes land. |
+| `dependencies.symbolAnalysisStorage.status` | `disabled`, `misconfigured`, `unverified`, `ready`, or `degraded`. |
+| `dependencies.symbolAnalysisStorage.ready` | `true` only after an observed **successful write**. |
+| `dependencies.symbolAnalysisStorage.readiness` | `unverified` / `verified` / `degraded` from the observed-write window. |
+| `dependencies.symbolAnalysisStorage.failOpen` | Always `true`: a degraded verdict still answers symbol analysis, it just silently stops building decision history. |
+| `dependencies.symbolAnalysisStorage.lastErrorReason` | Closed enum: `firestore_not_initialized` or `firestore_unavailable`. Never provider text. |
+
+Read and write counters are reported separately (`writesAttempted`, `writesSucceeded`, `writesFailed`, `readsAttempted`, `readsSucceeded`, `readsFailed`). **A successful read is not evidence of persistence** — it proves Firestore reachability only, and never sets `ready`. Persistence is the feature, so only a write proves the enablement took effect.
+
+```bash
+curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
+  | jq '{flag: .featureFlags.symbolAnalysisStorage, dep: .dependencies.symbolAnalysisStorage,
+         templatePublished: .dependencies.firebaseRemoteConfig.templatePublished,
+         configSource: .dependencies.firebaseRemoteConfig.source}'
+```
+
+- `flag: false` in production although `render.yaml` says `true` — check `templatePublished` and `configSource` first. Because both keys are excluded from Remote Config, a `true` template here can no longer be the cause; a published template that disagrees with `render.yaml` on *any* allow-listed key means `render.yaml` itself has not been applied to the running deployment, so redeploy from the blueprint.
+
+- `status: "unverified"` — the normal state right after a deploy. `configured` is already `true` here; nothing has been proven yet. Persist one analysis and re-check.
+- `status: "ready"` — proven: `writesSucceeded` is at least `1`.
+- `status: "degraded"` — a durable write failed while the analysis still returned. `firestore_unavailable` points at the Firestore SDK or network path; `firestore_not_initialized` points at the credential loader, and is the signal to check `FIREBASE_SERVICE_ACCOUNT_JSON` / `GOOGLE_APPLICATION_CREDENTIALS`. `consecutiveFailures` clears on the next successful Firestore operation, so a transient outage self-heals without a restart.
+- `status: "misconfigured"` — enabled without usable Firestore credentials.
+
+Counters and timestamps are process-local and reset on restart. A status read never counts as a durable attempt, so polling `/api/status` cannot manufacture a `ready` verdict.
+
+**Prerequisite — TTL on `symbolAnalyses`.** Every document carries `expiresAt`, but Firestore only deletes on it once the TTL policy exists, and Firestore TTL deletion is eventually consistent (up to ~24 h) and only removes documents that are *already* expired. Run once per Firebase project:
+
+```bash
+bash ops/configure-operational-collection-retention.sh   # covers symbolAnalyses
+```
+
+Until that runs, the collection grows without bound. This is a deployment step — it is not something this repository can apply for you.
+
+**Rollback.** Set the variable back to `false` and redeploy; symbol analysis keeps working and simply stops persisting, which is the pre-#1179 behaviour. Already-stored documents are left in place for TTL deletion.
 - `SIGNAL_OUTCOME_WORKER_ROLE` - Scheduler role: `web` preserves the local/web timer, `worker` enables only the dedicated worker entrypoint, and `disabled` prevents scheduler startup (default: `web`)
 - `SIGNAL_OUTCOME_EVALUATION_LEASE_MS` - Distributed sweep lease duration in milliseconds (`10000`-`600000`, integer, default: `120000`). The sweep is claimed in the Firestore `signalOutcomeLocks` collection so exactly one process evaluates a pending signal when more than one has tracking enabled; a replica that loses the claim skips with `reason: "lease-held"` and makes no market-data calls. Fails open to single-process behaviour when Firestore or the lease write is unavailable, so it can never disable evaluation. Reported as `dependencies.signalOutcomeWorker.leaseMs`.
 - `FIREBASE_SERVICE_ACCOUNT_JSON` - Inline Firebase service account JSON for server-side Firestore access. Service accounts only; an ADC document supplied inline is rejected with an actionable error because ADC is resolved from a file or the managed runtime, never from an inline value.
@@ -291,7 +363,7 @@ The `shadowModeMetrics` payload (also surfaced as the `X-Shadow-Mode-Metrics` re
 - `windows.<1h|4h|1D|1W>` — the same metric set scoped to a single evaluation window. Each block may include `bySide` (`BUY` / `SELL`) and `bySetupType` sub-blocks when at least one evaluated signal exists for that bucket.
 - `drawdownProxy` — `averageMaxAdverseExcursionPercent` (mean of per-signal worst excursion) and `absoluteMaxAdverseExcursionPercent` (single worst excursion observed).
 - `falsePositiveCandidates` / `falsePositiveCandidatesCount` — up to 5 high-confidence signals (`|score| >= 0.75`, or news-monitor `|score| >= 0.7`) with `return < -1%` or `maxAdverseExcursion < -3%`.
-- `latencyCostMetadata` — `averageProcessingTimeMs` and aggregated `tokenUsage` (numeric-only fields, `inputTokens` / `outputTokens` / `totalCost`).
+- `latencyCostMetadata` — `averageProcessingTimeMs` and aggregated `tokenUsage` (`inputTokens` / `outputTokens` / `totalCost` and `pricing` containing `unknownModelPricing` / `unknownModels`).
 
 When signal-outcome tracking is disabled, or when no measurements exist in the requested window, the field becomes the string sentinel `"No measurements found"` instead of an object payload. The same sentinel is emitted in the `X-Shadow-Mode-Metrics` response header on `GET /api/alerts/export`. Both surfaces honor the same fallback; filtered summaries/exports omit the field entirely because the shadow-mode metrics service has no matching source/enrichment filters.
 
@@ -302,7 +374,39 @@ When signal-outcome tracking is disabled, or when no measurements exist in the r
 - `FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS` - Maximum template-load wait (default: `10000`, maximum: `30000`)
 - `FIREBASE_REMOTE_CONFIG_MAX_AGE_MS` - Maximum age of a successful template before environment/default fallback (default: `3600000`, maximum: `604800000`)
 
-The allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_MAINTENANCE_MODE` (an operational incident-response kill switch), and per-chat user preferences (`ENABLE_FIRESTORE_CHAT_PREFERENCES`, `CHAT_PREFERENCES_RETENTION_DAYS` between `1` and `365`, `CHAT_PREFERENCES_CACHE_TTL_MS` between `1000` and `3600000`). Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, permanent security controls, route/security gates, and Telegram destinations are never read from Remote Config.
+##### Worker startup jitter
+
+These non-secret runtime settings are available through Firebase Remote Config. They delay only each process's first background sweep, refresh, or reconciliation; later intervals and webhook alert delivery are unchanged. Values are integer milliseconds from `0` to `30000`; the default maximum is `5000`. Setting `WORKER_STARTUP_JITTER_MS=0` disables startup jitter globally.
+
+The published template uses `useInAppDefault` for all five settings, so an unset Remote Config value falls through to the in-app schema default or environment. When an operator publishes a value, it is an explicit override even when it equals `5000`. Resolution order is: global environment `0` kill switch, per-worker environment, per-worker Remote Config, global Remote Config, global environment, then the schema default.
+
+The Remote Config bootstrap fetch uses environment values because the published template must load before its values can be read. After bootstrap, `REMOTE_CONFIG_REFRESH_JITTER_MS` resolves through the per-worker environment and Remote Config values, then global Remote Config, global environment, and the schema default; it offsets only the first scheduled refresh.
+
+- `WORKER_STARTUP_JITTER_MS` - Global startup-jitter maximum for background workers
+- `SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS` - Signal outcome worker maximum
+- `NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS` - Notification redrive worker maximum
+- `SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS` - Scanner preset scheduler maximum
+- `REMOTE_CONFIG_REFRESH_JITTER_MS` - Firebase Remote Config refresh maximum
+
+`GET /api/status` and `GET /api/capabilities` expose the effective values at `dependencies.startupJitter` as `global`, `signalOutcome`, `redrive`, `scannerPreset`, and `remoteConfig`.
+
+The allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `GENERIC_MESSAGE_MAX_LENGTH` (integer `1`-`20000`, default `4000`), `SIGNAL_OUTCOME_WINDOWS`, `SIGNAL_OUTCOME_WINDOW_LABELS`, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), the five startup-jitter settings (integer `0`-`30000`, default `5000`), `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_MAINTENANCE_MODE` (an operational incident-response kill switch), per-chat user preferences (`ENABLE_FIRESTORE_CHAT_PREFERENCES`, `CHAT_PREFERENCES_RETENTION_DAYS` between `1` and `365`, `CHAT_PREFERENCES_CACHE_TTL_MS` between `1000` and `3600000`), and the five Firestore storage gates (`ENABLE_FIRESTORE_ALERT_STORAGE`, `ENABLE_FIRESTORE_ALERT_SUBSCRIBERS`, `ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_FIRESTORE_JOB_STORAGE`, `ENABLE_FIRESTORE_SCANNER_PRESETS`, all boolean, default `false`). Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, permanent security controls, route/security gates, and Telegram destinations are never read from Remote Config.
+
+##### Storage gates resolve `remote ?? env`, not `env || remote`
+
+The five Firestore storage gates are re-evaluated on every call (each gate is checked *before* the cached Firestore client is handed out), so a published value flips durable storage at runtime without a redeploy. That makes precedence load-bearing, and `render.yaml` pins three of them to `true` in production (`ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_FIRESTORE_JOB_STORAGE`, `ENABLE_FIRESTORE_SCANNER_PRESETS` on the web service):
+
+- A **published value always wins**, including `false`. Combining the two sources with `env || remote` would let the `true` pin mask a remote `false`, which would make the gate impossible to switch off in production.
+- **No published value means the environment decides.** Remote Config being disabled, stale, or simply lacking the key is *not* evidence about the gate, so `undefined` falls through to `process.env` rather than being coerced to `false`.
+- Consumers read this through `getRemoteOverride(key)`, not `getRuntimeConfig()`. `getRuntimeConfig()` always returns a value for every schema key — environment-derived when the gate is off — so it cannot distinguish "Remote Config said `false`" from "the environment says `false`".
+
+`ENABLE_FIRESTORE_ALERT_SUBSCRIBERS`, `ENABLE_FIRESTORE_SCANNER_PRESETS`, `ENABLE_FIRESTORE_JOB_STORAGE`, `ENABLE_FIRESTORE_ALERT_STORAGE` and `ENABLE_FIRESTORE_IDEMPOTENCY` are all declared in the template with **`useInAppDefault: true`**, which means "no published value". That is deliberate, and it is not cosmetic:
+
+> **A template `defaultValue` is an override, not a default.** When no condition matches, `firebase-admin` falls through to `parameter.defaultValue` and tags it with source `'remote'`, which this service accepts as a real override. Shipping `defaultValue: { "value": "false" }` would therefore have silently disabled the three storage modes `render.yaml` pins to `true` (idempotency, job storage, scanner presets) the first time the template was published, re-enabling duplicate alert delivery after every restart and replica. `useInAppDefault: true` makes the SDK skip the parameter, so nothing is overridden and the deployment value decides.
+
+So: to change a storage gate, set a **conditional/actual value** in `firebase-remote-config-template.json` and republish. Do not "just edit the default" — the default is a remote value.
+
+Previews are unaffected either way: they run with `ENABLE_FIREBASE_REMOTE_CONFIG=false`, so `getRemoteOverride()` returns `undefined` and they keep their `render.yaml` values — a throwaway PR deployment can never mutate the production collection through a remote toggle.
 
 The service loads once at startup and refreshes on the bounded cadence; it does not fetch Remote Config per alert. `SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS` remains environment-only because the worker timer is created during process startup and is not a request-time setting. Disabled, unavailable, timed-out, stale, malformed, or invalid values fail open to the current environment/default behavior. The server-side Remote Config API is currently a Firebase Preview feature, so monitor its quota and error rate before enabling it in production. `firebase-admin` is upgraded to the Node 24-compatible 12.x line (`^12.1.0`, lockfile resolution `12.7.0`).
 
@@ -399,6 +503,7 @@ pnpm test:firebase
 - `NEWS_GEMINI_CONCURRENCY` - Max concurrent Gemini-backed symbol analyses. Production policy is `3`; unset keeps legacy parallel fan-out for backward compatibility.
 - `NEWS_GEMINI_QUOTA_MAX_RETRIES` - Max per-symbol retries for Gemini `429 RESOURCE_EXHAUSTED` errors (default: `2`)
 - `NEWS_GEMINI_QUOTA_RETRY_BASE_MS` - Base exponential backoff when Gemini does not provide retry delay metadata (default: `1000` ms)
+- `NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS` - Maximum process-level Gemini quota cooldown ceiling (default: `1800000` ms / 30 minutes, range: `1000`-`86400000`; Remote Config supported). Prevents upstream multi-hour quota resets from locking out Gemini grounding across all webhook alerts.
 - `NEWS_MAX_ALERTS_PER_BATCH` - Maximum alerts delivered per `/api/news-monitor` request (default: `10`, range: `1`-`50`; Remote Config supported)
 - `NEWS_MAX_ALERTS_PER_WINDOW` - Maximum alerts delivered by this process during the volume window (default: `20`, range: `1`-`200`; Remote Config supported)
 - `NEWS_MAX_ALERTS_PER_WINDOW_MS` - Sliding volume-window duration (default: `300000` ms / 5 minutes, range: `1000`-`3600000`; Remote Config supported)
@@ -410,23 +515,70 @@ pnpm test:firebase
 
 - `ENABLE_BINANCE_TRADING` - Enable the operator-only Spot order endpoint (`true` or `false`, default: `false`)
 - `BINANCE_API_KEY` / `BINANCE_API_SECRET` - Server-side Binance credentials with Spot trading permission only; withdrawals must remain disabled and IP restrictions are recommended
+- `BINANCE_TRADING_API_KEY` - Optional dedicated API credential for Binance trading endpoints. When set, it must be sent in `x-api-key`; webhook and admin API keys are not accepted there. Secret; environment-only and excluded from Remote Config.
 - `BINANCE_TRADING_ENV` - Binance environment: `testnet` (default), `demo`, or explicit `live`. Use `demo` (`https://demo-api.binance.com`) for pre-live validation — it mirrors production market data and exchange filters exactly. Use `testnet` (`https://testnet.binance.vision`) for exploratory sandbox testing.
 - `BINANCE_TRADING_BASE_URL` - Optional custom base URL for Binance trading endpoints in live mode (default: unset / `https://api.binance.com`)
 - `BINANCE_TRADING_ALLOWED_SYMBOLS` - Comma-separated Spot symbol allow-list, for example `BTCUSDT,ETHUSDT`
 - `BINANCE_TRADING_MAX_NOTIONAL` - Maximum order notional in quote asset, enforced before submission
 - `BINANCE_TRADING_TIMEOUT_MS` - Signed request timeout (default `10000` ms, capped at `30000` ms)
+- `BINANCE_BALANCE_CACHE_MS` - In-memory TTL for `GET /api/trading/binance/account/balances` responses (default `3000` ms, range: `1000`-`60000`; Remote Config supported). Sizing a `SELL` should use `refresh=true` when the free balance must be current.
 
-`POST /api/trading/binance/orders` requires `admin.operator` access through the existing API-key or Firebase admin authentication flow, and fails closed if neither mechanism is configured. It supports `MARKET` and `LIMIT` `BUY`/`SELL` orders, validates the live Binance symbol status and filters, and uses the existing `binance` `MainClient`. MARKET orders accept either `quoteOrderQty` or base asset `quantity` (evaluated using average price against the configured notional cap). Quantity-based MARKET BUYs are converted to an exchange-enforced `quoteOrderQty` at the estimated average price so Binance itself caps the realized quote spend at `BINANCE_TRADING_MAX_NOTIONAL`; quantity-based MARKET SELLs keep base-quantity sizing.
+`POST /api/trading/binance/orders` requires `admin.operator` access through the existing API-key or Firebase admin authentication flow, and fails closed if neither mechanism is configured. When `BINANCE_TRADING_API_KEY` is configured, the trading routes accept only that header credential. If it is unset, admin authentication remains the fallback. The endpoint supports `MARKET` and `LIMIT` `BUY`/`SELL` orders, validates the live Binance symbol status and filters, and uses the existing `binance` `MainClient`. MARKET orders accept either `quoteOrderQty` or base asset `quantity` (evaluated using average price against the configured notional cap). Quantity-based MARKET BUYs are converted to an exchange-enforced `quoteOrderQty` at the estimated average price so Binance itself caps the realized quote spend at `BINANCE_TRADING_MAX_NOTIONAL`; quantity-based MARKET SELLs keep base-quantity sizing.
 
 `DELETE /api/trading/binance/orders` closes a resting or partially filled order inside the same audited execution path so operators do not have to fall back to Binance's own web/app UI. It accepts a JSON body with the allow-listed `symbol` and exactly one of `orderId` or `origClientOrderId` (the same identifier format accepted by `POST` and the read endpoint). The response is the sanitized cancelled order. Already-terminal orders (Binance error `-2011`, "Unknown order sent", or `-2013`) return `404 ORDER_NOT_FOUND` without re-firing at Binance; ambiguous bodies return `400 INVALID_ORDER_REQUEST`; symbols outside the configured allow-list return `400`; definitive exchange rejections return `400 BINANCE_REQUEST_REJECTED`; transient provider failures return retryable `502 BINANCE_QUERY_FAILED`. The endpoint inherits every gate from `POST` (`ENABLE_BINANCE_TRADING`, credentials, `admin.operator`, allowed symbols) so an operator cannot bypass the execution safety envelope while cancelling an order.
 
 `dryRun` defaults to `true` and validates the request without submitting. Set `dryRun: false` only after enabling the feature and explicitly selecting the intended environment. The default environment is Spot Testnet; `live` is never selected implicitly. Live requests require `idempotency-key` (or `x-idempotency-key`) or an explicit `clientOrderId`; a matching request is replayed and a changed payload returns `409 IDEMPOTENCY_CONFLICT`. Send decimal quantities, prices, and quote amounts as strings when exact precision matters; the service preserves those values through validation, submission, and reconciliation by disabling Binance SDK response beautification. MARKET orders must omit `timeInForce`; Binance order-test validation runs for LIMIT dynamic price filters and account-dependent filters such as `MAX_POSITION` and `MAX_NUM_ORDERS`. Definitive Binance rejections, including pre-execution timestamp and throttling failures, return `400 BINANCE_ORDER_REJECTED`; a recovered Binance order that does not match the request returns `409 BINANCE_ORDER_CONFLICT`; transient order-test failures return retryable `502 BINANCE_VALIDATION_FAILED`. A live request with an idempotency key derives a deterministic Binance `clientOrderId`; after cache expiration or process restart, the service reconciles that ID before submitting again. If Binance submission status is ambiguous, including Binance execution-unknown code `-1006`, the API returns `503 BINANCE_ORDER_STATUS_UNKNOWN` and replays that result for the same key; reconcile the order before retrying with a new key.
 
 The response and audit logs include only sanitized order metadata. API credentials are never returned or logged.
+
+#### Auto-Trade (Alert-to-Order Bridge)
+
+Opt-in bridging of an enriched TradingView alert to a Binance Spot order. This closes the alerting-to-execution gap tracked in #955; advanced order types (OCO, trailing-stop, bracket) remain #805.
+
+Auto-trade is opt-in **twice** — the operator sets `ENABLE_AUTO_TRADE=true` and the caller additionally passes `autoTrade=true` to `POST /api/webhook/alert`. Explicit query values must be `true` or `false`; malformed or repeated query values and non-boolean body values return HTTP 400 with the standard `INVALID_REQUEST` envelope before delivery. It never runs in preview deployments. **Dry-run is the default**, so enabling the flag alone validates the entire path (request validation, exchange-info filters, notional bounds) without mutating Binance.
+
+- `ENABLE_AUTO_TRADE` - Master operator switch (`true` or `false`, default: `false`). Security control; environment-only and excluded from Firebase Remote Config.
+- `AUTO_TRADE_DRY_RUN` - Validate without submitting (`true` or `false`, default: `true`). Set to `false` only after testnet and demo validation.
+- `AUTO_TRADE_MAX_NOTIONAL` - Per-order quote-asset cap (default: `100`). The effective cap is the **lower** of this and `BINANCE_TRADING_MAX_NOTIONAL`, so it can only tighten the existing limit.
+- `AUTO_TRADE_MIN_ABS_SENTIMENT` - Minimum positive `sentiment_score` before a BUY may trigger an order (default: `0.3`, range `0`-`1`); missing or bearish scores are rejected.
+- `AUTO_TRADE_COOLDOWN_BARS` - Duplicate-signal cooldown in bars (default: `1`, range `1`-`10`; out-of-range integers clamp). The key includes the side, so an opposite-side flip is never suppressed.
+
+The bridge is deliberately conservative. It only submits a `MARKET` `BUY`, and only when the alert was parsed as a TradingView signal (`EXCHANGE:SYMBOL(TIMEFRAME) COMPRA|VENTA|BUY|SELL`) and enrichment produced both a sentiment score and an observed price. It never infers trade direction from sentiment, because that would risk inverting a trader's intent.
+
+**Live (non-dry-run) orders additionally require** an explicit `BINANCE` signal exchange, a supported raw timeframe, `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true`, and a request-body `signalId` (`1`-`128` ASCII letters, digits, `.`, `_`, `:`, or `-`). The signal producer must reuse the same ID on retries and send a new ID for each new bar or signal occurrence. A Firestore transaction atomically creates a permanent occurrence reservation and updates a shared `(exchange, symbol, timeframe, side)` cooldown slot before submitting to Binance. An unavailable reservation fails closed for trading. A duplicate or conflicting occurrence cannot submit again, including after a process restart; distinct occurrences inside the cooldown cannot race across replicas. The Binance client-order ID also includes `signalId` for exchange reconciliation. Ambiguous submissions retain the reservation for manual reconciliation.
+
+Live Binance work runs as a tracked background task after the reservation. The webhook returns `200` with `autoTrade.reason: "ORDER_PENDING"` while the order is in flight; that response does not claim that Binance accepted the order. The reservation records `submitted`, `failed`, or `unknown` when the task finishes. Shutdown drains tracked tasks, and a process crash leaves a pending reservation that cannot be replayed automatically.
+
+`ENABLE_AUTO_TRADE`, `AUTO_TRADE_DRY_RUN`, `AUTO_TRADE_MAX_NOTIONAL`, `AUTO_TRADE_MIN_ABS_SENTIMENT`, and `AUTO_TRADE_COOLDOWN_BARS` remain environment-only. Each directly controls whether, when, or how much money may be ordered; remote changes to these safety controls would bypass deployment review. They are therefore excluded from Firebase Remote Config.
+
+For valid requests, auto-trade failures **never block alert delivery**. The alert response remains HTTP 200 and reports a non-sensitive `autoTrade` summary instead:
+
+```json
+{ "success": true, "autoTrade": { "requested": true, "executed": false, "reason": "SENTIMENT_BELOW_THRESHOLD" } }
+```
+
+`SELL` signals are intentionally **not** auto-executed. The read-only balances endpoint exists, but a safe SELL sizing and reservation workflow is deferred to #955 Phase 2.
+
+`GET /api/trading/binance/account/balances` is the read-only sibling used to size a `SELL` or a "close position" against the real free balance. It requires `admin.viewer` (or the API key) rather than `admin.operator`, and inherits the same `ENABLE_BINANCE_TRADING`, credentials and `BINANCE_TRADING_ALLOWED_SYMBOLS` gates, so a disabled or unconfigured deployment answers `403 FEATURE_DISABLED` / `503 BINANCE_TRADING_UNAVAILABLE` instead of reaching Binance. The allow-list is **derived**: base and quote assets are parsed from `BINANCE_TRADING_ALLOWED_SYMBOLS`, so `BTCUSDT,ETHUSDT` exposes exactly `BTC`, `ETH` and `USDT` and nothing else. Only `asset`, `free` and `locked` are returned, as unmodified decimal strings — no float conversion — and account identifiers, permissions, commission tiers and the raw Binance account payload are never exposed. Disallowed `asset`/`symbol` filters are rejected with `400 INVALID_ORDER_REQUEST` before any provider call; a provider timeout or failure returns `502 BINANCE_BALANCE_QUERY_FAILED` with no secret material in the body or the logs. Responses are cached in-process for `BINANCE_BALANCE_CACHE_MS` to keep dashboard polling from spiking Binance request weight; pass `refresh=true` when sizing a live order.
+
+#### Durable Trade Ledger & P&L Observability
+
+- `ENABLE_TRADE_LEDGER` - Master gate for persisting Binance Spot order fills to Firestore (`tradeFills` collection, no TTL) and enabling `GET /api/trading/positions`, `GET /api/trading/pnl/summary`, and `GET /api/trading/trades` (`true` or `false`, default: `false`). Environment-only (process-startup gate; excluded from Remote Config).
+- `TRADE_LEDGER_MAX_SCAN` - Maximum durable trade fill documents scanned from Firestore when aggregating open positions, round trips, and P&L summaries (integer, default `5000`, range `1`-`20000`). Remote Config eligible; fresh valid Remote Config overrides the environment setting, and invalid values fall back to the default or environment value.
+
 - `ENABLE_LLM_ALERT_ENRICHMENT` - Enable optional secondary LLM enrichment (`true` or `false`, default: `false`)
 - `AZURE_LLM_ENDPOINT` - Azure AI Inference endpoint URL (required if enrichment enabled)
 - `AZURE_LLM_KEY` - Azure AI Inference API key (required if enrichment enabled)
 - `AZURE_LLM_MODEL` - Azure AI LLM model name (e.g., `gpt-4o`, required if enrichment enabled)
+
+#### Binance Order Mutation Audit
+
+- `ENABLE_BINANCE_ORDER_AUDIT` - Persist a structured audit record for every Binance order mutation in the `binanceOrderAudit` Firestore collection (`true` or `false`, default: `false`; Remote Config supported)
+- `BINANCE_ORDER_AUDIT_RETENTION_DAYS` - Retention window in days applied to each audit document before Firestore TTL expiry (default: `30`, range: `1`-`365`; Remote Config supported)
+
+`GET /api/status` and `GET /api/capabilities` expose `featureFlags.binanceOrderAudit` and `dependencies.binanceOrderAudit`. `dependencies.binanceOrderAudit` reports `enabled`, `configured`, `ready`, `status` (`ready`, `misconfigured`, or `disabled`), `collection`, and `retentionDays`. `configured` reflects Firestore credential readiness **independently** of the gate, so an operator can distinguish "credentials present but audit off" (`enabled: false`, `configured: true`, `status: "disabled"`) from "audit on but storage unconfigured" (`enabled: true`, `configured: false`, `status: "misconfigured"`), where order mutations still execute but produce no audit trail. `ready` is credential readiness only (`enabled && configured`) and does not prove a write has succeeded, since audit writes are fail-open and a failed write is dropped with a warning. Operator identifiers are stored only as PBKDF2 hashes; no operator identifier, exchange credential, or API key is ever returned in the status payload.
+
+Audit writes are fail-open: a failed audit write is logged as a warning and never blocks or rejects an order.
 
 #### Runtime Error Monitoring (005-sentry-runtime-errors)
 
@@ -450,7 +602,7 @@ The response and audit logs include only sanitized order metadata. API credentia
 
 #### Scanner Preset Storage
 
-- `ENABLE_FIRESTORE_SCANNER_PRESETS` - Enable the scanner-preset Firestore persistence gate independently from alert storage, job storage, and outcome tracking (default: `false`)
+- `ENABLE_FIRESTORE_SCANNER_PRESETS` - Enable the scanner-preset Firestore persistence gate independently from alert storage, job storage, and outcome tracking (default: `false`). Remote Config eligible.
 - `storage.mode` and `storage.backend` are **intent-derived**: they report the configured target and stay `durable`/`firestore` whenever the flag is on and credentials are present. They only report `ephemeral`/`memory` when the flag is off or credentials are unusable — the two cases where presets really are lost on restart or redeploy. Do not read `memory` as "the flag is off": that confusion is what made a transient Firestore error look like a disabled feature in [#1342](https://github.com/francovp/cabros-bot/issues/1342).
 - `dependencies.scannerPresetStorage` reports `status` so the three causes an operator must act on differently stay distinguishable, and `configured`/`ready` are not the same question:
 

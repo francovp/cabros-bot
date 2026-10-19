@@ -56,11 +56,18 @@ class WhatsAppMarkdownFormatter {
 
 		const signalClass = options.signalClass;
 		const marker = formatSignalClassMarker(signalClass, { markdownV2: false });
-		if (marker) {
-			return `${marker}\n\n${result}`;
+		let finalResult = marker ? `${marker}\n\n${result}` : result;
+
+		const sessionVal = options.session;
+		if (sessionVal) {
+			const { formatSessionLine } = require('../../storage/EquitySessionService');
+			const sessionLine = formatSessionLine(sessionVal, { markdownV2: false });
+			if (sessionLine) {
+				finalResult += `\n${sessionLine}`;
+			}
 		}
 
-		return result;
+		return finalResult;
 	}
 
 	/**
@@ -126,14 +133,20 @@ class WhatsAppMarkdownFormatter {
 		}
 
 		// Citations
-		if (citations && citations.length > 0) {
+		const citationList = (citations && citations.length > 0)
+			? citations
+			: (Array.isArray(enriched.sources) ? enriched.sources : []);
+
+		if (citationList && citationList.length > 0) {
 			// Extract URLs for shortening if URL shortener is available
-			const urls = citations.map(c => c.url).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
+			const urls = citationList.map(c => c.url).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
 
 			let shortenedMap = {};
-			if (this.urlShortener && urls.length > 0) {
+			if (this.urlShortener && urls.length > 0 && !options.signal?.aborted) {
 				try {
-					shortenedMap = await this.urlShortener.shortenUrlsParallel(urls);
+					shortenedMap = options.signal
+						? await this.urlShortener.shortenUrlsParallel(urls, { signal: options.signal })
+						: await this.urlShortener.shortenUrlsParallel(urls);
 				} catch (error) {
 					if (this.logger) {
 						this.logger.warn?.(`WhatsApp formatter: URL shortening failed, falling back to title-only: ${error.message}`);
@@ -142,7 +155,7 @@ class WhatsAppMarkdownFormatter {
 			}
 
 			message += '\n\n*Sources*';
-			citations.forEach(({ title = '', url = '' }) => {
+			citationList.forEach(({ title = '', url = '' }) => {
 				const cleanTitle = title.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1');
 				if (shortenedMap[url]) {
 					message += `\n- ${cleanTitle}: ${shortenedMap[url]}`;
@@ -232,6 +245,15 @@ class WhatsAppMarkdownFormatter {
 			message += `\n${htfLine}`;
 		}
 
+		const sessionVal = options.session || enriched.session;
+		if (sessionVal) {
+			const { formatSessionLine } = require('../../storage/EquitySessionService');
+			const sessionLine = formatSessionLine(sessionVal, { markdownV2: false });
+			if (sessionLine) {
+				message += `\n${sessionLine}`;
+			}
+		}
+
 		// Technical Levels
 		const hasSupports = technical_levels.supports && technical_levels.supports.length > 0;
 		const hasResistances = technical_levels.resistances && technical_levels.resistances.length > 0;
@@ -274,15 +296,21 @@ class WhatsAppMarkdownFormatter {
 		}
 
 		// Sources
-		if (sources.length > 0) {
+		const sourceList = (sources && sources.length > 0)
+			? sources
+			: (Array.isArray(enriched.citations) ? enriched.citations : []);
+
+		if (sourceList && sourceList.length > 0) {
 			// Extract URLs for shortening if URL shortener is available
-			const urls = sources.map(c => c.url).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
+			const urls = sourceList.map(c => c.url).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
 
 			let shortenedMap = {};
-			if (this.urlShortener && urls.length > 0) {
+			if (this.urlShortener && urls.length > 0 && !options.signal?.aborted) {
 				try {
 					// Call shortenUrlsParallel to shorten all URLs at once
-					shortenedMap = await this.urlShortener.shortenUrlsParallel(urls);
+					shortenedMap = options.signal
+						? await this.urlShortener.shortenUrlsParallel(urls, { signal: options.signal })
+						: await this.urlShortener.shortenUrlsParallel(urls);
 				} catch (error) {
 					// Log shortening failure but don't block message delivery
 					if (this.logger) {
@@ -292,7 +320,7 @@ class WhatsAppMarkdownFormatter {
 			}
 
 			message += '\n\n*Sources*';
-			sources.forEach(({ title = '', url = '' }) => {
+			sourceList.forEach(({ title = '', url = '' }) => {
 				const cleanTitle = title.replace(/\\([_*[\]()~`>#+\-=|{}.!])/g, '$1');
 				if (shortenedMap[url]) {
 					message += `\n- ${cleanTitle}: ${shortenedMap[url]}`;

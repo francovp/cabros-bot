@@ -29,6 +29,7 @@ const {
 	getRateLimitState,
 	_resetForTesting,
 } = require('../../src/controllers/admin/testAlert');
+const WhatsAppService = require('../../src/services/notification/WhatsAppService');
 
 describe('Admin Test Alert Controller Unit Tests', () => {
 	let mockNotificationManager;
@@ -84,10 +85,15 @@ describe('Admin Test Alert Controller Unit Tests', () => {
 		await handler(req, res);
 
 		expect(res.status).toHaveBeenCalledWith(403);
-		expect(res.data).toEqual({
+		expect(res.data).toEqual(expect.objectContaining({
 			error: 'Test alert endpoint is disabled',
 			code: 'FEATURE_DISABLED',
-		});
+		}));
+		expect(res.data).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('enforces 60-second rate limit per admin caller with Retry-After header', async () => {
@@ -345,6 +351,117 @@ describe('Admin Test Alert Controller Unit Tests', () => {
 		expect(res.data.formatted.discord.text).toContain('Ethereum');
 	});
 
+	it('uses configured urlShortener in dry-run previews for WhatsApp and Discord citations', async () => {
+		mockNotificationManager.getEnabledChannels.mockReturnValue(['whatsapp', 'discord']);
+		const mockShortener = {
+			shortenUrlsParallel: jest.fn().mockResolvedValue({
+				'https://example.com/long-article-url': 'https://tinyurl.com/short123',
+			}),
+		};
+
+		alertHandler.processEnrichment.mockImplementation(async (alert) => {
+			alert.enriched = {
+				symbol: 'BTCUSDT',
+				original_text: 'Bitcoin Analysis',
+				summary: 'Strong momentum above key resistance',
+				citations: [
+					{ title: 'CoinDesk Report', url: 'https://example.com/long-article-url' },
+				],
+			};
+			return true;
+		});
+
+		req.body = {
+			dryRun: true,
+			includeEnrichment: true,
+			channels: ['whatsapp', 'discord'],
+		};
+
+		const handler = postTestAlert(null, { urlShortener: mockShortener });
+		await handler(req, res);
+
+		expect(res.status).toHaveBeenCalledWith(200);
+		expect(mockShortener.shortenUrlsParallel).toHaveBeenCalledWith(['https://example.com/long-article-url']);
+		expect(res.data.formatted.whatsapp.preview).toContain('https://tinyurl.com/short123');
+		expect(res.data.formatted.whatsapp.preview).not.toContain('https://example.com/long-article-url');
+		expect(res.data.formatted.discord.preview).toContain('https://tinyurl.com/short123');
+	});
+
+	it('verifies citation URLs with a mocked shortener in both dry-run and live delivery paths', async () => {
+		const mockShortener = {
+			shortenUrlsParallel: jest.fn().mockResolvedValue({
+				'https://example.com/source-doc': 'https://tinyurl.com/doc-short',
+			}),
+		};
+
+		const whatsAppService = new WhatsAppService({
+			apiUrl: 'https://api.greenapi.com',
+			apiKey: 'test-key',
+			chatId: '120363xxxxxx@g.us',
+			urlShortener: mockShortener,
+		});
+
+		mockNotificationManager.channels = new Map([['whatsapp', whatsAppService]]);
+		mockNotificationManager.getEnabledChannels.mockReturnValue(['whatsapp']);
+		mockNotificationManager.sendToChannels.mockImplementation(async (alertPayload, channels) => {
+			const formattedText = await whatsAppService.formatter.formatEnriched(alertPayload.enriched);
+			return [{
+				channel: 'whatsapp',
+				success: true,
+				messageId: 'msg-live-1',
+				formattedText,
+			}];
+		});
+
+		alertHandler.processEnrichment.mockImplementation(async (alert) => {
+			alert.enriched = {
+				symbol: 'BTCUSDT',
+				original_text: 'Bitcoin Breakout',
+				summary: 'Testing $75k level',
+				citations: [{ title: 'Doc Source', url: 'https://example.com/source-doc' }],
+			};
+			return true;
+		});
+
+		// 1. Dry-run path
+		req.body = {
+			dryRun: true,
+			includeEnrichment: true,
+			channels: ['whatsapp'],
+		};
+		const handler = postTestAlert();
+		await handler(req, res);
+
+		expect(res.status).toHaveBeenCalledWith(200);
+		expect(res.data.formatted.whatsapp.preview).toContain('https://tinyurl.com/doc-short');
+		expect(res.data.formatted.whatsapp.preview).not.toContain('https://example.com/source-doc');
+		expect(mockShortener.shortenUrlsParallel).toHaveBeenCalledWith(['https://example.com/source-doc']);
+
+		// Reset shortener calls and rate limits
+		mockShortener.shortenUrlsParallel.mockClear();
+		_resetForTesting();
+
+		// 2. Live delivery path
+		req.body = {
+			dryRun: false,
+			includeEnrichment: true,
+			channels: ['whatsapp'],
+		};
+		const liveRes = {
+			headers: {},
+			set: jest.fn(),
+			status: jest.fn(function (c) { this.statusCode = c; return this; }),
+			json: jest.fn(function (d) { this.data = d; return this; }),
+		};
+
+		await handler(req, liveRes);
+		expect(liveRes.status).toHaveBeenCalledWith(200);
+		expect(liveRes.data.ok).toBe(true);
+		expect(mockShortener.shortenUrlsParallel).toHaveBeenCalledWith(['https://example.com/source-doc']);
+		expect(liveRes.data.results[0].formattedText).toContain('https://tinyurl.com/doc-short');
+		expect(liveRes.data.results[0].formattedText).not.toContain('https://example.com/source-doc');
+	});
+
 	it('rejects invalid or empty string text with 400 Bad Request', async () => {
 		req.body = { text: '' };
 		const handler = postTestAlert();
@@ -386,10 +503,15 @@ describe('Admin Test Alert Controller Unit Tests', () => {
 			await handler(req, invalidRes);
 
 			expect(invalidRes.status).toHaveBeenCalledWith(400);
-			expect(invalidRes.data).toEqual({
+			expect(invalidRes.data).toEqual(expect.objectContaining({
 				error: 'dryRun must be a boolean',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(invalidRes.data).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		}
 	});
 
@@ -399,10 +521,15 @@ describe('Admin Test Alert Controller Unit Tests', () => {
 		await handler(req, res);
 
 		expect(res.status).toHaveBeenCalledWith(400);
-		expect(res.data).toEqual({
+		expect(res.data).toEqual(expect.objectContaining({
 			error: 'includeEnrichment must be a boolean',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(res.data).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('rejects invalid dryRun query parameters with 400 Bad Request', async () => {
@@ -412,10 +539,15 @@ describe('Admin Test Alert Controller Unit Tests', () => {
 		await handler(req, res);
 
 		expect(res.status).toHaveBeenCalledWith(400);
-		expect(res.data).toEqual({
+		expect(res.data).toEqual(expect.objectContaining({
 			error: 'dryRun query parameter must be a boolean',
 			code: 'INVALID_REQUEST',
-		});
+		}));
+		expect(res.data).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('marks live probe delivery as ineligible for redrive to prevent duplicate stale deliveries', async () => {

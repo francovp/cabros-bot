@@ -512,6 +512,21 @@ describe('News Alert Source Formatting', () => {
 			expect(formatted).toContain('Target: 89460.52');
 			expect(formatted).toContain('Risk/Reward: 2');
 		});
+
+		it('should render equity session state in MarkdownV2Formatter and WhatsAppMarkdownFormatter', async () => {
+			const equityAlert = {
+				original_text: 'NASDAQ:AAPL(60) pasó a señal de COMPRA',
+				sentiment: 'BULLISH',
+				session: 'regular',
+			};
+
+			const mdOutput = formatter.formatWebhookAlert(equityAlert);
+			expect(mdOutput).toContain('Sesión: regular');
+
+			const waOutput = await whatsappFormatter.formatWebhookAlert(equityAlert);
+			expect(waOutput).toContain('Sesión: regular');
+		});
 	});
 });
+
 

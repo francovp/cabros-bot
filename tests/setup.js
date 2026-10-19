@@ -63,6 +63,7 @@ const createMockSpan = () => ({
 
 jest.mock('@sentry/node', () => ({
 	init: jest.fn(),
+	isEnabled: jest.fn(() => false),
 	consoleIntegration: jest.fn(() => 'console-breadcrumb-integration'),
 	consoleLoggingIntegration: jest.fn(() => 'console-logging-integration'),
 	startSpan: jest.fn((_options, callback) => callback(createMockSpan())),
