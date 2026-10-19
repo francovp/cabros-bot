@@ -157,7 +157,7 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `GET` | `/api/outcomes/summary` | Expectancy, win rate, filters, and optional bounded symbol/setup breakdowns | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomessummary) |
 | `GET`/`POST` | `/api/alert-subscribers` | Manage outbound alert subscriber webhooks with HMAC and SSRF guards | [OpenAPI Spec](/openapi.json) |
 
-Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`.
+Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`. CI coverage guards (`tests/unit/postman-collection.test.js` and `tests/unit/openapi-contract.test.js`) enforce that every mounted `/api` route appears in both OpenAPI and `CabrosBot.postman_collection.json`, and that every unique endpoint path referenced in README API documentation exists in `src/openapi/openapi.json`.
 
 `dependencies.persistentWriteHealth` is always present on `/api/status` and `/api/capabilities`. It reports process-local success/failure counts for alert storage, signal outcomes, notification redrive, and persistent news dedup. Each domain is `unconfigured` until a write is observed, `degraded` when the latest 100 attempts fail above 5% or a failure occurred in the last five minutes, and otherwise `ok`. Counters reset on process restart; only closed error categories are exposed, never provider messages.
 
