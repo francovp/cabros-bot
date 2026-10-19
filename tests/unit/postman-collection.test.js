@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { getRoutes } = require('../../src/routes');
+const { getMountedApiOperations } = require('../helpers/api-operations');
 const MarkdownV2Formatter = require('../../src/services/notification/formatters/markdownV2Formatter');
 
 const collectionPath = path.join(__dirname, '../../CabrosBot.postman_collection.json');
@@ -36,15 +36,6 @@ function normalizeParamPath(routePath) {
 		.replace(/\{\{[^}]+\}\}/g, '{param}')
 		.replace(/:([A-Za-z0-9_]+)/g, '{param}')
 		.replace(/\{([A-Za-z0-9_]+)\}/g, '{param}');
-}
-
-function getMountedApiOperations() {
-	return getRoutes(null).stack
-		.filter((layer) => layer.route)
-		.flatMap((layer) => Object.keys(layer.route.methods)
-			.filter((method) => layer.route.methods[method])
-			.map((method) => `${method.toUpperCase()} ${normalizeParamPath(`/api${layer.route.path}`)}`))
-		.sort();
 }
 
 function extractPostmanApiOperations(items, operations = new Set()) {
@@ -2249,8 +2240,9 @@ describe('news-monitor admin read examples (issue #1290)', () => {
 });
 
 describe('CI coverage guards (Postman collection and README endpoints)', () => {
-	it('covers every mounted /api operation from the router in the Postman collection', () => {
+	it('covers every mounted /api operation from the router and app in the Postman collection', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		expect(getMountedApiOperations()).toContain('GET /api/public/status');
 		const missing = findMissingPostmanOperations(
 			getMountedApiOperations(),
 			extractPostmanApiOperations(collection.item),
@@ -2279,6 +2271,12 @@ describe('CI coverage guards (Postman collection and README endpoints)', () => {
 			success: true,
 			analyses: expect.any(Array),
 		}));
+		expect(analyses.request.url.query).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'before', disabled: true }),
+		]));
+		expect(analyses.request.url.query).not.toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'beforeCursor' }),
+		]));
 		expect(invalidAnalyses.request.url.raw).toContain('limit=0');
 		expect(JSON.parse(invalidAnalyses.response.find((response) => response.code === 400).body).code).toBe('INVALID_REQUEST');
 	});

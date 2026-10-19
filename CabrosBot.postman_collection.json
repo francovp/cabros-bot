@@ -8109,10 +8109,10 @@
                   "description": "Lowercased exact category filter"
                 },
                 {
-                  "key": "beforeCursor",
+                  "key": "before",
                   "value": "",
                   "disabled": true,
-                  "description": "Document id cursor for the next page"
+                  "description": "Canonical document id cursor for the next page"
                 }
               ]
             },
