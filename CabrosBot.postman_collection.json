@@ -8041,6 +8041,19 @@
                 }
               ],
               "body": "{\n  \"error\": \"Unauthorized\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         },
@@ -8096,10 +8109,10 @@
                   "description": "Lowercased exact category filter"
                 },
                 {
-                  "key": "beforeCursor",
+                  "key": "before",
                   "value": "",
                   "disabled": true,
-                  "description": "Document id cursor for the next page"
+                  "description": "Canonical document id cursor for the next page"
                 }
               ]
             },
@@ -8200,6 +8213,139 @@
                 }
               ],
               "body": "{\n  \"error\": \"Unauthorized\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET News Monitor Summary (invalid threshold)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor/summary?threshold=1.5",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor",
+                "summary"
+              ],
+              "query": [
+                {
+                  "key": "threshold",
+                  "value": "1.5",
+                  "description": "Invalid: threshold must be from 0 to 1."
+                }
+              ]
+            },
+            "description": "Invalid-input variant: threshold must be a number from 0 to 1."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - threshold out of range",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Invalid threshold. Use a number between 0 and 1.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET News Monitor Analyses (invalid limit)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor/analyses?limit=0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor",
+                "analyses"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "0",
+                  "description": "Invalid: limit must be an integer from 1 to 100."
+                }
+              ]
+            },
+            "description": "Invalid-input variant: limit must be an integer from 1 to 100."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - limit out of range",
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 100.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
           ]
         }
