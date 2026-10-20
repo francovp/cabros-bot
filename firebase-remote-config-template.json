@@ -35,6 +35,13 @@
       "description": "Base delay for Gemini quota retries in milliseconds",
       "valueType": "NUMBER"
     },
+    "NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS": {
+      "defaultValue": {
+        "value": "1800000"
+      },
+      "description": "Maximum Gemini quota cooldown ceiling in milliseconds",
+      "valueType": "NUMBER"
+    },
     "NEWS_MAX_ALERTS_PER_BATCH": {
       "defaultValue": {
         "value": "10"
@@ -96,6 +103,34 @@
         "value": "3600000"
       },
       "description": "Operator degradation paging cooldown in milliseconds between admin notifications",
+      "valueType": "NUMBER"
+    },
+    "TRADINGVIEW_MCP_CACHE_TTL_MS": {
+      "defaultValue": {
+        "value": "90000"
+      },
+      "description": "TTL for successful process-local TradingView MCP tool results in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "ENABLE_TRADINGVIEW_MCP_WARMUP": {
+      "defaultValue": {
+        "value": "true"
+      },
+      "description": "Enable proactive periodic background keepalive probe to prevent TradingView MCP cold starts",
+      "valueType": "BOOLEAN"
+    },
+    "TRADINGVIEW_MCP_WARMUP_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "600000"
+      },
+      "description": "Interval in milliseconds between proactive TradingView MCP keepalive probes (default 10m)",
+      "valueType": "NUMBER"
+    },
+    "TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Timeout in milliseconds for TradingView MCP keepalive probe allowing for cold start latency (default 60s)",
       "valueType": "NUMBER"
     },
     "ENABLE_MESSAGE_FOOTER_METADATA": {
@@ -175,6 +210,20 @@
       "description": "Binance API fetch timeout in milliseconds",
       "valueType": "NUMBER"
     },
+    "BINANCE_BALANCE_CACHE_MS": {
+      "defaultValue": {
+        "value": "3000"
+      },
+      "description": "Cache duration in milliseconds for Binance account balance queries",
+      "valueType": "NUMBER"
+    },
+    "TRADINGVIEW_MCP_DEFAULT_EXCHANGE": {
+      "defaultValue": {
+        "value": "BINANCE"
+      },
+      "description": "Default exchange token for TradingView MCP analysis when a signal omits it",
+      "valueType": "STRING"
+    },
     "TRADINGVIEW_MCP_DEFAULT_TIMEFRAME": {
       "defaultValue": {
         "value": "1h"
@@ -245,6 +294,48 @@
       "description": "Polling interval in milliseconds for firestore-poller job execution mode",
       "valueType": "NUMBER"
     },
+    "JOB_QUEUE_ATTEMPTS": {
+      "defaultValue": {
+        "value": "5"
+      },
+      "description": "Maximum BullMQ job execution retry attempts before permanent failure",
+      "valueType": "NUMBER"
+    },
+    "JOB_QUEUE_BACKOFF_MS": {
+      "defaultValue": {
+        "value": "30000"
+      },
+      "description": "Base exponential backoff delay in milliseconds for BullMQ job retries",
+      "valueType": "NUMBER"
+    },
+    "JOB_QUEUE_CONCURRENCY": {
+      "defaultValue": {
+        "value": "1"
+      },
+      "description": "Maximum concurrent BullMQ jobs processed by the job worker",
+      "valueType": "NUMBER"
+    },
+    "JOB_QUEUE_CLAIM_LEASE_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Worker heartbeat lease duration in milliseconds for claimed jobs",
+      "valueType": "NUMBER"
+    },
+    "JOB_QUEUE_CONNECT_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Redis connection timeout in milliseconds for BullMQ queues and workers",
+      "valueType": "NUMBER"
+    },
+    "JOB_QUEUE_PROBE_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Redis broker probe timeout in milliseconds for health status checks",
+      "valueType": "NUMBER"
+    },
     "SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT": {
       "defaultValue": {
         "value": "50"
@@ -258,6 +349,20 @@
       },
       "description": "Maximum execution duration per signal outcome evaluation sweep in milliseconds",
       "valueType": "NUMBER"
+    },
+    "SIGNAL_OUTCOME_WINDOWS": {
+      "defaultValue": {
+        "value": "1h,4h,1D,1W"
+      },
+      "description": "Ordered comma-separated signal outcome evaluation windows",
+      "valueType": "STRING"
+    },
+    "SIGNAL_OUTCOME_WINDOW_LABELS": {
+      "defaultValue": {
+        "value": ""
+      },
+      "description": "Optional JSON display labels for configured signal outcome windows",
+      "valueType": "STRING"
     },
     "SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS": {
       "defaultValue": {
@@ -336,6 +441,13 @@
       "description": "Maximum due scanner presets to process per scheduler sweep",
       "valueType": "NUMBER"
     },
+    "SCANNER_PRESET_SCHEDULER_LEASE_MS": {
+      "defaultValue": {
+        "value": "120000"
+      },
+      "description": "Scheduler lease duration in milliseconds to prevent overlapping scanner preset sweeps",
+      "valueType": "NUMBER"
+    },
     "NEWS_MONITOR_SCHEDULER_INTERVAL_MS": {
       "defaultValue": {
         "value": "300000"
@@ -376,6 +488,13 @@
         "value": "false"
       },
       "description": "Enable TradingView MCP alert enrichment",
+      "valueType": "BOOLEAN"
+    },
+    "ENABLE_TRADINGVIEW_MCP_CACHE": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable process-local caching of successful TradingView MCP tool results",
       "valueType": "BOOLEAN"
     },
     "ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION": {
@@ -427,6 +546,13 @@
       "description": "Enable rendering signal classification marker prefix on alert notifications",
       "valueType": "BOOLEAN"
     },
+    "ENABLE_EQUITY_SESSION_TAG": {
+      "defaultValue": {
+        "value": "true"
+      },
+      "description": "Enable tagging equity webhook alerts with trading-session state (regular, pre, post, closed)",
+      "valueType": "BOOLEAN"
+    },
     "ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION": {
       "defaultValue": {
         "value": "false"
@@ -439,6 +565,132 @@
         "value": "1"
       },
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
+      "valueType": "NUMBER"
+    },
+    "ENABLE_MIN_ALERT_CONTEXT": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Synthesize a degraded-but-honest decision package (entry reference + provisional invalidation/target) when TradingView MCP enrichment fails and the alert is a parseable trading signal (GH-581 / CB-269)",
+      "valueType": "BOOLEAN"
+    },
+    "MIN_ALERT_PROVISIONAL_STOP_PERCENT": {
+      "defaultValue": {
+        "value": "2.5"
+      },
+      "description": "Provisional stop percentage for the synthesized minimum alert context envelope (default 2.5%, bounded 0.1-20)",
+      "valueType": "NUMBER"
+    },
+    "MIN_ALERT_PROVISIONAL_TARGET_PERCENT": {
+      "defaultValue": {
+        "value": "5.0"
+      },
+      "description": "Provisional target percentage for the synthesized minimum alert context envelope (default 5.0%, bounded 0.1-40)",
+      "valueType": "NUMBER"
+    },
+    "WORKER_STARTUP_JITTER_MS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Global default upper bound in milliseconds for per-process startup jitter (0-30000)",
+      "valueType": "NUMBER"
+    },
+    "SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Startup jitter upper bound in milliseconds for the signal outcome worker (0-30000)",
+      "valueType": "NUMBER"
+    },
+    "NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Startup jitter upper bound in milliseconds for the notification redrive worker (0-30000)",
+      "valueType": "NUMBER"
+    },
+    "SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Startup jitter upper bound in milliseconds for the scanner preset scheduler (0-30000)",
+      "valueType": "NUMBER"
+    },
+    "REMOTE_CONFIG_REFRESH_JITTER_MS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Startup jitter upper bound in milliseconds for Firebase Remote Config refresh (0-30000)",
+      "valueType": "NUMBER"
+    },
+    "ENABLE_ALERT_DECISION_AUDIT": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Persist an opt-in bounded decision audit trail for stored webhook alerts",
+      "valueType": "BOOLEAN"
+    },
+    "ENABLE_OUTCOME_INFORMED_DELIVERY": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Append per-(exchange, symbol, side, setupType) outcome annotation to enriched webhook alerts when historical data exists; lookup is fail-open and bounded",
+      "valueType": "BOOLEAN"
+    },
+    "OUTCOME_ANNOTATION_LOOKBACK_DAYS": {
+      "defaultValue": {
+        "value": "30"
+      },
+      "description": "Lookback window for outcome annotation aggregation, in days (range: 1-365)",
+      "valueType": "NUMBER"
+    },
+    "OUTCOME_ANNOTATION_MIN_SAMPLE": {
+      "defaultValue": {
+        "value": "5"
+      },
+      "description": "Minimum sample size required to render an outcome annotation (range: 1-100)",
+      "valueType": "NUMBER"
+    },
+    "OUTCOME_ANNOTATION_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "2000"
+      },
+      "description": "Bounded lookup timeout for the outcome annotation query, in milliseconds (range: 50-10000)",
+      "valueType": "NUMBER"
+    },
+    "ENABLE_ALERT_CROSS_TF_SUPPRESSION": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Collapse cross-timeframe duplicates: suppress delivery when the same exchange/symbol/side already fired inside the window on a different timeframe (alerts stay persisted with a suppression marker)",
+      "valueType": "BOOLEAN"
+    },
+    "ALERT_CROSS_TF_WINDOW_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Cross-timeframe collapse window in milliseconds (0 disables collapsing while the flag stays on)",
+      "valueType": "NUMBER"
+    },
+    "ENABLE_ALERT_SYNTH_BURST_AGGREGATION": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Aggregate same-direction multi-symbol bursts into one regime message per channel",
+      "valueType": "BOOLEAN"
+    },
+    "ALERT_BURST_WINDOW_MS": {
+      "defaultValue": {
+        "value": "3000"
+      },
+      "description": "Buffered window in milliseconds before a same-direction alert burst is evaluated",
+      "valueType": "NUMBER"
+    },
+    "ALERT_BURST_MIN_SIGNALS": {
+      "defaultValue": {
+        "value": "3"
+      },
+      "description": "Minimum same-direction signals in the window required to send one aggregate message",
       "valueType": "NUMBER"
     },
     "ENABLE_USER_PRICE_ALERTS": {
@@ -469,13 +721,6 @@
       "description": "Maximum active price alerts allowed per Telegram chat",
       "valueType": "NUMBER"
     },
-    "ENABLE_FIRESTORE_NEWS_ANALYSIS": {
-      "defaultValue": {
-        "value": "false"
-      },
-      "description": "Enable Firestore persistence for news-monitor analysis records",
-      "valueType": "BOOLEAN"
-    },
     "NEWS_ANALYSIS_RETENTION_DAYS": {
       "defaultValue": {
         "value": "30"
@@ -488,6 +733,13 @@
         "value": "30000"
       },
       "description": "Global request-deadline timeout ceiling in milliseconds",
+      "valueType": "NUMBER"
+    },
+    "GENERIC_MESSAGE_MAX_LENGTH": {
+      "defaultValue": {
+        "value": "4000"
+      },
+      "description": "Maximum inbound generic webhook message length before truncation",
       "valueType": "NUMBER"
     },
     "ENABLE_BINANCE_ORDER_AUDIT": {
@@ -504,18 +756,11 @@
       "description": "Audit log retention in days before Firestore TTL expiry",
       "valueType": "NUMBER"
     },
-    "ENABLE_SYMBOL_ANALYSIS_STORAGE": {
+    "TRADE_LEDGER_MAX_SCAN": {
       "defaultValue": {
-        "value": "false"
+        "value": "5000"
       },
-      "description": "Enable Firestore persistence of symbol-analysis results for decision history and accuracy trending",
-      "valueType": "BOOLEAN"
-    },
-    "SYMBOL_ANALYSIS_RETENTION_DAYS": {
-      "defaultValue": {
-        "value": "7"
-      },
-      "description": "Retention window in days for persisted symbol-analysis records before Firestore TTL expiry",
+      "description": "Maximum number of recent trade fills scanned for position and P&L calculations",
       "valueType": "NUMBER"
     },
     "ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT": {
@@ -531,6 +776,13 @@
       },
       "description": "Comma-separated ordered parameter names extracted from the alert for GreenAPI sendTemplate placeholders. Each maps to a field in alert.enriched or alert. Missing fields produce empty strings. WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, and WHATSAPP_TEMPLATE_NAMESPACE are excluded (notification destinations).",
       "valueType": "STRING"
+    },
+    "WHATSAPP_COMMAND_POLL_INTERVAL_MS": {
+      "defaultValue": {
+        "value": "3000"
+      },
+      "description": "Polling interval in milliseconds for the GreenAPI WhatsApp command bridge (bounded between 500ms and 60000ms)",
+      "valueType": "NUMBER"
     },
     "ENABLE_FIRESTORE_CHAT_PREFERENCES": {
       "defaultValue": {
@@ -572,6 +824,13 @@
         "value": "30000"
       },
       "description": "Heartbeat interval in milliseconds for SSE comment keepalive frames",
+      "valueType": "NUMBER"
+    },
+    "ADMIN_SSE_DRAIN_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "15000"
+      },
+      "description": "Maximum time in milliseconds to wait for a backpressured SSE client socket to drain before eviction",
       "valueType": "NUMBER"
     },
     "ENABLE_TOKEN_COST_BUDGET": {
@@ -622,10 +881,50 @@
       },
       "description": "Interval in milliseconds between periodic async job backlog depth probes (default: 1m)",
       "valueType": "NUMBER"
+    },
+    "ENABLE_FIRESTORE_ALERT_STORAGE": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "conditionalValues": {},
+      "description": "Enable Firestore persistence and read/export APIs for webhook alerts. Ships with useInAppDefault so publishing this template yields NO remote override for this key and the deployment value decides. Without it the Admin SDK reports the defaultValue with source 'remote', which would silently override render.yaml.",
+      "valueType": "BOOLEAN"
+    },
+    "ENABLE_FIRESTORE_IDEMPOTENCY": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "conditionalValues": {},
+      "description": "Enable durable Firestore-backed webhook idempotency reservations. Ships with useInAppDefault so publishing this template yields NO remote override for this key and the deployment value decides. Without it the Admin SDK reports the defaultValue with source 'remote', which would silently override render.yaml.",
+      "valueType": "BOOLEAN"
+    },
+    "ENABLE_FIRESTORE_JOB_STORAGE": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "conditionalValues": {},
+      "description": "Enable durable Firestore persistence for TradingView job state. Ships with useInAppDefault so publishing this template yields NO remote override for this key and the deployment value decides. Without it the Admin SDK reports the defaultValue with source 'remote', which would silently override render.yaml.",
+      "valueType": "BOOLEAN"
+    },
+    "ENABLE_FIRESTORE_SCANNER_PRESETS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "conditionalValues": {},
+      "description": "Enable durable Firestore persistence for scanner presets. Ships with useInAppDefault so publishing this template yields NO remote override for this key and the deployment value decides. Without it the Admin SDK reports the defaultValue with source 'remote', which would silently override render.yaml.",
+      "valueType": "BOOLEAN"
+    },
+    "ENABLE_FIRESTORE_ALERT_SUBSCRIBERS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "conditionalValues": {},
+      "description": "Enable durable Firestore persistence for alert subscriber webhooks. Ships with useInAppDefault so publishing this template yields NO remote override for this key and the deployment value decides. Without it the Admin SDK reports the defaultValue with source 'remote', which would silently override render.yaml.",
+      "valueType": "BOOLEAN"
     }
   },
   "version": {
-    "versionNumber": "24",
+    "versionNumber": "25",
     "isLegacy": true
   }
 }

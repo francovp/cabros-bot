@@ -54,7 +54,7 @@
 
 const fs = require('fs');
 
-const DEFAULT_BASE_URL = 'https://cabros-bot-production.up.railway.app';
+const DEFAULT_BASE_URL = 'https://cabros-crypto-bot-telegram.onrender.com';
 const DEFAULT_HEALTHCHECK_PATH = '/healthcheck';
 const DEFAULT_DOCS_PATH = '/docs';
 const DEFAULT_TIMEOUT_MS = 10000;

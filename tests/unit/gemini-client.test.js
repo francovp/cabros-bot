@@ -94,7 +94,7 @@ describe('Gemini Service', () => {
 			// sources are not returned by generateEnrichedAlert
 		});
 
-		it('should preserve valid optional risk metadata and setup_evidence from the model response', async () => {
+		it('should preserve valid optional risk metadata and setup_evidence from the model response when structural evidence is present', async () => {
 			genaiClient.llmCallv2.mockResolvedValue({
 				text: JSON.stringify({
 					...mockEnrichedResponse,
@@ -108,7 +108,11 @@ describe('Gemini Service', () => {
 
 			const result = await generateEnrichedAlert({
 				text: 'Bitcoin breaks 83k after a volatile session',
-				searchResults: [],
+				searchResults: [{
+					title: 'BTC breakout',
+					snippet: 'Bitcoin breaks above key resistance level in sharp breakout move',
+					url: 'https://test.com',
+				}],
 			});
 
 			expect(result).toEqual(expect.objectContaining({
@@ -118,6 +122,42 @@ describe('Gemini Service', () => {
 				setup_evidence: 'Price broke above range high with volume',
 				risk_reward_ratio: '2.5:1',
 			}));
+		});
+
+		it('should omit setup_type and setup_evidence when searchResults has 0 sources or lacks structural evidence', async () => {
+			genaiClient.llmCallv2.mockResolvedValue({
+				text: JSON.stringify({
+					...mockEnrichedResponse,
+					invalidation_level: '$80,000',
+					target_level: 90000,
+					setup_type: 'trend_continuation',
+					setup_evidence: 'Continuation in trend',
+					risk_reward_ratio: '2.5:1',
+				}),
+			});
+
+			// 0 sources
+			const resultZeroSources = await generateEnrichedAlert({
+				text: 'Bitcoin price update',
+				searchResults: [],
+			});
+
+			expect(resultZeroSources).not.toHaveProperty('setup_type');
+			expect(resultZeroSources).not.toHaveProperty('setup_evidence');
+			expect(resultZeroSources.invalidation_level).toBe('$80,000');
+
+			// Sources without structural keywords
+			const resultNonStructural = await generateEnrichedAlert({
+				text: 'Bitcoin price update',
+				searchResults: [{
+					title: 'CEO Interview',
+					snippet: 'Company announces new quarterly conference dates and regulatory filing',
+					url: 'https://test.com',
+				}],
+			});
+
+			expect(resultNonStructural).not.toHaveProperty('setup_type');
+			expect(resultNonStructural).not.toHaveProperty('setup_evidence');
 		});
 
 		it('should calibrate generated scores when grounding returns no sources', async () => {
@@ -141,10 +181,21 @@ describe('Gemini Service', () => {
 					...mockEnrichedResponse,
 					setup_type: setupType,
 					setup_evidence: `Evidence for ${setupType}`,
-				}));
+			}), [{ title: 'BTC market structure', snippet: 'Price broke above resistance level' }]);
 				expect(result.setup_type).toBe(setupType);
 				expect(result.setup_evidence).toBe(`Evidence for ${setupType}`);
 			}
+		});
+
+		it.each([undefined, null])('should omit setup classification when sources are %p', (sources) => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				setup_type: 'breakout',
+				setup_evidence: 'Price broke above resistance with volume',
+			}), sources);
+
+			expect(result).not.toHaveProperty('setup_type');
+			expect(result).not.toHaveProperty('setup_evidence');
 		});
 
 		it('should omit invalid optional risk metadata without degrading the enrichment', () => {
@@ -172,6 +223,63 @@ describe('Gemini Service', () => {
 			}));
 
 			expect(result.sentiment).toBe('BULLISH');
+			expect(result).not.toHaveProperty('setup_type');
+			expect(result).not.toHaveProperty('setup_evidence');
+		});
+
+		it('should omit setup_type when setup_evidence is missing (pairwise requirement)', () => {
+			const result = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				setup_type: 'breakout',
+			}));
+
+			expect(result).not.toHaveProperty('setup_type');
+			expect(result).not.toHaveProperty('setup_evidence');
+		});
+
+		it('should omit setup_type when setup_evidence is empty or only whitespace', () => {
+			const emptyResult = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				setup_type: 'breakout',
+				setup_evidence: '',
+			}));
+			expect(emptyResult).not.toHaveProperty('setup_type');
+			expect(emptyResult).not.toHaveProperty('setup_evidence');
+
+			const whitespaceResult = parseEnrichedAlertResponse(JSON.stringify({
+				...mockEnrichedResponse,
+				setup_type: 'breakout',
+				setup_evidence: '   \n\t  ',
+			}));
+			expect(whitespaceResult).not.toHaveProperty('setup_type');
+			expect(whitespaceResult).not.toHaveProperty('setup_evidence');
+		});
+
+		it('should omit setup_type when setup_evidence is not a string', () => {
+			for (const invalidEvidence of [null, true, 12345, {}, []]) {
+				const result = parseEnrichedAlertResponse(JSON.stringify({
+					...mockEnrichedResponse,
+					setup_type: 'breakout',
+					setup_evidence: invalidEvidence,
+				}));
+				expect(result).not.toHaveProperty('setup_type');
+				expect(result).not.toHaveProperty('setup_evidence');
+			}
+		});
+
+		it('should strip setup_type in generateEnrichedAlert when setup_evidence is omitted by the model', async () => {
+			genaiClient.llmCallv2.mockResolvedValue({
+				text: JSON.stringify({
+					...mockEnrichedResponse,
+					setup_type: 'breakout',
+				}),
+			});
+
+			const result = await generateEnrichedAlert({
+				text: 'Bitcoin breaks 83k after a volatile session',
+				searchResults: [],
+			});
+
 			expect(result).not.toHaveProperty('setup_type');
 			expect(result).not.toHaveProperty('setup_evidence');
 		});

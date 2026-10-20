@@ -6,6 +6,9 @@ const {
 	ACTION_CALLBACK_REGEX,
 	recordQualityFeedback,
 	getRecordedQualityFeedback,
+	answerCallback,
+	replyToUser,
+	withCallbackTimeout,
 } = require('../../src/lib/telegramAlertActions');
 
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
@@ -490,6 +493,109 @@ describe('telegramAlertActions', () => {
 
 			await expect(handleAlertAction(ctx)).resolves.not.toThrow();
 			expect(ctx.answerCbQuery).toHaveBeenCalledWith('👍 Gracias por tu feedback', { show_alert: false });
+		});
+
+		it('handles fallback answer when context.answerCbQuery times out without throwing', async () => {
+			jest.useFakeTimers();
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			let resolveCb;
+			const ctx = {
+				update: {},
+				answerCbQuery: jest.fn(() => new Promise((resolve) => { resolveCb = resolve; })),
+			};
+			const actionPromise = handleAlertAction(ctx);
+
+			await Promise.resolve();
+			await jest.advanceTimersByTimeAsync(5000);
+			await actionPromise;
+
+			expect(ctx.answerCbQuery).toHaveBeenCalledWith('Acción no reconocida', { show_alert: false });
+			expect(warnSpy).toHaveBeenCalledWith(
+				'[telegramAlertActions] Failed to answer callback:',
+				'Telegram callback answerCbQuery timed out',
+			);
+			resolveCb?.();
+			warnSpy.mockRestore();
+			jest.useRealTimers();
+		});
+	});
+
+	describe('bounded callback helpers and withCallbackTimeout', () => {
+		it('answerCallback bounds hanging context.answerCbQuery with timeout and logs warning without throwing', async () => {
+			jest.useFakeTimers();
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			let resolveCb;
+			const ctx = {
+				answerCbQuery: jest.fn(() => new Promise((resolve) => { resolveCb = resolve; })),
+			};
+			const answerPromise = answerCallback(ctx, 'test');
+
+			await Promise.resolve();
+			await jest.advanceTimersByTimeAsync(5000);
+			await answerPromise;
+
+			expect(warnSpy).toHaveBeenCalledWith(
+				'[telegramAlertActions] Failed to answer callback:',
+				'Telegram callback answerCbQuery timed out',
+			);
+			resolveCb?.();
+			warnSpy.mockRestore();
+			jest.useRealTimers();
+		});
+
+		it('answerCallback returns gracefully when context or answerCbQuery is invalid', async () => {
+			await expect(answerCallback(null, 'text')).resolves.toBeUndefined();
+			await expect(answerCallback({}, 'text')).resolves.toBeUndefined();
+		});
+
+		it('replyToUser bounds hanging context.reply with timeout and logs warning without throwing', async () => {
+			jest.useFakeTimers();
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			let resolveReply;
+			const ctx = {
+				reply: jest.fn(() => new Promise((resolve) => { resolveReply = resolve; })),
+			};
+			const replyPromise = replyToUser(ctx, 'test message');
+
+			await Promise.resolve();
+			await jest.advanceTimersByTimeAsync(5000);
+			await replyPromise;
+
+			expect(warnSpy).toHaveBeenCalledWith(
+				'[telegramAlertActions] Failed to send callback result:',
+				'Telegram callback reply timed out',
+			);
+			resolveReply?.();
+			warnSpy.mockRestore();
+			jest.useRealTimers();
+		});
+
+		it('replyToUser returns gracefully when context or reply is invalid', async () => {
+			await expect(replyToUser(null, 'text')).resolves.toBeUndefined();
+			await expect(replyToUser({}, 'text')).resolves.toBeUndefined();
+		});
+
+		it('withCallbackTimeout triggers onLateResult when operation finishes after timeout', async () => {
+			jest.useFakeTimers();
+			let resolveOp;
+			const lateResultSpy = jest.fn();
+			const opPromise = withCallbackTimeout(
+				() => new Promise((resolve) => { resolveOp = resolve; }),
+				lateResultSpy,
+				1000,
+				'Custom timeout',
+				'CUSTOM_TIMEOUT',
+			);
+
+			const rejectionExpectation = expect(opPromise).rejects.toThrow('Custom timeout');
+			await jest.advanceTimersByTimeAsync(1000);
+			await rejectionExpectation;
+
+			resolveOp('late data');
+			await Promise.resolve();
+			await Promise.resolve();
+			expect(lateResultSpy).toHaveBeenCalledWith('late data');
+			jest.useRealTimers();
 		});
 	});
 });

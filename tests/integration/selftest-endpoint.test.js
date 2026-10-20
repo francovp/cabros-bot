@@ -55,6 +55,26 @@ describe('Self-test diagnostic endpoint (GH-801)', () => {
 		expect(res.body.message).toMatch(/self-test/);
 	});
 
+	it('does not starve dependencies when /api/status or getSelfTestService() is called before a diagnostic run', async () => {
+		// First call /api/status without dependencies (or with empty getter)
+		const statusRes = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'test-key');
+		expect(statusRes.status).toBe(200);
+
+		// Now run POST /api/selftest/run which provides mockBot
+		const runRes = await request(app)
+			.post('/api/selftest/run')
+			.set('x-api-key', 'test-key')
+			.send();
+
+		expect(runRes.status).toBe(200);
+		const botCheck = runRes.body.checks.find((c) => c.id === 'telegram.bot_info');
+		expect(botCheck).toBeDefined();
+		expect(botCheck.status).toBe('pass');
+		expect(botCheck.message).toContain('cabros_bot');
+	});
+
 	it('runs the full suite on POST /api/selftest/run and returns a summary', async () => {
 		const res = await request(app)
 			.post('/api/selftest/run')

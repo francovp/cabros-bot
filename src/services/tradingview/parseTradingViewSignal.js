@@ -83,6 +83,13 @@ function parseTradingViewSignal(text, options = {}) {
 	}
 
 	const timeframe = normalizeTradingViewTimeframe(rawTimeframe, defaultTimeframe);
+	let session = undefined;
+	if (exchange) {
+		const { isEquityExchange, classifySession } = require('../storage/EquitySessionService');
+		if (isEquityExchange(exchange)) {
+			session = classifySession({ exchange, symbol, timestamp: options.timestamp });
+		}
+	}
 
 	return {
 		symbol,
@@ -90,6 +97,7 @@ function parseTradingViewSignal(text, options = {}) {
 		rawTimeframe,
 		timeframe,
 		side,
+		session,
 		rawText: cleaned,
 	};
 }

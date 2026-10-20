@@ -1,6 +1,8 @@
 const { NotificationRedriveService, notificationRedriveService, calculateBackoffMs, stripUndefinedFieldsDeep } = require('../../src/services/notification/NotificationRedriveService');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const { signalRepeatCooldown } = require('../../src/services/alerts/signalRepeatCooldown');
+const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
+const { getBackgroundTimerStats } = require('../../src/lib/backgroundTimerRegistry');
 const admin = require('firebase-admin');
 
 describe('NotificationRedriveService', () => {
@@ -11,7 +13,9 @@ describe('NotificationRedriveService', () => {
 
 	beforeEach(() => {
 		savedEnv = { ...process.env };
+		firestoreWriteMetricsService.resetForTesting();
 		process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+		process.env.WORKER_STARTUP_JITTER_MS = '0';
 		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
 		process.env.NOTIFICATION_REDRIVE_INTERVAL_MS = '60000';
 		process.env.NOTIFICATION_REDRIVE_BATCH_LIMIT = '50';
@@ -137,6 +141,7 @@ describe('NotificationRedriveService', () => {
 		}
 		process.env = savedEnv;
 		jest.restoreAllMocks();
+		jest.useRealTimers();
 	});
 
 	describe('configuration and gating', () => {
@@ -448,6 +453,8 @@ describe('NotificationRedriveService', () => {
 			expect(doc.status).toBe('pending');
 			expect(doc.attemptCount).toBe(0);
 			expect(doc.lastError).toBe('Telegram 500 error');
+			expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.notificationRedrive)
+				.toMatchObject({ success: 1, failure: 0 });
 		});
 
 		it('sanitizes undefined fields before writing to Firestore', async () => {
@@ -469,7 +476,7 @@ describe('NotificationRedriveService', () => {
 			const failingFirestore = {
 				collection: jest.fn(() => ({
 					doc: jest.fn(() => ({
-						set: jest.fn().mockRejectedValue(new Error('Firestore quota exceeded')),
+						set: jest.fn().mockRejectedValue(Object.assign(new Error('Firestore unavailable'), { code: 14 })),
 					})),
 				})),
 			};
@@ -481,6 +488,8 @@ describe('NotificationRedriveService', () => {
 			const recorded = await service.recordDeliveryResults(alert, results);
 			expect(recorded).toHaveLength(1);
 			expect(service.getPendingCount()).toBe(1);
+			expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.notificationRedrive)
+				.toMatchObject({ success: 0, failure: 1, lastFailureCategory: 'firestore_unavailable' });
 		});
 
 		it('terminalizes a late durable enqueue before releasing worker cooldown ownership', async () => {
@@ -970,6 +979,212 @@ describe('NotificationRedriveService', () => {
 
 			// Since record TrueTime is later than supersession TrueTime, it should NOT be superseded
 			expect(isSuperseded).toBe(false);
+		});
+
+		it('reconciles a skewed local supersession marker against a newer durable re-entry (#919)', async () => {
+			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
+			const key = 'BINANCE|ETHUSDT|4h|BUY';
+			const channel = 'telegram:destination-a';
+			const supersessionId = service.getSupersessionId(key, channel);
+			const recordId = 'corr-skewed-reentry_telegram';
+
+			// A local generation outranking the record's is what a fast-clocked replica
+			// mints, because generation is process-derived (clock * 1000 + counter),
+			// never a durable ordering signal.
+			service.supersessionStore.set(supersessionId, {
+				key,
+				channel,
+				status: 'superseded',
+				supersededAt: new Date(1_000_000),
+				generation: 5_000,
+			});
+			alertStorageService.getFirestore.mockReturnValue({
+				collection: jest.fn(() => ({
+					doc: jest.fn((id) => {
+						if (id === recordId) {
+							return {
+								id,
+								get: jest.fn(async () => ({
+									exists: true,
+									id,
+									data: () => ({ status: 'pending', repeatCooldown: { key, channel, generation: 1_000 } }),
+									createTime: { seconds: 1_005, nanoseconds: 500000 },
+								})),
+							};
+						}
+						if (id === supersessionId) {
+							return {
+								id,
+								get: jest.fn(async () => ({
+									exists: true,
+									id,
+									data: () => ({ status: 'superseded', key, channel, generation: 5_000 }),
+									updateTime: { seconds: 1_000, nanoseconds: 0 },
+								})),
+							};
+						}
+						return { id, get: jest.fn(async () => ({ exists: false })) };
+					}),
+				})),
+			});
+
+			const isSuperseded = await service.isRepeatCooldownSuperseded({
+				id: recordId,
+				repeatCooldown: { key, channel, generation: 1_000 },
+			});
+
+			// Durable commit order is the only cross-replica ordering signal, so the
+			// re-entry created after the supersession must proceed.
+			expect(isSuperseded).toBe(false);
+		});
+
+		it('still supersedes an older record when the local marker generation understates the supersession', async () => {
+			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
+			const key = 'BINANCE|ETHUSDT|4h|BUY';
+			const channel = 'telegram:destination-a';
+			const supersessionId = service.getSupersessionId(key, channel);
+			const recordId = 'corr-older-than-supersession_telegram';
+
+			service.supersessionStore.set(supersessionId, {
+				key,
+				channel,
+				status: 'superseded',
+				supersededAt: new Date(1_000_000),
+				generation: 100,
+			});
+			alertStorageService.getFirestore.mockReturnValue({
+				collection: jest.fn(() => ({
+					doc: jest.fn((id) => {
+						if (id === recordId) {
+							return {
+								id,
+								get: jest.fn(async () => ({
+									exists: true,
+									id,
+									data: () => ({ status: 'pending', repeatCooldown: { key, channel, generation: 5_000 } }),
+									createTime: { seconds: 995, nanoseconds: 0 },
+								})),
+							};
+						}
+						if (id === supersessionId) {
+							return {
+								id,
+								get: jest.fn(async () => ({
+									exists: true,
+									id,
+									data: () => ({ status: 'superseded', key, channel, generation: 100 }),
+									updateTime: { seconds: 1_000, nanoseconds: 0 },
+								})),
+							};
+						}
+						return { id, get: jest.fn(async () => ({ exists: false })) };
+					}),
+				})),
+			});
+
+			const isSuperseded = await service.isRepeatCooldownSuperseded({
+				id: recordId,
+				repeatCooldown: { key, channel, generation: 5_000 },
+			});
+
+			expect(isSuperseded).toBe(true);
+		});
+
+		it('reconciles local and durable markers when the durable snapshots carry no commit timestamps', async () => {
+			const key = 'BINANCE|ETHUSDT|4h|BUY';
+			const channel = 'telegram:destination-a';
+			const supersessionId = service.getSupersessionId(key, channel);
+			alertStorageService.getFirestore.mockReturnValue({
+				collection: jest.fn(() => ({
+					doc: jest.fn((id) => ({
+						id,
+						get: jest.fn(async () => (id === supersessionId
+							? { exists: true, id, data: () => ({ status: 'superseded', key, channel, generation: 9_000 }) }
+							: { exists: true, id, data: () => ({ status: 'pending', repeatCooldown: { key, channel, generation: 1_000 } }) })),
+					})),
+				})),
+			});
+			service.supersessionStore.set(supersessionId, {
+				key,
+				channel,
+				status: 'superseded',
+				supersededAt: new Date(1_000_000),
+				generation: 5_000,
+			});
+
+			expect(await service.isRepeatCooldownSuperseded({
+				id: 'untimestamped_telegram',
+				repeatCooldown: { key, channel, generation: 1_000 },
+			})).toBe(true);
+		});
+
+		it('falls back to the local marker verdict when the durable read fails', async () => {
+			const key = 'BINANCE|ETHUSDT|4h|BUY';
+			const channel = 'telegram:destination-a';
+			service.supersessionStore.set(service.getSupersessionId(key, channel), {
+				key,
+				channel,
+				status: 'superseded',
+				supersededAt: new Date(1_000_000),
+				generation: 5_000,
+			});
+			alertStorageService.getFirestore.mockReturnValue({
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({
+						get: jest.fn(async () => {
+							throw new Error('firestore unavailable');
+						}),
+					})),
+				})),
+			});
+
+			expect(await service.isRepeatCooldownSuperseded({
+				id: 'durably-unreachable_telegram',
+				repeatCooldown: { key, channel, generation: 1_000 },
+			})).toBe(true);
+		});
+
+		it('falls back to the local marker verdict when the durable read exceeds the reconciliation deadline', async () => {
+			const key = 'BINANCE|ETHUSDT|4h|BUY';
+			const channel = 'telegram:destination-a';
+			service.supersessionStore.set(service.getSupersessionId(key, channel), {
+				key,
+				channel,
+				status: 'superseded',
+				supersededAt: new Date(1_000_000),
+				generation: 5_000,
+			});
+			alertStorageService.getFirestore.mockReturnValue({
+				collection: jest.fn(() => ({
+					doc: jest.fn(() => ({ get: jest.fn(() => new Promise(() => {})) })),
+				})),
+			});
+
+			const startTime = Date.now();
+			const isSuperseded = await service.isRepeatCooldownSuperseded(
+				{ id: 'stalled_reconciliation_telegram', repeatCooldown: { key, channel, generation: 1_000 } },
+				Date.now() + 50,
+			);
+
+			expect(isSuperseded).toBe(true);
+			expect(Date.now() - startTime).toBeLessThan(500);
+		});
+
+		it('keeps the local-only marker verdict when Firestore is unavailable', async () => {
+			const key = 'BINANCE|ETHUSDT|4h|BUY';
+			const channel = 'telegram:destination-a';
+			service.supersessionStore.set(service.getSupersessionId(key, channel), {
+				key,
+				channel,
+				status: 'superseded',
+				supersededAt: new Date(1_000_000),
+				generation: 5_000,
+			});
+
+			expect(await service.isRepeatCooldownSuperseded({
+				id: 'local-only_telegram',
+				repeatCooldown: { key, channel, generation: 1_000 },
+			})).toBe(true);
 		});
 
 		it('cancels pending opposite-side redrives', async () => {
@@ -1541,6 +1756,80 @@ describe('NotificationRedriveService', () => {
 			service.stopWorker({ drain: false });
 			expect(service.running).toBe(false);
 			jest.useRealTimers();
+		});
+
+		it('keeps standalone startup jitter referenced and cancels it on stop', async () => {
+			jest.useFakeTimers();
+			process.env.WORKER_STARTUP_JITTER_MS = '1000';
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			process.env.NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS = '50';
+			const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+			const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+			const sweepSpy = jest.spyOn(service, 'sweep').mockResolvedValue({ scanned: 0, redriven: 0, errors: 0 });
+
+			try {
+				service.startWorker({ source: 'worker', unref: false, intervalMs: 1000 });
+				expect(setTimeoutSpy.mock.results[0].value.hasRef()).toBe(true);
+				await service.stopWorker({ drain: false });
+				expect(jest.getTimerCount()).toBe(0);
+				await jest.advanceTimersByTimeAsync(50);
+				expect(sweepSpy).not.toHaveBeenCalled();
+			} finally {
+				randomIntSpy.mockRestore();
+			}
+		});
+
+		it('waits for startup jitter before starting the first and periodic redrive sweeps', async () => {
+			const registeredBefore = getBackgroundTimerStats().registered;
+			jest.useFakeTimers();
+			process.env.WORKER_STARTUP_JITTER_MS = '1000';
+			process.env.NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS = '50';
+			const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+			const setIntervalSpy = jest.spyOn(global, 'setInterval');
+			const sweepSpy = jest.spyOn(service, 'sweep').mockResolvedValue({ scanned: 0, redriven: 0, errors: 0 });
+
+			try {
+				const started = service.startWorker({ intervalMs: 1000 });
+				expect(started).toBe(true);
+				expect(setIntervalSpy).not.toHaveBeenCalled();
+				expect(sweepSpy).not.toHaveBeenCalled();
+
+				await jest.advanceTimersByTimeAsync(50);
+				expect(sweepSpy).toHaveBeenCalledTimes(1);
+				expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+				expect(getBackgroundTimerStats().registered).toBe(registeredBefore + 1);
+			} finally {
+				await service.stopWorker({ drain: false });
+				expect(getBackgroundTimerStats().registered).toBe(registeredBefore);
+				randomIntSpy.mockRestore();
+				setIntervalSpy.mockRestore();
+				jest.useRealTimers();
+			}
+		});
+
+		it('waits for startup jitter before seeding worker counters from Firestore', async () => {
+			jest.useFakeTimers();
+			process.env.WORKER_STARTUP_JITTER_MS = '1000';
+			process.env.NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS = '50';
+			process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'worker';
+			const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+			const seedSpy = jest.spyOn(service, 'seedCountersFromHeartbeat').mockResolvedValue();
+			const sweepSpy = jest.spyOn(service, 'sweep').mockResolvedValue({ scanned: 0, redriven: 0, errors: 0 });
+
+			try {
+				const started = service.startWorker({ source: 'worker', intervalMs: 1000 });
+				expect(started).toBe(true);
+				expect(seedSpy).not.toHaveBeenCalled();
+				expect(sweepSpy).not.toHaveBeenCalled();
+
+				await jest.advanceTimersByTimeAsync(50);
+				expect(seedSpy).toHaveBeenCalledTimes(1);
+				expect(sweepSpy).toHaveBeenCalledTimes(1);
+			} finally {
+				await service.stopWorker({ drain: false });
+				randomIntSpy.mockRestore();
+				jest.useRealTimers();
+			}
 		});
 
 		it('does not start worker when role is disabled', () => {
@@ -2492,7 +2781,62 @@ describe('NotificationRedriveService', () => {
 					],
 				});
 
-				await countPromise;
+				const countResult = await countPromise;
+				expect(countResult).toBe(4);
+				expect(service.persistedPendingCount).toBe(4);
+			} finally {
+				nowSpy.mockRestore();
+			}
+		});
+
+		it('persists reconciled pending count in workerHeartbeat payload after local mutation following snapshot', async () => {
+			let resolveQuery;
+			const queryPromise = new Promise((resolve) => {
+				resolveQuery = resolve;
+			});
+			let committedPayload = null;
+			const mockDocRef = {
+				set: jest.fn(async (payload) => {
+					committedPayload = payload;
+				}),
+				get: jest.fn(async () => ({
+					exists: false,
+					data: () => ({}),
+				})),
+			};
+			const mockFirestore = {
+				collection: jest.fn(() => ({
+					where: jest.fn().mockReturnThis(),
+					limit: jest.fn(() => ({
+						get: jest.fn(() => queryPromise),
+					})),
+					doc: jest.fn(() => mockDocRef),
+				})),
+			};
+			jest.spyOn(service, 'getFirestore').mockReturnValue(mockFirestore);
+			service.persistedPendingCount = 2;
+			const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1000);
+
+			try {
+				const persistPromise = service.persistWorkerTelemetry({ timeoutMs: 100 });
+				await new Promise((resolve) => setImmediate(resolve));
+				service._adjustPendingCount(null, 'pending');
+				nowSpy.mockReturnValue(2000);
+				service._adjustPendingCount(null, 'pending');
+				resolveQuery({
+					readTime: new Date(1500),
+					empty: false,
+					docs: [
+						{ data: () => ({ expiresAt: new Date(60000) }) },
+						{ data: () => ({ expiresAt: new Date(60000) }) },
+						{ data: () => ({ expiresAt: new Date(60000) }) },
+					],
+				});
+
+				const success = await persistPromise;
+				expect(success).toBe(true);
+				expect(committedPayload).not.toBeNull();
+				expect(committedPayload.pendingCount).toBe(4);
 				expect(service.persistedPendingCount).toBe(4);
 			} finally {
 				nowSpy.mockRestore();

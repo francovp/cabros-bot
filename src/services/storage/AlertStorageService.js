@@ -30,7 +30,9 @@ const admin = require('firebase-admin');
 const crypto = require('crypto');
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const { fireAndForget } = require('../../lib/fireAndForget');
 const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
 const {
 	classifyFirestoreError,
@@ -46,8 +48,9 @@ const {
 	toPositiveFiniteNumber,
 	computeDeterministicRiskReward,
 } = require('../tradingview/riskRewardMath');
-const { deriveAssetContext } = require('../tradingview/parseTradingViewSignal');
+const { deriveAssetContext, parseTradingViewSignal } = require('../tradingview/parseTradingViewSignal');
 const { analyzeSentimentScoreDistribution } = require('../grounding/sentimentDistribution');
+const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
 
 function createEmptySignalClassCounts() {
 	return {
@@ -87,6 +90,13 @@ const MAX_ALERT_TEXT_LENGTH = 20000;
 const DEFAULT_ALERT_STORAGE_RETENTION_DAYS = 90;
 const MAX_ALERT_STORAGE_RETENTION_DAYS = 3650;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+// The epoch divides evenly by both HOUR_MS and DAY_MS, so flooring a
+// millisecond timestamp by either width aligns to a UTC hour or UTC midnight.
+const SUMMARY_INTERVALS = Object.freeze({
+	hour: Object.freeze({ ms: HOUR_MS, maxDays: 31 }),
+	day: Object.freeze({ ms: DAY_MS, maxDays: 366 }),
+});
 // ponytail: 24h ceiling rejects stuck-request outliers; raise only with observed legitimate longer handlers.
 const MAX_PROCESSING_TIME_MS = 24 * 60 * 60 * 1000;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
@@ -106,13 +116,167 @@ const VALID_SETUP_TYPES = new Set([
 	'reversal',
 ]);
 const VALID_TRADINGVIEW_ENRICHMENT_STATUSES = new Set(['full', 'partial', 'failed', 'not_applicable']);
+const VALID_DECISION_GATE_DECISIONS = new Set(['allow', 'suppress', 'skip']);
+const MAX_DECISION_DEPTH = 6;
+const MAX_DECISION_OBJECT_KEYS = 32;
+const MAX_DECISION_ARRAY_ITEMS = 32;
+const MAX_DECISION_TEXT_LENGTH = 1000;
+const MAX_DECISION_GATE_COUNT = 16;
+// Closed enum: a suppression reason is only persisted for a marker this build
+// can produce, so an unexpected string can never widen the stored document shape.
+const VALID_SUPPRESSION_REASONS = new Set(['cross_timeframe_duplicate']);
+const FEATURE_TAGS = ['grounding', 'news-analysis', 'expanded-analysis', 'scanner', 'enrichment'];
+const MAX_PERSISTED_SYMBOLS_PER_BATCH = 200;
+
+/**
+ * Normalize a request-level symbol list into a bounded, de-duplicated array of
+ * upper-case symbols safe to persist on the alert document.
+ */
+function sanitizePersistedSymbols(symbols) {
+	if (!Array.isArray(symbols)) return [];
+	const seen = new Set();
+	for (const raw of symbols) {
+		if (typeof raw !== 'string') continue;
+		const trimmed = raw.trim().toUpperCase();
+		if (!trimmed || trimmed.length > 64) continue;
+		seen.add(trimmed);
+		if (seen.size >= MAX_PERSISTED_SYMBOLS_PER_BATCH) break;
+	}
+	return Array.from(seen);
+}
+
+/**
+ * True only when the record reflects real billable LLM work.
+ * A webhook alert persists `tokenUsage.toJSON()` even when every enrichment
+ * feature is disabled, producing a truthy all-zero object. Treating that as
+ * grounding usage would invent a feature spend that never happened.
+ */
+function hasRealTokenUsage(tokenUsage) {
+	if (!tokenUsage || typeof tokenUsage !== 'object') return false;
+	return FEATURE_TAGS.some((feature) => {
+		const usage = tokenUsage.byFeature && tokenUsage.byFeature[feature];
+		return Boolean(usage) && getNumericValue(usage.calls) > 0;
+	}) || getNumericValue(tokenUsage.totalTokens) > 0
+		|| getNumericValue(tokenUsage.totalCost) > 0;
+}
 
 // Lazy Firestore singleton
 let db = null;
 let lastRetentionWarningValue = null;
 
 function isEnabled() {
+	// Issue #721: a published remote value wins over the deployment value, so a
+	// remote `false` can disable durable storage despite the `render.yaml` pin.
+	// `undefined` means "no published value" — Remote Config off, stale, or the key
+	// absent — which is not evidence, so the environment decides.
+	const remote = resolveRemoteOverride('ENABLE_FIRESTORE_ALERT_STORAGE');
+	if (typeof remote === 'boolean') {
+		return remote;
+	}
 	return process.env.ENABLE_FIRESTORE_ALERT_STORAGE === 'true';
+}
+
+function isDecisionAuditEnabled() {
+	// Use the request-time Remote Config override when present; otherwise keep the
+	// deployment environment value as the fail-open source of truth.
+	const remote = resolveRemoteOverride('ENABLE_ALERT_DECISION_AUDIT');
+	if (typeof remote === 'boolean') {
+		return remote;
+	}
+	return process.env.ENABLE_ALERT_DECISION_AUDIT === 'true';
+}
+
+function sanitizeDecisionAuditDepth(value, depth = 1) {
+	if (value === null || value === undefined || depth > MAX_DECISION_DEPTH) return undefined;
+	if (typeof value === 'string') {
+		return value.length > MAX_DECISION_TEXT_LENGTH ? value.slice(0, MAX_DECISION_TEXT_LENGTH) : value;
+	}
+	if (typeof value === 'boolean') return value;
+	if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+	if (typeof value !== 'object') return undefined;
+	if (Array.isArray(value)) {
+		return value.slice(0, MAX_DECISION_ARRAY_ITEMS)
+			.map((item) => sanitizeDecisionAuditDepth(item, depth + 1))
+			.filter((item) => item !== undefined);
+	}
+	const proto = Object.getPrototypeOf(value);
+	if (proto !== Object.prototype && proto !== null) return undefined;
+	const result = {};
+	let keyCount = 0;
+	for (const [key, item] of Object.entries(value)) {
+		if (keyCount >= MAX_DECISION_OBJECT_KEYS) break;
+		if (['__proto__', 'constructor', 'prototype'].includes(key)) continue;
+		const sanitized = sanitizeDecisionAuditDepth(item, depth + 1);
+		if (sanitized !== undefined) {
+			result[key.slice(0, 64)] = sanitized;
+			keyCount += 1;
+		}
+	}
+	return result;
+}
+
+function sanitizeDecisionAudit(value) {
+	if (!isDecisionAuditEnabled() || !value || typeof value !== 'object' || Array.isArray(value)) return null;
+	return sanitizeDecisionAuditDepth(value);
+}
+
+function sanitizeDecisionGate(rawGate) {
+	if (!rawGate || typeof rawGate !== 'object' || Array.isArray(rawGate)) return null;
+	const name = typeof rawGate.name === 'string' ? rawGate.name.trim().slice(0, 64) : '';
+	const decision = rawGate.decision;
+	if (!name || !VALID_DECISION_GATE_DECISIONS.has(decision)) return null;
+	const gate = { name, decision };
+	if (typeof rawGate.reason === 'string' && rawGate.reason.trim()) {
+		gate.reason = rawGate.reason.trim().slice(0, MAX_DECISION_TEXT_LENGTH);
+	}
+	if (rawGate.evidence && typeof rawGate.evidence === 'object' && !Array.isArray(rawGate.evidence)) {
+		const evidence = {};
+		for (const [key, value] of Object.entries(rawGate.evidence).slice(0, MAX_DECISION_OBJECT_KEYS)) {
+			if (['__proto__', 'constructor', 'prototype'].includes(key)) continue;
+			if (typeof value === 'string') evidence[key.slice(0, 64)] = value.slice(0, MAX_DECISION_TEXT_LENGTH);
+			else if (typeof value === 'boolean') evidence[key.slice(0, 64)] = value;
+			else if (typeof value === 'number' && Number.isFinite(value)) evidence[key.slice(0, 64)] = value;
+		}
+		if (Object.keys(evidence).length > 0) gate.evidence = evidence;
+	}
+	return gate;
+}
+
+function sanitizeDecisionGates(gates) {
+	if (!Array.isArray(gates)) return [];
+	return gates.slice(0, MAX_DECISION_GATE_COUNT).map(sanitizeDecisionGate).filter(Boolean);
+}
+
+function createDecisionGatesRollup() {
+	return { denominator: 0, gates: [] };
+}
+
+function recordDecisionGatesRollup(rollup, decision) {
+	rollup.denominator += 1;
+	const gates = decision && typeof decision === 'object' && Array.isArray(decision.gates)
+		? sanitizeDecisionGates(decision.gates)
+		: [];
+	for (const gate of gates) {
+		let entry = rollup.gates.find((item) => item.name === gate.name && item.decision === gate.decision);
+		if (!entry) {
+			entry = { name: gate.name, decision: gate.decision, populated: 0, percentage: 0 };
+			rollup.gates.push(entry);
+		}
+		entry.populated += 1;
+	}
+}
+
+function finalizeDecisionGatesRollup(rollup) {
+	if (rollup.denominator <= 0) {
+		rollup.gates = [];
+		return;
+	}
+	for (const entry of rollup.gates) {
+		entry.percentage = Math.round((entry.populated / rollup.denominator) * 10000) / 100;
+	}
+	rollup.gates.sort((left, right) => left.name === right.name
+		? left.decision.localeCompare(right.decision)
+		: left.name.localeCompare(right.name));
 }
 
 function canInitializeFirestore() {
@@ -128,6 +292,7 @@ function canInitializeFirestore() {
 	}
 
 	return isEnabled()
+		|| process.env.ENABLE_AUTO_TRADE === 'true'
 		|| process.env.ENABLE_FIRESTORE_SCANNER_PRESETS === 'true'
 		|| process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true'
 		|| process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
@@ -139,7 +304,9 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS === 'true'
 		|| process.env.ENABLE_TOKEN_COST_BUDGET === 'true'
 		|| rcBudgetEnabled
-		|| process.env.ENABLE_FIRESTORE_ALERT_FEEDBACK === 'true';
+		|| process.env.ENABLE_FIRESTORE_ALERT_FEEDBACK === 'true'
+		|| process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE === 'true'
+		|| process.env.ENABLE_TRADE_LEDGER === 'true';
 }
 
 function getAlertStorageRetentionDays() {
@@ -264,9 +431,20 @@ function formatAlertDocument(doc, options = {}) {
 	if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(data.tradingViewEnrichmentStatus)) {
 		docObj.tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
 	}
+	if (data.outcomeAnnotation && typeof data.outcomeAnnotation === 'object') {
+		docObj.outcomeAnnotation = data.outcomeAnnotation;
+	}
 	if (data.suppressedRepeat === true) {
 		docObj.suppressedRepeat = true;
+		if (VALID_SUPPRESSION_REASONS.has(data.suppressionReason)) {
+			docObj.suppressionReason = data.suppressionReason;
+		}
 	}
+	if (isDecisionAuditEnabled()) {
+		const decision = sanitizeDecisionAudit(data.decision);
+		if (decision) docObj.decision = decision;
+	}
+	applyBurstAggregationMarkers(docObj, data.burstAggregateId, data.burstSignalCount);
 	if (data.enrichmentData && typeof data.enrichmentData === 'object') {
 		const currentPrice = toPositiveFiniteNumber(data.enrichmentData.current_price);
 		if (currentPrice !== null) {
@@ -303,11 +481,28 @@ function formatAlertDocument(doc, options = {}) {
 	if (typeof data.dedupStatus === 'string') {
 		docObj.dedupStatus = data.dedupStatus;
 	}
+	if (typeof data.session === 'string' && data.session.trim()) {
+		docObj.session = data.session.trim();
+	}
 	if (data.truncated === true) {
 		docObj.truncated = true;
 		if (typeof data.originalLength === 'number' && Number.isFinite(data.originalLength)) {
 			docObj.originalLength = data.originalLength;
 		}
+	}
+	if (data.deployment && typeof data.deployment === 'object') {
+		docObj.deployment = {
+			platform: typeof data.deployment.platform === 'string' ? data.deployment.platform : null,
+			gitSha: typeof data.deployment.gitSha === 'string' ? data.deployment.gitSha : null,
+			service: typeof data.deployment.service === 'string' ? data.deployment.service : null,
+			runtimeVersion: typeof data.deployment.runtimeVersion === 'string' ? data.deployment.runtimeVersion : null,
+		};
+	}
+	if (Array.isArray(data.telegramMessageIds)) {
+		docObj.telegramMessageIds = data.telegramMessageIds;
+	}
+	if (data.reactions && typeof data.reactions === 'object') {
+		docObj.reactions = data.reactions;
 	}
 	return docObj;
 }
@@ -525,6 +720,11 @@ function createRiskMetadataCoverageBucket() {
 		fields: Object.fromEntries(
 			RISK_METADATA_FIELDS.map(field => [field, { populated: 0, percentage: 0 }]),
 		),
+		directionEchoRate: {
+			echoed: 0,
+			total: 0,
+			percentage: 0,
+		},
 	};
 }
 
@@ -538,6 +738,38 @@ function createTradingViewStatusCounts() {
 	};
 }
 
+function extractAlertSide(data) {
+	if (!data || typeof data !== 'object') {
+		return null;
+	}
+	if (typeof data.side === 'string' && (data.side === 'BUY' || data.side === 'SELL')) {
+		return data.side;
+	}
+	if (data.enrichmentData && typeof data.enrichmentData.side === 'string') {
+		const s = data.enrichmentData.side.toUpperCase();
+		if (s === 'BUY' || s === 'SELL') return s;
+	}
+	if (typeof data.text === 'string' && data.text) {
+		const parsed = parseTradingViewSignal(data.text);
+		if (parsed && (parsed.side === 'BUY' || parsed.side === 'SELL')) {
+			return parsed.side;
+		}
+	}
+	if (data.enrichmentData && typeof data.enrichmentData.sentiment === 'string') {
+		if (data.enrichmentData.sentiment === 'BULLISH') return 'BUY';
+		if (data.enrichmentData.sentiment === 'BEARISH') return 'SELL';
+	}
+	return null;
+}
+
+function isDirectionEcho(side, setupType) {
+	if (!side || !setupType) return false;
+	const normSide = side.toUpperCase();
+	const normSetup = setupType.toLowerCase();
+	return (normSide === 'BUY' && normSetup === 'trend_continuation')
+		|| (normSide === 'SELL' && normSetup === 'reversal');
+}
+
 function isRiskMetadataPopulated(field, value) {
 	if (field === 'setup_type') {
 		return typeof value === 'string' && VALID_SETUP_TYPES.has(value.trim().toLowerCase());
@@ -547,13 +779,20 @@ function isRiskMetadataPopulated(field, value) {
 		|| (typeof value === 'string' && value.trim().length > 0);
 }
 
-function recordRiskMetadataCoverage(bucket, enrichmentData) {
+function recordRiskMetadataCoverage(bucket, enrichmentData, side) {
 	const data = enrichmentData && typeof enrichmentData === 'object' ? enrichmentData : {};
 	bucket.denominator += 1;
 
 	for (const field of RISK_METADATA_FIELDS) {
 		if (isRiskMetadataPopulated(field, data[field])) {
 			bucket.fields[field].populated += 1;
+		}
+	}
+
+	if (isRiskMetadataPopulated('setup_type', data.setup_type) && side) {
+		bucket.directionEchoRate.total += 1;
+		if (isDirectionEcho(side, data.setup_type)) {
+			bucket.directionEchoRate.echoed += 1;
 		}
 	}
 }
@@ -564,6 +803,13 @@ function finalizeRiskMetadataCoverage(bucket) {
 		metric.percentage = bucket.denominator === 0
 			? 0
 			: Number(((metric.populated / bucket.denominator) * 100).toFixed(2));
+	}
+
+	const echo = bucket.directionEchoRate;
+	if (echo) {
+		echo.percentage = echo.total === 0
+			? 0
+			: Number(((echo.echoed / echo.total) * 100).toFixed(2));
 	}
 }
 
@@ -607,11 +853,11 @@ function getPromptProvenanceGroup(coverage, provenance) {
 	return group;
 }
 
-function recordRiskMetadataCoverageByProvenance(coverage, enrichmentData) {
-	recordRiskMetadataCoverage(coverage, enrichmentData);
+function recordRiskMetadataCoverageByProvenance(coverage, enrichmentData, side) {
+	recordRiskMetadataCoverage(coverage, enrichmentData, side);
 	const provenance = normalizePromptProvenance(enrichmentData && enrichmentData.promptProvenance);
 	const group = getPromptProvenanceGroup(coverage, provenance);
-	recordRiskMetadataCoverage(group, enrichmentData);
+	recordRiskMetadataCoverage(group, enrichmentData, side);
 }
 
 function finalizeRiskMetadataCoverageByProvenance(coverage) {
@@ -1159,6 +1405,149 @@ function addTokenUsage(totals, tokenUsage) {
 	totals.outputTokens += getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens);
 	totals.totalTokens += getNumericValue(tokenUsage.totalTokens || tokenUsage.total);
 	totals.totalCost += getNumericValue(tokenUsage.totalCost);
+
+	if (totals.pricing && tokenUsage.pricing && typeof tokenUsage.pricing === 'object') {
+		if (tokenUsage.pricing.unknownModelPricing) {
+			totals.pricing.unknownModelPricing = true;
+		}
+		if (Array.isArray(tokenUsage.pricing.unknownModels)) {
+			const set = new Set(totals.pricing.unknownModels);
+			for (const m of tokenUsage.pricing.unknownModels) {
+				if (typeof m === 'string' && m.trim()) {
+					set.add(m.trim());
+				}
+			}
+			totals.pricing.unknownModels = Array.from(set);
+		}
+	}
+}
+
+function createFeatureCostSummary() {
+	return Object.fromEntries(FEATURE_TAGS.map(feature => [feature, {
+		alerts: 0,
+		batches: 0,
+		symbols: 0,
+		inputTokens: 0,
+		outputTokens: 0,
+		totalTokens: 0,
+		totalCost: 0,
+	}]));
+}
+
+function getLegacyFeature(source, tokenUsage) {
+	if (!tokenUsage && !['expanded-analysis', 'market-scanner', 'scanner-preset', 'news-monitor'].includes(source)) {
+		return null;
+	}
+	if (source === 'news-monitor') return 'news-analysis';
+	if (source === 'expanded-analysis') return 'expanded-analysis';
+	if (source === 'market-scanner' || source === 'scanner-preset') return 'scanner';
+	// A plain webhook alert persists a truthy all-zero tokenUsage object even when
+	// no enrichment ran. Only attribute grounding when tokens were really used.
+	return hasRealTokenUsage(tokenUsage) ? 'grounding' : null;
+}
+
+function addFeatureCostSummary(summary, data, batchState) {
+	const tokenUsage = data && data.tokenUsage;
+	const byFeature = tokenUsage && typeof tokenUsage.byFeature === 'object'
+		? tokenUsage.byFeature
+		: null;
+	const entries = byFeature && Object.keys(byFeature).length > 0
+		? Object.entries(byFeature)
+		: [[getLegacyFeature(data && data.source, tokenUsage), tokenUsage]];
+	const symbols = extractPersistedSymbols(data);
+
+	for (const [feature, usage] of entries) {
+		if (!FEATURE_TAGS.includes(feature)) continue;
+		const bucket = summary[feature];
+		bucket.inputTokens += getNumericValue(usage && (usage.inputTokens || usage.promptTokens));
+		bucket.outputTokens += getNumericValue(usage && (usage.outputTokens || usage.completionTokens));
+		bucket.totalTokens += getNumericValue(usage && (usage.totalTokens || usage.total));
+		bucket.totalCost += getNumericValue(usage && usage.totalCost);
+
+		// A news-monitor request fans out to one stored document per symbol, so
+		// counting each document would report N batches for a single request.
+		// Count each persisted batch grouping key exactly once instead.
+		if (data.source === 'news-monitor') {
+			const batchKey = resolveBatchKey(data);
+			if (batchKey) {
+				if (batchState.seenBatches.has(batchKey)) continue;
+				batchState.seenBatches.add(batchKey);
+				bucket.batches += 1;
+			}
+		} else {
+			bucket.alerts += 1;
+		}
+
+		// `symbols` counts distinct symbols, not documents: expanded-analysis and
+		// scanner store one report covering many symbols but persist only the first,
+		// while news-monitor persists one document per symbol.
+		bucket.symbols += countNewSymbols(batchState, data, symbols, feature);
+	}
+}
+
+/**
+ * Resolve a stable grouping key identifying the request that produced a document.
+ * Falls back to the document id when no request-scoped key was persisted.
+ */
+function resolveBatchKey(data) {
+	if (data && typeof data.requestId === 'string' && data.requestId.trim()) {
+		return data.requestId.trim();
+	}
+	if (data && typeof data.batchId === 'string' && data.batchId.trim()) {
+		return data.batchId.trim();
+	}
+	return null;
+}
+
+/**
+ * Symbols represented by a stored document: the explicit `symbols` list when the
+ * handler persisted the full request-level set, otherwise the single parsed symbol.
+ */
+function extractPersistedSymbols(data) {
+	if (data && Array.isArray(data.symbols)) {
+		const seen = new Set();
+		for (const raw of data.symbols) {
+			if (typeof raw === 'string' && raw.trim()) {
+				seen.add(raw.trim().toUpperCase());
+			}
+		}
+		if (seen.size > 0) return seen;
+	}
+	const single = extractAlertSymbol(data);
+	return single && single !== 'unknown' ? new Set([single]) : new Set();
+}
+
+/**
+ * Count how many of this document's symbols have not yet been attributed for the
+ * given feature bucket, so multi-symbol reports are credited once per distinct
+ * symbol. Dedup is scoped per feature: a document carrying both `grounding` and
+ * `enrichment` usage must report the symbol in both buckets.
+ */
+function countNewSymbols(batchState, data, symbols, feature) {
+	if (symbols.size === 0) return 0;
+	const bucketKey = `${resolveBatchKey(data) || (data && data.id) || 'anonymous'}::${feature}`;
+	if (!batchState.seenSymbols.has(bucketKey)) {
+		batchState.seenSymbols.set(bucketKey, new Set());
+	}
+	const seen = batchState.seenSymbols.get(bucketKey);
+	let added = 0;
+	for (const symbol of symbols) {
+		if (!seen.has(symbol)) {
+			seen.add(symbol);
+			added += 1;
+		}
+	}
+	return added;
+}
+
+function getFeatureNames(data) {
+	const byFeature = data && data.tokenUsage && data.tokenUsage.byFeature;
+	const taggedFeatures = byFeature && typeof byFeature === 'object'
+		? Object.keys(byFeature).filter(feature => FEATURE_TAGS.includes(feature))
+		: [];
+	return taggedFeatures.length > 0
+		? taggedFeatures
+		: [getLegacyFeature(data && data.source, data && data.tokenUsage)].filter(Boolean);
 }
 
 function addDeliverySummary(summary, deliveryResults) {
@@ -1189,6 +1578,34 @@ function addDeliverySummary(summary, deliveryResults) {
 	}
 }
 
+function addBucketDeliverySummary(bucket, deliveryResults) {
+	if (!Array.isArray(deliveryResults)) {
+		return;
+	}
+
+	for (const result of deliveryResults) {
+		if (!result || typeof result !== 'object') {
+			continue;
+		}
+
+		const channel = typeof result.channel === 'string' && result.channel.trim()
+			? result.channel.trim()
+			: 'unknown';
+		if (!bucket.byChannel[channel]) {
+			bucket.byChannel[channel] = { total: 0, success: 0, failure: 0 };
+		}
+
+		bucket.byChannel[channel].total += 1;
+		if (result.success) {
+			bucket.byChannel[channel].success += 1;
+			bucket.success += 1;
+		} else {
+			bucket.byChannel[channel].failure += 1;
+			bucket.failure += 1;
+		}
+	}
+}
+
 function summarizeDeliveryResults(deliveryResults) {
 	if (!Array.isArray(deliveryResults)) {
 		return [];
@@ -1208,12 +1625,35 @@ function summarizeTokenUsage(tokenUsage) {
 		return null;
 	}
 
-	return {
+	const result = {
 		inputTokens: getNumericValue(tokenUsage.inputTokens || tokenUsage.promptTokens),
 		outputTokens: getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens),
 		totalTokens: getNumericValue(tokenUsage.totalTokens || tokenUsage.total),
 		totalCost: getNumericValue(tokenUsage.totalCost),
 	};
+	if (tokenUsage.byFeature && typeof tokenUsage.byFeature === 'object') {
+		result.byFeature = Object.fromEntries(Object.entries(tokenUsage.byFeature)
+			.filter(([feature]) => FEATURE_TAGS.includes(feature))
+			.map(([feature, usage]) => [feature, {
+				calls: getNumericValue(usage.calls),
+				inputTokens: getNumericValue(usage.inputTokens),
+				outputTokens: getNumericValue(usage.outputTokens),
+				totalTokens: getNumericValue(usage.totalTokens),
+				inputCost: getNumericValue(usage.inputCost),
+				outputCost: getNumericValue(usage.outputCost),
+				totalCost: getNumericValue(usage.totalCost),
+			}]));
+		if (Object.keys(result.byFeature).length === 0) delete result.byFeature;
+	}
+	if (tokenUsage.pricing && typeof tokenUsage.pricing === 'object') {
+		result.pricing = {
+			unknownModelPricing: Boolean(tokenUsage.pricing.unknownModelPricing),
+			unknownModels: Array.isArray(tokenUsage.pricing.unknownModels)
+				? [...tokenUsage.pricing.unknownModels]
+				: [],
+		};
+	}
+	return result;
 }
 
 function truncateAlertText(text) {
@@ -1228,7 +1668,7 @@ function truncateAlertText(text) {
 
 const formatExportEnrichmentData = formatEnrichmentSummary;
 
-function formatExportRecord(doc, { includeText, includeEnrichment } = {}) {
+function formatExportRecord(doc, { includeText, includeEnrichment, includeDecision = false } = {}) {
 	const data = doc.data() || {};
 	const record = {
 		id: doc.id,
@@ -1243,6 +1683,10 @@ function formatExportRecord(doc, { includeText, includeEnrichment } = {}) {
 		deliveryResults: summarizeDeliveryResults(data.deliveryResults),
 		tokenUsage: summarizeTokenUsage(data.tokenUsage),
 	};
+	const featureNames = getFeatureNames(data);
+	if (featureNames.length > 0) {
+		record.feature = featureNames.join(',');
+	}
 	if (typeof data.requestId === 'string' && data.requestId.trim()) {
 		record.requestId = data.requestId.trim();
 	}
@@ -1278,6 +1722,10 @@ function formatExportRecord(doc, { includeText, includeEnrichment } = {}) {
 
 	if (includeEnrichment) {
 		record.enrichmentData = formatExportEnrichmentData(data.enrichmentData, data);
+	}
+	if (includeDecision && isDecisionAuditEnabled()) {
+		const decision = sanitizeDecisionAudit(data.decision);
+		if (decision) record.decision = decision;
 	}
 
 	if (includeText) {
@@ -1326,11 +1774,31 @@ function calculatePercentileLatency(samples, percentile = 95) {
 	return Math.round(sorted[index]);
 }
 
-function buildSummaryWindow({ from, to, limit }) {
-	const now = new Date();
-	const parsedTo = to ? new Date(to) : now;
-	const maxWindowMs = MAX_SUMMARY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-	let parsedFrom = from ? new Date(from) : new Date(parsedTo.getTime() - (24 * 60 * 60 * 1000));
+function getSummaryIntervalMaxWindowDays(interval) {
+	const config = SUMMARY_INTERVALS[interval];
+	return config ? config.maxDays : null;
+}
+
+function resolveSummaryWindowBounds({ from, to }) {
+	const parsedTo = to ? new Date(to) : new Date();
+	return {
+		from: from ? new Date(from) : new Date(parsedTo.getTime() - DAY_MS),
+		to: parsedTo,
+	};
+}
+
+function buildSummaryWindow({ from, to, limit, interval }) {
+	const { from: requestedFrom, to: parsedTo } = resolveSummaryWindowBounds({ from, to });
+	const intervalConfig = SUMMARY_INTERVALS[interval];
+	const maxDays = intervalConfig ? intervalConfig.maxDays : MAX_SUMMARY_WINDOW_DAYS;
+	const maxWindowMs = maxDays * DAY_MS;
+	let parsedFrom = requestedFrom;
+
+	if (intervalConfig && parsedTo.getTime() - parsedFrom.getTime() > maxWindowMs) {
+		const error = new Error(`Invalid summary window for interval "${interval}". Maximum window is ${maxDays} days.`);
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
 
 	if (parsedTo.getTime() - parsedFrom.getTime() > maxWindowMs) {
 		parsedFrom = new Date(parsedTo.getTime() - maxWindowMs);
@@ -1342,12 +1810,60 @@ function buildSummaryWindow({ from, to, limit }) {
 		throw error;
 	}
 
-	return {
+	const window = {
 		from: parsedFrom.toISOString(),
 		to: parsedTo.toISOString(),
 		limit: clampSummaryLimit(limit),
-		maxDays: MAX_SUMMARY_WINDOW_DAYS,
+		maxDays,
 	};
+	if (intervalConfig) {
+		window.interval = interval;
+	}
+
+	return window;
+}
+
+function buildSummaryBuckets(interval, window, docs) {
+	const { ms: stepMs } = SUMMARY_INTERVALS[interval];
+	const windowFromMs = Date.parse(window.from);
+	const windowToMs = Date.parse(window.to);
+	const firstBucketMs = Math.floor(windowFromMs / stepMs) * stepMs;
+
+	const buckets = [];
+	const indexByStartMs = new Map();
+	for (let startMs = firstBucketMs; startMs <= windowToMs; startMs += stepMs) {
+		const bucket = {
+			bucketStart: new Date(startMs).toISOString(),
+			total: 0,
+			success: 0,
+			failure: 0,
+			byChannel: {},
+		};
+		indexByStartMs.set(startMs, bucket);
+		buckets.push(bucket);
+	}
+
+	for (const doc of docs) {
+		const data = doc.data() || {};
+		const receivedAtMs = getTimestampMillis(data.receivedAt);
+		// The scan range-filters on receivedAt, so every returned document carries
+		// a readable one. An unreadable timestamp is excluded from the series
+		// rather than fabricated into a bucket at a time it did not occur.
+		if (receivedAtMs === null) {
+			continue;
+		}
+
+		const bucketStartMs = Math.floor(receivedAtMs / stepMs) * stepMs;
+		const bucket = indexByStartMs.get(bucketStartMs);
+		if (!bucket) {
+			continue;
+		}
+
+		bucket.total += 1;
+		addBucketDeliverySummary(bucket, data.deliveryResults);
+	}
+
+	return buckets;
 }
 
 function buildExportWindow({ from, to, limit }) {
@@ -1649,7 +2165,7 @@ function getFirestore() {
 		const initialization = initializeFirebaseAdminApp({ admin });
 		if (!initialization.ok) {
 			console.warn(
-				`[AlertStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`
+				`[AlertStorageService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`,
 			);
 			db = null;
 			return null;
@@ -1701,6 +2217,25 @@ function emitAlertDeliveryEvents(params, alertId = null) {
 }
 
 /**
+ * Attach the burst-aggregation markers shared by every alert in a collapsed
+ * regime message. Each constituent keeps its own document (so outcome analytics
+ * stay per-symbol) and they are correlated by `burstAggregateId`.
+ *
+ * Bounded and non-secret: a fixed-shape id and a small integer count.
+ */
+function applyBurstAggregationMarkers(target, burstAggregateId, burstSignalCount) {
+	if (!target || typeof target !== 'object') {
+		return;
+	}
+	if (typeof burstAggregateId === 'string' && burstAggregateId.trim()) {
+		target.burstAggregateId = burstAggregateId.trim().slice(0, 64);
+	}
+	if (Number.isFinite(burstSignalCount) && burstSignalCount >= 1) {
+		target.burstSignalCount = Math.trunc(burstSignalCount);
+	}
+}
+
+/**
  * Persist an alert document to Firestore.
  *
  * @param {Object} params
@@ -1714,6 +2249,10 @@ function emitAlertDeliveryEvents(params, alertId = null) {
  * @param {Array}   params.deliveryResults   - Array of SendResult from notificationManager.sendToAll()
  * @param {boolean} params.useTradingViewData - Whether ?useTradingViewData=true was set on the request
  * @param {number}  params.processingTimeMs  - Bounded handler processing duration in milliseconds
+ * @param {string}  [params.burstAggregateId] - Shared id of the regime burst this alert joined
+ * @param {number}  [params.burstSignalCount] - Signals collapsed into the shared burst message
+ * @param {string[]} params.symbols - Complete request-level symbol set for multi-symbol reports
+ * @param {string}  params.batchId - Stable request-scoped grouping key for batch counting
  * @returns {Promise<string|null>} The new Firestore document ID, or null on failure/disabled
  */
 async function saveAlertInternal(params = {}) {
@@ -1730,7 +2269,11 @@ async function saveAlertInternal(params = {}) {
 		useTradingViewData,
 		tradingViewEnrichmentApplied,
 		tradingViewEnrichmentStatus,
+		outcomeAnnotation,
 		suppressedRepeat,
+		suppressionReason,
+		burstAggregateId,
+		burstSignalCount,
 		processingTimeMs,
 		source,
 		eventCategory,
@@ -1739,12 +2282,16 @@ async function saveAlertInternal(params = {}) {
 		dedupStatus,
 		requestId,
 		scannerErrorCategories,
+		symbols,
+		batchId,
 		telegramChatId,
 		telegramThreadId,
 		whatsappChatId,
 		discordWebhookUrl,
 		routing,
 		side,
+		session,
+		decision,
 		alertId: providedAlertId,
 	} = params;
 	if (!isEnabled()) {
@@ -1803,7 +2350,30 @@ async function saveAlertInternal(params = {}) {
 			source: typeof source === 'string' && source.trim() ? source.trim() : 'webhook',
 			useTradingViewData: Boolean(useTradingViewData),
 			tradingViewEnrichmentApplied: Boolean(tradingViewEnrichmentApplied),
+			deployment: getDeploymentIdentity(),
 		};
+		const collectedTelegramMessageIds = new Set();
+		if (Array.isArray(params.telegramMessageIds)) {
+			for (const mid of params.telegramMessageIds) {
+				if (mid != null) collectedTelegramMessageIds.add(String(mid).trim());
+			}
+		}
+		if (Array.isArray(deliveryResults)) {
+			for (const res of deliveryResults) {
+				if (res && (res.channel === 'telegram' || !res.channel)) {
+					if (res.messageId != null) collectedTelegramMessageIds.add(String(res.messageId).trim());
+					if (Array.isArray(res.messageIds)) {
+						for (const mid of res.messageIds) {
+							if (mid != null) collectedTelegramMessageIds.add(String(mid).trim());
+						}
+					}
+				}
+			}
+		}
+		const telegramMessageIdsArray = Array.from(collectedTelegramMessageIds).filter(Boolean);
+		if (telegramMessageIdsArray.length > 0) {
+			document.telegramMessageIds = telegramMessageIdsArray;
+		}
 		if (truncated) {
 			document.truncated = true;
 			document.originalLength = rawText.length;
@@ -1811,13 +2381,47 @@ async function saveAlertInternal(params = {}) {
 		if (typeof requestId === 'string' && requestId.trim()) {
 			document.requestId = requestId.trim();
 		}
+		const sanitizedDecision = sanitizeDecisionAudit(decision);
+		if (sanitizedDecision) document.decision = sanitizedDecision;
 		if (VALID_TRADINGVIEW_ENRICHMENT_STATUSES.has(tradingViewEnrichmentStatus)) {
 			document.tradingViewEnrichmentStatus = tradingViewEnrichmentStatus;
+		}
+		if (outcomeAnnotation && typeof outcomeAnnotation === 'object') {
+			const sanitizedAnnotation = stripUndefinedFieldsDeep({
+				exchange: typeof outcomeAnnotation.exchange === 'string' ? outcomeAnnotation.exchange : null,
+				symbol: typeof outcomeAnnotation.symbol === 'string' ? outcomeAnnotation.symbol : null,
+				side: typeof outcomeAnnotation.side === 'string' ? outcomeAnnotation.side : null,
+				setupType: typeof outcomeAnnotation.setupType === 'string' ? outcomeAnnotation.setupType : null,
+				windowLabel: typeof outcomeAnnotation.windowLabel === 'string' ? outcomeAnnotation.windowLabel : null,
+				sampleSize: typeof outcomeAnnotation.sampleSize === 'number' && Number.isFinite(outcomeAnnotation.sampleSize)
+					? outcomeAnnotation.sampleSize
+					: null,
+				hitRatePercent: typeof outcomeAnnotation.hitRatePercent === 'number' && Number.isFinite(outcomeAnnotation.hitRatePercent)
+					? outcomeAnnotation.hitRatePercent
+					: null,
+				expectancyR: typeof outcomeAnnotation.expectancyR === 'number' && Number.isFinite(outcomeAnnotation.expectancyR)
+					? outcomeAnnotation.expectancyR
+					: null,
+				totalWins: typeof outcomeAnnotation.totalWins === 'number' && Number.isFinite(outcomeAnnotation.totalWins)
+					? outcomeAnnotation.totalWins
+					: null,
+				totalLosses: typeof outcomeAnnotation.totalLosses === 'number' && Number.isFinite(outcomeAnnotation.totalLosses)
+					? outcomeAnnotation.totalLosses
+					: null,
+				summary: typeof outcomeAnnotation.summary === 'string' ? outcomeAnnotation.summary : null,
+			});
+			if (sanitizedAnnotation && Object.keys(sanitizedAnnotation).length > 0) {
+				document.outcomeAnnotation = sanitizedAnnotation;
+			}
 		}
 		if (suppressedRepeat === true) {
 			document.suppressedRepeat = true;
 			document.deliveryResults = [];
+			if (VALID_SUPPRESSION_REASONS.has(suppressionReason)) {
+				document.suppressionReason = suppressionReason;
+			}
 		}
+		applyBurstAggregationMarkers(document, burstAggregateId, burstSignalCount);
 		const normalizedProcessingTimeMs = normalizeProcessingTimeMs(processingTimeMs);
 		if (normalizedProcessingTimeMs !== null) {
 			document.processingTimeMs = normalizedProcessingTimeMs;
@@ -1828,6 +2432,15 @@ async function saveAlertInternal(params = {}) {
 		}
 		if (extracted.exchange) {
 			document.exchange = extracted.exchange;
+		}
+
+		if (typeof session === 'string' && session.trim()) {
+			document.session = session.trim();
+		} else if (extracted.exchange) {
+			const { isEquityExchange, classifySession } = require('./EquitySessionService');
+			if (isEquityExchange(extracted.exchange)) {
+				document.session = classifySession({ exchange: extracted.exchange, symbol: extracted.symbol });
+			}
 		}
 
 		document.enrichmentData = applyDeterministicRiskReward(document.enrichmentData, side);
@@ -1847,6 +2460,16 @@ async function saveAlertInternal(params = {}) {
 		if (sanitizedScannerErrorCategories.length > 0) {
 			document.scannerErrorCategories = sanitizedScannerErrorCategories;
 		}
+		// Request-level grouping: multi-symbol handlers persist the complete symbol
+		// set so summary aggregation can count symbols and batches accurately
+		// instead of once per stored document.
+		const sanitizedSymbols = sanitizePersistedSymbols(symbols);
+		if (sanitizedSymbols.length > 0) {
+			document.symbols = sanitizedSymbols;
+		}
+		if (typeof batchId === 'string' && batchId.trim()) {
+			document.batchId = batchId.trim();
+		}
 		if (typeof effectiveTelegramChatId === 'string' && effectiveTelegramChatId.trim()) {
 			document.telegramChatId = effectiveTelegramChatId.trim();
 		}
@@ -1863,9 +2486,12 @@ async function saveAlertInternal(params = {}) {
 		let docRef;
 		if (sanitizedAlertId) {
 			docRef = firestore.collection(COLLECTION_NAME).doc(sanitizedAlertId);
-			await docRef.set(document);
+			const write = await fireAndForget('alertStorage', () => docRef.set(document));
+			if (!write.ok) throw write.error;
 		} else {
-			docRef = await firestore.collection(COLLECTION_NAME).add(document);
+			const write = await fireAndForget('alertStorage', () => firestore.collection(COLLECTION_NAME).add(document));
+			if (!write.ok) throw write.error;
+			docRef = write.value;
 		}
 		console.debug(`[AlertStorageService] Alert stored with ID: ${docRef.id}`);
 		firestoreWriteMetricsService.recordWriteSuccess(WRITE_METRICS_DOMAIN_ALERTS);
@@ -2035,6 +2661,246 @@ async function getAlertById(alertId) {
 	return formatAlertDocument(snapshot);
 }
 
+const MAX_REACTIONS_PER_ALERT = 5000;
+
+/**
+ * Find an alert by a Telegram message ID (stored in telegramMessageIds).
+ *
+ * @param {string|number} messageId
+ * @returns {Promise<Object|null>}
+ */
+async function findAlertByTelegramMessageId(messageId) {
+	if (!isEnabled() || messageId == null) {
+		return null;
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		return null;
+	}
+	try {
+		const strId = String(messageId).trim();
+		const snapshot = await firestore.collection(COLLECTION_NAME)
+			.where('telegramMessageIds', 'array-contains', strId)
+			.limit(1)
+			.get();
+		if (snapshot.empty || !snapshot.docs || snapshot.docs.length === 0) {
+			return null;
+		}
+		return formatAlertDocument(snapshot.docs[0]);
+	} catch (error) {
+		logger.warn(`[AlertStorageService] findAlertByTelegramMessageId failed: ${error.message}`);
+		return null;
+	}
+}
+
+/**
+ * Update reaction records on an alert document.
+ * Enforces a bounded size (MAX_REACTIONS_PER_ALERT = 5000) with oldest eviction.
+ *
+ * @param {string} alertId
+ * @param {Object} reactionData - { chatId, userId, emoji, at, weight, removed }
+ * @returns {Promise<boolean>}
+ */
+async function updateAlertReactions(alertId, reactionData = {}) {
+	if (!isEnabled() || !alertId || !reactionData) {
+		return false;
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		return false;
+	}
+	const { chatId, userId, emoji, at, weight, removed } = reactionData;
+	if (!chatId || !userId) {
+		return false;
+	}
+	const userKey = `${chatId}_${userId}`;
+	const docRef = firestore.collection(COLLECTION_NAME).doc(alertId);
+
+	try {
+		if (typeof firestore.runTransaction === 'function') {
+			await firestore.runTransaction(async (transaction) => {
+				const snapshot = await transaction.get(docRef);
+				if (!snapshot || !snapshot.exists) {
+					return;
+				}
+				const data = snapshot.data() || {};
+				const reactions = { ...(data.reactions || {}) };
+
+				if (removed) {
+					delete reactions[userKey];
+				} else {
+					reactions[userKey] = {
+						emoji: typeof emoji === 'string' ? emoji : '',
+						at: at || new Date().toISOString(),
+						weight: typeof weight === 'number' ? weight : 0,
+					};
+
+					const keys = Object.keys(reactions);
+					if (keys.length > MAX_REACTIONS_PER_ALERT) {
+						keys.sort((a, b) => {
+							const atA = new Date(reactions[a]?.at || 0).getTime();
+							const atB = new Date(reactions[b]?.at || 0).getTime();
+							return atA - atB;
+						});
+						const toRemove = keys.slice(0, keys.length - MAX_REACTIONS_PER_ALERT);
+						for (const k of toRemove) {
+							delete reactions[k];
+						}
+					}
+				}
+
+				transaction.update(docRef, { reactions });
+			});
+		} else {
+			const snapshot = await docRef.get();
+			if (!snapshot || !snapshot.exists) return false;
+			const data = snapshot.data() || {};
+			const reactions = { ...(data.reactions || {}) };
+			if (removed) {
+				delete reactions[userKey];
+			} else {
+				reactions[userKey] = {
+					emoji: typeof emoji === 'string' ? emoji : '',
+					at: at || new Date().toISOString(),
+					weight: typeof weight === 'number' ? weight : 0,
+				};
+				const keys = Object.keys(reactions);
+				if (keys.length > MAX_REACTIONS_PER_ALERT) {
+					keys.sort((a, b) => {
+						const atA = new Date(reactions[a]?.at || 0).getTime();
+						const atB = new Date(reactions[b]?.at || 0).getTime();
+						return atA - atB;
+					});
+					const toRemove = keys.slice(0, keys.length - MAX_REACTIONS_PER_ALERT);
+					for (const k of toRemove) {
+						delete reactions[k];
+					}
+				}
+			}
+			await docRef.update({ reactions });
+		}
+		return true;
+	} catch (error) {
+		logger.warn(`[AlertStorageService] updateAlertReactions failed: ${error.message}`);
+		return false;
+	}
+}
+
+/**
+ * Aggregate reactions into total, approve, reject, approveRate, and Beta-Bernoulli weightedScore.
+ *
+ * @param {Object} alertOrReactions
+ * @returns {Object} { total, approve, reject, approveRate, weightedScore }
+ */
+function aggregateReactions(alertOrReactions) {
+	const reactions = (alertOrReactions && alertOrReactions.reactions && typeof alertOrReactions.reactions === 'object')
+		? alertOrReactions.reactions
+		: ((alertOrReactions && typeof alertOrReactions === 'object' && !alertOrReactions.id && !alertOrReactions.text) ? alertOrReactions : {});
+
+	let approve = 0;
+	let reject = 0;
+
+	for (const entry of Object.values(reactions)) {
+		if (!entry || typeof entry !== 'object') continue;
+		if (entry.weight > 0) {
+			approve += 1;
+		} else if (entry.weight < 0) {
+			reject += 1;
+		}
+	}
+
+	const total = approve + reject;
+	const approveRate = total > 0 ? parseFloat((approve / total).toFixed(4)) : 0;
+
+	let confidence = 0.5;
+	if (alertOrReactions && typeof alertOrReactions.confidence === 'number' && Number.isFinite(alertOrReactions.confidence)) {
+		confidence = alertOrReactions.confidence;
+	} else if (alertOrReactions?.enrichmentData && typeof alertOrReactions.enrichmentData.confidence === 'number') {
+		confidence = alertOrReactions.enrichmentData.confidence;
+	}
+
+	const prior = confidence;
+	const weightedScore = total > 0
+		? Math.max(0, Math.min(1, parseFloat(((approve + 4 * prior) / (total + 4)).toFixed(4))))
+		: null;
+
+	return {
+		total,
+		approve,
+		reject,
+		approveRate,
+		weightedScore,
+	};
+}
+
+/**
+ * Retrieve top setups for a symbol based on user reactions over the last N days.
+ *
+ * @param {Object} options - { symbol, days, limit }
+ * @returns {Promise<Array>}
+ */
+async function getTopSetupsByReactions({ symbol, days = 7, limit = 3 } = {}) {
+	if (!isEnabled() || !symbol) {
+		return [];
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		return [];
+	}
+	try {
+		const normSymbol = String(symbol).trim().toUpperCase();
+		const effectiveDays = Number.isFinite(days) && days > 0 ? days : 7;
+		const effectiveLimit = Number.isFinite(limit) && limit > 0 ? limit : 3;
+
+		const cutoff = new Date(Date.now() - effectiveDays * 24 * 60 * 60 * 1000);
+
+		const snapshot = await firestore.collection(COLLECTION_NAME)
+			.where('symbol', '==', normSymbol)
+			.get();
+
+		if (snapshot.empty || !snapshot.docs) {
+			return [];
+		}
+
+		const results = [];
+		for (const doc of snapshot.docs) {
+			const formatted = formatAlertDocument(doc);
+			if (!formatted.reactions || typeof formatted.reactions !== 'object') {
+				continue;
+			}
+			const receivedDate = formatted.receivedAt ? new Date(formatted.receivedAt) : null;
+			if (receivedDate && receivedDate < cutoff) {
+				continue;
+			}
+
+			const metrics = aggregateReactions(formatted);
+			if (metrics.total > 0) {
+				results.push({
+					id: formatted.id,
+					symbol: formatted.symbol || normSymbol,
+					receivedAt: formatted.receivedAt,
+					text: formatted.text,
+					reactionMetrics: metrics,
+				});
+			}
+		}
+
+		results.sort((a, b) => {
+			const scoreA = a.reactionMetrics.weightedScore ?? 0;
+			const scoreB = b.reactionMetrics.weightedScore ?? 0;
+			if (scoreB !== scoreA) {
+				return scoreB - scoreA;
+			}
+			return (b.reactionMetrics.approve || 0) - (a.reactionMetrics.approve || 0);
+		});
+
+		return results.slice(0, effectiveLimit);
+	} catch (error) {
+		logger.warn(`[AlertStorageService] getTopSetupsByReactions failed: ${error.message}`);
+		return [];
+	}
+}
+
 /**
  * Persist a replay attempt separately from the immutable original alert.
  *
@@ -2049,9 +2915,11 @@ async function getAlertById(alertId) {
  * @param {string} params.idempotencyKey
  * @param {Array<string>} params.channels
  * @param {Array} params.deliveryResults
+ * @param {boolean} [params.reEnriched]
+ * @param {Object} [params.enrichmentData]
  * @returns {Promise<string|null>}
  */
-async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryResults }) {
+async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryResults, reEnriched, enrichmentData }) {
 	const firestore = getFirestore();
 	if (!firestore) {
 		if (isEnabled()) {
@@ -2072,6 +2940,9 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 		replayedAt: admin.firestore.FieldValue.serverTimestamp(),
 		expiresAt: buildRetentionExpiryTimestamp(),
 		source: 'alert-replay',
+		deployment: getDeploymentIdentity(),
+		...(typeof reEnriched === 'boolean' ? { reEnriched } : {}),
+		...(enrichmentData && typeof enrichmentData === 'object' ? { enrichmentData: stripUndefinedFieldsDeep(sanitizeEnrichmentData(enrichmentData)) } : {}),
 	};
 
 	try {
@@ -2134,6 +3005,8 @@ function formatReplayDocument(doc) {
 		deliverySummary: compactDelivery,
 		replayedAt,
 		attemptId: typeof data.attemptId === 'string' ? data.attemptId : null,
+		...(typeof data.reEnriched === 'boolean' ? { reEnriched: data.reEnriched } : {}),
+		...(data.enrichmentData && typeof data.enrichmentData === 'object' ? { enrichmentData: data.enrichmentData } : {}),
 	};
 }
 
@@ -2380,7 +3253,7 @@ async function getReplayAttemptByIdempotencyKey(alertId, idempotencyKey) {
  * @param {boolean|undefined} params.includeEnrichment Include bounded enrichmentData when true
  * @returns {Promise<{window: Object, alerts: Array}>}
  */
-async function exportAlerts({ from, to, limit, source, enriched, signalClass, includeText = false, includeEnrichment = false } = {}) {
+async function exportAlerts({ from, to, limit, source, enriched, signalClass, includeText = false, includeEnrichment = false, includeDecision = false } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -2444,7 +3317,7 @@ async function exportAlerts({ from, to, limit, source, enriched, signalClass, in
 		}
 	}
 
-	const alerts = docs.map(doc => formatExportRecord(doc, { includeText, includeEnrichment }));
+	const alerts = docs.map(doc => formatExportRecord(doc, { includeText, includeEnrichment, includeDecision }));
 
 	return {
 		window,
@@ -2649,9 +3522,12 @@ async function batchReplayAlerts(attempts) {
  * @param {string|undefined} params.symbol Optional symbol filter
  * @param {string|undefined} params.eventCategory Optional event category filter
  * @param {string|undefined} params.exchange Optional exchange filter
+ * @param {string|undefined} params.interval Optional `hour`/`day` bucket width. When
+ *        set, adds `summary.buckets` and reports `window.interval`; when omitted the
+ *        response is unchanged. Raises INVALID_REQUEST on a window over the cap.
  * @returns {Promise<Object|null>}
  */
-async function summarizeAlerts({ from, to, limit, source, enriched, symbol, eventCategory, exchange, signalClass } = {}) {
+async function summarizeAlerts({ from, to, limit, source, enriched, symbol, eventCategory, exchange, signalClass, interval, includeDecisionRollup = false } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -2661,7 +3537,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		throw storageUnavailableUninitializedRead(READ_METRICS_DOMAIN_ALERTS);
 	}
 
-	const window = buildSummaryWindow({ from, to, limit });
+	const window = buildSummaryWindow({ from, to, limit, interval });
 	const hasFilters = typeof source === 'string'
 		|| typeof enriched === 'boolean'
 		|| typeof symbol === 'string'
@@ -2760,6 +3636,10 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 				outputTokens: 0,
 				totalTokens: 0,
 				totalCost: 0,
+				pricing: {
+					unknownModelPricing: false,
+					unknownModels: [],
+				},
 			},
 		},
 		delivery: {
@@ -2776,19 +3656,70 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 			averageDeliveryMs: null,
 			byChannel: {},
 		},
+		costByFeature: createFeatureCostSummary(),
+		deployments: [],
 	};
+	if (includeDecisionRollup && isDecisionAuditEnabled()) {
+		summary.decision = { gates: createDecisionGatesRollup() };
+	}
 	const processingLatencySamples = [];
 	const deliveryLatencySamples = [];
 	const channelLatencySamples = {};
 	const sentimentScores = [];
 	let rawScoreCapCount = 0;
+	// Cross-document state so multi-symbol / multi-document requests are not
+	// counted once per stored document.
+	const batchState = { seenBatches: new Set(), seenSymbols: new Map() };
+	const deploymentRollup = new Map();
 
 	for (const doc of docs) {
 		const data = doc.data() || {};
+		if (summary.decision) recordDecisionGatesRollup(summary.decision.gates, data.decision);
 		const alertEnriched = Boolean(data.enriched);
 		const useTradingViewData = Boolean(data.useTradingViewData);
 		const tradingViewEnrichmentApplied = Boolean(data.tradingViewEnrichmentApplied);
 		const tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
+
+		const dep = data.deployment && typeof data.deployment === 'object' ? data.deployment : null;
+		const platform = (dep && typeof dep.platform === 'string' && dep.platform.trim())
+			? dep.platform.trim()
+			: (dep && dep.platform === null ? null : 'unknown');
+		const gitSha = (dep && typeof dep.gitSha === 'string' && dep.gitSha.trim())
+			? dep.gitSha.trim()
+			: null;
+		const service = (dep && typeof dep.service === 'string' && dep.service.trim())
+			? dep.service.trim()
+			: (dep && dep.service === null ? null : (platform === 'unknown' ? null : 'cabros-bot'));
+		const runtimeVersion = (dep && typeof dep.runtimeVersion === 'string' && dep.runtimeVersion.trim())
+			? dep.runtimeVersion.trim()
+			: null;
+
+		const depKey = `${platform || 'null'}::${gitSha || 'null'}::${service || 'null'}`;
+		const receivedAtMs = getTimestampMillis(data.receivedAt || data.createdAt);
+		const docTimestamp = receivedAtMs !== null
+			? new Date(receivedAtMs).toISOString()
+			: (typeof data.receivedAt === 'string' ? data.receivedAt : null);
+
+		if (!deploymentRollup.has(depKey)) {
+			deploymentRollup.set(depKey, {
+				platform,
+				gitSha,
+				service,
+				runtimeVersion,
+				count: 0,
+				lastSeen: docTimestamp,
+			});
+		}
+		const depEntry = deploymentRollup.get(depKey);
+		depEntry.count += 1;
+		if (docTimestamp) {
+			if (!depEntry.lastSeen || docTimestamp > depEntry.lastSeen) {
+				depEntry.lastSeen = docTimestamp;
+			}
+		}
+		if (!depEntry.runtimeVersion && runtimeVersion) {
+			depEntry.runtimeVersion = runtimeVersion;
+		}
 
 		summary.totalAlerts += 1;
 		incrementCounter(summary.bySource, data.source);
@@ -2802,7 +3733,8 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		if (alertEnriched) {
 			summary.byFeatureFlag.enriched += 1;
 			summary.enrichment.enrichedAlerts += 1;
-			recordRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage, data.enrichmentData);
+			const side = extractAlertSide(data);
+			recordRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage, data.enrichmentData, side);
 			recordEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage, data.enrichmentData);
 
 			const storedScore = readStoredSentimentScore(data.enrichmentData);
@@ -2838,6 +3770,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		}
 
 		addTokenUsage(summary.enrichment.tokenUsage, data.tokenUsage);
+		addFeatureCostSummary(summary.costByFeature, data, batchState);
 		addDeliverySummary(summary.delivery, data.deliveryResults);
 		collectLatency(processingLatencySamples, data.processingTimeMs ?? data.processing_time_ms);
 
@@ -2873,8 +3806,16 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 
 	finalizeRiskMetadataCoverageByProvenance(summary.enrichment.riskMetadataCoverage);
 	finalizeEvidenceCoverageByProvenance(summary.enrichment.evidenceCoverage);
+	if (summary.decision) finalizeDecisionGatesRollup(summary.decision.gates);
 	summary.enrichment.sentimentCalibration = buildSentimentCalibration(sentimentScores, rawScoreCapCount);
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
+	// CB-583 / Issue #583: expose the same cost under a clearer
+	// `costEstimateUsd` alias so operators can see real spend without
+	// confusing it with input/output token counts.
+	summary.enrichment.costEstimateUsd = summary.enrichment.tokenUsage.totalCost;
+	for (const feature of FEATURE_TAGS) {
+		summary.costByFeature[feature].totalCost = Number(summary.costByFeature[feature].totalCost.toFixed(6));
+	}
 	summary.latency.averageProcessingMs = averageLatency(processingLatencySamples);
 	summary.latency.averageDeliveryMs = averageLatency(deliveryLatencySamples);
 	summary.latency.byChannel = {};
@@ -2888,16 +3829,35 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		}
 	}
 
+	if (SUMMARY_INTERVALS[interval]) {
+		summary.buckets = buildSummaryBuckets(interval, window, docs);
+	}
+
+	summary.deployments = Array.from(deploymentRollup.values())
+		.sort((a, b) => {
+			const timeA = a.lastSeen || '';
+			const timeB = b.lastSeen || '';
+			if (timeB !== timeA) return timeB.localeCompare(timeA);
+			return b.count - a.count;
+		})
+		.slice(0, 50);
+
 	return summary;
 }
 
 module.exports = {
 	isEnabled,
+	// Exported so the firebase-admin bootstrap gate can be asserted directly
+	// (issue #721). It is re-evaluated per call, never cached.
+	canInitializeFirestore,
 	saveAlert,
 	listAlerts,
 	getAlertById,
 	summarizeAlerts,
 	calculatePercentileLatency,
+	resolveSummaryWindowBounds,
+	getSummaryIntervalMaxWindowDays,
+	SUMMARY_INTERVALS,
 	exportAlerts,
 	exportAlertsByIds,
 	getAlertsByIds,
@@ -2914,12 +3874,24 @@ module.exports = {
 	formatEnrichmentSummary,
 	extractSourceDomains,
 	formatAlertDocument,
+	findAlertByTelegramMessageId,
+	updateAlertReactions,
+	aggregateReactions,
+	getTopSetupsByReactions,
+	MAX_REACTIONS_PER_ALERT,
 	STORAGE_UNAVAILABLE_CODE,
 	probeOrderedAlertRead,
 	FIRESTORE_ERROR_CATEGORIES,
 	INVALID_CURSOR_MESSAGE,
 	parseAlertPaginationCursor,
 	MAX_ALERT_TEXT_LENGTH,
+	isDecisionAuditEnabled,
+	sanitizeDecisionAudit,
+	sanitizeDecisionGates,
+	sanitizeDecisionGate,
+	createDecisionGatesRollup,
+	recordDecisionGatesRollup,
+	finalizeDecisionGatesRollup,
 	MAX_BATCH_REPLAY_LIMIT,
 	MAX_BATCH_DELETE_LIMIT,
 	// Exported for testing
