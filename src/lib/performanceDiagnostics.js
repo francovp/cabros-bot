@@ -30,4 +30,8 @@ function performanceDiagnosticsHandler(req, res) {
 	return res.status(200).json({ success: true, ...performanceDiagnostics.snapshot() });
 }
 
-module.exports = { createPerformanceDiagnostics, performanceDiagnosticsHandler };
+module.exports = {
+	createPerformanceDiagnostics,
+	performanceDiagnosticsHandler,
+	closePerformanceDiagnostics: () => performanceDiagnostics.close(),
+};

@@ -1,5 +1,7 @@
 const express = require('express');
 const request = require('supertest');
+const http = require('node:http');
+const directAgent = new http.Agent();
 
 describe('TradingView dependency outage drill', () => {
 	let app;
@@ -19,6 +21,9 @@ describe('TradingView dependency outage drill', () => {
 			TRADINGVIEW_MCP_TIMEOUT_MS: '100',
 			TRADINGVIEW_MCP_MAX_RETRIES: '0',
 			TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS: '200',
+			NO_PROXY: '*',
+			no_proxy: '*',
+			npm_config_no_proxy: '*',
 			TELEGRAM_CHAT_ID: '123456789',
 			WEBHOOK_API_KEY: 'performance-test-key',
 			ENABLE_FIRESTORE_ALERT_STORAGE: 'false',
@@ -30,7 +35,7 @@ describe('TradingView dependency outage drill', () => {
 		const mcp = new TradingViewMcpService({
 			url: process.env.TRADINGVIEW_MCP_URL,
 			timeoutMs: 100,
-			maxRetries: 0,
+			maxRetries: '0',
 			enrichmentBudgetMs: 200,
 		});
 		jest.doMock('../../../src/services/tradingview/TradingViewMcpService', () => ({ tradingViewMcpService: mcp }));
@@ -60,13 +65,17 @@ describe('TradingView dependency outage drill', () => {
 	});
 
 	it('delivers all five alerts when MCP is unreachable', async () => {
+		const startedAt = performance.now();
 		const responses = await Promise.all(Array.from({ length: 5 }, (_, index) => request(app)
 			.post('/api/webhook/alert?useTradingViewData=true')
+			.agent(directAgent)
 			.set('x-api-key', 'performance-test-key')
 			.send({ text: `BTCUSDT(240) señal de COMPRA ${index}` })));
 
+		const elapsedMs = performance.now() - startedAt;
 		expect(responses.every((response) => response.status === 200 && response.body.success === true)).toBe(true);
 		expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(5);
 		expect(unhandledRejections).toEqual([]);
+		expect(elapsedMs).toBeLessThan(1000);
 	});
 });

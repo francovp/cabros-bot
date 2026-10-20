@@ -1,7 +1,7 @@
 {
-  "/api/webhook/alert": { "p95Ms": 250 },
-  "/api/webhook/expanded-analysis-alert": { "p95Ms": 4000 },
-  "/api/webhook/market-scanner-alert": { "p95Ms": 4000 },
-  "/api/jobs/tradingview-analysis": { "p95Ms": 150 },
-  "/api/news-monitor": { "p95Ms": 150 }
+  "/api/webhook/alert": { "name": "alert", "p95Ms": 250, "p99Ms": 500 },
+  "/api/webhook/expanded-analysis-alert": { "name": "expanded-analysis", "p95Ms": 4000, "p99Ms": 8000 },
+  "/api/webhook/market-scanner-alert": { "name": "market-scanner", "p95Ms": 4000, "p99Ms": 8000 },
+  "/api/jobs/tradingview-analysis": { "name": "jobs", "p95Ms": 150, "p99Ms": 300 },
+  "/api/news-monitor": { "name": "news-monitor", "p95Ms": 150, "p99Ms": 300 }
 }
