@@ -1057,3 +1057,41 @@ When updating LEARNINGS.md, always append new entries to the end of the file rat
 - Pattern-Key: harden.data_preservation
 
 - [2026-10-19T04:20:58+00:00] @francovp on issue #601 (Add per-endpoint rate limiting for expensive operations): [GLOBAL_BLOCKED] Verification update 2026-10-18T12:19Z: the resolver selects active OpenClaw deployment 6702715040 for PR #968; its deployment-record SHA 5d2236e022178cfd006edfb80093d185cf598212 matches the current PR head. /healthcheck, /openapi.json, and /api/status each returned HTTP 502 on all three attempts. WEBHOOK_API_KEY is not available in this local run, so the served service.commit could not be read.  PR #968 is DIRTY against master. The four currently reported checks pass (Analyze actions, JavaScript/TypeScript, Python, and CodeQL); no Node.js CI or Deploy Preview check is reported. Four inline review threads remain unresolved. The latest PR discussion reports that the branch may replace master’s 1,000-request webhook-ingest bucket with a 30-per-minute tier and bypass getRateLimitKey/TRUST_PROXY; this must be verified and reconciled before merge.  This differs from the earlier Railway 404 report: the active OpenClaw deployment record now matches the PR head, but the preview endpoints are unavailable. Railway was not used, and no stale-SHA deployment refresh was triggered. The issue’s tier settings have documented defaults; no specific missing deployment variable was identified.  Operator next steps: restore the OpenClaw preview, reconcile PR #968 with current master, and resolve the webhook-ingest rate-limit regression and open review threads before considering merge.
+## [LRN-20261020-061843-43ab] correction
+
+**Logged**: 2026-10-20T06:18:43.039300Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Addressed the earlier feedback in head `7a84e28`:
+
+- The coverage guard now matches concrete Postman path values while keeping method, path length, and static segments exact. Shared route extraction i...
+
+### Details
+Correction from @francovp on PR #1056:
+
+> Addressed the earlier feedback in head `7a84e28`:
+
+- The coverage guard now matches concrete Postman path values while keeping method, path length, and static segments exact. Shared route extraction includes app-level routes such as `/api/public/status`.
+- Added valid/invalid requests and 408 response examples for `/api/news-monitor/summary` and `/api/news-monitor/analyses`; the README note targets the current API index.
+- The analyses request uses OpenAPI’s canonical `before` cursor.
+
+Verification: focused Postman/OpenAPI suites passed (137/137). The full local suite ended with 282/301 suites passing; 19 suites and 57 tests failed in unchanged integration suites. Exact-head Node.js CI, Secret Scan, and Firebase Hosting workflows passed.
+
+OpenClaw verification is unavailable: the deployment record still points to `f58114b`, and `/healthcheck` plus `/openapi.json` return HTTP 502. The linked issue retains `need manual PR deploy`, but the PR does not; no missing deployment variable was identified. No inline review threads are open.
+
+**Source URL**: https://github.com/francovp/cabros-bot/pull/1056#issuecomment-6264592879
+
+### Suggested Action
+Review the feedback and implement necessary changes.
+
+### Metadata
+- Source: user_feedback
+- Related Files: TBD
+- Tags: correction, feedback
+- See Also: https://github.com/francovp/cabros-bot/pull/1056#issuecomment-6264592879
+- Pattern-Key: harden.feedback_response
+
+---
