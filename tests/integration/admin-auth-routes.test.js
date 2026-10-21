@@ -65,6 +65,22 @@ describe('Firebase admin route authorization', () => {
 
 		expect(dryRunResponse.status).toBe(403);
 		expect(dryRunResponse.body.code).toBe('ADMIN_ROLE_REQUIRED');
+
+		const batchReplayResponse = await request(app)
+			.post('/api/alerts/batch/replay')
+			.set('Authorization', 'Bearer firebase-token')
+			.send({ alertIds: ['alert-1'] });
+
+		expect(batchReplayResponse.status).toBe(403);
+		expect(batchReplayResponse.body.code).toBe('ADMIN_ROLE_REQUIRED');
+
+		const batchDeleteResponse = await request(app)
+			.post('/api/alerts/batch/delete')
+			.set('Authorization', 'Bearer firebase-token')
+			.send({ alertIds: ['alert-1'] });
+
+		expect(batchDeleteResponse.status).toBe(403);
+		expect(batchDeleteResponse.body.code).toBe('ADMIN_ROLE_REQUIRED');
 	});
 
 	it('keeps Firebase bearer tokens out of protected webhook authentication', async () => {
