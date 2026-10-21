@@ -90,6 +90,7 @@ function isHttpUrl(value) {
 
 function timed(fn, timeoutMs) {
 	const startedAt = Date.now();
+	const controller = new AbortController();
 	return new Promise((resolve) => {
 		let settled = false;
 		const timer = setTimeout(() => {
@@ -97,6 +98,7 @@ function timed(fn, timeoutMs) {
 				return;
 			}
 			settled = true;
+			controller.abort();
 			resolve({
 				ready: false,
 				latencyMs: Date.now() - startedAt,
@@ -105,7 +107,7 @@ function timed(fn, timeoutMs) {
 		}, timeoutMs);
 
 		Promise.resolve()
-			.then(() => fn())
+			.then(() => fn(controller.signal))
 			.then((value) => {
 				if (settled) {
 					return;
@@ -124,10 +126,13 @@ function timed(fn, timeoutMs) {
 				}
 				settled = true;
 				clearTimeout(timer);
+				controller.abort();
 				resolve({
 					ready: false,
 					latencyMs: Date.now() - startedAt,
-					error: sanitizeError(error),
+					error: (error && error.name === 'AbortError')
+						? 'timeout_after_' + timeoutMs + 'ms'
+						: sanitizeError(error),
 				});
 			});
 	});
@@ -266,7 +271,7 @@ function buildGeminiProbe(opts) {
 		if (missingModel) {
 			return { ready: false, error: missingModel.key.toLowerCase() + '_missing' };
 		}
-		return timed(async () => {
+		return timed(async (signal) => {
 			const checkedModels = new Set();
 			for (const { key, value } of requiredModels) {
 				const isTunedModel = value.startsWith('tunedModels/');
@@ -286,6 +291,7 @@ function buildGeminiProbe(opts) {
 				const response = await fetch(url, {
 					method: 'GET',
 					headers: { 'x-goog-api-key': apiKey },
+					signal,
 				});
 				// A 404 means the model name is wrong or the API version moved, which
 				// breaks every call to this model — so it is a failure, not a pass.
@@ -293,15 +299,22 @@ function buildGeminiProbe(opts) {
 					throw new Error('gemini_http_' + response.status
 						+ (response.status === 404 ? ' (check ' + key + ')' : ''));
 				}
+				let modelMetadata;
+				try {
+					modelMetadata = await response.json();
+				} catch {
+					throw new Error(isTunedModel
+						? 'gemini_tuned_model_metadata_invalid'
+						: 'gemini_model_metadata_invalid');
+				}
 				if (isTunedModel) {
-					let modelMetadata;
-					try {
-						modelMetadata = await response.json();
-					} catch {
-						throw new Error('gemini_tuned_model_metadata_invalid');
-					}
 					if (modelMetadata?.state !== 'ACTIVE') {
 						throw new Error('gemini_tuned_model_not_active');
+					}
+				} else {
+					const supportedMethods = modelMetadata?.supportedGenerationMethods;
+					if (!Array.isArray(supportedMethods) || !supportedMethods.includes('generateContent')) {
+						throw new Error('gemini_model_generation_unsupported');
 					}
 				}
 			}
@@ -349,10 +362,11 @@ function buildTradingViewMcpProbe(opts) {
 		if (!hasValue(url)) {
 			return { ready: false, error: 'tradingview_url_missing' };
 		}
-		return timed(async () => {
+		return timed(async (signal) => {
 			const response = await fetch(url, {
 				method: 'GET',
 				headers: { accept: 'application/json, text/event-stream' },
+				signal,
 			});
 			if (!response.ok && response.status !== 405) {
 				throw new Error('tradingview_http_' + response.status);
@@ -371,8 +385,8 @@ function buildBinanceProbe(opts) {
 			return skippedResult('binance_disabled');
 		}
 		const baseUrl = process.env.BINANCE_DATA_BASE_URL || 'https://api.binance.com';
-		return timed(async () => {
-			const response = await fetch(baseUrl.replace(/\/$/, '') + '/api/v3/ping');
+		return timed(async (signal) => {
+			const response = await fetch(baseUrl.replace(/\/$/, '') + '/api/v3/ping', { signal });
 			if (!response.ok) {
 				throw new Error('binance_http_' + response.status);
 			}

@@ -44,6 +44,18 @@ function setEnv(map) {
 	};
 }
 
+function mockModelFetch(data = {}) {
+	return jest.fn(async () => ({
+		ok: true,
+		status: 200,
+		json: async () => ({
+			state: 'ACTIVE',
+			supportedGenerationMethods: ['generateContent'],
+			...data,
+		}),
+	}));
+}
+
 describe('readiness utilities', () => {
 	it('clamps out-of-range timeout values to the documented bounds', () => {
 		expect(clampTimeoutMs('0')).toBe(DEFAULT_PROBE_TIMEOUT_MS);
@@ -105,7 +117,7 @@ describe('createReadinessService', () => {
 		});
 		mockRemoteOverrides.ENABLE_GEMINI_GROUNDING = true;
 		const originalFetch = global.fetch;
-		global.fetch = jest.fn(async () => ({ ok: true, status: 200 }));
+		global.fetch = mockModelFetch();
 
 		try {
 			const service = createReadinessService({ timeoutMs: 1500 });
@@ -134,7 +146,7 @@ describe('createReadinessService', () => {
 		});
 		mockRemoteOverrides.GROUNDING_MODEL_NAME = 'published-grounding-model';
 		const originalFetch = global.fetch;
-		global.fetch = jest.fn(async () => ({ ok: true, status: 200 }));
+		global.fetch = mockModelFetch();
 
 		try {
 			const service = createReadinessService({ timeoutMs: 1500 });
@@ -314,7 +326,7 @@ describe('createReadinessService', () => {
 		mockRemoteOverrides.GEMINI_MODEL_NAME = 'published-primary-model';
 		mockRemoteOverrides.GROUNDING_MODEL_NAME = 'published-grounding-model';
 		const originalFetch = global.fetch;
-		global.fetch = jest.fn(async () => ({ ok: true, status: 200 }));
+		global.fetch = mockModelFetch();
 
 		try {
 			const service = createReadinessService({ timeoutMs: 1500 });
@@ -344,11 +356,7 @@ describe('createReadinessService', () => {
 		mockRemoteOverrides.GEMINI_MODEL_NAME = 'tunedModels/published-primary-model';
 		mockRemoteOverrides.GROUNDING_MODEL_NAME = 'models/published-grounding-model';
 		const originalFetch = global.fetch;
-		global.fetch = jest.fn(async () => ({
-			ok: true,
-			status: 200,
-			json: async () => ({ state: 'ACTIVE' }),
-		}));
+		global.fetch = mockModelFetch();
 
 		try {
 			const service = createReadinessService({ timeoutMs: 1500 });
@@ -399,6 +407,105 @@ describe('createReadinessService', () => {
 		}
 	});
 
+	it('fails readiness when a Gemini base model does not support generateContent', async () => {
+		const restore = setEnv({
+			ENABLE_GEMINI_GROUNDING: 'true',
+			ENABLE_NEWS_MONITOR: 'false',
+			GEMINI_API_KEY: 'gemini-key',
+			GEMINI_MODEL_NAME: 'models/embedding-model',
+			FORCE_BRAVE_SEARCH: 'true',
+			BRAVE_SEARCH_API_KEY: 'brave-key',
+			MODEL_PROVIDER: 'gemini',
+		});
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn(async () => ({
+			ok: true,
+			status: 200,
+			json: async () => ({ supportedGenerationMethods: ['embedContent'] }),
+		}));
+
+		try {
+			const service = createReadinessService({ timeoutMs: 1500 });
+			const report = await service.collectReadiness();
+
+			expect(report.dependencies.gemini.ready).toBe(false);
+			expect(report.dependencies.gemini.error).toBe('gemini_model_generation_unsupported');
+		} finally {
+			global.fetch = originalFetch;
+			restore();
+		}
+	});
+
+	it('fails readiness when Gemini model metadata is invalid JSON', async () => {
+		const restore = setEnv({
+			ENABLE_GEMINI_GROUNDING: 'true',
+			ENABLE_NEWS_MONITOR: 'false',
+			GEMINI_API_KEY: 'gemini-key',
+			GEMINI_MODEL_NAME: 'models/corrupted-model',
+			FORCE_BRAVE_SEARCH: 'true',
+			BRAVE_SEARCH_API_KEY: 'brave-key',
+			MODEL_PROVIDER: 'gemini',
+		});
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn(async () => ({
+			ok: true,
+			status: 200,
+			json: async () => { throw new Error('invalid JSON payload'); },
+		}));
+
+		try {
+			const service = createReadinessService({ timeoutMs: 1500 });
+			const report = await service.collectReadiness();
+
+			expect(report.dependencies.gemini.ready).toBe(false);
+			expect(report.dependencies.gemini.error).toBe('gemini_model_metadata_invalid');
+		} finally {
+			global.fetch = originalFetch;
+			restore();
+		}
+	});
+
+	it('passes abort signal to Gemini model fetch and aborts on probe timeout', async () => {
+		const restore = setEnv({
+			ENABLE_GEMINI_GROUNDING: 'true',
+			ENABLE_NEWS_MONITOR: 'false',
+			GEMINI_API_KEY: 'gemini-key',
+			GEMINI_MODEL_NAME: 'models/slow-model',
+			FORCE_BRAVE_SEARCH: 'true',
+			BRAVE_SEARCH_API_KEY: 'brave-key',
+			MODEL_PROVIDER: 'gemini',
+		});
+		let capturedSignal;
+		const originalFetch = global.fetch;
+		global.fetch = jest.fn(async (_url, opts) => {
+			capturedSignal = opts.signal;
+			return new Promise((resolve, reject) => {
+				const onAbort = () => {
+					const error = new Error('The operation was aborted');
+					error.name = 'AbortError';
+					reject(error);
+				};
+				if (opts.signal?.aborted) {
+					return onAbort();
+				}
+				opts.signal?.addEventListener('abort', onAbort);
+			});
+		});
+
+		try {
+			const service = createReadinessService({ timeoutMs: 1000 });
+			const report = await service.collectReadiness();
+
+			expect(report.dependencies.gemini.ready).toBe(false);
+			expect(report.dependencies.gemini.error).toBe('timeout_after_1000ms');
+			expect(capturedSignal).toBeDefined();
+			expect(capturedSignal.aborted).toBe(true);
+		} finally {
+			global.fetch = originalFetch;
+			restore();
+		}
+	});
+
 	it('does not pass readiness with only a published Gemini fallback model', async () => {
 		const restore = setEnv({
 			ENABLE_GEMINI_GROUNDING: 'true',
@@ -435,7 +542,7 @@ describe('createReadinessService', () => {
 		});
 		mockRemoteOverrides.GEMINI_MODEL_NAME = 'published-model';
 		const originalFetch = global.fetch;
-		global.fetch = jest.fn(async () => ({ ok: true, status: 200 }));
+		global.fetch = mockModelFetch();
 
 		try {
 			const service = createReadinessService({ timeoutMs: 1500 });
