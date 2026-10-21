@@ -573,6 +573,35 @@ describe('Postman collection contract', () => {
 		}));
 	});
 
+	it('assigns unique idempotency keys to negative replay request variants (issue #1391)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const batchBody = findItem(collection.item, 'POST Batch Replay Alerts (invalid dryRun body)');
+		const batchQuery = findItem(collection.item, 'POST Batch Replay Alerts (invalid dryRun query)');
+		const singleBody = findItem(collection.item, 'POST Replay Alert (invalid dryRun body)');
+		const singleQuery = findItem(collection.item, 'POST Replay Alert (invalid dryRun query)');
+
+		expect(batchBody).toBeDefined();
+		expect(batchQuery).toBeDefined();
+		expect(singleBody).toBeDefined();
+		expect(singleQuery).toBeDefined();
+
+		const batchBodyKey = findHeader(batchBody, 'idempotency-key').value;
+		const batchQueryKey = findHeader(batchQuery, 'idempotency-key').value;
+		const singleBodyKey = findHeader(singleBody, 'idempotency-key').value;
+		const singleQueryKey = findHeader(singleQuery, 'idempotency-key').value;
+
+		expect(batchBodyKey).toBe('replay-key-batch-invalid-dryrun-body');
+		expect(batchQueryKey).toBe('replay-key-batch-invalid-dryrun-query');
+		expect(singleBodyKey).toBe('replay-key-invalid-dryrun-body');
+		expect(singleQueryKey).toBe('replay-key-invalid-dryrun-query');
+
+		const keys = [batchBodyKey, batchQueryKey, singleBodyKey, singleQueryKey];
+		expect(new Set(keys).size).toBe(keys.length);
+		for (const key of keys) {
+			expect(key).not.toBe('{{replayIdempotencyKey}}');
+		}
+	});
+
 	it('documents lastReplay in the stored alert detail response example', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const detail = findItem(collection.item, 'GET Get Alert by ID');

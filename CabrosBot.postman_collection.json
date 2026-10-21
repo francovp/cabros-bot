@@ -19419,7 +19419,7 @@
               },
               {
                 "key": "idempotency-key",
-                "value": "{{replayIdempotencyKey}}",
+                "value": "replay-key-batch-invalid-dryrun-body",
                 "type": "text"
               }
             ],
@@ -19500,7 +19500,7 @@
               },
               {
                 "key": "idempotency-key",
-                "value": "{{replayIdempotencyKey}}",
+                "value": "replay-key-batch-invalid-dryrun-query",
                 "type": "text"
               }
             ],
@@ -20592,7 +20592,7 @@
               },
               {
                 "key": "idempotency-key",
-                "value": "{{replayIdempotencyKey}}",
+                "value": "replay-key-invalid-dryrun-body",
                 "type": "text"
               }
             ],
@@ -20661,7 +20661,7 @@
               },
               {
                 "key": "idempotency-key",
-                "value": "{{replayIdempotencyKey}}",
+                "value": "replay-key-invalid-dryrun-query",
                 "type": "text"
               }
             ],
