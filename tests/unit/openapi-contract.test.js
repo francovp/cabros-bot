@@ -164,7 +164,6 @@ describe('OpenAPI contract', () => {
 			'POST /api/trading/binance/orders',
 			'DELETE /api/trading/binance/orders',
 		]);
-		]);
 
 		for (const operation of operations) {
 			const operationKey = `${operation.method || 'UNKNOWN'} ${operation.path || ''}`;

@@ -2585,7 +2585,12 @@
                         {
                           "exchange": "TVC",
                           "symbol": "GOLD",
-                          "aliases": ["GOLD", "XAUUSD", "XAU/USD", "XAU"],
+                          "aliases": [
+                            "GOLD",
+                            "XAUUSD",
+                            "XAU/USD",
+                            "XAU"
+                          ],
                           "assetClass": "commodity",
                           "matchType": "exact",
                           "score": 100,
@@ -2608,6 +2613,11 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "400": {
@@ -2618,9 +2628,24 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -2631,7 +2656,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.operator"
+        "x-admin-role": "admin.operator",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/symbols/aliases": {
@@ -2653,7 +2683,12 @@
                 "example": {
                   "aliases": [
                     {
-                      "aliases": ["GOLD", "XAUUSD", "XAU/USD", "XAU"],
+                      "aliases": [
+                        "GOLD",
+                        "XAUUSD",
+                        "XAU/USD",
+                        "XAU"
+                      ],
                       "exchange": "TVC",
                       "symbol": "GOLD",
                       "assetClass": "commodity"
@@ -2662,6 +2697,11 @@
                   "totalEntries": 18
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "401": {
@@ -2669,9 +2709,18 @@
           },
           "403": {
             "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
           {
             "ApiKeyHeader": []
           },
@@ -2682,7 +2731,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.viewer"
+        "x-admin-role": "admin.viewer",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/jobs/tradingview-analysis": {
@@ -18445,7 +18499,12 @@
               "type": "string"
             },
             "description": "All aliases that resolve to this canonical identifier.",
-            "example": ["GOLD", "XAUUSD", "XAU/USD", "XAU"]
+            "example": [
+              "GOLD",
+              "XAUUSD",
+              "XAU/USD",
+              "XAU"
+            ]
           },
           "assetClass": {
             "type": [

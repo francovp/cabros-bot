@@ -33036,7 +33036,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -33077,7 +33077,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -33118,7 +33118,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -33159,7 +33159,7 @@
               },
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -33195,7 +33195,7 @@
             "header": [
               {
                 "key": "x-api-key",
-                "value": "{{apiKey}}",
+                "value": "{{adminApiKey}}",
                 "type": "text"
               }
             ],
@@ -33216,6 +33216,262 @@
               "name": "Alias table",
               "status": "OK",
               "code": 200,
+              "body": "{\"aliases\":[{\"aliases\":[\"GOLD\",\"XAUUSD\",\"XAU/USD\",\"XAU\"],\"exchange\":\"TVC\",\"symbol\":\"GOLD\",\"assetClass\":\"commodity\"}],\"totalEntries\":18}"
+            }
+          ]
+        },
+        {
+          "name": "POST Resolve Symbol (request ID echo)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh1272-test-001",
+                "type": "text",
+                "description": "Optional client-supplied correlation ID (1-128 printable ASCII). Returned in the X-Request-Id response header on every non-exempt route."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"GOLD\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/symbols/resolve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "symbols",
+                "resolve"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A valid X-Request-Id must be echoed back verbatim.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id response header matches supplied value\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh1272-test-001\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "gh1272-test-001"
+                }
+              ],
+              "body": "{\"matches\":[{\"exchange\":\"TVC\",\"symbol\":\"GOLD\",\"aliases\":[\"GOLD\",\"XAUUSD\",\"XAU/USD\",\"XAU\"],\"assetClass\":\"commodity\",\"matchType\":\"exact\",\"score\":100,\"order\":0}],\"normalizedQuery\":\"GOLD\",\"totalEntries\":18,\"query\":\"GOLD\"}"
+            }
+          ]
+        },
+        {
+          "name": "POST Resolve Symbol (request ID omitted)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"query\": \"GOLD\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/symbols/resolve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "symbols",
+                "resolve"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// When X-Request-Id is omitted, the server must generate and return a correlation ID.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id response header is populated\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\").length).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\"matches\":[{\"exchange\":\"TVC\",\"symbol\":\"GOLD\",\"aliases\":[\"GOLD\",\"XAUUSD\",\"XAU/USD\",\"XAU\"],\"assetClass\":\"commodity\",\"matchType\":\"exact\",\"score\":100,\"order\":0}],\"normalizedQuery\":\"GOLD\",\"totalEntries\":18,\"query\":\"GOLD\"}"
+            }
+          ]
+        },
+        {
+          "name": "GET Symbol Aliases (request ID echo)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh1272-test-001",
+                "type": "text",
+                "description": "Optional client-supplied correlation ID (1-128 printable ASCII). Returned in the X-Request-Id response header on every non-exempt route."
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/symbols/aliases",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "symbols",
+                "aliases"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A valid X-Request-Id must be echoed back verbatim.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id response header matches supplied value\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh1272-test-001\");",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "gh1272-test-001"
+                }
+              ],
+              "body": "{\"aliases\":[{\"aliases\":[\"GOLD\",\"XAUUSD\",\"XAU/USD\",\"XAU\"],\"exchange\":\"TVC\",\"symbol\":\"GOLD\",\"assetClass\":\"commodity\"}],\"totalEntries\":18}"
+            }
+          ]
+        },
+        {
+          "name": "GET Symbol Aliases (request ID omitted)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/symbols/aliases",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "symbols",
+                "aliases"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// When X-Request-Id is omitted, the server must generate and return a correlation ID.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id response header is populated\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\").length).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
               "body": "{\"aliases\":[{\"aliases\":[\"GOLD\",\"XAUUSD\",\"XAU/USD\",\"XAU\"],\"exchange\":\"TVC\",\"symbol\":\"GOLD\",\"assetClass\":\"commodity\"}],\"totalEntries\":18}"
             }
           ]
