@@ -11,6 +11,11 @@ const MarkdownV2Formatter = require('../services/notification/formatters/markdow
 
 const markdownFormatter = new MarkdownV2Formatter();
 
+const DEFAULT_LOG_COOLDOWN_MS = 60000;
+const DEFAULT_ADMIN_ALERT_THRESHOLD = 5;
+const DEFAULT_ADMIN_ALERT_COOLDOWN_MS = 900000;
+const DEFAULT_HEALTH_PROBE_INTERVAL_MS = 30000;
+
 // Polling error tracking state
 let pollingErrorState = {
 	consecutiveFailures: 0,
@@ -18,6 +23,11 @@ let pollingErrorState = {
 	lastLoggedAt: 0,
 	suppressedCount: 0,
 	lastPagingAt: 0,
+};
+
+let healthProbe = {
+	timer: null,
+	running: false,
 };
 
 function resetPollingErrorState() {
@@ -99,16 +109,43 @@ async function handleTelegrafUpdateError(err, ctx, options = {}) {
  * Handle polling or bot launch errors with rate-limited logging and optional admin paging
  * @param {Error|unknown} err
  * @param {Object} [options]
+ * @param {number} [options.logCooldownMs=60000]
+ * @param {number} [options.adminAlertThreshold=5]
+ * @param {number} [options.adminAlertCooldownMs=900000]
+ * @param {number} [options.recoveryWindowMs] — when the last failure is older than
+ *   this window, the prior streak is treated as ended and the next failure restarts
+ *   the count from 1. Defaults to 2x `logCooldownMs` so behavior is unchanged when
+ *   the option is not provided.
  */
 async function handlePollingError(err, options = {}) {
 	try {
 		const errorObj = err instanceof Error ? err : new Error(String(err));
-		const logCooldownMs = options.logCooldownMs !== undefined ? options.logCooldownMs : 60000;
-		const adminAlertThreshold = options.adminAlertThreshold !== undefined ? options.adminAlertThreshold : 5;
-		const adminAlertCooldownMs = options.adminAlertCooldownMs !== undefined ? options.adminAlertCooldownMs : 900000;
+		const logCooldownMs = options.logCooldownMs !== undefined ? options.logCooldownMs : DEFAULT_LOG_COOLDOWN_MS;
+		const adminAlertThreshold =
+			options.adminAlertThreshold !== undefined ? options.adminAlertThreshold : DEFAULT_ADMIN_ALERT_THRESHOLD;
+		const adminAlertCooldownMs =
+			options.adminAlertCooldownMs !== undefined ? options.adminAlertCooldownMs : DEFAULT_ADMIN_ALERT_COOLDOWN_MS;
+		const recoveryWindowMs =
+			options.recoveryWindowMs !== undefined
+				? options.recoveryWindowMs
+				: Math.max(logCooldownMs * 2, 60000);
 		const bot = options.bot;
 
 		const now = Date.now();
+
+		// If we have prior failures and the last one is older than the recovery
+		// window, treat the streak as ended so a single transient error does not
+		// page the admin or compound with stale telemetry.
+		if (
+			pollingErrorState.consecutiveFailures > 0 &&
+			pollingErrorState.firstFailureAt !== null &&
+			now - pollingErrorState.firstFailureAt > recoveryWindowMs
+		) {
+			pollingErrorState.consecutiveFailures = 0;
+			pollingErrorState.firstFailureAt = null;
+			pollingErrorState.suppressedCount = 0;
+		}
+
 		pollingErrorState.consecutiveFailures += 1;
 		if (!pollingErrorState.firstFailureAt) {
 			pollingErrorState.firstFailureAt = now;
@@ -185,10 +222,84 @@ function attachTelegramErrorBoundary(bot, options = {}) {
 	}
 }
 
+/**
+ * Start a periodic `getMe` health probe so a successful Telegram round-trip
+ * resets the polling-failure streak even when no updates are flowing.
+ *
+ * Telegraf v4's long-polling loop emits no success event, so without an
+ * external signal the streak is monotonic for the entire process lifetime.
+ * A lightweight `getMe` call is the cheapest "polling is healthy" signal.
+ *
+ * Calling `startTelegramHealthProbe` while a previous probe is still running
+ * stops the previous one before starting the new one (idempotent re-arm).
+ *
+ * @param {Object} bot - Telegraf bot instance
+ * @param {Object} [options]
+ * @param {number} [options.intervalMs=30000] - probe interval in milliseconds
+ * @param {number} [options.requestTimeoutMs=10000] - per-probe timeout
+ */
+function startTelegramHealthProbe(bot, options = {}) {
+	stopTelegramHealthProbe();
+
+	if (!bot || !bot.telegram || typeof bot.telegram.getMe !== 'function') {
+		return;
+	}
+
+	const intervalMs =
+		options.intervalMs !== undefined && options.intervalMs > 0
+			? options.intervalMs
+			: DEFAULT_HEALTH_PROBE_INTERVAL_MS;
+	const requestTimeoutMs =
+		options.requestTimeoutMs !== undefined && options.requestTimeoutMs > 0
+			? options.requestTimeoutMs
+			: 10000;
+
+	const tick = async () => {
+		if (!healthProbe.running) {
+			return;
+		}
+		try {
+			await Promise.race([
+				bot.telegram.getMe(),
+				new Promise((_, reject) =>
+					setTimeout(() => reject(new Error('getMe timeout')), requestTimeoutMs),
+				),
+			]);
+			recordPollingSuccess();
+		} catch (probeError) {
+			const message = probeError && probeError.message ? probeError.message : String(probeError);
+			console.debug('[telegram] Health probe getMe failed:', message);
+		}
+	};
+
+	healthProbe.running = true;
+	healthProbe.timer = setInterval(() => {
+		void tick();
+	}, intervalMs);
+	// Don't keep the event loop alive just for the health probe.
+	if (typeof healthProbe.timer.unref === 'function') {
+		healthProbe.timer.unref();
+	}
+}
+
+/**
+ * Stop the health probe started by `startTelegramHealthProbe`.
+ * Safe to call when no probe is running.
+ */
+function stopTelegramHealthProbe() {
+	healthProbe.running = false;
+	if (healthProbe.timer) {
+		clearInterval(healthProbe.timer);
+		healthProbe.timer = null;
+	}
+}
+
 module.exports = {
 	attachTelegramErrorBoundary,
 	handleTelegrafUpdateError,
 	handlePollingError,
 	recordPollingSuccess,
 	resetPollingErrorState,
+	startTelegramHealthProbe,
+	stopTelegramHealthProbe,
 };

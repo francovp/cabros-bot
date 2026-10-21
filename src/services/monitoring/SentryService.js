@@ -109,6 +109,7 @@ const { nodeProfilingIntegration } = require('@sentry/profiling-node');
 const FEATURE_NAMES = {
 	'http-alert': 'alerts',
 	'news-monitor': 'news-monitor',
+	'market-scanner': 'market-scanner',
 	'telegram': 'telegram-alerts',
 	'whatsapp': 'whatsapp-alerts',
 	'discord': 'discord-alerts',
@@ -720,6 +721,44 @@ class SentryService {
 	}
 
 	/**
+	 * Capture a sanitized informational event without treating it as an error.
+	 * @param {{message: string, feature?: string, extra?: Object<string, unknown>}} request
+	 * @returns {MonitoringCaptureResult}
+	 */
+	captureInfo(request = {}) {
+		try {
+			if (!this.state.enabled) {
+				return {
+					captured: false,
+					skippedReason: this.state.lastInitError || 'Monitoring disabled',
+				};
+			}
+
+			const message = this._sanitizeString(String(request.message || 'process.info'));
+			const feature = this._sanitizeString(String(request.feature || 'process.info'));
+			const eventId = Sentry.captureMessage(message, {
+				level: 'info',
+				tags: {
+					channel: 'process',
+					feature,
+					environment: this.config?.environment || 'unknown',
+				},
+				extra: this._sanitizeObject(request.extra || {}),
+			});
+
+			console.debug(`[SentryService] Info captured: ${eventId} (feature=${feature})`);
+			return { captured: true, eventId };
+		} catch (error) {
+			// Monitoring failures must never affect shutdown or other application behavior.
+			console.warn(`[SentryService] Failed to capture info: ${error.message}`);
+			return {
+				captured: false,
+				skippedReason: `Capture error: ${error.message}`,
+			};
+		}
+	}
+
+	/**
 	 * Build alert context, respecting sendAlertContent policy
 	 * @param {AlertContext} alertContext
 	 * @returns {{alert: Object}}
@@ -887,6 +926,29 @@ class SentryService {
 			console.warn(`[SentryService] Failed to capture LLM metrics: ${error.message}`);
 		}
 	}
+
+	/**
+	 * Capture Firestore write metric
+	 * @param {Object} params
+	 * @param {string} params.domain
+	 * @param {'success' | 'failure'} params.status
+	 */
+	captureFirestoreWriteMetric({ domain, status }) {
+		if (!this.state.enabled) return;
+		try {
+			const tags = {
+				domain: domain || 'unknown',
+				status: status === 'success' ? 'success' : 'failure',
+			};
+			if (Sentry.metrics && typeof Sentry.metrics.count === 'function') {
+				Sentry.metrics.count('firestore_writes', 1, { tags });
+			}
+		} catch (error) {
+			// Never throw - monitoring failures should not affect application behavior
+			console.warn(`[SentryService] Failed to capture Firestore write metric: ${error.message}`);
+		}
+	}
+
 
 	/**
 	 * Flush pending events (for graceful shutdown)

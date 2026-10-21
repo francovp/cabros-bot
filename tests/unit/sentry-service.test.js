@@ -449,6 +449,28 @@ describe('SentryService', () => {
 		});
 	});
 
+	describe('captureInfo()', () => {
+		it('captures a sanitized info message with structured timer drain metrics', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			service.init();
+			expect(typeof service.captureInfo).toBe('function');
+
+			const result = service.captureInfo({
+				message: 'shutdown.timer_drain',
+				feature: 'shutdown.timer_drain',
+				extra: { registered: 2, drained: 1, failed: 1 },
+			});
+
+			expect(result).toMatchObject({ captured: true, eventId: 'mock-event-id' });
+			expect(Sentry.captureMessage).toHaveBeenCalledWith('shutdown.timer_drain', expect.objectContaining({
+				level: 'info',
+				tags: expect.objectContaining({ feature: 'shutdown.timer_drain', channel: 'process' }),
+				extra: { registered: 2, drained: 1, failed: 1 },
+			}));
+		});
+	});
+
 	describe('ErrorEvent Building (T010)', () => {
 		beforeEach(() => {
 			process.env.ENABLE_SENTRY = 'true';
@@ -483,6 +505,25 @@ describe('SentryService', () => {
 						contexts: expect.objectContaining({
 							http: httpContext,
 						}),
+					}),
+				);
+			});
+
+			// Issue #1285 relies on this: `captureRuntimeError` reads a fixed
+			// allow-list and silently drops an unsupported `tags` field, so a
+			// category passed any other way never reaches Sentry.
+			it('maps extra.category onto a Sentry category tag', () => {
+				service.captureRuntimeError({
+					channel: 'alerts-controller',
+					error: new Error('Alert storage is enabled but Firestore is unavailable.'),
+					extra: { category: 'failed_precondition', missingIndex: true },
+				});
+
+				expect(Sentry.captureException).toHaveBeenCalledWith(
+					expect.any(Error),
+					expect.objectContaining({
+						tags: expect.objectContaining({ category: 'failed_precondition' }),
+						extra: expect.objectContaining({ category: 'failed_precondition', missingIndex: true }),
 					}),
 				);
 			});
@@ -978,4 +1019,42 @@ describe('profiling configuration', () => {
 			});
 		});
 	});
+
+	describe('captureFirestoreWriteMetric', () => {
+		it('should record firestore_writes count metric when sentry is enabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			service.init();
+
+			service.captureFirestoreWriteMetric({ domain: 'alerts', status: 'success' });
+
+			expect(Sentry.metrics.count).toHaveBeenCalledWith('firestore_writes', 1, {
+				tags: {
+					domain: 'alerts',
+					status: 'success',
+				},
+			});
+		});
+
+		it('should handle failure status and fallback domain', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			service.init();
+
+			service.captureFirestoreWriteMetric({ domain: '', status: 'failure' });
+
+			expect(Sentry.metrics.count).toHaveBeenCalledWith('firestore_writes', 1, {
+				tags: {
+					domain: 'unknown',
+					status: 'failure',
+				},
+			});
+		});
+
+		it('should do nothing when sentry is disabled', () => {
+			service.captureFirestoreWriteMetric({ domain: 'alerts', status: 'success' });
+			expect(Sentry.metrics.count).not.toHaveBeenCalled();
+		});
+	});
 });
+
