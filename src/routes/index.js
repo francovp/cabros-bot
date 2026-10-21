@@ -34,6 +34,10 @@ const {
 	submitFeedback,
 	getFeedbackSummary,
 } = require('../controllers/alerts/alerts');
+const {
+	postResolveSymbol,
+	getAliases,
+} = require('../controllers/webhooks/handlers/symbols/symbols');
 const { listOutcomes, summarizeOutcomes, getOutcomesCalibration } = require('../controllers/outcomes/outcomes');
 const { listSymbolAnalyses, summarizeSymbolAnalyses } = require('../controllers/symbolAnalyses/symbolAnalyses');
 const { getPreferencesHandler, putPreferencesHandler, deletePreferencesHandler } = require('../controllers/preferences/preferences');
@@ -118,6 +122,10 @@ function getRoutes(botOrGetter) {
 	router.put('/scanner-presets/:id', ...adminWrite, updatePreset);
 	router.delete('/scanner-presets/:id', ...adminWrite, deletePreset);
 	router.post('/scanner-presets/:id/run', ...adminWrite, idempotencyMiddleware, postRunPreset(botOrGetter));
+
+	// Symbol alias resolver (issue #845) — operator-only lookup endpoints.
+	router.post('/symbols/resolve', ...adminWrite, postResolveSymbol());
+	router.get('/symbols/aliases', ...adminRead, getAliases());
 
 	// Alert subscriber webhook endpoints
 	router.get('/alert-subscribers', ...adminRead, listSubscribers);

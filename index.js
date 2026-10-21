@@ -16,6 +16,7 @@ const {
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	resolveCmd,
 	reactionsCommand,
 	preferenciasCmd,
 	filtroCmd,
@@ -211,6 +212,7 @@ async function bootstrapApplication() {
 		bot.command(['history', 'alertas'], alertHistoryCommand);
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
+		bot.command(['resolve'], resolveCmd);
 		bot.command(['reactions', 'reacciones'], reactionsCommand);
 		bot.command(['preferencias', 'preferences'], preferenciasCmd);
 

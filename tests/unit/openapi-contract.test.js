@@ -143,6 +143,7 @@ describe('OpenAPI contract', () => {
 			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/outcomes/calibration',
 			'GET /api/symbol-analyses', 'GET /api/symbol-analyses/summary',
 			'GET /api/trading/binance/orders', 'GET /api/trading/binance/orders/audit', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
+			'POST /api/symbols/resolve', 'GET /api/symbols/aliases',
 			'POST /api/trading/binance/orders/preview', 'GET /api/trading/binance/account/balances',
 			'GET /api/trading/positions', 'GET /api/trading/pnl/summary', 'GET /api/trading/trades',
 			'POST /api/news-monitor/pause', 'POST /api/news-monitor/resume', 'GET /api/news-monitor/status',

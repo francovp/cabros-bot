@@ -694,6 +694,16 @@ The window is **leading-edge**, so the added latency is exactly `ALERT_BURST_WIN
 ### Market Scanner MCP Fast-Fail Gate
 `POST /api/webhook/market-scanner-alert` checks the process-local TradingView MCP status before running its sequential scans. If the status is `degraded` with `http_5xx`, `request_failed`, or `circuit_breaker_open` **and** the circuit breaker still reports `state: "open"`, it skips every scan and returns `502 TRADINGVIEW_MCP_UNAVAILABLE` with each scan as `status: "skipped"`. The endpoint returns `502` in two shapes: `TRADINGVIEW_MCP_UNAVAILABLE` (skipped, nothing attempted) and `ALL_SCANS_FAILED` (attempted, all failed). The gate keys on the breaker's time-based state so that after `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses the next request is allowed through as a recovery probe — a transient outage self-heals without a restart. See [Webhook Alerts](docs/webhooks.md#post-apiwebhookmarket-scanner-alert).
 
+### Symbol Alias Resolver (#845)
+
+- The static alias table lives in `src/services/symbols/aliases.json` (one entry per symbol, multiple aliases per entry, canonical `EXCHANGE:SYMBOL` identifier). Operators can extend the table without touching code paths.
+- `POST /api/symbols/resolve` (operator auth) — accepts `{ query, defaultExchange?, maxResults? }` and returns `{ matches, normalizedQuery, totalEntries, query }`. Empty matches are a successful 200 response, never a 5xx.
+- `GET /api/symbols/aliases` (operator auth) — returns the full static alias table in deterministic order so admins can audit it.
+- Telegram `/resolve <query>` command — replies with the top 1–3 candidates and a copyable canonical identifier. Hint to use `/analisis EXCHANGE:SYMBOL` after the match.
+- `featureFlags.symbolAliasResolver` (default `true` when the static table loads) and `dependencies.symbolAliasResolver` (`enabled`, `totalEntries`) are surfaced in `/api/status` and `/api/capabilities` without secrets.
+- `DISABLE_SYMBOL_ALIAS_RESOLVER=true` opt-out flag (escape hatch — keeps the route mounted but reports `enabled: false` so production can roll back without code changes). The flag is `environment-only` (operator opt-out toggle, not Remote-Config eligible).
+- The existing `/api/webhook/expanded-analysis-alert`, `/api/webhook/market-scanner-alert`, `/api/webhook/volume-confirmation`, `/api/webhook/symbol-analysis`, and `/api/jobs/tradingview-analysis` endpoints keep their strict `EXCHANGE:SYMBOL` validation — the resolver is a new lookup surface, not a parser override. Un-mapped tickers still surface `INVALID_REQUEST` to preserve current behavior.
+
 ---
 
 ## Running Tests
