@@ -198,7 +198,10 @@ function emit(level, attributes) {
 
 function createRequestLogger() {
 	return function requestLogger(req, res, next) {
-		const startTime = Date.now();
+		const startTime = typeof req.startTime === 'number' && Number.isFinite(req.startTime)
+			? req.startTime
+			: Date.now();
+		req.startTime = startTime;
 		const rawPath = normalizeRequestPath(req.originalUrl || req.url || req.path || '');
 
 		// Stamp the correlation id BEFORE the exemption check. An operator can
@@ -211,6 +214,7 @@ function createRequestLogger() {
 		// resolves the same id from `req.requestId`, so this only fills a gap.
 		const requestId = resolveRequestId(req);
 		req.requestId = requestId;
+		req.requestContext = { requestId, startTime };
 
 		// Set the response header here, not only in `requestDeadline`. This
 		// middleware is mounted first, so it is the earliest point that sees every

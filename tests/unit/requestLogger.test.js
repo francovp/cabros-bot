@@ -749,4 +749,46 @@ describe('Request Logger Middleware', () => {
 			triggerFinish(res);
 		}).not.toThrow();
 	});
+
+	it('stamps req.startTime and req.requestContext when none is provided', () => {
+		const middleware = createRequestLogger();
+		const before = Date.now();
+		const req = buildReq();
+		const res = buildRes();
+		const next = jest.fn();
+
+		middleware(req, res, next);
+		const after = Date.now();
+
+		expect(next).toHaveBeenCalledTimes(1);
+		expect(typeof req.startTime).toBe('number');
+		expect(req.startTime).toBeGreaterThanOrEqual(before);
+		expect(req.startTime).toBeLessThanOrEqual(after);
+		expect(req.requestContext).toEqual({
+			requestId: req.requestId,
+			startTime: req.startTime,
+		});
+	});
+
+	it('preserves upstream req.startTime in req.requestContext and durationMs', () => {
+		const middleware = createRequestLogger();
+		const explicitStartTime = Date.now() - 500;
+		const req = buildReq({ headers: { 'x-request-id': 'req-ctx-explicit' } });
+		req.startTime = explicitStartTime;
+		const res = buildRes();
+		const next = jest.fn();
+
+		middleware(req, res, next);
+
+		expect(next).toHaveBeenCalledTimes(1);
+		expect(req.startTime).toBe(explicitStartTime);
+		expect(req.requestContext).toEqual({
+			requestId: 'req-ctx-explicit',
+			startTime: explicitStartTime,
+		});
+
+		triggerFinish(res);
+		const log = parseLast(output.info);
+		expect(log.attributes.durationMs).toBeGreaterThanOrEqual(500);
+	});
 });
