@@ -2321,6 +2321,70 @@ describe('CI coverage guards (Postman collection and README endpoints)', () => {
 			.toEqual(['/api/not-in-openapi']);
 	});
 
+	it('documents request-ID echo and omitted variants on every documented non-probe API operation (issue #1272)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const openapi = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+		const probeRoutes = ['/healthcheck', '/ready'];
+
+		const allItems = collectRequestsAndSavedExamples(collection.item);
+		const requestItems = collectRequestItems(collection.item);
+
+		function normalizeUrl(urlObj) {
+			let url = '';
+			if (typeof urlObj === 'string') url = urlObj;
+			else if (urlObj && urlObj.raw) url = urlObj.raw;
+			else if (urlObj && urlObj.path) url = '/' + urlObj.path.join('/');
+			return url.replace('{{baseUrl}}', '').split('?')[0];
+		}
+
+		const missingEcho = [];
+		const missingOmitted = [];
+
+		for (const [routePath, methods] of Object.entries(openapi.paths || {})) {
+			if (probeRoutes.includes(routePath)) continue;
+			for (const [m, op] of Object.entries(methods)) {
+				if (!op || typeof op !== 'object' || !op.operationId) continue;
+				const method = m.toUpperCase();
+				const regexPath = new RegExp('^' + routePath.replace(/\{([^}]+)\}/g, '[^/]+') + '$');
+
+				const matches = requestItems.filter((item) => {
+					const itemMethod = (item.request?.method || 'GET').toUpperCase();
+					if (itemMethod !== method) return false;
+					const u = normalizeUrl(item.request?.url);
+					return regexPath.test(u);
+				});
+
+				const hasEcho = matches.some((item) => {
+					const headers = item.request?.header || [];
+					const hasHeader = headers.some(
+						(h) => (h.key || '').toLowerCase() === 'x-request-id' && h.value && h.value.length > 0,
+					);
+					const testCode = (item.event || [])
+						.filter((e) => e.listen === 'test')
+						.map((e) => e.script?.exec?.join('\n'))
+						.join('\n');
+					return hasHeader && testCode.includes('X-Request-Id') && testCode.includes('pm.test');
+				});
+
+				const hasOmitted = matches.some((item) => {
+					const headers = item.request?.header || [];
+					const hasHeader = headers.some((h) => (h.key || '').toLowerCase() === 'x-request-id');
+					const testCode = (item.event || [])
+						.filter((e) => e.listen === 'test')
+						.map((e) => e.script?.exec?.join('\n'))
+						.join('\n');
+					return !hasHeader && testCode.includes('X-Request-Id') && testCode.includes('pm.test');
+				});
+
+				if (!hasEcho) missingEcho.push(`${method} ${routePath}`);
+				if (!hasOmitted) missingOmitted.push(`${method} ${routePath}`);
+			}
+		}
+
+		expect(missingEcho).toEqual([]);
+		expect(missingOmitted).toEqual([]);
+	});
+
 	it('handles defensive path inputs', () => {
 		expect(normalizeParamPath(null)).toBe('');
 		expect(normalizeParamPath(undefined)).toBe('');

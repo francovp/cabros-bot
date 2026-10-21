@@ -93,6 +93,11 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "408": {
@@ -109,9 +114,19 @@
                   "$ref": "#/components/schemas/PublicStatusNotReady"
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/healthcheck": {
@@ -950,6 +965,9 @@
                   "type": "integer"
                 },
                 "description": "Seconds until retry is permitted."
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             },
             "content": {
@@ -983,7 +1001,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.operator"
+        "x-admin-role": "admin.operator",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/admin/events": {
@@ -1003,6 +1026,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -1014,6 +1040,11 @@
                   "type": "string"
                 },
                 "example": ":connected\nevent: connected\ndata: {\"clientId\":\"4519965b-db0d-4536-a81d-ef291f09c735\",\"timestamp\":\"2026-09-12T20:00:00.000Z\",\"activeConnections\":1}\n\n"
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -1037,6 +1068,9 @@
                   "type": "integer"
                 },
                 "description": "Seconds to wait before reconnecting."
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             },
             "content": {
@@ -1100,6 +1134,9 @@
           },
           {
             "$ref": "#/components/parameters/AlertSignalClass"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -1162,6 +1199,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -1244,6 +1284,9 @@
           },
           {
             "$ref": "#/components/parameters/IncludeDecisionRollup"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -1323,6 +1366,11 @@
                   "$ref": "#/components/schemas/AlertFeedbackResult"
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "400": {
@@ -1364,7 +1412,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.operator"
+        "x-admin-role": "admin.operator",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/alerts/feedback/summary": {
@@ -1384,6 +1437,9 @@
           },
           {
             "$ref": "#/components/parameters/SummaryLimit"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -1394,6 +1450,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/AlertFeedbackSummaryResult"
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -1461,6 +1522,9 @@
           },
           {
             "$ref": "#/components/parameters/IncludeDecision"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -1472,6 +1536,9 @@
                 "schema": {
                   "type": "string"
                 }
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             },
             "content": {
@@ -1539,6 +1606,11 @@
                   "$ref": "#/components/schemas/BatchDeleteResult"
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "400": {
@@ -1577,7 +1649,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.operator"
+        "x-admin-role": "admin.operator",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/alerts/batch/export": {
@@ -1599,6 +1676,9 @@
                 "schema": {
                   "type": "string"
                 }
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             },
             "content": {
@@ -1650,7 +1730,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.viewer"
+        "x-admin-role": "admin.viewer",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/alerts/batch/replay": {
@@ -1669,6 +1754,9 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -1682,6 +1770,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/BatchReplayResult"
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -1737,6 +1830,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/AlertId"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -1802,6 +1898,9 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -1867,6 +1966,9 @@
           },
           {
             "$ref": "#/components/parameters/PreferenceChatId"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -1912,6 +2014,9 @@
           },
           {
             "$ref": "#/components/parameters/PreferenceChatId"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -1966,6 +2071,9 @@
           },
           {
             "$ref": "#/components/parameters/PreferenceChatId"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -2034,7 +2142,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.viewer"
+        "x-admin-role": "admin.viewer",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -2063,6 +2176,11 @@
                   "$ref": "#/components/schemas/ScannerPresetConflictResponse"
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "413": {
@@ -2089,7 +2207,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.operator"
+        "x-admin-role": "admin.operator",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/scanner-presets/{id}": {
@@ -2102,6 +2225,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/PresetId"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -2154,6 +2280,9 @@
               "type": "string",
               "example": "\"3\""
             }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -2171,6 +2300,11 @@
                   "$ref": "#/components/schemas/ScannerPresetConflictResponse"
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "404": {
@@ -2187,6 +2321,11 @@
                   "$ref": "#/components/schemas/ScannerPresetConflictResponse"
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "412": {
@@ -2196,6 +2335,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ScannerPresetConflictResponse"
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -2244,6 +2388,9 @@
               "type": "string",
               "example": "\"3\""
             }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -2257,6 +2404,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ScannerPresetConflictResponse"
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -2273,6 +2425,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/ScannerPresetConflictResponse"
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -2316,6 +2473,9 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -2386,6 +2546,9 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -2450,6 +2613,9 @@
           },
           {
             "$ref": "#/components/parameters/JobTypeFilter"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -2493,6 +2659,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/JobId"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -2536,6 +2705,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/JobId"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -2588,6 +2760,9 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -2640,6 +2815,9 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -2808,6 +2986,9 @@
           },
           {
             "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -2876,6 +3057,9 @@
           },
           {
             "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -2969,7 +3153,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.operator"
+        "x-admin-role": "admin.operator",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/news-monitor/resume": {
@@ -3011,7 +3200,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.operator"
+        "x-admin-role": "admin.operator",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/news-monitor/status": {
@@ -3053,7 +3247,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.viewer"
+        "x-admin-role": "admin.viewer",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/symbol-analyses": {
@@ -3088,6 +3287,9 @@
           },
           {
             "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -3156,6 +3358,9 @@
           },
           {
             "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -3230,6 +3435,9 @@
           },
           {
             "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -3298,6 +3506,9 @@
           },
           {
             "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -3375,6 +3586,9 @@
           },
           {
             "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -3453,6 +3667,9 @@
               "type": "boolean",
               "default": false
             }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -3464,6 +3681,11 @@
                   "$ref": "#/components/schemas/BinanceAccountBalancesResponse"
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "400": {
@@ -3473,6 +3695,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/Error"
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -3486,6 +3713,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/Error"
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -3503,6 +3735,11 @@
                   "$ref": "#/components/schemas/Error"
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "503": {
@@ -3512,6 +3749,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/Error"
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           }
@@ -3662,6 +3904,11 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "400": {
@@ -3681,6 +3928,11 @@
                     }
                   }
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -3707,6 +3959,11 @@
                     }
                   }
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -3746,7 +4003,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.viewer"
+        "x-admin-role": "admin.viewer",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/trading/binance/orders": {
@@ -3796,6 +4058,9 @@
               "minimum": 1,
               "maximum": 100
             }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -3824,6 +4089,11 @@
                     }
                   }
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -3872,6 +4142,9 @@
           },
           {
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -3907,6 +4180,11 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "408": {
@@ -3941,6 +4219,11 @@
                     }
                   }
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -4018,6 +4301,11 @@
                   }
                 }
               }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
             }
           },
           "400": {
@@ -4042,6 +4330,11 @@
                     }
                   }
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -4081,7 +4374,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.operator"
+        "x-admin-role": "admin.operator",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/trading/binance/orders/audit": {
@@ -4169,6 +4467,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -4228,6 +4529,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -4238,6 +4542,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/TradingPositionsResponse"
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -4324,6 +4633,9 @@
                 "day"
               ]
             }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -4334,6 +4646,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/TradingPnlSummaryResponse"
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -4417,6 +4734,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -4427,6 +4747,11 @@
                 "schema": {
                   "$ref": "#/components/schemas/TradingTradesResponse"
                 }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
           },
@@ -4495,7 +4820,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.viewer"
+        "x-admin-role": "admin.viewer",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/capabilities": {
@@ -4530,7 +4860,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.viewer"
+        "x-admin-role": "admin.viewer",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/selftest": {
@@ -4734,7 +5069,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.viewer"
+        "x-admin-role": "admin.viewer",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       },
       "post": {
         "tags": [
@@ -4782,7 +5122,12 @@
             "FirebaseBearerAuth": []
           }
         ],
-        "x-admin-role": "admin.operator"
+        "x-admin-role": "admin.operator",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/alert-subscribers/{id}": {
@@ -4801,6 +5146,9 @@
               "type": "string"
             },
             "description": "Alert subscriber ID"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -4848,6 +5196,9 @@
               "type": "string"
             },
             "description": "Alert subscriber ID"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -4907,6 +5258,9 @@
               "type": "string"
             },
             "description": "Alert subscriber ID"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "requestBody": {
@@ -4966,6 +5320,9 @@
               "type": "string"
             },
             "description": "Alert subscriber ID"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -5015,6 +5372,9 @@
               "type": "string"
             },
             "description": "Alert subscriber ID"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
         "responses": {
@@ -6318,6 +6678,11 @@
               "$ref": "#/components/schemas/BinanceOrderAuditList"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "BinanceOrdersQueryResult": {
@@ -6372,6 +6737,11 @@
                 }
               }
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -6445,6 +6815,11 @@
               "error": "Binance accepted or may have accepted the order, but its final status is unknown; do not resubmit with a new idempotency key",
               "code": "BINANCE_ORDER_STATUS_UNKNOWN"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -6767,6 +7142,11 @@
               }
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "JobQueueUnavailable": {
@@ -6794,6 +7174,11 @@
               }
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "JsonResult": {
@@ -6803,6 +7188,11 @@
             "schema": {
               "$ref": "#/components/schemas/JsonObject"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -6814,6 +7204,11 @@
               "$ref": "#/components/schemas/AlertDetail"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "AlertSummaryResult": {
@@ -6823,6 +7218,11 @@
             "schema": {
               "$ref": "#/components/schemas/AlertSummaryResult"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -7312,6 +7712,11 @@
               }
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "AnalysisResult": {
@@ -7459,6 +7864,11 @@
               }
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "OutcomesCalibrationResult": {
@@ -7481,6 +7891,11 @@
                 }
               }
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -7514,6 +7929,11 @@
                 }
               }
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -7658,6 +8078,11 @@
               }
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "ReplayAttemptList": {
@@ -7668,6 +8093,11 @@
               "$ref": "#/components/schemas/ReplayAttemptList"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "JobResult": {
@@ -7677,6 +8107,11 @@
             "schema": {
               "$ref": "#/components/schemas/Job"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -7719,6 +8154,11 @@
                 }
               ]
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -8114,6 +8554,11 @@
               }
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "RequestTimeout": {
@@ -8150,6 +8595,11 @@
               "$ref": "#/components/schemas/NewsAnalysisSummary"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "NewsAnalysisListResult": {
@@ -8159,6 +8609,11 @@
             "schema": {
               "$ref": "#/components/schemas/NewsAnalysisList"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -8175,6 +8630,11 @@
               "pausedAt": "2026-09-04T05:00:00.000Z",
               "reason": "Gemini quota exhaustion"
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -8193,6 +8653,11 @@
               "previouslyPausedAt": "2026-09-04T05:00:00.000Z"
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "NewsMonitorStatusResult": {
@@ -8207,6 +8672,11 @@
               "pausedAt": null,
               "reason": null
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -8250,6 +8720,11 @@
                 }
               }
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -8322,6 +8797,11 @@
               }
             }
           }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
         }
       },
       "ChatPreferencesResult": {
@@ -8344,6 +8824,11 @@
                 "data"
               ]
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
@@ -8368,6 +8853,11 @@
                 "message"
               ]
             }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       },
