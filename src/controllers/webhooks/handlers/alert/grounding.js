@@ -1,6 +1,6 @@
 const { validateAlert } = require('../../../../lib/validation');
 const { groundAlert } = require('../../../../services/grounding/grounding');
-const { GROUNDING_MODEL_NAME } = require('../../../../services/grounding/config');
+const { getGroundingModelName } = require('../../../../services/grounding/runtimeModels');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
 const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
@@ -446,8 +446,9 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched, parsedSignal = n
 		const { sentiment, sentiment_score, sentimentConflict } = selectSentimentAndScore(gemini, mcp);
 
 		const geminiBackticked = extractBacktickedValues(gemini.extraText);
-		const modelName = geminiBackticked[0] || GROUNDING_MODEL_NAME;
-		const groundingFromGemini = geminiBackticked[1] || GROUNDING_MODEL_NAME;
+		const groundingModelName = getGroundingModelName();
+		const modelName = geminiBackticked[0] || groundingModelName;
+		const groundingFromGemini = geminiBackticked[1] || groundingModelName;
 		const groundingProviders = mergeUnique([groundingFromGemini], ['tradingview-mcp'], 8);
 		const extraText = isMessageFooterMetadataEnabled()
 			? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${groundingProviders.join('`, `')}` + '`'
@@ -621,9 +622,10 @@ async function enrichWithGemini(text, tokenUsage) {
 
 	// Build footer with model metadata (controlled by env var, default: true)
 	const enableFooter = isMessageFooterMetadataEnabled();
-	const modelName = modelUsed || GROUNDING_MODEL_NAME;
+	const groundingModelName = getGroundingModelName();
+	const modelName = modelUsed || groundingModelName;
 	const extraText = enableFooter
-		? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${GROUNDING_MODEL_NAME}` + '`'
+		? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${groundingModelName}` + '`'
 		: '';
 
 	const hasSentiment = typeof sentiment === 'string' || typeof sentiment_score === 'number';

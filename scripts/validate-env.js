@@ -128,9 +128,43 @@ function validateEnv(env = process.env) {
 		addInvalid(warnings, 'DISCORD_WEBHOOK_URL', 'must be a full HTTPS Discord webhook URL');
 	}
 
-	if (isEnabled(env, 'ENABLE_GEMINI_GROUNDING')) {
-		addMissing(warnings, 'GEMINI_API_KEY', env.GEMINI_API_KEY);
-		addMissing(warnings, 'GEMINI_MODEL_NAME', env.GEMINI_MODEL_NAME);
+	const groundingEnabled = isEnabled(env, 'ENABLE_GEMINI_GROUNDING');
+	const newsMonitorEnabled = isEnabled(env, 'ENABLE_NEWS_MONITOR');
+	const groundingPipelineEnabled = groundingEnabled || newsMonitorEnabled;
+	const modelProvider = hasValue(env.MODEL_PROVIDER) ? env.MODEL_PROVIDER.trim().toLowerCase() : 'gemini';
+	if (groundingPipelineEnabled) {
+		const supportedProviders = ['gemini', 'azure', 'openrouter', 'cloudflare'];
+		if (!supportedProviders.includes(modelProvider)) {
+			addInvalid(warnings, 'MODEL_PROVIDER', 'must be gemini, azure, openrouter, or cloudflare');
+		} else if (modelProvider === 'gemini') {
+			// Startup validation runs before the Firebase Remote Config template loads.
+			// Defer model availability to runtime readiness when Remote Config may supply it.
+			if (!isEnabled(env, 'ENABLE_FIREBASE_REMOTE_CONFIG')) {
+				addMissing(warnings, 'GEMINI_MODEL_NAME', env.GEMINI_MODEL_NAME);
+			}
+		} else if (modelProvider === 'azure') {
+			addMissing(warnings, 'AZURE_LLM_KEY', env.AZURE_LLM_KEY);
+			addMissing(warnings, 'AZURE_LLM_MODEL', env.AZURE_LLM_MODEL);
+		} else if (modelProvider === 'openrouter') {
+			addMissing(warnings, 'OPENROUTER_API_KEY', env.OPENROUTER_API_KEY);
+		} else if (modelProvider === 'cloudflare') {
+			if (!isEnabled(env, 'ENABLE_CLOUDFLARE_AIG')) {
+				addMissing(warnings, 'CF_AIG_TOKEN', env.CF_AIG_TOKEN);
+				addMissing(warnings, 'CF_AIG_BASE_URL', env.CF_AIG_BASE_URL);
+			}
+		}
+
+		if (isEnabled(env, 'FORCE_BRAVE_SEARCH')) {
+			addMissing(warnings, 'BRAVE_SEARCH_API_KEY', env.BRAVE_SEARCH_API_KEY);
+		}
+		// `ENABLE_GEMINI_GROUNDING` has an existing module-load key guard even
+		// when Brave search is forced. Google search and Gemini generation also
+		// require the key for the news-monitor-only path.
+		if (groundingEnabled
+			|| !isEnabled(env, 'FORCE_BRAVE_SEARCH')
+			|| modelProvider === 'gemini') {
+			addMissing(warnings, 'GEMINI_API_KEY', env.GEMINI_API_KEY);
+		}
 	}
 
 	if (isEnabled(env, 'ENABLE_LANGFUSE_PROMPTS')) {
@@ -148,6 +182,12 @@ function validateEnv(env = process.env) {
 	}
 	if (hasValue(env.CF_AIG_BASE_URL) && !isHttpUrl(env.CF_AIG_BASE_URL)) {
 		addInvalid(warnings, 'CF_AIG_BASE_URL', 'has an invalid HTTP URL');
+	}
+	if (hasValue(env.AZURE_LLM_ENDPOINT) && !isHttpUrl(env.AZURE_LLM_ENDPOINT)) {
+		addInvalid(warnings, 'AZURE_LLM_ENDPOINT', 'has an invalid HTTP URL');
+	}
+	if (hasValue(env.BRAVE_SEARCH_ENDPOINT) && !isHttpUrl(env.BRAVE_SEARCH_ENDPOINT)) {
+		addInvalid(warnings, 'BRAVE_SEARCH_ENDPOINT', 'has an invalid HTTP URL');
 	}
 
 	if (hasValue(env.EXPANDED_ANALYSIS_ALERT_SYMBOLS) && !isSymbolList(env.EXPANDED_ANALYSIS_ALERT_SYMBOLS)) {

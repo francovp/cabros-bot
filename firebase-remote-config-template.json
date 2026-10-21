@@ -161,6 +161,27 @@
       "description": "Maximum character length for grounding response",
       "valueType": "NUMBER"
     },
+    "GEMINI_MODEL_NAME": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Primary Gemini model for alert enrichment; uses the deployment default until explicitly overridden",
+      "valueType": "STRING"
+    },
+    "GEMINI_MODEL_NAME_FALLBACK": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Fallback Gemini model for transient alert-enrichment failures; uses the deployment default until explicitly overridden",
+      "valueType": "STRING"
+    },
+    "GROUNDING_MODEL_NAME": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Gemini model used for alert grounding search; uses the deployment default until explicitly overridden",
+      "valueType": "STRING"
+    },
     "ALERT_GROUNDING_COALESCE_MS": {
       "defaultValue": {
         "value": "0"

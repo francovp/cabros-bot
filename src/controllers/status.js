@@ -243,7 +243,8 @@ function getNewsMonitorLlmDependency({ enabled, provider }) {
 		return providerDependencyStatus({
 			enabled,
 			provider,
-			configured: hasValue(process.env.GEMINI_API_KEY) && hasValue(process.env.GEMINI_MODEL_NAME),
+			configured: hasValue(process.env.GEMINI_API_KEY)
+				&& hasValue(resolveRemoteOverride('GEMINI_MODEL_NAME') ?? process.env.GEMINI_MODEL_NAME),
 		});
 	case 'azure':
 		return providerDependencyStatus({
@@ -291,7 +292,9 @@ function getGeminiDependency({
 		enabled,
 		configured:
 			hasValue(process.env.GEMINI_API_KEY)
-			&& (!requiresGeminiModel || hasValue(process.env.GEMINI_MODEL_NAME)),
+			&& (!requiresGeminiModel || hasValue(
+				resolveRemoteOverride('GEMINI_MODEL_NAME') ?? process.env.GEMINI_MODEL_NAME,
+			)),
 	});
 }
 

@@ -2,9 +2,7 @@ const { GoogleGenAI } = require('@google/genai');
 const config = require('./config');
 const {
 	GEMINI_API_KEY,
-	GROUNDING_MODEL_NAME,
 	ENABLE_NEWS_MONITOR_TEST_MODE,
-	GEMINI_MODEL_NAME,
 	MODEL_PROVIDER,
 	BRAVE_SEARCH_API_KEY,
 	BRAVE_SEARCH_ENDPOINT,
@@ -12,8 +10,8 @@ const {
 	AZURE_LLM_MODEL,
 	OPENROUTER_MODEL,
 	CF_AIG_MODEL,
-	GEMINI_MODEL_NAME_FALLBACK,
 } = config;
+const { getGroundingModelName, getGeminiModelName, getGeminiFallbackModelName } = require('./runtimeModels');
 const { getAzureAIClient } = require('../inference/azureAiClient');
 const { getOpenRouterClient } = require('../inference/openRouterClient');
 const { getCloudflareAiClient } = require('../inference/cloudflareAiClient');
@@ -232,7 +230,7 @@ class GenaiClient {
 		};
 	}
 
-	async search({ query, model = GROUNDING_MODEL_NAME, maxResults = 3, textWithCitations = false, rethrowQuotaErrors = false, signal = null }) {
+	async search({ query, model = getGroundingModelName(), maxResults = 3, textWithCitations = false, rethrowQuotaErrors = false, signal = null }) {
 		if (ENABLE_NEWS_MONITOR_TEST_MODE) {
 			console.debug('[genaiClient] News Monitor Test Mode enabled - returning mock search results');
 			return {
@@ -351,7 +349,7 @@ class GenaiClient {
 	}
 
 	async llmCall({ prompt, context = {}, opts = {} }) {
-		const { model = GEMINI_MODEL_NAME, temperature = 0.2, signal } = opts;
+		const { model = getGeminiModelName(), temperature = 0.2, signal } = opts;
 
 		if (signal?.aborted) {
 			throw signal.reason || new Error('Grounding timeout');
@@ -466,14 +464,15 @@ class GenaiClient {
 		}
 
 		let lastError;
+		const geminiModelName = getGeminiModelName();
 
 		// 1. Try Gemini
-		if (MODEL_PROVIDER === 'gemini' && GEMINI_MODEL_NAME) {
+		if (MODEL_PROVIDER === 'gemini' && geminiModelName) {
 			try {
 				// Previous calls were like: prompt = `${systemPrompt}\n\n${userPrompt}`.
 				const startTime = Date.now();
 				const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
-				const modelUsed = opts.model || GEMINI_MODEL_NAME || GEMINI_MODEL_NAME_FALLBACK;
+				const modelUsed = opts.model || geminiModelName || getGeminiFallbackModelName();
 				console.debug('[GenaiClient] Attempting Gemini LLM call');
 				const response = await this.llmCall({
 					prompt: combinedPrompt,

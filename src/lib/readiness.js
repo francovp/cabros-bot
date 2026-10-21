@@ -35,6 +35,9 @@ const FIRESTORE_READINESS_GATE_KEYS = [
 const DEFAULT_PROBE_TIMEOUT_MS = 3000;
 const MIN_PROBE_TIMEOUT_MS = 1000;
 const MAX_PROBE_TIMEOUT_MS = 5000;
+const SUPPORTED_MODEL_PROVIDERS = new Set(['gemini', 'azure', 'openrouter', 'cloudflare']);
+const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
+const DEFAULT_BRAVE_SEARCH_ENDPOINT = 'https://api.search.brave.com/res/v1/web/search';
 
 /** Sanitize any error value before it is exposed on a public probe surface. */
 function sanitizeError(error) {
@@ -67,7 +70,7 @@ function resolveTimeoutMs(envValue, fallback) {
 }
 
 function isEnabled(value) {
-	return value === 'true';
+	return value === true || value === 'true';
 }
 
 const DEFAULT_CACHE_TTL_MS = 5000;
@@ -76,8 +79,18 @@ function hasValue(value) {
 	return typeof value === 'string' ? value.trim().length > 0 : value != null;
 }
 
+function isHttpUrl(value) {
+	if (!hasValue(value)) return false;
+	try {
+		return ['http:', 'https:'].includes(new URL(value).protocol);
+	} catch (_) {
+		return false;
+	}
+}
+
 function timed(fn, timeoutMs) {
 	const startedAt = Date.now();
+	const controller = new AbortController();
 	return new Promise((resolve) => {
 		let settled = false;
 		const timer = setTimeout(() => {
@@ -85,6 +98,7 @@ function timed(fn, timeoutMs) {
 				return;
 			}
 			settled = true;
+			controller.abort();
 			resolve({
 				ready: false,
 				latencyMs: Date.now() - startedAt,
@@ -93,7 +107,7 @@ function timed(fn, timeoutMs) {
 		}, timeoutMs);
 
 		Promise.resolve()
-			.then(() => fn())
+			.then(() => fn(controller.signal))
 			.then((value) => {
 				if (settled) {
 					return;
@@ -112,10 +126,13 @@ function timed(fn, timeoutMs) {
 				}
 				settled = true;
 				clearTimeout(timer);
+				controller.abort();
 				resolve({
 					ready: false,
 					latencyMs: Date.now() - startedAt,
-					error: sanitizeError(error),
+					error: (error && error.name === 'AbortError')
+						? 'timeout_after_' + timeoutMs + 'ms'
+						: sanitizeError(error),
 				});
 			});
 	});
@@ -184,31 +201,122 @@ function buildFirestoreProbe(deps) {
 function buildGeminiProbe(opts) {
 	const timeoutMs = opts.timeoutMs;
 	return async function probeGemini() {
-		if (!isEnabled(process.env.ENABLE_GEMINI_GROUNDING)
+		const geminiGroundingEnabled = resolveRemoteOverride('ENABLE_GEMINI_GROUNDING')
+			?? process.env.ENABLE_GEMINI_GROUNDING;
+		if (!isEnabled(geminiGroundingEnabled)
 			&& !isEnabled(process.env.ENABLE_NEWS_MONITOR)) {
 			return skippedResult('gemini_disabled');
 		}
+
+		const modelProvider = hasValue(process.env.MODEL_PROVIDER)
+			? process.env.MODEL_PROVIDER.trim().toLowerCase()
+			: 'gemini';
+		if (!SUPPORTED_MODEL_PROVIDERS.has(modelProvider)) {
+			return { ready: false, error: 'model_provider_invalid' };
+		}
+
+		if (modelProvider === 'azure') {
+			if (!hasValue(process.env.AZURE_LLM_KEY) || !hasValue(process.env.AZURE_LLM_MODEL)) {
+				return { ready: false, error: 'azure_not_configured' };
+			}
+			if (!isHttpUrl(process.env.AZURE_LLM_ENDPOINT || DEFAULT_AZURE_LLM_ENDPOINT)) {
+				return { ready: false, error: 'azure_endpoint_invalid' };
+			}
+		} else if (modelProvider === 'openrouter') {
+			if (!hasValue(process.env.OPENROUTER_API_KEY)
+				|| !hasValue(process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001')) {
+				return { ready: false, error: 'openrouter_not_configured' };
+			}
+		} else if (modelProvider === 'cloudflare') {
+			if (!hasValue(process.env.CF_AIG_TOKEN) || !hasValue(process.env.CF_AIG_BASE_URL)
+				|| !hasValue(process.env.CF_AIG_MODEL || 'google-ai-studio/gemini-2.5-flash')) {
+				return { ready: false, error: 'cloudflare_not_configured' };
+			}
+			if (!isHttpUrl(process.env.CF_AIG_BASE_URL)) {
+				return { ready: false, error: 'cloudflare_endpoint_invalid' };
+			}
+		}
+
+		const forceBraveSearch = isEnabled(process.env.FORCE_BRAVE_SEARCH);
+		if (forceBraveSearch && !hasValue(process.env.BRAVE_SEARCH_API_KEY)) {
+			return { ready: false, error: 'brave_search_api_key_missing' };
+		}
+		if ((forceBraveSearch || hasValue(process.env.BRAVE_SEARCH_API_KEY))
+			&& !isHttpUrl(process.env.BRAVE_SEARCH_ENDPOINT || DEFAULT_BRAVE_SEARCH_ENDPOINT)) {
+			return { ready: false, error: 'brave_search_endpoint_invalid' };
+		}
+		const requiredModels = [];
+		if (!forceBraveSearch) {
+			requiredModels.push({
+				key: 'GROUNDING_MODEL_NAME',
+				value: resolveRemoteOverride('GROUNDING_MODEL_NAME')
+					|| process.env.GROUNDING_MODEL_NAME
+					|| 'gemini-2.5-flash',
+			});
+		}
+		if (modelProvider === 'gemini') {
+			requiredModels.push({
+				key: 'GEMINI_MODEL_NAME',
+				value: resolveRemoteOverride('GEMINI_MODEL_NAME') || process.env.GEMINI_MODEL_NAME,
+			});
+		}
 		const apiKey = process.env.GEMINI_API_KEY;
-		if (!hasValue(apiKey)) {
+		if ((requiredModels.length > 0 || isEnabled(geminiGroundingEnabled)) && !hasValue(apiKey)) {
 			return { ready: false, error: 'gemini_api_key_missing' };
 		}
-		return timed(async () => {
-			const model = process.env.GEMINI_MODEL_NAME_FALLBACK
-				|| process.env.GEMINI_MODEL_NAME
-				|| 'gemini-2.5-flash';
-			const url = 'https://generativelanguage.googleapis.com/v1beta/models/'
-				+ encodeURIComponent(model);
-			// The key travels in a header, never the query string: `fetch` embeds
-			// the failing URL in its own error message and this surface is public.
-			const response = await fetch(url, {
-				method: 'GET',
-				headers: { 'x-goog-api-key': apiKey },
-			});
-			// A 404 means the model name is wrong or the API version moved, which
-			// breaks every grounding call — so it is a failure, not a pass.
-			if (!response.ok) {
-				throw new Error('gemini_http_' + response.status
-					+ (response.status === 404 ? ' (check GEMINI_MODEL_NAME_FALLBACK)' : ''));
+		if (requiredModels.length === 0) {
+			return { ready: true, backend: modelProvider, searchBackend: 'brave' };
+		}
+		const missingModel = requiredModels.find(({ value }) => !hasValue(value));
+		if (missingModel) {
+			return { ready: false, error: missingModel.key.toLowerCase() + '_missing' };
+		}
+		return timed(async (signal) => {
+			const checkedModels = new Set();
+			for (const { key, value } of requiredModels) {
+				const isTunedModel = value.startsWith('tunedModels/');
+				const resourceType = isTunedModel ? 'tunedModels' : 'models';
+				const modelId = value.startsWith('models/') || isTunedModel
+					? value.slice(value.indexOf('/') + 1)
+					: value;
+				const resourceName = resourceType + '/' + modelId;
+				if (checkedModels.has(resourceName)) {
+					continue;
+				}
+				checkedModels.add(resourceName);
+				const url = 'https://generativelanguage.googleapis.com/v1beta/'
+					+ resourceType + '/' + encodeURIComponent(modelId);
+				// The key travels in a header, never the query string: `fetch` embeds
+				// the failing URL in its own error message and this surface is public.
+				const response = await fetch(url, {
+					method: 'GET',
+					headers: { 'x-goog-api-key': apiKey },
+					signal,
+				});
+				// A 404 means the model name is wrong or the API version moved, which
+				// breaks every call to this model — so it is a failure, not a pass.
+				if (!response.ok) {
+					throw new Error('gemini_http_' + response.status
+						+ (response.status === 404 ? ' (check ' + key + ')' : ''));
+				}
+				let modelMetadata;
+				try {
+					modelMetadata = await response.json();
+				} catch {
+					throw new Error(isTunedModel
+						? 'gemini_tuned_model_metadata_invalid'
+						: 'gemini_model_metadata_invalid');
+				}
+				if (isTunedModel) {
+					if (modelMetadata?.state !== 'ACTIVE') {
+						throw new Error('gemini_tuned_model_not_active');
+					}
+				} else {
+					const supportedMethods = modelMetadata?.supportedGenerationMethods;
+					if (!Array.isArray(supportedMethods) || !supportedMethods.includes('generateContent')) {
+						throw new Error('gemini_model_generation_unsupported');
+					}
+				}
 			}
 			return { backend: 'gemini' };
 		}, timeoutMs);
@@ -254,10 +362,11 @@ function buildTradingViewMcpProbe(opts) {
 		if (!hasValue(url)) {
 			return { ready: false, error: 'tradingview_url_missing' };
 		}
-		return timed(async () => {
+		return timed(async (signal) => {
 			const response = await fetch(url, {
 				method: 'GET',
 				headers: { accept: 'application/json, text/event-stream' },
+				signal,
 			});
 			if (!response.ok && response.status !== 405) {
 				throw new Error('tradingview_http_' + response.status);
@@ -276,8 +385,8 @@ function buildBinanceProbe(opts) {
 			return skippedResult('binance_disabled');
 		}
 		const baseUrl = process.env.BINANCE_DATA_BASE_URL || 'https://api.binance.com';
-		return timed(async () => {
-			const response = await fetch(baseUrl.replace(/\/$/, '') + '/api/v3/ping');
+		return timed(async (signal) => {
+			const response = await fetch(baseUrl.replace(/\/$/, '') + '/api/v3/ping', { signal });
 			if (!response.ok) {
 				throw new Error('binance_http_' + response.status);
 			}

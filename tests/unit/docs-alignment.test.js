@@ -206,6 +206,20 @@ describe('Documentation Alignment Policy', () => {
 		expect(readme).toContain('`ENABLE_CLOUDFLARE_AIG` only exposes Cloudflare readiness in status/capabilities');
 	});
 
+	test('documents Gemini model selectors and Remote Config precedence', () => {
+		const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
+		const agents = fs.readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8');
+		const envInventory = agents.match(/^- Optional but relevant.*$/m)?.[0] || '';
+
+		for (const key of ['GEMINI_MODEL_NAME', 'GEMINI_MODEL_NAME_FALLBACK', 'GROUNDING_MODEL_NAME']) {
+			expect(readme).toContain(`\`${key}\``);
+			expect(envInventory).toContain(key);
+		}
+		expect(readme).toMatch(/Remote Config.+environment fallback/i);
+		expect(readme).toContain('Remote values must be strings of at most 128 characters');
+		expect(readme).toContain('validates the loaded models');
+	});
+
 	test('aliased process.env reads are included in the parity scan', () => {
 		const source = 'function setup(env = process.env) { return env.TRUST_PROXY; }';
 		expect([...getEnvironmentReadsFromContent(source)]).toContain('TRUST_PROXY');
