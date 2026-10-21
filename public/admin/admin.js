@@ -8,6 +8,10 @@ const VIEWS = {
 		{ method: 'GET', path: '/api/scanner-presets', label: 'Load presets' },
 		{ method: 'POST', path: '/api/scanner-presets', label: 'Create preset' },
 	],
+	subscribers: [
+		{ method: 'GET', path: '/api/alert-subscribers', label: 'Load subscribers' },
+		{ method: 'POST', path: '/api/alert-subscribers', label: 'Create subscriber' },
+	],
 	jobs: [{ method: 'POST', path: '/api/jobs/tradingview-analysis', label: 'Create job' }],
 	analysis: [
 		{
@@ -71,6 +75,17 @@ const VIEW_ACTIONS = {
 			confirm: 'Delete this scanner preset?',
 		},
 	],
+	subscribers: [
+		{ method: 'PATCH', path: '/api/alert-subscribers/{id}', label: 'Update subscriber' },
+		{
+			method: 'POST', path: '/api/alert-subscribers/{id}/test', label: 'Test subscriber ping',
+			confirm: 'Send test webhook ping to this subscriber?',
+		},
+		{
+			method: 'DELETE', path: '/api/alert-subscribers/{id}', label: 'Delete subscriber',
+			confirm: 'Delete this alert subscriber webhook?',
+		},
+	],
 };
 
 const STATUS_DEFINITION = { method: 'GET', path: '/api/status', label: 'Refresh status' };
@@ -107,6 +122,8 @@ const DISPLAY_LABELS = {
 	idempotencyStorage: 'Idempotency storage',
 	scannerPresetStorage: 'Scanner preset storage',
 	symbolAnalysisStorage: 'Symbol analysis storage',
+	alertSubscribers: 'Alert subscribers',
+	alertSubscriberStorage: 'Alert subscriber storage',
 	cloudflareAig: 'Cloudflare AI Gateway',
 };
 
@@ -118,6 +135,7 @@ const VIEW_TITLES = {
 	alerts: 'Alerts',
 	outcomes: 'Outcomes',
 	presets: 'Presets',
+	subscribers: 'Subscribers',
 	jobs: 'Jobs',
 	orders: 'Orders',
 	analysis: 'Analysis',
@@ -1118,6 +1136,7 @@ const statusNeedsAttention = (detail) => hasStatus({ status: effectiveStatus(det
 const statusDetailFields = [
 	['configured', 'Configured'],
 	['enabled', 'Enabled'],
+	['routed', 'Routed'],
 	['environment', 'Environment'],
 	['allowedSymbols', 'Allowed symbols'],
 	['maxNotionalConfigured', 'Max notional configured'],
@@ -1723,6 +1742,22 @@ const sentimentBadge = (enrichment) => {
 	});
 };
 
+const sessionBadge = (session) => {
+	if (!session || typeof session !== 'string') return null;
+	const norm = session.trim().toLowerCase();
+	if (norm === 'unknown' || norm === '24/7') return null;
+	const tones = {
+		regular: 'status-ready',
+		pre: 'status-active',
+		post: 'status-disabled',
+		closed: 'status-danger',
+	};
+	return element('span', {
+		className: `status-badge ${tones[norm] || 'status-unknown'}`,
+		text: `Sesión: ${norm}`,
+	});
+};
+
 const deliveryChips = (results) => {
 	const wrap = element('div', { className: 'chip-grid delivery-chips' });
 	(Array.isArray(results) ? results : []).forEach((result) => {
@@ -1790,6 +1825,8 @@ const createAlertDetailPanel = (alert) => {
 	const data = asObject(alert && alert.enrichmentData);
 	const sentimentNode = sentimentBadge(data);
 	if (sentimentNode) badges.append(sentimentNode);
+	const sessionNode = sessionBadge(alert && alert.session);
+	if (sessionNode) badges.append(sessionNode);
 	const head = element('div', { className: 'section-heading' });
 	head.append(headCopy, badges);
 	panel.append(head);
@@ -1866,6 +1903,7 @@ const createAlertDetailPanel = (alert) => {
 	if (data.truncated === true) {
 		panel.append(element('p', { className: 'request-state', text: 'Enrichment content was truncated.' }));
 	}
+	panel.append(createTradeTicket({ alert, defaultOrigin: 'admin_alert' }));
 	return panel;
 };
 
@@ -1899,6 +1937,8 @@ const createAlertCard = (alert, { onSelect, isSelected = false, registerCheckbox
 		: element('span', { className: 'status-badge status-disabled', text: 'Plain' }));
 	const sentimentNode = sentimentBadge(asObject(alert && alert.enrichmentData));
 	if (sentimentNode) badges.append(sentimentNode);
+	const sessionNode = sessionBadge(alert && alert.session);
+	if (sessionNode) badges.append(sessionNode);
 	const head = element('div', { className: 'section-heading' });
 	head.append(headCopy, badges);
 	card.append(head);
@@ -2464,7 +2504,24 @@ const createAlertListForm = () => {
 	);
 	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
 	const before = addField(form, 'Before cursor', 'before', { placeholder: 'nextBefore from the previous page' });
-	const source = addField(form, 'Source', 'source', { placeholder: 'webhook' });
+	const source = addField(form, 'Source', 'source', { placeholder: 'Any source, including custom values' });
+	source.setAttribute('list', 'alert-source-options');
+	const sourceOptions = element('datalist', { attributes: { id: 'alert-source-options' } });
+	[
+		['', 'All sources'],
+		['webhook-alert', 'Webhook alert'],
+		['webhook-message', 'Webhook message'],
+		['webhook', 'Webhook (legacy)'],
+		['news-monitor', 'News monitor'],
+		['market-scanner', 'Market scanner'],
+		['expanded-analysis', 'Expanded analysis'],
+		['test-alert', 'Test alert'],
+	].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		sourceOptions.append(option);
+	});
+	form.append(sourceOptions);
 	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
 	registerFilterScope('alerts.list', { limit, before, source, enriched });
 	[
@@ -2476,6 +2533,10 @@ const createAlertListForm = () => {
 		option.value = value;
 		enriched.append(option);
 	});
+	const activeFilters = element('p', { className: 'active-filters', text: 'Active filters: none' });
+	const clearFilters = element('button', { text: 'Clear filters' });
+	clearFilters.type = 'button';
+	clearFilters.disabled = true;
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
 	const prev = element('button', { text: 'Previous page' });
@@ -2524,7 +2585,7 @@ const createAlertListForm = () => {
 
 	batchToolbar.append(selectAllLabel, selectionCount, batchReplayButton, batchExportButton, batchDeleteButton, batchOutput);
 
-	form.append(button, prev, next, output, batchToolbar, alertList, rawToggle);
+	form.append(activeFilters, button, clearFilters, prev, next, output, batchToolbar, alertList, rawToggle);
 
 	let currentAlerts = [];
 	const selectedAlertIds = new Set();
@@ -2753,7 +2814,25 @@ const createAlertListForm = () => {
 		rawCopyButton.hidden = true;
 		output.textContent = 'Filters changed — load alerts to refresh.';
 		if (clearCursor) before.value = '';
+		updateActiveFilters();
 	};
+	const updateActiveFilters = () => {
+		const active = [];
+		if (source.value) active.push(`source=${source.value}`);
+		if (enriched.value) active.push(`enriched=${enriched.value}`);
+		if (active.length === 0) {
+			activeFilters.textContent = 'Active filters: none';
+			clearFilters.disabled = true;
+		} else {
+			activeFilters.textContent = `Active filters: ${active.join(', ')}`;
+			clearFilters.disabled = false;
+		}
+	};
+	clearFilters.addEventListener('click', () => {
+		source.value = '';
+		enriched.value = '';
+		resetPagination({ clearCursor: true });
+	});
 	[limit, source, enriched].forEach((field) => {
 		field.addEventListener('input', () => resetPagination({ clearCursor: true }));
 		field.addEventListener('change', () => resetPagination({ clearCursor: true }));
@@ -3923,6 +4002,12 @@ const formatOrderEnvironment = (environment) => {
 			text: 'Environment: testnet',
 		});
 	}
+	if (environment === 'demo') {
+		return element('span', {
+			className: 'status-badge status-ready',
+			text: 'Environment: demo',
+		});
+	}
 	return element('span', {
 		className: 'status-badge status-disabled',
 		text: `Environment: ${formatOrderValue(environment)}`,
@@ -4028,6 +4113,326 @@ const ORDER_LIST_QUERY_VALIDATION = {
 };
 
 const trimFormValue = (value) => (value === undefined || value === null ? '' : String(value).trim());
+
+function parseAlertTradeCandidate(alert) {
+	if (!alert || typeof alert !== 'object') {
+		return { symbol: '', side: 'BUY', price: '', setupType: null };
+	}
+
+	const enrichment = asObject(alert.enrichmentData);
+	let rawSymbol = alert.symbol || enrichment.symbol || enrichment.asset || enrichment.ticker || '';
+	const text = typeof alert.text === 'string' ? alert.text : '';
+
+	if (!rawSymbol && text) {
+		const symbolMatch = text.match(/(?:^|\s)(?:([A-Z_]+):)?([A-Z0-9._-]{3,20})(?:\s*\(|\s+)/i);
+		if (symbolMatch) {
+			rawSymbol = symbolMatch[2];
+		}
+	}
+
+	let symbol = String(rawSymbol).trim().toUpperCase();
+	if (symbol.includes(':')) {
+		symbol = symbol.split(':').pop().trim().toUpperCase();
+	}
+
+	let side = 'BUY';
+	const candidateText = `${alert.signal || ''} ${enrichment.signal || ''} ${text}`;
+	const buyMatch = candidateText.match(/\b(COMPRA|BUY)\b/i);
+	const sellMatch = candidateText.match(/\b(VENTA|SELL)\b/i);
+	if (buyMatch && !sellMatch) side = 'BUY';
+	else if (sellMatch && !buyMatch) side = 'SELL';
+	else if (buyMatch && sellMatch) {
+		side = buyMatch.index < sellMatch.index ? 'BUY' : 'SELL';
+	}
+
+	let price = '';
+	if (alert.price != null && Number.isFinite(Number(alert.price)) && Number(alert.price) > 0) {
+		price = String(alert.price);
+	} else if (enrichment.price != null && Number.isFinite(Number(enrichment.price)) && Number(enrichment.price) > 0) {
+		price = String(enrichment.price);
+	} else if (enrichment.current_price != null && Number.isFinite(Number(enrichment.current_price)) && Number(enrichment.current_price) > 0) {
+		price = String(enrichment.current_price);
+	} else if (text) {
+		const priceMatch = text.match(/(?:precio|price|entry|at)\s*[:=]?\s*\$?([0-9]+(?:\.[0-9]+)?)/i);
+		if (priceMatch) {
+			price = priceMatch[1];
+		}
+	}
+
+	const setupType = enrichment.setup_type || enrichment.setupType || alert.setupType || null;
+
+	return {
+		symbol,
+		side,
+		price,
+		setupType: setupType ? String(setupType).trim().toLowerCase() : null,
+	};
+}
+
+function createTradeTicket({ alert, position, defaultOrigin = 'manual', onOrderSubmitted } = {}) {
+	const panel = element('article', { className: 'operation-card trade-ticket' });
+	const candidate = alert ? parseAlertTradeCandidate(alert) : {
+		symbol: position && position.symbol ? String(position.symbol).trim().toUpperCase() : '',
+		side: position ? 'SELL' : 'BUY',
+		price: position && (position.markPrice || position.currentPrice) ? String(position.markPrice || position.currentPrice) : '',
+		setupType: null,
+	};
+
+	let initialQuantity = '';
+	let initialQuoteOrderQty = '50';
+	if (position && position.quantity) {
+		initialQuantity = String(position.quantity);
+		initialQuoteOrderQty = '';
+	}
+
+	const heading = element('h4', { text: alert ? 'Trade this alert' : (position ? `Close position (${position.symbol})` : 'Trade ticket') });
+	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: testnet' });
+	panel.append(heading, environmentBadge);
+
+	if (alert && alert.id) {
+		const alertMeta = element('p', { className: 'mono-line', text: `Linked alert: ${alert.id}` });
+		panel.append(alertMeta);
+	}
+
+	const form = element('form', { className: 'ticket-form' });
+	const symbolField = addField(form, 'Symbol', 'ticket-symbol', {
+		placeholder: 'e.g. BTCUSDT',
+		value: candidate.symbol,
+		required: true,
+	});
+	const sideField = addField(form, 'Side', 'ticket-side', { tag: 'select' });
+	['BUY', 'SELL'].forEach((s) => {
+		const opt = element('option', { text: s });
+		opt.value = s;
+		sideField.append(opt);
+	});
+	sideField.value = candidate.side;
+
+	const typeField = addField(form, 'Type', 'ticket-type', { tag: 'select' });
+	['LIMIT', 'MARKET'].forEach((t) => {
+		const opt = element('option', { text: t });
+		opt.value = t;
+		typeField.append(opt);
+	});
+	typeField.value = candidate.price ? 'LIMIT' : 'MARKET';
+
+	const priceField = addField(form, 'Price', 'ticket-price', {
+		placeholder: 'e.g. 50000.00',
+		value: candidate.price,
+	});
+
+	const quantityField = addField(form, 'Quantity', 'ticket-quantity', {
+		placeholder: 'e.g. 0.001',
+		value: initialQuantity,
+	});
+
+	const quoteQtyField = addField(form, 'Quote Order Qty (USDT)', 'ticket-quote-qty', {
+		placeholder: 'e.g. 50',
+		value: initialQuoteOrderQty,
+	});
+
+	const syncTypeFields = () => {
+		const isLimit = typeField.value === 'LIMIT';
+		priceField.disabled = !isLimit;
+		if (isLimit) {
+			quoteQtyField.disabled = true;
+			quoteQtyField.value = '';
+			quantityField.disabled = false;
+		} else {
+			priceField.disabled = true;
+			priceField.value = '';
+			quoteQtyField.disabled = false;
+			quantityField.disabled = false;
+		}
+	};
+	typeField.addEventListener('change', syncTypeFields);
+	syncTypeFields();
+
+	const actions = element('div', { className: 'ticket-actions' });
+	const dryRunBtn = element('button', { text: 'Validate (Dry Run)', className: 'trade-dry-run-btn' });
+	dryRunBtn.type = 'button';
+
+	const confirmInput = element('input', {
+		className: 'ticket-confirm-input',
+		placeholder: 'Type "CONFIRM" to enable live order',
+	});
+	confirmInput.type = 'text';
+	confirmInput.disabled = true;
+
+	const submitBtn = element('button', {
+		text: 'Submit Live Order',
+		className: 'trade-submit-btn',
+	});
+	submitBtn.type = 'button';
+	submitBtn.disabled = true;
+
+	const output = element('div', { className: 'response-block ticket-output', text: 'No validation run yet.' });
+	const validationNotice = element('div', { className: 'ticket-validation-notice' });
+
+	actions.append(dryRunBtn, confirmInput, submitBtn);
+	form.append(actions, validationNotice, output);
+	panel.append(form);
+
+	let currentEnv = 'testnet';
+	let dryRunSuccessful = false;
+
+	const updateEnvironmentBadge = (env) => {
+		currentEnv = env || currentEnv;
+		environmentBadge.replaceChildren(formatOrderEnvironment(currentEnv));
+		checkSubmitReadiness();
+	};
+
+	const checkSubmitReadiness = () => {
+		const isOperator = typeof canPerformMutation === 'function' ? canPerformMutation() : true;
+		const isConfirmed = confirmInput.value.trim() === 'CONFIRM';
+		const isLiveBlocked = currentEnv === 'live';
+
+		if (!isOperator) {
+			submitBtn.disabled = true;
+			submitBtn.title = 'Requires admin.operator role';
+			return;
+		}
+		if (isLiveBlocked) {
+			submitBtn.disabled = true;
+			submitBtn.title = 'Live trading is disabled on tickets (testnet/demo only until #769)';
+			return;
+		}
+		if (!dryRunSuccessful) {
+			submitBtn.disabled = true;
+			submitBtn.title = 'Run Dry Run validation first';
+			return;
+		}
+		if (!isConfirmed) {
+			submitBtn.disabled = true;
+			submitBtn.title = 'Type "CONFIRM" to enable submission';
+			return;
+		}
+
+		submitBtn.disabled = false;
+		submitBtn.title = 'Submit order to Binance';
+	};
+
+	checkSubmitReadiness();
+	confirmInput.addEventListener('input', checkSubmitReadiness);
+
+	const buildOrderPayload = (dryRun) => {
+		const sym = trimFormValue(symbolField.value).toUpperCase();
+		const side = sideField.value;
+		const type = typeField.value;
+		const payload = {
+			symbol: sym,
+			side,
+			type,
+			dryRun,
+		};
+		if (alert && alert.id) {
+			payload.alertId = String(alert.id).trim();
+			payload.origin = 'admin_alert';
+		} else if (defaultOrigin) {
+			payload.origin = defaultOrigin;
+		}
+		if (candidate.setupType) {
+			payload.setupType = candidate.setupType;
+		}
+		if (type === 'LIMIT') {
+			const pr = trimFormValue(priceField.value);
+			if (pr) payload.price = pr;
+			const qty = trimFormValue(quantityField.value);
+			if (qty) payload.quantity = qty;
+		} else {
+			const quote = trimFormValue(quoteQtyField.value);
+			const qty = trimFormValue(quantityField.value);
+			if (quote) payload.quoteOrderQty = quote;
+			else if (qty) payload.quantity = qty;
+		}
+		return payload;
+	};
+
+	dryRunBtn.addEventListener('click', async () => {
+		dryRunSuccessful = false;
+		confirmInput.disabled = true;
+		confirmInput.value = '';
+		submitBtn.disabled = true;
+		validationNotice.replaceChildren();
+
+		const payload = buildOrderPayload(true);
+		if (!ORDER_LIST_QUERY_VALIDATION.symbol(payload.symbol)) {
+			showError(output, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
+			return;
+		}
+
+		const definition = {
+			method: 'POST',
+			path: '/api/trading/binance/orders',
+			label: 'Dry Run Order',
+			requiredRole: 'admin.operator',
+		};
+
+		const data = await sendRequest({
+			definition,
+			path: definition.path,
+			body: payload,
+			button: dryRunBtn,
+			output,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+
+		if (data && data.success) {
+			dryRunSuccessful = true;
+			if (data.environment) updateEnvironmentBadge(data.environment);
+			validationNotice.replaceChildren(
+				element('p', { className: 'status-badge status-ready', text: `Dry run passed (${data.environment || currentEnv})` })
+			);
+			confirmInput.disabled = false;
+			checkSubmitReadiness();
+		} else {
+			dryRunSuccessful = false;
+			validationNotice.replaceChildren(
+				element('p', { className: 'status-badge status-danger', text: 'Dry run failed' })
+			);
+		}
+	});
+
+	submitBtn.addEventListener('click', async () => {
+		if (submitBtn.disabled) return;
+		const payload = buildOrderPayload(false);
+		const nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		const basePrefix = alert && alert.id ? String(alert.id).trim() : 'manual';
+		const idempotencyKey = `${basePrefix}-${payload.side.toLowerCase()}-${nonce}`;
+
+		payload.idempotencyKey = idempotencyKey;
+
+		const definition = {
+			method: 'POST',
+			path: '/api/trading/binance/orders',
+			label: 'Submit Live Order',
+			requiredRole: 'admin.operator',
+		};
+
+		submitBtn.disabled = true;
+		dryRunBtn.disabled = true;
+
+		const data = await sendRequest({
+			definition,
+			path: definition.path,
+			body: payload,
+			headers: { 'idempotency-key': idempotencyKey },
+			button: submitBtn,
+			output,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+
+		dryRunBtn.disabled = false;
+		if (data && data.success) {
+			validationNotice.replaceChildren(
+				element('p', { className: 'status-badge status-ready', text: `Order placed: #${data.order?.orderId || 'submitted'}` })
+			);
+			if (typeof onOrderSubmitted === 'function') onOrderSubmitted(data);
+		}
+	});
+
+	return panel;
+}
 
 const createOrderListForm = () => {
 	const definition = { method: 'GET', path: '/api/trading/binance/orders', label: 'Load recent orders' };
@@ -5411,6 +5816,355 @@ const addPresetStructuredFields = (form, contract, operation) => {
 	syncBody();
 };
 
+const createSubscriberSummary = (subscriber, { onEdit, onTest, onDelete }) => {
+	const card = element('div', { className: 'operation-card subscriber-card' });
+	const header = element('div', { className: 'preset-card-header' });
+	const title = element('h4', { text: subscriber.url || 'Unnamed subscriber' });
+	const isEnabled = subscriber.enabled !== false;
+	const statusBadge = element('span', {
+		className: `status-badge ${isEnabled ? 'status-ready' : 'status-disabled'}`,
+		text: isEnabled ? 'Active' : 'Disabled',
+	});
+	header.append(title, statusBadge);
+	card.append(header);
+
+	if (subscriber.description) {
+		card.append(element('p', { className: 'job-meta', text: subscriber.description }));
+	}
+
+	const chips = element('div', { className: 'chip-grid' });
+	if (subscriber.hasSecret) {
+		chips.append(element('span', { className: 'status-badge status-ready', text: 'HMAC Signed' }));
+	}
+	if (subscriber.filter && typeof subscriber.filter === 'object') {
+		if (Array.isArray(subscriber.filter.symbols) && subscriber.filter.symbols.length) {
+			chips.append(element('span', {
+				className: 'capability-chip',
+				text: `Symbols: ${subscriber.filter.symbols.join(', ')}`,
+			}));
+		}
+		if (Array.isArray(subscriber.filter.sources) && subscriber.filter.sources.length) {
+			chips.append(element('span', {
+				className: 'capability-chip',
+				text: `Sources: ${subscriber.filter.sources.join(', ')}`,
+			}));
+		}
+	}
+	if (chips.children.length) card.append(chips);
+
+	if (subscriber.lastDeliveryAt || subscriber.lastDeliveryStatus) {
+		const dl = element('dl', { className: 'status-detail-list' });
+		if (subscriber.lastDeliveryStatus) {
+			dl.append(element('dt', { text: 'Last delivery status' }), element('dd', { text: subscriber.lastDeliveryStatus }));
+		}
+		if (subscriber.lastDeliveryAt) {
+			const dd = element('dd');
+			dd.append(createTimestamp(subscriber.lastDeliveryAt));
+			dl.append(element('dt', { text: 'Last delivery' }), dd);
+		}
+		card.append(dl);
+	}
+
+	const actions = element('div', { className: 'preset-actions' });
+	const testBtn = element('button', { text: 'Test Ping', className: 'button-primary' });
+	testBtn.type = 'button';
+	testBtn.setAttribute('aria-label', `Test subscriber ping ${subscriber.id}`);
+	const editBtn = element('button', { text: 'Edit' });
+	editBtn.type = 'button';
+	editBtn.setAttribute('aria-label', `Edit subscriber ${subscriber.id}`);
+	const deleteBtn = element('button', { text: 'Delete', className: 'destructive-action' });
+	deleteBtn.type = 'button';
+	deleteBtn.setAttribute('aria-label', `Delete subscriber ${subscriber.id}`);
+
+	const isOperator = canPerformMutation();
+	if (!isOperator) {
+		testBtn.disabled = true;
+		testBtn.title = 'Requires admin.operator role';
+		editBtn.disabled = true;
+		editBtn.title = 'Requires admin.operator role';
+		deleteBtn.disabled = true;
+		deleteBtn.title = 'Requires admin.operator role';
+	}
+
+	const output = element('div', { className: 'response-block', text: '' });
+	output.hidden = true;
+	let lastRawJson = '';
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.hidden = true;
+	rawToggle.append(element('summary', { text: 'Test details' }), rawCopyButton, rawOutput);
+
+	testBtn.addEventListener('click', () => {
+		onTest(subscriber, testBtn, card, output, rawToggle, rawOutput, rawCopyButton, (rawJson) => {
+			lastRawJson = rawJson;
+		});
+	});
+	editBtn.addEventListener('click', () => {
+		onEdit(subscriber);
+	});
+	deleteBtn.addEventListener('click', () => {
+		onDelete(subscriber, deleteBtn, card);
+	});
+
+	actions.append(testBtn, editBtn, deleteBtn);
+	card.append(actions, output, rawToggle);
+
+	return card;
+};
+
+const createSubscriberListForm = (contract, { onEdit, onStorageUpdate }) => {
+	const definition = { method: 'GET', path: '/api/alert-subscribers', label: 'Load subscribers' };
+	const form = element('form', { className: 'operation-card subscriber-list-panel' });
+
+	const titleRow = element('div', { className: 'section-heading' });
+	const title = element('h3', { text: 'Alert subscribers' });
+	const storageBadge = element('span', { className: 'status-badge status-unknown', text: 'Storage: checking…' });
+	titleRow.append(title, storageBadge);
+	const route = element('code', { text: `${definition.method} ${definition.path}` });
+	form.append(titleRow, route);
+
+	const updateStorageBadge = (storage) => {
+		if (!storage || typeof storage !== 'object') return;
+		const mode = String(storage.mode || 'unknown');
+		const backend = String(storage.backend || 'unknown');
+		const isDurable = mode.toLowerCase() === 'durable';
+		storageBadge.className = `status-badge ${isDurable ? 'status-ready' : 'status-disabled'}`;
+		storageBadge.textContent = `${displayLabel(mode)} · ${displayLabel(backend)}`;
+	};
+
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+
+	const listContainer = element('div', { className: 'form-fields subscriber-list' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
+
+	let lastListRawJson = '';
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastListRawJson, 'Copy details');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.hidden = true;
+	rawToggle.append(element('summary', { text: 'Subscribers details' }), rawCopyButton, rawOutput);
+
+	form.append(button, listContainer, output, rawToggle);
+
+	const onTestSubscriber = async (subscriber, testBtn, card, cardOutput, cardRawToggle, cardRawOutput, cardRawCopy, setRawJson) => {
+		const testDef = {
+			method: 'POST',
+			path: '/api/alert-subscribers/{id}/test',
+			label: 'Test subscriber ping',
+			confirm: 'Send test webhook ping to this subscriber?',
+			requiredRole: 'admin.operator',
+		};
+		setRawJson('');
+		cardRawToggle.hidden = true;
+		cardOutput.hidden = false;
+		cardOutput.className = 'response-block request-state';
+		cardOutput.textContent = 'Sending test ping…';
+		try {
+			const data = await sendRequest({
+				definition: testDef,
+				path: `/api/alert-subscribers/${encodeURIComponent(subscriber.id)}/test`,
+				button: testBtn,
+				output: cardOutput,
+				formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+			});
+			if (!data) {
+				cardOutput.hidden = true;
+				return;
+			}
+			const rawJson = JSON.stringify(data, null, 2);
+			setRawJson(rawJson);
+			showResult(cardRawOutput, rawJson);
+			cardRawCopy.hidden = false;
+			cardRawToggle.hidden = false;
+		} catch (error) {
+			showError(cardOutput, error.message);
+		}
+	};
+
+	const onDeleteSubscriber = async (subscriber, deleteBtn, card) => {
+		const deleteDef = {
+			method: 'DELETE',
+			path: '/api/alert-subscribers/{id}',
+			label: 'Delete subscriber',
+			confirm: 'Delete this alert subscriber webhook?',
+			requiredRole: 'admin.operator',
+		};
+		try {
+			const data = await sendRequest({
+				definition: deleteDef,
+				path: `/api/alert-subscribers/${encodeURIComponent(subscriber.id)}`,
+				button: deleteBtn,
+				output,
+			});
+			if (data && data.success) {
+				card.remove();
+				if (data.storage) {
+					updateStorageBadge(data.storage);
+					if (typeof onStorageUpdate === 'function') onStorageUpdate(data.storage);
+				}
+				await loadSubscribers();
+			}
+		} catch (error) {
+			showError(output, error.message);
+		}
+	};
+
+	const loadSubscribers = async () => {
+		listContainer.replaceChildren(element('div', { className: 'loading-state', text: 'Loading subscribers…' }));
+		rawToggle.hidden = true;
+		try {
+			const data = await sendRequest({
+				definition,
+				path: definition.path,
+				button,
+				output,
+				formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+			});
+			if (!data) {
+				listContainer.replaceChildren();
+				return;
+			}
+			if (data.storage) {
+				updateStorageBadge(data.storage);
+				if (typeof onStorageUpdate === 'function') onStorageUpdate(data.storage);
+			}
+			lastListRawJson = JSON.stringify(data, null, 2);
+			showResult(rawOutput, lastListRawJson);
+			rawCopyButton.hidden = false;
+			rawToggle.hidden = false;
+
+			const subscribers = Array.isArray(data.subscribers) ? data.subscribers : [];
+			listContainer.replaceChildren();
+			if (!subscribers.length) {
+				listContainer.append(createEmptyState('No alert subscribers found.'));
+				return;
+			}
+			subscribers.forEach((subscriber) => {
+				const card = createSubscriberSummary(subscriber, {
+					onEdit,
+					onTest: onTestSubscriber,
+					onDelete: onDeleteSubscriber,
+				});
+				listContainer.append(card);
+			});
+		} catch (error) {
+			showError(output, error.message);
+		}
+	};
+
+	form.refresh = () => loadSubscribers();
+	form.updateStorage = (storage) => updateStorageBadge(storage);
+
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		Promise.resolve(loadSubscribers()).catch(() => {});
+	});
+
+	return form;
+};
+
+const addSubscriberStructuredFields = (form, contract, operation) => {
+	const bodyExample = getBodyExample(contract, operation) || {};
+	let isAdvancedDirty = false;
+
+	const urlInput = addField(form, 'Target URL', 'url', {
+		required: true,
+		placeholder: 'https://example.com/alerts/webhook',
+		value: bodyExample.url || '',
+	});
+
+	const secretInput = addField(form, 'Signing Secret (HMAC-SHA256)', 'secret', {
+		type: 'password',
+		placeholder: 'Optional signing secret',
+		value: bodyExample.secret || '',
+	});
+
+	const descInput = addField(form, 'Description', 'description', {
+		placeholder: 'e.g. My trading webhook bridge',
+		value: bodyExample.description || '',
+	});
+
+	const symbolsInput = addField(form, 'Filter symbols (comma-separated)', 'filterSymbols', {
+		placeholder: 'e.g. BTCUSDT, ETHUSDT',
+		value: (bodyExample.filter && Array.isArray(bodyExample.filter.symbols)) ? bodyExample.filter.symbols.join(', ') : '',
+	});
+
+	const sourcesInput = addField(form, 'Filter sources (comma-separated)', 'filterSources', {
+		placeholder: 'e.g. webhook-alert',
+		value: (bodyExample.filter && Array.isArray(bodyExample.filter.sources)) ? bodyExample.filter.sources.join(', ') : '',
+	});
+
+	const enabledLabel = element('label', { className: 'checkbox-label' });
+	const enabledCb = element('input', { type: 'checkbox' });
+	enabledCb.name = 'enabled';
+	enabledCb.checked = bodyExample.enabled !== false;
+	enabledLabel.append(enabledCb, element('span', { text: 'Subscriber enabled' }));
+	form.append(enabledLabel);
+
+	const syncBody = () => {
+		if (isAdvancedDirty) return;
+		const symbols = symbolsInput.value.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+		const sources = sourcesInput.value.split(',').map((s) => s.trim()).filter(Boolean);
+		const filter = {};
+		if (symbols.length) filter.symbols = symbols;
+		if (sources.length) filter.sources = sources;
+
+		const body = {
+			url: urlInput.value.trim(),
+			enabled: enabledCb.checked,
+		};
+		if (secretInput.value) body.secret = secretInput.value;
+		if (descInput.value.trim()) body.description = descInput.value.trim();
+		if (Object.keys(filter).length) body.filter = filter;
+
+		if (form.elements.body) {
+			form.elements.body.value = JSON.stringify(body, null, 2);
+		}
+	};
+
+	[urlInput, secretInput, descInput, symbolsInput, sourcesInput].forEach((input) => {
+		input.addEventListener('input', () => {
+			isAdvancedDirty = false;
+			syncBody();
+		});
+	});
+	enabledCb.addEventListener('change', () => {
+		isAdvancedDirty = false;
+		syncBody();
+	});
+
+	if (form.elements.body) {
+		form.elements.body.addEventListener('input', () => {
+			isAdvancedDirty = true;
+		});
+	}
+
+	form.populateSubscriber = (subscriber) => {
+		isAdvancedDirty = false;
+		if (form.elements['path-id'] && subscriber.id) {
+			form.elements['path-id'].value = subscriber.id;
+		}
+		urlInput.value = subscriber.url || '';
+		secretInput.value = '';
+		descInput.value = subscriber.description || '';
+		enabledCb.checked = subscriber.enabled !== false;
+		if (subscriber.filter && typeof subscriber.filter === 'object') {
+			symbolsInput.value = Array.isArray(subscriber.filter.symbols) ? subscriber.filter.symbols.join(', ') : '';
+			sourcesInput.value = Array.isArray(subscriber.filter.sources) ? subscriber.filter.sources.join(', ') : '';
+		} else {
+			symbolsInput.value = '';
+			sourcesInput.value = '';
+		}
+		syncBody();
+	};
+
+	syncBody();
+};
+
 const createOperationForm = (contract, definition, options = {}) => {
 	const operation = getOperation(contract, definition);
 	const form = element('form', { className: 'operation-card' });
@@ -5421,12 +6175,16 @@ const createOperationForm = (contract, definition, options = {}) => {
 
 	const isPresetUpsert = (definition.path === '/api/scanner-presets' && definition.method === 'POST') ||
 		(definition.path === '/api/scanner-presets/{id}' && definition.method === 'PUT');
+	const isSubscriberUpsert = (definition.path === '/api/alert-subscribers' && definition.method === 'POST') ||
+		(definition.path === '/api/alert-subscribers/{id}' && (definition.method === 'PUT' || definition.method === 'PATCH'));
 
 	if (definition.method === 'GET' || getParameters(contract, operation).some((parameter) => parameter.in === 'query')) {
 		addObjectField(form, 'Filters', 'query', getQueryExample(contract, operation), contract, getQuerySchema(contract, operation));
 	}
 	if (isPresetUpsert) {
 		addPresetStructuredFields(form, contract, operation);
+	} else if (isSubscriberUpsert) {
+		addSubscriberStructuredFields(form, contract, operation);
 	} else if (definition.method !== 'GET' && operation && operation.requestBody) {
 		addObjectField(form, 'Request options', 'body', getBodyExample(contract, operation), contract, getBodySchema(contract, operation));
 	}
@@ -5566,7 +6324,13 @@ const playgroundInputCache = new Map();
 const playgroundHistory = [];
 const sanitizeForHistory = (text) => {
 	if (!text || typeof text !== 'string') return text;
-	return text.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization)['"]?\s*[:=]\s*['"]?)[^'"\s,}\]]+/gi, '$1[REDACTED]');
+	if (typeof window !== 'undefined' && window.CabrosAdminRequest && typeof window.CabrosAdminRequest.sanitizeForHistory === 'function') {
+		return window.CabrosAdminRequest.sanitizeForHistory(text);
+	}
+	return text
+		.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization|discordWebhookUrl|webhookUrl)['"]?\s*[:=]\s*)(['"])(?:(?!\2).)*\2/gi, '$1$2[REDACTED]$2')
+		.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization|discordWebhookUrl|webhookUrl)['"]?\s*[:=]\s*)(?!['"])[^'"\s,}\]&]+/gi, '$1[REDACTED]')
+		.replace(/(https?:\/\/(?:[a-zA-Z0-9-]+\.)?discord(?:app)?\.com\/api\/webhooks\/)\d+(?:\/(?!\[REDACTED\])[^'"?\s/]*)?/gi, '$1[REDACTED]/[REDACTED]');
 };
 
 const renderPlayground = (contract, view) => {
@@ -7205,6 +7969,7 @@ const createTradingView = (contract) => {
 	const outcomesDefinition = { method: 'GET', path: '/api/outcomes', label: 'Load signal records' };
 	const auditDefinition = { method: 'GET', path: '/api/trading/binance/orders/audit', label: 'Load order audit' };
 	const ledgerDefinition = { method: 'GET', path: TRADING_LEDGER_PATH, label: 'Load trade ledger' };
+	const positionsDefinition = { method: 'GET', path: '/api/trading/positions', label: 'Load open positions' };
 	const statusDefinition = { method: 'GET', path: '/api/status', label: 'Load trading environment' };
 
 	const wrap = element('section', { className: 'dashboard trading-view' });
@@ -7254,8 +8019,14 @@ const createTradingView = (contract) => {
 
 	const realPanelHost = element('div');
 	const realOutput = element('div', { className: 'response-block', text: '' });
+	const positionsPanel = createTradingPanelShell('positions-panel', 'Open positions',
+		'Durable positions from recorded fills.');
+	const positionsHost = element('div', { className: 'positions-host' });
+	const positionsTicketHost = element('div', { className: 'positions-ticket-host' });
+	const positionsOutput = element('div', { className: 'response-block', text: '' });
+	positionsPanel.append(positionsHost, positionsTicketHost, positionsOutput);
 	const analyticsOutput = element('div', { className: 'response-block', text: '' });
-	main.append(paperPanel, realPanelHost, realOutput);
+	main.append(paperPanel, realPanelHost, positionsPanel, realOutput);
 
 	const curveHost = element('div');
 	const barsHost = element('div');
@@ -7458,6 +8229,77 @@ const createTradingView = (contract) => {
 		formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
 	});
 
+	const renderPositions = (positions) => {
+		positionsHost.replaceChildren();
+		positionsTicketHost.replaceChildren();
+		const openList = positions.filter((p) => p && Number(p.quantity) > 0);
+		if (!openList.length) {
+			positionsHost.append(createEmptyState('No open positions recorded.'));
+			return;
+		}
+		const table = createResultTable('Open positions', [
+			['Symbol', (p) => formatOrderValue(p && p.symbol)],
+			['Quantity', (p) => formatOrderValue(p && p.quantity)],
+			['Entry price', (p) => formatOrderValue(p && p.entryPrice)],
+			['Mark price', (p) => formatOrderValue(p && (p.currentPrice || p.markPrice))],
+			['Unrealized P&L', (p) => formatTradingPercent(p && p.unrealizedPnl)],
+			['Action', (p) => {
+				const closeBtn = element('button', { text: 'Close', className: 'position-close-btn' });
+				closeBtn.type = 'button';
+				closeBtn.addEventListener('click', async () => {
+					closeBtn.disabled = true;
+					let sellQty = String(p.quantity);
+					try {
+						const balanceData = await sendRequest({
+							definition: { method: 'GET', path: '/api/trading/binance/account/balances', label: 'Query balance' },
+							path: '/api/trading/binance/account/balances',
+							query: { symbol: p.symbol, refresh: 'true' },
+							button: closeBtn,
+							output: positionsOutput,
+							formatResponse: () => '',
+						});
+						if (balanceData && Array.isArray(balanceData.balances)) {
+							const baseAsset = p.symbol.replace(/USDT$|BUSD$|USDC$/, '');
+							const match = balanceData.balances.find((b) => b.asset === baseAsset);
+							if (match && match.free && Number(match.free) < Number(sellQty)) {
+								sellQty = String(match.free);
+							}
+						}
+					} catch (err) {
+						console.warn('Could not query balance for position close:', err);
+					}
+					closeBtn.disabled = false;
+					const ticket = createTradeTicket({
+						position: { ...p, quantity: sellQty },
+						defaultOrigin: 'manual',
+						onOrderSubmitted: () => loadAll(),
+					});
+					positionsTicketHost.replaceChildren(ticket);
+				});
+				return closeBtn;
+			}],
+		], openList, 'data-table data-table-scroll');
+		positionsHost.append(table.scroll);
+	};
+
+	const loadPositions = (current) => {
+		if (!contract || !contract.paths || !contract.paths['/api/trading/positions']) {
+			positionsHost.replaceChildren(createEmptyState('Positions API not available in contract.'));
+			return Promise.resolve();
+		}
+		return sendRequest({
+			definition: positionsDefinition,
+			path: positionsDefinition.path,
+			button: refresh,
+			output: positionsOutput,
+			isCurrent: () => current === generation,
+			captureResponseData: (data) => {
+				renderPositions(Array.isArray(data && data.positions) ? data.positions : []);
+			},
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+	};
+
 	const loadAll = () => {
 		const current = ++generation;
 		refresh.disabled = true;
@@ -7466,6 +8308,7 @@ const createTradingView = (contract) => {
 			loadPaper(current),
 			loadSignals(current),
 			loadAudit(current),
+			loadPositions(current),
 			renderRealPnlPanel(contract, ledgerDefinition, {}, refresh)
 				.then((panel) => realPanelHost.replaceChildren(panel)),
 		]).then(() => {
@@ -7604,6 +8447,59 @@ const renderView = async (name) => {
 					},
 				});
 				if (definition.method === 'PUT') {
+					updateForm = form;
+				}
+				view.append(form);
+			});
+			return;
+		}
+		if (name === 'subscribers') {
+			let updateForm = null;
+			let listForm = null;
+			const onEdit = (subscriber) => {
+				if (updateForm && typeof updateForm.populateSubscriber === 'function') {
+					updateForm.populateSubscriber(subscriber);
+					if (typeof updateForm.scrollIntoView === 'function') {
+						updateForm.scrollIntoView({ behavior: 'smooth' });
+					}
+					if (updateForm.elements?.url && typeof updateForm.elements.url.focus === 'function') {
+						updateForm.elements.url.focus();
+					}
+				}
+			};
+			const onStorageUpdate = (storage) => {
+				if (listForm && typeof listForm.updateStorage === 'function') {
+					listForm.updateStorage(storage);
+				}
+			};
+			const onSubscriberMutated = async (storage) => {
+				if (storage) onStorageUpdate(storage);
+				if (listForm && typeof listForm.refresh === 'function') {
+					await listForm.refresh();
+				}
+			};
+			listForm = createSubscriberListForm(contract, { onEdit, onStorageUpdate });
+			view.append(listForm);
+
+			VIEWS.subscribers.forEach((definition) => {
+				if (definition.method === 'GET') return;
+				const form = createOperationForm(contract, definition, {
+					onStorageUpdate: onSubscriberMutated,
+					onSuccess: () => {
+						if (listForm && typeof listForm.refresh === 'function') listForm.refresh();
+					},
+				});
+				view.append(form);
+			});
+
+			VIEW_ACTIONS.subscribers.forEach((definition) => {
+				const form = createOperationForm(contract, definition, {
+					onStorageUpdate: onSubscriberMutated,
+					onSuccess: () => {
+						if (listForm && typeof listForm.refresh === 'function') listForm.refresh();
+					},
+				});
+				if (definition.method === 'PATCH' || definition.method === 'PUT') {
 					updateForm = form;
 				}
 				view.append(form);

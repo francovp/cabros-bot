@@ -3032,6 +3032,7 @@ describe('SignalOutcomeService', () => {
 				providerBreakdown: {},
 				entryPriceSourceBreakdown: {},
 				eligibilityBreakdown: {},
+				bySession: {},
 				windows: {},
 				drawdownProxy: {
 					averageMaxAdverseExcursionPercent: 0,
@@ -3039,12 +3040,23 @@ describe('SignalOutcomeService', () => {
 				},
 				falsePositiveCandidatesCount: 0,
 				falsePositiveCandidates: [],
+				reactions: {
+					total: 0,
+					approve: 0,
+					reject: 0,
+					approveRate: 0,
+					weightedScore: null,
+				},
 				latencyCostMetadata: {
 					averageProcessingTimeMs: null,
 					tokenUsage: {
 						inputTokens: 0,
 						outputTokens: 0,
 						totalCost: 0,
+						pricing: {
+							unknownModelPricing: false,
+							unknownModels: [],
+						},
 					},
 				},
 			});
@@ -3150,6 +3162,9 @@ describe('SignalOutcomeService', () => {
 			expect(allRes.totalSignalsEvaluated).toBe(2);
 			expect(allRes.windows['1h'].totalSignals).toBe(2);
 			expect(allRes.windows['1h'].hitRatePercent).toBe(50);
+			expect(allRes.bySession).toBeDefined();
+			expect(allRes.bySession.BTCUSDT).toEqual({ regular: 0, pre: 0, post: 0, closed: 0, total: 1 });
+			expect(allRes.bySession.ETHUSDT).toEqual({ regular: 0, pre: 0, post: 0, closed: 0, total: 1 });
 		});
 
 		it('collects matching records beyond the initial slice when filters are applied (GH-715)', async () => {
@@ -3253,6 +3268,65 @@ describe('SignalOutcomeService', () => {
 			// hitRatePercent for 1h averages {1.0, -2.0}: 50%
 			expect(res.windows['1h'].hitRatePercent).toBe(50);
 			expect(res.windows['1h'].averageReturnPercent).toBe(-0.5);
+		});
+
+		it('aggregates unknownModelPricing and unknownModels in latencyCostMetadata tokenUsage', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const map = new Map([
+				['doc-1', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-1',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', return: 1.0, maxAdverseExcursion: -0.1 },
+					},
+					tokenUsage: {
+						inputTokens: 100,
+						outputTokens: 50,
+						totalCost: 0.0001,
+						pricing: {
+							unknownModelPricing: true,
+							unknownModels: ['gemini-custom-future-model'],
+						},
+					},
+				}],
+				['doc-2', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-2',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 3000,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', return: 0.5, maxAdverseExcursion: -0.2 },
+					},
+					tokenUsage: {
+						inputTokens: 200,
+						outputTokens: 80,
+						totalCost: 0.0002,
+						pricing: {
+							unknownModelPricing: false,
+							unknownModels: [],
+						},
+					},
+				}],
+			]);
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, map);
+
+			const res = await SignalOutcomeService.summarizeOutcomes();
+			expect(res.available).toBe(true);
+			expect(res.latencyCostMetadata.tokenUsage.pricing).toEqual({
+				unknownModelPricing: true,
+				unknownModels: ['gemini-custom-future-model'],
+			});
 		});
 
 		it('scopes status filter to the requested window when both filters are set (GH-715)', async () => {

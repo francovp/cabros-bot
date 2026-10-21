@@ -4,7 +4,11 @@ const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const newsAnalysisStorageService = require('../../src/services/storage/NewsAnalysisStorageService');
-const { __resetCollectionState: resetCollectionState } = require('firebase-admin');
+const {
+	__resetCollectionState: resetCollectionState,
+	__mockGet: mockGet,
+	__mockDocGet: mockDocGet,
+} = require('firebase-admin');
 
 // The console reads the payload the controller actually returns, so these tests assert the
 // wire shape through the real route rather than through the storage service alone. The
@@ -140,5 +144,41 @@ describe('GET /api/news-monitor/analyses and /summary (admin read contract)', ()
 		// console computed a fabricated 0% beside contradictory counts because of it.
 		expect(res.body.alertRatePercent).toBeUndefined();
 		expect(res.body.falsePositiveProxy.threshold).toBe(0.7);
+	});
+
+	it('returns 503 STORAGE_UNAVAILABLE when summary query read fails (#1301)', async () => {
+		mockGet.mockReturnValueOnce(Promise.reject(new Error('Firestore summary read unavailable')));
+
+		const res = await request(app)
+			.get('/api/news-monitor/summary')
+			.set(headers);
+
+		expect(res.status).toBe(503);
+		expect(res.body.success).toBe(false);
+		expect(res.body.code).toBe('STORAGE_UNAVAILABLE');
+	});
+
+	it('returns 503 STORAGE_UNAVAILABLE when list query read fails (#1301)', async () => {
+		mockGet.mockReturnValueOnce(Promise.reject(new Error('Firestore list read unavailable')));
+
+		const res = await request(app)
+			.get('/api/news-monitor/analyses')
+			.set(headers);
+
+		expect(res.status).toBe(503);
+		expect(res.body.success).toBe(false);
+		expect(res.body.code).toBe('STORAGE_UNAVAILABLE');
+	});
+
+	it('returns 503 STORAGE_UNAVAILABLE when cursor document lookup fails (#1301)', async () => {
+		mockDocGet.mockReturnValueOnce(Promise.reject(new Error('Firestore cursor read unavailable')));
+
+		const res = await request(app)
+			.get('/api/news-monitor/analyses?before=cursor-123')
+			.set(headers);
+
+		expect(res.status).toBe(503);
+		expect(res.body.success).toBe(false);
+		expect(res.body.code).toBe('STORAGE_UNAVAILABLE');
 	});
 });

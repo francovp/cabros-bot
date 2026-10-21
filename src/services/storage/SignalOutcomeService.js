@@ -8,6 +8,7 @@ const equityMarketDataService = require('./EquityMarketDataService');
 const geminiPriceService = require('../grounding/geminiPriceService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { fireAndForget } = require('../../lib/fireAndForget');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
 const { MainClient } = require('binance');
@@ -15,6 +16,7 @@ const {
 	parseEntryPriceSources,
 	getEntryPriceSourceChains: buildEntryPriceSourceChains,
 } = require('../../lib/signalOutcomeEntryPriceSources');
+const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
 
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 
@@ -909,6 +911,7 @@ async function recordSignalInternal({
 	tokenUsage,
 	processingTimeMs,
 	assetClass,
+	session,
 } = {}) {
 	if (!isEnabled()) {
 		return null;
@@ -1138,6 +1141,11 @@ async function recordSignalInternal({
 			calendarId: sessionContext.calendarId,
 			calendarTimeZone: sessionContext.calendarTimeZone,
 			sessionContext: sessionContext.sessionContext,
+			session: typeof session === 'string' && session.trim()
+				? session.trim()
+				: (normSymbolInfo.exchange && require('./EquitySessionService').isEquityExchange(normSymbolInfo.exchange)
+					? require('./EquitySessionService').classifySession({ exchange: normSymbolInfo.exchange, symbol: normSymbolInfo.symbol, timestamp: now })
+					: '24/7'),
 			measurementCohort: sessionContext.measurementCohort,
 			expiresAt: buildRetentionExpiryTimestamp(now),
 			requestId: typeof requestId === 'string' ? requestId : 'unknown',
@@ -1174,6 +1182,7 @@ async function recordSignalInternal({
 			eligibilityReason: eligibility.reason || null,
 			outcomeEvaluated: !isEligible,
 			outcomes,
+			deployment: getDeploymentIdentity(),
 		};
 
 		let docRef;
@@ -1276,7 +1285,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 		// so it is recorded instead of discarded. Renewals are serialized on one
 		// chain, and `finally` awaits it, so ownership is never classified while a
 		// renewal is still in flight.
-		leaseRenewHandle = setInterval(() => {
+		leaseRenewHandle = createManagedInterval('signal-outcome-lease-renewal', () => {
 			leaseRenewPromise = leaseRenewPromise
 				.then(() => renewSweepLease(Date.now(), leaseMs))
 				.then((renewal) => {
@@ -1289,6 +1298,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 				.catch((error) => {
 					console.warn('[SignalOutcomeService] Lease renewal sweep failed:', error.message);
 				});
+			return leaseRenewPromise;
 		}, renewIntervalMs);
 		if (leaseRenewHandle && typeof leaseRenewHandle.unref === 'function') {
 			leaseRenewHandle.unref();
@@ -1883,7 +1893,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 		return { scannedCount, evaluatedCount, error: error.message };
 	} finally {
 		if (leaseRenewHandle) {
-			clearInterval(leaseRenewHandle);
+			await leaseRenewHandle.stop();
 			leaseRenewHandle = null;
 		}
 		// Settle the renewal already in flight before deciding whether this sweep
@@ -1924,10 +1934,10 @@ function evaluatePendingOutcomes(options = {}) {
 
 function runScheduledSweep() {
 	if (shutdownRequested) {
-		return;
+		return undefined;
 	}
 
-	evaluatePendingOutcomes()
+	return evaluatePendingOutcomes()
 		.then(() => persistWorkerHeartbeat())
 		.catch((err) => {
 			console.warn('[SignalOutcomeService] Scheduled worker sweep failed:', err.message);
@@ -2003,7 +2013,7 @@ function startWorker(options = {}) {
 			workerStartupAbortController = null;
 		}
 		workerStartupPending = false;
-		workerTimer = setInterval(runScheduledSweep, intervalMs);
+		workerTimer = createManagedInterval('signal-outcome-worker-sweep', runScheduledSweep, intervalMs);
 		if (workerTimer && options.unref !== false && typeof workerTimer.unref === 'function') {
 			workerTimer.unref();
 		}
@@ -2046,7 +2056,7 @@ function stopWorker(options = {}) {
 	}
 	workerStartupPending = false;
 	if (workerTimer) {
-		clearInterval(workerTimer);
+		workerTimer.clear();
 		workerTimer = null;
 	}
 	activeIntervalMs = null;
@@ -2152,6 +2162,7 @@ function createEmptyMetricsSummary(breakdownTypes = []) {
 		providerBreakdown: {},
 		entryPriceSourceBreakdown: {},
 		eligibilityBreakdown: {},
+		bySession: {},
 		windows: {},
 		drawdownProxy: {
 			averageMaxAdverseExcursionPercent: 0,
@@ -2159,12 +2170,23 @@ function createEmptyMetricsSummary(breakdownTypes = []) {
 		},
 		falsePositiveCandidatesCount: 0,
 		falsePositiveCandidates: [],
+		reactions: {
+			total: 0,
+			approve: 0,
+			reject: 0,
+			approveRate: 0,
+			weightedScore: null,
+		},
 		latencyCostMetadata: {
 			averageProcessingTimeMs: null,
 			tokenUsage: {
 				inputTokens: 0,
 				outputTokens: 0,
 				totalCost: 0,
+				pricing: {
+					unknownModelPricing: false,
+					unknownModels: [],
+				},
 			},
 		},
 	};
@@ -2541,6 +2563,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 	const providerBreakdown = {};
 	const entryPriceSourceBreakdown = {};
 	const eligibilityBreakdown = {};
+	const bySession = {};
 	const symbolBreakdownBuckets = new Map();
 	const setupBreakdownBuckets = new Map();
 	const breakdownState = { truncated: false };
@@ -2552,6 +2575,34 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 		const docSymbol = doc.symbol || 'UNKNOWN';
 		const marketDataProvider = doc.marketDataProvider || (docExchange === 'BINANCE' ? 'binance' : 'none');
 		const entryPriceSource = doc.entryPriceSource || (doc.price !== null && doc.price !== undefined ? (doc.marketDataProvider || 'unknown') : 'none');
+
+		let docSession = doc.session;
+		if (!docSession || typeof docSession !== 'string') {
+			if (doc.sessionContext) {
+				const map = {
+					regular: 'regular',
+					pre_open: 'pre',
+					after_hours: 'post',
+					market_holiday: 'closed',
+					crypto_24_7: '24/7',
+				};
+				docSession = map[doc.sessionContext] || 'unknown';
+			} else {
+				docSession = 'unknown';
+			}
+		} else {
+			docSession = docSession.toLowerCase();
+		}
+
+		if (docSymbol !== 'UNKNOWN') {
+			if (!bySession[docSymbol]) {
+				bySession[docSymbol] = { regular: 0, pre: 0, post: 0, closed: 0, total: 0 };
+			}
+			if (Object.prototype.hasOwnProperty.call(bySession[docSymbol], docSession)) {
+				bySession[docSymbol][docSession]++;
+			}
+			bySession[docSymbol].total++;
+		}
 
 		let eligibilityState = doc.eligibilityState;
 		if (!eligibilityState) {
@@ -2695,6 +2746,8 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 	let totalTokenCost = 0;
 	let totalInputTokens = 0;
 	let totalOutputTokens = 0;
+	let unknownModelPricing = false;
+	const unknownModelsSet = new Set();
 	let totalProcessingTime = 0;
 	let processingTimeCount = 0;
 
@@ -2705,6 +2758,18 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 			totalTokenCost += signal.tokenUsage.totalCost || 0;
 			totalInputTokens += signal.tokenUsage.inputTokens || signal.tokenUsage.promptTokens || 0;
 			totalOutputTokens += signal.tokenUsage.outputTokens || signal.tokenUsage.completionTokens || 0;
+			if (signal.tokenUsage.pricing) {
+				if (signal.tokenUsage.pricing.unknownModelPricing) {
+					unknownModelPricing = true;
+				}
+				if (Array.isArray(signal.tokenUsage.pricing.unknownModels)) {
+					for (const model of signal.tokenUsage.pricing.unknownModels) {
+						if (typeof model === 'string' && model.trim()) {
+							unknownModelsSet.add(model.trim());
+						}
+					}
+				}
+			}
 		}
 		if (typeof signal.processingTimeMs === 'number') {
 			totalProcessingTime += signal.processingTimeMs;
@@ -2812,6 +2877,41 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 		? parseFloat((allTotalR / allRCount).toFixed(4))
 		: null;
 
+	let totalReactionApprove = 0;
+	let totalReactionReject = 0;
+	let confidenceSum = 0;
+	let confidenceCount = 0;
+
+	for (const doc of docs) {
+		const rawScore = typeof doc.score === 'number' && Number.isFinite(doc.score) ? Math.abs(doc.score) : null;
+		if (rawScore !== null) {
+			confidenceSum += rawScore;
+			confidenceCount++;
+		}
+		if (doc.reactions && typeof doc.reactions === 'object') {
+			for (const r of Object.values(doc.reactions)) {
+				if (!r || typeof r !== 'object') continue;
+				if (r.weight > 0) totalReactionApprove++;
+				else if (r.weight < 0) totalReactionReject++;
+			}
+		}
+	}
+
+	const totalReactions = totalReactionApprove + totalReactionReject;
+	const avgConfidence = confidenceCount > 0 ? (confidenceSum / confidenceCount) : 0.5;
+	const prior = avgConfidence;
+	const weightedReactionScore = totalReactions > 0
+		? Math.max(0, Math.min(1, parseFloat(((totalReactionApprove + 4 * prior) / (totalReactions + 4)).toFixed(4))))
+		: null;
+
+	const reactionsSummary = {
+		total: totalReactions,
+		approve: totalReactionApprove,
+		reject: totalReactionReject,
+		approveRate: totalReactions > 0 ? parseFloat((totalReactionApprove / totalReactions).toFixed(4)) : 0,
+		weightedScore: weightedReactionScore,
+	};
+
 	const summary = {
 		available: true,
 		totalSignalsReceived,
@@ -2831,6 +2931,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 		providerBreakdown,
 		entryPriceSourceBreakdown,
 		eligibilityBreakdown,
+		bySession,
 		windows: windowStats,
 		drawdownProxy: {
 			averageMaxAdverseExcursionPercent: averageWorstMae,
@@ -2838,12 +2939,17 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 		},
 		falsePositiveCandidatesCount: falsePositiveCandidates.length,
 		falsePositiveCandidates: falsePositiveCandidates.slice(0, 5),
+		reactions: reactionsSummary,
 		latencyCostMetadata: {
 			averageProcessingTimeMs,
 			tokenUsage: {
 				inputTokens: totalInputTokens,
 				outputTokens: totalOutputTokens,
 				totalCost: parseFloat(totalTokenCost.toFixed(6)),
+				pricing: {
+					unknownModelPricing,
+					unknownModels: Array.from(unknownModelsSet),
+				},
 			},
 		},
 	};
@@ -2906,12 +3012,23 @@ function summarizeTokenUsage(tokenUsage) {
 		return null;
 	}
 
-	return {
+	const result = {
 		inputTokens: getNumericValue(tokenUsage.inputTokens || tokenUsage.promptTokens),
 		outputTokens: getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens),
 		totalTokens: getNumericValue(tokenUsage.totalTokens || tokenUsage.total),
 		totalCost: getNumericValue(tokenUsage.totalCost),
 	};
+
+	if (tokenUsage.pricing && typeof tokenUsage.pricing === 'object') {
+		result.pricing = {
+			unknownModelPricing: Boolean(tokenUsage.pricing.unknownModelPricing),
+			unknownModels: Array.isArray(tokenUsage.pricing.unknownModels)
+				? [...tokenUsage.pricing.unknownModels]
+				: [],
+		};
+	}
+
+	return result;
 }
 
 function getDocTimestamp(data) {
@@ -3012,6 +3129,15 @@ function formatOutcomeDocument(doc) {
 			observedPrice: typeof data.observedPrice === 'number' && Number.isFinite(data.observedPrice) ? data.observedPrice : null,
 			tradablePrice: typeof data.tradablePrice === 'number' && Number.isFinite(data.tradablePrice) ? data.tradablePrice : null,
 		});
+	}
+
+	if (data.deployment && typeof data.deployment === 'object') {
+		formatted.deployment = {
+			platform: typeof data.deployment.platform === 'string' ? data.deployment.platform : null,
+			gitSha: typeof data.deployment.gitSha === 'string' ? data.deployment.gitSha : null,
+			service: typeof data.deployment.service === 'string' ? data.deployment.service : null,
+			runtimeVersion: typeof data.deployment.runtimeVersion === 'string' ? data.deployment.runtimeVersion : null,
+		};
 	}
 
 	return formatted;
@@ -3641,5 +3767,7 @@ module.exports = {
 	LOCK_COLLECTION_NAME,
 	STORAGE_UNAVAILABLE_CODE,
 	INVALID_CURSOR_MESSAGE,
+	isUsMarketHalfDay,
+	isUsMarketHoliday,
 	_resetForTesting,
 };

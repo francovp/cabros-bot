@@ -1,5 +1,7 @@
 'use strict';
 
+const { stopAllBackgroundTimers } = require('./backgroundTimerRegistry');
+
 let globalShutdownFlag = false;
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 10000;
@@ -88,12 +90,15 @@ function createProcessLifecycle(options = {}) {
 		stopUserPriceAlertWorker = () => undefined,
 		stopNewsMonitorScheduler = () => undefined,
 		stopAlertScheduler = () => undefined,
+		stopTradingViewMcpWarmup = () => undefined,
 		stopRemoteConfig = () => undefined,
 		stopTelegramHealthProbe = () => undefined,
 		shutdownNewsMonitor = () => undefined,
 		flushAlertBurstWindows = () => undefined,
 		closeAllSseConnections = () => undefined,
 		flushSentry = () => undefined,
+		stopBackgroundTimers = stopAllBackgroundTimers,
+		reportBackgroundTimerDrain = () => undefined,
 		timeoutMs = DEFAULT_SHUTDOWN_TIMEOUT_MS,
 		logger = console,
 		forceExit = (code) => process.exit(code),
@@ -198,8 +203,6 @@ function createProcessLifecycle(options = {}) {
 				await backlogMonitorCleanup;
 				await telegramCleanup;
 				await bootstrapCleanup;
-				await safelyRun(logger, 'background jobs', waitForBackgroundJobs);
-				await safelyRun(logger, 'background persistence tasks', waitForBackgroundTasks);
 				await Promise.allSettled([
 					safelyRun(logger, 'signal-outcome worker', () => stopSignalOutcomeWorker({ drain: true })),
 					safelyRun(logger, 'notification redrive worker', () => stopNotificationRedriveWorker({ drain: true })),
@@ -208,10 +211,19 @@ function createProcessLifecycle(options = {}) {
 					safelyRun(logger, 'user price alert worker', () => stopUserPriceAlertWorker({ drain: true })),
 					safelyRun(logger, 'news monitor scheduler', () => stopNewsMonitorScheduler({ drain: true })),
 					safelyRun(logger, 'alert scheduler', () => stopAlertScheduler({ drain: true })),
+					safelyRun(logger, 'tradingview mcp warmup', stopTradingViewMcpWarmup),
 					safelyRun(logger, 'remote config service', stopRemoteConfig),
 					safelyRun(logger, 'telegram health probe', stopTelegramHealthProbe),
 					safelyRun(logger, 'news monitor cache', shutdownNewsMonitor),
 				]);
+				await safelyRun(logger, 'background jobs', waitForBackgroundJobs);
+				await safelyRun(logger, 'background persistence tasks', waitForBackgroundTasks);
+				const timerDrain = await safelyRun(logger, 'background timer registry', () => stopBackgroundTimers({
+					timeoutMs: Math.min(2000, forcedFinalizationTimeoutMs),
+				}));
+				if (timerDrain) {
+					await safelyRun(logger, 'background timer drain report', () => reportBackgroundTimerDrain(timerDrain));
+				}
 				await safelyRun(logger, 'Sentry', () => flushSentry(Math.min(shutdownTimeoutMs, 2000)));
 			};
 

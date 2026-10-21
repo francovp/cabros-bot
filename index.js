@@ -12,9 +12,11 @@ const {
 	expandedAnalysisCmd,
 	marketScannerCmd,
 	jobsCommand,
+	alertHistoryCommand,
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	reactionsCommand,
 	preferenciasCmd,
 	filtroCmd,
 	silencioCmd,
@@ -22,6 +24,7 @@ const {
 	categoriasCmd,
 	telegramCommandRateLimiter,
 } = require('./src/controllers/commands');
+const { telegramReactionService } = require('./src/services/telegram/telegramReactionService');
 const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
 const { getRoutes } = require('./src/routes');
@@ -53,8 +56,10 @@ const { alertSchedulerService } = require('./src/services/scheduler');
 const { adminSseService } = require('./src/services/sse/AdminSseService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
+const { tradingViewMcpService } = require('./src/services/tradingview/TradingViewMcpService');
 const { probeManagedPromptReadiness } = require('./src/services/prompts');
 const { configureServerTimeouts } = require('./src/lib/serverTimeouts');
+const expressErrorHandler = require('./src/lib/expressErrorHandler');
 const Sentry = require('@sentry/node');
 
 const { token, shouldStartTelegramBot } = getTelegramBootstrapConfig();
@@ -79,14 +84,7 @@ registerDebugSentryRoute(app);
 
 // The error handler must be registered before any other error middleware and after all controllers
 Sentry.setupExpressErrorHandler(app);
-
-// Optional fallthrough error handler
-app.use(function onError(err, req, res, next) {
-	// The error id is attached to `res.sentry` to be returned
-	// and optionally displayed to the user for support.
-	res.statusCode = 500;
-	res.end(res.sentry + '\n');
-});
+app.use(expressErrorHandler);
 
 const lifecycle = createProcessLifecycle({
 	getServer: () => server,
@@ -104,12 +102,18 @@ const lifecycle = createProcessLifecycle({
 	stopUserPriceAlertWorker: (options) => userPriceAlertService.stopWorker(options),
 	stopNewsMonitorScheduler: (options) => newsMonitorSchedulerService.stopWorker(options),
 	stopAlertScheduler: (options) => alertSchedulerService.stopWorker(options),
+	stopTradingViewMcpWarmup: () => tradingViewMcpService.stopWarmupScheduler(),
 	stopRemoteConfig: () => remoteConfigService.stop(),
 	closeAllSseConnections: () => adminSseService.closeAll(),
 	stopTelegramHealthProbe: () => stopTelegramHealthProbe(),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
 	flushAlertBurstWindows: () => burstAggregator.flushAll('shutdown'),
 	flushSentry: (timeout) => sentryService.flush(timeout),
+	reportBackgroundTimerDrain: (stats) => sentryService.captureInfo({
+		message: 'shutdown.timer_drain',
+		feature: 'shutdown.timer_drain',
+		extra: stats,
+	}),
 	timeoutMs: process.env.SHUTDOWN_TIMEOUT_MS,
 });
 lifecycle.register();
@@ -165,6 +169,8 @@ async function bootstrapApplication() {
 			// Start background alert scheduler (JSON-defined news + scanner schedules) if enabled
 			alertSchedulerService.botGetter = () => bot;
 			alertSchedulerService.startWorker({ source: 'web' });
+			// Start proactive TradingView MCP keepalive warm-up probe if enabled
+			tradingViewMcpService.startWarmupScheduler();
 		})
 		.catch((error) => {
 			bootstrapReadiness.fail(error);
@@ -202,9 +208,17 @@ async function bootstrapApplication() {
 		bot.command(['analisis', 'analysis'], expandedAnalysisCmd);
 		bot.command(['scanner'], marketScannerCmd);
 		bot.command(['jobs', 'trabajos'], jobsCommand);
+		bot.command(['history', 'alertas'], alertHistoryCommand);
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
+		bot.command(['reactions', 'reacciones'], reactionsCommand);
 		bot.command(['preferencias', 'preferences'], preferenciasCmd);
+
+		if (process.env.ENABLE_TELEGRAM_REACTION_AGGREGATION === 'true') {
+			bot.on('message_reaction', async (ctx) => {
+				await telegramReactionService.handleReactionUpdate(ctx);
+			});
+		}
 		bot.command(['filtro', 'filter'], filtroCmd);
 		bot.command(['silencio', 'quiet'], silencioCmd);
 		bot.command(['umbral', 'threshold'], umbralCmd);

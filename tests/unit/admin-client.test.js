@@ -300,7 +300,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		elementsById[id] = node;
 		body.append(node);
 	});
-	['overview', 'status', 'diagnostics', 'alerts', 'outcomes', 'presets', 'jobs', 'orders', 'analysis', 'newsMonitor', 'trading', 'playground'].forEach((view) => {
+	['overview', 'status', 'diagnostics', 'alerts', 'outcomes', 'presets', 'subscribers', 'jobs', 'orders', 'analysis', 'newsMonitor', 'trading', 'playground'].forEach((view) => {
 		const button = new FakeElement('button');
 		button.dataset.view = view;
 		body.append(button);
@@ -1967,6 +1967,81 @@ describe('admin browser client', () => {
 		expect(requests.at(-1)[0]).toBe('/api/alerts?limit=10&before=cursor-2&source=webhook');
 	});
 
+	it('exposes source suggestions while preserving custom alert sources', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		const sourceInput = listForm.elements.source;
+		const enrichedSelect = listForm.elements.enriched;
+		expect(sourceInput.tagName).toBe('INPUT');
+		expect(sourceInput.attributes.list).toBe('alert-source-options');
+		expect(enrichedSelect.tagName).toBe('SELECT');
+		const sourceOptions = find(listForm, (node) => node.tagName === 'DATALIST');
+		expect(sourceOptions.attributes.id).toBe('alert-source-options');
+		const sourceValues = sourceOptions.children.map((option) => option.value);
+		expect(sourceValues).toEqual([
+			'', 'webhook-alert', 'webhook-message', 'webhook', 'news-monitor',
+			'market-scanner', 'expanded-analysis', 'test-alert',
+		]);
+		const enrichedValues = enrichedSelect.children.map((option) => option.value);
+		expect(enrichedValues).toEqual(['', 'true', 'false']);
+	});
+
+	it('renders an active-filters header that reflects the current selection', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		const activeFilters = find(listForm, (node) => node.className === 'active-filters');
+		expect(activeFilters).toBeDefined();
+		expect(activeFilters.textContent).toBe('Active filters: none');
+
+		listForm.elements.source.value = 'webhook';
+		await listForm.elements.source.dispatch('change');
+		await flush();
+		expect(activeFilters.textContent).toContain('source=webhook');
+
+		listForm.elements.enriched.value = 'true';
+		await listForm.elements.enriched.dispatch('change');
+		await flush();
+		expect(activeFilters.textContent).toContain('source=webhook');
+		expect(activeFilters.textContent).toContain('enriched=true');
+	});
+
+	it('clears all filter selections when the Clear filters button is clicked', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		listForm.elements.source.value = 'news-monitor';
+		await listForm.elements.source.dispatch('change');
+		await flush();
+		listForm.elements.enriched.value = 'false';
+		await listForm.elements.enriched.dispatch('change');
+		await flush();
+
+		const clearButton = findButton(listForm, 'Clear filters');
+		expect(clearButton.disabled).toBe(false);
+		await clearButton.dispatch('click');
+		await flush();
+
+		expect(listForm.elements.source.value).toBe('');
+		expect(listForm.elements.enriched.value).toBe('');
+		const activeFilters = find(listForm, (node) => node.className === 'active-filters');
+		expect(activeFilters.textContent).toBe('Active filters: none');
+		expect(clearButton.disabled).toBe(true);
+	});
+
 	it('renders dedicated alert analytics and export forms with safe defaults', async () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
@@ -2494,6 +2569,69 @@ describe('admin browser client', () => {
 		expect(editBtn.title).toBe('Requires admin.operator role');
 		expect(deleteBtn.disabled).toBe(true);
 		expect(deleteBtn.title).toBe('Requires admin.operator role');
+	});
+
+	it('renders dedicated alert subscriber controls and structured fields', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+
+		await selectView(browser, 'subscribers');
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alert-subscribers');
+		const createForm = findForm(browser.elementsById.view, 'POST /api/alert-subscribers');
+		const updateForm = findForm(browser.elementsById.view, 'PATCH /api/alert-subscribers/{id}');
+
+		expect(listForm).toBeDefined();
+		expect(createForm).toBeDefined();
+		expect(updateForm).toBeDefined();
+
+		expect(createForm.elements.url).toBeDefined();
+		expect(createForm.elements.secret).toBeDefined();
+		expect(createForm.elements.description).toBeDefined();
+		expect(createForm.elements.filterSymbols).toBeDefined();
+		expect(createForm.elements.filterSources).toBeDefined();
+		expect(createForm.elements.enabled).toBeDefined();
+	});
+
+	it('renders subscribers as structured cards with HMAC badge, filters, and actions', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/alert-subscribers') {
+					return response({
+						success: true,
+						storage: { mode: 'durable', backend: 'firestore' },
+						subscribers: [
+							{
+								id: 'sub_test_1',
+								url: 'https://example.com/webhook',
+								description: 'Test Webhook Subscriber',
+								enabled: true,
+								hasSecret: true,
+								filter: { symbols: ['BTCUSDT'], sources: ['webhook-alert'] },
+								lastDeliveryStatus: 'success',
+								lastDeliveryAt: '2026-03-30T12:00:00.000Z',
+							},
+						],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+
+		await selectView(browser, 'subscribers');
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alert-subscribers');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('https://example.com/webhook');
+		expect(viewText).toContain('Test Webhook Subscriber');
+		expect(viewText).toContain('HMAC Signed');
+		expect(viewText).toContain('Symbols: BTCUSDT');
+		expect(viewText).toContain('Sources: webhook-alert');
 	});
 
 	it('loads recent jobs with bounded status, type, and limit filters', async () => {
@@ -7538,6 +7676,63 @@ describe('structured analysis forms', () => {
 			expect(playground.elements.body.value).toContain('[REDACTED]');
 		});
 
+		it('redacts Discord webhook URLs in request history and restored body (#1159)', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.includes('/api/webhook/alert')) {
+						return response({ success: true, messageId: 'm-102' });
+					}
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
+			await select.dispatch('change');
+			const liveToken = 'super-secret-discord-token-xyz';
+			const liveWebhookId = '9876543210';
+			playground.elements.body.value = JSON.stringify({
+				message: 'Breakout alert',
+				discordWebhookUrl: `https://discord.com/api/webhooks/${liveWebhookId}/${liveToken}`,
+			});
+			await playground.dispatch('submit');
+			await flush();
+
+			const historyItems = findAll(playground, (n) => n.className === 'history-item');
+			expect(historyItems.length).toBe(1);
+
+			// Verify webhook token and ID are redacted from history and playground text
+			expect(playground.textContent).not.toContain(liveToken);
+			expect(playground.textContent).not.toContain(liveWebhookId);
+
+			// Change the current form to another operation to clear inputs
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('GET /api/alerts —')).value;
+			await select.dispatch('change');
+			expect(playground.elements.body).toBeUndefined();
+
+			// Restore from history
+			const restoreBtn = find(historyItems[0], (n) => n.tagName === 'BUTTON' && n.textContent === 'Restore');
+			await restoreBtn.dispatch('click');
+			await flush();
+
+			// Form should be back to POST /api/webhook/alert with restored body
+			const currentSelected = find(select, (o) => o.value === select.value);
+			expect(currentSelected.textContent).toContain('POST /api/webhook/alert');
+			expect(playground.elements.body).toBeDefined();
+			expect(playground.elements.body.value).toContain('Breakout alert');
+			expect(playground.elements.body.value).not.toContain(liveToken);
+			expect(playground.elements.body.value).not.toContain(liveWebhookId);
+			expect(playground.elements.body.value).toContain('[REDACTED]');
+		});
+
 		it('records the submitted query payload when operations change mid-flight', async () => {
 			let releaseRequest;
 			const pendingRequest = new Promise((resolve) => { releaseRequest = resolve; });
@@ -9070,4 +9265,279 @@ describe('structured analysis forms', () => {
 		});
 	});
 
+	describe('trade this alert ticket and position close (issue #1276)', () => {
+		it('prefills trade ticket from alert with Binance pair, parsed signal side, alert price, and default quote size', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/alerts/alert-trade-1') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-trade-1',
+								text: 'BINANCE:BTCUSDT(1H) COMPRA precio: 65000.50',
+								symbol: 'BINANCE:BTCUSDT',
+								price: '65000.50',
+								signal: 'COMPRA',
+								enriched: false,
+							},
+						});
+					}
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'alerts');
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			detailForm.elements['path-alertId'].value = 'alert-trade-1';
+			await detailForm.dispatch('submit');
+			await flush();
+
+			const ticket = find(detailForm, (node) => node.className && node.className.includes('trade-ticket'));
+			expect(ticket).toBeDefined();
+			expect(ticket.textContent).toContain('Trade this alert');
+			expect(ticket.textContent).toContain('Linked alert: alert-trade-1');
+			expect(ticket.textContent).toContain('Environment: testnet');
+
+			const symbolInput = find(ticket, (n) => n.name === 'ticket-symbol');
+			expect(symbolInput.value).toBe('BTCUSDT');
+
+			const sideSelect = find(ticket, (n) => n.name === 'ticket-side');
+			expect(sideSelect.value).toBe('BUY');
+
+			const typeSelect = find(ticket, (n) => n.name === 'ticket-type');
+			expect(typeSelect.value).toBe('LIMIT');
+
+			const priceInput = find(ticket, (n) => n.name === 'ticket-price');
+			expect(priceInput.value).toBe('65000.50');
+		});
+
+		it('parses VENTA signal side from alert text and does not infer from sentiment', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/alerts/alert-sell-1') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-sell-1',
+								text: 'BINANCE:ETHUSDT(4H) VENTA at 3500',
+								symbol: 'BINANCE:ETHUSDT',
+								price: '3500',
+								enrichmentData: { sentiment: 'bullish' },
+								enriched: true,
+							},
+						});
+					}
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'alerts');
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			detailForm.elements['path-alertId'].value = 'alert-sell-1';
+			await detailForm.dispatch('submit');
+			await flush();
+
+			const ticket = find(detailForm, (node) => node.className && node.className.includes('trade-ticket'));
+			const sideSelect = find(ticket, (n) => n.name === 'ticket-side');
+			expect(sideSelect.value).toBe('SELL');
+		});
+
+		it('executes dryRun first, displays validated order, and requires typing CONFIRM for live submission', async () => {
+			const orderRequests = [];
+			const browser = createBrowser({
+				fetchImpl: async (url, options = {}) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/alerts/alert-trade-2') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-trade-2',
+								text: 'BINANCE:BTCUSDT(1H) COMPRA 60000',
+								symbol: 'BTCUSDT',
+								price: '60000',
+								enriched: false,
+							},
+						});
+					}
+					if (url === '/api/trading/binance/orders' && options.method === 'POST') {
+						const body = JSON.parse(options.body);
+						orderRequests.push({ body, headers: options.headers });
+						return response({
+							success: true,
+							dryRun: body.dryRun,
+							environment: 'testnet',
+							order: { orderId: 9988, symbol: 'BTCUSDT', side: body.side, type: body.type },
+						});
+					}
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'alerts');
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			detailForm.elements['path-alertId'].value = 'alert-trade-2';
+			await detailForm.dispatch('submit');
+			await flush();
+
+			const ticket = find(detailForm, (node) => node.className && node.className.includes('trade-ticket'));
+			const dryRunBtn = find(ticket, (n) => n.className && n.className.includes('trade-dry-run-btn'));
+			const submitBtn = find(ticket, (n) => n.className && n.className.includes('trade-submit-btn'));
+			const confirmInput = find(ticket, (n) => n.className && n.className.includes('ticket-confirm-input'));
+
+			expect(submitBtn.disabled).toBe(true);
+			expect(confirmInput.disabled).toBe(true);
+
+			// Click dry run
+			const qtyInput = find(ticket, (n) => n.name === 'ticket-quantity');
+			qtyInput.value = '0.001';
+			await dryRunBtn.dispatch('click');
+			await flush();
+
+			expect(orderRequests).toHaveLength(1);
+			expect(orderRequests[0].body.dryRun).toBe(true);
+			expect(orderRequests[0].body.alertId).toBe('alert-trade-2');
+			expect(orderRequests[0].body.origin).toBe('admin_alert');
+			expect(ticket.textContent).toContain('Dry run passed');
+			expect(confirmInput.disabled).toBe(false);
+			expect(submitBtn.disabled).toBe(true);
+
+			// Partial confirmation keeps submit disabled
+			confirmInput.value = 'CONFIR';
+			await confirmInput.dispatch('input');
+			expect(submitBtn.disabled).toBe(true);
+
+			// Exact "CONFIRM" enables submit
+			confirmInput.value = 'CONFIRM';
+			await confirmInput.dispatch('input');
+			expect(submitBtn.disabled).toBe(false);
+
+			// Click submit
+			await submitBtn.dispatch('click');
+			await flush();
+
+			expect(orderRequests).toHaveLength(2);
+			expect(orderRequests[1].body.dryRun).toBe(false);
+			expect(orderRequests[1].body.alertId).toBe('alert-trade-2');
+			expect(orderRequests[1].body.origin).toBe('admin_alert');
+			expect(orderRequests[1].body.idempotencyKey).toMatch(/^alert-trade-2-buy-[0-9a-z-]+$/);
+			expect(ticket.textContent).toContain('Order placed: #9988');
+		});
+
+		it('disables live submit when environment is live', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url, options = {}) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/alerts/alert-live') {
+						return response({
+							success: true,
+							alert: { id: 'alert-live', text: 'BTCUSDT COMPRA 50000', price: '50000', symbol: 'BTCUSDT' },
+						});
+					}
+					if (url === '/api/trading/binance/orders') {
+						return response({
+							success: true,
+							dryRun: true,
+							environment: 'live',
+						});
+					}
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'alerts');
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			detailForm.elements['path-alertId'].value = 'alert-live';
+			await detailForm.dispatch('submit');
+			await flush();
+
+			const ticket = find(detailForm, (node) => node.className && node.className.includes('trade-ticket'));
+			const dryRunBtn = find(ticket, (n) => n.className && n.className.includes('trade-dry-run-btn'));
+			const submitBtn = find(ticket, (n) => n.className && n.className.includes('trade-submit-btn'));
+			const confirmInput = find(ticket, (n) => n.className && n.className.includes('ticket-confirm-input'));
+
+			const qtyInput = find(ticket, (n) => n.name === 'ticket-quantity');
+			qtyInput.value = '0.001';
+			await dryRunBtn.dispatch('click');
+			await flush();
+
+			expect(ticket.textContent).toContain('Environment: live');
+			confirmInput.value = 'CONFIRM';
+			await confirmInput.dispatch('input');
+
+			expect(submitBtn.disabled).toBe(true);
+			expect(submitBtn.title).toContain('Live trading is disabled');
+		});
+
+		it('renders open positions in trading view and Close button prefills sell order with sellable quantity', async () => {
+			const queried = [];
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					queried.push(url);
+					if (url === '/openapi.json') return response(contract);
+					if (url.startsWith('/api/status')) {
+						return response({
+							dependencies: { binanceTrading: { environment: 'testnet', maxNotionalConfigured: true } },
+						});
+					}
+					if (url.startsWith('/api/outcomes/summary')) return response({ summary: {} });
+					if (url.startsWith('/api/outcomes')) return response({ outcomes: [] });
+					if (url.startsWith('/api/trading/binance/orders/audit')) return response({ audit: [] });
+					if (url.startsWith('/api/trading/positions')) {
+						return response({
+							success: true,
+							positions: [
+								{ symbol: 'BTCUSDT', quantity: '0.05', entryPrice: '50000', markPrice: '55000', unrealizedPnl: 250 },
+							],
+						});
+					}
+					if (url.startsWith('/api/trading/binance/account/balances')) {
+						return response({
+							success: true,
+							balances: [
+								{ asset: 'BTC', free: '0.04', locked: '0.01' },
+								{ asset: 'USDT', free: '1000', locked: '0' },
+							],
+						});
+					}
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			await flush();
+
+			expect(queried.some((u) => u.startsWith('/api/trading/positions'))).toBe(true);
+			const positionsPanel = find(browser.elementsById.view, (n) => n.className && n.className.includes('positions-panel'));
+			expect(positionsPanel).toBeDefined();
+			expect(positionsPanel.textContent).toContain('BTCUSDT');
+			expect(positionsPanel.textContent).toContain('0.05');
+
+			const closeBtn = find(positionsPanel, (n) => n.className && n.className.includes('position-close-btn'));
+			expect(closeBtn).toBeDefined();
+
+			await closeBtn.dispatch('click');
+			await flush();
+
+			expect(queried.some((u) => u.startsWith('/api/trading/binance/account/balances'))).toBe(true);
+			const ticket = find(positionsPanel, (n) => n.className && n.className.includes('trade-ticket'));
+			expect(ticket).toBeDefined();
+			expect(ticket.textContent).toContain('Close position (BTCUSDT)');
+
+			const symbolInput = find(ticket, (n) => n.name === 'ticket-symbol');
+			expect(symbolInput.value).toBe('BTCUSDT');
+
+			const sideSelect = find(ticket, (n) => n.name === 'ticket-side');
+			expect(sideSelect.value).toBe('SELL');
+
+			const qtyInput = find(ticket, (n) => n.name === 'ticket-quantity');
+			// Clamped to free balance of 0.04 from 0.05 position
+			expect(qtyInput.value).toBe('0.04');
+		});
+	});
 });

@@ -139,11 +139,13 @@ Machine-readable runtime status for operational tooling. This endpoint uses the 
 
 The response intentionally exposes only non-sensitive booleans and metadata: service identity, version, commit, environment, feature-flag state, delivery channel readiness, and dependency readiness/configuration status. Secret values such as bot tokens, API keys, DSNs, chat IDs, and provider URLs are not returned.
 
+When `ENABLE_NEWS_MONITOR=true`, `dependencies.newsMonitorCache` reports cache readiness, deduplication mode and backend, plus hit/miss totals, hit rate, current non-expired entries, evictions, approximate memory usage, and the last hit/miss timestamps. The block is omitted when the news monitor is disabled. These counters are process-local and reset on restart; the memory figure estimates serialized payload size plus key and entry overhead for resident entries, including expired entries still held until retrieval or cleanup. Durable deduplication readiness remains available under `dependencies.newsMonitorDedup`.
+
 For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM dependency used by that flow as `dependencies.newsMonitorLlm`, including the resolved provider (`gemini`, `azure`, or `openrouter`) and whether that provider is actually configured for runtime use. When `FORCE_BRAVE_SEARCH=true`, the payload also exposes `dependencies.braveSearch` so the forced search path can be monitored independently of Gemini. When `ENABLE_GEMINI_GROUNDING=true` and `MODEL_PROVIDER=gemini`, `dependencies.gemini` requires both `GEMINI_API_KEY` and `GEMINI_MODEL_NAME`, matching the runtime path used for grounded alert generation. `dependencies.geminiQuota` reports whether a Gemini quota cooldown is active, bounded remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters (`totalRequests`, `successRequests`, `failureRequests`, `timeoutRequests`) without exposing prompts, error bodies, or provider credentials. `dependencies.groundingCoalescing` reports the bounded equity-alert search sharing window and hit/miss/failure counters. Firestore readiness treats `GOOGLE_APPLICATION_CREDENTIALS` as configured only when the referenced credential file exists and is readable.
 
 When `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION=true`, `featureFlags.tradingViewVolumeConfirmation` reports the gate value and `dependencies.tradingViewVolumeConfirmation` reports readiness only when the configured TradingView MCP endpoint and its parent MCP enrichment gate are active.
 
-TradingView dependency readiness is runtime-derived and fail-open: `configured` reflects the effective endpoint, while `status` starts as `unknown` and changes to `ready` or `degraded` after an MCP operation. `lastErrorCategory` is sanitized to categories such as `timeout`, `http_5xx`, `http_4xx`, `invalid_response`, `provider_unavailable`, or `request_failed`; terminal provider outages do not consume the retry chain, and `lastHttpStatusCode` exposes the last observed HTTP status without returning provider response bodies or URLs from `/api/status`.
+TradingView dependency readiness is runtime-derived and fail-open: `configured` reflects the effective endpoint, while `status` starts as `unknown` and changes to `ready` or `degraded` after an MCP operation. `lastErrorCategory` is sanitized to categories such as `timeout`, `http_5xx`, `http_4xx`, `invalid_response`, `provider_unavailable`, `upstream_tool_error`, `not_found`, or `request_failed`; terminal provider outages do not consume the retry chain, and `lastHttpStatusCode` exposes the last observed HTTP status without returning provider response bodies or URLs from `/api/status`.
 
 When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` reports the async-job persistence gate and `dependencies.firestoreJobStorage` reports readiness using the configured Firestore credentials. The legacy `ENABLE_FIRESTORE_ALERT_STORAGE=true` gate also reports job storage as enabled because it activates the same runtime persistence path.
 
@@ -197,7 +199,9 @@ Stored-alert read endpoints answer `503` with a machine-readable `category` so a
 
 `GET /ready?depth=dependencies` runs the same indexed `alerts` read (bounded to one document) in its Firestore probe, so a missing index fails the gate closed instead of only surfacing on the admin console. The probe replaced `listCollections()`, which is a metadata call that never executes a collection query and therefore could not observe this class of fault. See [Observability & Monitoring](monitoring.md) and [Troubleshooting](troubleshooting.md).
 
-`featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready. Runtime provider selection is controlled separately by `MODEL_PROVIDER=cloudflare`; set both values when status/capability telemetry should match active Cloudflare routing.
+`featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports Cloudflare AI Gateway readiness **including whether the gateway is actually in the runtime request path**. `dependencies.cloudflareAig.provider` is the selected `MODEL_PROVIDER` and `dependencies.cloudflareAig.routed` reports whether that provider is `cloudflare`.
+
+`ENABLE_CLOUDFLARE_AIG` is a telemetry-visibility flag only; it does not route LLM traffic — `MODEL_PROVIDER` does. Setting the flag plus credentials while another provider is selected leaves every request on that provider, so the block reports `ready: false` with `status: "inactive"` rather than claiming readiness. `status` is `ready` only when the gateway is enabled, credentialed, and routed; `misconfigured` when it is routed but credentials are missing; `disabled` when the flag is off.
 
 `notificationChannelIntent` reports the operator-intent view of notification channel configuration (`telegram`, `whatsapp`, `discord`). It mirrors `NotificationChannel.isConfigured()`: a channel counts as `configured` when its enable flag is set **and** its required credentials/chat id/webhook are present — the same `ready` semantics `dependencyStatus` already uses. A channel with a webhook URL present but its enable flag off therefore reports as **not** configured, which is the same verdict the zero-channel admin page reaches because both call that one method. The view answers the question the zero-channel page exists to raise — a channel the operator never set up (`unconfigured`) versus one that is set up but currently failing. The page reports the same two sets, so an operator can reconcile an alert from the page and `/api/status` without inspecting credentials. Only channel names are exposed; never tokens, webhook URLs, or chat IDs.
 
@@ -211,7 +215,32 @@ The dedicated worker also persists the same non-sensitive heartbeat to `workerHe
 
 `GET /api/capabilities` is an alias for the same payload.
 
+`featureFlags.firebaseAdminAuth` reports `ENABLE_FIREBASE_ADMIN_AUTH`, the gate for opt-in Firebase ID-token authentication on the browser admin console. `dependencies.adminAuth` reports the shape and observed health of that trust domain: `provider`, `signIn`, `browserConfigConfigured` (the console can render a sign-in form), `verifierConfigured` (the server holds credentials to verify tokens), `apiKeyFallbackConfigured` (the legacy `WEBHOOK_API_KEY` path is still accepted), `ready`, `status`, and the `verificationSuccessCount`/`verifierUnavailableCount`/`consecutiveFailures` counters with `lastSuccessAt`/`lastUnavailableAt`.
+
+`verifierConfigured` is credential **shape** only, so `ready` is never derived from it — the same rule this service already applies to `firebaseRemoteConfig.ready`, `equityMarketData.ready`, and Firestore `readHealth`. `ready` is true only after a `verifyIdToken()` call has actually succeeded in this process, and `status` is `disabled` (gate off), `misconfigured` (gate on without verifier credentials), `unverified` (shape complete, no sign-in observed yet), `ready`, or `degraded`. Gate state and knowably-absent credentials take precedence over observed health, counters reset on process restart — so `unverified` is the normal state right after a deploy — and a successful verification clears `consecutiveFailures` without needing a restart.
+
+`degraded` is a defensive state ranked below `misconfigured`, so it is only ever reported while `verifierConfigured` is `true`: the credentials are shaped correctly but the Firebase Admin SDK still could not produce an Auth instance. A deployment with no verifier credentials at all reports `misconfigured` and hides its `verifierUnavailableCount` behind that verdict, so do not read a growing `verifierUnavailableCount` alongside `status: "misconfigured"` as a live outage.
+
+A **rejected** bearer token never records a failure. `verifyIdToken()` rejects an expired token, a revoked token, a wrong-project token, and a random `Bearer <garbage>` string with the same indistinguishable rejection, so recording it would let any unauthenticated caller force a false `degraded` verdict with a single request. Only verifier unavailability (`ADMIN_AUTH_UNAVAILABLE`) degrades the dependency. A verified token that simply lacks an admin role is recorded as a success, because the token verified and the role decision is an authorization outcome.
+
+`dependencies.adminAuth` returns booleans and counters only. The Firebase Web configuration is served by `/admin/auth-config` and is never echoed into a status payload, and `/api/public/status` does not include this block at all.
+
 When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading` expose only the non-sensitive execution gate, selected `testnet`/`demo`/`live` environment, allow-listed symbols, and readiness state.
+
+`featureFlags.binanceOrderAudit` reports `ENABLE_BINANCE_ORDER_AUDIT` (environment value or Remote Config override), and `dependencies.binanceOrderAudit` reports the audit trail's readiness, Firestore collection, and retention days:
+
+```json
+"binanceOrderAudit": {
+  "enabled": false,
+  "configured": true,
+  "ready": false,
+  "status": "disabled",
+  "collection": "binanceOrderAudit",
+  "retentionDays": 30
+}
+```
+
+`configured` reports Firestore credential readiness independently of the gate, so the pair is diagnostic rather than redundant: `enabled: false` with `configured: true` means "audit is off although credentials exist" (turn it on when you want the trail), while `enabled: true` with `configured: false` reports `status: "misconfigured"` — orders still execute but produce **no** audit record, which is the state worth alerting on. `status` is `ready` only when both hold. `ready` is credential readiness only (`enabled && configured`) and does not prove a write has succeeded, since audit writes are fail-open and a failed write is dropped with a warning. The block never exposes an operator identifier (stored only as a PBKDF2 hash), an exchange credential, or an API key. See [Environment Configuration](environment-configuration.md#binance-order-mutation-audit).
 
 ### GET /api/public/status
 

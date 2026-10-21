@@ -39,6 +39,17 @@ Telegram bot utility command to get current Telegram chat ID.
 /cryptobot id
 ```
 
+### /history `<symbol>` (alias: `/alertas`)
+
+List recent stored alerts from Telegram when `ENABLE_FIRESTORE_ALERT_STORAGE=true`. Results include symbol, status, and timestamps.
+
+**Examples:**
+```
+/history
+/history BTCUSDT limit=10
+/alertas estado failed limit=20
+```
+
 ### /analisis `<symbols>` (alias: `/analysis`)
 
 Create a TradingView technical analysis background job.

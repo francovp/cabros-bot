@@ -50,6 +50,7 @@ const {
 } = require('../tradingview/riskRewardMath');
 const { deriveAssetContext, parseTradingViewSignal } = require('../tradingview/parseTradingViewSignal');
 const { analyzeSentimentScoreDistribution } = require('../grounding/sentimentDistribution');
+const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
 
 function createEmptySignalClassCounts() {
 	return {
@@ -291,6 +292,7 @@ function canInitializeFirestore() {
 	}
 
 	return isEnabled()
+		|| process.env.ENABLE_AUTO_TRADE === 'true'
 		|| process.env.ENABLE_FIRESTORE_SCANNER_PRESETS === 'true'
 		|| process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true'
 		|| process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
@@ -303,7 +305,8 @@ function canInitializeFirestore() {
 		|| process.env.ENABLE_TOKEN_COST_BUDGET === 'true'
 		|| rcBudgetEnabled
 		|| process.env.ENABLE_FIRESTORE_ALERT_FEEDBACK === 'true'
-		|| process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE === 'true';
+		|| process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE === 'true'
+		|| process.env.ENABLE_TRADE_LEDGER === 'true';
 }
 
 function getAlertStorageRetentionDays() {
@@ -478,11 +481,28 @@ function formatAlertDocument(doc, options = {}) {
 	if (typeof data.dedupStatus === 'string') {
 		docObj.dedupStatus = data.dedupStatus;
 	}
+	if (typeof data.session === 'string' && data.session.trim()) {
+		docObj.session = data.session.trim();
+	}
 	if (data.truncated === true) {
 		docObj.truncated = true;
 		if (typeof data.originalLength === 'number' && Number.isFinite(data.originalLength)) {
 			docObj.originalLength = data.originalLength;
 		}
+	}
+	if (data.deployment && typeof data.deployment === 'object') {
+		docObj.deployment = {
+			platform: typeof data.deployment.platform === 'string' ? data.deployment.platform : null,
+			gitSha: typeof data.deployment.gitSha === 'string' ? data.deployment.gitSha : null,
+			service: typeof data.deployment.service === 'string' ? data.deployment.service : null,
+			runtimeVersion: typeof data.deployment.runtimeVersion === 'string' ? data.deployment.runtimeVersion : null,
+		};
+	}
+	if (Array.isArray(data.telegramMessageIds)) {
+		docObj.telegramMessageIds = data.telegramMessageIds;
+	}
+	if (data.reactions && typeof data.reactions === 'object') {
+		docObj.reactions = data.reactions;
 	}
 	return docObj;
 }
@@ -1385,6 +1405,21 @@ function addTokenUsage(totals, tokenUsage) {
 	totals.outputTokens += getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens);
 	totals.totalTokens += getNumericValue(tokenUsage.totalTokens || tokenUsage.total);
 	totals.totalCost += getNumericValue(tokenUsage.totalCost);
+
+	if (totals.pricing && tokenUsage.pricing && typeof tokenUsage.pricing === 'object') {
+		if (tokenUsage.pricing.unknownModelPricing) {
+			totals.pricing.unknownModelPricing = true;
+		}
+		if (Array.isArray(tokenUsage.pricing.unknownModels)) {
+			const set = new Set(totals.pricing.unknownModels);
+			for (const m of tokenUsage.pricing.unknownModels) {
+				if (typeof m === 'string' && m.trim()) {
+					set.add(m.trim());
+				}
+			}
+			totals.pricing.unknownModels = Array.from(set);
+		}
+	}
 }
 
 function createFeatureCostSummary() {
@@ -1609,6 +1644,14 @@ function summarizeTokenUsage(tokenUsage) {
 				totalCost: getNumericValue(usage.totalCost),
 			}]));
 		if (Object.keys(result.byFeature).length === 0) delete result.byFeature;
+	}
+	if (tokenUsage.pricing && typeof tokenUsage.pricing === 'object') {
+		result.pricing = {
+			unknownModelPricing: Boolean(tokenUsage.pricing.unknownModelPricing),
+			unknownModels: Array.isArray(tokenUsage.pricing.unknownModels)
+				? [...tokenUsage.pricing.unknownModels]
+				: [],
+		};
 	}
 	return result;
 }
@@ -2247,6 +2290,7 @@ async function saveAlertInternal(params = {}) {
 		discordWebhookUrl,
 		routing,
 		side,
+		session,
 		decision,
 		alertId: providedAlertId,
 	} = params;
@@ -2306,7 +2350,30 @@ async function saveAlertInternal(params = {}) {
 			source: typeof source === 'string' && source.trim() ? source.trim() : 'webhook',
 			useTradingViewData: Boolean(useTradingViewData),
 			tradingViewEnrichmentApplied: Boolean(tradingViewEnrichmentApplied),
+			deployment: getDeploymentIdentity(),
 		};
+		const collectedTelegramMessageIds = new Set();
+		if (Array.isArray(params.telegramMessageIds)) {
+			for (const mid of params.telegramMessageIds) {
+				if (mid != null) collectedTelegramMessageIds.add(String(mid).trim());
+			}
+		}
+		if (Array.isArray(deliveryResults)) {
+			for (const res of deliveryResults) {
+				if (res && (res.channel === 'telegram' || !res.channel)) {
+					if (res.messageId != null) collectedTelegramMessageIds.add(String(res.messageId).trim());
+					if (Array.isArray(res.messageIds)) {
+						for (const mid of res.messageIds) {
+							if (mid != null) collectedTelegramMessageIds.add(String(mid).trim());
+						}
+					}
+				}
+			}
+		}
+		const telegramMessageIdsArray = Array.from(collectedTelegramMessageIds).filter(Boolean);
+		if (telegramMessageIdsArray.length > 0) {
+			document.telegramMessageIds = telegramMessageIdsArray;
+		}
 		if (truncated) {
 			document.truncated = true;
 			document.originalLength = rawText.length;
@@ -2365,6 +2432,15 @@ async function saveAlertInternal(params = {}) {
 		}
 		if (extracted.exchange) {
 			document.exchange = extracted.exchange;
+		}
+
+		if (typeof session === 'string' && session.trim()) {
+			document.session = session.trim();
+		} else if (extracted.exchange) {
+			const { isEquityExchange, classifySession } = require('./EquitySessionService');
+			if (isEquityExchange(extracted.exchange)) {
+				document.session = classifySession({ exchange: extracted.exchange, symbol: extracted.symbol });
+			}
 		}
 
 		document.enrichmentData = applyDeterministicRiskReward(document.enrichmentData, side);
@@ -2585,6 +2661,246 @@ async function getAlertById(alertId) {
 	return formatAlertDocument(snapshot);
 }
 
+const MAX_REACTIONS_PER_ALERT = 5000;
+
+/**
+ * Find an alert by a Telegram message ID (stored in telegramMessageIds).
+ *
+ * @param {string|number} messageId
+ * @returns {Promise<Object|null>}
+ */
+async function findAlertByTelegramMessageId(messageId) {
+	if (!isEnabled() || messageId == null) {
+		return null;
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		return null;
+	}
+	try {
+		const strId = String(messageId).trim();
+		const snapshot = await firestore.collection(COLLECTION_NAME)
+			.where('telegramMessageIds', 'array-contains', strId)
+			.limit(1)
+			.get();
+		if (snapshot.empty || !snapshot.docs || snapshot.docs.length === 0) {
+			return null;
+		}
+		return formatAlertDocument(snapshot.docs[0]);
+	} catch (error) {
+		logger.warn(`[AlertStorageService] findAlertByTelegramMessageId failed: ${error.message}`);
+		return null;
+	}
+}
+
+/**
+ * Update reaction records on an alert document.
+ * Enforces a bounded size (MAX_REACTIONS_PER_ALERT = 5000) with oldest eviction.
+ *
+ * @param {string} alertId
+ * @param {Object} reactionData - { chatId, userId, emoji, at, weight, removed }
+ * @returns {Promise<boolean>}
+ */
+async function updateAlertReactions(alertId, reactionData = {}) {
+	if (!isEnabled() || !alertId || !reactionData) {
+		return false;
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		return false;
+	}
+	const { chatId, userId, emoji, at, weight, removed } = reactionData;
+	if (!chatId || !userId) {
+		return false;
+	}
+	const userKey = `${chatId}_${userId}`;
+	const docRef = firestore.collection(COLLECTION_NAME).doc(alertId);
+
+	try {
+		if (typeof firestore.runTransaction === 'function') {
+			await firestore.runTransaction(async (transaction) => {
+				const snapshot = await transaction.get(docRef);
+				if (!snapshot || !snapshot.exists) {
+					return;
+				}
+				const data = snapshot.data() || {};
+				const reactions = { ...(data.reactions || {}) };
+
+				if (removed) {
+					delete reactions[userKey];
+				} else {
+					reactions[userKey] = {
+						emoji: typeof emoji === 'string' ? emoji : '',
+						at: at || new Date().toISOString(),
+						weight: typeof weight === 'number' ? weight : 0,
+					};
+
+					const keys = Object.keys(reactions);
+					if (keys.length > MAX_REACTIONS_PER_ALERT) {
+						keys.sort((a, b) => {
+							const atA = new Date(reactions[a]?.at || 0).getTime();
+							const atB = new Date(reactions[b]?.at || 0).getTime();
+							return atA - atB;
+						});
+						const toRemove = keys.slice(0, keys.length - MAX_REACTIONS_PER_ALERT);
+						for (const k of toRemove) {
+							delete reactions[k];
+						}
+					}
+				}
+
+				transaction.update(docRef, { reactions });
+			});
+		} else {
+			const snapshot = await docRef.get();
+			if (!snapshot || !snapshot.exists) return false;
+			const data = snapshot.data() || {};
+			const reactions = { ...(data.reactions || {}) };
+			if (removed) {
+				delete reactions[userKey];
+			} else {
+				reactions[userKey] = {
+					emoji: typeof emoji === 'string' ? emoji : '',
+					at: at || new Date().toISOString(),
+					weight: typeof weight === 'number' ? weight : 0,
+				};
+				const keys = Object.keys(reactions);
+				if (keys.length > MAX_REACTIONS_PER_ALERT) {
+					keys.sort((a, b) => {
+						const atA = new Date(reactions[a]?.at || 0).getTime();
+						const atB = new Date(reactions[b]?.at || 0).getTime();
+						return atA - atB;
+					});
+					const toRemove = keys.slice(0, keys.length - MAX_REACTIONS_PER_ALERT);
+					for (const k of toRemove) {
+						delete reactions[k];
+					}
+				}
+			}
+			await docRef.update({ reactions });
+		}
+		return true;
+	} catch (error) {
+		logger.warn(`[AlertStorageService] updateAlertReactions failed: ${error.message}`);
+		return false;
+	}
+}
+
+/**
+ * Aggregate reactions into total, approve, reject, approveRate, and Beta-Bernoulli weightedScore.
+ *
+ * @param {Object} alertOrReactions
+ * @returns {Object} { total, approve, reject, approveRate, weightedScore }
+ */
+function aggregateReactions(alertOrReactions) {
+	const reactions = (alertOrReactions && alertOrReactions.reactions && typeof alertOrReactions.reactions === 'object')
+		? alertOrReactions.reactions
+		: ((alertOrReactions && typeof alertOrReactions === 'object' && !alertOrReactions.id && !alertOrReactions.text) ? alertOrReactions : {});
+
+	let approve = 0;
+	let reject = 0;
+
+	for (const entry of Object.values(reactions)) {
+		if (!entry || typeof entry !== 'object') continue;
+		if (entry.weight > 0) {
+			approve += 1;
+		} else if (entry.weight < 0) {
+			reject += 1;
+		}
+	}
+
+	const total = approve + reject;
+	const approveRate = total > 0 ? parseFloat((approve / total).toFixed(4)) : 0;
+
+	let confidence = 0.5;
+	if (alertOrReactions && typeof alertOrReactions.confidence === 'number' && Number.isFinite(alertOrReactions.confidence)) {
+		confidence = alertOrReactions.confidence;
+	} else if (alertOrReactions?.enrichmentData && typeof alertOrReactions.enrichmentData.confidence === 'number') {
+		confidence = alertOrReactions.enrichmentData.confidence;
+	}
+
+	const prior = confidence;
+	const weightedScore = total > 0
+		? Math.max(0, Math.min(1, parseFloat(((approve + 4 * prior) / (total + 4)).toFixed(4))))
+		: null;
+
+	return {
+		total,
+		approve,
+		reject,
+		approveRate,
+		weightedScore,
+	};
+}
+
+/**
+ * Retrieve top setups for a symbol based on user reactions over the last N days.
+ *
+ * @param {Object} options - { symbol, days, limit }
+ * @returns {Promise<Array>}
+ */
+async function getTopSetupsByReactions({ symbol, days = 7, limit = 3 } = {}) {
+	if (!isEnabled() || !symbol) {
+		return [];
+	}
+	const firestore = getFirestore();
+	if (!firestore) {
+		return [];
+	}
+	try {
+		const normSymbol = String(symbol).trim().toUpperCase();
+		const effectiveDays = Number.isFinite(days) && days > 0 ? days : 7;
+		const effectiveLimit = Number.isFinite(limit) && limit > 0 ? limit : 3;
+
+		const cutoff = new Date(Date.now() - effectiveDays * 24 * 60 * 60 * 1000);
+
+		const snapshot = await firestore.collection(COLLECTION_NAME)
+			.where('symbol', '==', normSymbol)
+			.get();
+
+		if (snapshot.empty || !snapshot.docs) {
+			return [];
+		}
+
+		const results = [];
+		for (const doc of snapshot.docs) {
+			const formatted = formatAlertDocument(doc);
+			if (!formatted.reactions || typeof formatted.reactions !== 'object') {
+				continue;
+			}
+			const receivedDate = formatted.receivedAt ? new Date(formatted.receivedAt) : null;
+			if (receivedDate && receivedDate < cutoff) {
+				continue;
+			}
+
+			const metrics = aggregateReactions(formatted);
+			if (metrics.total > 0) {
+				results.push({
+					id: formatted.id,
+					symbol: formatted.symbol || normSymbol,
+					receivedAt: formatted.receivedAt,
+					text: formatted.text,
+					reactionMetrics: metrics,
+				});
+			}
+		}
+
+		results.sort((a, b) => {
+			const scoreA = a.reactionMetrics.weightedScore ?? 0;
+			const scoreB = b.reactionMetrics.weightedScore ?? 0;
+			if (scoreB !== scoreA) {
+				return scoreB - scoreA;
+			}
+			return (b.reactionMetrics.approve || 0) - (a.reactionMetrics.approve || 0);
+		});
+
+		return results.slice(0, effectiveLimit);
+	} catch (error) {
+		logger.warn(`[AlertStorageService] getTopSetupsByReactions failed: ${error.message}`);
+		return [];
+	}
+}
+
 /**
  * Persist a replay attempt separately from the immutable original alert.
  *
@@ -2624,6 +2940,7 @@ async function saveReplayAttempt({ alertId, idempotencyKey, channels, deliveryRe
 		replayedAt: admin.firestore.FieldValue.serverTimestamp(),
 		expiresAt: buildRetentionExpiryTimestamp(),
 		source: 'alert-replay',
+		deployment: getDeploymentIdentity(),
 		...(typeof reEnriched === 'boolean' ? { reEnriched } : {}),
 		...(enrichmentData && typeof enrichmentData === 'object' ? { enrichmentData: stripUndefinedFieldsDeep(sanitizeEnrichmentData(enrichmentData)) } : {}),
 	};
@@ -3319,6 +3636,10 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 				outputTokens: 0,
 				totalTokens: 0,
 				totalCost: 0,
+				pricing: {
+					unknownModelPricing: false,
+					unknownModels: [],
+				},
 			},
 		},
 		delivery: {
@@ -3336,6 +3657,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 			byChannel: {},
 		},
 		costByFeature: createFeatureCostSummary(),
+		deployments: [],
 	};
 	if (includeDecisionRollup && isDecisionAuditEnabled()) {
 		summary.decision = { gates: createDecisionGatesRollup() };
@@ -3348,6 +3670,7 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 	// Cross-document state so multi-symbol / multi-document requests are not
 	// counted once per stored document.
 	const batchState = { seenBatches: new Set(), seenSymbols: new Map() };
+	const deploymentRollup = new Map();
 
 	for (const doc of docs) {
 		const data = doc.data() || {};
@@ -3356,6 +3679,47 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 		const useTradingViewData = Boolean(data.useTradingViewData);
 		const tradingViewEnrichmentApplied = Boolean(data.tradingViewEnrichmentApplied);
 		const tradingViewEnrichmentStatus = data.tradingViewEnrichmentStatus;
+
+		const dep = data.deployment && typeof data.deployment === 'object' ? data.deployment : null;
+		const platform = (dep && typeof dep.platform === 'string' && dep.platform.trim())
+			? dep.platform.trim()
+			: (dep && dep.platform === null ? null : 'unknown');
+		const gitSha = (dep && typeof dep.gitSha === 'string' && dep.gitSha.trim())
+			? dep.gitSha.trim()
+			: null;
+		const service = (dep && typeof dep.service === 'string' && dep.service.trim())
+			? dep.service.trim()
+			: (dep && dep.service === null ? null : (platform === 'unknown' ? null : 'cabros-bot'));
+		const runtimeVersion = (dep && typeof dep.runtimeVersion === 'string' && dep.runtimeVersion.trim())
+			? dep.runtimeVersion.trim()
+			: null;
+
+		const depKey = `${platform || 'null'}::${gitSha || 'null'}::${service || 'null'}`;
+		const receivedAtMs = getTimestampMillis(data.receivedAt || data.createdAt);
+		const docTimestamp = receivedAtMs !== null
+			? new Date(receivedAtMs).toISOString()
+			: (typeof data.receivedAt === 'string' ? data.receivedAt : null);
+
+		if (!deploymentRollup.has(depKey)) {
+			deploymentRollup.set(depKey, {
+				platform,
+				gitSha,
+				service,
+				runtimeVersion,
+				count: 0,
+				lastSeen: docTimestamp,
+			});
+		}
+		const depEntry = deploymentRollup.get(depKey);
+		depEntry.count += 1;
+		if (docTimestamp) {
+			if (!depEntry.lastSeen || docTimestamp > depEntry.lastSeen) {
+				depEntry.lastSeen = docTimestamp;
+			}
+		}
+		if (!depEntry.runtimeVersion && runtimeVersion) {
+			depEntry.runtimeVersion = runtimeVersion;
+		}
 
 		summary.totalAlerts += 1;
 		incrementCounter(summary.bySource, data.source);
@@ -3445,6 +3809,10 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 	if (summary.decision) finalizeDecisionGatesRollup(summary.decision.gates);
 	summary.enrichment.sentimentCalibration = buildSentimentCalibration(sentimentScores, rawScoreCapCount);
 	summary.enrichment.tokenUsage.totalCost = Number(summary.enrichment.tokenUsage.totalCost.toFixed(6));
+	// CB-583 / Issue #583: expose the same cost under a clearer
+	// `costEstimateUsd` alias so operators can see real spend without
+	// confusing it with input/output token counts.
+	summary.enrichment.costEstimateUsd = summary.enrichment.tokenUsage.totalCost;
 	for (const feature of FEATURE_TAGS) {
 		summary.costByFeature[feature].totalCost = Number(summary.costByFeature[feature].totalCost.toFixed(6));
 	}
@@ -3464,6 +3832,15 @@ async function summarizeAlerts({ from, to, limit, source, enriched, symbol, even
 	if (SUMMARY_INTERVALS[interval]) {
 		summary.buckets = buildSummaryBuckets(interval, window, docs);
 	}
+
+	summary.deployments = Array.from(deploymentRollup.values())
+		.sort((a, b) => {
+			const timeA = a.lastSeen || '';
+			const timeB = b.lastSeen || '';
+			if (timeB !== timeA) return timeB.localeCompare(timeA);
+			return b.count - a.count;
+		})
+		.slice(0, 50);
 
 	return summary;
 }
@@ -3497,6 +3874,11 @@ module.exports = {
 	formatEnrichmentSummary,
 	extractSourceDomains,
 	formatAlertDocument,
+	findAlertByTelegramMessageId,
+	updateAlertReactions,
+	aggregateReactions,
+	getTopSetupsByReactions,
+	MAX_REACTIONS_PER_ALERT,
 	STORAGE_UNAVAILABLE_CODE,
 	probeOrderedAlertRead,
 	FIRESTORE_ERROR_CATEGORIES,

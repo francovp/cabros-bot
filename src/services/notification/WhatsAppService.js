@@ -626,12 +626,13 @@ class WhatsAppService extends NotificationChannel {
 		// Format message for WhatsApp.
 		// If enriched is an object, use formatEnriched (async with URL shortening), otherwise format the text.
 		const signalClass = alert.signalClass || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.signalClass : undefined);
+		const session = alert.session || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.session : undefined);
 		let formattedText;
 		if (alert.enriched && typeof alert.enriched === 'object') {
-			formattedText = await this.formatter.formatEnriched(alert.enriched, { signalClass });
+			formattedText = await this.formatter.formatEnriched(alert.enriched, { signalClass, session });
 			console.debug('Formatted enriched WhatsApp message length:', formattedText.length);
 		} else {
-			formattedText = this.formatter.format(alert.enriched || alert.text, { signalClass });
+			formattedText = this.formatter.format(alert.enriched || alert.text, { signalClass, session });
 			console.debug('Formatted WhatsApp message length:', formattedText.length);
 		}
 

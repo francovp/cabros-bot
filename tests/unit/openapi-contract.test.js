@@ -2,35 +2,9 @@ const fs = require('fs');
 const path = require('path');
 const SwaggerParser = require('@apidevtools/swagger-parser');
 const MarkdownV2Formatter = require('../../src/services/notification/formatters/markdownV2Formatter');
-const { getRoutes } = require('../../src/routes');
+const { getMountedApiOperations } = require('../helpers/api-operations');
 
 const contractPath = path.join(__dirname, '../../src/openapi/openapi.json');
-
-function normalizeExpressPath(routePath) {
-	return `/api${routePath}`.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
-}
-
-function getMountedApiOperations() {
-	const routerOperations = getRoutes(null).stack
-		.filter((layer) => layer.route)
-		.flatMap((layer) => Object.keys(layer.route.methods)
-			.filter((method) => layer.route.methods[method])
-			.map((method) => `${method.toUpperCase()} ${normalizeExpressPath(layer.route.path)}`));
-
-	const app = require('../../app');
-	const appOperations = [];
-	for (const layer of app._router.stack) {
-		if (!layer.route) continue;
-		for (const method of Object.keys(layer.route.methods)) {
-			if (!layer.route.methods[method]) continue;
-			const routePath = layer.route.path;
-			if (!routePath.startsWith('/api/')) continue;
-			appOperations.push(`${method.toUpperCase()} ${routePath}`);
-		}
-	}
-
-	return [...routerOperations, ...appOperations].sort();
-}
 
 function getDocumentedApiOperations(contract) {
 	return Object.entries(contract.paths)
@@ -42,6 +16,14 @@ function getDocumentedApiOperations(contract) {
 }
 
 describe('OpenAPI contract', () => {
+	it('documents body-only auto-trade and the live occurrence identity', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const properties = contract.components.schemas.AlertRequest.properties;
+		expect(properties.autoTrade.type).toBe('boolean');
+		expect(properties.signalId).toMatchObject({ type: 'string', minLength: 1, maxLength: 128 });
+		expect(contract.components.schemas.AutoTradeOutcome.properties.reason.enum)
+			.toEqual(expect.arrayContaining(['ORDER_PENDING', 'SIGNAL_ID_REQUIRED', 'DURABLE_RESERVATION_UNAVAILABLE']));
+	});
 	it('documents all decision-audit dispatch channel modes', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 
@@ -77,6 +59,20 @@ describe('OpenAPI contract', () => {
 
 	it('exists as the canonical JSON source', () => {
 		expect(fs.existsSync(contractPath)).toBe(true);
+	});
+
+	it('documents stored alert sources as open strings', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const sourceParameter = contract.components.parameters.Source;
+		const storedSource = contract.components.schemas.StoredAlert.properties.source;
+
+		expect(sourceParameter.schema.enum).toBeUndefined();
+		expect(sourceParameter.example).toBe('webhook-alert');
+		expect(sourceParameter.description).toContain('Custom source values are also accepted as exact filters');
+		expect(sourceParameter.description).toContain('/api/webhook/message');
+		expect(storedSource.enum).toBeUndefined();
+		expect(storedSource.description).toContain('webhook-message');
+		expect(storedSource.description).toMatch(/custom source strings may also be stored/i);
 	});
 
 	it('documents per-symbol alert routing and symbol-scoped results', () => {
@@ -138,12 +134,17 @@ describe('OpenAPI contract', () => {
 			'GET /api/scanner-presets', 'POST /api/scanner-presets',
 			'GET /api/scanner-presets/{id}', 'PUT /api/scanner-presets/{id}',
 			'DELETE /api/scanner-presets/{id}', 'POST /api/scanner-presets/{id}/run',
+			'GET /api/alert-subscribers', 'POST /api/alert-subscribers',
+			'GET /api/alert-subscribers/{id}', 'PUT /api/alert-subscribers/{id}',
+			'PATCH /api/alert-subscribers/{id}', 'DELETE /api/alert-subscribers/{id}',
+			'POST /api/alert-subscribers/{id}/test',
 			'POST /api/jobs/tradingview-analysis', 'GET /api/jobs', 'GET /api/jobs/{jobId}',
 			'POST /api/jobs/{jobId}/cancel', 'POST /api/jobs/{jobId}/retry',
 			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/outcomes/calibration',
 			'GET /api/symbol-analyses', 'GET /api/symbol-analyses/summary',
 			'GET /api/trading/binance/orders', 'GET /api/trading/binance/orders/audit', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
 			'POST /api/trading/binance/orders/preview', 'GET /api/trading/binance/account/balances',
+			'GET /api/trading/positions', 'GET /api/trading/pnl/summary', 'GET /api/trading/trades',
 			'POST /api/news-monitor/pause', 'POST /api/news-monitor/resume', 'GET /api/news-monitor/status',
 			'GET /api/news-monitor/summary', 'GET /api/news-monitor/analyses',
 			'POST /api/admin/test-alert', 'GET /api/admin/events',
@@ -210,6 +211,9 @@ describe('OpenAPI contract', () => {
 			'GET /api/trading/binance/orders/audit': 'admin.viewer',
 			'POST /api/trading/binance/orders/preview': 'admin.viewer',
 			'GET /api/trading/binance/account/balances': 'admin.viewer',
+			'GET /api/trading/positions': 'admin.viewer',
+			'GET /api/trading/pnl/summary': 'admin.viewer',
+			'GET /api/trading/trades': 'admin.viewer',
 			'POST /api/trading/binance/orders': 'admin.operator',
 			'DELETE /api/trading/binance/orders': 'admin.operator',
 			'GET /api/alerts': 'admin.viewer',
@@ -219,6 +223,13 @@ describe('OpenAPI contract', () => {
 			'POST /api/alerts/batch/export': 'admin.viewer',
 			'POST /api/alerts/batch/delete': 'admin.operator',
 			'POST /api/scanner-presets': 'admin.operator',
+			'GET /api/alert-subscribers': 'admin.viewer',
+			'POST /api/alert-subscribers': 'admin.operator',
+			'GET /api/alert-subscribers/{id}': 'admin.viewer',
+			'PUT /api/alert-subscribers/{id}': 'admin.operator',
+			'PATCH /api/alert-subscribers/{id}': 'admin.operator',
+			'DELETE /api/alert-subscribers/{id}': 'admin.operator',
+			'POST /api/alert-subscribers/{id}/test': 'admin.operator',
 			'POST /api/jobs/{jobId}/cancel': 'admin.operator',
 			'POST /api/news-monitor/pause': 'admin.operator',
 			'POST /api/news-monitor/resume': 'admin.operator',
@@ -645,6 +656,49 @@ describe('OpenAPI contract', () => {
 			expect(statusExample.dependencies.tokenCostBudget.budgetUsd).toBe(5);
 			expect(statusExample.featureFlags.tokenCostBudget).toBe(false);
 		});
+
+		// Issue #1118: `binanceOrderAudit` was returned by the handler but declared
+		// in neither the spec nor a Postman example, so the generic drift test above
+		// had nothing to compare. Pinning the name keeps a future removal from
+		// passing silently on both surfaces at once.
+		it('documents BinanceOrderAuditDependency and exposes the audit flag in the Status contract', () => {
+			if (!fs.existsSync(contractPath)) return;
+			const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+			expect(contract.components.schemas.Status.properties.dependencies.properties.binanceOrderAudit)
+				.toEqual({ $ref: '#/components/schemas/BinanceOrderAuditDependency' });
+
+			const auditSchema = contract.components.schemas.BinanceOrderAuditDependency;
+			expect(auditSchema.type).toBe('object');
+			expect(auditSchema.additionalProperties).toBe(false);
+			expect(auditSchema.required).toEqual([
+				'enabled',
+				'configured',
+				'ready',
+				'status',
+				'collection',
+				'retentionDays',
+			]);
+			expect(auditSchema.properties.status.enum).toEqual(['ready', 'misconfigured', 'disabled']);
+			expect(auditSchema.properties.retentionDays).toEqual(expect.objectContaining({
+				type: 'integer',
+				minimum: 1,
+				maximum: 365,
+			}));
+
+			expect(contract.components.schemas.Status.description).toContain('featureFlags.binanceOrderAudit reports ENABLE_BINANCE_ORDER_AUDIT');
+
+			const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+			expect(statusExample.featureFlags.binanceOrderAudit).toBe(false);
+			expect(statusExample.dependencies.binanceOrderAudit).toEqual({
+				enabled: false,
+				configured: true,
+				ready: false,
+				status: 'disabled',
+				collection: 'binanceOrderAudit',
+				retentionDays: 30,
+			});
+		});
 	});
 
 	describe('news-monitor alert barrier fields (GH-712)', () => {
@@ -886,6 +940,27 @@ describe('status dependency contract drift', () => {
 		expect(missing).toEqual([]);
 	});
 
+	it('documents XRequestIdHeader parameter on every non-probe API operation (issue #1272)', () => {
+		const spec = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const probeRoutes = ['/healthcheck', '/ready'];
+		const missing = [];
+
+		for (const [routePath, operations] of Object.entries(spec.paths || {})) {
+			if (probeRoutes.includes(routePath)) continue;
+			for (const [method, operation] of Object.entries(operations)) {
+				if (!operation || typeof operation !== 'object' || !operation.operationId) continue;
+				const hasParam = (operation.parameters || []).some(
+					(p) => p && p.$ref === '#/components/parameters/XRequestIdHeader',
+				);
+				if (!hasParam) {
+					missing.push(`${method.toUpperCase()} ${routePath}`);
+				}
+			}
+		}
+
+		expect(missing).toEqual([]);
+	});
+
 	it('exposes every named Status dependency in some Postman status example', () => {
 		const examples = getStatusExamples();
 		expect(examples.length).toBeGreaterThan(0);
@@ -919,6 +994,87 @@ describe('status dependency contract drift', () => {
 		expect(
 			spec.paths['/api/alerts/{alertId}/replay'].post.responses['200'].$ref,
 		).toBe('#/components/responses/DeliveryResult');
+	});
+
+	it('documents the structured Express fallthrough response for webhook alerts', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const alertResponses = spec.paths['/api/webhook/alert'].post.responses;
+		const schema = spec.components.schemas.ExpressErrorEnvelope;
+
+		expect(alertResponses['400'].$ref).toBe('#/components/responses/Error');
+		expect(alertResponses['500'].$ref).toBe('#/components/responses/ExpressFallthroughError');
+		expect(schema.required).toEqual(expect.arrayContaining([
+			'success',
+			'error',
+			'code',
+			'requestId',
+			'retryable',
+		]));
+		expect(schema.properties.sentryEventId.type).toBe('string');
+		expect(spec.components.responses.ExpressFallthroughError.content['application/json'].examples)
+			.toHaveProperty('sentryUnavailable');
+	});
+
+	it('documents global Express 500 responses and body-parser 400/413/415 responses', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const operations = Object.entries(spec.paths).flatMap(([path, pathItem]) => Object.entries(pathItem)
+			.filter(([method]) => ['get', 'post', 'put', 'patch', 'delete', 'options', 'head'].includes(method))
+			.map(([method, operation]) => ({ path, method, operation })));
+		const missingFallthrough500 = operations
+			.filter(({ operation }) => !operation.responses?.['500'])
+			.map(({ method, path }) => `${method.toUpperCase()} ${path}`);
+		const missingBodyParserErrors = operations
+			.filter(({ operation }) => operation.requestBody && (
+				!operation.responses?.['400'] || !operation.responses?.['413'] || !operation.responses?.['415']
+			))
+			.map(({ method, path }) => `${method.toUpperCase()} ${path}`);
+		const incorrectlyDocumented413 = operations
+			.filter(({ operation }) => operation.responses?.['413']
+				&& operation.responses['413'].$ref !== '#/components/responses/PayloadTooLarge')
+			.map(({ method, path }) => `${method.toUpperCase()} ${path}`);
+		const incorrectlyDocumented415 = operations
+			.filter(({ operation }) => operation.requestBody
+				&& operation.responses?.['415']?.$ref !== '#/components/responses/ExpressParserError')
+			.map(({ method, path }) => `${method.toUpperCase()} ${path}`);
+
+		expect(missingFallthrough500).toEqual([]);
+		expect(missingBodyParserErrors).toEqual([]);
+		expect(incorrectlyDocumented413).toEqual([]);
+		expect(incorrectlyDocumented415).toEqual([]);
+		expect(spec.components.schemas.Error.properties.sentryEventId.type).toBe('string');
+		expect(spec.components.schemas.ExpressErrorEnvelope.properties.sentryEventId.type).toBe('string');
+		expect(spec.components.responses.PayloadTooLarge.content['application/json'].schema.oneOf).toEqual([
+			{ $ref: '#/components/schemas/PayloadTooLarge' },
+			{ $ref: '#/components/schemas/ExpressErrorEnvelope' },
+		]);
+		expect(spec.components.responses.PayloadTooLarge.content['application/json'].examples)
+			.toHaveProperty('urlEncodedParameterLimit');
+		const payloadTooLargeSchema = spec.components.schemas.PayloadTooLarge;
+		expect(payloadTooLargeSchema.required).toEqual(expect.arrayContaining([
+			'code',
+			'requestId',
+			'retryable',
+		]));
+		expect(spec.components.responses.PayloadTooLarge.content['application/json'].examples.bodySize.value)
+			.toEqual(expect.objectContaining({
+				code: 'PAYLOAD_TOO_LARGE',
+				requestId: expect.any(String),
+				retryable: false,
+			}));
+		expect(spec.components.responses.ExpressParserError.content['application/json'].schema.$ref)
+			.toBe('#/components/schemas/ExpressErrorEnvelope');
+		expect(spec.components.responses.ExpressParserError.headers['X-Request-Id'].$ref)
+			.toBe('#/components/headers/XRequestIdResponseHeader');
+		expect(spec.components.responses.ExpressParserError.content['application/json'].examples.unsupportedCharset.value)
+			.toEqual({
+				success: false,
+				error: 'Request could not be processed',
+				code: 'INVALID_REQUEST',
+				requestId: 'req-unsupported-charset-001',
+				retryable: false,
+			});
+		expect(spec.paths['/api/webhook/message'].post.responses['500'].$ref)
+			.toBe('#/components/responses/Error');
 	});
 
 	it('documents every lastErrorCategory the remote-config service can emit', () => {
@@ -975,6 +1131,65 @@ describe('status dependency contract drift', () => {
 			redrive: 5000,
 			scannerPreset: 5000,
 			remoteConfig: 5000,
+		});
+	});
+
+	it('documents telegramCommandRateLimiting on the status schema and StatusResult example (issue #1183)', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const statusDescription = spec.components.schemas.Status.description;
+		const statusExample = spec.components.responses.StatusResult.content['application/json'].example;
+
+		expect(statusDescription).toContain('featureFlags.telegramCommandRateLimiting reports ENABLE_TELEGRAM_COMMAND_RATE_LIMITING');
+		expect(statusExample.featureFlags.telegramCommandRateLimiting).toBe(true);
+	});
+
+	it('documents deployment provenance identity on stored alerts and rollup on alert summary (issue #1169)', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const storedAlert = spec.components.schemas.StoredAlert;
+		const alertSummary = spec.components.schemas.AlertSummary;
+		const deploymentIdentity = spec.components.schemas.DeploymentIdentity;
+		const deploymentSummaryItem = spec.components.schemas.DeploymentSummaryItem;
+
+		expect(storedAlert.properties.deployment).toEqual({ $ref: '#/components/schemas/DeploymentIdentity' });
+		expect(alertSummary.properties.deployments).toEqual({
+			type: 'array',
+			description: expect.any(String),
+			items: { $ref: '#/components/schemas/DeploymentSummaryItem' },
+		});
+		expect(deploymentIdentity.properties).toHaveProperty('platform');
+		expect(deploymentIdentity.properties).toHaveProperty('gitSha');
+		expect(deploymentIdentity.properties).toHaveProperty('service');
+		expect(deploymentIdentity.properties).toHaveProperty('runtimeVersion');
+		expect(deploymentSummaryItem.required).toEqual(expect.arrayContaining(['count', 'lastSeen']));
+	});
+
+	describe('Batch alert IDs nonblank contract (GH-1174)', () => {
+		const requestBodies = ['BatchDeleteAlerts', 'BatchExportAlerts', 'BatchReplayAlerts'];
+		const spec = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+
+		it.each(requestBodies)('declares minLength: 1 and pattern: "\\S" on alertIds items in %s', (bodyName) => {
+			const schema = spec.components.requestBodies[bodyName].content['application/json'].schema;
+			const alertIdsProp = schema.properties.alertIds;
+
+			expect(alertIdsProp.type).toBe('array');
+			expect(alertIdsProp.items).toEqual(expect.objectContaining({
+				type: 'string',
+				minLength: 1,
+				pattern: '\\S',
+			}));
+		});
+
+		it('matches non-empty string and rejects empty/whitespace-only with regex pattern "\\S"', () => {
+			const regex = new RegExp('\\S');
+
+			expect(regex.test('')).toBe(false);
+			expect(regex.test(' ')).toBe(false);
+			expect(regex.test('   ')).toBe(false);
+			expect(regex.test('\t')).toBe(false);
+			expect(regex.test('\n')).toBe(false);
+			expect(regex.test('alert-1')).toBe(true);
+			expect(regex.test('doc_123456')).toBe(true);
+			expect(regex.test('a')).toBe(true);
 		});
 	});
 });

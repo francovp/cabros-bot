@@ -332,4 +332,37 @@ describe('NotificationManagerBootstrap', () => {
 		await newInitialization;
 		expect(fresh.getInitialized()).toBe(newManager);
 	});
+
+	it('passes getURLShortener() to DiscordService during bootstrap', async () => {
+		const telegram = makeChannel('telegram');
+		const whatsapp = makeChannel('whatsapp');
+		const discord = makeChannel('discord');
+
+		const mockDiscordCtor = jest.fn(() => discord);
+		const mockWhatsAppCtor = jest.fn(() => whatsapp);
+
+		jest.doMock('../../src/services/notification/TelegramService', () => jest.fn(() => telegram));
+		jest.doMock('../../src/services/notification/WhatsAppService', () => mockWhatsAppCtor);
+		jest.doMock('../../src/services/notification/DiscordService', () => mockDiscordCtor);
+		jest.doMock('../../src/services/notification/NotificationManager', () => jest.fn().mockImplementation(() => ({
+			validateAll: jest.fn().mockResolvedValue(undefined),
+			getEnabledChannels: () => ['telegram', 'whatsapp', 'discord'],
+		})));
+
+		jest.resetModules();
+		const fresh = require('../../src/services/notification/NotificationManagerBootstrap');
+		const { getURLShortener } = require('../../src/controllers/webhooks/handlers/newsMonitor/urlShortener');
+
+		await fresh.initialize({});
+
+		expect(mockDiscordCtor).toHaveBeenCalledWith(expect.objectContaining({
+			logger: console,
+			urlShortener: getURLShortener(),
+		}));
+		expect(mockWhatsAppCtor).toHaveBeenCalledWith(expect.objectContaining({
+			logger: console,
+			urlShortener: getURLShortener(),
+		}));
+	});
 });
+

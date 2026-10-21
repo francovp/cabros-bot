@@ -2356,6 +2356,19 @@ describe('Alerts API Integration Tests', () => {
 			expect(res.body.code).toBe('INVALID_REQUEST');
 		});
 
+		it('returns 400 when alertIds contains empty or whitespace-only strings', async () => {
+			const badLists = [[''], ['   '], ['alert-1', ''], ['alert-1', '  \t  ']];
+			for (let i = 0; i < badLists.length; i++) {
+				const res = await request(app)
+					.post('/api/alerts/batch/replay')
+					.set('x-api-key', 'test-key')
+					.send({ alertIds: badLists[i], idempotencyKey: `k-bad-${i}` })
+					.expect(400);
+				expect(res.body.code).toBe('INVALID_REQUEST');
+				expect(res.body.error).toBe('alertIds must be a non-empty array of up to 50 alert IDs.');
+			}
+		});
+
 		it('returns 400 when alertIds exceeds MAX_BATCH_REPLAY_LIMIT (50)', async () => {
 			const tooMany = Array.from({ length: 51 }, (_, i) => `alert-${i}`);
 			const res = await request(app)
@@ -2730,6 +2743,18 @@ describe('Alerts API Integration Tests', () => {
 			expect(res.body.code).toBe('INVALID_REQUEST');
 		});
 
+		it('returns 400 when alertIds contains empty or whitespace-only strings', async () => {
+			for (const badList of [[''], ['   '], ['alert-1', ''], ['alert-1', '  \t  ']]) {
+				const res = await request(app)
+					.post('/api/alerts/batch/export')
+					.set('x-api-key', 'test-key')
+					.send({ alertIds: badList })
+					.expect(400);
+				expect(res.body.code).toBe('INVALID_REQUEST');
+				expect(res.body.error).toBe('alertIds must be a non-empty array of up to 1000 alert IDs.');
+			}
+		});
+
 		it('returns 400 when alertIds exceeds 1000', async () => {
 			const tooMany = Array.from({ length: 1001 }, (_, i) => `alert-${i}`);
 			const res = await request(app)
@@ -2817,6 +2842,18 @@ describe('Alerts API Integration Tests', () => {
 				.send({ alertIds: [] })
 				.expect(400);
 			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 400 when alertIds contains empty or whitespace-only strings', async () => {
+			for (const badList of [[''], ['   '], ['alert-1', ''], ['alert-1', '  \t  ']]) {
+				const res = await request(app)
+					.post('/api/alerts/batch/delete')
+					.set('x-api-key', 'test-key')
+					.send({ alertIds: badList })
+					.expect(400);
+				expect(res.body.code).toBe('INVALID_REQUEST');
+				expect(res.body.error).toBe('alertIds must be a non-empty array of up to 500 alert IDs.');
+			}
 		});
 
 		it('returns 400 when alertIds exceeds MAX_BATCH_DELETE_LIMIT (500)', async () => {

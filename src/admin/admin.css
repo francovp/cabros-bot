@@ -194,6 +194,7 @@ textarea { resize: vertical; font-family: inherit; }
 .progress-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent-strong), var(--accent)); transition: width var(--speed) ease; }
 .report-text { white-space: pre-wrap; overflow-wrap: anywhere; padding: 1rem; border-radius: var(--radius-md); background: #f8fafb; border: 1px solid var(--border); font-family: var(--font-mono); font-size: .82rem; line-height: 1.5; }
 .alert-card .alert-preview { margin: 0; color: #3e4f60; font-size: .88rem; line-height: 1.5; }
+.active-filters { margin: 0; padding: .55rem .8rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-soft); color: var(--muted); font-size: .82rem; font-family: var(--font-mono); }
 .badge-row { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; }
 .mono-line { display: flex; align-items: center; gap: .45rem; margin: .2rem 0 0; font-family: var(--font-mono); font-size: .78rem; color: #196c63; overflow-wrap: anywhere; }
 .delivery-ok { border-color: #b7d8cb; background: #eaf6ee; color: var(--success); font-weight: 700; }
@@ -386,3 +387,8 @@ cabros-fields, cabros-result { display: block; min-width: 0; }
 .quick-control-output { margin: 0; }
 .trading-pending-notice { display: grid; gap: .5rem; }
 .data-table-scroll { min-width: 26rem; }
+.trade-ticket { border: 1px solid var(--border-bright); background: var(--panel-soft); margin-top: .75rem; }
+.ticket-actions { display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; margin-top: .5rem; }
+.ticket-confirm-input { max-width: 16rem; }
+.positions-panel { display: grid; gap: 1rem; }
+.positions-ticket-host { margin-top: .75rem; }

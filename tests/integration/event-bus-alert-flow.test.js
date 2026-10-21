@@ -86,9 +86,10 @@ describe('event bus alert flow', () => {
 	});
 
 	describe('end-to-end alert path', () => {
+		let notificationManager;
+
 		beforeEach(async () => {
-			const manager = await initializeNotificationServices(mockBot);
-			expect(manager).toBe(getNotificationManager());
+			notificationManager = await initializeNotificationServices(mockBot);
 
 			app = express();
 			app.use(express.json());
@@ -110,6 +111,8 @@ describe('event bus alert flow', () => {
 		});
 
 		it('publishes alert.delivered to every subscriber after delivery completes', async () => {
+			expect(notificationManager).toBe(getNotificationManager());
+
 			const subscribers = [jest.fn(), jest.fn(), jest.fn()];
 			subscribers.forEach((handler) => eventBus.on(EVENT_NAMES.ALERT_DELIVERED, handler));
 

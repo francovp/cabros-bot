@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const idempotencyStorageService = require('./IdempotencyStorageService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 
 class IdempotencyService {
 	constructor() {
@@ -13,9 +14,7 @@ class IdempotencyService {
 		this.maxKeys = 10000; // Protect against memory exhaustion
 
 		// Periodic cleanup of expired entries
-		this.cleanupInterval = setInterval(() => {
-			this.cleanup();
-		}, 60000).unref();
+		this.cleanupInterval = createManagedInterval('webhook-idempotency-cleanup', () => this.cleanup(), 60000).unref();
 	}
 
 	/**

@@ -302,10 +302,22 @@ describe('RemoteConfigService', () => {
 			['ALERT_SCHEDULER_INTERVAL_MS', '4000000', 60000],
 			['ALERT_SCHEDULER_BATCH_LIMIT', '0', 10],
 			['ALERT_SCHEDULER_BATCH_LIMIT', '101', 10],
+			['TRADINGVIEW_MCP_CACHE_TTL_MS', '9999', 90000],
+			['TRADINGVIEW_MCP_CACHE_TTL_MS', '600001', 90000],
 		].forEach(([key, value, expected]) => {
 			process.env[key] = value;
 			expect(remoteConfigService.getRuntimeConfig()[key]).toBe(expected);
 		});
+	});
+
+	it('preserves valid TradingView MCP cache environment settings', () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_CACHE = 'true';
+		process.env.TRADINGVIEW_MCP_CACHE_TTL_MS = '120000';
+
+		expect(remoteConfigService.getRuntimeConfig()).toEqual(expect.objectContaining({
+			ENABLE_TRADINGVIEW_MCP_CACHE: true,
+			TRADINGVIEW_MCP_CACHE_TTL_MS: 120000,
+		}));
 	});
 
 	it('preserves valid environment values when Remote Config is disabled', async () => {
@@ -617,6 +629,7 @@ describe('RemoteConfigService', () => {
 			NEWS_MAX_ALERTS_PER_BATCH: 15,
 			NEWS_MAX_ALERTS_PER_WINDOW: 30,
 			NEWS_MAX_ALERTS_PER_WINDOW_MS: 600000,
+			NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS: 3600000,
 		});
 		alertStorageService.getFirestore.mockReturnValue({});
 
@@ -626,6 +639,7 @@ describe('RemoteConfigService', () => {
 		expect(config.NEWS_MAX_ALERTS_PER_BATCH).toBe(15);
 		expect(config.NEWS_MAX_ALERTS_PER_WINDOW).toBe(30);
 		expect(config.NEWS_MAX_ALERTS_PER_WINDOW_MS).toBe(600000);
+		expect(config.NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS).toBe(3600000);
 		expect(config.GROUNDING_MAX_SOURCES).toBe(5);
 		expect(config.GROUNDING_TIMEOUT_MS).toBe(45000);
 		expect(config.GROUNDING_MAX_LENGTH).toBe(3000);
@@ -869,6 +883,121 @@ describe('RemoteConfigService', () => {
 
 		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('ENABLE_ADMIN_SSE');
 		expect(config).not.toHaveProperty('ENABLE_ADMIN_SSE');
+	});
+
+	it('supports job queue and scanner scheduler parameters via Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		mockTemplate({
+			SCANNER_PRESET_SCHEDULER_LEASE_MS: 180000,
+			JOB_QUEUE_ATTEMPTS: 8,
+			JOB_QUEUE_BACKOFF_MS: 45000,
+			JOB_QUEUE_CONCURRENCY: 4,
+			JOB_QUEUE_CLAIM_LEASE_MS: 90000,
+			JOB_QUEUE_CONNECT_TIMEOUT_MS: 8000,
+			JOB_QUEUE_PROBE_TIMEOUT_MS: 10000,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.SCANNER_PRESET_SCHEDULER_LEASE_MS).toBe(180000);
+		expect(config.JOB_QUEUE_ATTEMPTS).toBe(8);
+		expect(config.JOB_QUEUE_BACKOFF_MS).toBe(45000);
+		expect(config.JOB_QUEUE_CONCURRENCY).toBe(4);
+		expect(config.JOB_QUEUE_CLAIM_LEASE_MS).toBe(90000);
+		expect(config.JOB_QUEUE_CONNECT_TIMEOUT_MS).toBe(8000);
+		expect(config.JOB_QUEUE_PROBE_TIMEOUT_MS).toBe(10000);
+	});
+
+	it('enforces bounds on job queue and scanner scheduler parameters', () => {
+		process.env.SCANNER_PRESET_SCHEDULER_LEASE_MS = '700000'; // max 600000
+		process.env.JOB_QUEUE_ATTEMPTS = '60'; // max 50
+		process.env.JOB_QUEUE_BACKOFF_MS = '500'; // min 1000
+		process.env.JOB_QUEUE_CONCURRENCY = '150'; // max 100
+		process.env.JOB_QUEUE_CLAIM_LEASE_MS = '400000'; // max 300000
+		process.env.JOB_QUEUE_CONNECT_TIMEOUT_MS = '100000'; // max 60000
+		process.env.JOB_QUEUE_PROBE_TIMEOUT_MS = '200000'; // max 120000
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.SCANNER_PRESET_SCHEDULER_LEASE_MS).toBe(120000); // fallback to default
+		expect(config.JOB_QUEUE_ATTEMPTS).toBe(5); // fallback to default
+		expect(config.JOB_QUEUE_BACKOFF_MS).toBe(30000); // fallback to default
+		expect(config.JOB_QUEUE_CONCURRENCY).toBe(1); // fallback to default
+		expect(config.JOB_QUEUE_CLAIM_LEASE_MS).toBe(60000); // fallback to default
+		expect(config.JOB_QUEUE_CONNECT_TIMEOUT_MS).toBe(5000); // fallback to default
+		expect(config.JOB_QUEUE_PROBE_TIMEOUT_MS).toBe(5000); // fallback to default
+	});
+
+	it('supports WHATSAPP_COMMAND_POLL_INTERVAL_MS via Remote Config with bounds enforcement', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS = '4000';
+		mockTemplate({
+			WHATSAPP_COMMAND_POLL_INTERVAL_MS: 10000,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		const config = remoteConfigService.getRuntimeConfig();
+		expect(config.WHATSAPP_COMMAND_POLL_INTERVAL_MS).toBe(10000);
+
+		// Test out of range remote values fall back to environment/default
+		mockTemplate({
+			WHATSAPP_COMMAND_POLL_INTERVAL_MS: 100, // below min: 500
+		});
+		await remoteConfigService.loadNow();
+		expect(remoteConfigService.getRuntimeConfig().WHATSAPP_COMMAND_POLL_INTERVAL_MS).toBe(4000);
+
+		mockTemplate({
+			WHATSAPP_COMMAND_POLL_INTERVAL_MS: 70000, // above max: 60000
+		});
+		await remoteConfigService.loadNow();
+		expect(remoteConfigService.getRuntimeConfig().WHATSAPP_COMMAND_POLL_INTERVAL_MS).toBe(4000);
+	});
+
+	it('enforces bounds on WHATSAPP_COMMAND_POLL_INTERVAL_MS in environment parsing', () => {
+		process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS = '200'; // min: 500
+		expect(remoteConfigService.getRuntimeConfig().WHATSAPP_COMMAND_POLL_INTERVAL_MS).toBe(3000);
+
+		process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS = '90000'; // max: 60000
+		expect(remoteConfigService.getRuntimeConfig().WHATSAPP_COMMAND_POLL_INTERVAL_MS).toBe(3000);
+
+		process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS = '5000';
+		expect(remoteConfigService.getRuntimeConfig().WHATSAPP_COMMAND_POLL_INTERVAL_MS).toBe(5000);
+	});
+
+	it('keeps process-startup gates and security controls out of Remote Config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.JOB_EXECUTION_MODE = 'local';
+		process.env.NOTIFICATION_REDRIVE_WORKER_ROLE = 'web';
+		process.env.SCANNER_PRESET_SCHEDULER_WORKER_ROLE = 'web';
+		process.env.ALLOW_HTTP_CALLBACKS = 'false';
+		process.env.ALLOW_PRIVATE_CALLBACKS = 'false';
+		mockTemplate({
+			JOB_EXECUTION_MODE: 'render-worker',
+			NOTIFICATION_REDRIVE_WORKER_ROLE: 'worker',
+			SCANNER_PRESET_SCHEDULER_WORKER_ROLE: 'worker',
+			ALLOW_HTTP_CALLBACKS: true,
+			ALLOW_PRIVATE_CALLBACKS: true,
+		});
+		alertStorageService.getFirestore.mockReturnValue({});
+
+		await remoteConfigService.loadNow();
+
+		// Process-startup execution mode and role gates must remain environment-only
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('JOB_EXECUTION_MODE');
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('NOTIFICATION_REDRIVE_WORKER_ROLE');
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('SCANNER_PRESET_SCHEDULER_WORKER_ROLE');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('JOB_EXECUTION_MODE');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('NOTIFICATION_REDRIVE_WORKER_ROLE');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('SCANNER_PRESET_SCHEDULER_WORKER_ROLE');
+
+		// Security controls (SSRF protection / callback protocols) must remain environment-only
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('ALLOW_HTTP_CALLBACKS');
+		expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty('ALLOW_PRIVATE_CALLBACKS');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('ALLOW_HTTP_CALLBACKS');
+		expect(remoteConfigService.getRuntimeConfig()).not.toHaveProperty('ALLOW_PRIVATE_CALLBACKS');
 	});
 
 	describe('getStatus readiness and lifecycle states', () => {

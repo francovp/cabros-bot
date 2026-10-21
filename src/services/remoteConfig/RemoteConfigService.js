@@ -4,6 +4,7 @@ const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 const alertStorageService = require('../storage/AlertStorageService');
 const { parseEntryPriceSources } = require('../../lib/signalOutcomeEntryPriceSources');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 const {
 	applyStartupJitter,
 	getStartupJitterDelayMs,
@@ -23,6 +24,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	NEWS_GEMINI_CONCURRENCY: { type: 'number', defaultValue: Infinity, integer: true, min: 1, max: 50 },
 	NEWS_GEMINI_QUOTA_MAX_RETRIES: { type: 'number', defaultValue: 2, integer: true, min: 1, max: 5 },
 	NEWS_GEMINI_QUOTA_RETRY_BASE_MS: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 60000 },
+	NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS: { type: 'number', defaultValue: 1800000, integer: true, min: 1000, max: 86400000 },
 	NEWS_MAX_ALERTS_PER_BATCH: { type: 'number', defaultValue: 10, integer: true, min: 1, max: 50 },
 	NEWS_MAX_ALERTS_PER_WINDOW: { type: 'number', defaultValue: 20, integer: true, min: 1, max: 200 },
 	NEWS_MAX_ALERTS_PER_WINDOW_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1000, max: 3600000 },
@@ -32,6 +34,10 @@ const PARAMETER_SCHEMA = Object.freeze({
 	TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 100 },
 	TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS: { type: 'number', defaultValue: 600000, integer: true, min: 1000, max: 86400000 },
 	TRADINGVIEW_MCP_PAGE_COOLDOWN_MS: { type: 'number', defaultValue: 3600000, integer: true, min: 1000, max: 86400000 },
+	TRADINGVIEW_MCP_CACHE_TTL_MS: { type: 'number', defaultValue: 90000, integer: true, min: 10000, max: 600000 },
+	ENABLE_TRADINGVIEW_MCP_WARMUP: { type: 'boolean', defaultValue: true },
+	TRADINGVIEW_MCP_WARMUP_INTERVAL_MS: { type: 'number', defaultValue: 600000, integer: true, min: 60000, max: 3600000 },
+	TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS: { type: 'number', defaultValue: 60000, integer: true, min: 5000, max: 120000 },
 	ENABLE_MESSAGE_FOOTER_METADATA: { type: 'boolean', defaultValue: true },
 	GROUNDING_MAX_SOURCES: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	GROUNDING_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 120000 },
@@ -80,6 +86,12 @@ const PARAMETER_SCHEMA = Object.freeze({
 	WEBHOOK_IDEMPOTENCY_TTL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1, max: 86400000 },
 	JOB_CALLBACK_RETRY_DELAY_MS: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 60000 },
 	JOB_POLL_INTERVAL_MS: { type: 'number', defaultValue: 15000, integer: true, min: 1000, max: 300000 },
+	JOB_QUEUE_ATTEMPTS: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 50 },
+	JOB_QUEUE_BACKOFF_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1000, max: 300000 },
+	JOB_QUEUE_CONCURRENCY: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 100 },
+	JOB_QUEUE_CLAIM_LEASE_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 300000 },
+	JOB_QUEUE_CONNECT_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1000, max: 60000 },
+	JOB_QUEUE_PROBE_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1000, max: 120000 },
 	SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
 	SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 300000 },
 	SIGNAL_OUTCOME_WINDOWS: { type: 'string', defaultValue: '1h,4h,1D,1W' },
@@ -106,12 +118,14 @@ const PARAMETER_SCHEMA = Object.freeze({
 	NOTIFICATION_REDRIVE_MAX_AGE_MS: { type: 'number', defaultValue: 3600000, integer: true, min: 60000, max: 86400000 },
 	SCANNER_PRESET_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
 	SCANNER_PRESET_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
+	SCANNER_PRESET_SCHEDULER_LEASE_MS: { type: 'number', defaultValue: 120000, integer: true, min: 10000, max: 600000 },
 	NEWS_MONITOR_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 10000, max: 3600000 },
 	NEWS_MONITOR_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
 	ALERT_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
 	ALERT_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 10, integer: true, min: 1, max: 100 },
 	ENABLE_GEMINI_GROUNDING: { type: 'boolean', defaultValue: false },
 	ENABLE_TRADINGVIEW_MCP_ENRICHMENT: { type: 'boolean', defaultValue: false },
+	ENABLE_TRADINGVIEW_MCP_CACHE: { type: 'boolean', defaultValue: false },
 	ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION: { type: 'boolean', defaultValue: false },
 	ENABLE_MARKET_SCANNER: { type: 'boolean', defaultValue: false },
 	ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: { type: 'boolean', defaultValue: false },
@@ -119,8 +133,12 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_API_ONLY_MODE: { type: 'boolean', defaultValue: false },
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 	ENABLE_SIGNAL_CLASS_MARKER: { type: 'boolean', defaultValue: true },
+	ENABLE_EQUITY_SESSION_TAG: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	ENABLE_MIN_ALERT_CONTEXT: { type: 'boolean', defaultValue: false },
+	MIN_ALERT_PROVISIONAL_STOP_PERCENT: { type: 'number', defaultValue: 2.5, min: 0.1, max: 20 },
+	MIN_ALERT_PROVISIONAL_TARGET_PERCENT: { type: 'number', defaultValue: 5.0, min: 0.1, max: 40 },
 	WORKER_STARTUP_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
 	SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
 	NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
@@ -146,6 +164,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	REQUEST_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1000, max: 120000 },
 	ENABLE_BINANCE_ORDER_AUDIT: { type: 'boolean', defaultValue: false },
 	BINANCE_ORDER_AUDIT_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
+	TRADE_LEDGER_MAX_SCAN: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 20000 },
+	// ENABLE_TRADE_LEDGER excluded: environment-only gate controlling durable persistence.
 	// ENABLE_SYMBOL_ANALYSIS_STORAGE, SYMBOL_ANALYSIS_RETENTION_DAYS excluded:
 	// a process-startup gate that decides where a collection lives and its TTL
 	// horizon are deployment-controlled, matching ENABLE_FIRESTORE_IDEMPOTENCY,
@@ -167,6 +187,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	// WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_NAMESPACE excluded:
 	// notification destinations — must remain deployment-controlled.
 	WHATSAPP_TEMPLATE_PARAM_ORDER: { type: 'string', defaultValue: 'symbol,price,action,setup,timeframe,source' },
+	WHATSAPP_COMMAND_POLL_INTERVAL_MS: { type: 'number', defaultValue: 3000, integer: true, min: 500, max: 60000 },
 	// ENABLE_TEST_ALERT, TEST_ALERT_DAILY_LIMIT, ENABLE_ADMIN_SSE excluded:
 	// route-enablement gates and abuse rate-limiting controls must remain deployment-controlled.
 	ADMIN_SSE_MAX_CLIENT_CONNECTIONS: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 20 },
@@ -188,6 +209,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	// deployment has ENABLE_FIREBASE_REMOTE_CONFIG=false, so it keeps the render.yaml
 	// value and can never mutate the production collection through a remote toggle.
 	ENABLE_FIRESTORE_ALERT_STORAGE: { type: 'boolean', defaultValue: false },
+	ENABLE_FIRESTORE_ALERT_SUBSCRIBERS: { type: 'boolean', defaultValue: false },
 	ENABLE_FIRESTORE_IDEMPOTENCY: { type: 'boolean', defaultValue: false },
 	ENABLE_FIRESTORE_JOB_STORAGE: { type: 'boolean', defaultValue: false },
 	ENABLE_FIRESTORE_SCANNER_PRESETS: { type: 'boolean', defaultValue: false },
@@ -312,6 +334,8 @@ function getEnvironmentConfig() {
 			config[key] = parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES, 2);
 		} else if (key === 'NEWS_GEMINI_QUOTA_RETRY_BASE_MS') {
 			config[key] = parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS, 1000);
+		} else if (key === 'NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS') {
+			config[key] = parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS, 1800000);
 		} else if (key === 'WEBHOOK_IDEMPOTENCY_TTL_MS') {
 			config[key] = parseEnvironmentNumber(process.env[key], schema, schema.defaultValue);
 		} else if (key === 'EQUITY_MARKET_DATA_RPM') {
@@ -705,9 +729,7 @@ async function start() {
 				return;
 			}
 			void loadNow();
-			refreshTimer = setInterval(() => {
-				void loadNow();
-			}, getRefreshIntervalMs());
+			refreshTimer = createManagedInterval('remote-config-refresh', () => loadNow(), getRefreshIntervalMs());
 			if (typeof refreshTimer.unref === 'function') {
 				refreshTimer.unref();
 			}
@@ -718,9 +740,7 @@ async function start() {
 				refreshTimeout.unref();
 			}
 		} else {
-			refreshTimer = setInterval(() => {
-				void loadNow();
-			}, getRefreshIntervalMs());
+			refreshTimer = createManagedInterval('remote-config-refresh', () => loadNow(), getRefreshIntervalMs());
 			if (typeof refreshTimer.unref === 'function') {
 				refreshTimer.unref();
 			}
@@ -746,7 +766,7 @@ function stop() {
 		refreshTimeout = null;
 	}
 	if (refreshTimer) {
-		clearInterval(refreshTimer);
+		refreshTimer.clear();
 		refreshTimer = null;
 	}
 }

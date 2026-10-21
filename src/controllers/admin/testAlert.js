@@ -19,6 +19,7 @@ const {
 	initializeNotificationServices,
 	processEnrichment,
 } = require('../webhooks/handlers/alert/alert');
+const { getURLShortener } = require('../webhooks/handlers/newsMonitor/urlShortener');
 
 const RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const adminRateLimits = new Map();
@@ -95,7 +96,7 @@ function resolveBot(botOrGetter) {
 	return botOrGetter || null;
 }
 
-function postTestAlert(botOrGetter) {
+function postTestAlert(botOrGetter, deps = {}) {
 	return async (req, res) => {
 		if (!isTestAlertEnabled()) {
 			return sendErrorFrom(res, 403, {
@@ -230,8 +231,20 @@ function postTestAlert(botOrGetter) {
 		}
 
 		// Channel formatting
-		const telegramFormatter = new MarkdownV2Formatter();
-		const whatsappFormatter = new WhatsAppMarkdownFormatter();
+		const liveWhatsAppService = notificationManager?.channels?.get?.('whatsapp');
+		const liveDiscordService = notificationManager?.channels?.get?.('discord');
+		const activeUrlShortener = deps.urlShortener !== undefined
+			? deps.urlShortener
+			: (liveWhatsAppService?.urlShortener || liveDiscordService?.urlShortener || getURLShortener());
+
+		const telegramFormatter = (deps && deps.telegramFormatter) || new MarkdownV2Formatter();
+		const whatsappFormatter = (deps && deps.whatsappFormatter)
+			|| (liveWhatsAppService?.formatter && (deps.urlShortener === undefined || liveWhatsAppService.formatter.urlShortener === activeUrlShortener)
+				? liveWhatsAppService.formatter
+				: new WhatsAppMarkdownFormatter({
+					logger: liveWhatsAppService?.logger || console,
+					urlShortener: activeUrlShortener,
+				}));
 		const telegramText = alert.enriched && typeof alert.enriched === 'object'
 			? telegramFormatter.formatEnriched(alert.enriched)
 			: telegramFormatter.format(alert.text);

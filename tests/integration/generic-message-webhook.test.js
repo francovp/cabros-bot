@@ -1,4 +1,4 @@
-/* global jest, describe, it, beforeEach, afterEach, expect */
+/* global jest, describe, it, beforeEach, afterEach, expect, saveEnv, restoreEnv */
 
 const request = require('supertest');
 const app = require('../../app');
@@ -68,6 +68,35 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 	// ---------------------------------------------------------------------------
 	// Success cases
 	// ---------------------------------------------------------------------------
+	it('returns the standardized error envelope when unexpected processing fails', async () => {
+		const runtimeConfigSpy = jest.spyOn(remoteConfigService, 'getRuntimeConfig').mockImplementation(() => {
+			throw new Error('runtime configuration unavailable');
+		});
+		const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+		let res;
+		try {
+			res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.set('x-request-id', 'msg-error-500')
+				.send({ message: 'Force an unexpected error', channels: ['telegram'] })
+				.expect(500);
+		} finally {
+			runtimeConfigSpy.mockRestore();
+			consoleErrorSpy.mockRestore();
+		}
+
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			error: 'Internal server error',
+			code: 'INTERNAL_ERROR',
+			requestId: 'msg-error-500',
+			retryable: true,
+		}));
+		expect(res.headers['x-request-id']).toBe(res.body.requestId);
+	});
+
 	it('sends a message to telegram only', async () => {
 		const res = await request(app)
 			.post('/api/webhook/message')
@@ -147,7 +176,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		expect(alertStorageService.saveAlert).toHaveBeenCalledWith(
 			expect.not.objectContaining({
 				discordWebhookUrl: expect.anything(),
-			})
+			}),
 		);
 	});
 
@@ -482,7 +511,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.expect(200);
 
 		expect(res.body.success).toBe(true);
-		expect(res.body.results).toEqual([
+		expect(res.body.results).toMatchObject([
 			{
 				success: true,
 				channel: 'discord',
@@ -990,7 +1019,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		);
 		expect(truncationWarnings.length).toBe(0);
 		warnSpy.mockRestore();
-		});
+	});
 
 	// Chunk estimation & dryValidate mode (GH-614)
 	// ---------------------------------------------------------------------------

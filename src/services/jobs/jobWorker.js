@@ -3,6 +3,8 @@
 const { jobQueue } = require('./JobQueue');
 const { JobService } = require('./JobService');
 const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 function getWorkerId() {
 	return process.env.RENDER_INSTANCE_ID
@@ -123,9 +125,11 @@ async function startJobWorker({
 				return;
 			}
 			void reconcileQueuedJobs();
-			reconciliationTimer = globalThis.setInterval(() => {
-				void reconcileQueuedJobs();
-			}, JOB_QUEUE_RECONCILIATION_INTERVAL_MS);
+			reconciliationTimer = createManagedInterval(
+				'job-worker-reconciliation',
+				() => reconcileQueuedJobs(),
+				JOB_QUEUE_RECONCILIATION_INTERVAL_MS,
+			);
 			if (typeof reconciliationTimer.unref === 'function') {
 				reconciliationTimer.unref();
 			}
@@ -196,7 +200,7 @@ async function startJobWorker({
 				stopped = true;
 				startupAbortController.abort();
 				if (reconciliationTimer) {
-					globalThis.clearInterval(reconciliationTimer);
+					reconciliationTimer.clear();
 				}
 				if (worker) {
 					await queue.closeWorker(worker);
@@ -215,8 +219,11 @@ async function startJobWorker({
 	let activePollPromise = null;
 	const startupAbortController = new AbortController();
 	const inFlightJobs = new Set();
-	const maxAttempts = Number(process.env.JOB_QUEUE_ATTEMPTS) > 0
-		? Math.min(Number(process.env.JOB_QUEUE_ATTEMPTS), 20)
+	const configuredAttempts = Number(
+		getRuntimeConfig().JOB_QUEUE_ATTEMPTS ?? process.env.JOB_QUEUE_ATTEMPTS,
+	);
+	const maxAttempts = configuredAttempts > 0
+		? Math.min(configuredAttempts, 50)
 		: 5;
 
 	const pollOnce = async () => {

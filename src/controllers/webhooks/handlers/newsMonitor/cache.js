@@ -20,6 +20,11 @@ const { randomUUID } = require('node:crypto');
 
 const DELIVERY_LOCK_TTL_MS = 30_000;
 const DELIVERY_LOCK_RENEW_INTERVAL_MS = 10_000;
+const USAGE_CLAIM_LEASE_MS = 120_000;
+const USAGE_CLAIM_RENEW_INTERVAL_MS = 30_000;
+const USAGE_CLAIM_STATE = 'claimed';
+const USAGE_CLAIM_TOKEN_FIELD = 'usageClaimToken';
+const USAGE_CLAIM_EXPIRES_FIELD = 'usageClaimExpiresAt';
 const DELIVERY_ROUTING_FIELDS = {
 	telegram: 'telegramChatId',
 	whatsapp: 'whatsappChatId',
@@ -77,6 +82,11 @@ function mergeDeliveryData(existingData = {}, updatedData = {}, channels) {
 	}
 
 	return mergedData;
+}
+
+function isUsageClaimExpired(data, nowMs = Date.now()) {
+	const deadline = data ? data[USAGE_CLAIM_EXPIRES_FIELD] : undefined;
+	return !(typeof deadline === 'number' && Number.isFinite(deadline) && deadline > nowMs);
 }
 
 function getDeliveryDelta(data = {}, channels = []) {
@@ -154,10 +164,16 @@ const DEFAULT_NEWS_CACHE_MAX_ENTRIES = 5000;
 const MAX_NEWS_CACHE_ENTRIES = 1_000_000;
 const DEFAULT_NEWS_DELIVERY_LOCK_MAX_ENTRIES = 1000;
 const MAX_NEWS_DELIVERY_LOCK_ENTRIES = 100_000;
+const ESTIMATED_CACHE_ENTRY_OVERHEAD_BYTES = 128;
+const BATCH_CACHE_EVICTION_THRESHOLD = 64;
 
 class NewsCache {
 	constructor(ttlHours, options = {}) {
 		this.cache = new Map();
+		this._estimatedEntryBytes = new WeakMap();
+		this._expirationRoot = null;
+		this._expirationNodesByKey = new Map();
+		this._estimatedMemoryBytes = 0;
 		this._explicitTtlHours = ttlHours;
 		if (ttlHours !== undefined) {
 			this._explicitTtlHours = parseNewsCacheTtlHours(ttlHours);
@@ -174,6 +190,13 @@ class NewsCache {
 			: undefined;
 		this._evictionCount = 0;
 		this._deliveryLockEvictionCount = 0;
+		this._metrics = {
+			hits: 0,
+			misses: 0,
+			evictions: 0,
+			lastHitAt: null,
+			lastMissAt: null,
+		};
 	}
 
 	get ttlMs() {
@@ -226,9 +249,262 @@ class NewsCache {
 	 * Insert or update a cache entry, refreshing LRU recency and enforcing maxEntries.
 	 */
 	_setCacheEntry(key, entry) {
-		this.cache.delete(key);
-		this.cache.set(key, entry);
+		const previous = this._removeCacheEntry(key);
+		if (previous && this.isExpired(previous)) {
+			this._metrics.evictions++;
+		}
+		const cacheEntry = Number.isFinite(entry.expiresAt)
+			? entry
+			: { ...entry, expiresAt: entry.timestamp + this.ttlMs };
+		this.cache.set(key, cacheEntry);
+		let dataBytes = 0;
+		try {
+			dataBytes = Buffer.byteLength(JSON.stringify(cacheEntry.data ?? null) || '', 'utf8');
+		} catch {
+			// Keep cache writes fail-open when a value cannot be serialized for metrics.
+		}
+		const estimatedEntryBytes = Buffer.byteLength(key, 'utf8') + ESTIMATED_CACHE_ENTRY_OVERHEAD_BYTES + dataBytes;
+		this._estimatedEntryBytes.set(cacheEntry, estimatedEntryBytes);
+		this._estimatedMemoryBytes += estimatedEntryBytes;
+		this._addExpirationIndex(key, cacheEntry);
 		this._evictIfOverCapacity();
+	}
+
+	// An expiry-ordered treap provides exact expired-entry counts in O(log n).
+	_addExpirationIndex(key, entry) {
+		const node = {
+			key,
+			expiresAt: entry.expiresAt,
+			priority: Math.random(),
+			size: 1,
+			left: null,
+			right: null,
+		};
+		this._expirationNodesByKey.set(key, node);
+		this._expirationRoot = this._insertExpirationNode(this._expirationRoot, node);
+	}
+
+	_expirationSubtreeSize(node) {
+		return node?.size ?? 0;
+	}
+
+	_compareExpirationNodes(left, right) {
+		if (left.expiresAt !== right.expiresAt) {
+			return left.expiresAt - right.expiresAt;
+		}
+		return left.key < right.key ? -1 : left.key > right.key ? 1 : 0;
+	}
+
+	_updateExpirationNode(node) {
+		node.size = 1 + this._expirationSubtreeSize(node.left) + this._expirationSubtreeSize(node.right);
+		return node;
+	}
+
+	_rotateExpirationRight(root) {
+		const pivot = root.left;
+		root.left = pivot.right;
+		pivot.right = this._updateExpirationNode(root);
+		return this._updateExpirationNode(pivot);
+	}
+
+	_rotateExpirationLeft(root) {
+		const pivot = root.right;
+		root.right = pivot.left;
+		pivot.left = this._updateExpirationNode(root);
+		return this._updateExpirationNode(pivot);
+	}
+
+	_insertExpirationNode(root, node) {
+		if (!root) {
+			return node;
+		}
+		if (this._compareExpirationNodes(node, root) < 0) {
+			root.left = this._insertExpirationNode(root.left, node);
+			if (root.left.priority < root.priority) {
+				root = this._rotateExpirationRight(root);
+			}
+		} else {
+			root.right = this._insertExpirationNode(root.right, node);
+			if (root.right.priority < root.priority) {
+				root = this._rotateExpirationLeft(root);
+			}
+		}
+		return this._updateExpirationNode(root);
+	}
+
+	_mergeExpirationTrees(left, right) {
+		if (!left) return right;
+		if (!right) return left;
+		if (left.priority < right.priority) {
+			left.right = this._mergeExpirationTrees(left.right, right);
+			return this._updateExpirationNode(left);
+		}
+		right.left = this._mergeExpirationTrees(left, right.left);
+		return this._updateExpirationNode(right);
+	}
+
+	_removeExpirationNode(root, target) {
+		if (!root) {
+			return null;
+		}
+		const comparison = this._compareExpirationNodes(target, root);
+		if (comparison === 0) {
+			return this._mergeExpirationTrees(root.left, root.right);
+		}
+		if (comparison < 0) {
+			root.left = this._removeExpirationNode(root.left, target);
+		} else {
+			root.right = this._removeExpirationNode(root.right, target);
+		}
+		return this._updateExpirationNode(root);
+	}
+
+	_removeExpirationIndex(key) {
+		const node = this._expirationNodesByKey.get(key);
+		if (!node) {
+			return;
+		}
+		this._expirationNodesByKey.delete(key);
+		this._expirationRoot = this._removeExpirationNode(this._expirationRoot, node);
+	}
+
+	_countExpiredEntries(now) {
+		let count = 0;
+		let node = this._expirationRoot;
+		while (node) {
+			if (node.expiresAt <= now) {
+				count += 1 + this._expirationSubtreeSize(node.left);
+				node = node.right;
+			} else {
+				node = node.left;
+			}
+		}
+		return count;
+	}
+
+	_splitExpiredExpirationNodes(root, now) {
+		if (!root) {
+			return [null, null];
+		}
+		if (root.expiresAt <= now) {
+			const [expiredRight, activeRight] = this._splitExpiredExpirationNodes(root.right, now);
+			root.right = expiredRight;
+			return [this._updateExpirationNode(root), activeRight];
+		}
+		const [expiredLeft, activeLeft] = this._splitExpiredExpirationNodes(root.left, now);
+		root.left = activeLeft;
+		return [expiredLeft, this._updateExpirationNode(root)];
+	}
+
+	_removeExpiredCacheEntries(now) {
+		const [expiredRoot, activeRoot] = this._splitExpiredExpirationNodes(this._expirationRoot, now);
+		this._expirationRoot = activeRoot;
+		if (!expiredRoot) {
+			return 0;
+		}
+
+		let removed = 0;
+		const pending = [expiredRoot];
+		while (pending.length > 0) {
+			const node = pending.pop();
+			if (node.left) pending.push(node.left);
+			if (node.right) pending.push(node.right);
+			this._expirationNodesByKey.delete(node.key);
+
+			const entry = this.cache.get(node.key);
+			if (!entry) {
+				continue;
+			}
+			this.cache.delete(node.key);
+			const estimatedEntryBytes = this._estimatedEntryBytes.get(entry) ?? 0;
+			this._estimatedMemoryBytes = Math.max(0, this._estimatedMemoryBytes - estimatedEntryBytes);
+			this._estimatedEntryBytes.delete(entry);
+			removed++;
+			this._metrics.evictions++;
+		}
+		return removed;
+	}
+
+	_removeCacheEntry(key) {
+		if (!this.cache.has(key)) {
+			return null;
+		}
+		const entry = this.cache.get(key);
+		this.cache.delete(key);
+		this._removeExpirationIndex(key);
+		const estimatedEntryBytes = this._estimatedEntryBytes.get(entry) ?? 0;
+		this._estimatedMemoryBytes = Math.max(0, this._estimatedMemoryBytes - estimatedEntryBytes);
+		this._estimatedEntryBytes.delete(entry);
+		return entry;
+	}
+
+	_removeCacheEntries(keys) {
+		let removed = 0;
+		for (const key of keys) {
+			const entry = this.cache.get(key);
+			if (!entry) {
+				continue;
+			}
+			this.cache.delete(key);
+			this._expirationNodesByKey.delete(key);
+			const estimatedEntryBytes = this._estimatedEntryBytes.get(entry) ?? 0;
+			this._estimatedMemoryBytes = Math.max(0, this._estimatedMemoryBytes - estimatedEntryBytes);
+			this._estimatedEntryBytes.delete(entry);
+			removed++;
+		}
+
+		if (removed > 0) {
+			this._rebuildExpirationIndex();
+		}
+		return removed;
+	}
+
+	_rebuildExpirationIndex() {
+		const orderedNodes = [];
+		const traversal = [];
+		let node = this._expirationRoot;
+		while (node || traversal.length > 0) {
+			while (node) {
+				traversal.push(node);
+				node = node.left;
+			}
+			node = traversal.pop();
+			if (this._expirationNodesByKey.has(node.key)) {
+				orderedNodes.push(node);
+			}
+			node = node.right;
+		}
+
+		const treapStack = [];
+		for (const orderedNode of orderedNodes) {
+			orderedNode.left = null;
+			orderedNode.right = null;
+			orderedNode.size = 1;
+			let previous = null;
+			while (treapStack.length > 0 && treapStack[treapStack.length - 1].priority > orderedNode.priority) {
+				previous = treapStack.pop();
+			}
+			orderedNode.left = previous;
+			if (treapStack.length > 0) {
+				treapStack[treapStack.length - 1].right = orderedNode;
+			}
+			treapStack.push(orderedNode);
+		}
+		this._expirationRoot = treapStack[0] ?? null;
+
+		if (this._expirationRoot) {
+			const pending = [[this._expirationRoot, false]];
+			while (pending.length > 0) {
+				const [current, visited] = pending.pop();
+				if (visited) {
+					this._updateExpirationNode(current);
+					continue;
+				}
+				pending.push([current, true]);
+				if (current.right) pending.push([current.right, false]);
+				if (current.left) pending.push([current.left, false]);
+			}
+		}
 	}
 
 	_isActiveClaimEntry(entry) {
@@ -245,18 +521,24 @@ class NewsCache {
 		if (this.cache.size <= max) {
 			return;
 		}
-		let evicted = 0;
+		const keysToEvict = [];
 		for (const [key, entry] of this.cache.entries()) {
-			if (this.cache.size <= max) {
+			if (this.cache.size - keysToEvict.length <= max) {
 				break;
 			}
 			if (!this._isActiveClaimEntry(entry)) {
-				this.cache.delete(key);
-				evicted++;
+				keysToEvict.push(key);
 			}
 		}
+		const estimatedIndividualRemovalWork = keysToEvict.length * Math.log2(this.cache.size);
+		const shouldBatchEvictions = keysToEvict.length >= BATCH_CACHE_EVICTION_THRESHOLD
+			&& estimatedIndividualRemovalWork >= this.cache.size;
+		const evicted = shouldBatchEvictions
+			? this._removeCacheEntries(keysToEvict)
+			: keysToEvict.reduce((count, key) => count + (this._removeCacheEntry(key) ? 1 : 0), 0);
 		if (evicted > 0) {
 			this._evictionCount += evicted;
+			this._metrics.evictions += evicted;
 			console.debug('[NewsCache] Evicted', evicted, 'LRU entries; cache size:', this.cache.size);
 		}
 	}
@@ -368,7 +650,10 @@ class NewsCache {
 		let localData = null;
 		if (entry) {
 			if (this.isExpired(entry)) {
-				this.cache.delete(key);
+				const removed = this._removeCacheEntry(key);
+				if (removed) {
+					this._metrics.evictions++;
+				}
 				this._evictIfOverCapacity();
 			} else {
 				// Refresh LRU recency on hit: move entry to the most-recently used position in the Map
@@ -400,9 +685,11 @@ class NewsCache {
 						? mergeDeliveryData(entryRecord.data, refreshedLocalData, localOnlyChannels)
 						: entryRecord.data;
 					if (abandonedClaim && entryRecord.data?.status === 'claiming') {
+						this._recordHit();
 						return null;
 					}
 					if (refreshedLocalData && refreshedLocalData.status !== 'claiming' && entryRecord.data?.status === 'claiming') {
+						this._recordHit();
 						return refreshedLocalData;
 					}
 					// Warm the local cache to avoid repeated Firestore lookups, enforcing LRU bounds
@@ -413,6 +700,7 @@ class NewsCache {
 						data: refreshedData,
 						localOnlyChannels,
 					});
+					this._recordHit();
 					return refreshedData;
 				}
 			} catch (error) {
@@ -420,7 +708,13 @@ class NewsCache {
 			}
 		}
 
-		return localData;
+		if (localData !== null && localData !== undefined) {
+			this._recordHit();
+			return localData;
+		}
+
+		this._recordMiss();
+		return null;
 	}
 
 	/**
@@ -497,25 +791,64 @@ class NewsCache {
 	 * field into the durable Firestore payload transactionally so concurrent
 	 * delivery updates from other replicas are preserved. Fail-open.
 	 *
+	 * `options.allowedCurrentStates` guards the shared durable state so an
+	 * ordering mistake cannot regress it: a late 'pending' can no longer bury a
+	 * terminal 'owned'/'none', and a terminal write cannot undo a newer one.
+	 * `options.claimToken` additionally pins the transition to the owner of the
+	 * current usage claim. The local mirror is refreshed from Firestore on the
+	 * next get(), so it never outranks the durable value for long.
+	 *
 	 * @param {string} symbol
 	 * @param {string} eventCategory
 	 * @param {'pending'|'owned'|'none'} state
+	 * @param {{allowedCurrentStates?: Array, claimToken?: string|null, clearUsageClaim?: boolean}} [options]
 	 * @returns {Promise<void>}
 	 */
-	async markOriginalPersistState(symbol, eventCategory, state) {
+	async markOriginalPersistState(symbol, eventCategory, state, options = {}) {
 		const key = this.generateKey(symbol, eventCategory);
 		const entry = this.cache.get(key);
 		if (!entry || this.isExpired(entry)) {
 			return;
 		}
-		entry.data = { ...entry.data, originalPersistedState: state };
+		if (options.claimToken !== undefined
+			&& entry.data[USAGE_CLAIM_TOKEN_FIELD]
+			&& entry.data[USAGE_CLAIM_TOKEN_FIELD] !== options.claimToken) {
+			console.debug('[NewsCache] Skipping persist-state write for a usage claim this replica does not own');
+			return;
+		}
+
+		const mergeFields = ['originalPersistedState'];
+		if (options.clearUsageClaim) {
+			mergeFields.push(USAGE_CLAIM_TOKEN_FIELD, USAGE_CLAIM_EXPIRES_FIELD);
+		}
+
+		entry.data = {
+			...entry.data,
+			originalPersistedState: state,
+			...(options.clearUsageClaim
+				? { [USAGE_CLAIM_TOKEN_FIELD]: null, [USAGE_CLAIM_EXPIRES_FIELD]: null }
+				: {}),
+		};
 
 		if (newsDedupStorageService.isEnabled() && newsDedupStorageService.isReady()) {
 			try {
 				await newsDedupStorageService.updateEntry(
 					key,
-					{ originalPersistedState: state },
-					{ mergeFields: ['originalPersistedState'] },
+					{ originalPersistedState: state, ...(options.clearUsageClaim
+						? { [USAGE_CLAIM_TOKEN_FIELD]: null, [USAGE_CLAIM_EXPIRES_FIELD]: null }
+						: {}) },
+					{
+						mergeFields,
+						...(Array.isArray(options.allowedCurrentStates)
+							? {
+								expectedField: 'originalPersistedState',
+								expectedValues: options.allowedCurrentStates,
+							}
+							: {}),
+						...(options.claimToken
+							? { expectedTokenField: USAGE_CLAIM_TOKEN_FIELD, expectedToken: options.claimToken }
+							: {}),
+					},
 				);
 			} catch (error) {
 				console.warn('[NewsCache] Failed to persist original-write state (fail-open):', error.message);
@@ -529,59 +862,161 @@ class NewsCache {
 	 * Performs a synchronized local check-and-set first, then — when
 	 * persistent dedup is enabled — commits the claim with an expected-state
 	 * guard inside the Firestore transaction so concurrent replicas cannot
-	 * double-claim. Callers must release via markOriginalPersistState('none')
-	 * when the claimed record fails to persist. Fail-open: storage errors
-	 * roll the local claim back.
+	 * double-claim. The claim carries an owner token and a bounded deadline, so
+	 * a process that crashes between the claim and its terminal write releases
+	 * the field within USAGE_CLAIM_LEASE_MS instead of stranding it until the
+	 * dedup TTL. Callers must release via releaseUsageOwnershipClaim() with the
+	 * returned token when the claimed record fails to persist. Fail-open:
+	 * storage errors roll the local claim back.
 	 *
 	 * @param {string} symbol
 	 * @param {string} eventCategory
-	 * @returns {Promise<boolean>} true when the caller holds the usage claim
+	 * @returns {Promise<string|null>} owner token when the caller holds the claim, else null
 	 */
 	async claimUsageOwnership(symbol, eventCategory) {
 		const key = this.generateKey(symbol, eventCategory);
 		const entry = this.cache.get(key);
 		if (!entry || this.isExpired(entry)) {
-			return false;
+			return null;
 		}
 		const previousState = entry.data.originalPersistedState;
-		if (previousState === 'owned' || previousState === 'pending' || previousState === 'claimed') {
-			return false;
+		if (previousState === 'owned' || previousState === 'pending') {
+			return null;
 		}
-		entry.data = { ...entry.data, originalPersistedState: 'claimed' };
+		if (previousState === USAGE_CLAIM_STATE && !isUsageClaimExpired(entry.data)) {
+			return null;
+		}
+
+		const claimToken = randomUUID();
+		const claimExpiresAt = Date.now() + USAGE_CLAIM_LEASE_MS;
+		entry.data = {
+			...entry.data,
+			originalPersistedState: USAGE_CLAIM_STATE,
+			[USAGE_CLAIM_TOKEN_FIELD]: claimToken,
+			[USAGE_CLAIM_EXPIRES_FIELD]: claimExpiresAt,
+		};
 
 		if (!newsDedupStorageService.isEnabled() || !newsDedupStorageService.isReady()) {
-			return true;
+			return claimToken;
 		}
 		try {
 			const committed = await newsDedupStorageService.updateEntry(
 				key,
-				{ originalPersistedState: 'claimed' },
 				{
-					mergeFields: ['originalPersistedState'],
+					originalPersistedState: USAGE_CLAIM_STATE,
+					[USAGE_CLAIM_TOKEN_FIELD]: claimToken,
+					[USAGE_CLAIM_EXPIRES_FIELD]: claimExpiresAt,
+				},
+				{
+					mergeFields: ['originalPersistedState', USAGE_CLAIM_TOKEN_FIELD, USAGE_CLAIM_EXPIRES_FIELD],
 					expectedField: 'originalPersistedState',
 					expectedValues: ['none'],
+					reclaimStale: { states: [USAGE_CLAIM_STATE], expiresField: USAGE_CLAIM_EXPIRES_FIELD },
 				},
 			);
 			if (committed) {
-				return true;
+				return claimToken;
 			}
 		} catch (error) {
 			console.warn('[NewsCache] Usage-ownership claim failed (fail-open):', error.message);
 		}
 		entry.data = { ...entry.data, originalPersistedState: previousState ?? 'none' };
-		return false;
+		return null;
+	}
+
+	/**
+	 * Extend a usage-ownership claim that is still being persisted.
+	 *
+	 * The claim lease is a fixed deadline, but the Firestore `add()` that
+	 * follows it has no application-level deadline. A save that outlives the
+	 * lease would otherwise let another replica reclaim the state and persist
+	 * a SECOND document carrying the same token usage — the token-pinned
+	 * terminal write would then be refused, but the duplicate alert document
+	 * is already written and `/api/alerts/summary` double-counts. Renewing
+	 * keeps the claim alive for as long as the write is genuinely in flight,
+	 * while a crashed owner still releases it within USAGE_CLAIM_LEASE_MS
+	 * because a dead process cannot renew.
+	 *
+	 * Only the deadline is extended; the claim state and owner token are
+	 * untouched, and the write is token-pinned so a replica that lost the
+	 * claim can never resurrect it. Fail-open on storage errors.
+	 *
+	 * Returns false for a refused write and for a storage fault alike:
+	 * updateEntry() swallows Firestore errors, so the two are not
+	 * distinguishable here. Callers must treat renewal as best-effort.
+	 *
+	 * @param {string} symbol
+	 * @param {string} eventCategory
+	 * @param {string} claimToken - Token returned by claimUsageOwnership
+	 * @returns {Promise<boolean>} true when the durable deadline was extended
+	 */
+	async renewUsageOwnership(symbol, eventCategory, claimToken) {
+		const key = this.generateKey(symbol, eventCategory);
+		const entry = this.cache.get(key);
+		if (!entry || this.isExpired(entry)) {
+			return false;
+		}
+		if (!claimToken || entry.data[USAGE_CLAIM_TOKEN_FIELD] !== claimToken) {
+			return false;
+		}
+		const claimExpiresAt = Date.now() + USAGE_CLAIM_LEASE_MS;
+		if (!newsDedupStorageService.isEnabled() || !newsDedupStorageService.isReady()) {
+			entry.data = { ...entry.data, [USAGE_CLAIM_EXPIRES_FIELD]: claimExpiresAt };
+			return true;
+		}
+		try {
+			const renewed = await newsDedupStorageService.updateEntry(
+				key,
+				{ [USAGE_CLAIM_EXPIRES_FIELD]: claimExpiresAt },
+				{
+					mergeFields: [USAGE_CLAIM_EXPIRES_FIELD],
+					expectedField: 'originalPersistedState',
+					expectedValues: [USAGE_CLAIM_STATE],
+					expectedTokenField: USAGE_CLAIM_TOKEN_FIELD,
+					expectedToken: claimToken,
+				},
+			);
+			if (renewed) {
+				entry.data = { ...entry.data, [USAGE_CLAIM_EXPIRES_FIELD]: claimExpiresAt };
+			}
+			return renewed;
+		} catch (error) {
+			console.warn('[NewsCache] Usage-ownership renewal failed (fail-open):', error.message);
+			return false;
+		}
+	}
+
+	/**
+	 * Return the interval callers use to keep a usage claim alive while the
+	 * alert document is being persisted.
+	 *
+	 * @returns {number}
+	 */
+	getUsageClaimRenewIntervalMs() {
+		return USAGE_CLAIM_RENEW_INTERVAL_MS;
 	}
 
 	/**
 	 * Release a claim acquired via claimUsageOwnership after its record
 	 * failed to persist, restoring 'none' so a later redelivery can own it.
 	 *
+	 * Defaults to the token held by the local entry so the owner token always
+	 * matches the claim this replica took, even when the caller loses it.
+	 *
 	 * @param {string} symbol
 	 * @param {string} eventCategory
+	 * @param {string} [claimToken] - Token returned by claimUsageOwnership
 	 * @returns {Promise<void>}
 	 */
-	async releaseUsageOwnershipClaim(symbol, eventCategory) {
-		await this.markOriginalPersistState(symbol, eventCategory, 'none');
+	async releaseUsageOwnershipClaim(symbol, eventCategory, claimToken) {
+		const key = this.generateKey(symbol, eventCategory);
+		const entry = this.cache.get(key);
+		const ownedToken = claimToken ?? (entry?.data?.[USAGE_CLAIM_TOKEN_FIELD] ?? null);
+		await this.markOriginalPersistState(symbol, eventCategory, 'none', {
+			allowedCurrentStates: [USAGE_CLAIM_STATE],
+			claimToken: ownedToken,
+			clearUsageClaim: true,
+		});
 	}
 
 	/**
@@ -796,7 +1231,8 @@ class NewsCache {
 		const entry = this.cache.get(key);
 
 		if (entry) {
-			if (!this.isExpired(entry)) {
+			const expired = this.isExpired(entry);
+			if (!expired) {
 				if (entry.data?.status !== 'claiming-abandoned') {
 					return false;
 				}
@@ -811,7 +1247,10 @@ class NewsCache {
 					}
 				}
 			}
-			this.cache.delete(key);
+			const removed = this._removeCacheEntry(key);
+			if (removed) {
+				this._metrics.evictions++;
+			}
 		}
 
 		if (this.cache.size >= this.maxEntries) {
@@ -846,7 +1285,7 @@ class NewsCache {
 					return true;
 				}
 				// Remote claim was denied (already claimed/exists elsewhere)
-				this.cache.delete(key);
+				this._removeCacheEntry(key);
 				return false;
 			} catch (error) {
 				console.warn('[NewsCache] Firestore claimEntry failed (fail-open):', error.message);
@@ -885,7 +1324,7 @@ class NewsCache {
 			}
 		}
 		if (entry?.data?.status === 'claiming') {
-			this.cache.delete(key);
+			this._removeCacheEntry(key);
 		}
 	}
 
@@ -894,19 +1333,14 @@ class NewsCache {
    * Called periodically by setInterval
    */
 	cleanup() {
-		let removed = 0;
-		for (const [key, entry] of this.cache.entries()) {
-			if (this.isExpired(entry)) {
-				this.cache.delete(key);
-				removed++;
-			}
-		}
+		const now = Date.now();
+		const removed = this._removeExpiredCacheEntries(now);
 		if (removed > 0) {
 			console.debug('[NewsCache] Cleanup removed', removed, 'expired entries. Cache size:', this.cache.size);
 		}
 		this._evictIfOverCapacity();
 		for (const [key, lease] of this.deliveryLocks.entries()) {
-			if (!lease.active && lease.persistentUntil <= Date.now()) {
+			if (!lease.active && lease.persistentUntil <= now) {
 				this.deliveryLocks.delete(key);
 			}
 		}
@@ -918,7 +1352,55 @@ class NewsCache {
    */
 	clear() {
 		this.cache.clear();
+		this._expirationRoot = null;
+		this._expirationNodesByKey.clear();
+		this._estimatedEntryBytes = new WeakMap();
+		this._estimatedMemoryBytes = 0;
 		this.deliveryLocks.clear();
+	}
+
+	_recordHit() {
+		this._metrics.hits++;
+		this._metrics.lastHitAt = new Date().toISOString();
+	}
+
+	_recordMiss() {
+		this._metrics.misses++;
+		this._metrics.lastMissAt = new Date().toISOString();
+	}
+
+	resetMetrics() {
+		this._metrics = {
+			hits: 0,
+			misses: 0,
+			evictions: 0,
+			lastHitAt: null,
+			lastMissAt: null,
+		};
+	}
+
+	getMetrics() {
+		const readCount = this._metrics.hits + this._metrics.misses;
+		return {
+			...this._metrics,
+			hitRate: readCount === 0 ? 0 : Math.round((this._metrics.hits / readCount) * 1000) / 1000,
+			totalEntries: Math.max(0, this.cache.size - this._countExpiredEntries(Date.now())),
+			estimatedMemoryBytes: this._estimatedMemoryBytes,
+		};
+	}
+
+	getStatus(enabled) {
+		const isEnabled = Boolean(enabled);
+		const dedupMode = this.dedupMode;
+		return {
+			enabled: isEnabled,
+			configured: isEnabled,
+			ready: isEnabled,
+			status: isEnabled ? 'ready' : 'disabled',
+			mode: dedupMode.mode,
+			backend: dedupMode.backend,
+			metrics: this.getMetrics(),
+		};
 	}
 
 	/**
@@ -966,4 +1448,6 @@ module.exports = {
 	getCacheInstance,
 	NewsCache,
 	parseNewsCacheTtlHours,
+	USAGE_CLAIM_LEASE_MS,
+	USAGE_CLAIM_RENEW_INTERVAL_MS,
 };

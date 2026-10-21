@@ -9,7 +9,7 @@
  */
 
 const Sentry = require('@sentry/node');
-const { SentryService, FEATURE_NAMES } = require('../../src/services/monitoring/SentryService');
+const { SentryService, FEATURE_NAMES, shouldSendAlertContent } = require('../../src/services/monitoring/SentryService');
 
 describe('SentryService', () => {
 	let service;
@@ -191,6 +191,33 @@ describe('SentryService', () => {
 
 				const config = service._buildConfiguration();
 				expect(config.sendAlertContent).toBe(true);
+			});
+		});
+
+		describe('shouldSendAlertContent (module export)', () => {
+			it('returns true when SENTRY_SEND_ALERT_CONTENT is unset (matches docs default true)', () => {
+				delete process.env.SENTRY_SEND_ALERT_CONTENT;
+				expect(shouldSendAlertContent()).toBe(true);
+			});
+
+			it('returns false when SENTRY_SEND_ALERT_CONTENT=false', () => {
+				process.env.SENTRY_SEND_ALERT_CONTENT = 'false';
+				expect(shouldSendAlertContent()).toBe(false);
+			});
+
+			it('returns true when SENTRY_SEND_ALERT_CONTENT=true', () => {
+				process.env.SENTRY_SEND_ALERT_CONTENT = 'true';
+				expect(shouldSendAlertContent()).toBe(true);
+			});
+
+			it('returns true when SENTRY_SEND_ALERT_CONTENT is an arbitrary non-false value', () => {
+				process.env.SENTRY_SEND_ALERT_CONTENT = 'YES';
+				expect(shouldSendAlertContent()).toBe(true);
+			});
+
+			it('returns true when SENTRY_SEND_ALERT_CONTENT is the empty string', () => {
+				process.env.SENTRY_SEND_ALERT_CONTENT = '';
+				expect(shouldSendAlertContent()).toBe(true);
 			});
 		});
 
@@ -419,6 +446,28 @@ describe('SentryService', () => {
 
 			expect(result.captured).toBe(false);
 			expect(result.skippedReason).toContain('Capture error');
+		});
+	});
+
+	describe('captureInfo()', () => {
+		it('captures a sanitized info message with structured timer drain metrics', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			service.init();
+			expect(typeof service.captureInfo).toBe('function');
+
+			const result = service.captureInfo({
+				message: 'shutdown.timer_drain',
+				feature: 'shutdown.timer_drain',
+				extra: { registered: 2, drained: 1, failed: 1 },
+			});
+
+			expect(result).toMatchObject({ captured: true, eventId: 'mock-event-id' });
+			expect(Sentry.captureMessage).toHaveBeenCalledWith('shutdown.timer_drain', expect.objectContaining({
+				level: 'info',
+				tags: expect.objectContaining({ feature: 'shutdown.timer_drain', channel: 'process' }),
+				extra: { registered: 2, drained: 1, failed: 1 },
+			}));
 		});
 	});
 

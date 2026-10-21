@@ -5,6 +5,7 @@
  */
 
 function toNumber(value) {
+	if (value === null || value === undefined || value === '') return null;
 	const num = Number(value);
 	return Number.isFinite(num) ? num : null;
 }
@@ -18,11 +19,11 @@ function firstDefined(...values) {
 	return null;
 }
 
-// Pricing per 1M tokens (USD)
 // Based on official pricing documentation:
 // Gemini: https://ai.google.dev/gemini-api/docs/pricing
 // OpenAI: https://openai.com/api/pricing/
 // Anthropic: https://www.anthropic.com/pricing
+// CB-583: Brave Search grounding is billed per request and is treated as free for tokens.
 const PRICING_PER_1M = {
 	'gemini-3-pro-preview': { input: 2.00, output: 12.00 },
 	'gemini-3-flash-preview': { input: 0.50, output: 3.00 },
@@ -32,6 +33,7 @@ const PRICING_PER_1M = {
 	'gemini-2.5-flash-lite': { input: 0.10, output: 0.40 },
 	'gemini-1.5-flash': { input: 0.075, output: 0.30 },
 	'gemini-1.5-pro': { input: 1.25, output: 5.00 },
+	'brave-search': { input: 0, output: 0 },
 	'gpt-4o': { input: 2.50, output: 10.00 },
 	'gpt-4o-mini': { input: 0.15, output: 0.60 },
 	'claude-3-5-sonnet': { input: 3.00, output: 15.00 },
@@ -112,6 +114,47 @@ function resolveModelPricing(model) {
 	return PRICING_PER_1M.default;
 }
 
+const CLOUDFLARE_GATEWAY_PREFIX = 'google-ai-studio/';
+
+/**
+ * Normalize a model identifier by trimming whitespace and stripping the Cloudflare
+ * AI Gateway prefix (e.g. `google-ai-studio/gemini-2.5-flash` -> `gemini-2.5-flash`).
+ * Non-Cloudflare prefixes are preserved to avoid mangling provider namespaces.
+ * @param {string} model
+ * @returns {string}
+ */
+function normalizeModelName(model) {
+	if (typeof model !== 'string') return model;
+	const trimmed = model.trim();
+	if (trimmed.startsWith(CLOUDFLARE_GATEWAY_PREFIX)) {
+		return trimmed.slice(CLOUDFLARE_GATEWAY_PREFIX.length).trim();
+	}
+	return trimmed;
+}
+
+/**
+ * Resolve pricing for a model and report whether resolution fell through to the
+ * default fallback rate, so callers can surface unpriced models instead of
+ * silently costing them at the fallback.
+ *
+ * Pricing behavior is delegated unchanged to `resolveModelPricing`; that function
+ * returns the shared `PRICING_PER_1M.default` object *by reference* only when no
+ * table entry or family heuristic matched, which is what `unknown` keys off.
+ * @param {string} model
+ * @returns {{ pricing: {input: number, output: number}, matchedKey: string|null, unknown: boolean }}
+ */
+function resolvePricing(model) {
+	if (typeof model !== 'string' || model.trim() === '') {
+		return { pricing: PRICING_PER_1M.default, matchedKey: null, unknown: false };
+	}
+
+	const pricing = resolveModelPricing(model);
+	const matchedKey = normalizeModelName(model);
+	const unknown = pricing === PRICING_PER_1M.default;
+
+	return { pricing, matchedKey, unknown };
+}
+
 /**
  * Normalize usage metadata from various providers into a common shape.
  * Supports Gemini usageMetadata ({ promptTokenCount, candidatesTokenCount, totalTokenCount }),
@@ -128,13 +171,19 @@ function normalizeUsageMetadata(usageMetadata) {
 	const outputTokens = toNumber(firstDefined(meta.candidatesTokenCount, meta.outputTokens, meta.completionTokens, meta.completion_tokens)) || 0;
 
 	const explicitTotal = toNumber(firstDefined(meta.totalTokenCount, meta.totalTokens, meta.total_tokens));
-	const totalTokens = explicitTotal != null ? explicitTotal : inputTokens + outputTokens;
+	const totalTokens = explicitTotal != null && explicitTotal > 0 ? explicitTotal : inputTokens + outputTokens;
 
 	return {
 		inputTokens,
 		outputTokens,
-		totalTokens: totalTokens != null ? totalTokens : inputTokens + outputTokens,
+		totalTokens,
 	};
+}
+
+const warnedUnknownModels = new Set();
+
+function _resetWarnedModelsForTesting() {
+	warnedUnknownModels.clear();
 }
 
 class TokenUsageTracker {
@@ -143,8 +192,11 @@ class TokenUsageTracker {
 		this.outputTokens = 0;
 		this.inputCost = 0;
 		this.outputCost = 0;
+		this._unknownModels = new Set();
+		this._warnedModels = new Set();
 		this.defaultFeature = normalizeFeature(defaultFeature);
 		this.byFeature = {};
+		this.bySource = {};
 	}
 
 	/**
@@ -164,7 +216,10 @@ class TokenUsageTracker {
 	/**
 	 * Add a usage record (raw metadata or normalized object)
 	 * @param {Object|null|undefined} usage
-	 * @param {string} [model] - Model name for pricing calculation
+	 * @param {string} [model] - Model name for pricing calculation. When
+	 *   omitted, cost is estimated using the conservative Gemini 2.5 Flash
+	 *   default so `/api/alerts/summary` aggregates do not silently report
+	 *   `totalCost: 0` (CB-583 / Issue #583).
 	 */
 	addUsage(usage, model, featureOrOptions = this.defaultFeature) {
 		// Accept either a feature name (per-call attribution) or an options object
@@ -190,14 +245,24 @@ class TokenUsageTracker {
 		this.inputTokens += currentInput;
 		this.outputTokens += currentOutput;
 
-		let iCost = 0;
-		let oCost = 0;
+		const cost = this.calculateCost(currentInput, currentOutput, model);
+		const iCost = cost.inputCost;
+		const oCost = cost.outputCost;
+		this.inputCost += iCost;
+		this.outputCost += oCost;
+
 		if (model) {
-			const cost = this.calculateCost(currentInput, currentOutput, model);
-			iCost = cost.inputCost;
-			oCost = cost.outputCost;
-			this.inputCost += iCost;
-			this.outputCost += oCost;
+			const { unknown, matchedKey } = resolvePricing(model);
+			if (unknown && matchedKey) {
+				this._unknownModels.add(matchedKey);
+				if (!warnedUnknownModels.has(matchedKey)) {
+					warnedUnknownModels.add(matchedKey);
+					this._warnedModels.add(matchedKey);
+					console.warn(
+						`[TokenUsageTracker] unknown model "${matchedKey}" priced at the default fallback rate; add an entry to PRICING_PER_1M in src/lib/tokenUsage.js to enable real cost accounting`,
+					);
+				}
+			}
 		}
 
 		if (options.recordGlobal && this !== globalTokenTracker) {
@@ -231,13 +296,92 @@ class TokenUsageTracker {
 		}
 	}
 
-	merge(otherTracker) {
-		if (!otherTracker) return;
-		const { inputTokens, outputTokens, inputCost, outputCost, byFeature } = otherTracker.toJSON();
+	/**
+	 * Add usage to the total and attribute it to a named provider or enrichment source.
+	 * Accepts a normalized usage object or another tracker.
+	 */
+	addSource(name, usage, model) {
+		if (typeof name !== 'string' || !name.trim()) return;
+		const rawUsage = usage && typeof usage.toJSON === 'function' ? usage.toJSON() : usage;
+		const normalized = normalizeUsageMetadata(rawUsage);
+		if (!normalized) return;
+
+		const inputTokens = normalized.inputTokens || 0;
+		let outputTokens = normalized.outputTokens || 0;
+		const remainder = (normalized.totalTokens || 0) - inputTokens - outputTokens;
+		if (remainder > 0) outputTokens += remainder;
+
+		const source = this.bySource[name] || (this.bySource[name] = {
+			inputTokens: 0,
+			outputTokens: 0,
+			totalTokens: 0,
+		});
+		source.inputTokens += inputTokens;
+		source.outputTokens += outputTokens;
+		source.totalTokens += inputTokens + outputTokens;
+
 		this.inputTokens += inputTokens;
 		this.outputTokens += outputTokens;
+		const costs = typeof rawUsage?.inputCost === 'number' && typeof rawUsage?.outputCost === 'number'
+			? { inputCost: rawUsage.inputCost, outputCost: rawUsage.outputCost }
+			: this.calculateCost(inputTokens, outputTokens, model);
+		this.inputCost += costs.inputCost;
+		this.outputCost += costs.outputCost;
+
+		for (const unknownModel of rawUsage?.pricing?.unknownModels || []) {
+			this._unknownModels.add(unknownModel);
+		}
+
+		const sourceFeatures = rawUsage?.byFeature;
+		if (sourceFeatures && typeof sourceFeatures === 'object') {
+			for (const [feature, usageByFeature] of Object.entries(sourceFeatures)) {
+				const bucket = this.byFeature[feature] || (this.byFeature[feature] = {
+					calls: 0,
+					inputTokens: 0,
+					outputTokens: 0,
+					totalTokens: 0,
+					inputCost: 0,
+					outputCost: 0,
+					totalCost: 0,
+				});
+				for (const field of Object.keys(bucket)) {
+					bucket[field] += Number(usageByFeature[field]) || 0;
+				}
+			}
+		} else if (this.defaultFeature) {
+			const bucket = this.byFeature[this.defaultFeature] || (this.byFeature[this.defaultFeature] = {
+				calls: 0,
+				inputTokens: 0,
+				outputTokens: 0,
+				totalTokens: 0,
+				inputCost: 0,
+				outputCost: 0,
+				totalCost: 0,
+			});
+			bucket.calls += 1;
+			bucket.inputTokens += inputTokens;
+			bucket.outputTokens += outputTokens;
+			bucket.totalTokens += inputTokens + outputTokens;
+			bucket.inputCost += costs.inputCost;
+			bucket.outputCost += costs.outputCost;
+			bucket.totalCost += costs.inputCost + costs.outputCost;
+		}
+	}
+
+	merge(otherTracker) {
+		if (!otherTracker) return;
+		const otherData = typeof otherTracker.toJSON === 'function' ? otherTracker.toJSON() : otherTracker;
+		const { inputTokens, outputTokens, inputCost, outputCost, pricing, byFeature, bySource } = otherData;
+		this.inputTokens += Number(inputTokens) || 0;
+		this.outputTokens += Number(outputTokens) || 0;
 		this.inputCost += (inputCost || 0);
 		this.outputCost += (outputCost || 0);
+		if (pricing && Array.isArray(pricing.unknownModels)) {
+			for (const model of pricing.unknownModels) {
+				this._unknownModels.add(model);
+			}
+		}
+
 		for (const [feature, usage] of Object.entries(byFeature || {})) {
 			const bucket = this.byFeature[feature] || (this.byFeature[feature] = {
 				calls: 0,
@@ -252,6 +396,18 @@ class TokenUsageTracker {
 				bucket[field] += Number(usage[field]) || 0;
 			}
 		}
+
+		for (const [sourceName, usage] of Object.entries(bySource || {})) {
+			if (!usage || typeof usage !== 'object') continue;
+			const bucket = this.bySource[sourceName] || (this.bySource[sourceName] = {
+				inputTokens: 0,
+				outputTokens: 0,
+				totalTokens: 0,
+			});
+			bucket.inputTokens += Number(usage.inputTokens) || 0;
+			bucket.outputTokens += Number(usage.outputTokens) || 0;
+			bucket.totalTokens += Number(usage.totalTokens) || 0;
+		}
 	}
 
 	getTotalUsage() {
@@ -260,6 +416,22 @@ class TokenUsageTracker {
 			...json,
 			estimatedSpendUsd: json.totalCost,
 		};
+	}
+
+	/**
+	 * Reset all accumulated token and cost counters to zero. Used by the
+	 * render-or-skip gate (CB-583) to drop token spend for unrenderable
+	 * enrichment output so cost aggregates stay honest.
+	 */
+	reset() {
+		this.inputTokens = 0;
+		this.outputTokens = 0;
+		this.inputCost = 0;
+		this.outputCost = 0;
+		this.byFeature = {};
+		this.bySource = {};
+		this._unknownModels.clear();
+		this._warnedModels.clear();
 	}
 
 	toJSON() {
@@ -272,9 +444,16 @@ class TokenUsageTracker {
 			inputCost: this.inputCost,
 			outputCost: this.outputCost,
 			totalCost,
+			pricing: {
+				unknownModelPricing: this._unknownModels.size > 0,
+				unknownModels: Array.from(this._unknownModels),
+			},
 		};
 		if (Object.keys(this.byFeature).length > 0) {
 			result.byFeature = this.byFeature;
+		}
+		if (Object.keys(this.bySource).length > 0) {
+			result.bySource = Object.fromEntries(Object.entries(this.bySource).map(([name, usage]) => [name, { ...usage }]));
 		}
 		return result;
 	}
@@ -284,7 +463,7 @@ class TokenUsageTracker {
 	 * @returns {string}
 	 */
 	formatSummary() {
-		const { inputTokens, outputTokens, totalTokens, inputCost, outputCost, totalCost } = this.toJSON();
+		const { inputTokens, outputTokens, totalTokens, inputCost, outputCost, totalCost, pricing, bySource } = this.toJSON();
 
 		// Helper to format currency (up to 6 decimal places for small amounts)
 		const fmt = (val) => {
@@ -292,10 +471,25 @@ class TokenUsageTracker {
 			return val < 0.01 ? val.toPrecision(3) : val.toFixed(4);
 		};
 
-		return `Token usage:
+		let summary = `Token usage:
 - In ${inputTokens} ($${fmt(inputCost)})
 - Out ${outputTokens} ($${fmt(outputCost)})
 - Total ${totalTokens} ($${fmt(totalCost)})`;
+
+		if (bySource && Object.keys(bySource).length > 1) {
+			const sourceBreakdowns = Object.entries(bySource)
+				.map(([name, usage]) => `  • ${name}: ${usage.totalTokens} (${usage.inputTokens} in / ${usage.outputTokens} out)`)
+				.join('\n');
+			summary += `\nBy source:\n${sourceBreakdowns}`;
+		}
+
+		if (pricing && pricing.unknownModelPricing && pricing.unknownModels.length > 0) {
+			const note = totalCost > 0
+				? `priced with partial fallback rate for unknown model(s): ${pricing.unknownModels.join(', ')}`
+				: `priced at the default fallback rate (unknown model pricing for: ${pricing.unknownModels.join(', ')})`;
+			return `${summary}\n- Note: ${note}`;
+		}
+		return summary;
 	}
 }
 
@@ -967,6 +1161,10 @@ class GlobalTokenCostBudgetTracker extends TokenUsageTracker {
 		this.outputTokens = 0;
 		this.inputCost = 0;
 		this.outputCost = 0;
+		this.byFeature = {};
+		this.bySource = {};
+		this._unknownModels.clear();
+		this._warnedModels.clear();
 		this.dailySpendUsd = 0;
 		this.dailyInputTokens = 0;
 		this.dailyOutputTokens = 0;
@@ -996,10 +1194,13 @@ function registerGlobalUsage(usage, model) {
 module.exports = {
 	normalizeUsageMetadata,
 	TokenUsageTracker,
+	normalizeModelName,
+	resolvePricing,
 	GlobalTokenCostBudgetTracker,
 	globalTokenTracker,
 	tokenCostBudgetService: globalTokenTracker,
 	registerGlobalUsage,
 	PRICING_PER_1M,
 	MODEL_PRICING: PRICING_PER_1M,
+	_resetWarnedModelsForTesting,
 };

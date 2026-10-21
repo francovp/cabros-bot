@@ -269,6 +269,12 @@ class GenaiClient {
 		}
 
 		if (geminiQuotaManager.isCooldownActive()) {
+			// Callers passing rethrowQuotaErrors (such as geminiPriceService or news
+			// analyzer) require structured LLM completion/price extraction that raw web
+			// search cannot fulfill. They manage their own backoff loops and fail-open
+			// policies, so they deliberately bypass Brave Search fallback and rethrow
+			// 429 immediately. Thus, braveFallbacksDuringCooldown accurately records
+			// only paths where Brave Search fallback was actually executed.
 			if (rethrowQuotaErrors) {
 				const remainingMs = geminiQuotaManager.getRemainingCooldownMs();
 				const error = new Error(`Gemini quota cooldown active (${remainingMs}ms remaining)`);

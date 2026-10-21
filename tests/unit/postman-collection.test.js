@@ -1,8 +1,11 @@
 const fs = require('fs');
 const path = require('path');
+const { getMountedApiOperations } = require('../helpers/api-operations');
 const MarkdownV2Formatter = require('../../src/services/notification/formatters/markdownV2Formatter');
 
 const collectionPath = path.join(__dirname, '../../CabrosBot.postman_collection.json');
+const readmePath = path.join(__dirname, '../../README.md');
+const openapiPath = path.join(__dirname, '../../src/openapi/openapi.json');
 
 function findItem(items, name) {
 	for (const item of items) {
@@ -27,6 +30,186 @@ function collectRequestItems(items, result = []) {
 	return result;
 }
 
+function normalizeParamPath(routePath) {
+	if (typeof routePath !== 'string') return '';
+	return routePath
+		.replace(/\{\{[^}]+\}\}/g, '{param}')
+		.replace(/:([A-Za-z0-9_]+)/g, '{param}')
+		.replace(/\{([A-Za-z0-9_]+)\}/g, '{param}');
+}
+
+function extractPostmanApiOperations(items, operations = new Set()) {
+	if (!Array.isArray(items)) return operations;
+	for (const item of items) {
+		if (item && item.request) {
+			const method = (item.request.method || 'GET').toUpperCase();
+			let pathname = '';
+			if (item.request.url) {
+				if (Array.isArray(item.request.url.path)) {
+					pathname = `/${item.request.url.path.join('/')}`;
+				} else {
+					const raw = typeof item.request.url === 'string' ? item.request.url : (item.request.url.raw || '');
+					pathname = raw.replace(/^(?:https?:\/\/[^/]+|\{\{[^}]+\}\})/, '').split('?')[0].split('#')[0];
+				}
+			}
+			pathname = pathname.replace(/\/+$/, '');
+			const normalizedPath = normalizeParamPath(pathname);
+			if (normalizedPath.startsWith('/api/')) operations.add(`${method} ${normalizedPath}`);
+		}
+		if (item && Array.isArray(item.item)) extractPostmanApiOperations(item.item, operations);
+	}
+	return operations;
+}
+
+function findMissingPostmanOperations(mountedOperations, postmanOperations) {
+	const postmanSet = postmanOperations instanceof Set ? postmanOperations : new Set(postmanOperations);
+	const parsedPostmanOperations = Array.from(postmanSet, (operation) => {
+		if (typeof operation !== 'string') return null;
+		const separator = operation.indexOf(' ');
+		return separator < 0 ? null : {
+			method: operation.slice(0, separator),
+			path: operation.slice(separator + 1).split('/'),
+		};
+	}).filter(Boolean);
+
+	return mountedOperations.filter((mountedOperation) => {
+		if (postmanSet.has(mountedOperation)) return false;
+		if (typeof mountedOperation !== 'string') return true;
+		const separator = mountedOperation.indexOf(' ');
+		if (separator < 0) return true;
+		const method = mountedOperation.slice(0, separator);
+		const routePath = mountedOperation.slice(separator + 1).split('/');
+
+		return !parsedPostmanOperations.some((postmanOperation) => (
+			postmanOperation.method === method
+			&& postmanOperation.path.length === routePath.length
+			&& routePath.every((segment, index) => (
+				/^\{[^/]+\}$/.test(segment) || segment === postmanOperation.path[index]
+			))
+		));
+	});
+}
+
+function extractReadmeApiPaths(readmeContent) {
+	if (typeof readmeContent !== 'string') return [];
+	const regex = /(?:https?:\/\/([^/\s`"\)]+))?(\/api\/[a-zA-Z0-9_\-\/\{\}:]+)/g;
+	const paths = new Set();
+	let match;
+	while ((match = regex.exec(readmeContent)) !== null) {
+		const host = match[1];
+		let routePath = match[2];
+		if (host && (host.includes('discord') || host.includes('binance'))) continue;
+		routePath = routePath.replace(/[\.,\):]+$/, '').replace(/\/+$/, '');
+		if (routePath.startsWith('/api/')) paths.add(routePath.replace(/:([A-Za-z0-9_]+)/g, '{$1}'));
+	}
+	return Array.from(paths).sort();
+}
+
+function findMissingReadmePaths(readmeContent, contract = {}) {
+	const readmePaths = extractReadmeApiPaths(readmeContent);
+	const openapiPaths = new Set(Object.keys(contract.paths || {}));
+	return readmePaths.filter((routePath) => !openapiPaths.has(routePath));
+}
+
+// Minimal `pm` harness that actually EXECUTES a Postman item's test script, so a
+// self-defeating assertion cannot ship. `pm.expect(raw).to.not.include('apiKey')`
+// reads as a no-credential-leak guard, but every /api/status body carries the
+// documented field name `apiKeyFallbackConfigured`, so it always fails in
+// Postman. The contract assertions in this file check `/authDomain/i` instead,
+// which is why nothing in CI can see that defect class. An unsupported matcher
+// throws rather than silently passing, so widening the subset is deliberate.
+function createPmHarness(response, onResult) {
+	const buildChain = (actual, negated) => {
+		const check = (passed, description) => {
+			if (passed === negated) {
+				throw new Error(`expected ${description} to ${negated ? 'NOT ' : ''}hold`);
+			}
+		};
+		const chain = {
+			get to() { return chain; },
+			get be() { return chain; },
+			get been() { return chain; },
+			get that() { return chain; },
+			get which() { return chain; },
+			get and() { return chain; },
+			get has() { return chain; },
+			get have() { return chain; },
+			get is() { return chain; },
+			get deep() { return chain; },
+			get not() { return buildChain(actual, !negated); },
+			eql(expected) {
+				check(
+					JSON.stringify(actual) === JSON.stringify(expected),
+					`${JSON.stringify(actual)} to eql ${JSON.stringify(expected)}`,
+				);
+				return chain;
+			},
+			equal(expected) { return chain.eql(expected); },
+			include(expected) {
+				const passed = typeof actual === 'string'
+					? actual.includes(expected)
+					: Array.isArray(actual) && actual.includes(expected);
+				check(passed, `${JSON.stringify(actual)} to include ${JSON.stringify(expected)}`);
+				return chain;
+			},
+			property(key) {
+				check(
+					actual !== null && actual !== undefined
+						&& Object.prototype.hasOwnProperty.call(actual, key),
+					`${JSON.stringify(actual)} to have property "${key}"`,
+				);
+				return chain;
+			},
+			an(type) {
+				const observed = Array.isArray(actual) ? 'array' : typeof actual;
+				check(observed === type, `${JSON.stringify(actual)} to be an ${type} (got ${observed})`);
+				return chain;
+			},
+			a(type) { return chain.an(type); },
+			above(limit) {
+				check(typeof actual === 'number' && actual > limit, `${actual} to be above ${limit}`);
+				return chain;
+			},
+			least(limit) {
+				check(typeof actual === 'number' && actual >= limit, `${actual} to be at least ${limit}`);
+				return chain;
+			},
+			below(limit) {
+				check(typeof actual === 'number' && actual < limit, `${actual} to be below ${limit}`);
+				return chain;
+			},
+		};
+		return chain;
+	};
+
+	return {
+		test(name, fn) {
+			try {
+				fn();
+				onResult({ name, passed: true, error: null });
+			} catch (error) {
+				onResult({ name, passed: false, error: error.message });
+			}
+		},
+		expect(actual) { return buildChain(actual, false); },
+		response: {
+			code: response.code,
+			text: () => response.body,
+			json: () => JSON.parse(response.body),
+		},
+	};
+}
+
+function runItemTestScript(item, response) {
+	const script = (item.event || []).find((event) => event.listen === 'test');
+	if (!script) throw new Error(`item "${item.name}" has no test script`);
+	const results = [];
+
+	const run = new Function('pm', script.script.exec.join('\n'));
+	run(createPmHarness(response, (result) => results.push(result)));
+	return results;
+}
+
 function collectRequestsAndSavedExamples(items, result = []) {
 	for (const item of items) {
 		if (item.request) result.push(item.request);
@@ -39,6 +222,40 @@ function collectRequestsAndSavedExamples(items, result = []) {
 }
 
 describe('Postman collection contract', () => {
+	it('covers valid and invalid body-only auto-trade requests', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const valid = findItem(collection.item, 'POST Send Alert (autoTrade body only)');
+		const invalid = findItem(collection.item, 'POST Send Alert (invalid autoTrade body - 400)');
+		const invalidQuery = findItem(collection.item, 'POST Send Alert (invalid autoTrade query - 400)');
+		expect(valid.request.url.raw).toBe('{{baseUrl}}/api/webhook/alert');
+		expect(JSON.parse(valid.request.body.raw)).toMatchObject({ autoTrade: true, signalId: 'bar-123' });
+		expect(valid.response[0].code).toBe(200);
+		expect(invalid.request.url.raw).toBe('{{baseUrl}}/api/webhook/alert');
+		expect(JSON.parse(invalid.request.body.raw).autoTrade).toBe('yes');
+		expect(invalid.response[0].code).toBe(400);
+		expect(JSON.parse(invalid.response[0].body)).toMatchObject({ code: 'INVALID_REQUEST', retryable: false });
+		expect(invalidQuery.request.url.raw).toContain('?autoTrade=tru');
+		expect(JSON.parse(invalidQuery.response[0].body)).toMatchObject({ code: 'INVALID_REQUEST', retryable: false });
+	});
+	it('documents webhook-message alert filtering with a matching response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'GET List Alerts (webhook-message)');
+		const customSource = findItem(collection.item, 'GET List Alerts (custom source)');
+		const invalid = findItem(collection.item, 'GET List Alerts (invalid include - 400 Bad Request)');
+
+		expect(item).toBeDefined();
+		expect(item.request.url.raw).toBe('{{baseUrl}}/api/alerts?limit=10&source=webhook-message');
+		expect(item.request.body).toBeUndefined();
+		const response = item.response.find((example) => example.code === 200);
+		expect(JSON.parse(response.body).alerts[0].source).toBe('webhook-message');
+
+		expect(customSource).toBeDefined();
+		expect(customSource.request.url.raw).toBe('{{baseUrl}}/api/alerts?limit=10&source=webhook-signal');
+		expect(JSON.parse(customSource.response.find((example) => example.code === 200).body).alerts[0].source)
+			.toBe('webhook-signal');
+		expect(invalid.response[0].code).toBe(400);
+	});
+
 	it('adds executable response assertions to each alert decision rollup and export variant', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const names = [
@@ -255,6 +472,17 @@ describe('Postman collection contract', () => {
 		expect(script).toContain('pm.variables.set(\'oversizedWebhookPadding\'');
 		expect(oversized.request.body.raw).toContain('{{oversizedWebhookPadding}}');
 		expect(oversized.request.body.raw).not.toContain('{{$padString}}');
+		expect(oversized.request.header).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'x-request-id', value: 'req-webhook-body-size-001' }),
+		]));
+		expect(oversized.response[0].header).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'X-Request-Id', value: 'req-webhook-body-size-001' }),
+		]));
+		expect(JSON.parse(oversized.response[0].body)).toEqual(expect.objectContaining({
+			code: 'PAYLOAD_TOO_LARGE',
+			requestId: 'req-webhook-body-size-001',
+			retryable: false,
+		}));
 
 	});
 
@@ -603,6 +831,8 @@ describe('Postman collection contract', () => {
 			'/api/news-monitor/pause',
 			'/api/news-monitor/resume',
 			'/api/news-monitor/status',
+			'/api/news-monitor/summary',
+			'/api/news-monitor/analyses',
 			'/api/symbol-analyses',
 			'/api/symbol-analyses/summary',
 		];
@@ -798,6 +1028,76 @@ describe('Postman collection contract', () => {
 		expect(postInvalid.response[0].code).toBe(400);
 		expect(JSON.parse(postInvalid.response[0].body).code).toBe('INVALID_REQUEST');
 
+		const malformedJsonAlert = findItem(collection.item, 'POST Send Alert (malformed JSON - 400 Bad Request)');
+		expect(malformedJsonAlert).toBeDefined();
+		expect(malformedJsonAlert.request.url.raw).toBe('{{baseUrl}}/api/webhook/alert');
+		expect(malformedJsonAlert.request.body.raw).toBe('{"text":');
+		expect(malformedJsonAlert.response[0].code).toBe(400);
+		expect(JSON.parse(malformedJsonAlert.response[0].body)).toEqual(expect.objectContaining({
+			code: 'INVALID_REQUEST',
+			error: 'Malformed JSON request body',
+			requestId: expect.any(String),
+		}));
+		const malformedJsonTests = (malformedJsonAlert.event || [])
+			.filter((event) => event.listen === 'test')
+			.flatMap((event) => event.script.exec)
+			.join('\n');
+		expect(malformedJsonTests).toContain('pm.test');
+		expect(malformedJsonTests).toContain('Malformed JSON returns structured 400');
+		expect(malformedJsonTests).toContain('pm.response.to.have.status(400)');
+		expect(malformedJsonTests).toContain('body.code).to.eql(\'INVALID_REQUEST\')');
+
+		const unsupportedCharset = findItem(collection.item, 'POST Send Alert (unsupported JSON charset - 415)');
+		expect(unsupportedCharset).toBeDefined();
+		expect(unsupportedCharset.request.header).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'Content-Type', value: 'application/json; charset=unsupported-charset' }),
+		]));
+		expect(unsupportedCharset.response[0].code).toBe(415);
+		expect(JSON.parse(unsupportedCharset.response[0].body)).toEqual(expect.objectContaining({
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		}));
+		const unsupportedCharsetTests = unsupportedCharset.event
+			.filter((event) => event.listen === 'test')
+			.flatMap((event) => event.script.exec)
+			.join('\n');
+		expect(unsupportedCharsetTests).toContain('pm.response.to.have.status(415)');
+		expect(unsupportedCharsetTests).toContain('body.code).to.eql(\'INVALID_REQUEST\')');
+		expect(unsupportedCharsetTests).toContain('X-Request-Id');
+
+		const fallthrough500Examples = findItem(collection.item, 'POST Send Alert').response
+			.filter((response) => response.code === 500);
+		expect(fallthrough500Examples).toHaveLength(1);
+		expect(JSON.parse(fallthrough500Examples[0].body)).toEqual(expect.objectContaining({
+			success: false,
+			code: 'INTERNAL_ERROR',
+			requestId: expect.any(String),
+		}));
+
+		const tooManyParameters = findItem(collection.item, 'POST Send Alert (too many URL-encoded parameters - 413)');
+		expect(tooManyParameters).toBeDefined();
+		expect(tooManyParameters.request.body.raw).toContain('{{tooManyUrlEncodedParameters}}');
+		expect(tooManyParameters.event.find((event) => event.listen === 'prerequest').script.exec.join('\n'))
+			.toContain('Array.from({ length: 1001 }');
+		expect(tooManyParameters.event.find((event) => event.listen === 'test').script.exec.join('\n'))
+			.toContain('body.code).to.eql(\'PAYLOAD_TOO_LARGE\')');
+		expect(JSON.parse(tooManyParameters.response[0].body)).toEqual(expect.objectContaining({
+			code: 'PAYLOAD_TOO_LARGE',
+			error: 'Request contains too many URL-encoded parameters',
+			retryable: false,
+		}));
+
+		const message500 = findItem(collection.item, 'POST Send Message').response
+			.find((response) => response.code === 500);
+		expect(JSON.parse(message500.body)).toEqual(expect.objectContaining({
+			code: 'INTERNAL_ERROR',
+			retryable: true,
+		}));
+		expect(message500.header).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'X-Request-Id', value: expect.any(String) }),
+		]));
+
 		const listClassFiltered = findItem(collection.item, 'GET List Alerts (signalClass filter)');
 		expect(listClassFiltered).toBeDefined();
 		expect(listClassFiltered.request.url.raw).toContain('signalClass=breakout,reversal');
@@ -824,6 +1124,33 @@ describe('Postman collection contract', () => {
 		const exportClassInvalid = findItem(collection.item, 'GET Export Alerts (invalid signalClass - 400 Bad Request)');
 		expect(exportClassInvalid).toBeDefined();
 		expect(exportClassInvalid.response[0].code).toBe(400);
+	});
+
+	it('documents symbol analysis multi-agent state in status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		expect(JSON.parse(status.response[0].body).featureFlags.symbolAnalysisMultiAgent).toBe(false);
+		expect(JSON.parse(capabilities.response[0].body).featureFlags.symbolAnalysisMultiAgent).toBe(false);
+	});
+
+	it('documents api-only mode state in status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		expect(JSON.parse(status.response[0].body).featureFlags.apiOnlyMode).toBe(false);
+		expect(JSON.parse(capabilities.response[0].body).featureFlags.apiOnlyMode).toBe(false);
+	});
+
+	it('documents telegram command rate limiting state in status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		expect(JSON.parse(status.response[0].body).featureFlags.telegramCommandRateLimiting).toBe(true);
+		expect(JSON.parse(capabilities.response[0].body).featureFlags.telegramCommandRateLimiting).toBe(true);
 	});
 
 	it('documents notificationRedrive and zeroChannelBroadcasts in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
@@ -895,6 +1222,21 @@ describe('Postman collection contract', () => {
 		expect(unauthorized).toBeDefined();
 		expect(unauthorized.code).toBe(401);
 		expect(JSON.parse(unauthorized.body).error).toContain('Unauthorized');
+	});
+
+	it('documents background timer counts in successful status examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - firestore write metrics');
+		const successResponses = item.response.filter((response) => response.code === 200);
+
+		expect(successResponses.length).toBeGreaterThan(0);
+		for (const response of successResponses) {
+			expect(JSON.parse(response.body).dependencies.backgroundTimers).toEqual({
+				registered: expect.any(Number),
+				drained: expect.any(Number),
+				failed: expect.any(Number),
+			});
+		}
 	});
 
 	it('documents the job queue broker readiness variants for the #1117 cutover', () => {
@@ -1245,6 +1587,176 @@ describe('Postman collection contract', () => {
 		}
 	});
 
+	it('ships executable Postman assertions that actually pass on every documented response', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - Firebase admin auth readiness (issue #1134)');
+
+		// Only the 200 variants: the script asserts on `dependencies.adminAuth`,
+		// which the documented 401 error envelope intentionally does not carry.
+		const successes = item.response.filter((res) => res.code === 200);
+		expect(successes).toHaveLength(5);
+
+		for (const res of successes) {
+			const results = runItemTestScript(item, { code: res.code, body: res.body });
+			const failures = results.filter((result) => !result.passed);
+
+			expect({
+				example: res.name,
+				failures: failures.map((failure) => `${failure.name}: ${failure.error}`),
+			}).toEqual({ example: res.name, failures: [] });
+		}
+	});
+
+	it('documents Firebase admin auth gate and proven readiness states for GET Status', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - Firebase admin auth readiness (issue #1134)');
+
+		expect(item).toBeDefined();
+
+		const disabled = item.response.find((res) => res.name.includes('disabled'));
+		const unverified = item.response.find((res) => res.name.includes('unverified'));
+		const ready = item.response.find((res) => res.name.includes('ready'));
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const misconfigured = item.response.find((res) => res.name.includes('misconfigured'));
+		const unauthorized = item.response.find((res) => res.code === 401);
+
+		// The gate must be mirrored exactly into featureFlags, or a client
+		// cannot reconcile the flag with the dependency it drives.
+		for (const res of [disabled, unverified, ready, degraded, misconfigured]) {
+			const body = JSON.parse(res.body);
+			expect(body.featureFlags.firebaseAdminAuth).toBe(body.dependencies.adminAuth.enabled);
+			expect(body.dependencies.adminAuth).not.toHaveProperty('config');
+		}
+
+		// Shape is not readiness: the pre-verification state documents as
+		// unverified, exactly like equityMarketData in issue #1116.
+		expect(JSON.parse(unverified.body).dependencies.adminAuth).toMatchObject({
+			enabled: true,
+			provider: 'firebase',
+			signIn: 'email-password',
+			verifierConfigured: true,
+			browserConfigConfigured: true,
+			ready: false,
+			status: 'unverified',
+			verificationSuccessCount: 0,
+			consecutiveFailures: 0,
+		});
+
+		expect(JSON.parse(ready.body).dependencies.adminAuth).toMatchObject({
+			ready: true,
+			status: 'ready',
+			verificationSuccessCount: 12,
+		});
+
+		// Only verifier-unavailability degrades the dependency. The degraded
+		// example must therefore carry no verification success, since a
+		// rejected bearer token is never counted as a failure.
+		expect(JSON.parse(degraded.body).dependencies.adminAuth).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			verifierConfigured: true,
+			verificationSuccessCount: 0,
+			verifierUnavailableCount: 3,
+			consecutiveFailures: 3,
+		});
+
+		expect(JSON.parse(misconfigured.body).dependencies.adminAuth).toMatchObject({
+			verifierConfigured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+
+		expect(JSON.parse(disabled.body).dependencies.adminAuth).toMatchObject({
+			enabled: false,
+			provider: null,
+			verifierConfigured: false,
+			ready: false,
+			status: 'disabled',
+		});
+
+		expect(unauthorized.code).toBe(401);
+		expect(JSON.parse(unauthorized.body)).toMatchObject({
+			success: false,
+			code: 'ADMIN_AUTH_REQUIRED',
+		});
+
+		for (const res of [disabled, unverified, ready, degraded, misconfigured]) {
+			expect(res.body).not.toMatch(/private_key/);
+			expect(res.body).not.toMatch(/service_account/);
+			expect(res.body).not.toMatch(/authDomain/i);
+		}
+	});
+
+	it('documents the admin auth gate in the primary status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+
+		for (const name of ['Get Status', 'Get Capabilities']) {
+			const item = findItem(collection.item, name);
+			const body = JSON.parse(item.response[0].body);
+			expect(body.featureFlags.firebaseAdminAuth).toBe(false);
+			expect(body.dependencies.adminAuth).toMatchObject({
+				enabled: false,
+				ready: false,
+				status: 'disabled',
+			});
+		}
+	});
+
+	it('documents cloudflareAig routing states for GET Status', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - cloudflareAig routing (issue #1115)');
+
+		expect(item).toBeDefined();
+
+		const inactive = item.response.find((res) => res.name.includes('inactive'));
+		const routed = item.response.find((res) => res.name.includes('ready - gateway is the routed'));
+		const misconfigured = item.response.find((res) => res.name.includes('misconfigured'));
+
+		// Issue #1115 acceptance: ENABLE_CLOUDFLARE_AIG alone does not route traffic, so
+		// credentials present under another provider must document ready:false/inactive
+		// rather than the ready:true the flag-plus-credentials steps used to produce.
+		expect(inactive.code).toBe(200);
+		expect(JSON.parse(inactive.body).dependencies.cloudflareAig).toMatchObject({
+			enabled: true,
+			configured: true,
+			routed: false,
+			provider: 'gemini',
+			ready: false,
+			status: 'inactive',
+		});
+
+		expect(routed.code).toBe(200);
+		expect(JSON.parse(routed.body).dependencies.cloudflareAig).toMatchObject({
+			enabled: true,
+			configured: true,
+			routed: true,
+			provider: 'cloudflare',
+			ready: true,
+			status: 'ready',
+		});
+
+		expect(misconfigured.code).toBe(200);
+		expect(JSON.parse(misconfigured.body).dependencies.cloudflareAig).toMatchObject({
+			enabled: true,
+			configured: false,
+			routed: true,
+			provider: 'cloudflare',
+			ready: false,
+			status: 'misconfigured',
+		});
+
+		for (const res of [inactive, routed, misconfigured]) {
+			const cf = JSON.parse(res.body).dependencies.cloudflareAig;
+			expect(cf.routed).toBe(cf.provider === 'cloudflare');
+			if (cf.ready) {
+				expect(cf.status).toBe('ready');
+				expect(cf.routed).toBe(true);
+			}
+			expect(res.body).not.toMatch(/CF_AIG_TOKEN/);
+			expect(res.body).not.toMatch(/CF_AIG_BASE_URL/);
+		}
+	});
+
 	it('documents both STORAGE_UNAVAILABLE classifications for GET List Alerts', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const item = findItem(collection.item, 'GET List Alerts');
@@ -1351,6 +1863,74 @@ describe('Postman collection contract', () => {
 			expect(scriptText).toContain('INVALID_REQUEST');
 		});
 	});
+
+	it('documents distinct invalid query variants for GET Signal Outcomes Confidence Calibration (issue #1240)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const invalidLimit = findItem(collection.item, 'GET Signal Outcomes Confidence Calibration (invalid limit)');
+		const invalidWindow = findItem(collection.item, 'GET Signal Outcomes Confidence Calibration (invalid window)');
+		const malformedFrom = findItem(collection.item, 'GET Signal Outcomes Confidence Calibration (malformed from timestamp)');
+		const malformedTo = findItem(collection.item, 'GET Signal Outcomes Confidence Calibration (malformed to timestamp)');
+		const reversedRange = findItem(collection.item, 'GET Signal Outcomes Confidence Calibration (reversed time range)');
+
+		expect(invalidLimit).toBeDefined();
+		expect(invalidLimit.request.url.raw).toContain('limit=2000');
+		expect(invalidLimit.response[0].code).toBe(400);
+		expect(JSON.parse(invalidLimit.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid limit. Use an integer between 1 and 1000.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(invalidWindow).toBeDefined();
+		expect(invalidWindow.request.url.raw).toContain('window=invalid');
+		expect(invalidWindow.response[0].code).toBe(400);
+		expect(JSON.parse(invalidWindow.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(malformedFrom).toBeDefined();
+		expect(malformedFrom.request.url.raw).toContain('from=not-a-date');
+		expect(malformedFrom.response[0].code).toBe(400);
+		expect(JSON.parse(malformedFrom.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(malformedTo).toBeDefined();
+		expect(malformedTo.request.url.raw).toContain('to=not-a-date');
+		expect(malformedTo.response[0].code).toBe(400);
+		expect(JSON.parse(malformedTo.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(reversedRange).toBeDefined();
+		expect(reversedRange.request.url.raw).toContain('from=2026-08-30T00:00:00.000Z&to=2026-08-01T00:00:00.000Z');
+		expect(reversedRange.response[0].code).toBe(400);
+		expect(JSON.parse(reversedRange.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid time window. from must be before or equal to to.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		[invalidLimit, invalidWindow, malformedFrom, malformedTo, reversedRange].forEach((item) => {
+			expect(item.event).toBeDefined();
+			const testEvent = item.event.find((e) => e.listen === 'test');
+			expect(testEvent).toBeDefined();
+			const scriptText = testEvent.script.exec.join('\n');
+			expect(scriptText).toContain('pm.response.to.have.status(400)');
+			expect(scriptText).toContain('INVALID_REQUEST');
+		});
+	});
 	it('documents idempotency headers and replay examples for volume confirmation and symbol analysis', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const volumeConfirm = findItem(collection.item, 'POST Volume Confirmation');
@@ -1407,6 +1987,27 @@ describe('alert analytics summary examples (issue #731)', () => {
 		expect(directSummary.available).toBe(true);
 		expect(Object.keys(shadowMetrics)).toEqual(expect.arrayContaining(required));
 		expect(shadowMetrics).not.toHaveProperty('available');
+	});
+
+	it('documents deployments array in GET Alert Analytics Summary example (issue #1169)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const alertSummary = findItem(collection.item, 'GET Alert Analytics Summary');
+		expect(alertSummary).toBeDefined();
+
+		const summaryExample = alertSummary.response.find((response) => response.name === '200 OK - Analytics summary');
+		expect(summaryExample).toBeDefined();
+
+		const summary = JSON.parse(summaryExample.body).summary;
+		expect(Array.isArray(summary.deployments)).toBe(true);
+		expect(summary.deployments.length).toBeGreaterThan(0);
+		expect(summary.deployments[0]).toEqual(expect.objectContaining({
+			platform: expect.any(String),
+			gitSha: expect.any(String),
+			service: expect.any(String),
+			runtimeVersion: expect.any(String),
+			count: expect.any(Number),
+			lastSeen: expect.any(String),
+		}));
 	});
 });
 
@@ -1635,5 +2236,159 @@ describe('news-monitor admin read examples (issue #1290)', () => {
 			expect(Object.keys(body)).toEqual(expect.arrayContaining(required));
 			expect(body.success).toBe(true);
 		});
+	});
+});
+
+describe('CI coverage guards (Postman collection and README endpoints)', () => {
+	it('covers every mounted /api operation from the router and app in the Postman collection', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		expect(getMountedApiOperations()).toContain('GET /api/public/status');
+		const missing = findMissingPostmanOperations(
+			getMountedApiOperations(),
+			extractPostmanApiOperations(collection.item),
+		);
+		expect(missing).toEqual([]);
+	});
+
+	it('documents valid and invalid query examples for news monitor persistence endpoints', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const summary = findItem(collection.item, 'GET News Monitor Summary');
+		const invalidSummary = findItem(collection.item, 'GET News Monitor Summary (invalid threshold)');
+		const analyses = findItem(collection.item, 'GET News Monitor Analyses');
+		const invalidAnalyses = findItem(collection.item, 'GET News Monitor Analyses (invalid limit)');
+
+		expect(summary.request.url.raw).toContain('/api/news-monitor/summary?limit=500&threshold=0.7');
+		expect(JSON.parse(summary.response.find((response) => response.code === 200).body)).toEqual(expect.objectContaining({
+			success: true,
+			totalAnalyses: expect.any(Number),
+			falsePositiveProxy: expect.objectContaining({ threshold: 0.7 }),
+		}));
+		expect(invalidSummary.request.url.raw).toContain('threshold=1.5');
+		expect(JSON.parse(invalidSummary.response.find((response) => response.code === 400).body).code).toBe('INVALID_REQUEST');
+
+		expect(analyses.request.url.raw).toContain('/api/news-monitor/analyses?limit=50');
+		expect(JSON.parse(analyses.response.find((response) => response.code === 200).body)).toEqual(expect.objectContaining({
+			success: true,
+			analyses: expect.any(Array),
+		}));
+		expect(analyses.request.url.query).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'before', disabled: true }),
+		]));
+		expect(analyses.request.url.query).not.toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'beforeCursor' }),
+		]));
+		expect(invalidAnalyses.request.url.raw).toContain('limit=0');
+		expect(JSON.parse(invalidAnalyses.response.find((response) => response.code === 400).body).code).toBe('INVALID_REQUEST');
+	});
+
+	it('fails when a mounted Postman operation is missing', () => {
+		const missing = findMissingPostmanOperations(
+			['GET /api/status', 'POST /api/uncovered-endpoint'],
+			new Set(['GET /api/status']),
+		);
+		expect(missing).toEqual(['POST /api/uncovered-endpoint']);
+	});
+
+	it('matches concrete Postman values to route parameters and preserves methods and static segments', () => {
+		const mounted = [
+			'GET /api/preferences/{param}/{param}',
+			'PUT /api/preferences/{param}/{param}',
+			'GET /api/preferences/{param}/notifications/{param}',
+		];
+		const postman = new Set([
+			'GET /api/preferences/telegram/123456789',
+			'PUT /api/preferences/telegram/123456789',
+			'GET /api/preferences/telegram/notifications/123456789',
+			'GET /api/preferences/discord/wrong/987654321',
+		]);
+
+		expect(findMissingPostmanOperations(mounted, postman)).toEqual([]);
+		expect(findMissingPostmanOperations(
+			['GET /api/preferences/{param}/notifications/{param}'],
+			new Set(['GET /api/preferences/telegram/unread/123456789']),
+		)).toEqual(['GET /api/preferences/{param}/notifications/{param}']);
+		expect(findMissingPostmanOperations(
+			['PUT /api/preferences/{param}/{param}'],
+			new Set(['GET /api/preferences/telegram/123456789']),
+		)).toEqual(['PUT /api/preferences/{param}/{param}']);
+	});
+
+	it('asserts every README API path exists in openapi.json and detects missing paths', () => {
+		const readme = fs.readFileSync(readmePath, 'utf8');
+		const openapi = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+		expect(findMissingReadmePaths(readme, openapi)).toEqual([]);
+		expect(findMissingReadmePaths('Use POST /api/not-in-openapi.', { paths: { '/api/status': {} } }))
+			.toEqual(['/api/not-in-openapi']);
+	});
+
+	it('documents request-ID echo and omitted variants on every documented non-probe API operation (issue #1272)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const openapi = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+		const probeRoutes = ['/healthcheck', '/ready'];
+
+		const allItems = collectRequestsAndSavedExamples(collection.item);
+		const requestItems = collectRequestItems(collection.item);
+
+		function normalizeUrl(urlObj) {
+			let url = '';
+			if (typeof urlObj === 'string') url = urlObj;
+			else if (urlObj && urlObj.raw) url = urlObj.raw;
+			else if (urlObj && urlObj.path) url = '/' + urlObj.path.join('/');
+			return url.replace('{{baseUrl}}', '').split('?')[0];
+		}
+
+		const missingEcho = [];
+		const missingOmitted = [];
+
+		for (const [routePath, methods] of Object.entries(openapi.paths || {})) {
+			if (probeRoutes.includes(routePath)) continue;
+			for (const [m, op] of Object.entries(methods)) {
+				if (!op || typeof op !== 'object' || !op.operationId) continue;
+				const method = m.toUpperCase();
+				const regexPath = new RegExp('^' + routePath.replace(/\{([^}]+)\}/g, '[^/]+') + '$');
+
+				const matches = requestItems.filter((item) => {
+					const itemMethod = (item.request?.method || 'GET').toUpperCase();
+					if (itemMethod !== method) return false;
+					const u = normalizeUrl(item.request?.url);
+					return regexPath.test(u);
+				});
+
+				const hasEcho = matches.some((item) => {
+					const headers = item.request?.header || [];
+					const hasHeader = headers.some(
+						(h) => (h.key || '').toLowerCase() === 'x-request-id' && h.value && h.value.length > 0,
+					);
+					const testCode = (item.event || [])
+						.filter((e) => e.listen === 'test')
+						.map((e) => e.script?.exec?.join('\n'))
+						.join('\n');
+					return hasHeader && testCode.includes('X-Request-Id') && testCode.includes('pm.test');
+				});
+
+				const hasOmitted = matches.some((item) => {
+					const headers = item.request?.header || [];
+					const hasHeader = headers.some((h) => (h.key || '').toLowerCase() === 'x-request-id');
+					const testCode = (item.event || [])
+						.filter((e) => e.listen === 'test')
+						.map((e) => e.script?.exec?.join('\n'))
+						.join('\n');
+					return !hasHeader && testCode.includes('X-Request-Id') && testCode.includes('pm.test');
+				});
+
+				if (!hasEcho) missingEcho.push(`${method} ${routePath}`);
+				if (!hasOmitted) missingOmitted.push(`${method} ${routePath}`);
+			}
+		}
+
+		expect(missingEcho).toEqual([]);
+		expect(missingOmitted).toEqual([]);
+	});
+
+	it('handles defensive path inputs', () => {
+		expect(normalizeParamPath(null)).toBe('');
+		expect(normalizeParamPath(undefined)).toBe('');
+		expect(findMissingPostmanOperations([], new Set())).toEqual([]);
+		expect(findMissingReadmePaths('', {})).toEqual([]);
 	});
 });

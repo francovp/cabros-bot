@@ -4,6 +4,7 @@ const admin = require('firebase-admin');
 const alertStorageService = require('../storage/AlertStorageService');
 const { firestoreWriteMetricsService } = require('../storage/FirestoreWriteMetricsService');
 const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
+const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
 
 const WRITE_METRICS_DOMAIN_JOBS = 'jobs';
 
@@ -115,7 +116,8 @@ function getLocalTerminalJob(jobId) {
 }
 
 function getClaimLeaseMs() {
-	const configured = Number(process.env.JOB_QUEUE_CLAIM_LEASE_MS);
+	const remote = resolveRemoteOverride('JOB_QUEUE_CLAIM_LEASE_MS');
+	const configured = Number(remote !== undefined ? remote : process.env.JOB_QUEUE_CLAIM_LEASE_MS);
 	return Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_CLAIM_LEASE_MS;
 }
 
@@ -180,6 +182,10 @@ class JobRepository {
 
 		const version = (saveVersions.get(sanitized.jobId)?.version || 0) + 1;
 		saveVersions.set(sanitized.jobId, { version, job: cloneJob(sanitized) });
+
+		if (!sanitized.deployment) {
+			sanitized.deployment = getDeploymentIdentity();
+		}
 
 		let persistedJob = sanitized;
 		const durableJob = addTerminalExpiry(sanitized);
@@ -1046,6 +1052,10 @@ class JobRepository {
 		};
 	}
 
+	getClaimLeaseMs() {
+		return getClaimLeaseMs();
+	}
+
 	_getFirestore() {
 		if (!isFirestoreEnabled()) {
 			return null;
@@ -1060,6 +1070,7 @@ module.exports = {
 	JobRepository,
 	jobRepository,
 	COLLECTION_NAME,
+	getClaimLeaseMs,
 	// Exported so the durable-storage gate can be asserted directly (issue #721).
 	// The gate is resolved per call, not cached, so the export stays truthful.
 	isFirestoreEnabled,
