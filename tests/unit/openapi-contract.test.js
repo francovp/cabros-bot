@@ -940,6 +940,27 @@ describe('status dependency contract drift', () => {
 		expect(missing).toEqual([]);
 	});
 
+	it('documents XRequestIdHeader parameter on every non-probe API operation (issue #1272)', () => {
+		const spec = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const probeRoutes = ['/healthcheck', '/ready'];
+		const missing = [];
+
+		for (const [routePath, operations] of Object.entries(spec.paths || {})) {
+			if (probeRoutes.includes(routePath)) continue;
+			for (const [method, operation] of Object.entries(operations)) {
+				if (!operation || typeof operation !== 'object' || !operation.operationId) continue;
+				const hasParam = (operation.parameters || []).some(
+					(p) => p && p.$ref === '#/components/parameters/XRequestIdHeader',
+				);
+				if (!hasParam) {
+					missing.push(`${method.toUpperCase()} ${routePath}`);
+				}
+			}
+		}
+
+		expect(missing).toEqual([]);
+	});
+
 	it('exposes every named Status dependency in some Postman status example', () => {
 		const examples = getStatusExamples();
 		expect(examples.length).toBeGreaterThan(0);
