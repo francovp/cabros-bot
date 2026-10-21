@@ -1018,6 +1018,48 @@ describe('profiling configuration', () => {
 				span_id: 'span-67890',
 			});
 		});
+
+		it('should promote http.requestId and extra.requestId to request_id tag when available', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			service.init();
+
+			service.captureRuntimeError({
+				channel: 'http-alert',
+				error: new Error('Alert handling failed'),
+				http: {
+					endpoint: '/api/webhook/alert',
+					method: 'POST',
+					statusCode: 500,
+					requestId: 'req-http-tag-123',
+				},
+			});
+
+			expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+			const [, scopeHttp] = Sentry.captureException.mock.calls[0];
+			expect(scopeHttp.tags).toMatchObject({
+				channel: 'http-alert',
+				endpoint: '/api/webhook/alert',
+				request_id: 'req-http-tag-123',
+			});
+
+			Sentry.captureException.mockClear();
+
+			service.captureRuntimeError({
+				channel: 'http-alert',
+				error: new Error('Alert extra failed'),
+				extra: {
+					requestId: 'req-extra-tag-456',
+				},
+			});
+
+			expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+			const [, scopeExtra] = Sentry.captureException.mock.calls[0];
+			expect(scopeExtra.tags).toMatchObject({
+				channel: 'http-alert',
+				request_id: 'req-extra-tag-456',
+			});
+		});
 	});
 
 	describe('captureFirestoreWriteMetric', () => {

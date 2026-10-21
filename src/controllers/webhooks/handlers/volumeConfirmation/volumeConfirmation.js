@@ -20,8 +20,10 @@ function resolveDryRun(req) {
 
 function postVolumeConfirmation() {
 	return async (req, res) => {
-		const requestId = resolveRequestId(req);
-		const startTime = Date.now();
+		const requestId = (req && req.requestId) || resolveRequestId(req);
+		const startTime = (req && typeof req.startTime === 'number' && Number.isFinite(req.startTime))
+			? req.startTime
+			: Date.now();
 
 		try {
 			const parsed = parseVolumeConfirmationRequest(req);

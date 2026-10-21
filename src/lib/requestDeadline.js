@@ -192,7 +192,11 @@ function requestDeadline(req, res, next) {
 	req.requestId = requestId;
 	res.setHeader('X-Request-Id', requestId);
 
-	const startTime = Date.now();
+	const startTime = typeof req.startTime === 'number' && Number.isFinite(req.startTime)
+		? req.startTime
+		: Date.now();
+	req.startTime = startTime;
+	req.requestContext = { requestId, startTime };
 	req.requestDeadlineAt = startTime + timeoutMs;
 	const deadlineController = new AbortController();
 	let deadlineFired = false;

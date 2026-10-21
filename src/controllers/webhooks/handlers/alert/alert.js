@@ -586,7 +586,9 @@ function resolveSignalOutcomePriceSource(enriched, parsed) {
 function postAlert(botOrGetter) {
 	return async (req, res) => {
 		const requestId = req.requestId || resolveRequestId(req);
-		const startTime = Date.now();
+		const startTime = (req && typeof req.startTime === 'number' && Number.isFinite(req.startTime))
+			? req.startTime
+			: Date.now();
 		const { body } = req;
 		const invalidBodyFlag = body && typeof body === 'object'
 			&& Object.prototype.hasOwnProperty.call(body, 'autoTrade')
