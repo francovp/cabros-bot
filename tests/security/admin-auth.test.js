@@ -1,12 +1,18 @@
+/* global saveEnv, restoreEnv */
 'use strict';
 
 const request = require('supertest');
 const express = require('express');
+const httpMocks = require('node-mocks-http');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { generateKeyPairSync } = require('crypto');
 
 jest.mock('firebase-admin');
 const admin = require('firebase-admin');
-const { validateAdminAccess, requireAdminRole } = require('../../src/lib/adminAuth');
+const { validateAdminAccess, requireAdminRole, getAdminAuthStatus, resetAdminAuthReadinessForTesting } = require('../../src/lib/adminAuth');
+const requestDeadline = require('../../src/lib/requestDeadline');
 
 const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
 	type: 'pkcs1',
@@ -40,11 +46,13 @@ describe('Firebase admin authorization', () => {
 		process.env.FIREBASE_PROJECT_ID = 'test-project';
 		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = serviceAccount;
 		admin.__resetApps();
+		resetAdminAuthReadinessForTesting();
 	});
 
 	afterEach(() => {
 		restoreEnv(savedEnv);
 		admin.auth?.mockReset?.();
+		resetAdminAuthReadinessForTesting();
 	});
 
 	it('accepts a verified viewer token for reads but rejects it for operator actions', async () => {
@@ -65,6 +73,66 @@ describe('Firebase admin authorization', () => {
 		expect(verifyIdToken).toHaveBeenCalledWith('firebase-token', true);
 	});
 
+	it('does not enter the route when async token verification outlives the request deadline', async () => {
+		requestDeadline.setTestOverrides({ timeoutMs: 20 });
+		let releaseVerification;
+		admin.auth = jest.fn(() => ({
+			verifyIdToken: jest.fn(() => new Promise((resolve) => {
+				releaseVerification = resolve;
+			})),
+		}));
+		const req = httpMocks.createRequest({
+			method: 'GET',
+			url: '/read',
+			headers: { authorization: 'Bearer slow-token' },
+		});
+		const res = httpMocks.createResponse({ eventEmitter: require('events').EventEmitter });
+		const next = jest.fn();
+
+		try {
+			requestDeadline(req, res, jest.fn());
+			const validationPromise = validateAdminAccess(req, res, next);
+			await new Promise((resolve) => setTimeout(resolve, 35));
+			expect(res.statusCode).toBe(408);
+			releaseVerification({ uid: 'viewer-1', roles: ['admin.viewer'] });
+			await validationPromise;
+
+			expect(next).not.toHaveBeenCalled();
+		} finally {
+			requestDeadline.resetForTests();
+		}
+	});
+
+	it('does not enter the route when client disconnects during async token verification', async () => {
+		let releaseVerification;
+		admin.auth = jest.fn(() => ({
+			verifyIdToken: jest.fn(() => new Promise((resolve) => {
+				releaseVerification = resolve;
+			})),
+		}));
+		const req = httpMocks.createRequest({
+			method: 'POST',
+			url: '/api/trading/binance/orders',
+			headers: { authorization: 'Bearer client-token' },
+		});
+		const res = httpMocks.createResponse({ eventEmitter: require('events').EventEmitter });
+		const next = jest.fn();
+
+		try {
+			requestDeadline(req, res, jest.fn());
+			const validationPromise = validateAdminAccess(req, res, next);
+			res.emit('close');
+			expect(req.requestDeadlineClientDisconnected).toBe(true);
+			expect(req.requestDeadlineSignal.aborted).toBe(true);
+			releaseVerification({ uid: 'operator-1', roles: ['admin.operator'] });
+			await validationPromise;
+
+			expect(next).not.toHaveBeenCalled();
+		} finally {
+			requestDeadline.resetForTests();
+		}
+	});
+
 	it.each(['auth/id-token-expired', 'auth/id-token-revoked', 'auth/argument-error'])
 		('fails closed without exposing a %s verification error', async (code) => {
 			const verifyIdToken = jest.fn().mockRejectedValue({ code, message: 'token must not leak' });
@@ -75,7 +143,13 @@ describe('Firebase admin authorization', () => {
 				.set('Authorization', 'Bearer secret-firebase-token');
 
 			expect(response.status).toBe(401);
-			expect(response.body).toEqual({ error: 'Unauthorized', code: 'ADMIN_AUTH_INVALID' });
+			expect(response.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+				error: 'Unauthorized',
+				code: 'ADMIN_AUTH_INVALID',
+			}));
 			expect(JSON.stringify(response.body)).not.toContain('secret-firebase-token');
 		});
 
@@ -113,7 +187,13 @@ describe('Firebase admin authorization', () => {
 			.set('x-api-key', 'wrong-key');
 
 		expect(response.status).toBe(403);
-		expect(response.body).toEqual({ error: 'Forbidden: Invalid API key' });
+		expect(response.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+			error: 'Forbidden: Invalid API key',
+			code: 'FEATURE_DISABLED',
+		}));
 	});
 
 	it('accepts a valid API key when an invalid Firebase bearer token is also supplied', async () => {
@@ -131,6 +211,48 @@ describe('Firebase admin authorization', () => {
 		expect(response.body).toEqual({ role: 'admin.operator' });
 	});
 
+	it('does not let a rejected bearer token forge a degraded adminAuth readiness verdict', async () => {
+		admin.auth = jest.fn(() => ({
+			verifyIdToken: jest.fn().mockRejectedValue(new Error('Decoding Firebase ID token failed')),
+		}));
+		const app = createApp();
+
+		// An unauthenticated caller must not be able to move the monitoring
+		// surface by sending junk: verifyIdToken rejects expired, revoked,
+		// wrong-project and random tokens indistinguishably, so only Firebase
+		// Admin unavailability may count as a failure.
+		for (const token of ['not-a-jwt', 'aaa.bbb.ccc', 'Bearer-ish-garbage']) {
+			const response = await request(app).get('/read').set('Authorization', `Bearer ${token}`);
+			expect(response.status).toBe(401);
+		}
+
+		expect(getAdminAuthStatus()).toMatchObject({
+			status: 'unverified',
+			ready: false,
+			consecutiveFailures: 0,
+			verifierUnavailableCount: 0,
+			verificationSuccessCount: 0,
+		});
+	});
+
+	it('reports adminAuth ready after a real sign-in is proven through the router', async () => {
+		resetAdminAuthReadinessForTesting();
+		admin.auth = jest.fn(() => ({
+			verifyIdToken: jest.fn().mockResolvedValue({ uid: 'viewer-1', roles: ['admin.viewer'] }),
+		}));
+
+		const response = await request(createApp()).get('/read').set('Authorization', 'Bearer good-token');
+
+		expect(response.status).toBe(200);
+		expect(getAdminAuthStatus()).toMatchObject({
+			status: 'ready',
+			ready: true,
+			verificationSuccessCount: 1,
+			consecutiveFailures: 0,
+		});
+		resetAdminAuthReadinessForTesting();
+	});
+
 	it('preserves the existing API-key middleware behavior when Firebase auth is disabled', async () => {
 		delete process.env.ENABLE_FIREBASE_ADMIN_AUTH;
 		delete process.env.WEBHOOK_API_KEY;
@@ -139,5 +261,72 @@ describe('Firebase admin authorization', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body).toEqual({ role: 'admin.operator' });
+	});
+
+	describe('authorized-user Application Default Credentials (issue #1127)', () => {
+		let adcFile;
+
+		beforeEach(() => {
+			adcFile = path.join(
+				os.tmpdir(),
+				`cabros-admin-auth-adc-${process.pid}-${Date.now()}.json`,
+			);
+			fs.writeFileSync(adcFile, JSON.stringify({
+				type: 'authorized_user',
+				client_id: '123.apps.googleusercontent.com',
+				client_secret: 'not-a-real-secret',
+				refresh_token: 'not-a-real-refresh-token',
+			}));
+			delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+			process.env.GOOGLE_APPLICATION_CREDENTIALS = adcFile;
+			admin.__resetApps();
+			// These mocks are shared across the whole file, so scope the
+			// "cert() was never used" assertion to this block.
+			admin.__mockCert.mockClear();
+			admin.__mockApplicationDefault.mockClear();
+			admin.__mockInitializeApp.mockClear();
+		});
+
+		afterEach(() => {
+			fs.unlinkSync(adcFile);
+			delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+			delete process.env.FIREBASE_PROJECT_ID;
+		});
+
+		it('verifies a Firebase bearer token instead of returning ADMIN_AUTH_UNAVAILABLE', async () => {
+			admin.auth = jest.fn(() => ({
+				verifyIdToken: jest.fn().mockResolvedValue({
+					uid: 'viewer-1',
+					roles: ['admin.viewer'],
+				}),
+			}));
+
+			const response = await request(createApp())
+				.get('/read')
+				.set('Authorization', 'Bearer firebase-token');
+
+			expect(response.status).toBe(200);
+			expect(response.body).toEqual({ role: 'admin.viewer' });
+			expect(admin.__mockCert).not.toHaveBeenCalled();
+		});
+
+		it('initializes the admin app with FIREBASE_PROJECT_ID on the ADC path', async () => {
+			admin.auth = jest.fn(() => ({
+				verifyIdToken: jest.fn().mockResolvedValue({
+					uid: 'viewer-1',
+					roles: ['admin.viewer'],
+				}),
+			}));
+
+			await request(createApp())
+				.get('/read')
+				.set('Authorization', 'Bearer firebase-token');
+
+			expect(admin.__mockInitializeApp).toHaveBeenCalledWith(expect.objectContaining({
+				credential: expect.anything(),
+				projectId: 'test-project',
+			}));
+			expect(admin.__mockApplicationDefault).toHaveBeenCalled();
+		});
 	});
 });

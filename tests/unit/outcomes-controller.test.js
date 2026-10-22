@@ -4,17 +4,18 @@ const httpMocks = require('node-mocks-http');
 const {
 	listOutcomes,
 	summarizeOutcomes,
+	getOutcomesCalibration,
 	getOutcomeById,
 	exportOutcomes,
-	parseLimit,
-	parseStatus,
-	parseWindow,
-	parseOptionalTimestamp,
 	parseExportLimit,
 	parseExportFormat,
 	parseOptionalSetupType,
 	escapeCsvValue,
 	buildOutcomeCsv,
+	parseLimit,
+	parseStatus,
+	parseWindow,
+	parseOptionalTimestamp,
 } = require('../../src/controllers/outcomes/outcomes');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const sentryService = require('../../src/services/monitoring/SentryService');
@@ -23,6 +24,7 @@ jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	isEnabled: jest.fn(),
 	listOutcomes: jest.fn(),
 	summarizeOutcomes: jest.fn(),
+	getOutcomesCalibration: jest.fn(),
 	getOutcomeById: jest.fn(),
 	exportOutcomes: jest.fn(),
 	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
@@ -94,7 +96,9 @@ describe('Outcomes Controller Unit Tests', () => {
 
 			it('returns null for invalid windows', () => {
 				expect(parseWindow('2h')).toBeNull();
-				expect(parseWindow('1m')).toBeNull();
+				expect(parseWindow('1m')).toBe('1m');
+				expect(parseWindow('5m')).toBe('5m');
+				expect(parseWindow('1M')).toBe('1M');
 				expect(parseWindow(123)).toBeNull();
 			});
 		});
@@ -130,10 +134,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(403);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
 				code: 'FEATURE_DISABLED',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 for invalid limit', async () => {
@@ -144,10 +153,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid limit. Use an integer between 1 and 100.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 for invalid before cursor', async () => {
@@ -158,10 +172,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 for invalid status', async () => {
@@ -172,10 +191,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid status filter. Use pending, evaluated, or unavailable.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 for invalid window', async () => {
@@ -186,10 +210,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
-				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				error: 'Invalid window filter. Use 1m, 5m, 15m, 30m, 1h, 4h, 1D, 1W, or 1M.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 for invalid from timestamp', async () => {
@@ -200,10 +229,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 for invalid to timestamp', async () => {
@@ -214,10 +248,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 when from is greater than to', async () => {
@@ -235,10 +274,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid time window. from must be before or equal to to.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 200 with outcomes list and pagination on success', async () => {
@@ -311,10 +355,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(503);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Firestore is unavailable',
 				code: 'STORAGE_UNAVAILABLE',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: true,
+				requestId: expect.any(String),
+			}));
 			expect(sentryService.captureRuntimeError).toHaveBeenCalled();
 		});
 
@@ -328,10 +377,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await listOutcomes(req, res);
 
 			expect(res.statusCode).toBe(500);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Internal server error',
 				code: 'INTERNAL_ERROR',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: true,
+				requestId: expect.any(String),
+			}));
 			expect(sentryService.captureRuntimeError).toHaveBeenCalled();
 		});
 	});
@@ -345,10 +399,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(403);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
 				code: 'FEATURE_DISABLED',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 when limit is invalid', async () => {
@@ -359,10 +418,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid limit. Use an integer between 1 and 100.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 when status is invalid', async () => {
@@ -373,10 +437,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid status filter. Use pending, evaluated, or unavailable.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 when window is invalid', async () => {
@@ -387,10 +456,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
-				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				error: 'Invalid window filter. Use 1m, 5m, 15m, 30m, 1h, 4h, 1D, 1W, or 1M.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 when from is not a valid date', async () => {
@@ -401,10 +475,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 when to is not a valid date', async () => {
@@ -415,10 +494,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 when from is greater than to', async () => {
@@ -436,10 +520,91 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid time window. from must be before or equal to to.',
 				code: 'INVALID_REQUEST',
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
+		});
+
+		it('returns 400 when breakdown contains an unsupported value', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/summary',
+				query: { breakdown: 'symbol,exchange' },
 			});
+			const res = httpMocks.createResponse();
+
+			await summarizeOutcomes(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData()).toEqual({
+				error: 'Invalid breakdown parameter. Allowed values: symbol, setup.',
+				code: 'INVALID_REQUEST',
+			});
+			expect(signalOutcomeService.summarizeOutcomes).not.toHaveBeenCalled();
+		});
+
+		it('returns 400 when setupType is repeated', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/summary',
+				query: { setupType: ['breakout', 'mean-reversion'] },
+			});
+			const res = httpMocks.createResponse();
+
+			await summarizeOutcomes(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData()).toEqual({
+				error: 'Invalid setupType parameter. Use a single non-empty value.',
+				code: 'INVALID_REQUEST',
+			});
+			expect(signalOutcomeService.summarizeOutcomes).not.toHaveBeenCalled();
+		});
+
+		it('returns 400 when setupType is blank', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/summary',
+				query: { setupType: '  ' },
+			});
+			const res = httpMocks.createResponse();
+
+			await summarizeOutcomes(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData()).toEqual({
+				error: 'Invalid setupType parameter. Use a single non-empty value.',
+				code: 'INVALID_REQUEST',
+			});
+			expect(signalOutcomeService.summarizeOutcomes).not.toHaveBeenCalled();
+		});
+
+		it('normalizes breakdown and setupType filters before calling the service', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.summarizeOutcomes.mockResolvedValue({ available: true, symbolBreakdown: [], setupBreakdown: [] });
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/summary',
+				query: { breakdown: ' Symbol, SETUP,symbol ', setupType: ' Breakout ' },
+			});
+			const res = httpMocks.createResponse();
+
+			await summarizeOutcomes(req, res);
+
+			expect(res.statusCode).toBe(200);
+			expect(signalOutcomeService.summarizeOutcomes).toHaveBeenCalledWith(expect.objectContaining({
+				setupType: 'Breakout',
+				breakdown: ['symbol', 'setup'],
+			}));
 		});
 
 		it('returns 200 with aggregate summary on success', async () => {
@@ -579,10 +744,15 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(503);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Firestore is unavailable',
 				code: 'STORAGE_UNAVAILABLE',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: true,
+				requestId: expect.any(String),
+			}));
 			expect(sentryService.captureRuntimeError).toHaveBeenCalled();
 		});
 
@@ -596,11 +766,148 @@ describe('Outcomes Controller Unit Tests', () => {
 			await summarizeOutcomes(req, res);
 
 			expect(res.statusCode).toBe(500);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Internal server error',
 				code: 'INTERNAL_ERROR',
-			});
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: true,
+				requestId: expect.any(String),
+			}));
 			expect(sentryService.captureRuntimeError).toHaveBeenCalled();
+		});
+	});
+
+	describe('getOutcomesCalibration', () => {
+		it('returns 403 when feature is disabled', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(false);
+
+			const req = httpMocks.createRequest({ method: 'GET', url: '/api/outcomes/calibration' });
+			const res = httpMocks.createResponse();
+
+			await getOutcomesCalibration(req, res);
+
+			expect(res.statusCode).toBe(403);
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
+				code: 'FEATURE_DISABLED',
+			}));
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
+		});
+
+		it('returns 400 for invalid limit', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+
+			for (const invalidLimit of ['9999', '1.9', '10junk', 'abc', '-5', '0']) {
+				const req = httpMocks.createRequest({ method: 'GET', url: '/api/outcomes/calibration', query: { limit: invalidLimit } });
+				const res = httpMocks.createResponse();
+
+				await getOutcomesCalibration(req, res);
+
+				expect(res.statusCode).toBe(400);
+				expect(res._getJSONData().code).toBe('INVALID_REQUEST');
+			}
+		});
+
+		it('returns 400 for invalid window', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+
+			const req = httpMocks.createRequest({ method: 'GET', url: '/api/outcomes/calibration', query: { window: '2h' } });
+			const res = httpMocks.createResponse();
+
+			await getOutcomesCalibration(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData().code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 400 when from > to', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/calibration',
+				query: { from: '2026-08-20T00:00:00.000Z', to: '2026-08-10T00:00:00.000Z' },
+			});
+			const res = httpMocks.createResponse();
+
+			await getOutcomesCalibration(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData().code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 200 with calibration data when valid', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const mockCalibration = {
+				available: true,
+				totalScoredAlerts: 25,
+				buckets: [],
+				suggestedThreshold: 0.75,
+				suggestedThresholdRationale: 'Alerts at 0.75+ show 55%+ target hit rate at 4h window',
+			};
+			signalOutcomeService.getOutcomesCalibration.mockResolvedValue(mockCalibration);
+
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/calibration',
+				query: { window: '4h', symbol: 'BTCUSDT', exchange: 'BINANCE' },
+			});
+			const res = httpMocks.createResponse();
+
+			await getOutcomesCalibration(req, res);
+
+			expect(res.statusCode).toBe(200);
+			expect(res._getJSONData()).toEqual({
+				success: true,
+				calibration: mockCalibration,
+			});
+			expect(signalOutcomeService.getOutcomesCalibration).toHaveBeenCalledWith(expect.objectContaining({
+				window: '4h',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+			}));
+		});
+
+		it('forwards req.requestDeadlineSignal to getOutcomesCalibration', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.getOutcomesCalibration.mockResolvedValue({ available: false, buckets: [] });
+
+			const mockSignal = { aborted: false };
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/calibration',
+				query: { window: '4h' },
+			});
+			req.requestDeadlineSignal = mockSignal;
+			const res = httpMocks.createResponse();
+
+			await getOutcomesCalibration(req, res);
+
+			expect(signalOutcomeService.getOutcomesCalibration).toHaveBeenCalledWith(expect.objectContaining({
+				window: '4h',
+				signal: mockSignal,
+			}));
+		});
+
+		it('returns 503 when storage is unavailable', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const error = new Error('Firestore is unavailable');
+			error.code = 'STORAGE_UNAVAILABLE';
+			signalOutcomeService.getOutcomesCalibration.mockRejectedValue(error);
+
+			const req = httpMocks.createRequest({ method: 'GET', url: '/api/outcomes/calibration' });
+			const res = httpMocks.createResponse();
+
+			await getOutcomesCalibration(req, res);
+
+			expect(res.statusCode).toBe(503);
+			expect(res._getJSONData().code).toBe('STORAGE_UNAVAILABLE');
 		});
 	});
 
@@ -735,10 +1042,10 @@ describe('Outcomes Controller Unit Tests', () => {
 			await getOutcomeById(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Missing outcomeId parameter',
 				code: 'INVALID_REQUEST',
-			});
+			}));
 		});
 
 		it('returns 404 when service returns null', async () => {
@@ -750,10 +1057,10 @@ describe('Outcomes Controller Unit Tests', () => {
 			await getOutcomeById(req, res);
 
 			expect(res.statusCode).toBe(404);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Outcome not found',
 				code: 'NOT_FOUND',
-			});
+			}));
 			expect(signalOutcomeService.getOutcomeById).toHaveBeenCalledWith('missing');
 		});
 
@@ -832,10 +1139,10 @@ describe('Outcomes Controller Unit Tests', () => {
 			await exportOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid export format. Use jsonl or csv.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
 		});
 
 		it('returns 400 when limit is invalid', async () => {
@@ -850,10 +1157,10 @@ describe('Outcomes Controller Unit Tests', () => {
 			await exportOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Invalid limit. Use an integer between 1 and 1000.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
 		});
 
 		it('returns 400 when from/to bounds are missing', async () => {
@@ -868,10 +1175,10 @@ describe('Outcomes Controller Unit Tests', () => {
 			await exportOutcomes(req, res);
 
 			expect(res.statusCode).toBe(400);
-			expect(res._getJSONData()).toEqual({
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
 				error: 'Export requests require bounded from and to ISO-8601 timestamps.',
 				code: 'INVALID_REQUEST',
-			});
+			}));
 		});
 
 		it('returns 400 when window exceeds 31 days', async () => {
@@ -956,4 +1263,5 @@ describe('Outcomes Controller Unit Tests', () => {
 			expect(res._getJSONData().code).toBe('STORAGE_UNAVAILABLE');
 		});
 	});
+
 });

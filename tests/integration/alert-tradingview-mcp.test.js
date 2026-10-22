@@ -1,7 +1,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
@@ -27,6 +27,7 @@ describe('Alert TradingView MCP Integration', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'test-message-id' });
 		const bot = {
@@ -73,7 +74,12 @@ describe('Alert TradingView MCP Integration', () => {
 
 		expect(response.body.success).toBe(true);
 		expect(response.body.enriched).toBe(true);
-		expect(tradingViewMcpService.enrichFromAlertText).toHaveBeenCalledWith('BTCUSDT(240) pasó a señal de VENTA');
+		expect(tradingViewMcpService.enrichFromAlertText).toHaveBeenCalledWith(
+			'BTCUSDT(240) pasó a señal de VENTA',
+			expect.objectContaining({
+				tokenUsage: expect.objectContaining({ bySource: expect.any(Object) }),
+			}),
+		);
 		expect(mockTelegramSendMessage).toHaveBeenCalledTimes(1);
 
 		const telegramPayload = mockTelegramSendMessage.mock.calls[0][1];
