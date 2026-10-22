@@ -344,4 +344,32 @@ describe('GeminiQuotaManager', () => {
 			triggersTotal: 2,
 		}));
 	});
+
+	it('does not count a wrapped provider rejection twice', () => {
+		const providerError = { status: 429, retryDelay: 1000 };
+		const wrappedError = new Error('LLM call failed: RESOURCE_EXHAUSTED');
+
+		geminiQuotaManager.triggerQuotaCooldown(providerError);
+		geminiQuotaManager.markQuotaErrorCounted(wrappedError);
+		geminiQuotaManager.triggerQuotaCooldown(wrappedError);
+
+		expect(geminiQuotaManager.getSnapshot()).toEqual(expect.objectContaining({
+			exhaustedEventsInWindow: 1,
+			triggersTotal: 2,
+		}));
+	});
+
+	it('does not count synthetic cooldown errors as provider exhaustion events', () => {
+		const cooldownError = new Error('Gemini quota cooldown active (1000ms remaining)');
+		cooldownError.code = 'GEMINI_QUOTA_EXHAUSTED';
+		cooldownError.status = 429;
+		cooldownError.retryDelay = 1000;
+
+		geminiQuotaManager.triggerQuotaCooldown(cooldownError);
+
+		expect(geminiQuotaManager.getSnapshot()).toEqual(expect.objectContaining({
+			exhaustedEventsInWindow: 0,
+			quotaStatus: 'healthy',
+		}));
+	});
 });

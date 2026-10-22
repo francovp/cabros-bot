@@ -444,6 +444,27 @@ describe('GenaiClient robustness', () => {
 	});
 
 	describe('llmCall quota cooldown handling', () => {
+		it('marks wrapped quota errors as already recorded by the provider boundary', async () => {
+			const providerError = Object.assign(new Error('RESOURCE_EXHAUSTED: quota exceeded'), {
+				status: 429,
+				retryDelay: 1000,
+			});
+			genaiClient.genAI.models.generateContent.mockRejectedValueOnce(providerError);
+
+			let wrappedError;
+			try {
+				await genaiClient.llmCall({ prompt: 'test prompt' });
+			} catch (error) {
+				wrappedError = error;
+			}
+
+			expect(wrappedError).toMatchObject({
+				message: expect.stringContaining('RESOURCE_EXHAUSTED'),
+			});
+			geminiQuotaManager.triggerQuotaCooldown(wrappedError);
+			expect(geminiQuotaManager.getSnapshot().exhaustedEventsInWindow).toBe(1);
+		});
+
 		it('throws quota error and does not invoke generateContent when cooldown is active', async () => {
 			geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 10000 });
 

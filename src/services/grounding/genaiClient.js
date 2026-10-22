@@ -443,7 +443,11 @@ class GenaiClient {
 					{ ...error, provider: 'gemini' },
 				);
 			}
-			throw new Error(`LLM call failed: ${error.message}`);
+			const wrappedError = new Error(`LLM call failed: ${error.message}`);
+			if (isGeminiQuotaError(error)) {
+				geminiQuotaManager.markQuotaErrorCounted(wrappedError);
+			}
+			throw wrappedError;
 		}
 	}
 
@@ -593,7 +597,13 @@ class GenaiClient {
 		}
 
 		// If we reach here, all configured providers failed
-		throw new Error(`All LLM providers failed. Last error: ${lastError ? lastError.message : 'No providers configured'}`);
+		const finalError = new Error(`All LLM providers failed. Last error: ${lastError ? lastError.message : 'No providers configured'}`);
+		if (lastError?.code === 'GEMINI_QUOTA_EXHAUSTED') {
+			finalError.code = 'GEMINI_QUOTA_EXHAUSTED';
+		} else if (lastError && isGeminiQuotaError(lastError)) {
+			geminiQuotaManager.markQuotaErrorCounted(finalError);
+		}
+		throw finalError;
 	}
 
 	_addCitations(text, supports, chunks) {

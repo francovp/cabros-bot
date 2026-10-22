@@ -112,6 +112,16 @@ class GeminiQuotaManager {
 	}
 
 	/**
+	 * Mark a wrapped quota error as already counted at the provider boundary.
+	 * @param {Error|object} error
+	 */
+	markQuotaErrorCounted(error) {
+		if (error !== null && (typeof error === 'object' || typeof error === 'function')) {
+			this.recordedQuotaErrors.add(error);
+		}
+	}
+
+	/**
 	 * Extract recommended retry delay in milliseconds from error or exponential backoff,
 	 * clamped to the configured maximum cooldown ceiling.
 	 * @param {Error|object} error
@@ -183,6 +193,12 @@ class GeminiQuotaManager {
 	 * @returns {number} Cooldown delay in milliseconds
 	 */
 	triggerQuotaCooldown(error, attempt = 1, baseDelayMs = 1000) {
+		if (error?.code === 'GEMINI_QUOTA_EXHAUSTED') {
+			return this.isCooldownActive()
+				? this.extendQuotaCooldown(error, attempt, baseDelayMs)
+				: 0;
+		}
+
 		const delayMs = this.extractRetryDelayMs(error, attempt, baseDelayMs);
 		const now = Date.now();
 		this._startWindowIfNeeded(now);
@@ -225,11 +241,7 @@ class GeminiQuotaManager {
 	 */
 	getSnapshot() {
 		this._resetExpiredWindow();
-		const quotaStatus = this.exhaustedEventsInWindow === 0
-			? 'healthy'
-			: (this.lastExhaustedAt && Date.now() - new Date(this.lastExhaustedAt).getTime() < QUOTA_WINDOW_DURATION_MS
-				? 'exhausted'
-				: 'approaching_limit');
+		const quotaStatus = this.exhaustedEventsInWindow === 0 ? 'healthy' : 'exhausted';
 
 		return {
 			windowStartedAt: this.windowStartedAt === null ? null : new Date(this.windowStartedAt).toISOString(),
