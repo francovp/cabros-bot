@@ -1095,3 +1095,99 @@ Review the feedback and implement necessary changes.
 - Pattern-Key: harden.feedback_response
 
 ---
+## [LRN-20261022-102004-a94b] correction
+
+**Logged**: 2026-10-22T10:20:04.875196Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Addressed in PR #1448. Thanks to @gigachad-senior-dev and @virgin-trainee-dev for the triage analysis and test isolation feedback!
+
+- Isolated each of the 4 negative replay variants in `CabrosBot.post...
+
+### Details
+Correction from @francovp on Issue #1391:
+
+> Addressed in PR #1448. Thanks to @gigachad-senior-dev and @virgin-trainee-dev for the triage analysis and test isolation feedback!
+
+- Isolated each of the 4 negative replay variants in `CabrosBot.postman_collection.json` with unique keys (`replay-key-batch-invalid-dryrun-body`, `replay-key-batch-invalid-dryrun-query`, `replay-key-invalid-dryrun-body`, `replay-key-invalid-dryrun-query`).
+- Verified sequential execution will properly assert HTTP 400 with the standardized `INVALID_REQUEST` error envelope instead of colliding with `409 IDEMPOTENCY_CONFLICT`.
+- Enforced test isolation in `tests/unit/postman-collection.test.js`.
+
+**Source URL**: https://github.com/francovp/cabros-bot/issues/1391#issuecomment-6328875395
+
+### Suggested Action
+Review the feedback and implement necessary changes.
+
+### Metadata
+- Source: user_feedback
+- Related Files: TBD
+- Tags: correction, feedback
+- See Also: https://github.com/francovp/cabros-bot/issues/1391#issuecomment-6328875395
+- Pattern-Key: harden.feedback_response
+
+---
+## [LRN-20261022-102004-5f73] correction
+
+**Logged**: 2026-10-22T10:20:04.875367Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+@virgin-trainee-dev Correct: this telemetry is intentionally process-local. `/api/status` reports one process's counters, which reset on restart, so multiple instances do not produce a cluster-wide ag...
+
+### Details
+Correction from @francovp on PR #1005:
+
+> @virgin-trainee-dev Correct: this telemetry is intentionally process-local. `/api/status` reports one process's counters, which reset on restart, so multiple instances do not produce a cluster-wide aggregate. For this issue the counters are diagnostic and do not enforce a shared quota; keeping them local avoids adding a Redis or persistence dependency. If cluster-wide telemetry becomes a requirement, we should define that separately.
+
+**Source URL**: https://github.com/francovp/cabros-bot/pull/1005#issuecomment-6337437069
+
+### Suggested Action
+Review the feedback and implement necessary changes.
+
+### Metadata
+- Source: user_feedback
+- Related Files: TBD
+- Tags: correction, feedback
+- See Also: https://github.com/francovp/cabros-bot/pull/1005#issuecomment-6337437069
+- Pattern-Key: harden.feedback_response
+
+---
+## [LRN-20261022-102004-b250] correction
+
+**Logged**: 2026-10-22T10:20:04.875409Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Thanks to @gigachad-senior-dev and @virgin-trainee-dev for the triage analysis and feedback on issue #1391!
+
+- **Senior triage recommendations adopted**: Isolated the four runnable negative replay var...
+
+### Details
+Correction from @francovp on PR #1448:
+
+> Thanks to @gigachad-senior-dev and @virgin-trainee-dev for the triage analysis and feedback on issue #1391!
+
+- **Senior triage recommendations adopted**: Isolated the four runnable negative replay variants with deterministic, dedicated keys (`replay-key-batch-invalid-dryrun-body`, `replay-key-batch-invalid-dryrun-query`, `replay-key-invalid-dryrun-body`, `replay-key-invalid-dryrun-query`), eliminating cross-variant idempotency collision during sequential collection execution.
+- **Trainee feedback adopted**: Verified test isolation directly against the `idempotencyMiddleware` contract so negative tests reliably assert HTTP 400 and the standardized `INVALID_REQUEST` error envelope rather than tripping `409 IDEMPOTENCY_CONFLICT`.
+- Added contract guard unit tests in `tests/unit/postman-collection.test.js` to guarantee ongoing test isolation and prevent future regressions.
+
+**Source URL**: https://github.com/francovp/cabros-bot/pull/1448#issuecomment-6328873753
+
+### Suggested Action
+Review the feedback and implement necessary changes.
+
+### Metadata
+- Source: user_feedback
+- Related Files: TBD
+- Tags: correction, feedback
+- See Also: https://github.com/francovp/cabros-bot/pull/1448#issuecomment-6328873753
+- Pattern-Key: harden.feedback_response
+
+---
