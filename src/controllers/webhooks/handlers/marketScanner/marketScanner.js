@@ -50,14 +50,17 @@ function resolveDryRun(req) {
 
 function postMarketScannerAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = resolveRequestId(req);
-		const startTime = Date.now();
+		const requestId = (req && req.requestId) || resolveRequestId(req);
+		const startTime = (req && typeof req.startTime === 'number' && Number.isFinite(req.startTime))
+			? req.startTime
+			: Date.now();
 
 		try {
 			if (!getRuntimeConfig().ENABLE_MARKET_SCANNER) {
 				return sendErrorFrom(res, 404, {
 					error: 'Market scanner is not enabled',
 					code: 'FEATURE_DISABLED',
+					requestId,
 				});
 			}
 

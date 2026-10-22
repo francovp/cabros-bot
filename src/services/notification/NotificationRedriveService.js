@@ -6,6 +6,7 @@ const AlertStorageService = require('../storage/AlertStorageService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { fireAndForget } = require('../../lib/fireAndForget');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
 const { signalRepeatCooldown, nextMonotonicGeneration } = require('../alerts/signalRepeatCooldown');
 
@@ -2037,8 +2038,8 @@ class NotificationRedriveService {
 			return;
 		}
 		void this.syncWorkerTelemetry();
-		this.telemetrySyncTimer = setInterval(() => {
-			trackBackgroundTask(this.syncWorkerTelemetry()).catch(() => {});
+		this.telemetrySyncTimer = createManagedInterval('notification-redrive-telemetry-sync', () => {
+			return trackBackgroundTask(this.syncWorkerTelemetry()).catch(() => {});
 		}, intervalMs);
 		if (typeof this.telemetrySyncTimer.unref === 'function') {
 			this.telemetrySyncTimer.unref();
@@ -2100,8 +2101,8 @@ class NotificationRedriveService {
 			if (configuredRole === 'worker') {
 				this._initialSeedPromise = this.seedCountersFromHeartbeat();
 			}
-			this.workerTimer = setInterval(() => {
-				trackBackgroundTask(this.sweep()).catch((err) => {
+			this.workerTimer = createManagedInterval('notification-redrive-worker-sweep', () => {
+				return trackBackgroundTask(this.sweep()).catch((err) => {
 					console.warn('[NotificationRedriveService] Worker sweep error:', err.message);
 				});
 			}, intervalMs);
@@ -2142,11 +2143,11 @@ class NotificationRedriveService {
 		}
 		this.running = false;
 		if (this.workerTimer) {
-			clearInterval(this.workerTimer);
+			this.workerTimer.clear();
 			this.workerTimer = null;
 		}
 		if (this.telemetrySyncTimer) {
-			clearInterval(this.telemetrySyncTimer);
+			this.telemetrySyncTimer.clear();
 			this.telemetrySyncTimer = null;
 		}
 		if (options.drain) {
@@ -2407,11 +2408,11 @@ class NotificationRedriveService {
 			this._workerStartupAbortController = null;
 		}
 		if (this.workerTimer) {
-			clearInterval(this.workerTimer);
+			this.workerTimer.clear();
 			this.workerTimer = null;
 		}
 		if (this.telemetrySyncTimer) {
-			clearInterval(this.telemetrySyncTimer);
+			this.telemetrySyncTimer.clear();
 			this.telemetrySyncTimer = null;
 		}
 		this.inMemoryStore.clear();

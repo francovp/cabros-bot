@@ -2,35 +2,9 @@ const fs = require('fs');
 const path = require('path');
 const SwaggerParser = require('@apidevtools/swagger-parser');
 const MarkdownV2Formatter = require('../../src/services/notification/formatters/markdownV2Formatter');
-const { getRoutes } = require('../../src/routes');
+const { getMountedApiOperations } = require('../helpers/api-operations');
 
 const contractPath = path.join(__dirname, '../../src/openapi/openapi.json');
-
-function normalizeExpressPath(routePath) {
-	return `/api${routePath}`.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
-}
-
-function getMountedApiOperations() {
-	const routerOperations = getRoutes(null).stack
-		.filter((layer) => layer.route)
-		.flatMap((layer) => Object.keys(layer.route.methods)
-			.filter((method) => layer.route.methods[method])
-			.map((method) => `${method.toUpperCase()} ${normalizeExpressPath(layer.route.path)}`));
-
-	const app = require('../../app');
-	const appOperations = [];
-	for (const layer of app._router.stack) {
-		if (!layer.route) continue;
-		for (const method of Object.keys(layer.route.methods)) {
-			if (!layer.route.methods[method]) continue;
-			const routePath = layer.route.path;
-			if (!routePath.startsWith('/api/')) continue;
-			appOperations.push(`${method.toUpperCase()} ${routePath}`);
-		}
-	}
-
-	return [...routerOperations, ...appOperations].sort();
-}
 
 function getDocumentedApiOperations(contract) {
 	return Object.entries(contract.paths)
@@ -42,6 +16,14 @@ function getDocumentedApiOperations(contract) {
 }
 
 describe('OpenAPI contract', () => {
+	it('documents body-only auto-trade and the live occurrence identity', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const properties = contract.components.schemas.AlertRequest.properties;
+		expect(properties.autoTrade.type).toBe('boolean');
+		expect(properties.signalId).toMatchObject({ type: 'string', minLength: 1, maxLength: 128 });
+		expect(contract.components.schemas.AutoTradeOutcome.properties.reason.enum)
+			.toEqual(expect.arrayContaining(['ORDER_PENDING', 'SIGNAL_ID_REQUIRED', 'DURABLE_RESERVATION_UNAVAILABLE']));
+	});
 	it('documents all decision-audit dispatch channel modes', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 
@@ -161,6 +143,7 @@ describe('OpenAPI contract', () => {
 			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/outcomes/calibration',
 			'GET /api/symbol-analyses', 'GET /api/symbol-analyses/summary',
 			'GET /api/trading/binance/orders', 'GET /api/trading/binance/orders/audit', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
+			'POST /api/symbols/resolve', 'GET /api/symbols/aliases',
 			'POST /api/trading/binance/orders/preview', 'GET /api/trading/binance/account/balances',
 			'GET /api/trading/positions', 'GET /api/trading/pnl/summary', 'GET /api/trading/trades',
 			'POST /api/news-monitor/pause', 'POST /api/news-monitor/resume', 'GET /api/news-monitor/status',
@@ -958,6 +941,27 @@ describe('status dependency contract drift', () => {
 		expect(missing).toEqual([]);
 	});
 
+	it('documents XRequestIdHeader parameter on every non-probe API operation (issue #1272)', () => {
+		const spec = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const probeRoutes = ['/healthcheck', '/ready'];
+		const missing = [];
+
+		for (const [routePath, operations] of Object.entries(spec.paths || {})) {
+			if (probeRoutes.includes(routePath)) continue;
+			for (const [method, operation] of Object.entries(operations)) {
+				if (!operation || typeof operation !== 'object' || !operation.operationId) continue;
+				const hasParam = (operation.parameters || []).some(
+					(p) => p && p.$ref === '#/components/parameters/XRequestIdHeader',
+				);
+				if (!hasParam) {
+					missing.push(`${method.toUpperCase()} ${routePath}`);
+				}
+			}
+		}
+
+		expect(missing).toEqual([]);
+	});
+
 	it('exposes every named Status dependency in some Postman status example', () => {
 		const examples = getStatusExamples();
 		expect(examples.length).toBeGreaterThan(0);
@@ -1129,6 +1133,15 @@ describe('status dependency contract drift', () => {
 			scannerPreset: 5000,
 			remoteConfig: 5000,
 		});
+	});
+
+	it('documents telegramCommandRateLimiting on the status schema and StatusResult example (issue #1183)', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const statusDescription = spec.components.schemas.Status.description;
+		const statusExample = spec.components.responses.StatusResult.content['application/json'].example;
+
+		expect(statusDescription).toContain('featureFlags.telegramCommandRateLimiting reports ENABLE_TELEGRAM_COMMAND_RATE_LIMITING');
+		expect(statusExample.featureFlags.telegramCommandRateLimiting).toBe(true);
 	});
 
 	it('documents deployment provenance identity on stored alerts and rollup on alert summary (issue #1169)', () => {

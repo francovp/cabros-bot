@@ -3,6 +3,9 @@
 const { postSymbolAnalysis } = require('../../src/controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis');
 const { postVolumeConfirmation } = require('../../src/controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation');
 const { NewsMonitorHandler } = require('../../src/controllers/webhooks/handlers/newsMonitor/newsMonitor');
+const { postExpandedAnalysisAlert } = require('../../src/controllers/webhooks/handlers/expandedAnalysisAlert/expandedAnalysisAlert');
+const { postMarketScannerAlert } = require('../../src/controllers/webhooks/handlers/marketScanner/marketScanner');
+const { postRunPreset } = require('../../src/controllers/webhooks/handlers/scannerPresets/scannerPresets');
 
 function createMockRes() {
 	const res = {
@@ -77,5 +80,56 @@ describe('Handlers requestId reuse', () => {
 				process.env.ENABLE_NEWS_MONITOR = originalEnv;
 			}
 		}
+	});
+
+	it('postExpandedAnalysisAlert reuses req.requestId on validation error', async () => {
+		const handler = postExpandedAnalysisAlert();
+		const req = {
+			requestId: 'req-exp-789',
+			body: {},
+		};
+		const res = createMockRes();
+
+		await handler(req, res);
+
+		expect(res.status).toHaveBeenCalledWith(400);
+		expect(res.body).toEqual(expect.objectContaining({
+			requestId: 'req-exp-789',
+		}));
+	});
+
+	it('postMarketScannerAlert reuses req.requestId and req.startTime when feature is disabled or invalid', async () => {
+		const handler = postMarketScannerAlert();
+		const explicitStartTime = Date.now() - 200;
+		const req = {
+			requestId: 'req-scan-321',
+			startTime: explicitStartTime,
+			body: {},
+		};
+		const res = createMockRes();
+
+		await handler(req, res);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			requestId: 'req-scan-321',
+		}));
+	});
+
+	it('postRunPreset reuses req.requestId and req.startTime when feature is disabled or invalid', async () => {
+		const handler = postRunPreset();
+		const explicitStartTime = Date.now() - 150;
+		const req = {
+			params: { id: 'test-preset' },
+			requestId: 'req-preset-654',
+			startTime: explicitStartTime,
+			body: {},
+		};
+		const res = createMockRes();
+
+		await handler(req, res);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			requestId: 'req-preset-654',
+		}));
 	});
 });

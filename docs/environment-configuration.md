@@ -85,18 +85,26 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 
 #### AI Grounding
 
-- `ENABLE_GEMINI_GROUNDING` - Enable Gemini-based alert enrichment (`true` or `false`)
-- `GEMINI_API_KEY` - Google API key for Gemini access
-- `GROUNDING_MODEL_NAME` - Grounding model when Brave Search is not forced (default: `gemini-2.5-flash`)
-- `GROUNDING_MAX_SOURCES` - Maximum grounded sources per alert (default: `3`)
-- `GROUNDING_TIMEOUT_MS` - Grounding request timeout (default: `30000` ms)
-- `GROUNDING_MAX_LENGTH` - Maximum alert text length used in grounding prompts (default: `2000` characters)
+- `ENABLE_GEMINI_GROUNDING` - Enable Gemini-based alert enrichment (`true` or `false`; default: `false`; Remote Config supported)
+- `GEMINI_API_KEY` - Google API key for Gemini access (secret; environment-only)
+- `GEMINI_MODEL_NAME` - Primary Gemini model for alert enrichment (optional; Remote Config supported)
+- `GEMINI_MODEL_NAME_FALLBACK` - Fallback Gemini model for transient enrichment failures (default: `gemini-2.5-flash-lite`; Remote Config supported)
+- `GROUNDING_MODEL_NAME` - Grounding model when Brave Search is not forced (default: `gemini-2.5-flash`; Remote Config supported)
+- `MODEL_PROVIDER` - LLM generation provider (`gemini`, `azure`, `openrouter`, or `cloudflare`; default: `gemini`; environment-only). The configuration doctor validates credentials for the selected provider when grounding or the news monitor is enabled.
+- `GROUNDING_MAX_SOURCES` - Maximum grounded sources per alert (default: `3`; Remote Config supported)
+- `GROUNDING_TIMEOUT_MS` - Grounding request timeout (default: `30000` ms; Remote Config supported)
+- `GROUNDING_MAX_LENGTH` - Maximum alert text length used in grounding prompts (default: `2000` characters; Remote Config supported)
 - `ALERT_GROUNDING_COALESCE_MS` - Optional equity-alert search coalescing window in milliseconds (default: `0`, disabled; Remote Config supported)
+- `GEMINI_API_KEY` and `BRAVE_SEARCH_API_KEY` are credentials; `BRAVE_SEARCH_ENDPOINT` is an external destination; `FORCE_BRAVE_SEARCH` and `MODEL_PROVIDER` control provider routing. Keep all of them environment-only.
+- `FORCE_BRAVE_SEARCH=true` requires `BRAVE_SEARCH_API_KEY`; the configuration doctor and runtime readiness report this missing prerequisite.
+- Configured `AZURE_LLM_ENDPOINT`, `CF_AIG_BASE_URL`, and `BRAVE_SEARCH_ENDPOINT` values must use HTTP or HTTPS; the configuration doctor validates their URL syntax.
+
+The Remote Config model-selector defaults use the deployment's in-app values, preserving environment configuration until an operator explicitly publishes an override. Blank or invalid model values fall back to the deployment defaults.
 
 #### Token Spend Tracking & Cost Budgeting
 
 - `ENABLE_TOKEN_COST_BUDGET` - Enable daily LLM token cost tracking and budget limits (`true` or `false`, default: `false`; Remote Config supported)
-- `TOKEN_COST_DAILY_BUDGET_USD` - Maximum daily spend in USD before LLM calls fail open safely (default: `5.00`, range `0.01`-`1000.00`; Remote Config supported)
+- `TOKEN_COST_DAILY_BUDGET_USD` - Maximum daily spend in USD before LLM calls fail open safely (default: `5.00`, range `0.01`-`10000.00`; Remote Config supported)
 - `TOKEN_COST_WARN_THRESHOLD_PCT` - Percentage of daily budget that triggers an admin Telegram alert (default: `80`, range `1`-`100`; Remote Config supported)
 
 #### Cloudflare AI Gateway
@@ -530,6 +538,34 @@ pnpm test:firebase
 `dryRun` defaults to `true` and validates the request without submitting. Set `dryRun: false` only after enabling the feature and explicitly selecting the intended environment. The default environment is Spot Testnet; `live` is never selected implicitly. Live requests require `idempotency-key` (or `x-idempotency-key`) or an explicit `clientOrderId`; a matching request is replayed and a changed payload returns `409 IDEMPOTENCY_CONFLICT`. Send decimal quantities, prices, and quote amounts as strings when exact precision matters; the service preserves those values through validation, submission, and reconciliation by disabling Binance SDK response beautification. MARKET orders must omit `timeInForce`; Binance order-test validation runs for LIMIT dynamic price filters and account-dependent filters such as `MAX_POSITION` and `MAX_NUM_ORDERS`. Definitive Binance rejections, including pre-execution timestamp and throttling failures, return `400 BINANCE_ORDER_REJECTED`; a recovered Binance order that does not match the request returns `409 BINANCE_ORDER_CONFLICT`; transient order-test failures return retryable `502 BINANCE_VALIDATION_FAILED`. A live request with an idempotency key derives a deterministic Binance `clientOrderId`; after cache expiration or process restart, the service reconciles that ID before submitting again. If Binance submission status is ambiguous, including Binance execution-unknown code `-1006`, the API returns `503 BINANCE_ORDER_STATUS_UNKNOWN` and replays that result for the same key; reconcile the order before retrying with a new key.
 
 The response and audit logs include only sanitized order metadata. API credentials are never returned or logged.
+
+#### Auto-Trade (Alert-to-Order Bridge)
+
+Opt-in bridging of an enriched TradingView alert to a Binance Spot order. This closes the alerting-to-execution gap tracked in #955; advanced order types (OCO, trailing-stop, bracket) remain #805.
+
+Auto-trade is opt-in **twice** — the operator sets `ENABLE_AUTO_TRADE=true` and the caller additionally passes `autoTrade=true` to `POST /api/webhook/alert`. Explicit query values must be `true` or `false`; malformed or repeated query values and non-boolean body values return HTTP 400 with the standard `INVALID_REQUEST` envelope before delivery. It never runs in preview deployments. **Dry-run is the default**, so enabling the flag alone validates the entire path (request validation, exchange-info filters, notional bounds) without mutating Binance.
+
+- `ENABLE_AUTO_TRADE` - Master operator switch (`true` or `false`, default: `false`). Security control; environment-only and excluded from Firebase Remote Config.
+- `AUTO_TRADE_DRY_RUN` - Validate without submitting (`true` or `false`, default: `true`). Set to `false` only after testnet and demo validation.
+- `AUTO_TRADE_MAX_NOTIONAL` - Per-order quote-asset cap (default: `100`). The effective cap is the **lower** of this and `BINANCE_TRADING_MAX_NOTIONAL`, so it can only tighten the existing limit.
+- `AUTO_TRADE_MIN_ABS_SENTIMENT` - Minimum positive `sentiment_score` before a BUY may trigger an order (default: `0.3`, range `0`-`1`); missing or bearish scores are rejected.
+- `AUTO_TRADE_COOLDOWN_BARS` - Duplicate-signal cooldown in bars (default: `1`, range `1`-`10`; out-of-range integers clamp). The key includes the side, so an opposite-side flip is never suppressed.
+
+The bridge is deliberately conservative. It only submits a `MARKET` `BUY`, and only when the alert was parsed as a TradingView signal (`EXCHANGE:SYMBOL(TIMEFRAME) COMPRA|VENTA|BUY|SELL`) and enrichment produced both a sentiment score and an observed price. It never infers trade direction from sentiment, because that would risk inverting a trader's intent.
+
+**Live (non-dry-run) orders additionally require** an explicit `BINANCE` signal exchange, a supported raw timeframe, `ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION=true`, and a request-body `signalId` (`1`-`128` ASCII letters, digits, `.`, `_`, `:`, or `-`). The signal producer must reuse the same ID on retries and send a new ID for each new bar or signal occurrence. A Firestore transaction atomically creates a permanent occurrence reservation and updates a shared `(exchange, symbol, timeframe, side)` cooldown slot before submitting to Binance. An unavailable reservation fails closed for trading. A duplicate or conflicting occurrence cannot submit again, including after a process restart; distinct occurrences inside the cooldown cannot race across replicas. The Binance client-order ID also includes `signalId` for exchange reconciliation. Ambiguous submissions retain the reservation for manual reconciliation.
+
+Live Binance work runs as a tracked background task after the reservation. The webhook returns `200` with `autoTrade.reason: "ORDER_PENDING"` while the order is in flight; that response does not claim that Binance accepted the order. The reservation records `submitted`, `failed`, or `unknown` when the task finishes. Shutdown drains tracked tasks, and a process crash leaves a pending reservation that cannot be replayed automatically.
+
+`ENABLE_AUTO_TRADE`, `AUTO_TRADE_DRY_RUN`, `AUTO_TRADE_MAX_NOTIONAL`, `AUTO_TRADE_MIN_ABS_SENTIMENT`, and `AUTO_TRADE_COOLDOWN_BARS` remain environment-only. Each directly controls whether, when, or how much money may be ordered; remote changes to these safety controls would bypass deployment review. They are therefore excluded from Firebase Remote Config.
+
+For valid requests, auto-trade failures **never block alert delivery**. The alert response remains HTTP 200 and reports a non-sensitive `autoTrade` summary instead:
+
+```json
+{ "success": true, "autoTrade": { "requested": true, "executed": false, "reason": "SENTIMENT_BELOW_THRESHOLD" } }
+```
+
+`SELL` signals are intentionally **not** auto-executed. The read-only balances endpoint exists, but a safe SELL sizing and reservation workflow is deferred to #955 Phase 2.
 
 `GET /api/trading/binance/account/balances` is the read-only sibling used to size a `SELL` or a "close position" against the real free balance. It requires `admin.viewer` (or the API key) rather than `admin.operator`, and inherits the same `ENABLE_BINANCE_TRADING`, credentials and `BINANCE_TRADING_ALLOWED_SYMBOLS` gates, so a disabled or unconfigured deployment answers `403 FEATURE_DISABLED` / `503 BINANCE_TRADING_UNAVAILABLE` instead of reaching Binance. The allow-list is **derived**: base and quote assets are parsed from `BINANCE_TRADING_ALLOWED_SYMBOLS`, so `BTCUSDT,ETHUSDT` exposes exactly `BTC`, `ETH` and `USDT` and nothing else. Only `asset`, `free` and `locked` are returned, as unmodified decimal strings — no float conversion — and account identifiers, permissions, commission tiers and the raw Binance account payload are never exposed. Disallowed `asset`/`symbol` filters are rejected with `400 INVALID_ORDER_REQUEST` before any provider call; a provider timeout or failure returns `502 BINANCE_BALANCE_QUERY_FAILED` with no secret material in the body or the logs. Responses are cached in-process for `BINANCE_BALANCE_CACHE_MS` to keep dashboard polling from spiking Binance request weight; pass `refresh=true` when sizing a live order.
 

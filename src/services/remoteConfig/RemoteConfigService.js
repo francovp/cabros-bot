@@ -4,6 +4,7 @@ const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 const alertStorageService = require('../storage/AlertStorageService');
 const { parseEntryPriceSources } = require('../../lib/signalOutcomeEntryPriceSources');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 const {
 	applyStartupJitter,
 	getStartupJitterDelayMs,
@@ -41,6 +42,23 @@ const PARAMETER_SCHEMA = Object.freeze({
 	GROUNDING_MAX_SOURCES: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	GROUNDING_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 120000 },
 	GROUNDING_MAX_LENGTH: { type: 'number', defaultValue: 2000, integer: true, min: 1, max: 10000 },
+	// Credentials (GEMINI_API_KEY and BRAVE_SEARCH_API_KEY), external endpoints,
+	// and provider-routing controls remain environment-only.
+	GEMINI_MODEL_NAME: {
+		type: 'string',
+		defaultValue: '',
+		validate: (value) => value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value),
+	},
+	GEMINI_MODEL_NAME_FALLBACK: {
+		type: 'string',
+		defaultValue: 'gemini-2.5-flash-lite',
+		validate: (value) => value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value),
+	},
+	GROUNDING_MODEL_NAME: {
+		type: 'string',
+		defaultValue: 'gemini-2.5-flash',
+		validate: (value) => value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value),
+	},
 	ALERT_GROUNDING_COALESCE_MS: { type: 'number', defaultValue: 0, integer: true, min: 0, max: 60000 },
 	NEWS_CACHE_TTL_HOURS: { type: 'number', defaultValue: 6, min: 0, max: 720 },
 	NEWS_CACHE_MAX_ENTRIES: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 1000000 },
@@ -711,9 +729,7 @@ async function start() {
 				return;
 			}
 			void loadNow();
-			refreshTimer = setInterval(() => {
-				void loadNow();
-			}, getRefreshIntervalMs());
+			refreshTimer = createManagedInterval('remote-config-refresh', () => loadNow(), getRefreshIntervalMs());
 			if (typeof refreshTimer.unref === 'function') {
 				refreshTimer.unref();
 			}
@@ -724,9 +740,7 @@ async function start() {
 				refreshTimeout.unref();
 			}
 		} else {
-			refreshTimer = setInterval(() => {
-				void loadNow();
-			}, getRefreshIntervalMs());
+			refreshTimer = createManagedInterval('remote-config-refresh', () => loadNow(), getRefreshIntervalMs());
 			if (typeof refreshTimer.unref === 'function') {
 				refreshTimer.unref();
 			}
@@ -752,7 +766,7 @@ function stop() {
 		refreshTimeout = null;
 	}
 	if (refreshTimer) {
-		clearInterval(refreshTimer);
+		refreshTimer.clear();
 		refreshTimer = null;
 	}
 }

@@ -35,12 +35,14 @@ const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
 const { resolveStartupJitterMs } = require('../lib/startupJitter');
+const { getBackgroundTimerStats } = require('../lib/backgroundTimerRegistry');
 const { outcomeAnnotationService } = require('../services/alerts/outcomeAnnotationService');
 const { crossTimeframeCooldown } = require('../services/alerts/crossTimeframeCooldown');
 const { burstAggregator } = require('../services/alerts/burstAggregator');
 const { userPriceAlertService } = require('../services/alerts/UserPriceAlertService');
 const { alertModeration } = require('../services/alerts/alertModeration');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
+const aliasResolver = require('../services/symbols/aliasResolver');
 const { getPromptReadiness } = require('../services/prompts/promptReadiness');
 const newsAnalysisStorageService = require('../services/storage/NewsAnalysisStorageService');
 const {
@@ -56,6 +58,7 @@ const {
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
 } = require('../lib/deploymentEnvironment');
+const { getAggregateStats: getDiscordSourceRoutingAggregateStats } = require('../services/notification/discordSourceRouting');
 const {
 	getLastRunAt: getTestAlertLastRunAt,
 	getLastRunStatus: getTestAlertLastRunStatus,
@@ -241,7 +244,8 @@ function getNewsMonitorLlmDependency({ enabled, provider }) {
 		return providerDependencyStatus({
 			enabled,
 			provider,
-			configured: hasValue(process.env.GEMINI_API_KEY) && hasValue(process.env.GEMINI_MODEL_NAME),
+			configured: hasValue(process.env.GEMINI_API_KEY)
+				&& hasValue(resolveRemoteOverride('GEMINI_MODEL_NAME') ?? process.env.GEMINI_MODEL_NAME),
 		});
 	case 'azure':
 		return providerDependencyStatus({
@@ -289,7 +293,9 @@ function getGeminiDependency({
 		enabled,
 		configured:
 			hasValue(process.env.GEMINI_API_KEY)
-			&& (!requiresGeminiModel || hasValue(process.env.GEMINI_MODEL_NAME)),
+			&& (!requiresGeminiModel || hasValue(
+				resolveRemoteOverride('GEMINI_MODEL_NAME') ?? process.env.GEMINI_MODEL_NAME,
+			)),
 	});
 }
 
@@ -369,10 +375,13 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	const adminAuthStatus = getAdminAuthStatus();
 	const llmAlertEnrichmentDependencyEnabled = llmAlertEnrichmentEnabled && newsMonitorEnabled;
 
-	const telegram = dependencyStatus({
-		enabled: telegramEnabled,
-		configured: hasValue(process.env.BOT_TOKEN) && hasValue(process.env.TELEGRAM_CHAT_ID),
-	});
+	const telegram = {
+		...dependencyStatus({
+			enabled: telegramEnabled,
+			configured: hasValue(process.env.BOT_TOKEN) && hasValue(process.env.TELEGRAM_CHAT_ID),
+		}),
+		commandRateLimiting: process.env.ENABLE_TELEGRAM_COMMAND_RATE_LIMITING !== 'false',
+	};
 	const whatsappChatId = previewEnvironment
 		? process.env.WHATSAPP_PREVIEW_CHAT_ID || process.env.WHATSAPP_CHAT_ID
 		: process.env.WHATSAPP_CHAT_ID;
@@ -387,6 +396,49 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		enabled: discordEnabled,
 		configured: hasValue(process.env.DISCORD_WEBHOOK_URL),
 	});
+	const discordSourceRoutingEnabled = isEnabled(process.env.ENABLE_DISCORD_SOURCE_ROUTING);
+	const discordSourceRouting = (() => {
+		if (!discordSourceRoutingEnabled) {
+			return {
+				enabled: false,
+				configured: false,
+				ready: false,
+				status: 'disabled',
+				routesConfigured: 0,
+				hasDefault: false,
+			};
+		}
+		const rawRoutes = process.env.DISCORD_SOURCE_ROUTING_JSON;
+		let parsedKeys = [];
+		let hasDefault = false;
+		if (typeof rawRoutes === 'string' && rawRoutes.trim().length > 0) {
+			const trimmed = rawRoutes.trim();
+			if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+				try {
+					const parsed = JSON.parse(trimmed);
+					if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+						parsedKeys = Object.keys(parsed).map((k) => k.toLowerCase());
+						hasDefault = parsedKeys.includes('default') || parsedKeys.includes('*');
+					}
+				} catch (_) {
+					// invalid JSON; surfaced via discordSourceRouting warning logs in the service
+				}
+			}
+		}
+		const configured = parsedKeys.length > 0;
+		const aggregate = getDiscordSourceRoutingAggregateStats();
+		return {
+			enabled: discordSourceRoutingEnabled,
+			configured,
+			ready: configured,
+			status: configured ? 'ready' : 'misconfigured',
+			routesConfigured: parsedKeys.length,
+			hasDefault,
+			keys: parsedKeys.sort(),
+			decisions: aggregate.decisions || 0,
+			fallbacks: aggregate.fallbacks || 0,
+		};
+	})();
 	const gemini = getGeminiDependency({
 		enabled: geminiEnabled,
 		geminiGroundingEnabled,
@@ -502,6 +554,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		backend: cache.dedupMode.backend,
 		cacheSize: newsMonitorCacheSize,
 	};
+	const newsMonitorCache = newsMonitorEnabled ? cache.getStatus(newsMonitorEnabled) : null;
 
 	const signalOutcomeWorkerStatus = SignalOutcomeService.getWorkerStatus();
 	const jobExecutionQueueStatus = jobQueue.getStatus();
@@ -551,6 +604,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			telegramBot: telegramFlagEnabled,
 			whatsappAlerts: whatsappEnabled,
 			discordAlerts: discordEnabled,
+			discordSourceRouting: discordSourceRoutingEnabled,
 			geminiGrounding: geminiGroundingEnabled,
 			newsMonitor: newsMonitorEnabled,
 			newsMonitorPaused: isNewsMonitorPaused(),
@@ -593,6 +647,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			alertHtfRender: runtimeConfig.ENABLE_ALERT_HTF_RENDER,
 			alertModeration: alertModeration.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			symbolAliasResolver: aliasResolver.isEnabled(),
 			userPriceAlerts: userPriceAlertService.isEnabled(),
 			alertFeedback: alertFeedbackStorageService.isEnabled(),
 			symbolAnalysisStorage: symbolAnalysisStorageService.isEnabled(),
@@ -605,6 +660,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			equitySessionTag: runtimeConfig.ENABLE_EQUITY_SESSION_TAG,
 			maintenanceMode: isMaintenanceModeEnabled(),
 			telegramCommandAuth: telegramCommandAuth.getStatus().enabled,
+			telegramCommandRateLimiting: process.env.ENABLE_TELEGRAM_COMMAND_RATE_LIMITING !== 'false',
 			firebaseAdminAuth: adminAuthStatus.enabled,
 		},
 		deliveryChannels: {
@@ -655,6 +711,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			telegram,
 			whatsapp,
 			discord,
+			discordSourceRouting,
 			webhookAuth,
 			adminApiKey,
 			binanceTradingApiKey,
@@ -683,6 +740,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				? { firestoreReadMetrics: firestoreWriteMetricsService.getReadSnapshot() }
 				: {}),
 			persistentWriteHealth: firestoreWriteMetricsService.getPersistentWriteHealthSnapshot(),
+			backgroundTimers: getBackgroundTimerStats(),
 			sentry,
 			langfuse,
 			...(langfusePrompts ? { langfusePrompts } : {}),
@@ -702,6 +760,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 					&& hasValue(process.env.CF_AIG_MODEL || DEFAULT_CF_AIG_MODEL),
 			}),
 			newsMonitorDedup,
+			...(newsMonitorCache ? { newsMonitorCache } : {}),
 			idempotencyStorage: idempotencyStorageService.getStorageStatus(),
 			firebaseRemoteConfig: remoteConfigStatus,
 			chatPreferences: chatPreferenceService.getStatus(),
@@ -741,6 +800,10 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			alertSignalRepeatSuppression: {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
+			},
+			symbolAliasResolver: {
+				enabled: aliasResolver.isEnabled(),
+				totalEntries: aliasResolver.listAliases().length,
 			},
 			outcomeInformedDelivery: {
 				enabled: outcomeAnnotationService.isEnabled(),

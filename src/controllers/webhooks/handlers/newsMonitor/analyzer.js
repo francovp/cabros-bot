@@ -17,7 +17,8 @@ const {
 	parseNewsMaxAlertsPerWindow,
 	parseNewsMaxAlertsPerWindowMs,
 } = require('./volumeTracker');
-const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
+const { ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
+const { getGroundingModelName } = require('../../../../services/grounding/runtimeModels');
 const geminiQuotaManager = require('../../../../services/grounding/geminiQuotaManager');
 const geminiPriceService = require('../../../../services/grounding/geminiPriceService');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
@@ -531,7 +532,7 @@ class NewsAnalyzer {
 				const currentIndex = nextIndex;
 				nextIndex += 1;
 				const symbol = symbols[currentIndex];
-const symbolTokenUsage = new TokenUsageTracker('news-analysis');
+				const symbolTokenUsage = new TokenUsageTracker('news-analysis');
 				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, symbolTokenUsage, routing, batchStartedAt, symbolOptions)
 					.then((result) => {
 						if (tokenUsage) {
@@ -1875,7 +1876,7 @@ const symbolTokenUsage = new TokenUsageTracker('news-analysis');
 		// Build enriched object for formatEnriched methods
 		const confidenceProvenance = geminiAnalysis.confidence_source
 			? `_Confidence source: ${geminiAnalysis.confidence_source}_`
-			: `_Model used: ${GROUNDING_MODEL_NAME}_`;
+			: `_Model used: ${getGroundingModelName()}_`;
 		// Issue #1230: the tier is appended to `extraText` because that is what
 		// `formatEnriched()` actually renders to the trader. `formatAlertMessage()`
 		// has no production call site, so a line added only there would never be seen.

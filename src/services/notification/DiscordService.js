@@ -2,6 +2,11 @@ const NotificationChannel = require('./NotificationChannel');
 const WhatsAppMarkdownFormatter = require('./formatters/whatsappMarkdownFormatter');
 const { splitMessageIntoChunks } = require('../../lib/messageHelper');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const {
+	parseDiscordSourceRouting,
+	resolveDiscordWebhookForAlert,
+	getAggregateStats: getDiscordSourceRoutingAggregateStats,
+} = require('./discordSourceRouting');
 const sleepWithSignal = require('../../lib/sleepWithSignal');
 
 const DEFAULT_TIMEOUT_MS = 10000;
@@ -88,6 +93,12 @@ class DiscordService extends NotificationChannel {
 		this._configFallbackRetryDelayMs = config.fallbackRetryDelayMs;
 		this._configMaxRetryDelayMs = config.maxRetryDelayMs;
 		this._configMaxTotalRetryWaitMs = config.maxTotalRetryWaitMs;
+		this.sourceRoutingEnabled = config.sourceRoutingEnabled !== undefined
+			? Boolean(config.sourceRoutingEnabled)
+			: process.env.ENABLE_DISCORD_SOURCE_ROUTING === 'true';
+		this.sourceRoutes = config.sourceRoutes !== undefined
+			? config.sourceRoutes
+			: parseDiscordSourceRouting(process.env.DISCORD_SOURCE_ROUTING_JSON, this.logger);
 		this._healthCheckInFlight = null;
 	}
 
@@ -351,7 +362,29 @@ class DiscordService extends NotificationChannel {
 				}
 				const content = await this.formatAlert(alert, options);
 				if (options.signal?.aborted) return abortResult(0);
-				return await this.sendWithWebhookUrl(alert, overrideUrl, options, startedAt, content);
+				const overrideResult = await this.sendWithWebhookUrl(alert, overrideUrl, options, startedAt, content);
+				return {
+					...overrideResult,
+					routeKey: 'per-request',
+				};
+			}
+
+			const routingResult = this._resolveWebhookUrl(alert);
+			const routeKey = routingResult.routeKey;
+
+			let targetWebhookUrl = null;
+			if (routingResult.webhookUrl && routingResult.routeKey && routingResult.routeKey !== 'default') {
+				targetWebhookUrl = routingResult.webhookUrl;
+			}
+
+			if (targetWebhookUrl) {
+				const content = await this.formatAlert(alert, options);
+				if (options.signal?.aborted) return abortResult(0);
+				const routeResult = await this.sendWithWebhookUrl(alert, targetWebhookUrl, options, startedAt, content);
+				return {
+					...routeResult,
+					routeKey,
+				};
 			}
 
 			const candidates = this.getHealthyWebhookUrls();
@@ -382,30 +415,34 @@ class DiscordService extends NotificationChannel {
 					return {
 						...result,
 						attemptCount: totalAttempts,
+						routeKey,
 					};
 				}
 				if (options.signal?.aborted || result.aborted) {
 					return {
 						...result,
 						...abortResult(totalAttempts),
+						routeKey,
 					};
 				}
 				if (result.statusCode === 429) {
 					return {
 						...result,
 						attemptCount: totalAttempts,
+						routeKey,
 					};
 				}
 			}
 
 			return lastResult
-				? { ...lastResult, attemptCount: totalAttempts }
+				? { ...lastResult, attemptCount: totalAttempts, routeKey }
 				: {
 					success: false,
 					channel: 'discord',
 					error: 'All Discord webhooks failed',
 					attemptCount: totalAttempts,
 					durationMs: Date.now() - startedAt,
+					routeKey,
 				};
 		} catch (error) {
 			this.logger?.error?.(`Failed to send to Discord: ${error.message}`);
@@ -417,6 +454,37 @@ class DiscordService extends NotificationChannel {
 				durationMs: Date.now() - startedAt,
 			};
 		}
+	}
+
+	_resolveWebhookUrl(alert = {}) {
+		if (alert.discordWebhookUrl) {
+			return { webhookUrl: alert.discordWebhookUrl, routeKey: 'per-request' };
+		}
+
+		if (!this.sourceRoutingEnabled) {
+			return { webhookUrl: this.webhookUrl, routeKey: null };
+		}
+
+		if (!this.sourceRoutes || Object.keys(this.sourceRoutes).length === 0) {
+			return { webhookUrl: this.webhookUrl, routeKey: null };
+		}
+
+		return resolveDiscordWebhookForAlert(
+			alert,
+			this.sourceRoutes,
+			this.webhookUrl,
+			this.logger,
+		);
+	}
+
+	getSourceRoutingStatus() {
+		const aggregate = getDiscordSourceRoutingAggregateStats();
+		return {
+			enabled: this.sourceRoutingEnabled,
+			routesConfigured: this.sourceRoutes ? Object.keys(this.sourceRoutes).length : 0,
+			decisions: aggregate.decisions,
+			fallbacks: aggregate.fallbacks,
+		};
 	}
 
 	async sendWithWebhookUrl(alert, webhookUrl, options = {}, startedAt = Date.now(), formattedContent) {

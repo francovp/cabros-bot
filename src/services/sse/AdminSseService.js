@@ -1,6 +1,7 @@
 'use strict';
 
 const { v4: uuidv4 } = require('uuid');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 function resolveRuntimeConfig() {
 	try {
 		const rc = require('../remoteConfig/RemoteConfigService');
@@ -329,7 +330,7 @@ class AdminSseService {
 		if (this.heartbeatTimer && this.heartbeatTimerIntervalMs === interval) return;
 		this._stopHeartbeatTimer();
 		this.heartbeatTimerIntervalMs = interval;
-		this.heartbeatTimer = setInterval(() => {
+		this.heartbeatTimer = createManagedInterval('admin-sse-heartbeat', () => {
 			if (this.getEffectiveHeartbeatIntervalMs() !== this.heartbeatTimerIntervalMs) {
 				this._ensureHeartbeatTimer();
 				return;
@@ -343,7 +344,7 @@ class AdminSseService {
 
 	_stopHeartbeatTimer() {
 		if (this.heartbeatTimer) {
-			clearInterval(this.heartbeatTimer);
+			this.heartbeatTimer.clear();
 			this.heartbeatTimer = null;
 		}
 		this.heartbeatTimerIntervalMs = null;

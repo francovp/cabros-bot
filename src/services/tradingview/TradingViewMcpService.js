@@ -26,6 +26,7 @@ const {
 	getTakeProfitTarget,
 	getRiskRewardRatio,
 } = require('./expandedAnalysisAlertReport');
+const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
 const { hasConfluenceEvidence } = require('./confluenceEvidence');
 const remoteConfigService = require('../remoteConfig/RemoteConfigService');
 const { getRuntimeConfig } = remoteConfigService;
@@ -1207,6 +1208,25 @@ class TradingViewMcpService {
 		cleanBudget();
 		const enrichmentStatus = optionalEnrichmentPartial ? 'partial' : 'full';
 		this._recordEnrichmentStatus(enrichmentStatus);
+
+		if (options.tokenUsage) {
+			if (typeof options.tokenUsage.addSource === 'function') {
+				if (result.analysis?.tokenUsage) {
+					options.tokenUsage.addSource('tradingviewMcp', result.analysis.tokenUsage);
+				}
+				if (volumeAnalysis?.tokenUsage) {
+					options.tokenUsage.addSource('volumeConfirmation', volumeAnalysis.tokenUsage);
+				}
+				if (confluenceAnalysis?.tokenUsage) {
+					options.tokenUsage.addSource('confluence', confluenceAnalysis.tokenUsage);
+				}
+			} else if (typeof options.tokenUsage.addUsage === 'function') {
+				if (result.analysis?.tokenUsage) options.tokenUsage.addUsage(result.analysis.tokenUsage);
+				if (volumeAnalysis?.tokenUsage) options.tokenUsage.addUsage(volumeAnalysis.tokenUsage);
+				if (confluenceAnalysis?.tokenUsage) options.tokenUsage.addUsage(confluenceAnalysis.tokenUsage);
+			}
+		}
+
 		return this._toEnrichedAlert(parsedSignal.rawText || '', { symbol, exchange, timeframe, side: parsedSignal.side }, result.analysis, volumeAnalysis, confluenceAnalysis, multiTimeframeAnalysis, enrichmentStatus, {
 			requestedExchange,
 			requestedExchangeMappedTo: resolvedExchange.mapped ? exchange : null,
@@ -1577,8 +1597,23 @@ class TradingViewMcpService {
 				throw createToolResultError(errorMessage);
 			}
 
+			const attachUsage = (parsed) => {
+				if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return parsed;
+				const rawUsage = callResult.usage
+					|| callResult._meta?.usage
+					|| callResult.meta?.usage
+					|| toolResponse.usage
+					|| parsed.usage
+					|| parsed.tokenUsage;
+				if (rawUsage && !parsed.tokenUsage) {
+					const normalized = normalizeUsageMetadata(rawUsage);
+					if (normalized) parsed.tokenUsage = normalized;
+				}
+				return parsed;
+			};
+
 			if (callResult.structuredContent && typeof callResult.structuredContent === 'object') {
-				return callResult.structuredContent;
+				return attachUsage(callResult.structuredContent);
 			}
 
 			const contentText = this._extractContentText(callResult);
@@ -1586,7 +1621,7 @@ class TradingViewMcpService {
 				throw new Error(`TradingView MCP tool ${toolName} returned empty content`);
 			}
 
-			return this._parseToolJson(contentText);
+			return attachUsage(this._parseToolJson(contentText));
 		};
 
 		if (!cacheKey) {
@@ -2004,6 +2039,9 @@ class TradingViewMcpService {
 			extraText,
 			confluenceData: confluenceAnalysis || null,
 			multiTimeframeData: multiTimeframeAnalysis || null,
+			...(analysis?.tokenUsage ? { tokenUsage: analysis.tokenUsage } : {}),
+			...(volumeAnalysis?.tokenUsage ? { volumeTokenUsage: volumeAnalysis.tokenUsage } : {}),
+			...(confluenceAnalysis?.tokenUsage ? { confluenceTokenUsage: confluenceAnalysis.tokenUsage } : {}),
 			// Reports the venue the screener sent; the MCP-only alias target is
 			// surfaced separately (#591). `exchange` is deliberately NOT emitted:
 			// it would be an identical duplicate of `requestedExchange`, and leaving
@@ -2111,9 +2149,11 @@ class TradingViewMcpService {
 		}
 
 		const keys = Object.keys(result);
-		if (keys.length === 1 && Object.prototype.hasOwnProperty.call(result, 'result')) {
+		const usage = result.tokenUsage || result.usage;
+		if ((keys.length === 1 || (keys.length === 2 && usage)) && Object.prototype.hasOwnProperty.call(result, 'result')) {
 			const innerResult = result.result;
 			if (innerResult && typeof innerResult === 'object' && !Array.isArray(innerResult)) {
+				if (usage && !innerResult.tokenUsage) innerResult.tokenUsage = usage;
 				return innerResult;
 			}
 		}

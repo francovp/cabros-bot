@@ -1,6 +1,6 @@
 const { validateAlert } = require('../../../../lib/validation');
 const { groundAlert } = require('../../../../services/grounding/grounding');
-const { GROUNDING_MODEL_NAME } = require('../../../../services/grounding/config');
+const { getGroundingModelName } = require('../../../../services/grounding/runtimeModels');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
 const { parseTradingViewSignal } = require('../../../../services/tradingview/parseTradingViewSignal');
@@ -14,7 +14,7 @@ const {
 	toPositiveFiniteNumber,
 	computeDeterministicRiskReward,
 } = require('../../../../services/tradingview/riskRewardMath');
-const { tokenCostBudgetService } = require('../../../../lib/tokenUsage');
+const { TokenUsageTracker, tokenCostBudgetService } = require('../../../../lib/tokenUsage');
 
 const ENRICHMENT_PROVIDER_OUTCOMES = Symbol.for('cabros-bot.alert.enrichment-provider-outcomes');
 
@@ -446,8 +446,9 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched, parsedSignal = n
 		const { sentiment, sentiment_score, sentimentConflict } = selectSentimentAndScore(gemini, mcp);
 
 		const geminiBackticked = extractBacktickedValues(gemini.extraText);
-		const modelName = geminiBackticked[0] || GROUNDING_MODEL_NAME;
-		const groundingFromGemini = geminiBackticked[1] || GROUNDING_MODEL_NAME;
+		const groundingModelName = getGroundingModelName();
+		const modelName = geminiBackticked[0] || groundingModelName;
+		const groundingFromGemini = geminiBackticked[1] || groundingModelName;
 		const groundingProviders = mergeUnique([groundingFromGemini], ['tradingview-mcp'], 8);
 		const extraText = isMessageFooterMetadataEnabled()
 			? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${groundingProviders.join('`, `')}` + '`'
@@ -621,9 +622,10 @@ async function enrichWithGemini(text, tokenUsage) {
 
 	// Build footer with model metadata (controlled by env var, default: true)
 	const enableFooter = isMessageFooterMetadataEnabled();
-	const modelName = modelUsed || GROUNDING_MODEL_NAME;
+	const groundingModelName = getGroundingModelName();
+	const modelName = modelUsed || groundingModelName;
 	const extraText = enableFooter
-		? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${GROUNDING_MODEL_NAME}` + '`'
+		? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${groundingModelName}` + '`'
 		: '';
 
 	const hasSentiment = typeof sentiment === 'string' || typeof sentiment_score === 'number';
@@ -734,13 +736,24 @@ async function enrichAlert(alert, options = {}) {
 	let mcpEnrichmentFailed = false;
 	if (isMcpEnabled) {
 		try {
-			mcpEnrichedAlert = await tradingViewMcpService.enrichFromAlertText(text);
+			mcpEnrichedAlert = await tradingViewMcpService.enrichFromAlertText(text, { tokenUsage });
 			tradingViewMcpStatus = getTradingViewProviderStatus(mcpEnrichedAlert, false);
 		} catch (error) {
 			mcpEnrichmentFailed = true;
 			tradingViewMcpStatus = 'failed';
 			console.warn('[Alert] TradingView MCP enrichment failed, continuing with grounding flow:', error.message);
 		}
+	}
+
+	if (tokenUsage && typeof tokenUsage.addSource === 'function' && mcpEnrichedAlert) {
+		const addMissingSource = (name, usage) => {
+			if (usage && !tokenUsage.bySource?.[name]) {
+				tokenUsage.addSource(name, usage);
+			}
+		};
+		addMissingSource('tradingviewMcp', mcpEnrichedAlert.tokenUsage);
+		addMissingSource('volumeConfirmation', mcpEnrichedAlert.volumeTokenUsage);
+		addMissingSource('confluence', mcpEnrichedAlert.confluenceTokenUsage);
 	}
 
 	if (!isGeminiEnabled) {
@@ -780,8 +793,19 @@ async function enrichAlert(alert, options = {}) {
 		return mcpEnrichedAlert;
 	}
 
+	const geminiTracker = tokenUsage && typeof tokenUsage.addSource === 'function'
+		? new TokenUsageTracker(tokenUsage.defaultFeature)
+		: null;
+	const geminiUsageTarget = geminiTracker || tokenUsage;
+	const addGeminiSource = () => {
+		if (geminiTracker && (geminiTracker.inputTokens > 0 || geminiTracker.outputTokens > 0)) {
+			tokenUsage.addSource('geminiGrounding', geminiTracker);
+		}
+	};
+
 	try {
-		const geminiEnrichedAlert = await enrichWithGemini(text, tokenUsage);
+		const geminiEnrichedAlert = await enrichWithGemini(text, geminiUsageTarget);
+		addGeminiSource();
 		geminiStatus = geminiEnrichedAlert ? 'full' : 'failed';
 
 		// CB-583 / Issue #583: when TradingView MCP is enabled and produced
@@ -860,6 +884,7 @@ async function enrichAlert(alert, options = {}) {
 
 		return withProviderOutcomes(geminiEnrichedAlert);
 	} catch (error) {
+		addGeminiSource();
 		geminiStatus = 'failed';
 		if (mcpEnrichedAlert) {
 			console.warn('[Alert] Gemini grounding failed, using TradingView MCP enrichment:', error.message);

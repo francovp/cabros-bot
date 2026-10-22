@@ -16,6 +16,7 @@ const {
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	resolveCmd,
 	reactionsCommand,
 	preferenciasCmd,
 	filtroCmd,
@@ -109,6 +110,11 @@ const lifecycle = createProcessLifecycle({
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
 	flushAlertBurstWindows: () => burstAggregator.flushAll('shutdown'),
 	flushSentry: (timeout) => sentryService.flush(timeout),
+	reportBackgroundTimerDrain: (stats) => sentryService.captureInfo({
+		message: 'shutdown.timer_drain',
+		feature: 'shutdown.timer_drain',
+		extra: stats,
+	}),
 	timeoutMs: process.env.SHUTDOWN_TIMEOUT_MS,
 });
 lifecycle.register();
@@ -206,6 +212,7 @@ async function bootstrapApplication() {
 		bot.command(['history', 'alertas'], alertHistoryCommand);
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
+		bot.command(['resolve'], resolveCmd);
 		bot.command(['reactions', 'reacciones'], reactionsCommand);
 		bot.command(['preferencias', 'preferences'], preferenciasCmd);
 

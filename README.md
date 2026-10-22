@@ -3,7 +3,7 @@
 [![Node.js CI](https://github.com/francovp/cabros-bot/actions/workflows/node.js.yml/badge.svg)](https://github.com/francovp/cabros-bot/actions/workflows/node.js.yml)
 [![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](https://github.com/francovp/cabros-bot)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC)
-[![Node Version](https://img.shields.io/badge/node-%3E%3D24.18.0%20%3C25-brightgreen.svg)](https://nodejs.org/)
+[![Node Version](https://img.shields.io/badge/node-%3E%3D24.18.0%20%3C27-brightgreen.svg)](https://nodejs.org/)
 
 A high-performance crypto, equity, and market intelligence bot service built with Node.js and Express. It connects incoming TradingView alerts and scheduled event monitors with Gemini Grounding, TradingView MCP analysis, and Binance Spot execution, dispatching formatted alerts concurrently across Telegram, WhatsApp, and Discord.
 
@@ -53,7 +53,7 @@ Comprehensive guides and technical documentation are maintained inside the [`doc
 
 ### 1. Prerequisites
 
-- **Node.js**: `>=24.18.0 <25` (enforced via `.node-version` and `package.json` engines)
+- **Node.js**: `>=24.18.0 <27` (enforced via `.node-version` and `package.json` engines)
 - **Package Manager**: `pnpm` (`pnpm@10.34.1` recommended)
 - **Telegram Bot Token**: Created via [@BotFather](https://t.me/botfather)
 
@@ -133,7 +133,7 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | :--- | :--- | :--- | :--- |
 | `GET` | `/healthcheck` | Process liveness probe; `?deep=true` = channel readiness, `?depth=readiness` = dependency report (advisory, always 200) | [API Reference](docs/api-reference.md#get-healthcheck) |
 | `GET` | `/ready` | Bootstrap gate; `?depth=dependencies` adds a fail-closed dependency probe | [API Reference](docs/api-reference.md#get-ready) |
-| `GET` | `/api/status` | Comprehensive system capabilities & dependency matrix | [API Reference](docs/api-reference.md#get-apistatus) |
+| `GET` | `/api/status` | System capabilities and dependency matrix, including news-monitor cache hit/miss, entry, eviction, and memory metrics when enabled | [API Reference](docs/api-reference.md#get-apistatus) |
 | `GET` | `/api/public/status` | Safe public subset of capabilities & channel statuses | [API Reference](docs/api-reference.md#get-apipublicstatus) |
 | `POST` | `/api/webhook/alert` | Ingest and dispatch alert to configured channels | [Webhook Alerts](docs/webhooks.md#post-apiwebhookalert) |
 | `POST` | `/api/webhook/expanded-analysis-alert` | TradingView MCP technical analysis report | [Webhook Alerts](docs/webhooks.md#post-apiwebhookexpanded-analysis-alert) |
@@ -157,7 +157,7 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `GET` | `/api/outcomes/summary` | Expectancy, win rate, filters, and optional bounded symbol/setup breakdowns | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomessummary) |
 | `GET`/`POST` | `/api/alert-subscribers` | Manage outbound alert subscriber webhooks with HMAC and SSRF guards | [OpenAPI Spec](/openapi.json) |
 
-Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`.
+Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`. CI coverage guards (`tests/unit/postman-collection.test.js` and `tests/unit/openapi-contract.test.js`) enforce that every mounted `/api` route appears in both OpenAPI and `CabrosBot.postman_collection.json`, and that every unique endpoint path referenced in README API documentation exists in `src/openapi/openapi.json`.
 
 `dependencies.persistentWriteHealth` is always present on `/api/status` and `/api/capabilities`. It reports process-local success/failure counts for alert storage, signal outcomes, notification redrive, and persistent news dedup. Each domain is `unconfigured` until a write is observed, `degraded` when the latest 100 attempts fail above 5% or a failure occurred in the last five minutes, and otherwise `ok`. Counters reset on process restart; only closed error categories are exposed, never provider messages.
 
@@ -245,7 +245,7 @@ The Remote Config bootstrap fetch uses environment values because the published 
 Notifications are dispatched concurrently across enabled channels. For Discord, transient rate limits and server errors are retried according to `DISCORD_MAX_RETRIES` and bounded by `DISCORD_MAX_TOTAL_RETRY_WAIT_MS`. Long messages exceeding platform limits are automatically split into sequential chunks with preserved markdown formatting. See [Multi-Channel Alerts Guide](docs/notifications.md).
 
 ### AI Provider Routing & Grounding
-When configuring AI providers, `MODEL_PROVIDER=cloudflare` selects Cloudflare runtime routing, whereas `ENABLE_CLOUDFLARE_AIG` only exposes Cloudflare readiness in status/capabilities. Because the flag alone does not route traffic, `dependencies.cloudflareAig` reports `provider` and `routed` alongside `ready`: credentials present while another provider is selected yield `ready: false` and `status: "inactive"`, so an operator can never read `ready` as proof that requests traverse the gateway. Gemini Grounding provides web search citations and confidence scores for market alerts. See [AI Grounding & Prompts](docs/ai-grounding.md).
+When configuring AI providers, `MODEL_PROVIDER` accepts `gemini`, `azure`, `openrouter`, or `cloudflare`; `MODEL_PROVIDER=cloudflare` selects Cloudflare runtime routing, whereas `ENABLE_CLOUDFLARE_AIG` only exposes Cloudflare readiness in status/capabilities. Because the flag alone does not route traffic, `dependencies.cloudflareAig` reports `provider` and `routed` alongside `ready`: credentials present while another provider is selected yield `ready: false` and `status: "inactive"`, so an operator can never read `ready` as proof that requests traverse the gateway. Gemini Grounding provides web search citations and confidence scores for market alerts. `GEMINI_MODEL_NAME`, `GEMINI_MODEL_NAME_FALLBACK`, and `GROUNDING_MODEL_NAME` are non-secret model selectors supported by Firebase Remote Config. A published value takes precedence; its environment value is the fallback before the schema default. Remote values must be strings of at most 128 characters matching `[A-Za-z0-9][A-Za-z0-9._/-]*`. `pnpm run doctor` defers the primary Gemini model check when Remote Config can supply it, validates the selected provider's required credentials and configured HTTP URLs, and requires the Brave key when forced search is enabled. Runtime readiness validates the loaded models required by active search and generation paths and fails when the selected provider or forced search is misconfigured. API keys, provider routing, Brave endpoints, and the `FORCE_BRAVE_SEARCH` control remain environment-only. See [AI Grounding & Prompts](docs/ai-grounding.md) and [Environment Configuration](docs/environment-configuration.md).
 
 ### Sentiment Score Calibration
 
@@ -621,6 +621,18 @@ Every run resolves to exactly one named outcome (`ok`, `down`, `stale`, `degrade
 
 Set the `PRODUCTION_REQUIRE_ENABLED_FLAGS` repository variable to a comma-separated flag list; it defaults to empty, so it adds no failure mode until you enable it. Every failure message ends with `(probed <base_url>)`, so a misconfigured target is never mistaken for a real outage. See [Observability & Monitoring](docs/monitoring.md#production-smoke-probe).
 
+### Backlog Hygiene Automation
+
+The opt-in `.github/workflows/backlog-hygiene.yml` workflow periodically audits and normalizes GitHub issue metadata using `scripts/backlog-hygiene.js`:
+- **Status label normalization**: Ensures exactly one status label (`status/needs-triage`, `status/ready`, `status/in-progress`, `status/blocked`) is present without demoting issues under review.
+- **Duplicate detection**: Flags possible duplicate open/closed issues via lexical + label overlap similarity (>0.7 threshold).
+- **Stale `agent-working` retirement**: Identifies issues carrying `agent-working` for >14 days without referencing PRs or active commits and applies `stale/agent-working`.
+- **Scheduled execution toggle**: By default, the workflow is manual `workflow_dispatch` only. Scheduled runs (monthly) are gated by setting the repository variable `BACKLOG_HYGIENE_CRON` (e.g. `0 4 1 * *`).
+- Run dry-run locally:
+  ```bash
+  pnpm run hygiene:backlog --dry-run
+  ```
+
 ### TradingView Confluence Enrichment
 
 `ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true` are declared `true` in `render.yaml` on the **web service only** (previews off). Treat the Blueprint entry as intent and `/api/status` as runtime state. The confluence flag enables an optional `combined_analysis` call; the independent multi-timeframe flag enables `multi_timeframe_analysis`, whether or not confluence is enabled. Both are fail-open: a failure or budget skip never blocks alert delivery and marks the enrichment as `partial`.
@@ -684,6 +696,16 @@ The window is **leading-edge**, so the added latency is exactly `ALERT_BURST_WIN
 ### Market Scanner MCP Fast-Fail Gate
 `POST /api/webhook/market-scanner-alert` checks the process-local TradingView MCP status before running its sequential scans. If the status is `degraded` with `http_5xx`, `request_failed`, or `circuit_breaker_open` **and** the circuit breaker still reports `state: "open"`, it skips every scan and returns `502 TRADINGVIEW_MCP_UNAVAILABLE` with each scan as `status: "skipped"`. The endpoint returns `502` in two shapes: `TRADINGVIEW_MCP_UNAVAILABLE` (skipped, nothing attempted) and `ALL_SCANS_FAILED` (attempted, all failed). The gate keys on the breaker's time-based state so that after `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses the next request is allowed through as a recovery probe — a transient outage self-heals without a restart. See [Webhook Alerts](docs/webhooks.md#post-apiwebhookmarket-scanner-alert).
 
+### Symbol Alias Resolver (#845)
+
+- The static alias table lives in `src/services/symbols/aliases.json` (one entry per symbol, multiple aliases per entry, canonical `EXCHANGE:SYMBOL` identifier). Operators can extend the table without touching code paths.
+- `POST /api/symbols/resolve` (operator auth) — accepts `{ query, defaultExchange?, maxResults? }` and returns `{ matches, normalizedQuery, totalEntries, query }`. Empty matches are a successful 200 response, never a 5xx.
+- `GET /api/symbols/aliases` (operator auth) — returns the full static alias table in deterministic order so admins can audit it.
+- Telegram `/resolve <query>` command — replies with the top 1–3 candidates and a copyable canonical identifier. Hint to use `/analisis EXCHANGE:SYMBOL` after the match.
+- `featureFlags.symbolAliasResolver` (default `true` when the static table loads) and `dependencies.symbolAliasResolver` (`enabled`, `totalEntries`) are surfaced in `/api/status` and `/api/capabilities` without secrets.
+- `DISABLE_SYMBOL_ALIAS_RESOLVER=true` opt-out flag (escape hatch — keeps the route mounted but reports `enabled: false` so production can roll back without code changes). The flag is `environment-only` (operator opt-out toggle, not Remote-Config eligible).
+- The existing `/api/webhook/expanded-analysis-alert`, `/api/webhook/market-scanner-alert`, `/api/webhook/volume-confirmation`, `/api/webhook/symbol-analysis`, and `/api/jobs/tradingview-analysis` endpoints keep their strict `EXCHANGE:SYMBOL` validation — the resolver is a new lookup surface, not a parser override. Un-mapped tickers still surface `INVALID_REQUEST` to preserve current behavior.
+
 ---
 
 ## Running Tests
@@ -706,8 +728,17 @@ pnpm test -- tests/unit/alert-handler.test.js
 # Run opt-in Firestore emulator integration suite (requires local Firebase emulator)
 pnpm run test:firebase
 
+# Run the opt-in k6 load test and dependency-outage drill (requires k6)
+pnpm test:perf
+
+# Include the 30-minute soak profile and /diag memory/event-loop samples
+pnpm test:perf -- --soak
+
 # Run linter
 pnpm run lint
+
+# Set up a secondary git worktree with symlinked node_modules and shared caches
+pnpm run setup:worktree
 ```
 
 ---
