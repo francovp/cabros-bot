@@ -1167,6 +1167,59 @@ describe('status dependency contract drift', () => {
 		expect(deploymentSummaryItem.required).toEqual(expect.arrayContaining(['count', 'lastSeen']));
 	});
 
+	it('documents tiered rate-limit responses and their positive retry delay', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const response = spec.components.responses.RateLimitExceeded;
+		const schema = spec.components.schemas.RateLimitError;
+
+		expect(spec.info.description).toContain('All webhook/news ingest paths share an aggregate 1,000-request bucket');
+		expect(response.description).toContain('Tiered webhook/news ingest requests also enforce the shared aggregate limit');
+		expect(response.content['application/json'].schema).toEqual({
+			$ref: '#/components/schemas/RateLimitError',
+		});
+		expect(Object.keys(response.headers)).toEqual(expect.arrayContaining([
+			'X-RateLimit-Limit',
+			'X-RateLimit-Remaining',
+			'X-RateLimit-Reset',
+			'Retry-After',
+			'X-Request-Id',
+		]));
+		expect(schema.required).toEqual(expect.arrayContaining([
+			'success',
+			'error',
+			'code',
+			'retryable',
+			'retryAfterSeconds',
+		]));
+		expect(schema.properties.retryAfterSeconds).toEqual(expect.objectContaining({
+			type: 'integer',
+			minimum: 1,
+		}));
+
+		const tieredOperations = [
+			['/api/webhook/alert', 'post'],
+			['/api/webhook/message', 'post'],
+			['/api/webhook/expanded-analysis-alert', 'post'],
+			['/api/webhook/market-scanner-alert', 'post'],
+			['/api/webhook/symbol-analysis', 'post'],
+			['/api/webhook/volume-confirmation', 'post'],
+			['/api/news-monitor', 'get'],
+			['/api/news-monitor', 'post'],
+			['/api/trading/binance/orders', 'get'],
+			['/api/trading/binance/orders', 'post'],
+			['/api/trading/binance/orders', 'delete'],
+			['/api/trading/binance/orders/preview', 'post'],
+			['/api/status', 'get'],
+			['/api/capabilities', 'get'],
+		];
+
+		for (const [routePath, method] of tieredOperations) {
+			expect(spec.paths[routePath][method].responses['429']).toEqual({
+				$ref: '#/components/responses/RateLimitExceeded',
+			});
+		}
+	});
+
 	describe('Batch alert IDs nonblank contract (GH-1174)', () => {
 		const requestBodies = ['BatchDeleteAlerts', 'BatchExportAlerts', 'BatchReplayAlerts'];
 		const spec = JSON.parse(fs.readFileSync(contractPath, 'utf8'));

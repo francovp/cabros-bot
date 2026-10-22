@@ -763,11 +763,11 @@ Every protected `/api` response (success and throttled) carries the standard `X-
 
 | Header | Value |
 |---|---|
-| `X-RateLimit-Limit` | Max requests per window for the active bucket (`RATE_LIMIT_MAX` or `1000` for `/api/webhook/alert` and `/api/webhook/message`). |
+| `X-RateLimit-Limit` | Max requests per window for the active bucket: heavy 5, trading 10, standard 30, light 100 per 60 seconds; otherwise `RATE_LIMIT_MAX` or the 1,000-request webhook-ingest bucket. |
 | `X-RateLimit-Remaining` | Requests remaining in the current window. Zero on a throttled response. |
 | `X-RateLimit-Reset` | Unix timestamp (seconds) when the current window resets. |
 
-Throttled (`429`) responses additionally include the existing `Retry-After` header (seconds) and the `retryAfterSeconds` field in the JSON body. `/healthcheck`, `/ready`, and static asset routes are exempt — the global rate limiter is mounted after them in `app.js`.
+Dedicated limits use independent per-endpoint buckets keyed by the existing API-key hash and trusted client IP. Heavy routes are expanded analysis, market scanner, symbol analysis, and news monitor; trading covers Binance order reads, writes, and previews; standard covers volume-confirmation; light covers `/api/status` and `/api/capabilities`. All webhook and news-monitor ingest requests also share an aggregate 1,000-request bucket per `RATE_LIMIT_WINDOW_MS`; mapped webhook tiers enforce both limits. Alert and message ingest use the aggregate bucket without an additional tier. Other routes use `RATE_LIMIT_WINDOW_MS` and `RATE_LIMIT_MAX`. Throttled (`429`) responses include the `Retry-After` header and the positive `retryAfterSeconds` field in the standard retryable `RATE_LIMITED` error envelope. `/healthcheck`, `/ready`, `/openapi.json`, `/docs`, and static assets are mounted before the rate limiter in `app.js` and are exempt.
 
 ## Architecture Overview
 

@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "CabrosBot",
-    "description": "Collection for Cabros Bot API - Telegram + WhatsApp crypto/stock alert bot with TradingView MCP integration.",
+    "description": "Collection for Cabros Bot API - Telegram + WhatsApp crypto/stock alert bot with TradingView MCP integration. Dedicated rate-limit tiers use independent 60-second per-endpoint buckets: heavy 5, trading 10, standard 30, and light 100 requests by default. All webhook/news ingest paths share an aggregate 1,000-request bucket per RATE_LIMIT_WINDOW_MS; tiered webhook routes enforce both the aggregate and per-endpoint limits, while alert/message use only the aggregate. Other routes use RATE_LIMIT_WINDOW_MS and RATE_LIMIT_MAX.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -372,6 +372,44 @@
           "status": "OK",
           "code": 200,
           "body": "{\"dependencies\":{\"tradingViewMcp\":{\"status\":\"degraded\",\"lastErrorCategory\":\"not_found\",\"errorCategoryCounts\":{\"not_found\":1}},\"backgroundTimers\":{\"registered\":0,\"drained\":0,\"failed\":0}}}"
+        },
+        {
+          "name": "429 Rate limit exceeded",
+          "status": "Too Many Requests",
+          "code": 429,
+          "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"req-rate-limit-429\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "description": "Response media type."
+            },
+            {
+              "key": "Retry-After",
+              "value": "60",
+              "description": "Seconds until the current rate-limit window resets."
+            },
+            {
+              "key": "X-Request-Id",
+              "value": "req-rate-limit-429",
+              "description": "Request correlation identifier."
+            },
+            {
+              "key": "X-RateLimit-Limit",
+              "value": "100",
+              "description": "Maximum requests permitted in the current rate-limit window."
+            },
+            {
+              "key": "X-RateLimit-Remaining",
+              "value": "0",
+              "description": "Requests remaining in the current window; zero on a throttled response."
+            },
+            {
+              "key": "X-RateLimit-Reset",
+              "value": "1756819200",
+              "description": "Unix timestamp in seconds when the current window resets."
+            }
+          ]
         }
       ]
     },
@@ -1950,6 +1988,44 @@
           ],
           "body": "{\n  \"featureFlags\": {\n    \"jobExecutionWorker\": false\n  },\n  \"dependencies\": {\n    \"jobExecutionQueue\": {\n      \"mode\": \"local\",\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"queueName\": \"tradingview-jobs\",\n      \"brokerReachable\": null,\n      \"lastBrokerProbeAt\": \"2026-10-04T12:00:00.000Z\",\n      \"lastBrokerProbeErrorCode\": null,\n      \"enqueued\": 0,\n      \"claimed\": 0,\n      \"completed\": 0,\n      \"failed\": 0,\n      \"lastErrorCode\": null,\n      \"lastEnqueuedAt\": null,\n      \"waitingCount\": 0,\n      \"delayedCount\": 0,\n      \"failedCount\": 0,\n      \"activeCount\": 0,\n      \"durableQueuedCount\": 0,\n      \"durableQueuedTruncated\": false,\n      \"durableScanRotated\": false,\n      \"durableCycleComplete\": false,\n      \"durableProbeSucceeded\": null,\n      \"oldestQueuedAgeMs\": null,\n      \"backlogAlert\": {\n        \"active\": false,\n        \"thresholdMs\": 900000,\n        \"pagedAt\": null,\n        \"lastRecoveryAt\": null\n      },\n      \"backlogMonitorEnabled\": true,\n      \"backlogMonitorRunning\": true\n    },\n    \"backgroundTimers\": {\n      \"registered\": 0,\n      \"drained\": 0,\n      \"failed\": 0\n    }\n  }\n}",
           "_postman_previewlanguage": "json"
+        },
+        {
+          "name": "429 Rate limit exceeded",
+          "status": "Too Many Requests",
+          "code": 429,
+          "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"req-rate-limit-429\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json",
+              "description": "Response media type."
+            },
+            {
+              "key": "Retry-After",
+              "value": "60",
+              "description": "Seconds until the current rate-limit window resets."
+            },
+            {
+              "key": "X-Request-Id",
+              "value": "req-rate-limit-429",
+              "description": "Request correlation identifier."
+            },
+            {
+              "key": "X-RateLimit-Limit",
+              "value": "100",
+              "description": "Maximum requests permitted in the current rate-limit window."
+            },
+            {
+              "key": "X-RateLimit-Remaining",
+              "value": "0",
+              "description": "Requests remaining in the current window; zero on a throttled response."
+            },
+            {
+              "key": "X-RateLimit-Reset",
+              "value": "1756819200",
+              "description": "Unix timestamp in seconds when the current window resets."
+            }
+          ]
         }
       ]
     },
@@ -4740,7 +4816,47 @@
                 }
               ]
             }
-          }
+          },
+          "response": [
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "header": [
+                {
+                  "key": "Retry-After",
+                  "value": "60",
+                  "description": "Seconds until the current rate-limit window resets."
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c",
+                  "description": "Request correlation identifier."
+                },
+                {
+                  "key": "Content-Type",
+                  "value": "application/json",
+                  "description": "Response media type."
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "1000",
+                  "description": "Maximum requests permitted in the current rate-limit window."
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0",
+                  "description": "Requests remaining in the current window; zero on a throttled response."
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1756819200",
+                  "description": "Unix timestamp in seconds when the current window resets."
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}"
+            }
+          ]
         },
         {
           "name": "POST Send Alert Dry Run (BATS exchange alias)",
@@ -4925,6 +5041,44 @@
                 }
               ],
               "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"req-rate-limit-429\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json",
+                  "description": "Response media type."
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "60",
+                  "description": "Seconds until the current rate-limit window resets."
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429",
+                  "description": "Request correlation identifier."
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "5",
+                  "description": "Maximum requests permitted in the current rate-limit window."
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0",
+                  "description": "Requests remaining in the current window; zero on a throttled response."
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1756819200",
+                  "description": "Unix timestamp in seconds when the current window resets."
+                }
+              ]
             }
           ]
         },
@@ -5185,6 +5339,44 @@
                 }
               ],
               "body": "{\n  \"success\": false,\n  \"ranked\": false,\n  \"includeMultiTimeframe\": false,\n  \"code\": \"ALL_SCANS_FAILED\",\n  \"error\": \"TradingView MCP failed for all requested scans.\",\n  \"scanResults\": [\n    {\n      \"scan\": \"top_gainers\",\n      \"status\": \"error\",\n      \"error\": \"Connection failure\",\n      \"errorCategory\": \"unknown\"\n    }\n  ],\n  \"timedOut\": false\n}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"req-rate-limit-429\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json",
+                  "description": "Response media type."
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "60",
+                  "description": "Seconds until the current rate-limit window resets."
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429",
+                  "description": "Request correlation identifier."
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "5",
+                  "description": "Maximum requests permitted in the current rate-limit window."
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0",
+                  "description": "Requests remaining in the current window; zero on a throttled response."
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1756819200",
+                  "description": "Unix timestamp in seconds when the current window resets."
+                }
+              ]
             }
           ]
         },
@@ -5319,23 +5511,23 @@
                   "value": "true"
                 }
               ]
-            },
-            "response": [
-              {
-                "name": "200 Ranked dry-run",
-                "status": "OK",
-                "code": 200,
-                "_postman_previewlanguage": "json",
-                "header": [
-                  {
-                    "key": "Content-Type",
-                    "value": "application/json"
-                  }
-                ],
-                "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"ranked\": true,\n  \"includeMultiTimeframe\": true,\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BTCUSDT\", \"score\": 83, \"reason\": \"+3.5% · RSI 62.0 · Vol 1.8x · HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
-              }
-            ]
-          }
+            }
+          },
+          "response": [
+            {
+              "name": "200 Ranked dry-run",
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"ranked\": true,\n  \"includeMultiTimeframe\": true,\n  \"scanResults\": [{\n    \"scan\": \"top_gainers\",\n    \"status\": \"success\",\n    \"itemCount\": 1,\n    \"scores\": [{ \"symbol\": \"BTCUSDT\", \"score\": 83, \"reason\": \"+3.5% · RSI 62.0 · Vol 1.8x · HTF aligned +10\", \"trendConfluence\": { \"status\": \"aligned\", \"direction\": \"bullish\", \"confidence\": 82, \"adjustment\": 10 } }]\n  }]\n}"
+            }
+          ]
         },
         {
           "name": "POST Market Scanner Alert (invalid ranked flag)",
@@ -5692,6 +5884,44 @@
               "status": "OK",
               "code": 200,
               "body": "{\n  \"success\": true,\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"exchange\": \"BINANCE\",\n  \"asset\": \"BTCUSDT\",\n  \"timeframe\": \"4h\",\n  \"confirmed\": true,\n  \"decision\": \"confirm\",\n  \"volumeRatio\": 1.7,\n  \"analysis\": {\n    \"symbol\": \"BINANCE:BTCUSDT\",\n    \"volume_analysis\": {\n      \"volume_ratio\": 1.7,\n      \"volume_strength\": \"HIGH\"\n    }\n  }\n}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"req-rate-limit-429\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json",
+                  "description": "Response media type."
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "60",
+                  "description": "Seconds until the current rate-limit window resets."
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429",
+                  "description": "Request correlation identifier."
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "30",
+                  "description": "Maximum requests permitted in the current rate-limit window."
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0",
+                  "description": "Requests remaining in the current window; zero on a throttled response."
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1756819200",
+                  "description": "Unix timestamp in seconds when the current window resets."
+                }
+              ]
             }
           ]
         },
@@ -6147,6 +6377,44 @@
                 }
               ],
               "body": "{\n  \"error\": \"Idempotency key was reused with a different payload\",\n  \"code\": \"IDEMPOTENCY_CONFLICT\"\n}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"req-rate-limit-429\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json",
+                  "description": "Response media type."
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "60",
+                  "description": "Seconds until the current rate-limit window resets."
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429",
+                  "description": "Request correlation identifier."
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "5",
+                  "description": "Maximum requests permitted in the current rate-limit window."
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0",
+                  "description": "Requests remaining in the current window; zero on a throttled response."
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1756819200",
+                  "description": "Unix timestamp in seconds when the current window resets."
+                }
+              ]
             }
           ]
         },
@@ -6623,6 +6891,44 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"success\": false,\n  \"error\": \"\\\"dryValidate\\\" must be a boolean if provided\",\n  \"details\": {\n    \"field\": \"dryValidate\"\n  }\n}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"req-rate-limit-429\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json",
+                  "description": "Response media type."
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "60",
+                  "description": "Seconds until the current rate-limit window resets."
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429",
+                  "description": "Request correlation identifier."
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "1000",
+                  "description": "Maximum requests permitted in the current rate-limit window."
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0",
+                  "description": "Requests remaining in the current window; zero on a throttled response."
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1756819200",
+                  "description": "Unix timestamp in seconds when the current window resets."
+                }
+              ]
             }
           ]
         },
@@ -8979,7 +9285,7 @@
                 "alert"
               ]
             },
-            "description": "Every protected /api response carries the standard X-RateLimit-* headers so callers can implement adaptive backpressure. The webhook ingest endpoints use an isolated 1,000-request bucket; ordinary /api endpoints use RATE_LIMIT_MAX. Throttled (429) responses include the headers plus the existing Retry-After header and retryAfterSeconds body field. Healthcheck, /ready, and static asset routes are exempt — the global rate limiter is mounted after them in app.js."
+            "description": "Every protected /api response carries the standard X-RateLimit-* headers so callers can implement adaptive backpressure. All webhook/news ingest paths share an aggregate 1,000-request bucket per RATE_LIMIT_WINDOW_MS; tiered webhook routes also enforce their per-endpoint caps. Other /api endpoints use RATE_LIMIT_MAX. Throttled (429) responses include the headers plus the existing Retry-After header and retryAfterSeconds body field. Healthcheck, /ready, and static asset routes are exempt — the global rate limiter is mounted after them in app.js."
           },
           "response": [
             {
@@ -9007,14 +9313,14 @@
               "cookie": []
             },
             {
-              "name": "Throttled (429) - headers + Retry-After",
+              "name": "429 Rate limit exceeded",
               "status": "Too Many Requests",
               "code": 429,
-              "body": "{\"error\":\"Too many requests, please try again later.\",\"retryAfterSeconds\":120}",
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"req-rate-limit-429\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
               "header": [
                 {
                   "key": "X-RateLimit-Limit",
-                  "value": "2",
+                  "value": "1000",
                   "description": "Max requests per window for the active bucket."
                 },
                 {
@@ -9029,8 +9335,18 @@
                 },
                 {
                   "key": "Retry-After",
-                  "value": "120",
+                  "value": "60",
                   "description": "Seconds until the caller may retry the request."
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429",
+                  "description": "Request correlation identifier."
+                },
+                {
+                  "key": "Content-Type",
+                  "value": "application/json",
+                  "description": "Response media type."
                 }
               ],
               "cookie": []
@@ -12630,6 +12946,44 @@
                 }
               ],
               "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"req-rate-limit-429\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json",
+                  "description": "Response media type."
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "60",
+                  "description": "Seconds until the current rate-limit window resets."
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429",
+                  "description": "Request correlation identifier."
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "5",
+                  "description": "Maximum requests permitted in the current rate-limit window."
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0",
+                  "description": "Requests remaining in the current window; zero on a throttled response."
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1756819200",
+                  "description": "Unix timestamp in seconds when the current window resets."
+                }
+              ]
             }
           ]
         },
@@ -12876,6 +13230,44 @@
                 }
               ],
               "body": "{\n  \"error\": \"MAINTENANCE_MODE\",\n  \"message\": \"Service is temporarily unavailable for maintenance\"\n}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"req-rate-limit-429\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json",
+                  "description": "Response media type."
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "60",
+                  "description": "Seconds until the current rate-limit window resets."
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429",
+                  "description": "Request correlation identifier."
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "5",
+                  "description": "Maximum requests permitted in the current rate-limit window."
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0",
+                  "description": "Requests remaining in the current window; zero on a throttled response."
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1756819200",
+                  "description": "Unix timestamp in seconds when the current window resets."
+                }
+              ]
             }
           ]
         },
@@ -21531,14 +21923,36 @@
               "header": [
                 {
                   "key": "Retry-After",
-                  "value": "58"
+                  "value": "58",
+                  "description": "Seconds until the current rate-limit window resets."
                 },
                 {
                   "key": "Content-Type",
-                  "value": "application/json; charset=utf-8"
+                  "value": "application/json",
+                  "description": "Response media type."
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "100",
+                  "description": "Maximum requests permitted in the current rate-limit window."
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0",
+                  "description": "Requests remaining in the current window; zero on a throttled response."
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1756819200",
+                  "description": "Unix timestamp in seconds when the current window resets."
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c",
+                  "description": "Request correlation identifier."
                 }
               ],
-              "body": "{\n  \"error\": \"Rate limit exceeded. Please wait 58 seconds before triggering another test alert.\",\n  \"code\": \"RATE_LIMITED\",\n  \"retryAfterSeconds\": 58\n}",
+              "body": "{\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"retryAfterSeconds\": 58,\n  \"success\": false,\n  \"requestId\": \"6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c\",\n  \"retryable\": true\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [
@@ -27914,6 +28328,44 @@
               "status": "Forbidden",
               "code": 403,
               "body": "{\n  \"success\": false,\n  \"error\": \"order notional exceeds configured maximum\",\n  \"code\": \"MAX_NOTIONAL_EXCEEDED\"\n}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"req-rate-limit-429\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json",
+                  "description": "Response media type."
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "60",
+                  "description": "Seconds until the current rate-limit window resets."
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429",
+                  "description": "Request correlation identifier."
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "10",
+                  "description": "Maximum requests permitted in the current rate-limit window."
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0",
+                  "description": "Requests remaining in the current window; zero on a throttled response."
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1756819200",
+                  "description": "Unix timestamp in seconds when the current window resets."
+                }
+              ]
             }
           ]
         },
@@ -28231,6 +28683,44 @@
               "status": "OK",
               "code": 200,
               "body": "{\n  \"success\": true,\n  \"dryRun\": true,\n  \"environment\": \"testnet\",\n  \"order\": {\n    \"symbol\": \"BTCUSDT\",\n    \"side\": \"BUY\",\n    \"type\": \"LIMIT\",\n    \"quantity\": 0.001,\n    \"price\": 60000,\n    \"timeInForce\": \"GTC\",\n    \"newOrderRespType\": \"FULL\"\n  }\n}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"req-rate-limit-429\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json",
+                  "description": "Response media type."
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "60",
+                  "description": "Seconds until the current rate-limit window resets."
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429",
+                  "description": "Request correlation identifier."
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "10",
+                  "description": "Maximum requests permitted in the current rate-limit window."
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0",
+                  "description": "Requests remaining in the current window; zero on a throttled response."
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1756819200",
+                  "description": "Unix timestamp in seconds when the current window resets."
+                }
+              ]
             }
           ]
         },
@@ -28966,6 +29456,44 @@
               "status": "OK",
               "code": 200,
               "body": "{\n  \"success\": true,\n  \"environment\": \"testnet\",\n  \"orders\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"orderId\": 42,\n      \"clientOrderId\": \"cabros-375-1\",\n      \"status\": \"FILLED\",\n      \"type\": \"LIMIT\",\n      \"side\": \"BUY\",\n      \"price\": \"60000.00000000\",\n      \"origQty\": \"0.00100000\",\n      \"executedQty\": \"0.00100000\",\n      \"cummulativeQuoteQty\": \"60.00000000\",\n      \"time\": 1700000000000\n    }\n  ],\n  \"count\": 1\n}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"req-rate-limit-429\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json",
+                  "description": "Response media type."
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "60",
+                  "description": "Seconds until the current rate-limit window resets."
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429",
+                  "description": "Request correlation identifier."
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "10",
+                  "description": "Maximum requests permitted in the current rate-limit window."
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0",
+                  "description": "Requests remaining in the current window; zero on a throttled response."
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1756819200",
+                  "description": "Unix timestamp in seconds when the current window resets."
+                }
+              ]
             }
           ]
         },
@@ -29330,6 +29858,44 @@
               "status": "Not Found",
               "code": 404,
               "body": "{\n  \"success\": false,\n  \"error\": \"Binance order not found\",\n  \"code\": \"ORDER_NOT_FOUND\"\n}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"req-rate-limit-429\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json",
+                  "description": "Response media type."
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "60",
+                  "description": "Seconds until the current rate-limit window resets."
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429",
+                  "description": "Request correlation identifier."
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "10",
+                  "description": "Maximum requests permitted in the current rate-limit window."
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0",
+                  "description": "Requests remaining in the current window; zero on a throttled response."
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1756819200",
+                  "description": "Unix timestamp in seconds when the current window resets."
+                }
+              ]
             }
           ]
         },

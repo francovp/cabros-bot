@@ -658,6 +658,79 @@ describe('Postman collection contract', () => {
 		]));
 	});
 
+	it('stores the rate-limit response example at the Postman item level', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const alertRequest = findItem(collection.item, 'POST Send Alert (with TradingView data)');
+		const response = alertRequest.response.find((item) => item.code === 429);
+
+		expect(collection.info.description).toContain('All webhook/news ingest paths share an aggregate 1,000-request bucket');
+		expect(alertRequest.request.response).toBeUndefined();
+		expect(response).toEqual(expect.objectContaining({
+			name: '429 Rate limit exceeded',
+			status: 'Too Many Requests',
+			code: 429,
+		}));
+		expect(JSON.parse(response.body)).toEqual(expect.objectContaining({
+			success: false,
+			error: 'Too many requests, please try again later.',
+			code: 'RATE_LIMITED',
+			retryable: true,
+			retryAfterSeconds: 60,
+		}));
+		expect(response.header.map(({ key }) => key.toLowerCase())).toEqual(expect.arrayContaining([
+			'x-ratelimit-limit',
+			'x-ratelimit-remaining',
+			'x-ratelimit-reset',
+			'retry-after',
+			'x-request-id',
+		]));
+	});
+
+	it('documents valid 429 examples for every OpenAPI rate-limited operation', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const contract = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+		const requestItems = collectRequestItems(collection.item);
+		const operations = Object.entries(contract.paths).flatMap(([routePath, pathItem]) =>
+			Object.entries(pathItem)
+				.filter(([method, operation]) => ['get', 'post', 'put', 'patch', 'delete'].includes(method)
+					&& operation.responses?.['429']?.$ref === '#/components/responses/RateLimitExceeded')
+				.map(([method]) => ({ routePath, method: method.toUpperCase() })));
+
+		for (const operation of operations) {
+			const matchingItems = requestItems.filter((candidate) => candidate.request.method === operation.method
+				&& `/${candidate.request.url?.path?.join('/')}` === operation.routePath);
+			const responses = matchingItems.flatMap((item) => item.response || [])
+				.filter((response) => response.code === 429);
+
+			expect(responses.length).toBeGreaterThan(0);
+			for (const response of responses) {
+				expect(response.status).toBe('Too Many Requests');
+				expect(JSON.parse(response.body)).toEqual(expect.objectContaining({
+					success: false,
+					error: 'Too many requests, please try again later.',
+					code: 'RATE_LIMITED',
+					retryable: true,
+					retryAfterSeconds: expect.any(Number),
+				}));
+				expect(response.header.map(({ key }) => key.toLowerCase())).toEqual(expect.arrayContaining([
+					'x-ratelimit-limit',
+					'x-ratelimit-remaining',
+					'x-ratelimit-reset',
+					'retry-after',
+					'x-request-id',
+				]));
+			}
+		}
+	});
+
+	it('stores saved examples beside Postman requests, not inside request objects', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const nestedResponseRequests = collectRequestItems(collection.item)
+			.filter((item) => item.request.response !== undefined);
+
+		expect(nestedResponseRequests).toEqual([]);
+	});
+
 	it('includes runnable replay cursor and invalid-input variants', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const cursor = findItem(collection.item, 'GET List Replay Attempts (before cursor)');

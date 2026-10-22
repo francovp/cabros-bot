@@ -3,7 +3,7 @@
   "info": {
     "title": "Cabros Bot API",
     "version": "0.1.0",
-    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter is deprecated and exists only for legacy compatibility — it may leak through reverse-proxy access logs. A one-time per-process deprecation warning is emitted on use; setting API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) rejects query-parameter auth with 401 API_KEY_QUERY_REMOVED after the date. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true."
+    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter is deprecated and exists only for legacy compatibility — it may leak through reverse-proxy access logs. A one-time per-process deprecation warning is emitted on use; setting API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) rejects query-parameter auth with 401 API_KEY_QUERY_REMOVED after the date. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true. HTTP 429 responses include Retry-After and retryAfterSeconds. Dedicated per-endpoint limits default to heavy 5, trading 10, standard 30, and light 100 requests per 60 seconds. All webhook/news ingest paths share an aggregate 1,000-request bucket per RATE_LIMIT_WINDOW_MS; tiered webhook routes enforce both the aggregate and per-endpoint limits, while alert/message use only the aggregate. Other routes use RATE_LIMIT_WINDOW_MS and RATE_LIMIT_MAX."
   },
   "servers": [
     {
@@ -591,6 +591,9 @@
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
           "500": {
             "$ref": "#/components/responses/ExpressFallthroughError"
           },
@@ -660,6 +663,9 @@
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           },
@@ -722,6 +728,9 @@
           },
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -792,6 +801,9 @@
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           },
@@ -843,6 +855,9 @@
           },
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -897,6 +912,9 @@
           },
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -3100,6 +3118,9 @@
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           },
@@ -3151,6 +3172,9 @@
           },
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -4375,6 +4399,9 @@
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           },
@@ -4498,6 +4525,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -4632,6 +4662,9 @@
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           },
@@ -4745,6 +4778,9 @@
           },
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -5201,6 +5237,9 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           }
@@ -5240,6 +5279,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -9322,12 +9364,69 @@
             }
           }
         }
+      },
+      "RateLimitExceeded": {
+        "description": "The client exceeded the applicable per-endpoint, shared webhook/news ingest, or global rate limit. Tiered webhook/news ingest requests also enforce the shared aggregate limit of 1,000 requests per RATE_LIMIT_WINDOW_MS.",
+        "headers": {
+          "X-RateLimit-Limit": {
+            "description": "Maximum requests permitted in the current rate-limit window.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "5"
+              ]
+            }
+          },
+          "X-RateLimit-Remaining": {
+            "description": "Requests remaining in the current window. This is zero on a throttled response.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "0"
+              ]
+            }
+          },
+          "X-RateLimit-Reset": {
+            "description": "Unix timestamp in seconds when the current window resets.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "1756819200"
+              ]
+            }
+          },
+          "Retry-After": {
+            "description": "Seconds until the current rate-limit window resets.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RateLimitError"
+            },
+            "example": {
+              "success": false,
+              "error": "Too many requests, please try again later.",
+              "code": "RATE_LIMITED",
+              "requestId": "6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c",
+              "retryable": true,
+              "retryAfterSeconds": 60
+            }
+          }
+        }
       }
     },
     "schemas": {
       "RateLimitHeaders": {
         "type": "object",
-        "description": "Standard X-RateLimit-* response headers emitted by the global rate limiter on every protected /api response (success and throttled). The webhook ingest endpoints use an isolated 1,000-request bucket; ordinary /api endpoints use RATE_LIMIT_MAX.",
+        "description": "Standard X-RateLimit-* response headers emitted by the API rate limiter. Dedicated endpoints use independent 60-second per-endpoint buckets. All webhook/news ingest paths share an aggregate 1,000-request bucket per RATE_LIMIT_WINDOW_MS; tiered webhook routes enforce both this aggregate ceiling and their endpoint tier. Other routes use RATE_LIMIT_MAX.",
         "required": [
           "X-RateLimit-Limit",
           "X-RateLimit-Remaining",
@@ -20535,6 +20634,42 @@
           },
           "metrics": {
             "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "RateLimitError": {
+        "type": "object",
+        "description": "Standard error envelope returned when a rate limit is exceeded, with the seconds until retry is permitted.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Error"
+          }
+        ],
+        "required": [
+          "success",
+          "error",
+          "code",
+          "retryable",
+          "retryAfterSeconds"
+        ],
+        "properties": {
+          "retryAfterSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Seconds until the current rate-limit window resets.",
+            "examples": [
+              60
+            ]
+          },
+          "code": {
+            "type": "string",
+            "const": "RATE_LIMITED",
+            "description": "Machine-readable rate-limit error code."
+          },
+          "retryable": {
+            "type": "boolean",
+            "const": true,
+            "description": "Rate-limit responses are retryable after the indicated delay."
           }
         }
       }
