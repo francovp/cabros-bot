@@ -8478,7 +8478,13 @@
                     "successRequests": 0,
                     "failureRequests": 0,
                     "timeoutRequests": 0
-                  }
+                  },
+                  "windowStartedAt": null,
+                  "windowDurationMs": 60000,
+                  "requestsInWindow": 0,
+                  "exhaustedEventsInWindow": 0,
+                  "lastExhaustedAt": null,
+                  "quotaStatus": "healthy"
                 },
                 "grounding": {
                   "enabled": true,
@@ -17118,6 +17124,9 @@
               },
               "backgroundTimers": {
                 "$ref": "#/components/schemas/BackgroundTimerStats"
+              },
+              "geminiQuota": {
+                "$ref": "#/components/schemas/GeminiQuotaDependency"
               }
             }
           }
@@ -20233,6 +20242,108 @@
           }
         },
         "additionalProperties": false
+      },
+      "GeminiQuotaDependency": {
+        "type": "object",
+        "description": "Non-sensitive Gemini quota and request-window telemetry. The counters are process-local and reset at the declared 60-second window boundary.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "windowStartedAt",
+          "windowDurationMs",
+          "requestsInWindow",
+          "exhaustedEventsInWindow",
+          "lastExhaustedAt",
+          "quotaStatus"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "misconfigured",
+              "degraded",
+              "ready"
+            ]
+          },
+          "windowStartedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "windowDurationMs": {
+            "type": "integer",
+            "minimum": 1,
+            "example": 60000
+          },
+          "requestsInWindow": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "exhaustedEventsInWindow": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastExhaustedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "quotaStatus": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "exhausted"
+            ]
+          },
+          "cooldownActive": {
+            "type": "boolean"
+          },
+          "remainingCooldownMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastTriggeredAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "triggersTotal": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "braveFallbacksDuringCooldown": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastBraveFallbackAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/JsonObject"
+          }
+        }
       }
     },
     "headers": {

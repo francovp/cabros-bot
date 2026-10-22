@@ -331,6 +331,32 @@ describe('Postman collection contract', () => {
 		});
 	});
 
+	it('documents bounded Gemini quota telemetry and only reachable quota states', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const statusBody = JSON.parse(findItem(collection.item, 'Get Status').response[0].body);
+		const contract = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+		const statusSchema = contract.components.schemas.Status;
+		const quotaSchema = contract.components.schemas.GeminiQuotaDependency;
+		const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+
+		expect(statusBody.dependencies.geminiQuota).toEqual(expect.objectContaining({
+			windowDurationMs: 60000,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			quotaStatus: 'healthy',
+		}));
+		expect(statusSchema.properties.dependencies.properties.geminiQuota).toEqual({
+			$ref: '#/components/schemas/GeminiQuotaDependency',
+		});
+		expect(quotaSchema.properties.quotaStatus.enum).toEqual(['healthy', 'exhausted']);
+		expect(statusExample.dependencies.geminiQuota).toEqual(expect.objectContaining({
+			windowDurationMs: 60000,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			quotaStatus: 'healthy',
+		}));
+	});
+
 	it('documents bounded startup jitter in the Get Status response example', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');
