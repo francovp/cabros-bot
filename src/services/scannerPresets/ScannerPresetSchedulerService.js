@@ -29,6 +29,14 @@ const MAX_SCHEDULER_BATCH_LIMIT = 500;
 const DEFAULT_LEASE_MS = 120000;
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 
+// Per-preset floor: even if the operator's cadence is shorter, the runtime
+// scheduler will not fire the same preset more often than this window. This
+// prevents MCP/Gemini/delivery burst traffic when cadenceMs is misconfigured,
+// downgraded mid-flight, or when nextRunAt lands in the past after a save.
+// Mirrors the lower bound enforced by parseCadenceToMs at config-save time so
+// multi-replica sweeps agree on the effective minimum interval.
+const MIN_PRESET_FLOOR_MS = 60000;
+
 function parseEnvInt(value, fallback, min = 1, max = Number.MAX_SAFE_INTEGER) {
 	if (value === undefined || value === null || value === '') {
 		return fallback;
@@ -80,6 +88,8 @@ class ScannerPresetSchedulerService {
 		this.lastRunScannedCount = 0;
 		this.lastRunExecutedCount = 0;
 		this.lastRunErrorCount = 0;
+		this.lastRunDeferredByFloorCount = 0;
+		this.duePresetCursorId = null;
 	}
 
 	isEnabled() {
@@ -138,6 +148,7 @@ class ScannerPresetSchedulerService {
 			lastRunScannedCount: this.lastRunScannedCount,
 			lastRunExecutedCount: this.lastRunExecutedCount,
 			lastRunErrorCount: this.lastRunErrorCount,
+			lastRunDeferredByFloorCount: this.lastRunDeferredByFloorCount,
 		};
 	}
 
@@ -251,17 +262,19 @@ class ScannerPresetSchedulerService {
 		let scannedCount = 0;
 		let executedCount = 0;
 		let errorCount = 0;
+		let deferredByFloorCount = 0;
 
 		try {
-			const candidates = await this._fetchDuePresets(nowMs, batchLimit);
-			scannedCount = candidates.length;
+			const fetched = await this._fetchDuePresets(nowMs, batchLimit);
+			scannedCount = fetched.scannedCount;
+			deferredByFloorCount = fetched.deferredByFloorCount;
 
-			for (const candidate of candidates) {
+			for (const candidate of fetched.candidates) {
 				if (this.shutdownRequested) {
 					break;
 				}
 
-				const claimed = await this._claimPreset(candidate, nowMs, leaseMs);
+				const claimed = await this._claimPreset(candidate, leaseMs);
 				if (!claimed) {
 					continue;
 				}
@@ -289,12 +302,14 @@ class ScannerPresetSchedulerService {
 			this.lastRunScannedCount = scannedCount;
 			this.lastRunExecutedCount = executedCount;
 			this.lastRunErrorCount = errorCount;
+			this.lastRunDeferredByFloorCount = deferredByFloorCount;
 		}
 
 		return {
 			scannedCount,
 			executedCount,
 			errorCount,
+			deferredByFloorCount,
 			durationMs: this.lastRunDurationMs,
 		};
 	}
@@ -308,31 +323,45 @@ class ScannerPresetSchedulerService {
 					.where('schedule.enabled', '==', true)
 					.get();
 
-				const due = [];
-				if (snapshot && Array.isArray(snapshot.docs)) {
-					for (const doc of snapshot.docs) {
-						const preset = this.presetService._formatFirestoreDoc(doc);
-						if (this._isDue(preset, nowMs)) {
-							due.push(preset);
-							if (due.length >= batchLimit) break;
-						}
-					}
-				}
-				return due;
+				const presets = snapshot && Array.isArray(snapshot.docs)
+					? snapshot.docs.map((doc) => this.presetService._formatFirestoreDoc(doc))
+					: [];
+				return this._selectDuePresetBatch(presets, nowMs, batchLimit);
 			} catch (err) {
 				console.warn('[ScannerPresetScheduler] Firestore fetch due presets failed, falling back:', err.message);
 			}
 		}
 
 		const allPresets = await this.presetService.listPresets();
-		const due = [];
-		for (const preset of allPresets) {
-			if (preset.schedule && preset.schedule.enabled && this._isDue(preset, nowMs)) {
-				due.push(preset);
-				if (due.length >= batchLimit) break;
-			}
+		return this._selectDuePresetBatch(Array.isArray(allPresets) ? allPresets : [], nowMs, batchLimit);
+	}
+
+	_selectDuePresetBatch(presets, nowMs, batchLimit) {
+		const duePresets = presets.filter((preset) => this._isDue(preset, nowMs));
+		if (duePresets.length === 0) {
+			return { candidates: [], scannedCount: 0, deferredByFloorCount: 0 };
 		}
-		return due;
+
+		const previousCursorIndex = this.duePresetCursorId
+			? duePresets.findIndex((preset) => preset.id === this.duePresetCursorId)
+			: -1;
+		const startIndex = previousCursorIndex >= 0
+			? (previousCursorIndex + 1) % duePresets.length
+			: 0;
+		const candidates = [];
+		let scannedCount = 0;
+		let deferredByFloorCount = 0;
+		for (let offset = 0; offset < duePresets.length && candidates.length < batchLimit; offset += 1) {
+			const preset = duePresets[(startIndex + offset) % duePresets.length];
+			scannedCount += 1;
+			this.duePresetCursorId = preset.id || null;
+			if (this._isFloorDeferred(preset, nowMs)) {
+				deferredByFloorCount += 1;
+				continue;
+			}
+			candidates.push(preset);
+		}
+		return { candidates, scannedCount, deferredByFloorCount };
 	}
 
 	_isDue(preset, nowMs) {
@@ -355,7 +384,30 @@ class ScannerPresetSchedulerService {
 		return !Number.isFinite(nextRunAtMs) || nextRunAtMs <= nowMs;
 	}
 
-	async _claimPreset(preset, nowMs, leaseMs) {
+	// Per-preset floor: even when _isDue returned true (e.g. a cadence downgrade
+	// pushed nextRunAt into the past), defer the run if the previous successful
+	// execution happened less than MIN_PRESET_FLOOR_MS ago. Brand-new presets
+	// without a lastRunAt are never deferred on their first run. The cadence
+	// argument is ignored here on purpose: parseCadenceToMs already enforces a
+	// 60s minimum at save time, so this floor matches the parser lower bound and
+	// keeps local web and dedicated-worker sweepers in agreement without
+	// introducing a new persisted field.
+	_isFloorDeferred(preset, nowMs) {
+		if (!preset || !preset.lastRunAt) {
+			return false;
+		}
+		const lastRunMs = new Date(preset.lastRunAt).getTime();
+		if (!Number.isFinite(lastRunMs)) {
+			return false;
+		}
+		const elapsedMs = nowMs - lastRunMs;
+		if (!Number.isFinite(elapsedMs)) {
+			return false;
+		}
+		return elapsedMs < MIN_PRESET_FLOOR_MS;
+	}
+
+	async _claimPreset(preset, leaseMs) {
 		const firestore = this.presetService._getFirestore();
 		if (firestore && typeof firestore.runTransaction === 'function') {
 			try {
@@ -365,20 +417,23 @@ class ScannerPresetSchedulerService {
 					if (!doc.exists) return false;
 					const data = doc.data() || {};
 					if (!data.schedule || !data.schedule.enabled) return false;
+					const claimNowMs = Date.now();
 
 					const nextRunAtMs = data.nextRunAt ? new Date(data.nextRunAt).getTime() : 0;
-					if (nextRunAtMs > nowMs) return false;
+					if (nextRunAtMs > claimNowMs) return false;
 
 					const lockedUntilMs = data.lockedUntil ? new Date(data.lockedUntil).getTime() : 0;
-					if (lockedUntilMs > nowMs) return false;
+					if (lockedUntilMs > claimNowMs) return false;
 					preset.nextRunAt = data.nextRunAt || null;
 
-					const lockedUntilDate = new Date(nowMs + leaseMs).toISOString();
+					if (this._isFloorDeferred(data, claimNowMs)) return false;
+
+					const lockedUntilDate = new Date(claimNowMs + leaseMs).toISOString();
 					const currentVersion = normalizeVersion(data.version, 1);
 					tx.update(docRef, {
 						lockedUntil: lockedUntilDate,
 						lockedBy: this.workerId,
-						updatedAt: new Date(nowMs).toISOString(),
+						updatedAt: new Date(claimNowMs).toISOString(),
 						version: currentVersion + 1,
 					});
 					return true;
@@ -398,20 +453,23 @@ class ScannerPresetSchedulerService {
 				if (!doc || !doc.exists) return false;
 				const data = doc.data() || {};
 				if (!data.schedule || !data.schedule.enabled) return false;
+				const claimNowMs = Date.now();
 
 				const nextRunAtMs = data.nextRunAt ? new Date(data.nextRunAt).getTime() : 0;
-				if (nextRunAtMs > nowMs) return false;
+				if (nextRunAtMs > claimNowMs) return false;
 
 				const lockedUntilMs = data.lockedUntil ? new Date(data.lockedUntil).getTime() : 0;
-				if (lockedUntilMs > nowMs) return false;
+				if (lockedUntilMs > claimNowMs) return false;
 				preset.nextRunAt = data.nextRunAt || null;
 
-				const lockedUntilDate = new Date(nowMs + leaseMs).toISOString();
+				if (this._isFloorDeferred(data, claimNowMs)) return false;
+
+				const lockedUntilDate = new Date(claimNowMs + leaseMs).toISOString();
 				const currentVersion = normalizeVersion(data.version, 1);
 				await docRef.update({
 					lockedUntil: lockedUntilDate,
 					lockedBy: this.workerId,
-					updatedAt: new Date(nowMs).toISOString(),
+					updatedAt: new Date(claimNowMs).toISOString(),
 					version: currentVersion + 1,
 				});
 				return true;
@@ -424,18 +482,21 @@ class ScannerPresetSchedulerService {
 		// In-memory fallback
 		const mem = _memoryPresets.get(preset.id);
 		if (!mem || !mem.schedule || !mem.schedule.enabled) return false;
+		const claimNowMs = Date.now();
 
 		const nextRunAtMs = mem.nextRunAt ? new Date(mem.nextRunAt).getTime() : 0;
-		if (nextRunAtMs > nowMs) return false;
+		if (nextRunAtMs > claimNowMs) return false;
 
 		const lockedUntilMs = mem.lockedUntil ? new Date(mem.lockedUntil).getTime() : 0;
-		if (lockedUntilMs > nowMs) return false;
+		if (lockedUntilMs > claimNowMs) return false;
 		preset.nextRunAt = mem.nextRunAt || null;
 
-		mem.lockedUntil = new Date(nowMs + leaseMs).toISOString();
+		if (this._isFloorDeferred(mem, claimNowMs)) return false;
+
+		mem.lockedUntil = new Date(claimNowMs + leaseMs).toISOString();
 		mem.lockedBy = this.workerId;
 		mem.version = normalizeVersion(mem.version, 1) + 1;
-		mem.updatedAt = new Date(nowMs).toISOString();
+		mem.updatedAt = new Date(claimNowMs).toISOString();
 		return true;
 	}
 
