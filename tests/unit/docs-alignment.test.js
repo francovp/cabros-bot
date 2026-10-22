@@ -265,6 +265,27 @@ describe('Documentation Alignment Policy', () => {
 		expect(envConfigDoc).toMatch(/TOKEN_COST_DAILY_BUDGET_USD.*range `0\.01`-`10000\.00`/);
 		expect(envConfigDoc).not.toContain('1000.00');
 	});
+
+	test('confluence and multi-timeframe deadline documentation matches decoupled runtime model (#1392)', () => {
+		const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
+		const mcpDoc = fs.readFileSync(path.join(repoRoot, 'docs/tradingview-mcp.md'), 'utf8');
+
+		const staleSingleDeadlinePatterns = [
+			/both confluence calls share one/i,
+			/share one (?:deadline of )?min\(8000/i,
+			/both confluence calls share a single deadline/i,
+		];
+
+		for (const pattern of staleSingleDeadlinePatterns) {
+			expect(readme).not.toMatch(pattern);
+			expect(mcpDoc).not.toMatch(pattern);
+		}
+
+		expect(readme).toContain('decoupled per-call deadline model');
+		expect(readme).toMatch(/min\(8000,\s*remaining budget\)/);
+		expect(mcpDoc).toContain('decoupled deadline model');
+		expect(mcpDoc).toMatch(/min\(8000,\s*remaining budget\)/);
+	});
 });
 
 describe('Node.js runtime contract', () => {
