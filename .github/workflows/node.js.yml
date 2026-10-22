@@ -6,8 +6,34 @@ name: Node.js CI
 on:
   push:
     branches: [ "master" ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.agents/skills/**'
+      - 'README*'
+      - 'CONTRIBUTING*'
+      - 'CODE_OF_CONDUCT*'
+      - 'SECURITY*'
+      - 'LICENSE*'
+      - '.gitignore'
+      - '.mdoc'
+      - '.markdown'
+      - '*.txt'
   pull_request:
     branches: [ "master" ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.agents/skills/**'
+      - 'README*'
+      - 'CONTRIBUTING*'
+      - 'CODE_OF_CONDUCT*'
+      - 'SECURITY*'
+      - 'LICENSE*'
+      - '.gitignore'
+      - '.mdoc'
+      - '.markdown'
+      - '*.txt'
 
 permissions:
   contents: read
