@@ -3,17 +3,27 @@
 
 const { isFirestoreConfigured } = require('../src/services/storage/firestoreConfig');
 const { isPreviewEnvironment } = require('../src/lib/deploymentEnvironment');
+const { parseEntryPriceSources } = require('../src/lib/signalOutcomeEntryPriceSources');
 
 const ENV_EXAMPLE = '.env.example';
 const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
 const INTEGER_RULES = {
 	TRADINGVIEW_MCP_TIMEOUT_MS: [1000, 120000],
 	TRADINGVIEW_MCP_MAX_RETRIES: [1, 5],
+	TRADINGVIEW_MCP_CACHE_TTL_MS: [10000, 600000],
+	TRADINGVIEW_MCP_WARMUP_INTERVAL_MS: [60000, 3600000],
+	TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS: [5000, 120000],
 	GROUNDING_TIMEOUT_MS: [1000, 120000],
 	GROUNDING_MAX_SOURCES: [1, 20],
 	RATE_LIMIT_WINDOW_MS: [1000, 86400000],
 	RATE_LIMIT_MAX: [1, 100000],
+	REQUEST_TIMEOUT_MS: [1000, 120000],
 	SIGNAL_OUTCOME_RETENTION_DAYS: [1, 3650],
+	NEWS_CACHE_MAX_ENTRIES: [1, 1000000],
+	NEWS_DELIVERY_LOCK_MAX_ENTRIES: [1, 100000],
+	NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS: [1000, 86400000],
+	URL_SHORTENER_CACHE_MAX_ENTRIES: [1, 100000],
+	URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES: [1, 1024],
 };
 
 function hasValue(value) {
@@ -118,9 +128,43 @@ function validateEnv(env = process.env) {
 		addInvalid(warnings, 'DISCORD_WEBHOOK_URL', 'must be a full HTTPS Discord webhook URL');
 	}
 
-	if (isEnabled(env, 'ENABLE_GEMINI_GROUNDING')) {
-		addMissing(warnings, 'GEMINI_API_KEY', env.GEMINI_API_KEY);
-		addMissing(warnings, 'GEMINI_MODEL_NAME', env.GEMINI_MODEL_NAME);
+	const groundingEnabled = isEnabled(env, 'ENABLE_GEMINI_GROUNDING');
+	const newsMonitorEnabled = isEnabled(env, 'ENABLE_NEWS_MONITOR');
+	const groundingPipelineEnabled = groundingEnabled || newsMonitorEnabled;
+	const modelProvider = hasValue(env.MODEL_PROVIDER) ? env.MODEL_PROVIDER.trim().toLowerCase() : 'gemini';
+	if (groundingPipelineEnabled) {
+		const supportedProviders = ['gemini', 'azure', 'openrouter', 'cloudflare'];
+		if (!supportedProviders.includes(modelProvider)) {
+			addInvalid(warnings, 'MODEL_PROVIDER', 'must be gemini, azure, openrouter, or cloudflare');
+		} else if (modelProvider === 'gemini') {
+			// Startup validation runs before the Firebase Remote Config template loads.
+			// Defer model availability to runtime readiness when Remote Config may supply it.
+			if (!isEnabled(env, 'ENABLE_FIREBASE_REMOTE_CONFIG')) {
+				addMissing(warnings, 'GEMINI_MODEL_NAME', env.GEMINI_MODEL_NAME);
+			}
+		} else if (modelProvider === 'azure') {
+			addMissing(warnings, 'AZURE_LLM_KEY', env.AZURE_LLM_KEY);
+			addMissing(warnings, 'AZURE_LLM_MODEL', env.AZURE_LLM_MODEL);
+		} else if (modelProvider === 'openrouter') {
+			addMissing(warnings, 'OPENROUTER_API_KEY', env.OPENROUTER_API_KEY);
+		} else if (modelProvider === 'cloudflare') {
+			if (!isEnabled(env, 'ENABLE_CLOUDFLARE_AIG')) {
+				addMissing(warnings, 'CF_AIG_TOKEN', env.CF_AIG_TOKEN);
+				addMissing(warnings, 'CF_AIG_BASE_URL', env.CF_AIG_BASE_URL);
+			}
+		}
+
+		if (isEnabled(env, 'FORCE_BRAVE_SEARCH')) {
+			addMissing(warnings, 'BRAVE_SEARCH_API_KEY', env.BRAVE_SEARCH_API_KEY);
+		}
+		// `ENABLE_GEMINI_GROUNDING` has an existing module-load key guard even
+		// when Brave search is forced. Google search and Gemini generation also
+		// require the key for the news-monitor-only path.
+		if (groundingEnabled
+			|| !isEnabled(env, 'FORCE_BRAVE_SEARCH')
+			|| modelProvider === 'gemini') {
+			addMissing(warnings, 'GEMINI_API_KEY', env.GEMINI_API_KEY);
+		}
 	}
 
 	if (isEnabled(env, 'ENABLE_LANGFUSE_PROMPTS')) {
@@ -139,6 +183,12 @@ function validateEnv(env = process.env) {
 	if (hasValue(env.CF_AIG_BASE_URL) && !isHttpUrl(env.CF_AIG_BASE_URL)) {
 		addInvalid(warnings, 'CF_AIG_BASE_URL', 'has an invalid HTTP URL');
 	}
+	if (hasValue(env.AZURE_LLM_ENDPOINT) && !isHttpUrl(env.AZURE_LLM_ENDPOINT)) {
+		addInvalid(warnings, 'AZURE_LLM_ENDPOINT', 'has an invalid HTTP URL');
+	}
+	if (hasValue(env.BRAVE_SEARCH_ENDPOINT) && !isHttpUrl(env.BRAVE_SEARCH_ENDPOINT)) {
+		addInvalid(warnings, 'BRAVE_SEARCH_ENDPOINT', 'has an invalid HTTP URL');
+	}
 
 	if (hasValue(env.EXPANDED_ANALYSIS_ALERT_SYMBOLS) && !isSymbolList(env.EXPANDED_ANALYSIS_ALERT_SYMBOLS)) {
 		addInvalid(warnings, 'EXPANDED_ANALYSIS_ALERT_SYMBOLS', 'must use EXCHANGE:SYMBOL entries');
@@ -146,14 +196,23 @@ function validateEnv(env = process.env) {
 	if (hasValue(env.TRADINGVIEW_MCP_URL) && !isHttpUrl(env.TRADINGVIEW_MCP_URL)) {
 		addInvalid(warnings, 'TRADINGVIEW_MCP_URL', 'has an invalid HTTP URL');
 	}
+	if (hasValue(env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES)) {
+		try {
+			parseEntryPriceSources(env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES);
+		} catch (_) {
+			addInvalid(warnings, 'SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES', 'must contain only mcp, binance, twelve-data, or gemini providers');
+		}
+	}
 
 	const firestoreGateEnabled = [
 		'ENABLE_FIRESTORE_ALERT_STORAGE',
+		'ENABLE_FIRESTORE_ALERT_SUBSCRIBERS',
 		'ENABLE_FIRESTORE_SCANNER_PRESETS',
 		'ENABLE_FIRESTORE_JOB_STORAGE',
 		'ENABLE_FIRESTORE_IDEMPOTENCY',
 		'ENABLE_FIREBASE_REMOTE_CONFIG',
 		'ENABLE_SIGNAL_OUTCOME_TRACKING',
+		'ENABLE_FIRESTORE_NEWS_ANALYSIS',
 	].some((name) => isEnabled(env, name));
 	if (firestoreGateEnabled && !isFirestoreConfigured()) {
 		addInvalid(warnings, 'FIREBASE_CREDENTIALS', 'are not configured or readable for an enabled Firebase feature');

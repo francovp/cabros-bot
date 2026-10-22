@@ -30,6 +30,122 @@ describe('validate-env', () => {
 		expect(JSON.stringify(warnings)).not.toContain('secret-gemini-key');
 	});
 
+	it('does not require an environment Gemini model when Remote Config can provide it', () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		process.env.GEMINI_API_KEY = 'test-gemini-key';
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		delete process.env.GEMINI_MODEL_NAME;
+
+		const warnings = validateEnv();
+
+		expect(warnings.map((warning) => warning.variable)).not.toContain('GEMINI_MODEL_NAME');
+	});
+
+	it('still requires an environment Gemini model when Remote Config is disabled', () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		process.env.GEMINI_API_KEY = 'test-gemini-key';
+		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+		delete process.env.GEMINI_MODEL_NAME;
+
+		const warnings = validateEnv();
+
+		expect(warnings.map((warning) => warning.variable)).toContain('GEMINI_MODEL_NAME');
+	});
+
+	it('does not require a Gemini generation model when another provider handles generation', () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		process.env.GEMINI_API_KEY = 'test-gemini-key';
+		process.env.MODEL_PROVIDER = 'azure';
+		process.env.FORCE_BRAVE_SEARCH = 'false';
+		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+		delete process.env.GEMINI_MODEL_NAME;
+
+		const warnings = validateEnv();
+
+		expect(warnings.map((warning) => warning.variable)).not.toContain('GEMINI_MODEL_NAME');
+	});
+
+	it('rejects an unsupported model provider instead of treating it as an alternate', () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		process.env.GEMINI_API_KEY = 'test-gemini-key';
+		process.env.MODEL_PROVIDER = 'azuer';
+		delete process.env.GEMINI_MODEL_NAME;
+
+		const warnings = validateEnv();
+
+		expect(warnings).toContainEqual(expect.objectContaining({
+			variable: 'MODEL_PROVIDER',
+			message: 'must be gemini, azure, openrouter, or cloudflare',
+		}));
+		expect(warnings.map((warning) => warning.variable)).not.toContain('GEMINI_MODEL_NAME');
+	});
+
+	it('reports missing credentials for the selected Azure provider', () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		process.env.GEMINI_API_KEY = 'test-gemini-key';
+		process.env.MODEL_PROVIDER = 'azure';
+		delete process.env.AZURE_LLM_KEY;
+		delete process.env.AZURE_LLM_MODEL;
+
+		const variables = validateEnv().map((warning) => warning.variable);
+
+		expect(variables).toContain('AZURE_LLM_KEY');
+		expect(variables).toContain('AZURE_LLM_MODEL');
+	});
+
+	it('reports Cloudflare credentials once when provider and runtime gates overlap', () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		process.env.GEMINI_API_KEY = 'test-gemini-key';
+		process.env.MODEL_PROVIDER = 'cloudflare';
+		process.env.ENABLE_CLOUDFLARE_AIG = 'true';
+		delete process.env.CF_AIG_TOKEN;
+		delete process.env.CF_AIG_BASE_URL;
+
+		const variables = validateEnv().map((warning) => warning.variable);
+
+		expect(variables.filter((variable) => variable === 'CF_AIG_TOKEN')).toHaveLength(1);
+		expect(variables.filter((variable) => variable === 'CF_AIG_BASE_URL')).toHaveLength(1);
+	});
+
+	it('reports a missing Brave key when forced search is enabled', () => {
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+		process.env.GEMINI_API_KEY = 'test-gemini-key';
+		process.env.MODEL_PROVIDER = 'azure';
+		process.env.AZURE_LLM_KEY = 'test-azure-key';
+		process.env.AZURE_LLM_MODEL = 'test-azure-model';
+		process.env.FORCE_BRAVE_SEARCH = 'true';
+		delete process.env.BRAVE_SEARCH_API_KEY;
+
+		const variables = validateEnv().map((warning) => warning.variable);
+
+		expect(variables).toContain('BRAVE_SEARCH_API_KEY');
+	});
+
+	it.each([
+		['grounding', { ENABLE_GEMINI_GROUNDING: 'true' }],
+		['news monitoring', { ENABLE_NEWS_MONITOR: 'true' }],
+	])('reports a missing Gemini key once when %s uses Gemini', (_feature, env) => {
+		Object.assign(process.env, env, {
+			MODEL_PROVIDER: 'gemini',
+			FORCE_BRAVE_SEARCH: 'false',
+		});
+		delete process.env.GEMINI_API_KEY;
+
+		const warnings = validateEnv().filter((warning) => warning.variable === 'GEMINI_API_KEY');
+
+		expect(warnings).toHaveLength(1);
+	});
+
+	it('reports malformed configured AI endpoints', () => {
+		process.env.AZURE_LLM_ENDPOINT = 'not-a-url';
+		process.env.BRAVE_SEARCH_ENDPOINT = 'also-not-a-url';
+
+		const variables = validateEnv().map((warning) => warning.variable);
+
+		expect(variables).toContain('AZURE_LLM_ENDPOINT');
+		expect(variables).toContain('BRAVE_SEARCH_ENDPOINT');
+	});
+
 	it('reports malformed provided URLs, chat IDs, and symbol lists', () => {
 		process.env.WHATSAPP_CHAT_ID = 'not-a-group';
 		process.env.WHATSAPP_API_URL = 'not-a-url';
@@ -67,15 +183,42 @@ describe('validate-env', () => {
 	it('reports numeric values outside documented bounds and rejects fractional integers', () => {
 		process.env.TRADINGVIEW_MCP_TIMEOUT_MS = '10';
 		process.env.TRADINGVIEW_MCP_MAX_RETRIES = '1.5';
+		process.env.TRADINGVIEW_MCP_CACHE_TTL_MS = '9999';
 		process.env.GROUNDING_MAX_SOURCES = '0';
+		process.env.REQUEST_TIMEOUT_MS = '500';
 
 		const variables = validateEnv().map((warning) => warning.variable);
 
 		expect(variables).toEqual(expect.arrayContaining([
 			'TRADINGVIEW_MCP_TIMEOUT_MS',
 			'TRADINGVIEW_MCP_MAX_RETRIES',
+			'TRADINGVIEW_MCP_CACHE_TTL_MS',
 			'GROUNDING_MAX_SOURCES',
+			'REQUEST_TIMEOUT_MS',
 		]));
+	});
+
+	it('reports news cache max-entries bounds for issue #689', () => {
+		process.env.NEWS_CACHE_MAX_ENTRIES = '0';
+		process.env.NEWS_DELIVERY_LOCK_MAX_ENTRIES = '-1';
+		process.env.URL_SHORTENER_CACHE_MAX_ENTRIES = 'not-a-number';
+		process.env.URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES = '999999';
+
+		const variables = validateEnv().map((warning) => warning.variable);
+
+		expect(variables).toEqual(expect.arrayContaining([
+			'NEWS_CACHE_MAX_ENTRIES',
+			'NEWS_DELIVERY_LOCK_MAX_ENTRIES',
+			'URL_SHORTENER_CACHE_MAX_ENTRIES',
+			'URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES',
+		]));
+	});
+
+	it('reports NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS bounds', () => {
+		process.env.NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS = '500';
+
+		const variables = validateEnv().map((warning) => warning.variable);
+		expect(variables).toContain('NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS');
 	});
 
 	it('accepts personal WhatsApp chat IDs ending with @c.us', () => {
@@ -117,6 +260,30 @@ describe('validate-env', () => {
 		process.env.TELEGRAM_TOPIC_ROUTES = 'webhook-signal:101,market-scanner:202';
 		warnings = validateEnv();
 		expect(warnings.map((w) => w.variable)).not.toContain('TELEGRAM_TOPIC_ROUTES');
+	});
+
+	it('rejects unknown signal outcome entry-price providers', () => {
+		process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'mcp,wat';
+
+		expect(validateEnv().map((warning) => warning.variable)).toContain('SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES');
+	});
+
+	it('validates TRADINGVIEW_MCP_WARMUP_INTERVAL_MS and TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS bounds', () => {
+		process.env.TRADINGVIEW_MCP_WARMUP_INTERVAL_MS = '1000'; // below 60000
+		let warnings = validateEnv();
+		expect(warnings.map((w) => w.variable)).toContain('TRADINGVIEW_MCP_WARMUP_INTERVAL_MS');
+
+		process.env.TRADINGVIEW_MCP_WARMUP_INTERVAL_MS = '600000';
+		warnings = validateEnv();
+		expect(warnings.map((w) => w.variable)).not.toContain('TRADINGVIEW_MCP_WARMUP_INTERVAL_MS');
+
+		process.env.TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS = '1000'; // below 5000
+		warnings = validateEnv();
+		expect(warnings.map((w) => w.variable)).toContain('TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS');
+
+		process.env.TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS = '60000';
+		warnings = validateEnv();
+		expect(warnings.map((w) => w.variable)).not.toContain('TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS');
 	});
 
 	it('formats warnings with remediation and no raw value', () => {

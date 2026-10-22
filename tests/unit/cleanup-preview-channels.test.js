@@ -191,3 +191,23 @@ describe('cleanup-preview-channels tool', () => {
 		});
 	});
 });
+describe('cleanup-preview-channels npm script wiring', () => {
+	const repoRoot = path.join(__dirname, '../..');
+	const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+
+	it('registers cleanup:preview-channels so the documented command is runnable', () => {
+		expect(packageJson.scripts['cleanup:preview-channels']).toBe('node scripts/cleanup-preview-channels.js');
+	});
+
+	it('resolves to a script file that exists', () => {
+		const command = packageJson.scripts['cleanup:preview-channels'];
+		expect(command).toBeTruthy();
+		const scriptPath = command.replace(/^node\s+/, '');
+		expect(fs.existsSync(path.join(repoRoot, scriptPath))).toBe(true);
+	});
+
+	it('is documented in AGENTS.md under the same name', () => {
+		const agents = fs.readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8');
+		expect(agents).toContain('pnpm run cleanup:preview-channels');
+	});
+});

@@ -7,7 +7,7 @@
 # 1. Copy this file to your actual workflow: cp .github/workflows/news-monitor-cron.yml.example .github/workflows/news-monitor-cron.yml
 # 2. Configure repository secrets in GitHub (Settings -> Secrets and variables -> Actions):
 #    - WEBHOOK_API_KEY: API key matching the server's WEBHOOK_API_KEY environment variable
-#    - NEWS_MONITOR_BASE_URL: Base URL of your deployed bot (e.g. https://cabros-bot-production.up.railway.app)
+#    - NEWS_MONITOR_BASE_URL: Base URL of your deployed bot (e.g. https://cabros-crypto-bot-telegram.onrender.com)
 # 3. Adjust schedule and options as needed
 # 4. Commit and push to enable the workflow
 #
@@ -80,7 +80,7 @@ jobs:
 # Secrets Configuration:
 # Add these in GitHub Repository Settings -> Secrets and variables -> Actions:
 # - WEBHOOK_API_KEY: The API key secret required by validateApiKey (x-api-key header)
-# - NEWS_MONITOR_BASE_URL: Base URL of your deployment (e.g. https://cabros-bot-production.up.railway.app)
+# - NEWS_MONITOR_BASE_URL: Base URL of your deployment (e.g. https://cabros-crypto-bot-telegram.onrender.com)
 
 # Customization Options:
 # - Adjust cron schedule: https://crontab.guru/
