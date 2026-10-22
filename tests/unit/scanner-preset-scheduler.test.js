@@ -411,6 +411,58 @@ describe('ScannerPresetSchedulerService', () => {
 	describe('per-preset floor enforcement (GH-786)', () => {
 		const MIN_PRESET_FLOOR_MS = 60000;
 
+		async function expectReadyPresetBatchesToRotate(presetService) {
+			const dueAt = new Date(Date.now() - 1000).toISOString();
+			const presets = Array.from({ length: 5 }, (_, index) => ({
+				id: `ready-${index}`,
+				schedule: { enabled: true },
+				nextRunAt: dueAt,
+				lastRunAt: null,
+			}));
+			presetService.listPresets = jest.fn().mockResolvedValue(presets);
+			const rotatingScheduler = new ScannerPresetSchedulerService({ presetService });
+			// Keep the due set stable while claims fail, modeling transient claim
+			// contention; a successful execution would advance nextRunAt.
+			const claimSpy = jest.spyOn(rotatingScheduler, '_claimPreset').mockResolvedValue(false);
+			const executeSpy = jest.spyOn(rotatingScheduler, '_executePreset');
+
+			const firstSweep = await rotatingScheduler.sweep({ batchLimit: 2 });
+			const secondSweep = await rotatingScheduler.sweep({ batchLimit: 2 });
+
+			expect(firstSweep.executedCount).toBe(0);
+			expect(secondSweep.executedCount).toBe(0);
+			expect(executeSpy).not.toHaveBeenCalled();
+			expect(claimSpy.mock.calls.map(([preset]) => preset.id)).toEqual([
+				'ready-0', 'ready-1', 'ready-2', 'ready-3',
+			]);
+		}
+
+		it('rotates ready batches in memory mode so later due presets do not starve', async () => {
+			await expectReadyPresetBatchesToRotate({
+				_getFirestore: () => null,
+			});
+		});
+
+		it('rotates ready batches in Firestore mode so later due presets do not starve', async () => {
+			const collectionRef = {
+				where: jest.fn().mockReturnThis(),
+				get: jest.fn(async () => ({
+					docs: Array.from({ length: 5 }, (_, index) => ({
+						id: `ready-${index}`,
+						data: () => ({
+							schedule: { enabled: true },
+							nextRunAt: new Date(Date.now() - 1000).toISOString(),
+							lastRunAt: null,
+						}),
+					})),
+				})),
+			};
+			await expectReadyPresetBatchesToRotate({
+				_getFirestore: () => ({ collection: () => collectionRef }),
+				_formatFirestoreDoc: (doc) => ({ ...doc.data(), id: doc.id }),
+			});
+		});
+
 		async function createPresetWithLastRunAt(name, lastRunAtOffsetMs) {
 			const preset = await scannerPresetService.createPreset({
 				name,

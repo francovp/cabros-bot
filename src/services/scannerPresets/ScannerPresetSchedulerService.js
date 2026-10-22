@@ -89,6 +89,7 @@ class ScannerPresetSchedulerService {
 		this.lastRunExecutedCount = 0;
 		this.lastRunErrorCount = 0;
 		this.lastRunDeferredByFloorCount = 0;
+		this.duePresetCursorId = null;
 	}
 
 	isEnabled() {
@@ -322,41 +323,43 @@ class ScannerPresetSchedulerService {
 					.where('schedule.enabled', '==', true)
 					.get();
 
-				const candidates = [];
-				let scannedCount = 0;
-				let deferredByFloorCount = 0;
-				if (snapshot && Array.isArray(snapshot.docs)) {
-					for (const doc of snapshot.docs) {
-						const preset = this.presetService._formatFirestoreDoc(doc);
-						if (!this._isDue(preset, nowMs)) continue;
-						scannedCount += 1;
-						if (this._isFloorDeferred(preset, nowMs)) {
-							deferredByFloorCount += 1;
-							continue;
-						}
-						candidates.push(preset);
-						if (candidates.length >= batchLimit) break;
-					}
-				}
-				return { candidates, scannedCount, deferredByFloorCount };
+				const presets = snapshot && Array.isArray(snapshot.docs)
+					? snapshot.docs.map((doc) => this.presetService._formatFirestoreDoc(doc))
+					: [];
+				return this._selectDuePresetBatch(presets, nowMs, batchLimit);
 			} catch (err) {
 				console.warn('[ScannerPresetScheduler] Firestore fetch due presets failed, falling back:', err.message);
 			}
 		}
 
 		const allPresets = await this.presetService.listPresets();
+		return this._selectDuePresetBatch(Array.isArray(allPresets) ? allPresets : [], nowMs, batchLimit);
+	}
+
+	_selectDuePresetBatch(presets, nowMs, batchLimit) {
+		const duePresets = presets.filter((preset) => this._isDue(preset, nowMs));
+		if (duePresets.length === 0) {
+			return { candidates: [], scannedCount: 0, deferredByFloorCount: 0 };
+		}
+
+		const previousCursorIndex = this.duePresetCursorId
+			? duePresets.findIndex((preset) => preset.id === this.duePresetCursorId)
+			: -1;
+		const startIndex = previousCursorIndex >= 0
+			? (previousCursorIndex + 1) % duePresets.length
+			: 0;
 		const candidates = [];
 		let scannedCount = 0;
 		let deferredByFloorCount = 0;
-		for (const preset of allPresets) {
-			if (!preset.schedule || !preset.schedule.enabled || !this._isDue(preset, nowMs)) continue;
+		for (let offset = 0; offset < duePresets.length && candidates.length < batchLimit; offset += 1) {
+			const preset = duePresets[(startIndex + offset) % duePresets.length];
 			scannedCount += 1;
+			this.duePresetCursorId = preset.id || null;
 			if (this._isFloorDeferred(preset, nowMs)) {
 				deferredByFloorCount += 1;
 				continue;
 			}
 			candidates.push(preset);
-			if (candidates.length >= batchLimit) break;
 		}
 		return { candidates, scannedCount, deferredByFloorCount };
 	}
