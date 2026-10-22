@@ -16,6 +16,7 @@ jest.mock('../../src/services/grounding/config', () => ({
 const genaiClient = require('../../src/services/grounding/genaiClient');
 const sentryService = require('../../src/services/monitoring/SentryService');
 const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
+const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
 // Mock fetch globally
 global.fetch = jest.fn();
@@ -26,9 +27,48 @@ describe('GenaiClient robustness', () => {
 		// Reset genAI to avoid using the real SDK in tests
 		genaiClient.genAI = { models: { generateContent: jest.fn().mockResolvedValue({}) } };
 		jest.resetAllMocks();
+		remoteConfigService._resetForTesting();
 	});
 
 	describe('Google Search (Default)', () => {
+		it('uses Remote Config model selectors for search and alert enrichment', async () => {
+			const previousRemoteConfigGate = process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			remoteConfigService._setRemoteOverridesForTesting({
+				GROUNDING_MODEL_NAME: 'remote-grounding-model',
+				GEMINI_MODEL_NAME: 'remote-gemini-model',
+			});
+			genaiClient.genAI.models.generateContent
+				.mockResolvedValueOnce({
+					response: {
+						text: 'Google Answer',
+						candidates: [{ groundingMetadata: { groundingChunks: [{ web: { title: 'Source', uri: 'https://example.com' } }] } }],
+					},
+				})
+				.mockResolvedValueOnce({ response: { text: 'Enriched answer' } });
+
+			try {
+				await genaiClient.search({ query: 'test' });
+				await genaiClient.llmCallv2({ systemPrompt: 'system', userPrompt: 'user' });
+
+				expect(genaiClient.genAI.models.generateContent).toHaveBeenNthCalledWith(
+					1,
+					expect.objectContaining({ model: 'remote-grounding-model' }),
+				);
+				expect(genaiClient.genAI.models.generateContent).toHaveBeenNthCalledWith(
+					2,
+					expect.objectContaining({ model: 'remote-gemini-model' }),
+				);
+			} finally {
+				if (previousRemoteConfigGate === undefined) {
+					delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+				} else {
+					process.env.ENABLE_FIREBASE_REMOTE_CONFIG = previousRemoteConfigGate;
+				}
+				remoteConfigService._resetForTesting();
+			}
+		});
+
 		it('uses Google Search when FORCE_BRAVE_SEARCH is false', async () => {
 			// Mock successful Google Search response
 			genaiClient.genAI.models.generateContent.mockResolvedValueOnce({

@@ -46,6 +46,43 @@ describe('Request Deadline Middleware (unit)', () => {
 		}
 	});
 
+	test('stamps req.startTime and req.requestContext when none is provided', () => {
+		process.env.REQUEST_TIMEOUT_MS = '5000';
+		const before = Date.now();
+		const req = httpMocks.createRequest({ method: 'POST', url: '/api/webhook/alert' });
+		const res = httpMocks.createResponse();
+		const next = jest.fn();
+		requestDeadline(req, res, next);
+		const after = Date.now();
+
+		expect(next).toHaveBeenCalled();
+		expect(typeof req.startTime).toBe('number');
+		expect(req.startTime).toBeGreaterThanOrEqual(before);
+		expect(req.startTime).toBeLessThanOrEqual(after);
+		expect(req.requestContext).toEqual({
+			requestId: req.requestId,
+			startTime: req.startTime,
+		});
+	});
+
+	test('preserves upstream req.startTime in req.requestContext and deadline', () => {
+		process.env.REQUEST_TIMEOUT_MS = '5000';
+		const explicitStartTime = Date.now() - 1000;
+		const req = httpMocks.createRequest({ method: 'POST', url: '/api/webhook/alert' });
+		req.startTime = explicitStartTime;
+		const res = httpMocks.createResponse();
+		const next = jest.fn();
+		requestDeadline(req, res, next);
+
+		expect(next).toHaveBeenCalled();
+		expect(req.startTime).toBe(explicitStartTime);
+		expect(req.requestContext).toEqual({
+			requestId: req.requestId,
+			startTime: explicitStartTime,
+		});
+		expect(req.requestDeadlineAt).toBe(explicitStartTime + 5000);
+	});
+
 	test('reuses req.requestId stamped upstream and exposes X-Request-Id', () => {
 		process.env.REQUEST_TIMEOUT_MS = '5000';
 		const req = httpMocks.createRequest({ method: 'POST', url: '/api/webhook/alert' });
@@ -56,6 +93,8 @@ describe('Request Deadline Middleware (unit)', () => {
 		expect(next).toHaveBeenCalled();
 		expect(req.requestId).toBe('preset-request-id');
 		expect(res.getHeader('X-Request-Id')).toBe('preset-request-id');
+		expect(req.requestDeadlineAt).toBeGreaterThanOrEqual(Date.now());
+		expect(req.requestDeadlineAt - Date.now()).toBeLessThanOrEqual(5000);
 	});
 
 	test('mints a request id when none is provided', () => {

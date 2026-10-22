@@ -11,6 +11,7 @@ const { runScans } = require('../marketScanner/marketScanner');
 const {
 	MarketScannerRequestError,
 	buildMarketScannerReport,
+	recordMarketScannerOutcomes,
 	SUPPORTED_SCAN_TYPES,
 } = require('../../../../services/tradingview/marketScannerReport');
 const {
@@ -22,7 +23,7 @@ const {
 const { getIdempotencyKey } = require('../../../../lib/idempotency');
 const {
 	getNotificationManager,
-	initializeNotificationServices,
+	getOrInitializeNotificationManager,
 } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const {
@@ -36,6 +37,7 @@ const {
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { adminSseService } = require('../../../../services/sse/AdminSseService');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
+const { sendErrorFrom, STANDARD_ERROR_CODES } = require('../../../../lib/errorEnvelope');
 
 const SUPPORTED_TIMEFRAME_ALIASES = new Set([
 	'5', '5M', '15', '15M', '60', '1H', '240', '4H',
@@ -139,7 +141,7 @@ function postPreset(req, res) {
 					body.preset = error.preset;
 					setPresetEtag(res, error.preset);
 				}
-				return res.status(statusCode).json(body);
+				return sendErrorFrom(res, statusCode, body);
 			}
 
 			console.error('[ScannerPresets] Create failed:', error.message);
@@ -149,7 +151,7 @@ function postPreset(req, res) {
 				http: { endpoint: '/api/scanner-presets', method: 'POST', statusCode: 500 },
 			});
 
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error',
 				code: 'INTERNAL_ERROR',
 			});
@@ -174,7 +176,7 @@ function listPresets(req, res) {
 				http: { endpoint: '/api/scanner-presets', method: 'GET', statusCode: 500 },
 			});
 
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error',
 				code: 'INTERNAL_ERROR',
 			});
@@ -194,7 +196,7 @@ function resolveIfMatchVersion(req) {
 }
 
 function sendMalformedIfMatch(res) {
-	return res.status(400).json({
+	return sendErrorFrom(res, 400, {
 		error: 'Malformed If-Match header. Use a quoted integer such as "3" or the weak form W/"3".',
 		code: 'INVALID_IF_MATCH',
 		storage: getStorageMetadata(),
@@ -207,7 +209,7 @@ function getPreset(req, res) {
 			const routing = parseNotificationRouting(req.body);
 			const preset = await scannerPresetService.getPreset(req.params.id);
 			if (!preset) {
-				return res.status(404).json({
+				return sendErrorFrom(res, 404, {
 					success: false,
 					error: 'Preset not found',
 					storage: getStorageMetadata(),
@@ -228,7 +230,7 @@ function getPreset(req, res) {
 				http: { endpoint: `/api/scanner-presets/${req.params.id}`, method: 'GET', statusCode: 500 },
 			});
 
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error',
 				code: 'INTERNAL_ERROR',
 			});
@@ -245,7 +247,7 @@ function deletePreset(req, res) {
 			}
 			const deleted = await scannerPresetService.deletePreset(req.params.id, { ifMatchVersion: ifMatch.version });
 			if (!deleted) {
-				return res.status(404).json({
+				return sendErrorFrom(res, 404, {
 					success: false,
 					error: 'Preset not found',
 					storage: getStorageMetadata(),
@@ -268,7 +270,7 @@ function deletePreset(req, res) {
 					body.preset = error.preset;
 					setPresetEtag(res, error.preset);
 				}
-				return res.status(statusCode).json(body);
+				return sendErrorFrom(res, statusCode, body);
 			}
 
 			console.error('[ScannerPresets] Delete failed:', error.message);
@@ -278,7 +280,7 @@ function deletePreset(req, res) {
 				http: { endpoint: `/api/scanner-presets/${req.params.id}`, method: 'DELETE', statusCode: 500 },
 			});
 
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error',
 				code: 'INTERNAL_ERROR',
 			});
@@ -299,7 +301,7 @@ function updatePreset(req, res) {
 				{ ifMatchVersion: ifMatch.version },
 			);
 			if (!preset) {
-				return res.status(404).json({
+				return sendErrorFrom(res, 404, {
 					success: false,
 					error: 'Preset not found',
 					storage: getStorageMetadata(),
@@ -337,7 +339,7 @@ function updatePreset(req, res) {
 					body.preset = error.preset;
 					setPresetEtag(res, error.preset);
 				}
-				return res.status(statusCode).json(body);
+				return sendErrorFrom(res, statusCode, body);
 			}
 
 			console.error('[ScannerPresets] Update failed:', error.message);
@@ -347,7 +349,7 @@ function updatePreset(req, res) {
 				http: { endpoint: `/api/scanner-presets/${req.params.id}`, method: 'PUT', statusCode: 500 },
 			});
 
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error',
 				code: 'INTERNAL_ERROR',
 			});
@@ -417,23 +419,27 @@ function validatePresetConfig(preset, reqBody = {}) {
 
 function postRunPreset(botOrGetter) {
 	return async (req, res) => {
-		const requestId = resolveRequestId(req);
-		const startTime = Date.now();
+		const requestId = (req && req.requestId) || resolveRequestId(req);
+		const startTime = (req && typeof req.startTime === 'number' && Number.isFinite(req.startTime))
+			? req.startTime
+			: Date.now();
 
 		try {
 			if (!getRuntimeConfig().ENABLE_MARKET_SCANNER) {
-				return res.status(404).json({
+				return sendErrorFrom(res, 404, {
 					error: 'Market scanner is not enabled',
 					code: 'FEATURE_DISABLED',
+					requestId,
 				});
 			}
 
 			const preset = await scannerPresetService.getPreset(req.params.id);
 			if (!preset) {
-				return res.status(404).json({
+				return sendErrorFrom(res, 404, {
 					success: false,
 					error: 'Preset not found',
 					storage: getStorageMetadata(),
+					requestId,
 				});
 			}
 
@@ -454,7 +460,7 @@ function postRunPreset(botOrGetter) {
 				let notificationManager = getNotificationManager();
 				if (!notificationManager) {
 					try {
-						notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
+						notificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
 					} catch (_) {}
 				}
 				const requestedChannels = getRequestedChannels(notificationManager, routing);
@@ -542,7 +548,7 @@ function postRunPreset(botOrGetter) {
 			if (routing.channels) {
 				let presetNotificationManager = getNotificationManager();
 				if (!presetNotificationManager) {
-					presetNotificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
+					presetNotificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
 				}
 				assertChannelsAvailable(presetNotificationManager, routing);
 			}
@@ -558,7 +564,7 @@ function postRunPreset(botOrGetter) {
 			const successfulScans = scanResults.filter((r) => r.status === 'success');
 
 			if (successfulScans.length === 0) {
-				return res.status(timedOut ? 504 : 502).json({
+				return sendErrorFrom(res, timedOut ? 504 : 502, {
 					success: false,
 					code: timedOut ? 'PRESET_SCAN_TIMEOUT' : 'ALL_SCANS_FAILED',
 					error: timedOut
@@ -581,7 +587,7 @@ function postRunPreset(botOrGetter) {
 
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
-				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
+				notificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
 			}
 
 			const deliveryResults = await sendWithNotificationRouting(
@@ -596,6 +602,12 @@ function postRunPreset(botOrGetter) {
 			const deliveredChannels = getDeliveredChannels(deliveryResults);
 			const summary = buildSummary(scanResults, deliveryResults);
 
+			// Preset reports currently render unranked; persist the same item directions.
+			recordMarketScannerOutcomes(scanResults, { ...preset, ranked: false }, {
+				requestId,
+				startTime,
+				source: 'scanner-preset',
+			});
 			try {
 				adminSseService.broadcast('scanner-result', {
 					presetId: preset.id,
@@ -626,7 +638,7 @@ function postRunPreset(botOrGetter) {
 			});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: error.message,
 					code: 'INVALID_REQUEST',
 					requestId,
@@ -645,7 +657,7 @@ function postRunPreset(botOrGetter) {
 				},
 			});
 
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error. Please try again later.',
 				code: 'INTERNAL_ERROR',
 				requestId,

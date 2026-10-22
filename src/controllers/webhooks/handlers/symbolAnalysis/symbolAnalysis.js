@@ -1,6 +1,8 @@
 /* global AbortController */
 
+const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
+const { hasConfluenceEvidence } = require('../../../../services/tradingview/confluenceEvidence');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
 	ExpandedAnalysisAlertRequestError,
@@ -23,8 +25,10 @@ function resolveDryRun(req) {
 
 function postSymbolAnalysis() {
 	return async (req, res) => {
-		const requestId = resolveRequestId(req);
-		const startTime = Date.now();
+		const requestId = (req && req.requestId) || resolveRequestId(req);
+		const startTime = (req && typeof req.startTime === 'number' && Number.isFinite(req.startTime))
+			? req.startTime
+			: Date.now();
 		let deadline;
 
 		try {
@@ -96,6 +100,7 @@ function postSymbolAnalysis() {
 			const normalized = normalizeAnalysis({ analysis, input, parsed, multiTimeframe, multiAgent, side });
 			const reportAnalysis = {
 				...analysis,
+				confluence: hasConfluenceEvidence(analysis) ? analysis.confluence : null,
 				technical: {
 					...(analysis.technical || analysis),
 					price_data: normalized.price_data,
@@ -172,7 +177,7 @@ function postSymbolAnalysis() {
 				} catch (monitoringError) {
 					console.warn('[SymbolAnalysis] Sentry timeout capture failed:', monitoringError.message);
 				}
-				return res.status(504).json({
+				return sendErrorFrom(res, 504, {
 					success: false,
 					error: 'Symbol analysis timed out.',
 					code: 'SYMBOL_ANALYSIS_TIMEOUT',
@@ -193,7 +198,7 @@ function postSymbolAnalysis() {
 				} catch (monitoringError) {
 					console.warn('[SymbolAnalysis] Sentry capture failed:', monitoringError.message);
 				}
-				return res.status(502).json({
+				return sendErrorFrom(res, 502, {
 					success: false,
 					error: error.message,
 					code: 'SYMBOL_ANALYSIS_FAILED',
@@ -207,7 +212,7 @@ function postSymbolAnalysis() {
 				error,
 				http: { endpoint: '/api/webhook/symbol-analysis', method: 'POST', statusCode: 500, requestId },
 			});
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				success: false,
 				error: 'Internal server error. Please try again later.',
 				code: 'INTERNAL_ERROR',
@@ -378,7 +383,7 @@ function emptyRisk(side, price) {
 function buildDecision({ analysis, technical, side, risk, price, technicalIndicators, multiAgent }) {
 	const reasons = [];
 	const warnings = [];
-	const confluence = analysis.confluence || {};
+	const confluence = hasConfluenceEvidence(analysis) ? analysis.confluence || {} : {};
 	const dataSufficient = Boolean(price !== null && technicalIndicators.RSI !== null && side && risk.valid);
 	if (confluence.recommendation || confluence.action) reasons.push(`Confluencia: ${confluence.recommendation || confluence.action}`);
 	if (technicalIndicators.RSI !== null) reasons.push(`RSI: ${technicalIndicators.RSI}`);
@@ -416,7 +421,9 @@ function buildDecision({ analysis, technical, side, risk, price, technicalIndica
 }
 
 function inferSide(analysis = {}) {
-	const confluence = String(analysis.confluence?.recommendation || analysis.confluence?.action || '').toUpperCase();
+	const confluence = hasConfluenceEvidence(analysis)
+		? String(analysis.confluence?.recommendation || analysis.confluence?.action || '').toUpperCase()
+		: '';
 	if (confluence.includes('SELL')) return 'SELL';
 	if (confluence.includes('BUY')) return 'BUY';
 	const sentiment = String(analysis.sentiment?.sentiment_label || analysis.market_sentiment?.overall_sentiment || '').toUpperCase();

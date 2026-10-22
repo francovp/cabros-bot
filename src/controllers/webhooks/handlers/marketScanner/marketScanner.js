@@ -1,5 +1,6 @@
 /* global AbortController */
 
+const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
@@ -7,13 +8,11 @@ const {
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
-	getRiskLevelsForSide,
-	getScanItemSide,
-	pickLevel,
+	recordMarketScannerOutcomes,
 } = require('../../../../services/tradingview/marketScannerReport');
 const {
 	getNotificationManager,
-	initializeNotificationServices,
+	getOrInitializeNotificationManager,
 } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const {
@@ -35,7 +34,8 @@ const {
 const DEFAULT_SCANNER_TIMEOUT_MS = 90000;
 const MAX_SCANNER_TIMEOUT_MS = 120000;
 
-function resolveBot(botOrGetter) {	if (typeof botOrGetter === 'function') {
+function resolveBot(botOrGetter) {
+	if (typeof botOrGetter === 'function') {
 		return botOrGetter();
 	}
 
@@ -50,14 +50,17 @@ function resolveDryRun(req) {
 
 function postMarketScannerAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = resolveRequestId(req);
-		const startTime = Date.now();
+		const requestId = (req && req.requestId) || resolveRequestId(req);
+		const startTime = (req && typeof req.startTime === 'number' && Number.isFinite(req.startTime))
+			? req.startTime
+			: Date.now();
 
 		try {
 			if (!getRuntimeConfig().ENABLE_MARKET_SCANNER) {
-				return res.status(404).json({
+				return sendErrorFrom(res, 404, {
 					error: 'Market scanner is not enabled',
 					code: 'FEATURE_DISABLED',
+					requestId,
 				});
 			}
 
@@ -97,7 +100,7 @@ function postMarketScannerAlert(botOrGetter) {
 
 			if (successfulScans.length === 0) {
 				const timeoutError = timedOut;
-				return res.status(timeoutError ? 504 : 502).json({
+				return sendErrorFrom(res, timeoutError ? 504 : 502, {
 					success: false,
 					ranked: parsed.ranked === true,
 					includeMultiTimeframe: parsed.includeMultiTimeframe === true,
@@ -141,7 +144,7 @@ function postMarketScannerAlert(botOrGetter) {
 
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
-				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
+				notificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
 			}
 
 			const deliveryResults = await sendWithNotificationRouting(
@@ -172,6 +175,10 @@ function postMarketScannerAlert(botOrGetter) {
 					requestId,
 					text: alertText,
 					symbol: scannerSymbols[0] || null,
+					// A scanner run covers many symbols but persists one report document,
+					// so record the complete scanned symbol set.
+					symbols: scannerSymbols,
+					batchId: requestId,
 					exchange: parsed.exchange || null,
 					enriched: false,
 					enrichmentData: null,
@@ -188,76 +195,11 @@ function postMarketScannerAlert(botOrGetter) {
 				}).catch(() => {});
 			}
 
-			const signalOutcomeService = require('../../../../services/storage/SignalOutcomeService');
-			if (signalOutcomeService.isEnabled()) {
-				for (const scanResult of scanResults) {
-					if (scanResult.status === 'success' && Array.isArray(scanResult.items) && scanResult.items.length > 0) {
-						// Resolve sides from the same prepared (rank-normalized) item set the
-						// report rendered, so persisted sides match delivered levels
-						const preparedItems = prepareMarketScannerItems(scanResult, parsed.ranked === true);
-						for (const item of preparedItems) {
-							const closePrice = item.indicators?.close ?? null;
-							// Persisted side must match the rendered report side
-							const itemSide = getScanItemSide(scanResult.scan, item);
-							const itemScore = item.changePercent ?? item.indicators?.RSI ?? item.volume_ratio ?? null;
-
-							const atr = pickLevel([item.indicators?.atr, item.indicators?.ATR, item.atr]);
-							const bbLower = pickLevel([item.indicators?.bb_lower, item.indicators?.bollinger_lower, item.indicators?.lower, item.bollinger?.lower, item.bollinger_lower]);
-							const bbUpper = pickLevel([item.indicators?.bb_upper, item.indicators?.bollinger_upper, item.indicators?.upper, item.bollinger?.upper, item.bollinger_upper]);
-							const support = pickLevel([
-								item.indicators?.support,
-								item.indicators?.nearest_support,
-								item.support,
-								item.support_resistance?.nearest_support,
-								item.support_resistance?.support_1,
-							]);
-							const resistance = pickLevel([
-								item.indicators?.resistance,
-								item.indicators?.nearest_resistance,
-								item.resistance,
-								item.support_resistance?.nearest_resistance,
-								item.support_resistance?.resistance_1,
-							]);
-
-							const validPrice = typeof closePrice === 'number' && Number.isFinite(closePrice) && closePrice > 0 ? closePrice : null;
-							let stopLoss = null;
-							let takeProfit = null;
-							if (validPrice !== null) {
-								const riskLevels = getRiskLevelsForSide({
-									side: itemSide,
-									price: validPrice,
-									atr: typeof atr === 'number' && Number.isFinite(atr) && atr > 0 ? atr : null,
-									bbLower: typeof bbLower === 'number' && Number.isFinite(bbLower) && bbLower > 0 ? bbLower : null,
-									bbUpper: typeof bbUpper === 'number' && Number.isFinite(bbUpper) && bbUpper > 0 ? bbUpper : null,
-									support: typeof support === 'number' && Number.isFinite(support) && support > 0 ? support : null,
-									resistance: typeof resistance === 'number' && Number.isFinite(resistance) && resistance > 0 ? resistance : null,
-								});
-								stopLoss = riskLevels.stopLoss;
-								takeProfit = riskLevels.takeProfit;
-							}
-
-							signalOutcomeService.recordSignal({
-								requestId,
-								source: 'market-scanner',
-								symbol: item.symbol,
-								exchange: parsed.exchange,
-								timeframe: parsed.timeframe,
-								setupType: scanResult.scan,
-								score: itemScore,
-								confidenceScore: typeof item.confidence === 'number' && Number.isFinite(item.confidence) && item.confidence >= 0 && item.confidence <= 1 ? item.confidence : null,
-								side: itemSide,
-								price: validPrice,
-								priceSource: validPrice !== null ? 'tradingview-mcp' : null,
-								stop: stopLoss,
-								target: takeProfit,
-								sources: [],
-								tokenUsage: null,
-								processingTimeMs: Date.now() - startTime,
-							}).catch(() => {});
-						}
-					}
-				}
-			}
+			recordMarketScannerOutcomes(scanResults, parsed, {
+				requestId,
+				startTime,
+				source: 'market-scanner',
+			});
 
 			return res.status(200).json({
 				success: true,
@@ -276,7 +218,7 @@ function postMarketScannerAlert(botOrGetter) {
 			});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: error.message,
 					code: 'INVALID_REQUEST',
 					requestId,
@@ -284,7 +226,7 @@ function postMarketScannerAlert(botOrGetter) {
 			}
 
 			if (error instanceof MarketScannerRequestError) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: error.message,
 					code: error.code,
 					requestId,
@@ -303,7 +245,7 @@ function postMarketScannerAlert(botOrGetter) {
 				},
 			});
 
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error. Please try again later.',
 				code: 'INTERNAL_ERROR',
 				requestId,

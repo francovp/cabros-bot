@@ -17,7 +17,8 @@ const {
 	parseNewsMaxAlertsPerWindow,
 	parseNewsMaxAlertsPerWindowMs,
 } = require('./volumeTracker');
-const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
+const { ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
+const { getGroundingModelName } = require('../../../../services/grounding/runtimeModels');
 const geminiQuotaManager = require('../../../../services/grounding/geminiQuotaManager');
 const geminiPriceService = require('../../../../services/grounding/geminiPriceService');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
@@ -531,7 +532,7 @@ class NewsAnalyzer {
 				const currentIndex = nextIndex;
 				nextIndex += 1;
 				const symbol = symbols[currentIndex];
-				const symbolTokenUsage = new TokenUsageTracker();
+				const symbolTokenUsage = new TokenUsageTracker('news-analysis');
 				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, symbolTokenUsage, routing, batchStartedAt, symbolOptions)
 					.then((result) => {
 						if (tokenUsage) {
@@ -1178,7 +1179,7 @@ class NewsAnalyzer {
 		// Optional LLM enrichment
 		let enrichmentMetadata = null;
 		if (this.enrichmentService.isEnabled() && ENABLE_NEWS_MONITOR_TEST_MODE !== true) {
-			enrichmentMetadata = await this.enrichmentService.enrichAlert(geminiAnalysis);
+			enrichmentMetadata = await this.enrichmentService.enrichAlert(geminiAnalysis, { tokenUsage });
 			if (enrichmentMetadata && enrichmentMetadata.enriched_confidence < this.alertThreshold) {
 				console.debug('[Analyzer] Enrichment lowered confidence below threshold');
 				return {
@@ -1360,6 +1361,9 @@ class NewsAnalyzer {
 
 			if (meetsConviction) {
 				const side = (sentimentScore > 0) ? 'BUY' : 'SELL';
+				const outcomeScore = typeof alert.confidence === 'number' && Number.isFinite(alert.confidence)
+					? (side === 'SELL' ? -1 : 1) * Math.abs(alert.confidence)
+					: null;
 				const stop = (alert.marketContext && typeof alert.marketContext.stop === 'number')
 					? alert.marketContext.stop
 					: (typeof alert.stop === 'number' ? alert.stop : null);
@@ -1377,8 +1381,8 @@ class NewsAnalyzer {
 					exchange: alert.marketContext && alert.marketContext.source === 'binance' ? 'BINANCE' : 'UNKNOWN',
 					timeframe: null,
 					setupType: 'news-alert',
-					score: alert.confidence,
-					confidenceScore: alert.confidence,
+					score: outcomeScore,
+					confidenceScore: typeof alert.confidence === 'number' && Number.isFinite(alert.confidence) ? Math.abs(alert.confidence) : null,
 					side,
 					price: alert.marketContext ? alert.marketContext.price : null,
 					priceSource: alert.marketContext ? alert.marketContext.source : null,
@@ -1872,7 +1876,7 @@ class NewsAnalyzer {
 		// Build enriched object for formatEnriched methods
 		const confidenceProvenance = geminiAnalysis.confidence_source
 			? `_Confidence source: ${geminiAnalysis.confidence_source}_`
-			: `_Model used: ${GROUNDING_MODEL_NAME}_`;
+			: `_Model used: ${getGroundingModelName()}_`;
 		// Issue #1230: the tier is appended to `extraText` because that is what
 		// `formatEnriched()` actually renders to the trader. `formatAlertMessage()`
 		// has no production call site, so a line added only there would never be seen.
