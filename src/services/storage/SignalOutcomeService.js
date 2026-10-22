@@ -68,6 +68,10 @@ const MAX_TIMER_DELAY_MS = 2147483647;
 const MAX_CONFIGURED_INTERVAL_MS = 3600000;
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
+const DEFAULT_EXPORT_LIMIT = 100;
+const MAX_EXPORT_LIMIT = 1000;
+const MAX_EXPORT_WINDOW_DAYS = 31;
+const MAX_EXPORT_SCAN_DOCS = 10000;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
 const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
@@ -2996,6 +3000,13 @@ function createStorageUnavailableError(cause) {
 	return error;
 }
 
+function createExportAbortedError() {
+	const error = new Error('Signal outcome export query was aborted');
+	error.name = 'AbortError';
+	error.code = 'ABORTED';
+	return error;
+}
+
 function clampOutcomeLimit(limit) {
 	if (!Number.isInteger(limit) || limit < 1) {
 		return DEFAULT_LIMIT;
@@ -3319,6 +3330,165 @@ async function listOutcomes({
 			? encodeAlertPaginationCursor(outcomes[outcomes.length - 1])
 			: null,
 	};
+}
+
+async function getOutcomeById(outcomeId) {
+	if (!isEnabled() || typeof outcomeId !== 'string' || !outcomeId.trim()) {
+		return null;
+	}
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+	let snapshot;
+	try {
+		snapshot = await firestore.collection(COLLECTION_NAME).doc(outcomeId.trim()).get();
+	} catch (error) {
+		console.warn('[SignalOutcomeService] Failed to read signal outcome from Firestore:', error.message);
+		throw createStorageUnavailableError(error);
+	}
+	if (!snapshot || !snapshot.exists || isRetentionExpired(snapshot.data() || {})) {
+		return null;
+	}
+	return formatOutcomeDocument(snapshot);
+}
+
+function buildOutcomeExportWindow({ from, to, limit } = {}) {
+	if (!from || !to) {
+		const error = new Error('Export requests require bounded from and to ISO-8601 timestamps.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+	const parsedFrom = new Date(from);
+	const parsedTo = new Date(to);
+	if (Number.isNaN(parsedFrom.getTime()) || Number.isNaN(parsedTo.getTime())) {
+		const error = new Error('Invalid export window. Use ISO-8601 timestamps.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+	if (parsedFrom.getTime() > parsedTo.getTime()) {
+		const error = new Error('Invalid export window. from must be before or equal to to.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+	if (parsedTo.getTime() - parsedFrom.getTime() > MAX_EXPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000) {
+		const error = new Error(`Invalid export window. Maximum export window is ${MAX_EXPORT_WINDOW_DAYS} days.`);
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+	const normalizedLimit = Number.isInteger(limit) && limit >= 1
+		? Math.min(limit, MAX_EXPORT_LIMIT)
+		: DEFAULT_EXPORT_LIMIT;
+	return {
+		from: parsedFrom.toISOString(),
+		to: parsedTo.toISOString(),
+		limit: normalizedLimit,
+		maxDays: MAX_EXPORT_WINDOW_DAYS,
+	};
+}
+
+function formatOutcomeExportRecord(doc) {
+	const outcome = formatOutcomeDocument(doc);
+	return {
+		id: outcome.id,
+		receivedAt: outcome.receivedAt,
+		source: outcome.source,
+		symbol: outcome.symbol,
+		exchange: outcome.exchange,
+		side: outcome.side,
+		price: outcome.price,
+		setupType: outcome.setupType,
+		score: outcome.score,
+		outcomes: outcome.outcomes,
+	};
+}
+
+async function exportOutcomes({ from, to, limit, symbol, exchange, setupType, signal, maxScanDocs } = {}) {
+	if (!isEnabled()) {
+		return null;
+	}
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+	const window = buildOutcomeExportWindow({ from, to, limit });
+	const scanLimit = Math.max(window.limit, MAX_LIMIT);
+	const scanBudget = Number.isSafeInteger(maxScanDocs) && maxScanDocs > 0
+		? Math.min(maxScanDocs, MAX_EXPORT_SCAN_DOCS)
+		: MAX_EXPORT_SCAN_DOCS;
+	const outcomes = [];
+	let totalScanned = 0;
+	let pageCursor = null;
+	while (outcomes.length < window.limit) {
+		if (signal && signal.aborted) {
+			throw createExportAbortedError();
+		}
+		const remainingScanBudget = scanBudget - totalScanned;
+		const queryLimit = Math.min(scanLimit, remainingScanBudget);
+		let query = firestore
+			.collection(COLLECTION_NAME)
+			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
+			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
+			.orderBy('receivedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
+		if (pageCursor) {
+			query = query.startAfter(buildParsedCursorTimestamp(pageCursor), pageCursor.documentId);
+		}
+		let snapshot;
+		try {
+			snapshot = await query.limit(queryLimit).get();
+		} catch (error) {
+			if (signal && signal.aborted) {
+				throw createExportAbortedError();
+			}
+			console.warn('[SignalOutcomeService] Failed to export signal outcomes from Firestore:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+		if (signal && signal.aborted) {
+			throw createExportAbortedError();
+		}
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			break;
+		}
+		totalScanned += snapshot.docs.length;
+		for (const doc of snapshot.docs) {
+			if (isRetentionExpired(doc.data() || {})) {
+				continue;
+			}
+			const outcome = formatOutcomeExportRecord(doc);
+			if (!matchesOutcomeFilters(outcome, {
+				symbol,
+				exchange,
+				setupType,
+				from: window.from,
+				to: window.to,
+			})) {
+				continue;
+			}
+			outcomes.push(outcome);
+			if (outcomes.length >= window.limit) {
+				break;
+			}
+		}
+		if (outcomes.length >= window.limit) {
+			break;
+		}
+		if (snapshot.docs.length < queryLimit) {
+			break;
+		}
+		if (totalScanned >= scanBudget) {
+			const error = new Error(`Outcome export could not complete within the ${scanBudget}-document scan limit. Narrow the time range or add a filter and retry.`);
+			error.code = 'INVALID_REQUEST';
+			throw error;
+		}
+		pageCursor = getDocCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!pageCursor) {
+			const error = new Error(`Outcome export could not complete within the ${scanBudget}-document scan limit. Narrow the time range or add a filter and retry.`);
+			error.code = 'INVALID_REQUEST';
+			throw error;
+		}
+	}
+	return { window, outcomes };
 }
 
 const CALIBRATION_DEFAULT_BUCKETS = [
@@ -3745,6 +3915,8 @@ module.exports = {
 	getMetricsSummary,
 	summarizeOutcomes,
 	listOutcomes,
+	getOutcomeById,
+	exportOutcomes,
 	computeCalibration,
 	getOutcomesCalibration,
 	normalizeSide,

@@ -38,7 +38,13 @@ const {
 	postResolveSymbol,
 	getAliases,
 } = require('../controllers/webhooks/handlers/symbols/symbols');
-const { listOutcomes, summarizeOutcomes, getOutcomesCalibration } = require('../controllers/outcomes/outcomes');
+const {
+	listOutcomes,
+	summarizeOutcomes,
+	getOutcomesCalibration,
+	getOutcomeById,
+	exportOutcomes,
+} = require('../controllers/outcomes/outcomes');
 const { listSymbolAnalyses, summarizeSymbolAnalyses } = require('../controllers/symbolAnalyses/symbolAnalyses');
 const { getPreferencesHandler, putPreferencesHandler, deletePreferencesHandler } = require('../controllers/preferences/preferences');
 const {
@@ -114,6 +120,8 @@ function getRoutes(botOrGetter) {
 	router.get('/outcomes', ...adminRead, listOutcomes);
 	router.get('/outcomes/summary', ...adminRead, summarizeOutcomes);
 	router.get('/outcomes/calibration', ...adminRead, getOutcomesCalibration);
+	router.get('/outcomes/export', ...adminRead, exportOutcomes);
+	router.get('/outcomes/:outcomeId', ...adminRead, getOutcomeById);
 	router.get('/symbol-analyses', ...adminRead, listSymbolAnalyses);
 	router.get('/symbol-analyses/summary', ...adminRead, summarizeSymbolAnalyses);
 	router.post('/scanner-presets', ...adminWrite, postPreset);

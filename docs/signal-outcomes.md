@@ -198,6 +198,22 @@ GET /api/outcomes/summary?setupType=breakout&breakdown=symbol,setup
 
 `GET /api/alerts/summary` accepts the same `breakdown` values to add these arrays inside its `shadowModeMetrics` object when that object is available.
 
+#### GET /api/outcomes/{outcomeId}
+
+Retrieve one stored signal outcome by Firestore document ID. Its fields use the same sanitized representation as `GET /api/outcomes`; raw MCP payloads, provider responses, and prompt text are not returned. Requires `x-api-key` or a Firebase bearer token with `admin.viewer` or `admin.operator` role. Returns `404 NOT_FOUND` for missing or retention-expired IDs, `403 FEATURE_DISABLED` when outcome tracking is disabled, and `503 STORAGE_UNAVAILABLE` when Firestore cannot be read.
+
+#### GET /api/outcomes/export
+
+Stream a bounded outcome window as JSON Lines (`application/x-ndjson`) or CSV (`text/csv`). Both `from` and `to` are required ISO-8601 timestamps and may span at most 31 days. `limit` accepts `1`–`1000` and defaults to `100`; optional `symbol`, `exchange`, and `setupType` filters narrow the rows. Each request scans at most 10,000 documents; if that cannot collect the requested row limit, the endpoint returns `400 INVALID_REQUEST` and asks you to narrow the time range or add a filter. The scan also stops paging when the request deadline expires or the client disconnects. CSV fields are escaped and formula-leading ASCII and full-width text is prefixed with an apostrophe. Export records contain only `id`, `receivedAt`, `source`, `symbol`, `exchange`, `side`, `price`, `setupType`, `score`, and `outcomes`.
+
+Example:
+
+```text
+GET /api/outcomes/export?format=csv&from=2026-08-23T00:00:00.000Z&to=2026-08-24T00:00:00.000Z&limit=100
+```
+
+Requires `x-api-key` or a Firebase bearer token with `admin.viewer` or `admin.operator` role. Invalid bounds, ranges over 31 days, unsupported formats, or an incomplete scan return `400 INVALID_REQUEST`; unavailable Firestore returns `503 STORAGE_UNAVAILABLE`.
+
 #### GET /api/outcomes/calibration
 
 Query empirical confidence calibration feedback metrics comparing news-monitor and alert confidence scores against realized signal outcomes. Groups evaluated signals into confidence buckets (`<0.70`, `0.70-0.75`, `0.75-0.80`, `0.80-0.85`, `0.85-0.90`, `0.90-1.00`), calculating count, average 1h and 4h returns, and target hit rate per bucket. Also computes a recommended confidence threshold with deterministic rationale once an empirical sample of at least 20 scored alerts is available. Requires `x-api-key` header (or `api-key` query parameter) or Firebase Bearer token with `admin.viewer` or `admin.operator` role.
