@@ -2523,7 +2523,6 @@ const createAlertListForm = () => {
 	});
 	form.append(sourceOptions);
 	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
-	registerFilterScope('alerts.list', { limit, before, source, enriched });
 	[
 		['', 'All alerts'],
 		['true', 'Enriched only'],
@@ -2828,10 +2827,12 @@ const createAlertListForm = () => {
 			clearFilters.disabled = false;
 		}
 	};
+	registerFilterScope('alerts.list', { limit, before, source, enriched }, updateActiveFilters);
 	clearFilters.addEventListener('click', () => {
 		source.value = '';
 		enriched.value = '';
 		resetPagination({ clearCursor: true });
+		syncConsoleUrlFromFilters();
 	});
 	[limit, source, enriched].forEach((field) => {
 		field.addEventListener('input', () => resetPagination({ clearCursor: true }));
@@ -2884,9 +2885,9 @@ const resetFilterScopes = () => {
 	activeFilterScopes = [];
 };
 
-const registerFilterScope = (scope, fields) => {
+const registerFilterScope = (scope, fields, onRestore) => {
 	if (FILTER_SCOPE_VIEWS[scope]) {
-		activeFilterScopes.push({ scope, fields: { ...fields } });
+		activeFilterScopes.push({ scope, fields: { ...fields }, onRestore });
 	}
 	return fields;
 };
@@ -2911,7 +2912,7 @@ const collectFilterParams = (view) => {
 
 const applyFilterParams = (params) => {
 	if (!params) return;
-	activeFilterScopes.forEach(({ scope, fields }) => {
+	activeFilterScopes.forEach(({ scope, fields, onRestore }) => {
 		Object.entries(fields).forEach(([name, input]) => {
 			const key = `${scope}.${name}`;
 			if (!input || !params.has(key)) return;
@@ -2919,6 +2920,7 @@ const applyFilterParams = (params) => {
 			if (input.type === 'checkbox') input.checked = value === 'true';
 			else input.value = value;
 		});
+		if (typeof onRestore === 'function') onRestore();
 	});
 };
 
