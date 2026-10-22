@@ -74,6 +74,7 @@ describe('configuration doctor process', () => {
 			ENABLE_FIRESTORE_IDEMPOTENCY: 'false',
 			ENABLE_FIREBASE_REMOTE_CONFIG: 'false',
 			ENABLE_SIGNAL_OUTCOME_TRACKING: 'false',
+			SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES: 'wat',
 			LOG_LEVEL: 'info',
 		});
 
@@ -114,6 +115,8 @@ describe('configuration doctor process', () => {
 
 		expect(output).toContain('WHATSAPP_API_KEY');
 		expect(output).toContain('Configuration warning');
+		expect(output).toContain('SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES');
+		expect(output).not.toContain('Unknown signal outcome entry-price provider');
 		expect(output).toContain('Telegram Bot is disabled');
 		expect(result.signal === 'SIGTERM' || result.code === 0).toBe(true);
 	});
