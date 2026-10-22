@@ -726,6 +726,7 @@ describe('Signal Outcomes API Integration Tests', () => {
 				symbol: 'BTCUSDT',
 				exchange: 'BINANCE',
 				setupType: undefined,
+				signal: expect.any(AbortSignal),
 			});
 			expect(res.headers['content-type']).toContain('application/x-ndjson');
 			expect(res.headers['content-disposition']).toMatch(/^attachment; filename="outcomes-/);

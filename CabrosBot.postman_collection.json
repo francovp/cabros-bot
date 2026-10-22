@@ -24513,7 +24513,7 @@
                 "type": "text"
               }
             ],
-            "description": "Exports bounded recorded signal outcomes as JSON Lines. Requires both `from` and `to` ISO-8601 timestamps, validates x-api-key, caps the window at 31 days and `limit` at 1000. Optional symbol/exchange/setupType filters narrow the result set. The export never includes rawMcpPayload, prompt text, provider responses, or credentials.",
+            "description": "Exports bounded recorded signal outcomes as JSON Lines. Requires both `from` and `to` ISO-8601 timestamps, validates x-api-key, caps the window at 31 days and `limit` at 1000, and scans at most 10,000 documents per request. If the scan cannot collect the requested number of filtered rows, narrow the time range or add a filter and retry. The export never includes rawMcpPayload, prompt text, provider responses, or credentials.",
             "url": {
               "raw": "{{baseUrl}}/api/outcomes/export?format=jsonl&from=2026-08-23T00:00:00.000Z&to=2026-08-24T00:00:00.000Z&limit=100&symbol=BTCUSDT&exchange=BINANCE",
               "host": [
@@ -24578,7 +24578,7 @@
                 "type": "text"
               }
             ],
-            "description": "Exports bounded recorded signal outcomes as CSV with the same filters and bounds as the JSONL export. Formula-leading strings (`=`, `+`, `-`, `@`, plus tab/CR/LF prefixes) are prefixed with an apostrophe for spreadsheet safety; commas, quotes, and newlines inside string values are escaped per RFC 4180.",
+            "description": "Exports bounded recorded signal outcomes as CSV with the same filters and bounds as the JSONL export. Formula-leading ASCII and full-width prefixes (`=`, `+`, `-`, `@`, `＝`, `＋`, `－`, `＠`, plus tab/CR/LF prefixes) are prefixed with an apostrophe for spreadsheet safety; commas, quotes, and newlines inside string values are escaped per RFC 4180.",
             "url": {
               "raw": "{{baseUrl}}/api/outcomes/export?format=csv&from=2026-08-23T00:00:00.000Z&to=2026-08-24T00:00:00.000Z",
               "host": [
@@ -24956,7 +24956,7 @@
                 "type": "text"
               }
             ],
-            "description": "Exports bounded recorded signal outcomes as JSON Lines. Requires both `from` and `to` ISO-8601 timestamps, validates x-api-key, caps the window at 31 days and `limit` at 1000. Optional symbol/exchange/setupType filters narrow the result set. The export never includes rawMcpPayload, prompt text, provider responses, or credentials.",
+            "description": "Exports bounded recorded signal outcomes as JSON Lines. Requires both `from` and `to` ISO-8601 timestamps, validates x-api-key, caps the window at 31 days and `limit` at 1000, and scans at most 10,000 documents per request. If the scan cannot collect the requested number of filtered rows, narrow the time range or add a filter and retry. The export never includes rawMcpPayload, prompt text, provider responses, or credentials.",
             "url": {
               "raw": "{{baseUrl}}/api/outcomes/export?format=xml&from=2026-08-23T00%3A00%3A00.000Z&to=2026-08-24T00%3A00%3A00.000Z",
               "host": [
@@ -25013,7 +25013,7 @@
                 "type": "text"
               }
             ],
-            "description": "Exports bounded recorded signal outcomes as JSON Lines. Requires both `from` and `to` ISO-8601 timestamps, validates x-api-key, caps the window at 31 days and `limit` at 1000. Optional symbol/exchange/setupType filters narrow the result set. The export never includes rawMcpPayload, prompt text, provider responses, or credentials.",
+            "description": "Exports bounded recorded signal outcomes as JSON Lines. Requires both `from` and `to` ISO-8601 timestamps, validates x-api-key, caps the window at 31 days and `limit` at 1000, and scans at most 10,000 documents per request. If the scan cannot collect the requested number of filtered rows, narrow the time range or add a filter and retry. The export never includes rawMcpPayload, prompt text, provider responses, or credentials.",
             "url": {
               "raw": "{{baseUrl}}/api/outcomes/export?format=jsonl&from=2026-08-23T00%3A00%3A00.000Z&to=2026-08-24T00%3A00%3A00.000Z&limit=1001",
               "host": [
@@ -25060,6 +25060,71 @@
                 }
               ],
               "body": "{\"success\":false,\"error\":\"Invalid limit. Use an integer between 1 and 1000.\",\"code\":\"INVALID_REQUEST\",\"requestId\":\"example-request-id\",\"retryable\":false}"
+            }
+          ]
+        },
+        {
+          "name": "GET Export Signal Outcomes (scan limit reached)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Shows the explicit incomplete-export response when more than 10,000 documents must be scanned before the requested number of filtered rows is found. Narrow the time range or add a filter and retry.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/export?format=jsonl&from=2026-08-23T00%3A00%3A00.000Z&to=2026-08-24T00%3A00%3A00.000Z&limit=100&symbol=RARE-SYMBOL",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "export"
+              ],
+              "query": [
+                {
+                  "key": "format",
+                  "value": "jsonl"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-08-23T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-08-24T00:00:00.000Z"
+                },
+                {
+                  "key": "limit",
+                  "value": "100"
+                },
+                {
+                  "key": "symbol",
+                  "value": "RARE-SYMBOL"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Incomplete export",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "example-request-id"
+                }
+              ],
+              "body": "{\"success\":false,\"error\":\"Outcome export could not complete within the 10000-document scan limit. Narrow the time range or add a filter and retry.\",\"code\":\"INVALID_REQUEST\",\"requestId\":\"example-request-id\",\"retryable\":false}"
             }
           ]
         }

@@ -71,6 +71,7 @@ const MAX_LIMIT = 100;
 const DEFAULT_EXPORT_LIMIT = 100;
 const MAX_EXPORT_LIMIT = 1000;
 const MAX_EXPORT_WINDOW_DAYS = 31;
+const MAX_EXPORT_SCAN_DOCS = 10000;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
 const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
@@ -2999,6 +3000,13 @@ function createStorageUnavailableError(cause) {
 	return error;
 }
 
+function createExportAbortedError() {
+	const error = new Error('Signal outcome export query was aborted');
+	error.name = 'AbortError';
+	error.code = 'ABORTED';
+	return error;
+}
+
 function clampOutcomeLimit(limit) {
 	if (!Number.isInteger(limit) || limit < 1) {
 		return DEFAULT_LIMIT;
@@ -3395,7 +3403,7 @@ function formatOutcomeExportRecord(doc) {
 	};
 }
 
-async function exportOutcomes({ from, to, limit, symbol, exchange, setupType } = {}) {
+async function exportOutcomes({ from, to, limit, symbol, exchange, setupType, signal, maxScanDocs } = {}) {
 	if (!isEnabled()) {
 		return null;
 	}
@@ -3405,9 +3413,18 @@ async function exportOutcomes({ from, to, limit, symbol, exchange, setupType } =
 	}
 	const window = buildOutcomeExportWindow({ from, to, limit });
 	const scanLimit = Math.max(window.limit, MAX_LIMIT);
+	const scanBudget = Number.isSafeInteger(maxScanDocs) && maxScanDocs > 0
+		? Math.min(maxScanDocs, MAX_EXPORT_SCAN_DOCS)
+		: MAX_EXPORT_SCAN_DOCS;
 	const outcomes = [];
+	let totalScanned = 0;
 	let pageCursor = null;
 	while (outcomes.length < window.limit) {
+		if (signal && signal.aborted) {
+			throw createExportAbortedError();
+		}
+		const remainingScanBudget = scanBudget - totalScanned;
+		const queryLimit = Math.min(scanLimit, remainingScanBudget);
 		let query = firestore
 			.collection(COLLECTION_NAME)
 			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
@@ -3419,14 +3436,21 @@ async function exportOutcomes({ from, to, limit, symbol, exchange, setupType } =
 		}
 		let snapshot;
 		try {
-			snapshot = await query.limit(scanLimit).get();
+			snapshot = await query.limit(queryLimit).get();
 		} catch (error) {
+			if (signal && signal.aborted) {
+				throw createExportAbortedError();
+			}
 			console.warn('[SignalOutcomeService] Failed to export signal outcomes from Firestore:', error.message);
 			throw createStorageUnavailableError(error);
+		}
+		if (signal && signal.aborted) {
+			throw createExportAbortedError();
 		}
 		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
 			break;
 		}
+		totalScanned += snapshot.docs.length;
 		for (const doc of snapshot.docs) {
 			if (isRetentionExpired(doc.data() || {})) {
 				continue;
@@ -3446,12 +3470,22 @@ async function exportOutcomes({ from, to, limit, symbol, exchange, setupType } =
 				break;
 			}
 		}
-		if (snapshot.docs.length < scanLimit) {
+		if (outcomes.length >= window.limit) {
 			break;
+		}
+		if (snapshot.docs.length < queryLimit) {
+			break;
+		}
+		if (totalScanned >= scanBudget) {
+			const error = new Error(`Outcome export could not complete within the ${scanBudget}-document scan limit. Narrow the time range or add a filter and retry.`);
+			error.code = 'INVALID_REQUEST';
+			throw error;
 		}
 		pageCursor = getDocCursorValues(snapshot.docs[snapshot.docs.length - 1]);
 		if (!pageCursor) {
-			break;
+			const error = new Error(`Outcome export could not complete within the ${scanBudget}-document scan limit. Narrow the time range or add a filter and retry.`);
+			error.code = 'INVALID_REQUEST';
+			throw error;
 		}
 	}
 	return { window, outcomes };

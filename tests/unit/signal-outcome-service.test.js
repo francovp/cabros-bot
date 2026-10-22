@@ -11,6 +11,7 @@ const {
 	__mockAdd: mockAdd,
 	__mockCollection: mockCollection,
 	__mockGet: mockGet,
+	__mockLimit: mockLimit,
 	__mockDocGet: mockDocGet,
 	__mockDocSet: mockDocSet,
 	__mockDocUpdate: mockDocUpdate,
@@ -4251,6 +4252,72 @@ describe('SignalOutcomeService', () => {
 			expect(res.window.to).toBe('2026-08-24T00:00:00.000Z');
 			expect(res.window.maxDays).toBe(31);
 			expect(res.outcomes).toEqual([]);
+		});
+
+		it('rejects incomplete exports when the scan budget is exhausted before the result limit', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const receivedAt = admin.firestore.Timestamp.fromDate(new Date('2026-08-23T12:00:00.000Z'));
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: Array.from({ length: 3 }, (_, index) => buildQueryDoc(`other-${index}`, {
+					receivedAt,
+					symbol: 'OTHER',
+					exchange: 'BINANCE',
+				})),
+			});
+
+			await expect(SignalOutcomeService.exportOutcomes({
+				from: '2026-08-23T00:00:00.000Z',
+				to: '2026-08-24T00:00:00.000Z',
+				limit: 10,
+				symbol: 'TARGET',
+				maxScanDocs: 3,
+			})).rejects.toMatchObject({
+				code: 'INVALID_REQUEST',
+				message: expect.stringContaining('scan limit'),
+			});
+			expect(mockLimit).toHaveBeenCalledWith(3);
+		});
+
+		it('includes a matching document at the end of the scan budget', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const receivedAt = admin.firestore.Timestamp.fromDate(new Date('2026-08-23T12:00:00.000Z'));
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('other-1', { receivedAt, symbol: 'OTHER', exchange: 'BINANCE' }),
+					buildQueryDoc('other-2', { receivedAt, symbol: 'OTHER', exchange: 'BINANCE' }),
+					buildQueryDoc('target-3', { receivedAt, symbol: 'TARGET', exchange: 'BINANCE' }),
+				],
+			});
+
+			const result = await SignalOutcomeService.exportOutcomes({
+				from: '2026-08-23T00:00:00.000Z',
+				to: '2026-08-24T00:00:00.000Z',
+				limit: 1,
+				symbol: 'TARGET',
+				maxScanDocs: 3,
+			});
+
+			expect(result.outcomes).toEqual([expect.objectContaining({ id: 'target-3', symbol: 'TARGET' })]);
+			expect(mockLimit).toHaveBeenCalledWith(3);
+		});
+
+		it('stops export pagination when the request signal is aborted', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const controller = new AbortController();
+			mockGet.mockImplementationOnce(async () => {
+				controller.abort();
+				return { empty: true, docs: [] };
+			});
+
+			await expect(SignalOutcomeService.exportOutcomes({
+				from: '2026-08-23T00:00:00.000Z',
+				to: '2026-08-24T00:00:00.000Z',
+				symbol: 'TARGET',
+				signal: controller.signal,
+			})).rejects.toMatchObject({ name: 'AbortError', code: 'ABORTED' });
+			expect(mockGet).toHaveBeenCalledTimes(1);
 		});
 
 		it('returns formatted export records with safe fields only', async () => {

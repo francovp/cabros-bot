@@ -204,7 +204,7 @@ Retrieve one stored signal outcome by Firestore document ID. Its fields use the 
 
 #### GET /api/outcomes/export
 
-Stream a bounded outcome window as JSON Lines (`application/x-ndjson`) or CSV (`text/csv`). Both `from` and `to` are required ISO-8601 timestamps and may span at most 31 days. `limit` accepts `1`–`1000` and defaults to `100`; optional `symbol`, `exchange`, and `setupType` filters narrow the rows. CSV fields are escaped and formula-leading text is prefixed with an apostrophe. Export records contain only `id`, `receivedAt`, `source`, `symbol`, `exchange`, `side`, `price`, `setupType`, `score`, and `outcomes`.
+Stream a bounded outcome window as JSON Lines (`application/x-ndjson`) or CSV (`text/csv`). Both `from` and `to` are required ISO-8601 timestamps and may span at most 31 days. `limit` accepts `1`–`1000` and defaults to `100`; optional `symbol`, `exchange`, and `setupType` filters narrow the rows. Each request scans at most 10,000 documents; if that cannot collect the requested row limit, the endpoint returns `400 INVALID_REQUEST` and asks you to narrow the time range or add a filter. The scan also stops paging when the request deadline expires or the client disconnects. CSV fields are escaped and formula-leading ASCII and full-width text is prefixed with an apostrophe. Export records contain only `id`, `receivedAt`, `source`, `symbol`, `exchange`, `side`, `price`, `setupType`, `score`, and `outcomes`.
 
 Example:
 
@@ -212,7 +212,7 @@ Example:
 GET /api/outcomes/export?format=csv&from=2026-08-23T00:00:00.000Z&to=2026-08-24T00:00:00.000Z&limit=100
 ```
 
-Requires `x-api-key` or a Firebase bearer token with `admin.viewer` or `admin.operator` role. Invalid bounds, ranges over 31 days, or unsupported formats return `400 INVALID_REQUEST`; unavailable Firestore returns `503 STORAGE_UNAVAILABLE`.
+Requires `x-api-key` or a Firebase bearer token with `admin.viewer` or `admin.operator` role. Invalid bounds, ranges over 31 days, unsupported formats, or an incomplete scan return `400 INVALID_REQUEST`; unavailable Firestore returns `503 STORAGE_UNAVAILABLE`.
 
 #### GET /api/outcomes/calibration
 

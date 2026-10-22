@@ -107,7 +107,7 @@ function escapeCsvValue(value) {
 	if (value === null || value === undefined) return '';
 	const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
 	const safeSerialized = typeof value === 'string'
-		&& /^[\t\r\n]*[=+\-@]/.test(value)
+		&& /^[\t\r\n]*[=+\-@＝＋－＠]/u.test(value)
 		&& !Number.isFinite(Number(value))
 		? `'${serialized}`
 		: serialized;
@@ -447,6 +447,7 @@ function exportOutcomes(req, res) {
 			symbol,
 			exchange,
 			setupType,
+			signal: req.requestDeadlineSignal,
 		});
 		const extension = format === 'csv' ? 'csv' : 'jsonl';
 		res.set('Content-Disposition', `attachment; filename="outcomes-${result.window.from.substring(0, 10)}-${result.window.to.substring(0, 10)}.${extension}"`);
@@ -529,6 +530,7 @@ function getOutcomesCalibration(req, res) {
 
 function handleAsync(req, res, endpoint, handler) {
 	return Promise.resolve(handler()).catch((error) => {
+		if (error.code === 'ABORTED' && req.requestDeadlineSignal?.aborted) return undefined;
 		console.error('[OutcomesController] Request failed:', error.message);
 		const statusCode = error.statusCode || error.status || (error.code === signalOutcomeService.STORAGE_UNAVAILABLE_CODE ? 503 : (error.code === 'INVALID_REQUEST' ? 400 : 500));
 		sentryService.captureRuntimeError({
@@ -567,7 +569,7 @@ function handleError(error, req, res, route) {
 		});
 	}
 
-	if (statusCode === 400) {
+	if (statusCode === 400 || error.code === 'INVALID_REQUEST') {
 		return sendErrorFrom(res, 400, {
 			error: error.message,
 			code: 'INVALID_REQUEST',

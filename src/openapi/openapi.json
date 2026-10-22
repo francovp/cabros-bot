@@ -3844,7 +3844,7 @@
         ],
         "summary": "Export bounded signal outcomes",
         "operationId": "exportOutcomes",
-        "description": "Stream a bounded window of recorded signal outcomes as JSONL or CSV with optional symbol, exchange, and setupType filters. Requires both `from` and `to` ISO-8601 timestamps and caps the window at 31 days and `limit` at 1000. The export never includes rawMcpPayload, prompt text, provider responses, or credentials.",
+        "description": "Stream a bounded window of recorded signal outcomes as JSONL or CSV with optional symbol, exchange, and setupType filters. Requires both `from` and `to` ISO-8601 timestamps and caps the window at 31 days and `limit` at 1000. Each request scans at most 10,000 documents; if that scan cannot collect the requested result limit, the endpoint returns 400 INVALID_REQUEST and asks the caller to narrow the time range or add a filter. The export never includes rawMcpPayload, prompt text, provider responses, or credentials.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FromRequired"

@@ -984,6 +984,10 @@ describe('Outcomes Controller Unit Tests', () => {
 				expect(escapeCsvValue('@host')).toBe(`'@host`);
 				expect(escapeCsvValue('\t=attack')).toBe(`'\t=attack`);
 				expect(escapeCsvValue('\r=attack')).toBe(`"'\r=attack"`);
+				expect(escapeCsvValue('＝formula')).toBe(`'＝formula`);
+				expect(escapeCsvValue('＋formula')).toBe(`'＋formula`);
+				expect(escapeCsvValue('－formula')).toBe(`'－formula`);
+				expect(escapeCsvValue('＠formula')).toBe(`'＠formula`);
 				expect(escapeCsvValue('=SUM(1,1)')).toBe(`"'=SUM(1,1)"`);
 				expect(escapeCsvValue('=@SUM(1,1), "quoted"\r\n+next')).toBe(`"'=@SUM(1,1), ""quoted""\r\n+next"`);
 			});
@@ -1112,6 +1116,27 @@ describe('Outcomes Controller Unit Tests', () => {
 	});
 
 	describe('exportOutcomes', () => {
+		it('returns 400 for an incomplete export scan', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const error = new Error('Outcome export exceeded the scan limit. Narrow the time range or add a filter.');
+			error.code = 'INVALID_REQUEST';
+			signalOutcomeService.exportOutcomes.mockRejectedValue(error);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/export',
+				query: { from: '2026-08-23T00:00:00.000Z', to: '2026-08-24T00:00:00.000Z' },
+			});
+			const res = httpMocks.createResponse();
+
+			await exportOutcomes(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData()).toEqual(expect.objectContaining({
+				error: error.message,
+				code: 'INVALID_REQUEST',
+			}));
+		});
+
 		it('returns 403 when feature is disabled', async () => {
 			signalOutcomeService.isEnabled.mockReturnValue(false);
 			const req = httpMocks.createRequest({
@@ -1243,6 +1268,28 @@ describe('Outcomes Controller Unit Tests', () => {
 			expect(res.getHeader('Content-Type')).toContain('text/csv');
 			expect(res._getData()).toContain('id,receivedAt,source,symbol,exchange,side,price,setupType,score,outcomes');
 			expect(res._getData()).toContain('outcome-1,2026-08-23T12:00:00.000Z,,BTCUSDT,,BUY,');
+		});
+
+		it('passes the request deadline signal to the export service', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.exportOutcomes.mockResolvedValue({
+				window: { from: '2026-08-23T00:00:00.000Z', to: '2026-08-24T00:00:00.000Z', limit: 100, maxDays: 31 },
+				outcomes: [],
+			});
+			const requestDeadlineSignal = new AbortController().signal;
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/export',
+				query: { from: '2026-08-23T00:00:00.000Z', to: '2026-08-24T00:00:00.000Z' },
+			});
+			req.requestDeadlineSignal = requestDeadlineSignal;
+			const res = httpMocks.createResponse();
+
+			await exportOutcomes(req, res);
+
+			expect(signalOutcomeService.exportOutcomes).toHaveBeenCalledWith(expect.objectContaining({
+				signal: requestDeadlineSignal,
+			}));
 		});
 
 		it('returns 503 when storage is unavailable', async () => {
