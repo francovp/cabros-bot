@@ -1367,3 +1367,51 @@ Use preview/staging environments as independent reproduction surfaces when they 
 - See Also: Issue #1285
 - Pattern-Key: harden.cross_process_reproduction
 ---
+
+## [LRN-20261003-001] correction
+
+**Logged**: 2026-10-03T21:21:27Z
+**Priority**: medium
+**Status**: pending
+**Area**: git-workflow
+
+### Summary
+Branch 43 commits behind master with 7/10 touched files also changed on master — must rebase before merge.
+
+### Details
+In PR #1266, @francovp flagged that the branch was **43 commits behind `master`**, and **7 of the 10 files it touches have also changed on `master` since the merge base**. This creates a high risk of merge conflicts and semantic drift. The PR was not blocked on design grounds, but the mechanical prerequisite of rebasing onto a current `master` was explicitly required before merge.
+
+### Suggested Action
+Always rebase feature branches onto the latest `master` before requesting review or merge, especially when the branch is long-lived or touches frequently-changed files. Use `git rebase origin/master` or squash-merge to maintain linear history.
+
+### Metadata
+- Source: user_feedback
+- Related Files: PR #1266
+- Tags: git-workflow, rebase, merge-hygiene
+- See Also: PR #1266
+- Pattern-Key: harden.rebase_before_merge
+---
+
+## [LRN-20261003-002] correction
+
+**Logged**: 2026-10-03T23:33:47Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Branch predates master's MCP error taxonomy — TradingViewMCPError classification changed on master.
+
+### Details
+In PR #1264, @francovp noted: "This branch predates master's MCP error taxonomy. `TradingViewMCPError` classification changed on master." The branch was built on an outdated error taxonomy, meaning its error handling would be misaligned with the current master implementation. This is a semantic drift issue where the branch's assumptions about error types/codes no longer match the upstream reality.
+
+### Suggested Action
+Before starting work on a feature that interacts with shared error taxonomies or classification systems, verify the current state on `master`. Rebase frequently to incorporate upstream changes to shared types, errors, and contracts.
+
+### Metadata
+- Source: user_feedback
+- Related Files: PR #1264, TradingViewMCPError
+- Tags: error-handling, taxonomy, semantic-drift, rebase
+- See Also: PR #1264
+- Pattern-Key: harden.error_taxonomy_sync
+---
