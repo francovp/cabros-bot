@@ -1180,14 +1180,190 @@ Correction from @francovp on PR #1448:
 
 **Source URL**: https://github.com/francovp/cabros-bot/pull/1448#issuecomment-6328873753
 
+- Pattern-Key: harden.feedback_response
+
+---
+
+## [LRN-20261023-001] correction
+
+**Logged**: 2026-10-23T02:17:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Wrong dependency key cited in /api/status Telegram bot status claim.
+
+### Details
+In Issue #1286, @francovp corrected their own earlier claim: wrote that `/api/status` reports `dependencies.telegramBot` as `ready: true`, but **it does not** — that key is absent from the response entirely. The actual key is `dependencies.telegram`:
+
+```json
+"dependencies": { "telegram": { "enabled": true, "configured": true, "ready": true, "status": "ready" } }
+```
+
 ### Suggested Action
-Review the feedback and implement necessary changes.
+Always verify response structures against actual API output before citing specific keys in issues or documentation. Use live endpoint probes rather than assumptions.
 
 ### Metadata
 - Source: user_feedback
-- Related Files: TBD
-- Tags: correction, feedback
-- See Also: https://github.com/francovp/cabros-bot/pull/1448#issuecomment-6328873753
-- Pattern-Key: harden.feedback_response
+- Related Files: src/controllers/status.js
+- Tags: correction, api-contract, verification
+- See Also: Issue #1286
+- Pattern-Key: harden.response_verification
 
+---
+
+## [LRN-20261023-002] correction
+
+**Logged**: 2026-10-23T02:17:00Z
+**Priority**: high
+**Status**: pending
+**Area**: infra
+
+### Summary
+Cheapest fix for Telegram preview polling conflict was a config change, not code change.
+
+### Details
+In Issue #1286, @francovp initially framed the fix as requiring "platform-specific detection" code changes. Upon re-reading `src/lib/deploymentEnvironment.js`, discovered `isPreviewEnvironment()` already handles the deployment naming convention via a third clause that was missed. The fix is setting `RAILWAY_ENVIRONMENT_NAME=cabros-bot-pr-<N>` — a pure config change.
+
+### Suggested Action
+Before proposing code changes, fully read existing utility functions. The solution often already exists in the codebase; the gap is knowing it's there.
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/lib/deploymentEnvironment.js, render.yaml
+- Tags: correction, config-over-code, code-reuse
+- See Also: Issue #1286
+- Pattern-Key: simplify.existing_utilities
+
+---
+
+## [LRN-20261023-003] correction
+
+**Logged**: 2026-10-23T02:17:00Z
+**Priority**: high
+**Status**: pending
+**Area**: infra
+
+### Summary
+Config fix verified by execution, not just code reading.
+
+### Details
+In Issue #1286, @francovp recommended setting `RAILWAY_ENVIRONMENT_NAME=cabros-bot-pr-<N>` based on reading the regex in `isPreviewEnvironment()`. Then **actually executed** the function against real observed preview names to verify:
+
+```
+PASS  RAILWAY_ENVIRONMENT_NAME=cabros-bot-pr-1280 (proposed fix)   => true
+PASS  RAILWAY_ENVIRONMENT_NAME=cabros-bot-pr-359 (existing test)   => true
+PASS  RAILWAY_GIT_PULL_REQUEST_NUMBER=1280                          => true
+```
+
+### Suggested Action
+Always verify config hypotheses by running the actual code paths, not just reading them. A regex that "looks right" may have edge cases only execution reveals.
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/lib/deploymentEnvironment.js
+- Tags: correction, verification, empirical-testing
+- See Also: Issue #1286
+- Pattern-Key: harden.empirical_verification
+
+---
+
+## [LRN-20261023-004] correction
+
+**Logged**: 2026-10-23T02:17:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Missing composite index hypothesis for Firestore read failures was RULED OUT by direct test.
+
+### Details
+In Issue #1285, @francovp listed "missing composite index for the `receivedAt`-ordered query" as a candidate cause. Tested with a discriminating probe: both a **document read** (`doc(id).get()`) and a **query read** (`orderBy`) failed identically with 503. Since document reads require no composite index, the index hypothesis is falsified.
+
+### Suggested Action
+Use discriminating tests that isolate variables. When multiple failure modes could produce the same symptom, design a probe that distinguishes them — here, document read vs query read.
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/services/storage/
+- Tags: correction, debugging, firestore, hypothesis-testing
+- See Also: Issue #1285
+- Pattern-Key: harden.discriminating_tests
+
+---
+
+## [LRN-20261023-005] correction
+
+**Logged**: 2026-10-23T02:17:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+`/api/jobs` control was invalid — it swallows read failures and falls back to in-memory data.
+
+### Details
+In Issue #1285, @francovp claimed `"/api/jobs` returning 200 with 0 jobs shows the shared client reaches *a* Firestore database fine." This evidence **does not hold**. `JobRepository.list()` catches Firestore read errors and falls through to in-memory jobs (`src/services/jobs/JobRepository.js:698-700`), so a 200 response does not prove Firestore reads work.
+
+### Suggested Action
+Never assume a successful HTTP response proves downstream dependency health when fallback paths exist. Always check the actual code path for error swallowing.
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/services/jobs/JobRepository.js
+- Tags: correction, debugging, fallback-paths, observability
+- See Also: Issue #1285
+- Pattern-Key: harden.fallback_awareness
+
+---
+
+## [LRN-20261023-006] correction
+
+**Logged**: 2026-10-23T02:17:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Null-client hypothesis for Firestore reads refuted by live alert arrival.
+
+### Details
+In Issue #1285, @francovp set a falsifiable prediction: "if the client is null now, the next alert that arrives must record a write failure (`writesFailed` ticks up while `writesSucceeded` stays flat)." A new alert arrived — `writesSucceeded` increased, `writesFailed` stayed at 0. The null-client hypothesis is **refuted** by production evidence.
+
+### Suggested Action
+Make falsifiable predictions with concrete observability signals. When the predicted event occurs, the outcome settles the hypothesis without guesswork.
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/services/storage/
+- Tags: correction, hypothesis-testing, observability, falsifiable-predictions
+- See Also: Issue #1285
+- Pattern-Key: harden.falsifiable_predictions
+
+---
+
+## [LRN-20261023-007] correction
+
+**Logged**: 2026-10-23T02:17:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+"Production-specific config" hypothesis refuted by cross-process reproduction on 3/3 previews.
+
+### Details
+In Issue #1285, @francovp tested whether the Firestore read failure was specific to production config. Previews are **separate processes** sharing production credentials — an independent sample. Result: **3/3 previews fail identically to production** (`GET /api/alerts?limit=1 -> 503`). The "production-specific config" hypothesis is refuted.
+
+### Suggested Action
+Use preview/staging environments as independent reproduction surfaces when they share the same downstream dependencies. Identical failure across independent processes strongly indicates a shared-root-cause (permissions, network, data) rather than local config.
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/services/storage/
+- Tags: correction, debugging, cross-process, reproduction
+- See Also: Issue #1285
+- Pattern-Key: harden.cross_process_reproduction
 ---
