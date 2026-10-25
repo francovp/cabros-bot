@@ -304,6 +304,9 @@ describe('RemoteConfigService', () => {
 			['ALERT_SCHEDULER_BATCH_LIMIT', '101', 10],
 			['TRADINGVIEW_MCP_CACHE_TTL_MS', '9999', 90000],
 			['TRADINGVIEW_MCP_CACHE_TTL_MS', '600001', 90000],
+			['SYMBOL_ANALYSIS_MIN_RISK_REWARD_RATIO', 'not-a-number', 1.5],
+			['SYMBOL_ANALYSIS_MIN_RISK_REWARD_RATIO', '0', 1.5],
+			['SYMBOL_ANALYSIS_MIN_RISK_REWARD_RATIO', '20', 1.5],
 		].forEach(([key, value, expected]) => {
 			process.env[key] = value;
 			expect(remoteConfigService.getRuntimeConfig()[key]).toBe(expected);
@@ -329,6 +332,7 @@ describe('RemoteConfigService', () => {
 		process.env.TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS = '20000';
 		process.env.EXPANDED_ANALYSIS_ALERT_CONCURRENCY = '2';
 		process.env.REQUEST_TIMEOUT_MS = '45000';
+		process.env.SYMBOL_ANALYSIS_MIN_RISK_REWARD_RATIO = '2.5';
 
 		await remoteConfigService.start();
 
@@ -341,6 +345,7 @@ describe('RemoteConfigService', () => {
 			TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS: 20000,
 			EXPANDED_ANALYSIS_ALERT_CONCURRENCY: 2,
 			REQUEST_TIMEOUT_MS: 45000,
+			SYMBOL_ANALYSIS_MIN_RISK_REWARD_RATIO: 2.5,
 		}));
 	});
 
