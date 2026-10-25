@@ -10102,6 +10102,30 @@
                   "registered": 0,
                   "drained": 0,
                   "failed": 0
+                },
+                "sentry": {
+                  "enabled": true,
+                  "configured": true,
+                  "ready": true,
+                  "status": "ready",
+                  "runtime": {
+                    "initialized": true,
+                    "environment": "production",
+                    "release": "cabros-bot@abc1234",
+                    "tracesSampleRate": 0.1,
+                    "tracingEnabled": true,
+                    "dsnRouting": {
+                      "configured": true,
+                      "host": "o123.ingest.sentry.io",
+                      "projectId": "4510434640330752"
+                    }
+                  },
+                  "profiling": {
+                    "enabled": true,
+                    "configured": true,
+                    "ready": true,
+                    "status": "ready"
+                  }
                 }
               }
             }
@@ -19147,10 +19171,144 @@
               },
               "presetBoundDestinations": {
                 "$ref": "#/components/schemas/PresetBoundDestinationsDependency"
+              },
+              "sentry": {
+                "$ref": "#/components/schemas/SentryDependency"
               }
             }
           }
         }
+      },
+      "SentryRuntimeDiagnostics": {
+        "type": "object",
+        "description": "Effective Sentry environment, release, trace sample rate, tracing state, and sanitized DSN routing. DSN credentials, path prefixes, and query parameters are omitted.",
+        "required": [
+          "initialized",
+          "environment",
+          "release",
+          "tracesSampleRate",
+          "tracingEnabled",
+          "dsnRouting"
+        ],
+        "properties": {
+          "initialized": {
+            "type": "boolean"
+          },
+          "environment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "release": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tracesSampleRate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1
+          },
+          "tracingEnabled": {
+            "type": "boolean"
+          },
+          "dsnRouting": {
+            "type": "object",
+            "required": [
+              "configured",
+              "host",
+              "projectId"
+            ],
+            "properties": {
+              "configured": {
+                "type": "boolean"
+              },
+              "host": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "projectId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "SentryDependency": {
+        "type": "object",
+        "description": "Sentry dependency readiness with a non-secret effective runtime configuration projection.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "runtime",
+          "profiling"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "misconfigured",
+              "ready"
+            ]
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/SentryRuntimeDiagnostics"
+          },
+          "profiling": {
+            "type": "object",
+            "required": [
+              "enabled",
+              "configured",
+              "ready",
+              "status"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "configured": {
+                "type": "boolean"
+              },
+              "ready": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "disabled",
+                  "misconfigured",
+                  "ready"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
       },
       "TradingViewMcpRuntimeStatus": {
         "type": "object",

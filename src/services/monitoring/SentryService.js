@@ -119,7 +119,7 @@ const FEATURE_NAMES = {
 };
 
 const {
-	getDeploymentCommit,
+	getDeploymentIdentity,
 	getDeploymentRepoSlug,
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
@@ -177,7 +177,7 @@ class SentryService {
 			return process.env.SENTRY_RELEASE;
 		}
 
-		const deploymentCommit = getDeploymentCommit();
+		const deploymentCommit = getDeploymentIdentity().gitSha;
 		if (deploymentCommit) {
 			const shortCommit = deploymentCommit.substring(0, 7);
 			const repoSlug = getDeploymentRepoSlug();
@@ -398,6 +398,48 @@ class SentryService {
 	 */
 	getState() {
 		return { ...this.state };
+	}
+
+	/**
+	 * Get non-secret effective runtime settings for the protected status endpoint.
+	 * DSN credentials, path prefixes, and query parameters are deliberately omitted.
+	 * @returns {{initialized: boolean, environment: string|null, release: string|null, tracesSampleRate: number|null, tracingEnabled: boolean, dsnRouting: {configured: boolean, host: string|null, projectId: string|null}}}
+	 */
+	getRuntimeDiagnostics() {
+		const config = this.config;
+		const dsnRouting = {
+			configured: Boolean(config && config.dsn),
+			host: null,
+			projectId: null,
+		};
+
+		if (dsnRouting.configured) {
+			try {
+				const parsedDsn = new URL(config.dsn);
+				const lastPathSegment = parsedDsn.pathname.split('/').filter(Boolean).pop();
+				if (['http:', 'https:'].includes(parsedDsn.protocol)) {
+					dsnRouting.host = parsedDsn.host || null;
+					dsnRouting.projectId = lastPathSegment && /^\d+$/.test(lastPathSegment)
+						? lastPathSegment
+						: null;
+				}
+			} catch {
+				// Keep malformed DSNs out of status while still showing that a value was configured.
+			}
+		}
+
+		const tracesSampleRate = config && config.tracesSampleRate !== undefined
+			? config.tracesSampleRate
+			: null;
+
+		return {
+			initialized: this.state.enabled,
+			environment: config ? config.environment : null,
+			release: config && config.release ? config.release : null,
+			tracesSampleRate,
+			tracingEnabled: this.state.enabled && tracesSampleRate !== null && tracesSampleRate > 0,
+			dsnRouting,
+		};
 	}
 
 	/**

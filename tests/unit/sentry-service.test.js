@@ -10,6 +10,7 @@
 
 const Sentry = require('@sentry/node');
 const { SentryService, FEATURE_NAMES, shouldSendAlertContent } = require('../../src/services/monitoring/SentryService');
+const { getDeploymentIdentity } = require('../../src/lib/deploymentEnvironment');
 
 describe('SentryService', () => {
 	let service;
@@ -128,12 +129,16 @@ describe('SentryService', () => {
 				expect(release).toBe('cabros-bot@abc123d');
 			});
 
-			it('should return undefined when no release info available', () => {
+			it('should derive a release from the local git identity when deployment metadata is absent', () => {
 				delete process.env.SENTRY_RELEASE;
 				delete process.env.RENDER_GIT_COMMIT;
+				delete process.env.RENDER_GIT_REPO_SLUG;
+
+				const localGitSha = getDeploymentIdentity().gitSha;
+				expect(localGitSha).toMatch(/^[0-9a-f]{7,40}$/i);
 
 				const release = service._deriveRelease();
-				expect(release).toBeUndefined();
+				expect(release).toBe(`cabros-bot@${localGitSha.substring(0, 7)}`);
 			});
 		});
 
@@ -264,6 +269,54 @@ describe('SentryService', () => {
 
 				const config = service._buildConfiguration();
 				expect(config.tracesSampleRate).toBe(1);
+			});
+		});
+
+		describe('runtime diagnostics', () => {
+			it('should expose effective routing and sampling without exposing DSN credentials', () => {
+				process.env.ENABLE_SENTRY = 'true';
+				process.env.SENTRY_DSN = 'https://public-key:private-secret@sentry.example:9000/prefix/4510434640330752?token=query-secret';
+				process.env.SENTRY_ENVIRONMENT = 'production';
+				process.env.SENTRY_RELEASE = 'cabros-bot@abc1234';
+				process.env.SENTRY_TRACES_SAMPLE_RATE = '0.25';
+
+				service.init();
+
+				const diagnostics = service.getRuntimeDiagnostics();
+				expect(diagnostics).toEqual({
+					initialized: true,
+					environment: 'production',
+					release: 'cabros-bot@abc1234',
+					tracesSampleRate: 0.25,
+					tracingEnabled: true,
+					dsnRouting: {
+						configured: true,
+						host: 'sentry.example:9000',
+						projectId: '4510434640330752',
+					},
+				});
+				expect(JSON.stringify(diagnostics)).not.toContain('public-key');
+				expect(JSON.stringify(diagnostics)).not.toContain('private-secret');
+				expect(JSON.stringify(diagnostics)).not.toContain('query-secret');
+			});
+
+			it('should report tracing disabled when the sample rate is missing or zero', () => {
+				process.env.ENABLE_SENTRY = 'true';
+				process.env.SENTRY_DSN = 'https://key@sentry.example/123';
+				delete process.env.SENTRY_TRACES_SAMPLE_RATE;
+				service.init();
+
+				expect(service.getRuntimeDiagnostics()).toMatchObject({
+					tracesSampleRate: null,
+					tracingEnabled: false,
+				});
+
+				process.env.SENTRY_TRACES_SAMPLE_RATE = '0';
+				service.init();
+				expect(service.getRuntimeDiagnostics()).toMatchObject({
+					tracesSampleRate: 0,
+					tracingEnabled: false,
+				});
 			});
 		});
 

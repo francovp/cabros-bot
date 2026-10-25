@@ -57,8 +57,8 @@ const telegramCommandAuth = require('../lib/telegramCommandAuth');
 const { getAdminAuthStatus } = require('../lib/adminAuth');
 const { getNotificationManager } = require('./webhooks/handlers/alert/alert');
 const {
-	getDeploymentCommit,
 	getBuildInfo,
+	getDeploymentIdentity,
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
 } = require('../lib/deploymentEnvironment');
@@ -494,6 +494,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			enabled: sentryEnabled,
 			configured: hasValue(process.env.SENTRY_DSN),
 		}),
+		runtime: sentryService.getRuntimeDiagnostics(),
 		profiling: dependencyStatus({
 			enabled: sentryProfilingEnabled,
 			configured: hasValue(process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE),

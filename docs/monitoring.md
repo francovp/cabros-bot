@@ -27,6 +27,8 @@ When enabled, it also forwards configured console levels to Sentry Logs using th
 - **Optional Tracing/Spans**: Enable transaction traces plus custom spans for alert processing, news analysis, and multi-channel delivery
 - **Graceful Degradation**: Works without affecting existing fallback mechanisms
 
+The protected `GET /api/status` response exposes `dependencies.sentry.runtime` with the effective environment, release, trace sample rate, tracing-enabled state, and DSN host/project routing. It omits DSN credentials, path prefixes, and query parameters. An unset trace sample rate remains disabled; use this diagnostic to confirm the deployed value before comparing route latency.
+
 ### Configuration
 
 ```bash
