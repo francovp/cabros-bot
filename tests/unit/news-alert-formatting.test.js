@@ -203,6 +203,48 @@ describe('News Alert Source Formatting', () => {
 		});
 	});
 
+	describe('MarkdownV2Formatter.formatNewsAlert derived barriers (issue #809 / CB-???)', () => {
+		it('renders the Niveles derivados line when barriers.source is derived', () => {
+			const message = formatter.formatNewsAlert({
+				originalText: 'BTCUSDT: breakout',
+				summary: '*Sentiment:* Bullish 🚀 (0.8)',
+				extraText: '_Model Confidence: 90%_',
+				barriers: {
+					stop: 98,
+					target: 103,
+					side: 'BUY',
+					stopPct: 0.02,
+					rewardMultiplier: 1.5,
+					source: 'derived',
+					timeHorizon: 'short_term',
+				},
+			});
+
+			expect(message).toContain('_Niveles derivados \\(Corto plazo, 2% stop, R\\:R 1\\.5\\)_');
+		});
+
+		it('omits the Niveles derivados line when barriers.source is marketContext', () => {
+			const message = formatter.formatNewsAlert({
+				originalText: 'BTCUSDT: marketContext',
+				summary: '*Sentiment:* Bullish 🚀 (0.8)',
+				extraText: '_Model Confidence: 90%_',
+				barriers: { source: 'marketContext' },
+			});
+
+			expect(message).not.toContain('Niveles derivados');
+		});
+
+		it('omits the Niveles derivados line when barriers is missing', () => {
+			const message = formatter.formatNewsAlert({
+				originalText: 'BTCUSDT: no barriers',
+				summary: '*Sentiment:* Bullish 🚀 (0.8)',
+				extraText: '_Model Confidence: 90%_',
+			});
+
+			expect(message).not.toContain('Niveles derivados');
+		});
+	});
+
 	describe('formatAlertMessage with SearchResult objects', () => {
 		it('should format sources as markdown links with titles', () => {
 			const analysis = {
@@ -512,6 +554,21 @@ describe('News Alert Source Formatting', () => {
 			expect(formatted).toContain('Target: 89460.52');
 			expect(formatted).toContain('Risk/Reward: 2');
 		});
+
+		it('should render equity session state in MarkdownV2Formatter and WhatsAppMarkdownFormatter', async () => {
+			const equityAlert = {
+				original_text: 'NASDAQ:AAPL(60) pasó a señal de COMPRA',
+				sentiment: 'BULLISH',
+				session: 'regular',
+			};
+
+			const mdOutput = formatter.formatWebhookAlert(equityAlert);
+			expect(mdOutput).toContain('Sesión: regular');
+
+			const waOutput = await whatsappFormatter.formatWebhookAlert(equityAlert);
+			expect(waOutput).toContain('Sesión: regular');
+		});
 	});
 });
+
 

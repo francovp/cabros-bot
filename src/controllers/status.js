@@ -1,4 +1,5 @@
 const packageJson = require('../../package.json');
+const { sendErrorFrom } = require('../lib/errorEnvelope');
 const sentryService = require('../services/monitoring/SentryService');
 const {
 	scannerPresetService,
@@ -6,9 +7,11 @@ const {
 } = require('../services/scannerPresets');
 const { newsMonitorSchedulerService } = require('../services/newsMonitorScheduler');
 const { alertSchedulerService } = require('../services/scheduler');
+const { alertSubscriberService } = require('../services/subscribers/AlertSubscriberService');
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const alertFeedbackStorageService = require('../services/storage/AlertFeedbackStorageService');
 const { isFirestoreConfigured } = require('../services/storage/firestoreConfig');
+const { resolveRemoteOverride } = require('../services/remoteConfig/resolveRemoteOverride');
 const SignalOutcomeService = require('../services/storage/SignalOutcomeService');
 const { jobQueue } = require('../services/jobs/JobQueue');
 const equityMarketDataService = require('../services/storage/EquityMarketDataService');
@@ -16,21 +19,30 @@ const remoteConfigService = require('../services/remoteConfig/RemoteConfigServic
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
 const { binanceOrderAuditService } = require('../services/trading/BinanceOrderAuditService');
+const { tradeLedgerService } = require('../services/trading/TradeLedgerService');
 const symbolAnalysisStorageService = require('../services/storage/SymbolAnalysisStorageService');
 const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
 const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
+const { getAdminPagingStatus } = require('../services/notification/adminPagingStatus');
 const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
 const { firestoreWriteMetricsService, READ_HEALTH } = require('../services/storage/FirestoreWriteMetricsService');
+const { getPromptService } = require('../services/prompts');
+const { signalClassMetrics } = require('../services/alerts/signalClassifier');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsAppService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const { resolveStartupJitterMs } = require('../lib/startupJitter');
+const { getBackgroundTimerStats } = require('../lib/backgroundTimerRegistry');
+const { outcomeAnnotationService } = require('../services/alerts/outcomeAnnotationService');
+const { crossTimeframeCooldown } = require('../services/alerts/crossTimeframeCooldown');
+const { burstAggregator } = require('../services/alerts/burstAggregator');
 const { userPriceAlertService } = require('../services/alerts/UserPriceAlertService');
 const { alertModeration } = require('../services/alerts/alertModeration');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
-const { getPromptService } = require('../services/prompts');
+const aliasResolver = require('../services/symbols/aliasResolver');
 const { getPromptReadiness } = require('../services/prompts/promptReadiness');
 const newsAnalysisStorageService = require('../services/storage/NewsAnalysisStorageService');
 const {
@@ -40,11 +52,14 @@ const {
 const { getVolumeTracker } = require('./webhooks/handlers/newsMonitor/volumeTracker');
 const { getSelfTestService } = require('./diagnostics/selftest');
 const telegramCommandAuth = require('../lib/telegramCommandAuth');
+const { getAdminAuthStatus } = require('../lib/adminAuth');
+const { getNotificationManager } = require('./webhooks/handlers/alert/alert');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
 } = require('../lib/deploymentEnvironment');
+const { getAggregateStats: getDiscordSourceRoutingAggregateStats } = require('../services/notification/discordSourceRouting');
 const {
 	getLastRunAt: getTestAlertLastRunAt,
 	getLastRunStatus: getTestAlertLastRunStatus,
@@ -59,6 +74,17 @@ const DEFAULT_CF_AIG_MODEL = 'google-ai-studio/gemini-2.5-flash';
 
 function isEnabled(value) {
 	return value === 'true';
+}
+
+/**
+ * Resolve a Firestore storage gate the way the storage services do (issue #721):
+ * a published Remote Config value wins, and its absence falls back to the
+ * environment. `/api/status` reporting `process.env` would describe a gate the
+ * services are not actually evaluating.
+ */
+function resolveStorageGate(key) {
+	const remote = resolveRemoteOverride(key);
+	return typeof remote === 'boolean' ? remote : isEnabled(process.env[key]);
 }
 
 function hasValue(value) {
@@ -183,13 +209,44 @@ function withFirestoreReadHealth(status) {
 	};
 }
 
+/**
+ * Cloudflare AI Gateway readiness, including whether the gateway is in the
+ * runtime request path at all.
+ *
+ * Issue #1115: `ENABLE_CLOUDFLARE_AIG` never selected the runtime provider —
+ * `MODEL_PROVIDER` does — so deriving `ready` from `enabled && configured` alone
+ * let the documented enablement steps report `ready: true` while
+ * `MODEL_PROVIDER=gemini` sent every LLM call straight to Google and no request
+ * touched the gateway. Credentials present but unrouted now report
+ * `status: "inactive"` and `ready: false`.
+ */
+function cloudflareAigDependencyStatus({ enabled, configured }) {
+	const provider = getModelProvider();
+	const routed = provider === 'cloudflare';
+	if (!enabled) {
+		return { enabled, configured, routed, provider, ready: false, status: 'disabled' };
+	}
+	if (!configured) {
+		return { enabled, configured, routed, provider, ready: false, status: 'misconfigured' };
+	}
+	return {
+		enabled,
+		configured,
+		routed,
+		provider,
+		ready: routed,
+		status: routed ? 'ready' : 'inactive',
+	};
+}
+
 function getNewsMonitorLlmDependency({ enabled, provider }) {
 	switch (provider) {
 	case 'gemini':
 		return providerDependencyStatus({
 			enabled,
 			provider,
-			configured: hasValue(process.env.GEMINI_API_KEY) && hasValue(process.env.GEMINI_MODEL_NAME),
+			configured: hasValue(process.env.GEMINI_API_KEY)
+				&& hasValue(resolveRemoteOverride('GEMINI_MODEL_NAME') ?? process.env.GEMINI_MODEL_NAME),
 		});
 	case 'azure':
 		return providerDependencyStatus({
@@ -237,7 +294,9 @@ function getGeminiDependency({
 		enabled,
 		configured:
 			hasValue(process.env.GEMINI_API_KEY)
-			&& (!requiresGeminiModel || hasValue(process.env.GEMINI_MODEL_NAME)),
+			&& (!requiresGeminiModel || hasValue(
+				resolveRemoteOverride('GEMINI_MODEL_NAME') ?? process.env.GEMINI_MODEL_NAME,
+			)),
 	});
 }
 
@@ -254,6 +313,12 @@ function getGeminiQuotaDependency({ gemini }) {
 		configured: gemini.configured,
 		ready: gemini.ready && !snapshot.cooldownActive,
 		status,
+		windowStartedAt: snapshot.windowStartedAt,
+		windowDurationMs: snapshot.windowDurationMs,
+		requestsInWindow: snapshot.requestsInWindow,
+		exhaustedEventsInWindow: snapshot.exhaustedEventsInWindow,
+		lastExhaustedAt: snapshot.lastExhaustedAt,
+		quotaStatus: snapshot.quotaStatus,
 		cooldownActive: snapshot.cooldownActive,
 		remainingCooldownMs: snapshot.remainingCooldownMs,
 		lastTriggeredAt: snapshot.lastTriggeredAt,
@@ -269,6 +334,10 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
 	const runtimeConfig = remoteConfigService.getRuntimeConfig();
+	const notificationManager = notificationRedriveService.getNotificationManager();
+	const channelStatuses = notificationManager && typeof notificationManager.getChannelStatuses === 'function'
+		? notificationManager.getChannelStatuses()
+		: {};
 	const telegramFlagEnabled = isEnabled(process.env.ENABLE_TELEGRAM_BOT);
 	const telegramEnabled = telegramFlagEnabled && !previewEnvironment;
 	const whatsappEnabled = isEnabled(process.env.ENABLE_WHATSAPP_ALERTS);
@@ -289,15 +358,21 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		tradingViewMcpEnrichmentEnabled
 		|| marketScannerEnabled
 		|| observedTradingViewMcpStatus.lastCheckedAt !== null;
-	const firestoreEnabled = isEnabled(process.env.ENABLE_FIRESTORE_ALERT_STORAGE);
-	const firestoreScannerPresetsEnabled = isEnabled(process.env.ENABLE_FIRESTORE_SCANNER_PRESETS);
-	const firestoreJobStorageEnabled = isEnabled(process.env.ENABLE_FIRESTORE_JOB_STORAGE)
+	// Issue #721: report the gate that actually runs, not the raw environment value.
+	// These gates are runtime-resolved, so a published remote value is what the
+	// services evaluate — reporting `process.env` here would tell an operator their
+	// toggle failed (or that it worked) when the opposite is true.
+	const firestoreEnabled = resolveStorageGate('ENABLE_FIRESTORE_ALERT_STORAGE');
+	const firestoreScannerPresetsEnabled = resolveStorageGate('ENABLE_FIRESTORE_SCANNER_PRESETS');
+	const firestoreAlertSubscribersEnabled = resolveStorageGate('ENABLE_FIRESTORE_ALERT_SUBSCRIBERS');
+	const firestoreJobStorageEnabled = resolveStorageGate('ENABLE_FIRESTORE_JOB_STORAGE')
 		|| firestoreEnabled;
 	const sentryEnabled = isEnabled(process.env.ENABLE_SENTRY);
 	const langfusePromptsEnabled = isEnabled(process.env.ENABLE_LANGFUSE_PROMPTS);
 	const binancePriceCheckEnabled = isEnabled(process.env.ENABLE_BINANCE_PRICE_CHECK);
 	const binanceTradingEnabled = isEnabled(process.env.ENABLE_BINANCE_TRADING);
 	const binanceTradingStatus = binanceOrderService.getStatus();
+	const binanceTradingKillSwitchEnabled = binanceTradingEnabled;
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
 	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
@@ -305,12 +380,16 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	const remoteConfigStatus = remoteConfigService.getStatus();
 	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING);
 	const equityMarketDataStatus = equityMarketDataService.getStatus();
+	const adminAuthStatus = getAdminAuthStatus();
 	const llmAlertEnrichmentDependencyEnabled = llmAlertEnrichmentEnabled && newsMonitorEnabled;
 
-	const telegram = dependencyStatus({
-		enabled: telegramEnabled,
-		configured: hasValue(process.env.BOT_TOKEN) && hasValue(process.env.TELEGRAM_CHAT_ID),
-	});
+	const telegram = {
+		...dependencyStatus({
+			enabled: telegramEnabled,
+			configured: hasValue(process.env.BOT_TOKEN) && hasValue(process.env.TELEGRAM_CHAT_ID),
+		}),
+		commandRateLimiting: process.env.ENABLE_TELEGRAM_COMMAND_RATE_LIMITING !== 'false',
+	};
 	const whatsappChatId = previewEnvironment
 		? process.env.WHATSAPP_PREVIEW_CHAT_ID || process.env.WHATSAPP_CHAT_ID
 		: process.env.WHATSAPP_CHAT_ID;
@@ -325,6 +404,49 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		enabled: discordEnabled,
 		configured: hasValue(process.env.DISCORD_WEBHOOK_URL),
 	});
+	const discordSourceRoutingEnabled = isEnabled(process.env.ENABLE_DISCORD_SOURCE_ROUTING);
+	const discordSourceRouting = (() => {
+		if (!discordSourceRoutingEnabled) {
+			return {
+				enabled: false,
+				configured: false,
+				ready: false,
+				status: 'disabled',
+				routesConfigured: 0,
+				hasDefault: false,
+			};
+		}
+		const rawRoutes = process.env.DISCORD_SOURCE_ROUTING_JSON;
+		let parsedKeys = [];
+		let hasDefault = false;
+		if (typeof rawRoutes === 'string' && rawRoutes.trim().length > 0) {
+			const trimmed = rawRoutes.trim();
+			if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+				try {
+					const parsed = JSON.parse(trimmed);
+					if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+						parsedKeys = Object.keys(parsed).map((k) => k.toLowerCase());
+						hasDefault = parsedKeys.includes('default') || parsedKeys.includes('*');
+					}
+				} catch (_) {
+					// invalid JSON; surfaced via discordSourceRouting warning logs in the service
+				}
+			}
+		}
+		const configured = parsedKeys.length > 0;
+		const aggregate = getDiscordSourceRoutingAggregateStats();
+		return {
+			enabled: discordSourceRoutingEnabled,
+			configured,
+			ready: configured,
+			status: configured ? 'ready' : 'misconfigured',
+			routesConfigured: parsedKeys.length,
+			hasDefault,
+			keys: parsedKeys.sort(),
+			decisions: aggregate.decisions || 0,
+			fallbacks: aggregate.fallbacks || 0,
+		};
+	})();
 	const gemini = getGeminiDependency({
 		enabled: geminiEnabled,
 		geminiGroundingEnabled,
@@ -375,6 +497,28 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		}),
 	};
 	const langfuse = getLangfusePromptDependencyStatus(langfusePromptsEnabled);
+	// Configuration/reachability (dependencies.langfuse) says nothing about whether
+	// prompts are actually served remotely. Keep the two facts apart so a 100%
+	// local-fallback regression is visible instead of silent.
+	let langfusePrompts;
+	try {
+		langfusePrompts = getPromptService().getPromptResolutionStatus();
+	} catch (error) {
+		console.warn(`[status] Failed to read prompt-resolution telemetry: ${error.message}`);
+		// Emit the documented fail-open verdict rather than omitting the key: a
+		// consumer reading status.dependencies.langfusePrompts.servingStatus would
+		// otherwise get a TypeError on exactly the path where telemetry is broken.
+		langfusePrompts = {
+			enabled: langfusePromptsEnabled,
+			configured: hasValue(process.env.LANGFUSE_PUBLIC_KEY) && hasValue(process.env.LANGFUSE_SECRET_KEY),
+			ready: false,
+			servingStatus: 'unknown',
+			servingPrompts: false,
+			lastErrorCategory: null,
+			consecutiveFailures: 0,
+			prompts: [],
+		};
+	}
 	const braveSearch = dependencyStatus({
 		enabled: newsMonitorEnabled && forceBraveSearch,
 		configured: hasValue(process.env.BRAVE_SEARCH_API_KEY),
@@ -418,6 +562,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		backend: cache.dedupMode.backend,
 		cacheSize: newsMonitorCacheSize,
 	};
+	const newsMonitorCache = newsMonitorEnabled ? cache.getStatus(newsMonitorEnabled) : null;
 
 	const signalOutcomeWorkerStatus = SignalOutcomeService.getWorkerStatus();
 	const jobExecutionQueueStatus = jobQueue.getStatus();
@@ -430,10 +575,30 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		signalOutcomeWorkerDependency.status = 'disabled';
 	}
 
-	const webhookAuth = dependencyStatus({
-		enabled: true,
-		configured: hasValue(process.env.WEBHOOK_API_KEY),
-	});
+	const webhookAuth = {
+		...dependencyStatus({
+			enabled: true,
+			configured: hasValue(process.env.WEBHOOK_API_KEY),
+		}),
+		scope: 'webhook',
+	};
+
+	const adminApiKey = {
+		...dependencyStatus({
+			enabled: hasValue(process.env.ADMIN_API_KEY),
+			configured: hasValue(process.env.ADMIN_API_KEY),
+		}),
+		scope: 'admin',
+		legacyFallback: hasValue(process.env.WEBHOOK_API_KEY) && !hasValue(process.env.ADMIN_API_KEY),
+	};
+
+	const binanceTradingApiKey = {
+		...dependencyStatus({
+			enabled: hasValue(process.env.BINANCE_TRADING_API_KEY),
+			configured: hasValue(process.env.BINANCE_TRADING_API_KEY),
+		}),
+		scope: 'binance-trading',
+	};
 
 	return {
 		readiness: bootstrapReadiness.getStatus(),
@@ -447,6 +612,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			telegramBot: telegramFlagEnabled,
 			whatsappAlerts: whatsappEnabled,
 			discordAlerts: discordEnabled,
+			discordSourceRouting: discordSourceRoutingEnabled,
 			geminiGrounding: geminiGroundingEnabled,
 			newsMonitor: newsMonitorEnabled,
 			newsMonitorPaused: isNewsMonitorPaused(),
@@ -458,6 +624,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
 			firestoreAlertStorage: firestoreEnabled,
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
+			firestoreAlertSubscribers: firestoreAlertSubscribersEnabled,
 			firestoreJobStorage: firestoreJobStorageEnabled,
 			firestoreNewsAnalysis: newsAnalysisStorageService.isEnabled(),
 			firestoreChatPreferences: chatPreferenceService.isEnabled(),
@@ -471,6 +638,8 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			binancePriceCheck: binancePriceCheckEnabled,
 			binanceTrading: binanceTradingEnabled,
 			binanceOrderAudit: binanceOrderAuditService.isEnabled(),
+			tradeLedger: tradeLedgerService.isEnabled(),
+			binanceTradingKillSwitch: binanceTradingKillSwitchEnabled,
 			llmAlertEnrichment: llmAlertEnrichmentEnabled,
 			cloudflareAig: cloudflareAigEnabled,
 			messageFooterMetadata: messageFooterMetadataEnabled,
@@ -481,17 +650,27 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
+			outcomeInformedDelivery: outcomeAnnotationService.isEnabled(),
+			alertCrossTimeframeSuppression: crossTimeframeCooldown.isEnabled(),
+			alertBurstAggregation: burstAggregator.isEnabled(),
+			alertHtfRender: runtimeConfig.ENABLE_ALERT_HTF_RENDER,
 			alertModeration: alertModeration.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			symbolAliasResolver: aliasResolver.isEnabled(),
 			userPriceAlerts: userPriceAlertService.isEnabled(),
 			alertFeedback: alertFeedbackStorageService.isEnabled(),
 			symbolAnalysisStorage: symbolAnalysisStorageService.isEnabled(),
+			symbolAnalysisMultiAgent: runtimeConfig.ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT,
+			apiOnlyMode: runtimeConfig.ENABLE_API_ONLY_MODE,
 			whatsappTemplateMode: !!process.env.WHATSAPP_TEMPLATE_NAME,
 			testAlert: isTestAlertEnabled(),
 			tokenCostBudget: tokenCostBudgetService.isEnabled(),
 			signalClassMarker: signalClassMarkerEnabled,
+			equitySessionTag: runtimeConfig.ENABLE_EQUITY_SESSION_TAG,
 			maintenanceMode: isMaintenanceModeEnabled(),
 			telegramCommandAuth: telegramCommandAuth.getStatus().enabled,
+			telegramCommandRateLimiting: process.env.ENABLE_TELEGRAM_COMMAND_RATE_LIMITING !== 'false',
+			firebaseAdminAuth: adminAuthStatus.enabled,
 		},
 		deliveryChannels: {
 			telegram: {
@@ -507,6 +686,8 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				status: discord.status,
 			},
 		},
+		deliveryHealth: getNotificationManager()?.getDeliveryHealth?.() || {},
+		channelHealth: channelStatuses,
 		// Operator intent, not runtime reachability. Mirrors
 		// NotificationChannel.isConfigured(), which is the enable flag AND the
 		// required credentials — i.e. exactly the `ready` semantics of
@@ -530,11 +711,20 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 		...(deliveryMetricsService.getSnapshot()
 			? { deliveryMetrics: deliveryMetricsService.getSnapshot() }
 			: {}),
+		// Non-secret operator-paging health. Lets an operator tell a working admin path from
+		// a silent one: readiness alone reports "ready" for a channel that is 0/N at runtime.
+		// Channel names and counters only — never tokens, webhook URLs, or chat IDs.
+		...(getAdminPagingStatus()
+			? { adminPaging: getAdminPagingStatus() }
+			: {}),
 		dependencies: {
 			telegram,
 			whatsapp,
 			discord,
+			discordSourceRouting,
 			webhookAuth,
+			adminApiKey,
+			binanceTradingApiKey,
 			whatsappCommandBridge: whatsAppCommandBridgeService.getStatus(),
 			whatsappTemplate: getWhatsAppTemplateStatus(),
 			gemini,
@@ -548,11 +738,22 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			...(firestoreWriteMetricsService.getSnapshot()
 				? { firestoreWriteMetrics: firestoreWriteMetricsService.getSnapshot() }
 				: {}),
+			// `featureFlags.signalClassMarker: true` only says the badge marker
+			// is allowed to render; it says nothing about whether alerts are
+			// actually being classified. Expose the population rate so a silent
+			// regression back to 100% `unknown` is detectable from /api/status
+			// instead of looking healthy.
+			...(signalClassMetrics.getSnapshot()
+				? { signalClassClassification: signalClassMetrics.getSnapshot() }
+				: {}),
 			...(firestoreWriteMetricsService.getReadSnapshot()
 				? { firestoreReadMetrics: firestoreWriteMetricsService.getReadSnapshot() }
 				: {}),
+			persistentWriteHealth: firestoreWriteMetricsService.getPersistentWriteHealthSnapshot(),
+			backgroundTimers: getBackgroundTimerStats(),
 			sentry,
 			langfuse,
+			...(langfusePrompts ? { langfusePrompts } : {}),
 			braveSearch,
 			newsMonitor: {
 				enabled: newsMonitorEnabled,
@@ -561,7 +762,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			},
 			newsMonitorLlm,
 			llmAlertEnrichment,
-			cloudflareAig: dependencyStatus({
+			cloudflareAig: cloudflareAigDependencyStatus({
 				enabled: isEnabled(process.env.ENABLE_CLOUDFLARE_AIG),
 				configured:
 					hasValue(process.env.CF_AIG_TOKEN)
@@ -569,10 +770,13 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 					&& hasValue(process.env.CF_AIG_MODEL || DEFAULT_CF_AIG_MODEL),
 			}),
 			newsMonitorDedup,
+			...(newsMonitorCache ? { newsMonitorCache } : {}),
 			idempotencyStorage: idempotencyStorageService.getStorageStatus(),
 			firebaseRemoteConfig: remoteConfigStatus,
 			chatPreferences: chatPreferenceService.getStatus(),
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
+			alertSubscribers: alertSubscriberService.getStorageStatus(),
+			newsAnalysisStorage: newsAnalysisStorageService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
 			userPriceAlertWorker: userPriceAlertService.getStatus(),
 			newsMonitorScheduler: newsMonitorSchedulerService.getStatus(),
@@ -580,6 +784,10 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
 				...signalOutcomeWorkerDependency,
+				breakdownBucketCap: signalOutcomeWorkerStatus.breakdownBucketCap,
+				lastBreakdownBucketCount: signalOutcomeWorkerStatus.lastBreakdownBucketCount,
+				lastBreakdownTruncated: signalOutcomeWorkerStatus.lastBreakdownTruncated,
+				breakdownTruncationCount: signalOutcomeWorkerStatus.breakdownTruncationCount,
 				entryPriceSources: signalOutcomeWorkerStatus.entryPriceSources,
 				role: signalOutcomeWorkerStatus.role,
 				running: signalOutcomeWorkerStatus.running,
@@ -603,14 +811,82 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
 			},
+			symbolAliasResolver: {
+				enabled: aliasResolver.isEnabled(),
+				totalEntries: aliasResolver.listAliases().length,
+			},
+			outcomeInformedDelivery: {
+				enabled: outcomeAnnotationService.isEnabled(),
+				...outcomeAnnotationService.getStats(),
+			},
+			alertCrossTimeframeSuppression: {
+				enabled: crossTimeframeCooldown.isEnabled(),
+				...crossTimeframeCooldown.getStats(),
+			},
+			alertBurstAggregation: {
+				enabled: burstAggregator.isEnabled(),
+				...burstAggregator.getStats(),
+			},
 			alertModeration: {
 				enabled: alertModeration.isEnabled(),
 				...alertModeration.getStats(),
 			},
 			alertFeedback: alertFeedbackStorageService.getStatus(),
 			jobExecutionQueue: jobExecutionQueueStatus,
-			binanceTrading: binanceTradingStatus,
+			binanceTrading: {
+				enabled: binanceTradingStatus.enabled,
+				configured: binanceTradingStatus.configured,
+				ready: binanceTradingStatus.ready,
+				status: binanceTradingStatus.status,
+				environment: binanceTradingStatus.environment,
+				allowedSymbols: binanceTradingStatus.allowedSymbols,
+				maxNotionalConfigured: binanceTradingStatus.maxNotionalConfigured,
+				paused: binanceTradingStatus.paused,
+				pausedBy: binanceTradingStatus.pausedBy,
+				pausedAt: binanceTradingStatus.pausedAt,
+				pausedReason: binanceTradingStatus.pausedReason,
+				lastChangedAt: binanceTradingStatus.lastChangedAt,
+				lastChangedBy: binanceTradingStatus.lastChangedBy,
+				lastAction: binanceTradingStatus.lastAction,
+				controlStorage: binanceTradingStatus.controlStorage,
+				unavailable: binanceTradingStatus.unavailable,
+				blocked: binanceTradingStatus.blocked,
+			},
+			startupJitter: (() => {
+				const global = resolveStartupJitterMs({
+					globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+					globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+				});
+				return {
+					global,
+					signalOutcome: resolveStartupJitterMs({
+						envVar: 'SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS',
+						runtimeKey: 'SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS',
+						globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+						globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+					}),
+					redrive: resolveStartupJitterMs({
+						envVar: 'NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS',
+						runtimeKey: 'NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS',
+						globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+						globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+					}),
+					scannerPreset: resolveStartupJitterMs({
+						envVar: 'SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS',
+						runtimeKey: 'SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS',
+						globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+						globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+					}),
+					remoteConfig: resolveStartupJitterMs({
+						envVar: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+						runtimeKey: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+						globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+						globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+					}),
+				};
+			})(),
 			binanceOrderAudit: binanceOrderAuditService.getStatus(),
+			tradeLedger: tradeLedgerService.getStatus(),
 			symbolAnalysisStorage: symbolAnalysisStorageService.getStatus(),
 			testAlert: {
 				enabled: isTestAlertEnabled(),
@@ -621,6 +897,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			tokenCostBudget: tokenCostBudgetService.getBudgetStatus(),
 			selfTest: getSelfTestService().getStatus(),
 			telegramCommandAuth: telegramCommandAuth.getStatus(),
+			adminAuth: adminAuthStatus,
 		},
 	};
 }
@@ -649,10 +926,17 @@ async function getApiStatus(req, res) {
 		} catch (_) {
 			// Fail-open for status endpoint
 		}
+		if (typeof binanceOrderService?.getPauseState === 'function') {
+			try {
+				await binanceOrderService.getPauseState();
+			} catch (_) {
+				// Fail-open for status endpoint
+			}
+		}
 		return res.status(200).json(getStatus({ skipTelemetrySync: true }));
 	} catch (error) {
 		console.error('[StatusController] getStatus failed:', error);
-		return res.status(500).json({ error: error.message, code: 'INTERNAL_ERROR' });
+		return sendErrorFrom(res, 500, { error: error.message, code: 'INTERNAL_ERROR' });
 	}
 }
 

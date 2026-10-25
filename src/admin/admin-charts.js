@@ -182,9 +182,14 @@
 
 	// Graphics that carry text hold a minimum width in CSS, so this contained scroller is what
 	// absorbs the extra width on a narrow viewport. `min-width: 0` on the holder in CSS is what
-	// stops the graphic from widening the page instead of the card.
-	const scrollable = (svg) => {
+	// stops the graphic from widening the page instead of the card. `tabindex="0"` is what lets
+	// a keyboard-only operator pan it: axe reports `scrollable-region-focusable` on a scrollable
+	// box with no focusable content, and a 36rem chart at a 320px viewport is exactly that.
+	const scrollable = (svg, label) => {
 		const wrapper = htmlElement('div', 'chart-scroll');
+		wrapper.setAttribute('tabindex', '0');
+		wrapper.setAttribute('role', 'region');
+		wrapper.setAttribute('aria-label', label || 'Scrollable chart');
 		wrapper.append(svg);
 		return wrapper;
 	};
@@ -369,7 +374,7 @@
 		});
 
 		return figure('chart-figure', [
-			scrollable(svg),
+			scrollable(svg, label),
 			disclosure(label, ['Series', xKey || 'Point', yKey || 'Value'], list.flatMap((entry) => entry.points.map((point) => [
 				entry.label,
 				displayText(point.x),
@@ -485,7 +490,7 @@
 		});
 
 		return figure('chart-figure', [
-			scrollable(svg),
+			scrollable(svg, label),
 			disclosure(label, ['Category', valueKey], rows.map((row) => [row.name, formatValue(row.value)])),
 		]);
 	};

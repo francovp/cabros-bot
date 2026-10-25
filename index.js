@@ -12,9 +12,12 @@ const {
 	expandedAnalysisCmd,
 	marketScannerCmd,
 	jobsCommand,
+	alertHistoryCommand,
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	resolveCmd,
+	reactionsCommand,
 	preferenciasCmd,
 	filtroCmd,
 	silencioCmd,
@@ -22,6 +25,7 @@ const {
 	categoriasCmd,
 	telegramCommandRateLimiter,
 } = require('./src/controllers/commands');
+const { telegramReactionService } = require('./src/services/telegram/telegramReactionService');
 const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
 const { getRoutes } = require('./src/routes');
@@ -47,15 +51,17 @@ const { notificationRedriveService } = require('./src/services/notification/Noti
 const { whatsAppCommandBridgeService } = require('./src/services/notification/WhatsAppCommandBridgeService');
 const { scannerPresetSchedulerService } = require('./src/services/scannerPresets');
 const { userPriceAlertService } = require('./src/services/alerts/UserPriceAlertService');
+const { burstAggregator } = require('./src/services/alerts/burstAggregator');
 const { newsMonitorSchedulerService } = require('./src/services/newsMonitorScheduler');
 const { alertSchedulerService } = require('./src/services/scheduler');
 const { adminSseService } = require('./src/services/sse/AdminSseService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
+const { tradingViewMcpService } = require('./src/services/tradingview/TradingViewMcpService');
 const { probeManagedPromptReadiness } = require('./src/services/prompts');
 const { configureServerTimeouts } = require('./src/lib/serverTimeouts');
+const expressErrorHandler = require('./src/lib/expressErrorHandler');
 const Sentry = require('@sentry/node');
-const { onError } = require('./src/lib/expressErrorHandler');
 
 const { token, shouldStartTelegramBot } = getTelegramBootstrapConfig();
 bootstrapReadiness.begin({
@@ -79,9 +85,7 @@ registerDebugSentryRoute(app);
 
 // The error handler must be registered before any other error middleware and after all controllers
 Sentry.setupExpressErrorHandler(app);
-
-// Optional fallthrough error handler
-app.use(onError);
+app.use(expressErrorHandler);
 
 const lifecycle = createProcessLifecycle({
 	getServer: () => server,
@@ -99,11 +103,18 @@ const lifecycle = createProcessLifecycle({
 	stopUserPriceAlertWorker: (options) => userPriceAlertService.stopWorker(options),
 	stopNewsMonitorScheduler: (options) => newsMonitorSchedulerService.stopWorker(options),
 	stopAlertScheduler: (options) => alertSchedulerService.stopWorker(options),
+	stopTradingViewMcpWarmup: () => tradingViewMcpService.stopWarmupScheduler(),
 	stopRemoteConfig: () => remoteConfigService.stop(),
 	closeAllSseConnections: () => adminSseService.closeAll(),
 	stopTelegramHealthProbe: () => stopTelegramHealthProbe(),
 	shutdownNewsMonitor: () => getCacheInstance().shutdown(),
+	flushAlertBurstWindows: () => burstAggregator.flushAll('shutdown'),
 	flushSentry: (timeout) => sentryService.flush(timeout),
+	reportBackgroundTimerDrain: (stats) => sentryService.captureInfo({
+		message: 'shutdown.timer_drain',
+		feature: 'shutdown.timer_drain',
+		extra: stats,
+	}),
 	timeoutMs: process.env.SHUTDOWN_TIMEOUT_MS,
 });
 lifecycle.register();
@@ -112,7 +123,7 @@ async function bootstrapApplication() {
 	console.log(now + ' - Running server on port ' + port);
 	if (lifecycle.isShuttingDown()) return;
 
-	void remoteConfigService.start();
+	const remoteConfigStartup = remoteConfigService.start();
 
 	// Proven, bounded and detached: `dependencies.langfuse.ready` on /api/status
 	// needs one observed resolution to flip to true, and without this an idle
@@ -120,37 +131,52 @@ async function bootstrapApplication() {
 	// unpublished-label pair that falls back to the local file forever (#1178).
 	void probeManagedPromptReadiness();
 
-	// Start background signal outcome evaluation worker if enabled
-	SignalOutcomeService.startWorker();
-	// Start background notification redrive worker if enabled
-	notificationRedriveService.startWorker();
-	// Start background scanner preset scheduler if enabled
-	scannerPresetSchedulerService.botGetter = () => bot;
-	scannerPresetSchedulerService.startWorker();
-	// Start background job backlog monitor if enabled
-	jobBacklogService.startMonitor();
-	// Prove broker connectivity at boot so /api/capabilities reports a real queue
-	// verdict on an idle deployment. Without this, readiness only ever became true
-	// as a side effect of the first enqueue, so a correct render-worker cut-over
-	// read as "not_started" and an operator could not tell it apart from a broker
-	// that was configured but unreachable.
-	void jobQueue.probeBrokerReadiness().then((result) => {
-		if (result.skipped) {
-			return;
-		}
-		console.log(
-			`Job queue broker ${result.reachable ? 'reachable' : 'UNREACHABLE'}` +
-			(result.reachable ? '' : ` (lastErrorCode=${result.errorCode})`),
-		);
-	});
-	// Start background user price alert worker if enabled
-	userPriceAlertService.setBotGetter(() => bot);
-	userPriceAlertService.startWorker({ source: 'web' });
-	// Start background news-monitor scheduler if enabled
-	newsMonitorSchedulerService.startWorker({ source: 'web' });
-	// Start background alert scheduler (JSON-defined news + scanner schedules) if enabled
-	alertSchedulerService.botGetter = () => bot;
-	alertSchedulerService.startWorker({ source: 'web' });
+	// Background workers resolve runtime settings only after the first Remote
+	// Config load. This detached wait keeps HTTP and notification bootstrap moving.
+	void remoteConfigStartup
+		.catch((error) => {
+			console.warn('[index] Remote Config startup failed; background workers will use environment/default settings:', error.message);
+		})
+		.then(() => {
+			if (lifecycle.isShuttingDown()) return;
+			// Start background signal outcome evaluation worker if enabled
+			SignalOutcomeService.startWorker();
+			// Start background notification redrive worker if enabled
+			notificationRedriveService.startWorker();
+			// Start background scanner preset scheduler if enabled
+			scannerPresetSchedulerService.botGetter = () => bot;
+			scannerPresetSchedulerService.startWorker();
+			// Start background job backlog monitor if enabled
+			jobBacklogService.startMonitor();
+			// Prove broker connectivity at boot so /api/capabilities reports a real queue
+			// verdict on an idle deployment. Without this, readiness only ever became true
+			// as a side effect of the first enqueue, so a correct render-worker cut-over
+			// read as "not_started" and an operator could not tell it apart from a broker
+			// that was configured but unreachable.
+			void jobQueue.probeBrokerReadiness().then((result) => {
+				if (result.skipped) {
+					return;
+				}
+				console.log(
+					`Job queue broker ${result.reachable ? 'reachable' : 'UNREACHABLE'}` +
+					(result.reachable ? '' : ` (lastErrorCode=${result.errorCode})`),
+				);
+			});
+			// Start background user price alert worker if enabled
+			userPriceAlertService.setBotGetter(() => bot);
+			userPriceAlertService.startWorker({ source: 'web' });
+			// Start background news-monitor scheduler if enabled
+			newsMonitorSchedulerService.startWorker({ source: 'web' });
+			// Start background alert scheduler (JSON-defined news + scanner schedules) if enabled
+			alertSchedulerService.botGetter = () => bot;
+			alertSchedulerService.startWorker({ source: 'web' });
+			// Start proactive TradingView MCP keepalive warm-up probe if enabled
+			tradingViewMcpService.startWarmupScheduler();
+		})
+		.catch((error) => {
+			bootstrapReadiness.fail(error);
+			console.error('[index] Background worker startup failed:', error.message);
+		});
 	// Start WhatsApp inbound command bridge if enabled
 	if (whatsAppCommandBridgeService.isEnabled()) {
 		whatsAppCommandBridgeService.start();
@@ -183,9 +209,18 @@ async function bootstrapApplication() {
 		bot.command(['analisis', 'analysis'], expandedAnalysisCmd);
 		bot.command(['scanner'], marketScannerCmd);
 		bot.command(['jobs', 'trabajos'], jobsCommand);
+		bot.command(['history', 'alertas'], alertHistoryCommand);
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
+		bot.command(['resolve'], resolveCmd);
+		bot.command(['reactions', 'reacciones'], reactionsCommand);
 		bot.command(['preferencias', 'preferences'], preferenciasCmd);
+
+		if (process.env.ENABLE_TELEGRAM_REACTION_AGGREGATION === 'true') {
+			bot.on('message_reaction', async (ctx) => {
+				await telegramReactionService.handleReactionUpdate(ctx);
+			});
+		}
 		bot.command(['filtro', 'filter'], filtroCmd);
 		bot.command(['silencio', 'quiet'], silencioCmd);
 		bot.command(['umbral', 'threshold'], umbralCmd);

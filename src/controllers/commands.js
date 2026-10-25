@@ -1,11 +1,15 @@
 const { fetchSymbolPrice } = require('./commands/handlers/core/fetchPriceCryptoSymbol');
 const { userPriceAlertCmd } = require('./commands/handlers/core/userPriceAlertHandler');
+const { reactionsSymbol } = require('./commands/handlers/reactionsSymbol');
 const { jobService } = require('../services/jobs/JobService');
 const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor');
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const signalOutcomeService = require('../services/storage/SignalOutcomeService');
+const alertStorageService = require('../services/storage/AlertStorageService');
 const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
+const { resolveSymbolQuery } = require('../services/symbols/aliasResolver');
+const { isChatAuthorized } = require('../lib/telegramCommandAuth');
 const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
 const { smartEscapeMarkdownV2 } = require('../services/notification/formatters/markdownV2Formatter');
 const {
@@ -66,6 +70,8 @@ const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
 	umbral: { max: 20, windowMs: 60_000 },
 	categorias: { max: 20, windowMs: 60_000 },
 	alerta: { max: 10, windowMs: 60_000 },
+	history: { max: 10, windowMs: 60_000 },
+	reactions: { max: 10, windowMs: 60_000 },
 });
 const TELEGRAM_COMMAND_ALIASES = Object.freeze({
 	analysis: 'analisis',
@@ -76,6 +82,8 @@ const TELEGRAM_COMMAND_ALIASES = Object.freeze({
 	threshold: 'umbral',
 	categories: 'categorias',
 	alert: 'alerta',
+	alertas: 'history',
+	reacciones: 'reactions',
 });
 const MAX_TELEGRAM_COMMAND_RATE_LIMIT = 1_000;
 const MAX_TELEGRAM_COMMAND_WINDOW_MS = 86_400_000;
@@ -234,6 +242,23 @@ function sendReadinessWarning(context, warningText, signal) {
 	return Promise.resolve();
 }
 
+/**
+ * Routing merged into a created job's payload.
+ *
+ * Telegram contexts carry no `notificationRouting` and keep `{ telegramChatId }`
+ * unchanged. Issue #886's WhatsApp bridge sets it so a job is delivered to the chat
+ * the command arrived in rather than to a GreenAPI chat id shaped like a Telegram
+ * one. A malformed override is ignored: dropping routing would turn the job into an
+ * unintended broadcast.
+ */
+function resolveJobRouting(context, chatId) {
+	const override = context && context.notificationRouting;
+	if (override && typeof override === 'object' && !Array.isArray(override)) {
+		return { ...override };
+	}
+	return chatId !== undefined && chatId !== null ? { telegramChatId: String(chatId) } : {};
+}
+
 const createTradingViewJobCommand = (type, command, buildPayload) => async (context) => {
 	if (isMaintenanceModeEnabled()) {
 		await sendMaintenanceReply(context);
@@ -255,7 +280,7 @@ const createTradingViewJobCommand = (type, command, buildPayload) => async (cont
 	try {
 		const payload = {
 			...buildPayload(args),
-			...(chatId !== undefined && chatId !== null ? { telegramChatId: String(chatId) } : {}),
+			...resolveJobRouting(context, chatId),
 		};
 		if (typeof jobService.validateJobRequest === 'function') {
 			jobService.validateJobRequest(type, payload);
@@ -408,6 +433,164 @@ const jobsCommand = async (context) => {
 	}
 };
 
+const HISTORY_DEFAULT_LIMIT = 5;
+const HISTORY_MAX_LIMIT = 20;
+const HISTORY_FETCH_LIMIT = 100;
+const HISTORY_COMMAND_TIMEOUT_MS = 8000;
+const HISTORY_STATUS_VALUES = new Set(['delivered', 'failed', 'partial', 'skipped']);
+
+function parseHistoryFilters(args) {
+	const first = String(args.positionals[0] || '').trim();
+	const second = String(args.positionals[1] || '').trim();
+	const isStatusCommand = ['status', 'estado'].includes(first.toLowerCase());
+	const rawStatus = isStatusCommand ? (second || args.options.status) : args.options.status;
+
+	let positionalLimit;
+	let symbol;
+
+	if (isStatusCommand) {
+		const third = String(args.positionals[2] || '').trim();
+		if (/^\d+$/.test(third)) {
+			positionalLimit = Number(third);
+		}
+	} else if (/^\d+$/.test(first)) {
+		positionalLimit = Number(first);
+	} else if (first) {
+		symbol = first.toUpperCase();
+		if (/^\d+$/.test(second)) {
+			positionalLimit = Number(second);
+		}
+	}
+
+	const rawLimit = args.options.limit !== undefined ? Number(args.options.limit) : positionalLimit;
+	const parsedLimit = Number(rawLimit);
+
+	return {
+		symbol,
+		status: HISTORY_STATUS_VALUES.has(String(rawStatus || '').toLowerCase())
+			? String(rawStatus).toLowerCase()
+			: undefined,
+		limit: Number.isInteger(parsedLimit) && parsedLimit > 0
+			? Math.min(parsedLimit, HISTORY_MAX_LIMIT)
+			: HISTORY_DEFAULT_LIMIT,
+	};
+}
+
+function getAlertDeliveryStatus(alert) {
+	const results = Array.isArray(alert.deliveryResults) ? alert.deliveryResults : [];
+	if (results.length === 0) return 'unknown';
+	const nonSkipped = results.filter((result) => result && !result.skipped);
+	if (nonSkipped.length === 0) return 'skipped';
+	const delivered = nonSkipped.filter((result) => result.success).length;
+	if (delivered === nonSkipped.length) return 'delivered';
+	if (delivered === 0) return 'failed';
+	return 'partial';
+}
+
+function matchesHistoryFilters(alert, filters) {
+	if (filters.symbol) {
+		const symbol = String(alert.symbol || '').toUpperCase();
+		const exchange = alert.exchange ? `${String(alert.exchange).toUpperCase()}:${symbol}` : symbol;
+		if (filters.symbol !== symbol && filters.symbol !== exchange) return false;
+	}
+	return !filters.status || getAlertDeliveryStatus(alert) === filters.status;
+}
+
+function escapeTelegramText(value) {
+	return String(value ?? '').replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
+}
+
+function formatHistoryTime(receivedAt) {
+	const date = new Date(receivedAt);
+	return Number.isNaN(date.getTime()) ? 'fecha desconocida' : `${date.toISOString().slice(11, 16)} UTC`;
+}
+
+function formatHistoryDelivery(results) {
+	if (!Array.isArray(results) || results.length === 0) return 'no registrada';
+	return results
+		.filter((result) => result && result.channel)
+		.map((result) => {
+			const channel = escapeTelegramText(result.channel);
+			if (result.skipped) {
+				return `${channel} OMITIDO`;
+			}
+			return `${channel} ${result.success ? 'OK' : 'FALLÓ'}`;
+		})
+		.join(', ') || 'no registrada';
+}
+
+function formatAlertHistory(alerts, limit) {
+	const lines = [`*Historial de alertas* \\(últimas ${limit}\\)`, ''];
+	alerts.forEach((alert, index) => {
+		const symbol = escapeTelegramText(alert.symbol || 'desconocido');
+		const sentiment = escapeTelegramText(alert.enrichmentData?.sentiment || 'N/D');
+		lines.push(`${index + 1}\\. *${symbol}* \\- ${escapeTelegramText(formatHistoryTime(alert.receivedAt))}`);
+		lines.push(`   Sentimiento: ${sentiment} \\| Enriquecida: ${alert.enriched ? 'sí' : 'no'}`);
+		lines.push(`   Entrega: ${formatHistoryDelivery(alert.deliveryResults)}`);
+		lines.push('');
+	});
+	return lines.join('\n').trim();
+}
+
+const alertHistoryCommand = async (context) => {
+	const chatId = getChatId(context);
+	if (!isChatAuthorized(chatId)) {
+		console.warn('[commands] /history requested from unauthorized chat:', chatId);
+		await context.reply('No tienes autorización para consultar el historial de alertas.');
+		return;
+	}
+	const args = parseCommandArgs(context);
+	const filters = parseHistoryFilters(args);
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.history',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/history',
+			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
+			'query.symbol': filters.symbol || 'all',
+		},
+	});
+
+	try {
+		if (!alertStorageService.isEnabled()) {
+			await context.reply('El historial de alertas está desactivado — pide a un operador que active ENABLE_FIRESTORE_ALERT_STORAGE');
+			return;
+		}
+
+		const result = await withTimeout(
+			() => alertStorageService.listAlerts({ limit: HISTORY_FETCH_LIMIT }),
+			HISTORY_COMMAND_TIMEOUT_MS,
+			'alert history read timed out',
+		);
+		const alerts = (Array.isArray(result?.alerts) ? result.alerts : [])
+			.filter((alert) => matchesHistoryFilters(alert, filters))
+			.slice(0, filters.limit);
+		if (alerts.length === 0) {
+			const suffix = filters.symbol ? ` para ${escapeTelegramText(filters.symbol)}` : '';
+			await context.reply(`No hay alertas recientes${suffix}\\.`, { parse_mode: 'MarkdownV2' });
+			return;
+		}
+		await context.reply(formatAlertHistory(alerts, filters.limit), { parse_mode: 'MarkdownV2' });
+	} catch (error) {
+		console.error('[commands] /history failed:', error.message);
+		const expected = error.name === 'AbortError'
+			|| error.name === 'TimeoutError'
+			|| error.code === 'TIMEOUT'
+			|| error.code === alertStorageService.STORAGE_UNAVAILABLE_CODE;
+		if (!expected) {
+			sentryService.captureRuntimeError({ channel: 'telegram', error, extra: { command: 'history', chatId } });
+		}
+		try {
+			await context.reply('No pude consultar el historial ahora mismo. Intenta nuevamente más tarde.');
+		} catch (replyError) {
+			console.error('Failed to send error reply:', replyError);
+		}
+	} finally {
+		sentryService.endSpan(commandSpan);
+	}
+};
+
 const expandedAnalysisCmd = createTradingViewJobCommand(
 	'expanded-analysis',
 	'analisis',
@@ -416,7 +599,7 @@ const expandedAnalysisCmd = createTradingViewJobCommand(
 		symbols: parseCsvOption(args, 'symbols', args.positionals),
 		timeframe: args.options.timeframe,
 		includeMultiTimeframe: parseBooleanOption(args.options.mtf ?? args.options.includeMultiTimeframe),
-		timeoutMs: parseIntegerOption(args.options.timeoutMs),
+		timeoutMs: parseIntegerOption(args.options.timeoutMs, 'timeoutMs'),
 	}),
 );
 
@@ -428,9 +611,9 @@ const marketScannerCmd = createTradingViewJobCommand(
 		scans: parseCsvOption(args, 'scans'),
 		exchange: args.options.exchange,
 		timeframe: args.options.timeframe,
-		limit: parseIntegerOption(args.options.limit),
-		bbw_threshold: parseNumberOption(args.options.bbw_threshold ?? args.options.bbwThreshold),
-		timeoutMs: parseIntegerOption(args.options.timeoutMs),
+		limit: parseIntegerOption(args.options.limit, 'limit'),
+		bbw_threshold: parseNumberOption(args.options.bbw_threshold ?? args.options.bbwThreshold, 'bbw_threshold'),
+		timeoutMs: parseIntegerOption(args.options.timeoutMs, 'timeoutMs'),
 	}),
 );
 
@@ -531,8 +714,6 @@ const cryptoBotCmd = async (context) => {
 
 const OUTCOMES_COMMAND_LIMIT = 5;
 const OUTCOMES_COMMAND_MAX_SCAN_DOCS = 300;
-const OUTCOME_WINDOW_KEYS = ['1h', '4h', '1D', '1W'];
-const OUTCOME_WINDOW_LABELS = { '1h': '1h', '4h': '4h', '1D': '1D', '1W': '1S' };
 const OUTCOME_EXCHANGE_PATTERN = /^[A-Z0-9_]{1,30}$/;
 const OUTCOME_SYMBOL_PATTERN = /^[A-Z0-9._-]{1,30}$/;
 // Bounded deadline for the outcome store read so a chat command can never hold
@@ -680,16 +861,20 @@ function formatOutcomesMessage(symbol, outcomes) {
 		`*📊 Rendimiento reciente — ${escapeOutcomeText(symbol)}*`,
 		'',
 	];
+	const configuredLabels = typeof signalOutcomeService.getOutcomeWindowLabels === 'function'
+		? signalOutcomeService.getOutcomeWindowLabels()
+		: {};
 	outcomes.slice(0, OUTCOMES_COMMAND_LIMIT).forEach((outcome) => {
 		const sideLabel = outcome.side === 'SELL' ? 'Venta' : 'Compra';
 		const entry = Number.isFinite(outcome.price) ? escapeOutcomeText(outcome.price) : null;
 		const receivedAt = outcome.receivedAt ? String(outcome.receivedAt).slice(0, 10) : '';
 		lines.push(`• ${sideLabel}${entry !== null ? ` @ ${entry}` : ''}${receivedAt ? ` \\(${escapeOutcomeText(receivedAt)}\\)` : ''}`);
 
-		OUTCOME_WINDOW_KEYS.forEach((winKey) => {
+		const windowKeys = Object.keys(outcome.outcomes || {});
+		windowKeys.forEach((winKey) => {
 			const win = outcome.outcomes && outcome.outcomes[winKey];
 			if (!win || win.status !== 'evaluated') return;
-			const label = OUTCOME_WINDOW_LABELS[winKey] || winKey;
+			const label = configuredLabels[winKey] || winKey;
 			const returnPct = Number.isFinite(win.return)
 				? `${escapeOutcomeText(`${win.return >= 0 ? '+' : ''}${win.return.toFixed(2)}%`)}`
 				: 'n/d';
@@ -956,6 +1141,7 @@ function buildHelpMessage() {
 		'• `/alerta <simbolo> <operador> <precio>` — Configura o gestiona alertas de precio \\(alias: `/alert`\\)',
 		'  _Opciones: `/alerta BTCUSDT < 60000`, `/alerta list`, `/alerta cancel <id>`_',
 		'• `/cryptobot id` — Muestra el Chat ID actual de Telegram',
+		'• `/resolve <simbolo>` — Resuelve un ticker amigable a EXCHANGE:SYMBOL \\(ej: `/resolve GOLD` → `TVC:GOLD`\\)',
 		'• `/analisis <simbolos>` — Crea un análisis técnico en TradingView \\(alias: `/analysis`\\)',
 		'  _Opciones: `timeframe=1D`, `mtf=true`, `timeoutMs=300000`_',
 		'• `/scanner` — Escaneo de mercado en TradingView \\(top gainers, losers, breakouts\\)',
@@ -967,9 +1153,95 @@ function buildHelpMessage() {
 		'• `/preferencias` — Preferencias de alertas para este chat \\(símbolos, silencio, umbral, categorías\\)',
 		'  _Comandos rápidos: `/filtro`, `/silencio`, `/umbral`, `/categorias`_',
 		'• `/jobs [jobId]` — Lista jobs recientes o muestra su estado \\(alias: `/trabajos`\\)',
+		'• `/history [simbolo] [limit]` — Consulta alertas recientes \\(alias: `/alertas`; admite `status=failed|partial|delivered`\\)',
 		'• `/help` / `/start` — Muestra este mensaje de ayuda',
 	].join('\n');
 }
+
+const RESOLVE_COMMAND_MAX_RESULTS = 3;
+
+function escapeMdV2Inline(value) {
+	// Minimal MarkdownV2 escape for inline code/text inside the /resolve reply.
+	// We render the canonical identifier inside `…` (inline code) and free
+	// text outside, so we only escape the small set that breaks inline text.
+	return String(value).replace(/([_*`\[\]()~>#+\-=|{}.!\\])/g, '\\$1');
+}
+
+const resolveCmd = async (context) => {
+	const chatId = getChatId(context);
+	const args = parseCommandArgs(context);
+	const query = (args.positionals[0] || '').trim();
+	const defaultExchange = (args.options.exchange || args.options.exchange || '').trim();
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.resolve',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/resolve',
+			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
+			'query.symbol': query || 'missing',
+		},
+	});
+
+	try {
+		if (!query) {
+			await context.reply(
+				'Uso: `/resolve <simbolo>`. Ejemplos: `/resolve GOLD`, `/resolve BTC`, `/resolve ES`',
+			);
+			return;
+		}
+
+		const { matches, normalizedQuery } = resolveSymbolQuery(query, {
+			defaultExchange: defaultExchange || undefined,
+			maxResults: RESOLVE_COMMAND_MAX_RESULTS,
+		});
+
+		if (matches.length === 0) {
+			const escapedQuery = escapeMdV2Inline(normalizedQuery || query);
+			await context.reply(
+				`Sin coincidencias para \`${escapedQuery}\`. Probá con el identificador canónico \`EXCHANGE:SYMBOL\`.`,
+			);
+			return;
+		}
+
+		const lines = matches.map((match, index) => {
+			const canonical = `${match.exchange}:${match.symbol}`;
+			const confidence = match.matchType === 'exact' ? 'exacto' : 'aproximado';
+			const assetClass = match.assetClass
+				? ` _\\(${escapeMdV2Inline(match.assetClass)}\\)_`
+				: '';
+			const aliases = match.aliases && match.aliases.length > 0
+				? `\n    _aliases:_ ${match.aliases.slice(0, 4).map((a) => '`' + escapeMdV2Inline(a) + '`').join(', ')}${match.aliases.length > 4 ? ', …' : ''}`
+				: '';
+			return `${index + 1}\\. \`${escapeMdV2Inline(canonical)}\` — ${confidence}${assetClass}${aliases}`;
+		});
+
+		const header = matches.length === 1
+			? '*Coincidencia para* \\`' + escapeMdV2Inline(query) + '\\`'
+			: '*Top ' + matches.length + ' coincidencias para* \\`' + escapeMdV2Inline(query) + '\\`\nUsa \\`/analisis EXCHANGE:SYMBOL\\` para ejecutar\\.';
+		const message = `${header}\n\n${lines.join('\n\n')}`;
+
+		await context.reply(message);
+	} catch (error) {
+		console.error(error);
+		sentryService.captureRuntimeError({
+			channel: 'telegram',
+			error,
+			extra: {
+				command: 'resolveCmd',
+				chatId,
+				query,
+			},
+		});
+		try {
+			await context.reply('No pude resolver el símbolo. Intenta de nuevo.');
+		} catch (replyError) {
+			console.error('Failed to send error reply:', replyError);
+		}
+	} finally {
+		sentryService.endSpan(commandSpan);
+	}
+};
 
 const helpCmd = async (context) => {
 	if (isMaintenanceModeEnabled()) {
@@ -1047,14 +1319,22 @@ function parseBooleanOption(value) {
 	return value;
 }
 
-function parseIntegerOption(value) {
+function parseIntegerOption(value, optionName) {
 	if (value === undefined) return undefined;
-	return Number(value);
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
+		throw new Error(`${optionName} debe ser un número entero`);
+	}
+	return parsed;
 }
 
-function parseNumberOption(value) {
+function parseNumberOption(value, optionName) {
 	if (value === undefined) return undefined;
-	return Number(value);
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed)) {
+		throw new Error(`${optionName} debe ser un número`);
+	}
+	return parsed;
 }
 
 function buildBotFromContext(context) {
@@ -1087,6 +1367,14 @@ async function replyValidationError(context, error) {
 	await context.reply(`Comando inválido: ${suffix}`);
 }
 
+const reactionsCommand = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
+	return reactionsSymbol(context);
+};
+
 module.exports = {
 	getPrice,
 	userPriceAlertCmd,
@@ -1094,9 +1382,13 @@ module.exports = {
 	expandedAnalysisCmd,
 	marketScannerCmd,
 	jobsCommand,
+	alertHistoryCommand,
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	resolveCmd,
+	reactionsCommand,
+	reactionsSymbol,
 	preferenciasCmd,
 	filtroCmd,
 	silencioCmd,
@@ -1112,4 +1404,5 @@ module.exports = {
 	telegramCommandRateLimiter,
 	telegramMaintenanceMode,
 	setWarningReplyTimeoutMsForTest,
+	resolveJobRouting,
 };

@@ -2,9 +2,7 @@ const { GoogleGenAI } = require('@google/genai');
 const config = require('./config');
 const {
 	GEMINI_API_KEY,
-	GROUNDING_MODEL_NAME,
 	ENABLE_NEWS_MONITOR_TEST_MODE,
-	GEMINI_MODEL_NAME,
 	MODEL_PROVIDER,
 	BRAVE_SEARCH_API_KEY,
 	BRAVE_SEARCH_ENDPOINT,
@@ -12,8 +10,8 @@ const {
 	AZURE_LLM_MODEL,
 	OPENROUTER_MODEL,
 	CF_AIG_MODEL,
-	GEMINI_MODEL_NAME_FALLBACK,
 } = config;
+const { getGroundingModelName, getGeminiModelName, getGeminiFallbackModelName } = require('./runtimeModels');
 const { getAzureAIClient } = require('../inference/azureAiClient');
 const { getOpenRouterClient } = require('../inference/openRouterClient');
 const { getCloudflareAiClient } = require('../inference/cloudflareAiClient');
@@ -158,6 +156,7 @@ class GenaiClient {
 		}
 
 		let abortCleanup = null;
+		geminiQuotaManager.recordRequest();
 		let generatePromise = this.genAI.models.generateContent({
 			model: model,
 			contents: query,
@@ -232,7 +231,7 @@ class GenaiClient {
 		};
 	}
 
-	async search({ query, model = GROUNDING_MODEL_NAME, maxResults = 3, textWithCitations = false, rethrowQuotaErrors = false, signal = null }) {
+	async search({ query, model = getGroundingModelName(), maxResults = 3, textWithCitations = false, rethrowQuotaErrors = false, signal = null }) {
 		if (ENABLE_NEWS_MONITOR_TEST_MODE) {
 			console.debug('[genaiClient] News Monitor Test Mode enabled - returning mock search results');
 			return {
@@ -271,6 +270,12 @@ class GenaiClient {
 		}
 
 		if (geminiQuotaManager.isCooldownActive()) {
+			// Callers passing rethrowQuotaErrors (such as geminiPriceService or news
+			// analyzer) require structured LLM completion/price extraction that raw web
+			// search cannot fulfill. They manage their own backoff loops and fail-open
+			// policies, so they deliberately bypass Brave Search fallback and rethrow
+			// 429 immediately. Thus, braveFallbacksDuringCooldown accurately records
+			// only paths where Brave Search fallback was actually executed.
 			if (rethrowQuotaErrors) {
 				const remainingMs = geminiQuotaManager.getRemainingCooldownMs();
 				const error = new Error(`Gemini quota cooldown active (${remainingMs}ms remaining)`);
@@ -345,7 +350,7 @@ class GenaiClient {
 	}
 
 	async llmCall({ prompt, context = {}, opts = {} }) {
-		const { model = GEMINI_MODEL_NAME, temperature = 0.2, signal } = opts;
+		const { model = getGeminiModelName(), temperature = 0.2, signal } = opts;
 
 		if (signal?.aborted) {
 			throw signal.reason || new Error('Grounding timeout');
@@ -361,6 +366,7 @@ class GenaiClient {
 		}
 
 		let abortCleanup = null;
+		geminiQuotaManager.recordRequest();
 		let generatePromise = this.genAI.models.generateContent({
 			model,
 			contents: prompt,
@@ -437,7 +443,11 @@ class GenaiClient {
 					{ ...error, provider: 'gemini' },
 				);
 			}
-			throw new Error(`LLM call failed: ${error.message}`);
+			const wrappedError = new Error(`LLM call failed: ${error.message}`);
+			if (isGeminiQuotaError(error)) {
+				geminiQuotaManager.markQuotaErrorCounted(wrappedError);
+			}
+			throw wrappedError;
 		}
 	}
 
@@ -460,14 +470,15 @@ class GenaiClient {
 		}
 
 		let lastError;
+		const geminiModelName = getGeminiModelName();
 
 		// 1. Try Gemini
-		if (MODEL_PROVIDER === 'gemini' && GEMINI_MODEL_NAME) {
+		if (MODEL_PROVIDER === 'gemini' && geminiModelName) {
 			try {
 				// Previous calls were like: prompt = `${systemPrompt}\n\n${userPrompt}`.
 				const startTime = Date.now();
 				const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
-				const modelUsed = opts.model || GEMINI_MODEL_NAME || GEMINI_MODEL_NAME_FALLBACK;
+				const modelUsed = opts.model || geminiModelName || getGeminiFallbackModelName();
 				console.debug('[GenaiClient] Attempting Gemini LLM call');
 				const response = await this.llmCall({
 					prompt: combinedPrompt,
@@ -586,7 +597,13 @@ class GenaiClient {
 		}
 
 		// If we reach here, all configured providers failed
-		throw new Error(`All LLM providers failed. Last error: ${lastError ? lastError.message : 'No providers configured'}`);
+		const finalError = new Error(`All LLM providers failed. Last error: ${lastError ? lastError.message : 'No providers configured'}`);
+		if (lastError?.code === 'GEMINI_QUOTA_EXHAUSTED') {
+			finalError.code = 'GEMINI_QUOTA_EXHAUSTED';
+		} else if (lastError && isGeminiQuotaError(lastError)) {
+			geminiQuotaManager.markQuotaErrorCounted(finalError);
+		}
+		throw finalError;
 	}
 
 	_addCitations(text, supports, chunks) {

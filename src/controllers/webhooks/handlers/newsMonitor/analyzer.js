@@ -17,7 +17,8 @@ const {
 	parseNewsMaxAlertsPerWindow,
 	parseNewsMaxAlertsPerWindowMs,
 } = require('./volumeTracker');
-const { GROUNDING_MODEL_NAME, ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
+const { ENABLE_NEWS_MONITOR_TEST_MODE } = require('../../../../services/grounding/config');
+const { getGroundingModelName } = require('../../../../services/grounding/runtimeModels');
 const geminiQuotaManager = require('../../../../services/grounding/geminiQuotaManager');
 const geminiPriceService = require('../../../../services/grounding/geminiPriceService');
 const { getPromptService, PromptKeys } = require('../../../../services/prompts');
@@ -531,7 +532,7 @@ class NewsAnalyzer {
 				const currentIndex = nextIndex;
 				nextIndex += 1;
 				const symbol = symbols[currentIndex];
-				const symbolTokenUsage = new TokenUsageTracker();
+				const symbolTokenUsage = new TokenUsageTracker('news-analysis');
 				results[currentIndex] = await this.analyzeSymbol(symbol, requestId, symbolTokenUsage, routing, batchStartedAt, symbolOptions)
 					.then((result) => {
 						if (tokenUsage) {
@@ -1178,7 +1179,7 @@ class NewsAnalyzer {
 		// Optional LLM enrichment
 		let enrichmentMetadata = null;
 		if (this.enrichmentService.isEnabled() && ENABLE_NEWS_MONITOR_TEST_MODE !== true) {
-			enrichmentMetadata = await this.enrichmentService.enrichAlert(geminiAnalysis);
+			enrichmentMetadata = await this.enrichmentService.enrichAlert(geminiAnalysis, { tokenUsage });
 			if (enrichmentMetadata && enrichmentMetadata.enriched_confidence < this.alertThreshold) {
 				console.debug('[Analyzer] Enrichment lowered confidence below threshold');
 				return {
@@ -1360,12 +1361,18 @@ class NewsAnalyzer {
 
 			if (meetsConviction) {
 				const side = (sentimentScore > 0) ? 'BUY' : 'SELL';
+				const outcomeScore = typeof alert.confidence === 'number' && Number.isFinite(alert.confidence)
+					? (side === 'SELL' ? -1 : 1) * Math.abs(alert.confidence)
+					: null;
 				const stop = (alert.marketContext && typeof alert.marketContext.stop === 'number')
 					? alert.marketContext.stop
 					: (typeof alert.stop === 'number' ? alert.stop : null);
 				const target = (alert.marketContext && typeof alert.marketContext.target === 'number')
 					? alert.marketContext.target
 					: (typeof alert.target === 'number' ? alert.target : null);
+				// Preserve barrier provenance for outcome tracking so
+				// summarizeOutcomes() can build barrierSourceBreakdown.
+				const barriers = alert.barriers || null;
 
 				signalOutcomeService.recordSignal({
 					requestId,
@@ -1377,13 +1384,14 @@ class NewsAnalyzer {
 					exchange: alert.marketContext && alert.marketContext.source === 'binance' ? 'BINANCE' : 'UNKNOWN',
 					timeframe: null,
 					setupType: 'news-alert',
-					score: alert.confidence,
-					confidenceScore: alert.confidence,
+					score: outcomeScore,
+					confidenceScore: typeof alert.confidence === 'number' && Number.isFinite(alert.confidence) ? Math.abs(alert.confidence) : null,
 					side,
 					price: alert.marketContext ? alert.marketContext.price : null,
 					priceSource: alert.marketContext ? alert.marketContext.source : null,
 					stop,
 					target,
+					barriers,
 					sources: alert.sources || [],
 					tokenUsage: alert.enriched ? alert.enriched.tokenUsage : null,
 				}).catch(() => {});
@@ -1872,7 +1880,7 @@ class NewsAnalyzer {
 		// Build enriched object for formatEnriched methods
 		const confidenceProvenance = geminiAnalysis.confidence_source
 			? `_Confidence source: ${geminiAnalysis.confidence_source}_`
-			: `_Model used: ${GROUNDING_MODEL_NAME}_`;
+			: `_Model used: ${getGroundingModelName()}_`;
 		// Issue #1230: the tier is appended to `extraText` because that is what
 		// `formatEnriched()` actually renders to the trader. `formatAlertMessage()`
 		// has no production call site, so a line added only there would never be seen.
@@ -1890,6 +1898,27 @@ class NewsAnalyzer {
 				: `_Model Confidence: ${confidense}%_\n${confidenceProvenance}`,
 			qualityAuditLine,
 		].filter(Boolean).join('\n');
+
+		// Preserve barrier provenance so downstream delivery, outcome tracking,
+		// and summary rollups can distinguish derived vs. supplied vs. absent
+		// barriers. When marketContext supplies explicit stop/target levels,
+		// those take precedence over heuristic deriveBarriers(). See issue #809.
+		const hasMarketContextBarriers = marketContext
+			&& (typeof marketContext.stop === 'number' || typeof marketContext.target === 'number');
+		let barriers = null;
+		if (hasMarketContextBarriers) {
+			barriers = { source: 'marketContext' };
+		} else if (derivedBarriers) {
+			barriers = {
+				stop: derivedBarriers.stop,
+				target: derivedBarriers.target,
+				side: derivedBarriers.side,
+				stopPct: derivedBarriers.stopPct,
+				rewardMultiplier: derivedBarriers.rewardMultiplier,
+				source: 'derived',
+				timeHorizon: geminiAnalysis.time_horizon || 'short_term',
+			};
+		}
 		const enriched = {
 			originalText: alertTitle,
 			summary: context,
@@ -1898,6 +1927,7 @@ class NewsAnalyzer {
 			tokenUsage: tokenUsageSummary || undefined,
 			time_horizon: geminiAnalysis.time_horizon,
 			invalidation_hint: geminiAnalysis.invalidation_hint,
+			barriers,
 		};
 
 		return {
@@ -1933,6 +1963,7 @@ class NewsAnalyzer {
 			target: (marketContext && typeof marketContext.target === 'number')
 				? marketContext.target
 				: (derivedBarriers ? derivedBarriers.target : undefined),
+			barriers,
 		};
 	}
 

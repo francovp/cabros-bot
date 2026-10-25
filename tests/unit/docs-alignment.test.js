@@ -32,6 +32,7 @@ function getJavaScriptFiles(dirPath, arrayOfFiles = []) {
 const ENVIRONMENT_CLASSIFICATIONS = {
 	APPDATA: 'platform-injected credential path',
 	COMMIT_SHA: 'platform-injected release metadata',
+	DISABLE_SYMBOL_ALIAS_RESOLVER: 'opt-out feature flag for the symbol alias resolver (#845)',
 	ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE: 'deprecated compatibility alias',
 	ENABLE_TEST_RATE_LIMITER: 'test-only override',
 	FUNCTION_NAME: 'platform-injected runtime metadata',
@@ -57,6 +58,9 @@ const ENVIRONMENT_CLASSIFICATIONS = {
 	RAILWAY_GIT_REPO_OWNER: 'platform-injected release metadata',
 	RENDER_INSTANCE_ID: 'platform-injected runtime metadata',
 	RENDER_SERVICE_ID: 'platform-injected runtime metadata',
+	RENDER_SERVICE_NAME: 'platform-injected runtime metadata',
+	RAILWAY_SERVICE_ID: 'platform-injected runtime metadata',
+	RAILWAY_SERVICE_NAME: 'platform-injected runtime metadata',
 	SIGNAL_OUTCOME_EVALUATION_CADENCE_MS: 'deprecated compatibility alias',
 	SOURCE_VERSION: 'platform-injected release metadata',
 };
@@ -203,6 +207,20 @@ describe('Documentation Alignment Policy', () => {
 		expect(readme).toContain('`ENABLE_CLOUDFLARE_AIG` only exposes Cloudflare readiness in status/capabilities');
 	});
 
+	test('documents Gemini model selectors and Remote Config precedence', () => {
+		const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
+		const agents = fs.readFileSync(path.join(repoRoot, 'AGENTS.md'), 'utf8');
+		const envInventory = agents.match(/^- Optional but relevant.*$/m)?.[0] || '';
+
+		for (const key of ['GEMINI_MODEL_NAME', 'GEMINI_MODEL_NAME_FALLBACK', 'GROUNDING_MODEL_NAME']) {
+			expect(readme).toContain(`\`${key}\``);
+			expect(envInventory).toContain(key);
+		}
+		expect(readme).toMatch(/Remote Config.+environment fallback/i);
+		expect(readme).toContain('Remote values must be strings of at most 128 characters');
+		expect(readme).toContain('validates the loaded models');
+	});
+
 	test('aliased process.env reads are included in the parity scan', () => {
 		const source = 'function setup(env = process.env) { return env.TRUST_PROXY; }';
 		expect([...getEnvironmentReadsFromContent(source)]).toContain('TRUST_PROXY');
@@ -235,6 +253,39 @@ describe('Documentation Alignment Policy', () => {
 		expect(readme).toContain('DISCORD_MAX_TOTAL_RETRY_WAIT_MS');
 		expect(readme).toMatch(/split(?:s|ting)? into (?:ordered|sequential) chunks/i);
 	});
+
+	test('TOKEN_COST_DAILY_BUDGET_USD documented ceiling matches RemoteConfig schema', () => {
+		const envConfigDoc = fs.readFileSync(path.join(repoRoot, 'docs/environment-configuration.md'), 'utf8');
+		const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+		const schema = remoteConfigService.PARAMETER_SCHEMA.TOKEN_COST_DAILY_BUDGET_USD;
+
+		expect(schema.min).toBe(0.01);
+		expect(schema.max).toBe(10000);
+		expect(envConfigDoc).toContain('TOKEN_COST_DAILY_BUDGET_USD');
+		expect(envConfigDoc).toMatch(/TOKEN_COST_DAILY_BUDGET_USD.*range `0\.01`-`10000\.00`/);
+		expect(envConfigDoc).not.toContain('1000.00');
+	});
+
+	test('confluence and multi-timeframe deadline documentation matches decoupled runtime model (#1392)', () => {
+		const readme = fs.readFileSync(path.join(repoRoot, 'README.md'), 'utf8');
+		const mcpDoc = fs.readFileSync(path.join(repoRoot, 'docs/tradingview-mcp.md'), 'utf8');
+
+		const staleSingleDeadlinePatterns = [
+			/both confluence calls share one/i,
+			/share one (?:deadline of )?min\(8000/i,
+			/both confluence calls share a single deadline/i,
+		];
+
+		for (const pattern of staleSingleDeadlinePatterns) {
+			expect(readme).not.toMatch(pattern);
+			expect(mcpDoc).not.toMatch(pattern);
+		}
+
+		expect(readme).toContain('decoupled per-call deadline model');
+		expect(readme).toMatch(/min\(8000,\s*remaining budget\)/);
+		expect(mcpDoc).toContain('decoupled deadline model');
+		expect(mcpDoc).toMatch(/min\(8000,\s*remaining budget\)/);
+	});
 });
 
 describe('Node.js runtime contract', () => {
@@ -249,7 +300,7 @@ describe('Node.js runtime contract', () => {
 
     expect(fs.existsSync(nodeVersionPath)).toBe(true);
     expect(fs.readFileSync(nodeVersionPath, 'utf8').trim()).toBe(nodeVersion);
-    expect(packageJson.engines.node).toBe(`>=${nodeVersion} <25`);
+    expect(packageJson.engines.node).toBe(`>=${nodeVersion} <27`);
     expect(workflow).toContain('node-version-file: .node-version');
     expect(workflow).not.toMatch(/node-version:\s*20\b/i);
     expect(devcontainer).toContain(`FROM node:${nodeVersion}`);

@@ -2,12 +2,10 @@ const genaiClient = require('./genaiClient');
 const { NonRetryableProviderError } = genaiClient;
 const { validateGeminiResponse } = require('../../lib/validation');
 const {
-	GROUNDING_MODEL_NAME,
-	GEMINI_MODEL_NAME,
-	GEMINI_MODEL_NAME_FALLBACK,
 	ENABLE_NEWS_MONITOR_TEST_MODE,
 	GROUNDING_MAX_LENGTH,
 } = require('./config');
+const { getGroundingModelName, getGeminiModelName, getGeminiFallbackModelName } = require('./runtimeModels');
 const { EventCategory } = require('../../controllers/webhooks/handlers/newsMonitor/constants');
 const { getPromptService, PromptKeys } = require('../prompts');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
@@ -15,6 +13,13 @@ const { registerGlobalUsage, tokenCostBudgetService } = require('../../lib/token
 const { createSentimentScoreWindow } = require('./sentimentDistribution');
 
 const promptService = getPromptService();
+
+function usesGeminiModelProvider() {
+	const provider = typeof process.env.MODEL_PROVIDER === 'string'
+		? process.env.MODEL_PROVIDER.trim().toLowerCase()
+		: '';
+	return provider === '' || provider === 'gemini';
+}
 
 function getEffectiveGroundingMaxLength() {
 	return getRuntimeConfig().GROUNDING_MAX_LENGTH;
@@ -46,6 +51,29 @@ const SETUP_TYPES = new Set([
 	'trend_continuation',
 	'reversal',
 ]);
+
+const STRUCTURAL_KEYWORDS_REGEX = /\b(trend|tendencia|uptrend|downtrend|alcista|bajista|breakout|ruptura|revers|mean[-_\s]?reversion|support|soporte|resistance|resistencia|range|rango|channel|canal|pullback|consolidat|momentum|bounce|rebote|structure|estructura|moving\s+average|promedio\s+m[oó]vil|rsi|macd|bollinger|atr|volatility|volatilidad|level|nivel|pivot)\b/i;
+
+function hasStructuralEvidenceInSources(sources) {
+	if (!Array.isArray(sources) || sources.length === 0) {
+		return false;
+	}
+	return sources.some(source => {
+		if (!source) return false;
+		if (typeof source === 'string') {
+			return STRUCTURAL_KEYWORDS_REGEX.test(source);
+		}
+		const text = [
+			source.title,
+			source.snippet,
+			source.text,
+			source.content,
+			source.description,
+			source.summary,
+		].filter(Boolean).join(' ');
+		return STRUCTURAL_KEYWORDS_REGEX.test(text);
+	});
+}
 
 function parseOptionalRiskValue(value) {
 	if (typeof value === 'number' && Number.isFinite(value)) {
@@ -349,7 +377,7 @@ async function generateGroundedSummary({ text, searchResults = [], searchResultT
 		});
 
 		if (usage) {
-			const effectiveModel = modelUsed || GEMINI_MODEL_NAME || 'gemini';
+			const effectiveModel = modelUsed || getGeminiModelName() || 'gemini';
 			registerGlobalUsage(usage, effectiveModel);
 			if (tokenUsage) {
 				tokenUsage.addUsage(usage, effectiveModel);
@@ -428,7 +456,7 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 			rethrowQuotaErrors: true,
 		});
 		if (searchResult.usage) {
-			const searchModel = searchResult.modelUsed || GROUNDING_MODEL_NAME || 'gemini';
+			const searchModel = searchResult.modelUsed || getGroundingModelName() || 'gemini';
 			registerGlobalUsage(searchResult.usage, searchModel);
 			if (tokenUsage) {
 				tokenUsage.addUsage(searchResult.usage, searchModel);
@@ -457,10 +485,10 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 			const result = await genaiClient.llmCallv2({
 				systemPrompt: prompt.systemPrompt,
 				userPrompt: prompt.userPrompt,
-				opts: { model: GEMINI_MODEL_NAME, temperature: 0.3 },
+				opts: { model: getGeminiModelName(), temperature: 0.3 },
 			});
 			if (result.usage) {
-				const effectiveModel = result.modelUsed || GEMINI_MODEL_NAME || 'gemini';
+				const effectiveModel = result.modelUsed || getGeminiModelName() || 'gemini';
 				registerGlobalUsage(result.usage, effectiveModel);
 				if (tokenUsage) {
 					tokenUsage.addUsage(result.usage, effectiveModel);
@@ -472,16 +500,19 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 			// Note: This logic is specific to Gemini errors, but keeping it for safety if we are in Gemini path.
 			// Azure client might throw different errors.
 			const errorMessage = primaryError.message || '';
-			if (process.env.GEMINI_MODEL_NAME && (errorMessage.includes('503') || errorMessage.includes('UNAVAILABLE') || errorMessage.includes('overloaded'))) {
-				console.warn('[Gemini] Primary model overloaded, attempting fallback model:', GEMINI_MODEL_NAME_FALLBACK);
+			const fallbackModelName = getGeminiFallbackModelName();
+			if (usesGeminiModelProvider()
+				&& getGeminiModelName()
+				&& (errorMessage.includes('503') || errorMessage.includes('UNAVAILABLE') || errorMessage.includes('overloaded'))) {
+				console.warn('[Gemini] Primary model overloaded, attempting fallback model:', fallbackModelName);
 				try {
 					const fallbackResult = await genaiClient.llmCallv2({
 						systemPrompt: prompt.systemPrompt,
 						userPrompt: prompt.userPrompt,
-						opts: { model: GEMINI_MODEL_NAME_FALLBACK, temperature: 0.3 },
+						opts: { model: fallbackModelName, temperature: 0.3 },
 					});
 					if (fallbackResult.usage) {
-						const fallbackModel = fallbackResult.modelUsed || GEMINI_MODEL_NAME_FALLBACK || 'gemini';
+						const fallbackModel = fallbackResult.modelUsed || fallbackModelName || 'gemini';
 						registerGlobalUsage(fallbackResult.usage, fallbackModel);
 						if (tokenUsage) {
 							tokenUsage.addUsage(fallbackResult.usage, fallbackModel);
@@ -527,6 +558,24 @@ async function analyzeNewsForSymbol(symbol, context, options = {}) {
 
 		return analysisResult;
 	} catch (error) {
+		const isBudgetError = error?.code === 'TOKEN_BUDGET_EXCEEDED'
+			|| (typeof error?.message === 'string' && error.message.includes('TOKEN_BUDGET_EXCEEDED'));
+
+		if (isBudgetError) {
+			console.warn('[Gemini][analyzeNewsForSymbol] Daily token cost budget exceeded during analysis, returning fallback analysis');
+			return {
+				event_category: EventCategory.NONE,
+				event_significance: 0,
+				sentiment_score: 0,
+				headline: 'Token cost budget ceiling reached',
+				description: 'Skipping news analysis due to daily token cost budget ceiling.',
+				confidence: 0,
+				promptVersion: 'fallback-budget',
+				sources: [],
+				budgetExceeded: true,
+			};
+		}
+
 		console.error('[Gemini] News analysis failed:', error.message);
 		throw error;
 	}
@@ -958,7 +1007,7 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 			sentiment: 'NEUTRAL',
 			sentiment_score: 0,
 			insights: [],
-			modelUsed: GEMINI_MODEL_NAME || 'unknown',
+			modelUsed: getGeminiModelName() || 'unknown',
 			budgetExceeded: true,
 			...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
 		};
@@ -985,37 +1034,40 @@ async function generateEnrichedAlert({ text, searchResults = [], searchResultTex
 					sentiment: 'NEUTRAL',
 					sentiment_score: 0,
 					insights: [],
-					modelUsed: GEMINI_MODEL_NAME || 'unknown',
+					modelUsed: getGeminiModelName() || 'unknown',
 					...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
 				};
 			}
 
-			if (!GEMINI_MODEL_NAME_FALLBACK || !shouldRetryGeminiWithFallback(error)) {
+			const fallbackModelName = getGeminiFallbackModelName();
+			if (!usesGeminiModelProvider()
+				|| !fallbackModelName
+				|| !shouldRetryGeminiWithFallback(error)) {
 				throw error;
 			}
 
-			console.warn('[Gemini] Primary enrichment model failed, attempting fallback model:', GEMINI_MODEL_NAME_FALLBACK);
+			console.warn('[Gemini] Primary enrichment model failed, attempting fallback model:', fallbackModelName);
 			const fallbackParams = {
 				...llmParams,
 				opts: {
 					...llmParams.opts,
-					model: GEMINI_MODEL_NAME_FALLBACK,
+					model: fallbackModelName,
 				},
 			};
 			llmResult = await genaiClient.llmCallv2(fallbackParams);
 		}
 
 		if (llmResult.usage) {
-			registerGlobalUsage(llmResult.usage, llmResult.modelUsed || GEMINI_MODEL_NAME || 'gemini');
+			registerGlobalUsage(llmResult.usage, llmResult.modelUsed || getGeminiModelName() || 'gemini');
 			if (tokenUsage) {
-				tokenUsage.addUsage(llmResult.usage, llmResult.modelUsed || GEMINI_MODEL_NAME || 'gemini');
+				tokenUsage.addUsage(llmResult.usage, llmResult.modelUsed || getGeminiModelName() || 'gemini');
 			}
 		}
 
 		const parsed = parseEnrichedAlertResponse(llmResult.text, searchResults);
 		return {
 			...parsed,
-			modelUsed: llmResult.modelUsed || GEMINI_MODEL_NAME || 'unknown',
+			modelUsed: llmResult.modelUsed || getGeminiModelName() || 'unknown',
 			...(promptProvenance ? { promptProvenance, prompt_provenance: promptProvenance } : {}),
 		};
 	} catch (error) {
@@ -1067,10 +1119,12 @@ function parseEnrichedAlertResponse(response, sources) {
 			? Math.sign(sentimentScore) * ZERO_SOURCE_SENTIMENT_SCORE_CAP
 			: sentimentScore;
 
-		const parsedSetupType = parseOptionalSetupType(parsed.setup_type);
-		const parsedSetupEvidence = parsedSetupType && typeof parsed.setup_evidence === 'string' && parsed.setup_evidence.trim()
+		const hasEvidence = Array.isArray(sources) && hasStructuralEvidenceInSources(sources);
+		const rawSetupType = parseOptionalSetupType(parsed.setup_type);
+		const parsedSetupEvidence = hasEvidence && rawSetupType && typeof parsed.setup_evidence === 'string' && parsed.setup_evidence.trim()
 			? parsed.setup_evidence.trim()
 			: undefined;
+		const parsedSetupType = parsedSetupEvidence ? rawSetupType : undefined;
 
 		const parsedSentimentScoreEvidence = typeof parsed.sentiment_score_evidence === 'string' && parsed.sentiment_score_evidence.trim()
 			? parsed.sentiment_score_evidence.trim().substring(0, MAX_SENTIMENT_SCORE_EVIDENCE_LENGTH)

@@ -9,6 +9,7 @@ const {
 	calibrateNewsConfidence,
 } = require('../../src/services/grounding/gemini');
 const { EventCategory } = require('../../src/controllers/webhooks/handlers/newsMonitor/constants');
+const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
 jest.mock('../../src/services/grounding/genaiClient');
 
@@ -296,6 +297,69 @@ Some text after...`;
 			genaiClient.llmCallv2.mockRejectedValue(new Error('API error'));
 
 			await expect(analyzeNewsForSymbol('BTCUSDT', 'Context')).rejects.toThrow('API error');
+		});
+
+		it('does not retry a published Gemini model when another LLM provider is selected', async () => {
+			const keys = [
+				'ENABLE_FIREBASE_REMOTE_CONFIG',
+				'MODEL_PROVIDER',
+				'GEMINI_MODEL_NAME',
+			];
+			const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			process.env.MODEL_PROVIDER = 'azure';
+			delete process.env.GEMINI_MODEL_NAME;
+			remoteConfigService._setRemoteOverridesForTesting({
+				GEMINI_MODEL_NAME: 'published-primary-model',
+				GEMINI_MODEL_NAME_FALLBACK: 'published-fallback-model',
+			});
+			genaiClient.llmCallv2.mockRejectedValue(new Error('LLM call failed: 503 UNAVAILABLE'));
+
+			try {
+				await expect(analyzeNewsForSymbol('BTCUSDT', 'Context'))
+					.rejects.toThrow('503 UNAVAILABLE');
+				expect(genaiClient.llmCallv2).toHaveBeenCalledTimes(1);
+			} finally {
+				remoteConfigService._resetForTesting();
+				for (const [key, value] of Object.entries(previous)) {
+					if (value === undefined) {
+						delete process.env[key];
+					} else {
+						process.env[key] = value;
+					}
+				}
+			}
+		});
+
+		it('should fail open to neutral analysis when llmCallv2 throws TOKEN_BUDGET_EXCEEDED code', async () => {
+			const budgetError = new Error('Daily token cost budget exceeded');
+			budgetError.code = 'TOKEN_BUDGET_EXCEEDED';
+			budgetError.status = 429;
+			genaiClient.llmCallv2.mockRejectedValue(budgetError);
+
+			const result = await analyzeNewsForSymbol('BTCUSDT', 'Context');
+
+			expect(result).toBeDefined();
+			expect(result.event_category).toBe(EventCategory.NONE);
+			expect(result.event_significance).toBe(0);
+			expect(result.sentiment_score).toBe(0);
+			expect(result.confidence).toBe(0);
+			expect(result.headline).toBe('Token cost budget ceiling reached');
+			expect(result.description).toBe('Skipping news analysis due to daily token cost budget ceiling.');
+			expect(result.promptVersion).toBe('fallback-budget');
+			expect(result.sources).toEqual([]);
+			expect(result.budgetExceeded).toBe(true);
+		});
+
+		it('should fail open to neutral analysis when llmCallv2 throws message containing TOKEN_BUDGET_EXCEEDED', async () => {
+			const budgetError = new Error('TOKEN_BUDGET_EXCEEDED: Daily LLM token cost budget exceeded');
+			genaiClient.llmCallv2.mockRejectedValue(budgetError);
+
+			const result = await analyzeNewsForSymbol('BTCUSDT', 'Context');
+
+			expect(result).toBeDefined();
+			expect(result.event_category).toBe(EventCategory.NONE);
+			expect(result.budgetExceeded).toBe(true);
 		});
 
 		it('should handle fallback when Gemini response cannot be parsed', async () => {

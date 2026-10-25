@@ -104,6 +104,14 @@ app.get('/ready', (req, res) => {
 	return res.status(status.ready ? 200 : 503).json(status);
 });
 
+// The performance harness needs process-local diagnostics during local test runs.
+// Keep the endpoint unavailable in development and production, and retain API-key auth.
+if (process.env.NODE_ENV === 'test' && process.env.ENABLE_API_ONLY_MODE === 'true') {
+	const { validateApiKey } = require('./src/lib/auth');
+	const { performanceDiagnosticsHandler } = require('./src/lib/performanceDiagnostics');
+	app.get('/diag', validateApiKey, performanceDiagnosticsHandler);
+}
+
 // Public, unauthenticated, read-only status snapshot. Mounted before the
 // rate limiter so monitoring traffic and embedded status widgets never hit
 // the global bucket and never require operator credentials.

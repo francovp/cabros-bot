@@ -1,5 +1,17 @@
 'use strict';
 
+const mockRemoteOverrides = {};
+const firestoreGateKeys = [
+	'ENABLE_FIRESTORE_ALERT_STORAGE',
+	'ENABLE_FIRESTORE_JOB_STORAGE',
+	'ENABLE_FIRESTORE_SCANNER_PRESETS',
+	'ENABLE_FIRESTORE_IDEMPOTENCY',
+];
+
+jest.mock('../../src/services/remoteConfig/resolveRemoteOverride', () => ({
+	resolveRemoteOverride: jest.fn((key) => mockRemoteOverrides[key]),
+}));
+
 const { createSelfTestService, RESULT_TTL_MS } = require('../../src/services/diagnostics/SelfTestService');
 
 function resetEnv() {
@@ -11,6 +23,10 @@ function resetEnv() {
 	delete process.env.GEMINI_API_KEY;
 	delete process.env.TRADINGVIEW_MCP_URL;
 	delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+	delete process.env.ENABLE_FIRESTORE_IDEMPOTENCY;
+	delete process.env.ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE;
+	delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
+	delete process.env.ENABLE_FIRESTORE_SCANNER_PRESETS;
 	delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 	delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
 	delete process.env.ENABLE_BINANCE_TRADING;
@@ -26,6 +42,9 @@ function resetEnv() {
 describe('SelfTestService', () => {
 	beforeEach(() => {
 		resetEnv();
+		for (const key of Object.keys(mockRemoteOverrides)) {
+			delete mockRemoteOverrides[key];
+		}
 	});
 
 	it('reports a full pass when all env vars are configured and the bot is live', async () => {
@@ -74,6 +93,55 @@ describe('SelfTestService', () => {
 		expect(gemini.status).toBe('skipped');
 		expect(tv.status).toBe('skipped');
 		expect(binance.status).toBe('skipped');
+	});
+
+	it.each(firestoreGateKeys)('enables the Firestore diagnostic when remote %s overrides a disabled environment gate', async (key) => {
+		process.env[key] = 'false';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{}';
+		mockRemoteOverrides[key] = true;
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'firestore.collections' });
+
+		expect(result.checks[0]).toMatchObject({ id: 'firestore.collections', status: 'pass' });
+	});
+
+	it.each(firestoreGateKeys)('skips the Firestore diagnostic when remote false overrides enabled %s', async (key) => {
+		process.env[key] = 'true';
+		mockRemoteOverrides[key] = false;
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'firestore.collections' });
+
+		expect(result.checks[0]).toMatchObject({
+			id: 'firestore.collections',
+			status: 'skipped',
+			message: 'No Firestore feature is enabled',
+		});
+	});
+
+	it('uses the legacy idempotency environment alias when no remote value is published', async () => {
+		process.env.ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{}';
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'firestore.collections' });
+
+		expect(result.checks[0]).toMatchObject({ id: 'firestore.collections', status: 'pass' });
+	});
+
+	it('lets a published idempotency false override the legacy environment alias', async () => {
+		process.env.ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE = 'true';
+		mockRemoteOverrides.ENABLE_FIRESTORE_IDEMPOTENCY = false;
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'firestore.collections' });
+
+		expect(result.checks[0]).toMatchObject({
+			id: 'firestore.collections',
+			status: 'skipped',
+			message: 'No Firestore feature is enabled',
+		});
 	});
 
 	it('fails Gemini grounding when enabled without API key', async () => {
@@ -144,7 +212,7 @@ describe('SelfTestService', () => {
 		process.env.BOT_TOKEN = originalEnv;
 	});
 
-	it('redacts sensitive evidence keys', async () => {
+	it('redacts sensitive evidence keys and URL credentials in endpoint', async () => {
 		const svc = createSelfTestService({ botOrGetter: () => null });
 		process.env.BOT_TOKEN = 't';
 		process.env.TELEGRAM_CHAT_ID = 'c';
@@ -155,8 +223,57 @@ describe('SelfTestService', () => {
 		process.env.TRADINGVIEW_MCP_URL = 'https://example.com?api-key=secret';
 		// re-run because the check is evaluated at run-time
 		const result2 = await svc.run({ only: 'tradingview_mcp.endpoint' });
-		expect(result2.checks[0].evidence).toEqual({ endpoint: 'https://example.com?api-key=secret' });
+		expect(result2.checks[0].evidence).toEqual({ endpoint: 'https://example.com' });
 		expect(result.checks[0].evidence).toBeNull();
+	});
+
+	it('redacts basic auth and query credentials from TRADINGVIEW_MCP_URL in evidence', async () => {
+		const svc = createSelfTestService({ botOrGetter: () => null });
+		process.env.BOT_TOKEN = 't';
+		process.env.TELEGRAM_CHAT_ID = 'c';
+		process.env.WEBHOOK_API_KEY = 'k';
+		process.env.RATE_LIMIT_MAX = '1';
+		process.env.RATE_LIMIT_WINDOW_MS = '1';
+
+		// Basic auth and query credentials stripped/redacted
+		process.env.TRADINGVIEW_MCP_URL = 'https://operator:supersecret@mcp.internal:8443/mcp?token=xyz123&apiKey=456';
+		const res1 = await svc.run({ only: 'tradingview_mcp.endpoint' });
+		expect(res1.checks[0].evidence).toEqual({ endpoint: 'https://mcp.internal:8443/mcp' });
+
+		// Standard URL without query or auth is preserved intact
+		process.env.TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
+		const res2 = await svc.run({ only: 'tradingview_mcp.endpoint' });
+		expect(res2.checks[0].evidence).toEqual({ endpoint: 'https://tradingview-mcp-yp6b.onrender.com/mcp' });
+
+		// User-only basic auth
+		process.env.TRADINGVIEW_MCP_URL = 'https://operator@mcp.internal/mcp';
+		const res3 = await svc.run({ only: 'tradingview_mcp.endpoint' });
+		expect(res3.checks[0].evidence).toEqual({ endpoint: 'https://mcp.internal/mcp' });
+
+		// Password-only basic auth
+		process.env.TRADINGVIEW_MCP_URL = 'https://:supersecret@mcp.internal/mcp';
+		const res4 = await svc.run({ only: 'tradingview_mcp.endpoint' });
+		expect(res4.checks[0].evidence).toEqual({ endpoint: 'https://mcp.internal/mcp' });
+
+		// Encoded basic auth credentials
+		process.env.TRADINGVIEW_MCP_URL = 'https://user%40domain:pass%23word@mcp.internal:8443/mcp?token=xyz';
+		const res5 = await svc.run({ only: 'tradingview_mcp.endpoint' });
+		expect(res5.checks[0].evidence).toEqual({ endpoint: 'https://mcp.internal:8443/mcp' });
+
+		// Malformed URL with invalid port (> 65535) and basic auth
+		process.env.TRADINGVIEW_MCP_URL = 'https://operator:secretpass@127.0.0.1:99999/mcp?token=xyz123';
+		const res6 = await svc.run({ only: 'tradingview_mcp.endpoint' });
+		expect(res6.checks[0].evidence).toEqual({ endpoint: 'https://127.0.0.1:99999/mcp' });
+
+		// Schemeless URL with credentials
+		process.env.TRADINGVIEW_MCP_URL = 'operator:secretpass@mcp.internal:8080/mcp?token=xyz';
+		const res7 = await svc.run({ only: 'tradingview_mcp.endpoint' });
+		expect(res7.checks[0].evidence).toEqual({ endpoint: 'mcp.internal:8080/mcp' });
+
+		// Schemeless URL with invalid port and credentials
+		process.env.TRADINGVIEW_MCP_URL = 'operator:secretpass@mcp.internal:99999/mcp?token=xyz';
+		const res8 = await svc.run({ only: 'tradingview_mcp.endpoint' });
+		expect(res8.checks[0].evidence).toEqual({ endpoint: 'mcp.internal:99999/mcp' });
 	});
 
 	it('caches the last result and reports an age', async () => {
@@ -191,5 +308,27 @@ describe('SelfTestService', () => {
 		} finally {
 			Date.now = clock;
 		}
+	});
+
+	it('updates dependencies when updateDependencies is called', async () => {
+		process.env.BOT_TOKEN = 't';
+		process.env.TELEGRAM_CHAT_ID = 'c';
+		process.env.WEBHOOK_API_KEY = 'k';
+		process.env.RATE_LIMIT_MAX = '1';
+		process.env.RATE_LIMIT_WINDOW_MS = '1';
+		process.env.ENABLE_TELEGRAM_BOT = 'true';
+
+		// Initially uninitialized / null bot
+		const svc = createSelfTestService();
+		const initialResult = await svc.run({ only: 'telegram.bot_info' });
+		expect(initialResult.checks[0].status).toBe('skipped');
+
+		// Update with live bot
+		const fakeBot = { botInfo: { id: 1, username: 'updated_bot' } };
+		svc.updateDependencies({ botOrGetter: () => fakeBot });
+
+		const updatedResult = await svc.run({ only: 'telegram.bot_info' });
+		expect(updatedResult.checks[0].status).toBe('pass');
+		expect(updatedResult.checks[0].message).toContain('updated_bot');
 	});
 });

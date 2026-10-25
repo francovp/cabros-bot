@@ -49,10 +49,15 @@ describe('Signal Outcomes Calibration API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(403);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
 			code: 'FEATURE_DISABLED',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('returns 503 when Firestore is unavailable', async () => {
@@ -65,10 +70,15 @@ describe('Signal Outcomes Calibration API Integration Tests', () => {
 			.set('x-api-key', 'test-key')
 			.expect(503);
 
-		expect(res.body).toEqual({
+		expect(res.body).toEqual(expect.objectContaining({
 			error: 'Signal outcome tracking is enabled but Firestore is unavailable.',
 			code: 'STORAGE_UNAVAILABLE',
-		});
+		}));
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: true,
+			requestId: expect.any(String),
+		}));
 	});
 
 	it('returns 400 for invalid query parameters', async () => {

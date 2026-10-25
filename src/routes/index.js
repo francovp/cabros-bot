@@ -34,9 +34,27 @@ const {
 	submitFeedback,
 	getFeedbackSummary,
 } = require('../controllers/alerts/alerts');
-const { listOutcomes, summarizeOutcomes, getOutcomesCalibration } = require('../controllers/outcomes/outcomes');
+const {
+	postResolveSymbol,
+	getAliases,
+} = require('../controllers/webhooks/handlers/symbols/symbols');
+const {
+	listOutcomes,
+	summarizeOutcomes,
+	getOutcomesCalibration,
+	getOutcomeById,
+	exportOutcomes,
+} = require('../controllers/outcomes/outcomes');
 const { listSymbolAnalyses, summarizeSymbolAnalyses } = require('../controllers/symbolAnalyses/symbolAnalyses');
 const { getPreferencesHandler, putPreferencesHandler, deletePreferencesHandler } = require('../controllers/preferences/preferences');
+const {
+	listSubscribers,
+	postSubscriber,
+	getSubscriber,
+	updateSubscriber,
+	deleteSubscriber,
+	testSubscriber,
+} = require('../controllers/subscribers/alertSubscribers');
 const { validateApiKey } = require('../lib/auth');
 const { getApiStatus } = require('../controllers/status');
 const {
@@ -45,7 +63,18 @@ const {
 	deleteBinanceOrder,
 	getBinanceOrderAudit,
 	postBinanceOrderPreview,
+	getBinanceAccountBalances,
 } = require('../controllers/trading/binanceOrders');
+const {
+	postBinancePause,
+	postBinanceResume,
+	getBinancePause,
+} = require('../controllers/trading/binanceTradingControl');
+const {
+	getPositions,
+	getPnlSummary,
+	getTrades,
+} = require('../controllers/trading/tradeLedger');
 const { postTestAlert } = require('../controllers/admin/testAlert');
 const { handleSseStream } = require('../controllers/admin/sseEvents');
 const { idempotencyMiddleware } = require('../lib/idempotency');
@@ -54,6 +83,7 @@ const {
 	ADMIN_VIEWER,
 	requireAdminRole,
 	requireConfiguredAdminAccess,
+	requireConfiguredBinanceTradingAccess,
 	requireConfiguredSseAccess,
 	validateAdminAccess,
 } = require('../lib/adminAuth');
@@ -65,15 +95,14 @@ function getRoutes(botOrGetter) {
 	const adminRead = [validateAdminAccess, requireAdminRole(ADMIN_VIEWER)];
 	const adminWrite = [validateAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
 	const sseRead = [requireConfiguredSseAccess, requireAdminRole(ADMIN_VIEWER)];
-	const binanceOrderRead = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_VIEWER)];
-	const binanceOrderWrite = [requireConfiguredAdminAccess, requireAdminRole(ADMIN_OPERATOR)];
+	const binanceOrderRead = [requireConfiguredBinanceTradingAccess, requireAdminRole(ADMIN_VIEWER)];
+	const binanceOrderWrite = [requireConfiguredBinanceTradingAccess, requireAdminRole(ADMIN_OPERATOR)];
 	router.post('/webhook/alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postAlert(botOrGetter));
 	router.post('/webhook/message', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postMessage(botOrGetter));
 	router.post('/webhook/expanded-analysis-alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
 	router.post('/webhook/market-scanner-alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
-	// Rate limited by the app-wide src/lib/rateLimiter (app.use). These two webhook
-	// ingest paths additionally have their own dedicated 1,000-request bucket via
-	// WEBHOOK_INGEST_PATHS, so they are more restricted than the global default.
+	// Rate limited by the app-wide src/lib/rateLimiter (app.use): volume confirmation
+	// uses the standard tier (30/minute), and symbol analysis uses the heavy tier (5/minute).
 	// CodeQL's js/missing-rate-limiting cannot see the app-level middleware.
 	/* codeql[js/missing-rate-limiting] */
 	router.post('/webhook/volume-confirmation', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postVolumeConfirmation());
@@ -95,6 +124,8 @@ function getRoutes(botOrGetter) {
 	router.get('/outcomes', ...adminRead, listOutcomes);
 	router.get('/outcomes/summary', ...adminRead, summarizeOutcomes);
 	router.get('/outcomes/calibration', ...adminRead, getOutcomesCalibration);
+	router.get('/outcomes/export', ...adminRead, exportOutcomes);
+	router.get('/outcomes/:outcomeId', ...adminRead, getOutcomeById);
 	router.get('/symbol-analyses', ...adminRead, listSymbolAnalyses);
 	router.get('/symbol-analyses/summary', ...adminRead, summarizeSymbolAnalyses);
 	router.post('/scanner-presets', ...adminWrite, postPreset);
@@ -103,6 +134,19 @@ function getRoutes(botOrGetter) {
 	router.put('/scanner-presets/:id', ...adminWrite, updatePreset);
 	router.delete('/scanner-presets/:id', ...adminWrite, deletePreset);
 	router.post('/scanner-presets/:id/run', ...adminWrite, idempotencyMiddleware, postRunPreset(botOrGetter));
+
+	// Symbol alias resolver (issue #845) — operator-only lookup endpoints.
+	router.post('/symbols/resolve', ...adminWrite, postResolveSymbol());
+	router.get('/symbols/aliases', ...adminRead, getAliases());
+
+	// Alert subscriber webhook endpoints
+	router.get('/alert-subscribers', ...adminRead, listSubscribers);
+	router.post('/alert-subscribers', ...adminWrite, idempotencyMiddleware, postSubscriber);
+	router.get('/alert-subscribers/:id', ...adminRead, getSubscriber);
+	router.put('/alert-subscribers/:id', ...adminWrite, updateSubscriber);
+	router.patch('/alert-subscribers/:id', ...adminWrite, updateSubscriber);
+	router.delete('/alert-subscribers/:id', ...adminWrite, deleteSubscriber);
+	router.post('/alert-subscribers/:id/test', ...adminWrite, idempotencyMiddleware, testSubscriber);
 
 	// Per-chat alert preferences endpoints
 	router.get('/preferences/:channel/:chatId', ...adminRead, getPreferencesHandler);
@@ -119,8 +163,15 @@ function getRoutes(botOrGetter) {
 	router.get('/trading/binance/orders', ...binanceOrderRead, getBinanceOrders);
 	router.get('/trading/binance/orders/audit', ...binanceOrderRead, getBinanceOrderAudit);
 	router.post('/trading/binance/orders/preview', ...binanceOrderRead, postBinanceOrderPreview);
+	router.get('/trading/binance/account/balances', ...binanceOrderRead, getBinanceAccountBalances);
 	router.post('/trading/binance/orders', ...binanceOrderWrite, idempotencyMiddleware, postBinanceOrder);
 	router.delete('/trading/binance/orders', ...binanceOrderWrite, deleteBinanceOrder);
+	router.get('/trading/binance/pause', ...binanceOrderRead, getBinancePause);
+	router.post('/trading/binance/pause', ...binanceOrderWrite, idempotencyMiddleware, postBinancePause);
+	router.post('/trading/binance/resume', ...binanceOrderWrite, idempotencyMiddleware, postBinanceResume);
+	router.get('/trading/positions', ...adminRead, getPositions);
+	router.get('/trading/pnl/summary', ...adminRead, getPnlSummary);
+	router.get('/trading/trades', ...adminRead, getTrades);
 
 	const { getNewsMonitor } = require('../controllers/webhooks/handlers/newsMonitor/newsMonitor');
 	const {

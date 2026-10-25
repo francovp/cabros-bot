@@ -4,6 +4,12 @@ const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 const alertStorageService = require('../storage/AlertStorageService');
 const { parseEntryPriceSources } = require('../../lib/signalOutcomeEntryPriceSources');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
+const {
+	applyStartupJitter,
+	getStartupJitterDelayMs,
+	resolveStartupJitterMs,
+} = require('../../lib/startupJitter');
 
 const DEFAULT_REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 const DEFAULT_LOAD_TIMEOUT_MS = 10 * 1000;
@@ -18,6 +24,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	NEWS_GEMINI_CONCURRENCY: { type: 'number', defaultValue: Infinity, integer: true, min: 1, max: 50 },
 	NEWS_GEMINI_QUOTA_MAX_RETRIES: { type: 'number', defaultValue: 2, integer: true, min: 1, max: 5 },
 	NEWS_GEMINI_QUOTA_RETRY_BASE_MS: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 60000 },
+	NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS: { type: 'number', defaultValue: 1800000, integer: true, min: 1000, max: 86400000 },
 	NEWS_MAX_ALERTS_PER_BATCH: { type: 'number', defaultValue: 10, integer: true, min: 1, max: 50 },
 	NEWS_MAX_ALERTS_PER_WINDOW: { type: 'number', defaultValue: 20, integer: true, min: 1, max: 200 },
 	NEWS_MAX_ALERTS_PER_WINDOW_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1000, max: 3600000 },
@@ -27,10 +34,31 @@ const PARAMETER_SCHEMA = Object.freeze({
 	TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 100 },
 	TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS: { type: 'number', defaultValue: 600000, integer: true, min: 1000, max: 86400000 },
 	TRADINGVIEW_MCP_PAGE_COOLDOWN_MS: { type: 'number', defaultValue: 3600000, integer: true, min: 1000, max: 86400000 },
+	TRADINGVIEW_MCP_CACHE_TTL_MS: { type: 'number', defaultValue: 90000, integer: true, min: 10000, max: 600000 },
+	ENABLE_TRADINGVIEW_MCP_WARMUP: { type: 'boolean', defaultValue: true },
+	TRADINGVIEW_MCP_WARMUP_INTERVAL_MS: { type: 'number', defaultValue: 600000, integer: true, min: 60000, max: 3600000 },
+	TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS: { type: 'number', defaultValue: 60000, integer: true, min: 5000, max: 120000 },
 	ENABLE_MESSAGE_FOOTER_METADATA: { type: 'boolean', defaultValue: true },
 	GROUNDING_MAX_SOURCES: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	GROUNDING_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 120000 },
 	GROUNDING_MAX_LENGTH: { type: 'number', defaultValue: 2000, integer: true, min: 1, max: 10000 },
+	// Credentials (GEMINI_API_KEY and BRAVE_SEARCH_API_KEY), external endpoints,
+	// and provider-routing controls remain environment-only.
+	GEMINI_MODEL_NAME: {
+		type: 'string',
+		defaultValue: '',
+		validate: (value) => value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value),
+	},
+	GEMINI_MODEL_NAME_FALLBACK: {
+		type: 'string',
+		defaultValue: 'gemini-2.5-flash-lite',
+		validate: (value) => value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value),
+	},
+	GROUNDING_MODEL_NAME: {
+		type: 'string',
+		defaultValue: 'gemini-2.5-flash',
+		validate: (value) => value.length <= 128 && /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(value),
+	},
 	ALERT_GROUNDING_COALESCE_MS: { type: 'number', defaultValue: 0, integer: true, min: 0, max: 60000 },
 	NEWS_CACHE_TTL_HOURS: { type: 'number', defaultValue: 6, min: 0, max: 720 },
 	NEWS_CACHE_MAX_ENTRIES: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 1000000 },
@@ -38,6 +66,12 @@ const PARAMETER_SCHEMA = Object.freeze({
 	URL_SHORTENER_CACHE_MAX_ENTRIES: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 100000 },
 	URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES: { type: 'number', defaultValue: 32, integer: true, min: 1, max: 1024 },
 	BINANCE_FETCH_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
+	BINANCE_BALANCE_CACHE_MS: { type: 'number', defaultValue: 3000, integer: true, min: 1000, max: 60000 },
+	TRADINGVIEW_MCP_DEFAULT_EXCHANGE: {
+		type: 'string',
+		defaultValue: 'BINANCE',
+		validate: (value) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value),
+	},
 	TRADINGVIEW_MCP_DEFAULT_TIMEFRAME: {
 		type: 'string',
 		defaultValue: '1h',
@@ -45,6 +79,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	},
 	EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1, max: 120000 },
 	EXPANDED_ANALYSIS_ALERT_CONCURRENCY: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 10 },
+	SYMBOL_ANALYSIS_MIN_RISK_REWARD_RATIO: { type: 'number', defaultValue: 1.5, min: 0.1, max: 10 },
 	DISCORD_MAX_RETRIES: { type: 'number', defaultValue: 2, integer: true, min: 0, max: 10 },
 	DISCORD_FALLBACK_RETRY_DELAY_MS: { type: 'number', defaultValue: 500, integer: true, min: 1, max: 30000 },
 	DISCORD_MAX_RETRY_DELAY_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
@@ -52,8 +87,16 @@ const PARAMETER_SCHEMA = Object.freeze({
 	WEBHOOK_IDEMPOTENCY_TTL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1, max: 86400000 },
 	JOB_CALLBACK_RETRY_DELAY_MS: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 60000 },
 	JOB_POLL_INTERVAL_MS: { type: 'number', defaultValue: 15000, integer: true, min: 1000, max: 300000 },
+	JOB_QUEUE_ATTEMPTS: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 50 },
+	JOB_QUEUE_BACKOFF_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1000, max: 300000 },
+	JOB_QUEUE_CONCURRENCY: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 100 },
+	JOB_QUEUE_CLAIM_LEASE_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 300000 },
+	JOB_QUEUE_CONNECT_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1000, max: 60000 },
+	JOB_QUEUE_PROBE_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1000, max: 120000 },
 	SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
 	SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 300000 },
+	SIGNAL_OUTCOME_WINDOWS: { type: 'string', defaultValue: '1h,4h,1D,1W' },
+	SIGNAL_OUTCOME_WINDOW_LABELS: { type: 'string', defaultValue: '' },
 	SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	SIGNAL_OUTCOME_MAX_RETRY_AGE_MS: { type: 'number', defaultValue: 604800000, integer: true, min: 60000, max: 2592000000 },
 	SIGNAL_OUTCOME_RETENTION_DAYS: { type: 'number', defaultValue: 365, integer: true, min: 1, max: 3650 },
@@ -76,12 +119,14 @@ const PARAMETER_SCHEMA = Object.freeze({
 	NOTIFICATION_REDRIVE_MAX_AGE_MS: { type: 'number', defaultValue: 3600000, integer: true, min: 60000, max: 86400000 },
 	SCANNER_PRESET_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
 	SCANNER_PRESET_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
+	SCANNER_PRESET_SCHEDULER_LEASE_MS: { type: 'number', defaultValue: 120000, integer: true, min: 10000, max: 600000 },
 	NEWS_MONITOR_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 10000, max: 3600000 },
 	NEWS_MONITOR_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 50, integer: true, min: 1, max: 500 },
 	ALERT_SCHEDULER_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
 	ALERT_SCHEDULER_BATCH_LIMIT: { type: 'number', defaultValue: 10, integer: true, min: 1, max: 100 },
 	ENABLE_GEMINI_GROUNDING: { type: 'boolean', defaultValue: false },
 	ENABLE_TRADINGVIEW_MCP_ENRICHMENT: { type: 'boolean', defaultValue: false },
+	ENABLE_TRADINGVIEW_MCP_CACHE: { type: 'boolean', defaultValue: false },
 	ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION: { type: 'boolean', defaultValue: false },
 	ENABLE_MARKET_SCANNER: { type: 'boolean', defaultValue: false },
 	ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: { type: 'boolean', defaultValue: false },
@@ -89,8 +134,27 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_API_ONLY_MODE: { type: 'boolean', defaultValue: false },
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 	ENABLE_SIGNAL_CLASS_MARKER: { type: 'boolean', defaultValue: true },
+	ENABLE_EQUITY_SESSION_TAG: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	ENABLE_MIN_ALERT_CONTEXT: { type: 'boolean', defaultValue: false },
+	MIN_ALERT_PROVISIONAL_STOP_PERCENT: { type: 'number', defaultValue: 2.5, min: 0.1, max: 20 },
+	MIN_ALERT_PROVISIONAL_TARGET_PERCENT: { type: 'number', defaultValue: 5.0, min: 0.1, max: 40 },
+	WORKER_STARTUP_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
+	SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
+	NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
+	SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
+	REMOTE_CONFIG_REFRESH_JITTER_MS: { type: 'number', defaultValue: 5000, integer: true, min: 0, max: 30000 },
+	ENABLE_ALERT_DECISION_AUDIT: { type: 'boolean', defaultValue: false },
+	ENABLE_OUTCOME_INFORMED_DELIVERY: { type: 'boolean', defaultValue: false },
+	OUTCOME_ANNOTATION_LOOKBACK_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
+	OUTCOME_ANNOTATION_MIN_SAMPLE: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 100 },
+	OUTCOME_ANNOTATION_TIMEOUT_MS: { type: 'number', defaultValue: 2000, integer: true, min: 50, max: 10000 },
+	ENABLE_ALERT_CROSS_TF_SUPPRESSION: { type: 'boolean', defaultValue: false },
+	ALERT_CROSS_TF_WINDOW_MS: { type: 'number', defaultValue: 60000, integer: true, min: 0, max: 600000 },
+	ENABLE_ALERT_SYNTH_BURST_AGGREGATION: { type: 'boolean', defaultValue: false },
+	ALERT_BURST_WINDOW_MS: { type: 'number', defaultValue: 3000, integer: true, min: 1000, max: 15000 },
+	ALERT_BURST_MIN_SIGNALS: { type: 'number', defaultValue: 3, integer: true, min: 2, max: 20 },
 	JOB_BACKLOG_ALERT_THRESHOLD_MS: { type: 'number', defaultValue: 900000, integer: true, min: 1000, max: 86400000 },
 	JOB_BACKLOG_PAGE_COOLDOWN_MS: { type: 'number', defaultValue: 900000, integer: true, min: 1000, max: 86400000 },
 	JOB_BACKLOG_PROBE_INTERVAL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
@@ -101,26 +165,55 @@ const PARAMETER_SCHEMA = Object.freeze({
 	REQUEST_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1000, max: 120000 },
 	ENABLE_BINANCE_ORDER_AUDIT: { type: 'boolean', defaultValue: false },
 	BINANCE_ORDER_AUDIT_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
-	ENABLE_SYMBOL_ANALYSIS_STORAGE: { type: 'boolean', defaultValue: false },
-	SYMBOL_ANALYSIS_RETENTION_DAYS: { type: 'number', defaultValue: 7, integer: true, min: 1, max: 365 },
+	TRADE_LEDGER_MAX_SCAN: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 20000 },
+	// ENABLE_TRADE_LEDGER excluded: environment-only gate controlling durable persistence.
+	// ENABLE_SYMBOL_ANALYSIS_STORAGE, SYMBOL_ANALYSIS_RETENTION_DAYS excluded:
+	// a process-startup gate that decides where a collection lives and its TTL
+	// horizon are deployment-controlled, matching ENABLE_FIRESTORE_IDEMPOTENCY,
+	// ENABLE_FIRESTORE_SCANNER_PRESETS and ENABLE_SIGNAL_OUTCOME_TRACKING. A
+	// published template outranks render.yaml, so an allow-listed gate here
+	// would silently override the blueprint's enablement (issue #1179).
 	ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT: { type: 'boolean', defaultValue: false },
-	ENABLE_FIRESTORE_NEWS_ANALYSIS: { type: 'boolean', defaultValue: false },
+	// ENABLE_FIRESTORE_NEWS_ANALYSIS excluded (issue #1180): it is a process-startup
+	// gate that decides where the news_analysis collection lives, like every other
+	// ENABLE_FIRESTORE_* storage gate. A published template parameter reports its
+	// defaultValue with source `remote`, so leaving the gate here would let the
+	// template silently override render.yaml and re-disable persistence the moment
+	// a template load recovered. NEWS_ANALYSIS_RETENTION_DAYS stays eligible.
 	NEWS_ANALYSIS_RETENTION_DAYS: { type: 'number', defaultValue: 30, integer: true, min: 1, max: 365 },
 	ENABLE_FIRESTORE_CHAT_PREFERENCES: { type: 'boolean', defaultValue: false },
 	CHAT_PREFERENCES_RETENTION_DAYS: { type: 'number', defaultValue: 90, integer: true, min: 1, max: 365 },
 	CHAT_PREFERENCES_CACHE_TTL_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 3600000 },
+	GENERIC_MESSAGE_MAX_LENGTH: { type: 'number', defaultValue: 4000, integer: true, min: 1, max: 20000 },
 	// WHATSAPP_TEMPLATE_NAME, WHATSAPP_TEMPLATE_LANGUAGE, WHATSAPP_TEMPLATE_NAMESPACE excluded:
 	// notification destinations — must remain deployment-controlled.
 	WHATSAPP_TEMPLATE_PARAM_ORDER: { type: 'string', defaultValue: 'symbol,price,action,setup,timeframe,source' },
+	WHATSAPP_COMMAND_POLL_INTERVAL_MS: { type: 'number', defaultValue: 3000, integer: true, min: 500, max: 60000 },
 	// ENABLE_TEST_ALERT, TEST_ALERT_DAILY_LIMIT, ENABLE_ADMIN_SSE excluded:
 	// route-enablement gates and abuse rate-limiting controls must remain deployment-controlled.
 	ADMIN_SSE_MAX_CLIENT_CONNECTIONS: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 20 },
 	ADMIN_SSE_MAX_TOTAL_CONNECTIONS: { type: 'number', defaultValue: 100, integer: true, min: 10, max: 1000 },
 	ADMIN_SSE_HEARTBEAT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 5000, max: 120000 },
+	ADMIN_SSE_DRAIN_TIMEOUT_MS: { type: 'number', defaultValue: 15000, integer: true, min: 1000, max: 60000 },
 	ENABLE_TOKEN_COST_BUDGET: { type: 'boolean', defaultValue: false },
 	TOKEN_COST_DAILY_BUDGET_USD: { type: 'number', defaultValue: 5.0, min: 0.01, max: 10000 },
 	TOKEN_COST_WARN_THRESHOLD_PCT: { type: 'number', defaultValue: 80, integer: true, min: 1, max: 100 },
 	ENABLE_MAINTENANCE_MODE: { type: 'boolean', defaultValue: false },
+	// Issue #721 — Firestore storage gates. Each is resolved per call (the gate is
+	// checked before the cached `db` handle), so a remote value flips it at runtime
+	// rather than only at process start. Consumers must read `remote ?? env`, never
+	// `env || remote`: `getRuntimeConfig()` always yields a boolean for these keys, so
+	// the `||` form would let a `true` render.yaml pin mask a remote `false` and make
+	// the flag impossible to turn off in production.
+	//
+	// These remain environment-only for *startup* control in one respect: a preview
+	// deployment has ENABLE_FIREBASE_REMOTE_CONFIG=false, so it keeps the render.yaml
+	// value and can never mutate the production collection through a remote toggle.
+	ENABLE_FIRESTORE_ALERT_STORAGE: { type: 'boolean', defaultValue: false },
+	ENABLE_FIRESTORE_ALERT_SUBSCRIBERS: { type: 'boolean', defaultValue: false },
+	ENABLE_FIRESTORE_IDEMPOTENCY: { type: 'boolean', defaultValue: false },
+	ENABLE_FIRESTORE_JOB_STORAGE: { type: 'boolean', defaultValue: false },
+	ENABLE_FIRESTORE_SCANNER_PRESETS: { type: 'boolean', defaultValue: false },
 });
 
 let remoteOverrides = {};
@@ -129,6 +222,10 @@ let templateVersion = null;
 let lastSuccessfulLoad = null;
 let lastErrorCategory = null;
 let refreshTimer = null;
+let refreshTimeout = null;
+let refreshStartPending = false;
+let refreshStartGeneration = 0;
+let refreshStartAbortController = null;
 let loadingPromise = null;
 let consecutiveFailures = 0;
 const changeListeners = new Set();
@@ -238,6 +335,8 @@ function getEnvironmentConfig() {
 			config[key] = parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_MAX_RETRIES, 2);
 		} else if (key === 'NEWS_GEMINI_QUOTA_RETRY_BASE_MS') {
 			config[key] = parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_RETRY_BASE_MS, 1000);
+		} else if (key === 'NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS') {
+			config[key] = parseLegacyPositiveInteger(process.env.NEWS_GEMINI_QUOTA_MAX_COOLDOWN_MS, 1800000);
 		} else if (key === 'WEBHOOK_IDEMPOTENCY_TTL_MS') {
 			config[key] = parseEnvironmentNumber(process.env[key], schema, schema.defaultValue);
 		} else if (key === 'EQUITY_MARKET_DATA_RPM') {
@@ -295,6 +394,33 @@ function getRuntimeConfig() {
 		Object.assign(config, remoteOverrides);
 	}
 	return config;
+}
+
+/**
+ * Return the *published remote* value for `key`, or `undefined` when Remote
+ * Config has not supplied one.
+ *
+ * `getRuntimeConfig()` cannot answer this question: it always returns a value for
+ * every schema key, environment-derived when the gate is off, so a consumer
+ * reading it cannot tell "Remote Config said false" apart from "the environment
+ * says false". Gating behaviour on that ambiguity is how a deployment-level
+ * `false` silently overrode a published `true`.
+ *
+ * Consumers that need `remote ?? env` semantics must use this instead. A returned
+ * `undefined` is not evidence about the gate, so it must fall through to the
+ * environment rather than being coerced to `false`.
+ *
+ * @param {string} key
+ * @returns {boolean|number|string|undefined}
+ */
+function getRemoteOverride(key) {
+	if (!isEnabled() || !hasFreshRemoteConfig()) {
+		return undefined;
+	}
+	if (!Object.prototype.hasOwnProperty.call(PARAMETER_SCHEMA, key)) {
+		return undefined;
+	}
+	return remoteOverrides[key];
 }
 
 function getSource() {
@@ -545,23 +671,103 @@ async function loadNow(options = {}) {
 }
 
 async function start() {
-	if (!isEnabled() || refreshTimer) {
+	if (!isEnabled() || refreshTimer || refreshTimeout || refreshStartPending) {
 		return false;
 	}
 
-	await loadNow();
-	refreshTimer = setInterval(() => {
-		void loadNow();
-	}, getRefreshIntervalMs());
-	if (typeof refreshTimer.unref === 'function') {
-		refreshTimer.unref();
+	refreshStartPending = true;
+	const startupGeneration = ++refreshStartGeneration;
+	const startupAbortController = new AbortController();
+	refreshStartAbortController = startupAbortController;
+	const startupJitterMs = resolveStartupJitterMs({
+		envVar: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+		runtimeKey: null,
+		globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+		globalRuntimeKey: null,
+	});
+	if (startupJitterMs > 0) {
+		console.info(`[RemoteConfigService] Applying startup jitter (${startupJitterMs}ms max)`);
+		try {
+			await applyStartupJitter(startupJitterMs, {
+				unref: false,
+				signal: startupAbortController.signal,
+			});
+		} catch (error) {
+			if (!startupAbortController.signal.aborted) {
+				console.warn('[RemoteConfigService] Startup jitter failed:', error.message);
+			}
+		}
 	}
-	return true;
+	if (refreshStartAbortController === startupAbortController) {
+		refreshStartAbortController = null;
+	}
+	if (startupGeneration !== refreshStartGeneration || !isEnabled() || refreshTimer || refreshTimeout) {
+		if (startupGeneration === refreshStartGeneration) {
+			refreshStartPending = false;
+		}
+		return false;
+	}
+
+	try {
+		await loadNow();
+		if (startupGeneration !== refreshStartGeneration || !isEnabled() || refreshTimer || refreshTimeout) {
+			return false;
+		}
+
+		// The bootstrap fetch cannot use a published Remote Config value because
+		// that value does not exist in this process until loadNow() completes.
+		// Use the published setting to offset only the first scheduled refresh.
+		const firstRefreshJitterMs = getStartupJitterDelayMs(resolveStartupJitterMs({
+			envVar: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+			runtimeKey: 'REMOTE_CONFIG_REFRESH_JITTER_MS',
+			globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+			globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+			defaultValue: PARAMETER_SCHEMA.REMOTE_CONFIG_REFRESH_JITTER_MS.defaultValue,
+		}));
+		const startPeriodicRefresh = () => {
+			refreshTimeout = null;
+			if (startupGeneration !== refreshStartGeneration || !isEnabled()) {
+				return;
+			}
+			void loadNow();
+			refreshTimer = createManagedInterval('remote-config-refresh', () => loadNow(), getRefreshIntervalMs());
+			if (typeof refreshTimer.unref === 'function') {
+				refreshTimer.unref();
+			}
+		};
+		if (firstRefreshJitterMs > 0) {
+			refreshTimeout = setTimeout(startPeriodicRefresh, getRefreshIntervalMs() + firstRefreshJitterMs);
+			if (typeof refreshTimeout.unref === 'function') {
+				refreshTimeout.unref();
+			}
+		} else {
+			refreshTimer = createManagedInterval('remote-config-refresh', () => loadNow(), getRefreshIntervalMs());
+			if (typeof refreshTimer.unref === 'function') {
+				refreshTimer.unref();
+			}
+		}
+		return true;
+	} finally {
+		if (startupGeneration === refreshStartGeneration) {
+			refreshStartPending = false;
+		}
+	}
 }
 
 function stop() {
+	refreshStartGeneration += 1;
+	refreshStartPending = false;
+	if (refreshStartAbortController) {
+		const startupAbortController = refreshStartAbortController;
+		refreshStartAbortController = null;
+		startupAbortController.abort();
+	}
+	if (refreshTimeout) {
+		clearTimeout(refreshTimeout);
+		refreshTimeout = null;
+	}
 	if (refreshTimer) {
-		clearInterval(refreshTimer);
+		refreshTimer.clear();
 		refreshTimer = null;
 	}
 }
@@ -580,6 +786,7 @@ function resetForTesting() {
 module.exports = {
 	PARAMETER_SCHEMA,
 	getRuntimeConfig,
+	getRemoteOverride,
 	getStatus,
 	loadNow,
 	start,

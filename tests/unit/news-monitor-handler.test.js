@@ -113,4 +113,44 @@ describe('NewsMonitorHandler', () => {
 			else process.env.ENABLE_NEWS_MONITOR = previousFlag;
 		}
 	});
+
+	it('reports barrier provenance when at least one alert has derived or marketContext barriers', () => {
+		const handler = new NewsMonitorHandler();
+
+		const summary = handler.generateSummary([
+			{
+				status: 'analyzed',
+				alert: { barriers: { source: 'derived' } },
+			},
+			{
+				status: 'analyzed',
+				alert: { barriers: { source: 'derived' } },
+			},
+			{
+				status: 'analyzed',
+				alert: { barriers: { source: 'marketContext' } },
+			},
+			{
+				status: 'analyzed',
+				alert: null,
+			},
+		]);
+
+		expect(summary.barrierProvenance).toEqual({
+			derivedAlertsCount: 2,
+			marketContextAlertsCount: 1,
+			totalAlertsWithBarriers: 3,
+		});
+	});
+
+	it('omits barrierProvenance when no alerts carry barrier provenance', () => {
+		const handler = new NewsMonitorHandler();
+
+		const summary = handler.generateSummary([
+			{ status: 'analyzed', alert: { barriers: null } },
+			{ status: 'analyzed', alert: null },
+		]);
+
+		expect(summary.barrierProvenance).toBeUndefined();
+	});
 });

@@ -2,25 +2,19 @@
 
 const express = require('express');
 const request = require('supertest');
-const { onError } = require('../../src/lib/expressErrorHandler');
+const expressErrorHandler = require('../../src/lib/expressErrorHandler');
 
-// Helper: build a JSON body larger than 100kb so express.json() rejects it
-// with 413 Payload Too Large. Each character is one byte when encoded as ASCII.
-function buildOversizedJsonPayload() {
-	const filler = 'x'.repeat(110 * 1024); // 110kb of filler text
+function buildOversizedJsonPayload(sizeKb = 110) {
+	const filler = 'x'.repeat(sizeKb * 1024);
 	return JSON.stringify({ text: filler });
 }
 
-// Helper: build a plain-text body larger than 100kb so express.text() rejects
-// it with 413.
-function buildOversizedTextPayload() {
-	return 'x'.repeat(110 * 1024);
+function buildOversizedTextPayload(sizeKb = 110) {
+	return 'x'.repeat(sizeKb * 1024);
 }
 
-// Helper: build a urlencoded body larger than 100kb so express.urlencoded()
-// rejects it with 413.
-function buildOversizedUrlencodedPayload() {
-	return 'text=' + 'x'.repeat(110 * 1024);
+function buildOversizedUrlencodedPayload(sizeKb = 110) {
+	return 'text=' + 'x'.repeat(sizeKb * 1024);
 }
 
 describe('Body parser size limits', () => {
@@ -29,68 +23,118 @@ describe('Body parser size limits', () => {
 	let savedEnv;
 
 	beforeAll(() => {
-		savedEnv = (() => {
-			const saved = {};
-			for (const k of Object.keys(process.env)) {
-				saved[k] = process.env[k];
-			}
-			return saved;
-		})();
+		savedEnv = { ...process.env };
+		delete process.env.WEBHOOK_MAX_BODY_SIZE;
 		app = require('../../app');
 		productionApp = express();
 		productionApp.use(app);
-		productionApp.use(onError);
+		productionApp.use(expressErrorHandler);
 	});
 
 	afterAll(() => {
-		for (const k of Object.keys(process.env)) {
-			if (!(k in savedEnv)) {
-				delete process.env[k];
+		for (const key of Object.keys(process.env)) {
+			if (!(key in savedEnv)) {
+				delete process.env[key];
 			} else {
-				process.env[k] = savedEnv[k];
+				process.env[key] = savedEnv[key];
 			}
 		}
 	});
 
-	it('accepts a normal-sized JSON payload under 100kb', async () => {
+	it('accepts a normal-sized webhook JSON payload', async () => {
 		const res = await request(productionApp)
 			.post('/api/webhook/alert')
 			.set('x-api-key', 'test-key')
 			.send({ text: 'BTCUSDT at 117000' });
 
-		// Status may be 200/202 (success) or 401/403 (auth-gated), but it must
-		// NOT be 413 - a 413 here would mean the body parser rejected a
-		// small, valid payload, which would be a regression.
 		expect(res.status).not.toBe(413);
 	});
 
-	it('rejects an oversized JSON payload with 413', async () => {
+	it('accepts a webhook JSON payload between 100kb and the default 256kb limit', async () => {
 		const res = await request(productionApp)
 			.post('/api/webhook/alert')
 			.set('x-api-key', 'test-key')
 			.set('Content-Type', 'application/json')
-			.send(buildOversizedJsonPayload());
+			.send(buildOversizedJsonPayload(110));
+
+		expect(res.status).not.toBe(413);
+	});
+
+	it('accepts a news-monitor JSON payload between 100kb and the default 256kb limit', async () => {
+		const res = await request(productionApp)
+			.post('/api/news-monitor')
+			.set('Content-Type', 'application/json')
+			.send(buildOversizedJsonPayload(110));
+
+		expect(res.status).not.toBe(413);
+	});
+
+	it('rejects webhook JSON larger than the default 256kb limit with 413', async () => {
+		const res = await request(productionApp)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.set('Content-Type', 'application/json')
+			.send(buildOversizedJsonPayload(300));
 
 		expect(res.status).toBe(413);
 	});
 
-	it('rejects an oversized text/plain payload with 413', async () => {
+	it('rejects news-monitor JSON larger than the default 256kb limit with 413', async () => {
+		const res = await request(productionApp)
+			.post('/api/news-monitor')
+			.set('Content-Type', 'application/json')
+			.send(buildOversizedJsonPayload(300));
+
+		expect(res.status).toBe(413);
+	});
+
+	it('rejects oversized webhook text/plain payloads with 413', async () => {
 		const res = await request(productionApp)
 			.post('/api/webhook/alert')
 			.set('x-api-key', 'test-key')
 			.set('Content-Type', 'text/plain')
-			.send(buildOversizedTextPayload());
+			.send(buildOversizedTextPayload(300));
 
 		expect(res.status).toBe(413);
 	});
 
-	it('rejects an oversized urlencoded payload with 413', async () => {
+	it('rejects oversized webhook urlencoded payloads with 413', async () => {
 		const res = await request(productionApp)
 			.post('/api/webhook/alert')
 			.set('x-api-key', 'test-key')
 			.set('Content-Type', 'application/x-www-form-urlencoded')
-			.send(buildOversizedUrlencodedPayload());
+			.send(buildOversizedUrlencodedPayload(300));
 
 		expect(res.status).toBe(413);
+	});
+
+	it('rejects non-webhook JSON payloads over 100kb with 413', async () => {
+		const res = await request(productionApp)
+			.post('/api/jobs/tradingview-analysis')
+			.set('Content-Type', 'application/json')
+			.send(buildOversizedJsonPayload(110));
+
+		expect(res.status).toBe(413);
+		expect(res.body.code).toBe('PAYLOAD_TOO_LARGE');
+	});
+
+	it('rejects non-webhook text/plain payloads over 100kb with 413', async () => {
+		const res = await request(productionApp)
+			.post('/api/jobs/tradingview-analysis')
+			.set('Content-Type', 'text/plain')
+			.send(buildOversizedTextPayload(110));
+
+		expect(res.status).toBe(413);
+		expect(res.body.code).toBe('PAYLOAD_TOO_LARGE');
+	});
+
+	it('rejects non-webhook urlencoded payloads over 100kb with 413', async () => {
+		const res = await request(productionApp)
+			.post('/api/jobs/tradingview-analysis')
+			.set('Content-Type', 'application/x-www-form-urlencoded')
+			.send(buildOversizedUrlencodedPayload(110));
+
+		expect(res.status).toBe(413);
+		expect(res.body.code).toBe('PAYLOAD_TOO_LARGE');
 	});
 });
