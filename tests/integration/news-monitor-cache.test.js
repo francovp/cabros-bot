@@ -6,8 +6,23 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices, getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, getNotificationManager, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { getCacheInstance } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
+
+/**
+ * Admin paging fails over to other operator channels (GH-1168), so a test that only blanks
+ * the Telegram admin chat id would still have the channel under test receive an operator
+ * page. Neutralize paging explicitly for those tests.
+ */
+const suppressAdminPaging = () => {
+	const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+	const manager = getNotificationManager();
+	if (!manager) {
+		return;
+	}
+	jest.spyOn(manager, 'getAdminPagingFallbackChannels').mockReturnValue([]);
+	jest.spyOn(manager, '_dispatchAdminPage').mockResolvedValue({ delivered: false, channel: null, attempts: [] });
+};
 
 jest.mock('../../src/services/grounding/gemini');
 jest.mock('../../src/services/grounding/genaiClient');
@@ -40,6 +55,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 
 		// Mock Gemini for symbol analysis
 		const gemini = require('../../src/services/grounding/gemini');
@@ -66,6 +82,7 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		global.fetch = mockFetch;
 
 		// Initialize notification services
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		// Initialize cache and news monitor
@@ -232,7 +249,11 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 
 	describe('Cache Deduplication Impact', () => {
 		it('should retry only failed channels and persist recovered delivery results', async () => {
+			// Suppress operator paging explicitly. A blank admin chat id is no longer enough
+			// (GH-1168): admin pages now fail over to other configured channels, so the
+			// channel under test would also receive the page and skew its call counts.
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			suppressAdminPaging();
 			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
 			const manager = getNotificationManager();
 			const telegramSend = jest.spyOn(manager.channels.get('telegram'), 'send').mockResolvedValue({
@@ -284,7 +305,11 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		});
 
 		it('should keep a failed channel retryable without retrying successful channels', async () => {
+			// Suppress operator paging explicitly. A blank admin chat id is no longer enough
+			// (GH-1168): admin pages now fail over to other configured channels, so the
+			// channel under test would also receive the page and skew its call counts.
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			suppressAdminPaging();
 			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
 			const manager = getNotificationManager();
 			const telegramSend = jest.spyOn(manager.channels.get('telegram'), 'send').mockResolvedValue({
@@ -324,7 +349,11 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		});
 
 		it('should not persist a cached retry after its lease ownership is lost', async () => {
+			// Suppress operator paging explicitly. A blank admin chat id is no longer enough
+			// (GH-1168): admin pages now fail over to other configured channels, so the
+			// channel under test would also receive the page and skew its call counts.
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			suppressAdminPaging();
 			const cache = getCacheInstance();
 			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1);
 			const renewSpy = jest.spyOn(cache, 'renewDelivery').mockResolvedValue(false);
@@ -367,7 +396,11 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		});
 
 		it('should keep a successful retry but skip durable persistence when lease renewal is indeterminate', async () => {
+			// Suppress operator paging explicitly. A blank admin chat id is no longer enough
+			// (GH-1168): admin pages now fail over to other configured channels, so the
+			// channel under test would also receive the page and skew its call counts.
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			suppressAdminPaging();
 			const cache = getCacheInstance();
 			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1);
 			const cacheSetSpy = jest.spyOn(cache, 'set');
@@ -408,7 +441,11 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		});
 
 		it('should bound in-flight lease renewal waits by the analysis deadline', async () => {
+			// Suppress operator paging explicitly. A blank admin chat id is no longer enough
+			// (GH-1168): admin pages now fail over to other configured channels, so the
+			// channel under test would also receive the page and skew its call counts.
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			suppressAdminPaging();
 			const cache = getCacheInstance();
 			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1);
 			let releaseRenewal;
@@ -453,7 +490,11 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		});
 
 		it('should await an in-flight lease renewal before deciding durable persistence', async () => {
+			// Suppress operator paging explicitly. A blank admin chat id is no longer enough
+			// (GH-1168): admin pages now fail over to other configured channels, so the
+			// channel under test would also receive the page and skew its call counts.
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			suppressAdminPaging();
 			const cache = getCacheInstance();
 			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1);
 			const cacheSetSpy = jest.spyOn(cache, 'set');
@@ -491,7 +532,11 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		});
 
 		it('should preserve persistence for channels whose renewal completed before another timed out', async () => {
+			// Suppress operator paging explicitly. A blank admin chat id is no longer enough
+			// (GH-1168): admin pages now fail over to other configured channels, so the
+			// channel under test would also receive the page and skew its call counts.
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			suppressAdminPaging();
 			const cache = getCacheInstance();
 			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1000);
 			const cacheSetSpy = jest.spyOn(cache, 'set');
@@ -540,7 +585,11 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		});
 
 		it('should not mark a failed indeterminate retry as a local-only overlay', async () => {
+			// Suppress operator paging explicitly. A blank admin chat id is no longer enough
+			// (GH-1168): admin pages now fail over to other configured channels, so the
+			// channel under test would also receive the page and skew its call counts.
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			suppressAdminPaging();
 			const cache = getCacheInstance();
 			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1000);
 			const cacheSetSpy = jest.spyOn(cache, 'set');
@@ -583,7 +632,11 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		});
 
 		it('should drop the old destination success when a claimed retry loses its lease', async () => {
+			// Suppress operator paging explicitly. A blank admin chat id is no longer enough
+			// (GH-1168): admin pages now fail over to other configured channels, so the
+			// channel under test would also receive the page and skew its call counts.
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			suppressAdminPaging();
 			const cache = getCacheInstance();
 			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1);
 			const renewSpy = jest.spyOn(cache, 'renewDelivery').mockResolvedValue(false);
@@ -624,7 +677,11 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		});
 
 		it('should preserve an independently owned channel when another lease is lost', async () => {
+			// Suppress operator paging explicitly. A blank admin chat id is no longer enough
+			// (GH-1168): admin pages now fail over to other configured channels, so the
+			// channel under test would also receive the page and skew its call counts.
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			suppressAdminPaging();
 			const cache = getCacheInstance();
 			const manager = getNotificationManager();
 			const intervalSpy = jest.spyOn(cache, 'getDeliveryLeaseRenewIntervalMs').mockReturnValue(1);
@@ -674,7 +731,11 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		});
 
 		it('should serialize concurrent retries for the same failed channel', async () => {
+			// Suppress operator paging explicitly. A blank admin chat id is no longer enough
+			// (GH-1168): admin pages now fail over to other configured channels, so the
+			// channel under test would also receive the page and skew its call counts.
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			suppressAdminPaging();
 			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
 			const manager = getNotificationManager();
 			const telegramSend = jest.spyOn(manager.channels.get('telegram'), 'send').mockResolvedValue({
@@ -718,7 +779,11 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		});
 
 		it('should merge concurrent retries for different channels', async () => {
+			// Suppress operator paging explicitly. A blank admin chat id is no longer enough
+			// (GH-1168): admin pages now fail over to other configured channels, so the
+			// channel under test would also receive the page and skew its call counts.
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			suppressAdminPaging();
 			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
 			const manager = getNotificationManager();
 			let releaseTelegram;
@@ -887,7 +952,11 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 		});
 
 		it('should preserve untouched channel destinations across partial retries', async () => {
+			// Suppress operator paging explicitly. A blank admin chat id is no longer enough
+			// (GH-1168): admin pages now fail over to other configured channels, so the
+			// channel under test would also receive the page and skew its call counts.
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = '';
+			suppressAdminPaging();
 			const { getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
 			const manager = getNotificationManager();
 			const telegramSend = jest.spyOn(manager.channels.get('telegram'), 'send').mockResolvedValue({
@@ -1034,7 +1103,8 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 
 		it('should re-deliver cached alerts when a later request specifies a different discordWebhookUrl', async () => {
 			process.env.ENABLE_DISCORD_ALERTS = 'true';
-			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/default';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
+			resetNotificationManagerForTesting();
 			await initializeNotificationServices(mockBot);
 			const webhookA = 'https://discord.com/api/webhooks/123/abc';
 			const webhookB = 'https://discord.com/api/webhooks/456/def';
@@ -1077,7 +1147,8 @@ describe('News Monitor - Cache Deduplication (US3)', () => {
 
 		it('should not re-deliver when a cached request uses the exact same discordWebhookUrl override', async () => {
 			process.env.ENABLE_DISCORD_ALERTS = 'true';
-			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/default/default';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
+			resetNotificationManagerForTesting();
 			await initializeNotificationServices(mockBot);
 			const webhookA = 'https://discord.com/api/webhooks/123/abc';
 

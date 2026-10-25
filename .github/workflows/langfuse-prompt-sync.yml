@@ -1,0 +1,86 @@
+name: Sync Langfuse Prompts
+
+on:
+  push:
+    branches: ["master"]
+    paths:
+      - "src/services/prompts/defaults/**"
+      - "src/services/prompts/promptRegistry.js"
+  workflow_dispatch:
+    inputs:
+      prompt_name:
+        description: "Specific prompt name to sync (leave empty to sync all)"
+        required: false
+        default: ""
+      commit_message:
+        description: "Commit message for the new Langfuse prompt version"
+        required: false
+        default: "Sync prompt from codebase defaults"
+      labels:
+        description: "Comma-separated labels to apply (e.g. production,latest)"
+        required: false
+        default: "production,latest"
+      dry_run:
+        description: "Dry run: preview changes without pushing to Langfuse"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  sync-langfuse-prompts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install langfuse-cli
+        run: npm install -g langfuse-cli
+
+      - name: Build sync arguments
+        id: args
+        run: |
+          ARGS=""
+
+          # --prompt (optional, workflow_dispatch only)
+          if [ -n "${{ github.event.inputs.prompt_name }}" ]; then
+            ARGS="$ARGS --prompt ${{ github.event.inputs.prompt_name }}"
+          fi
+
+          # --message
+          MSG="${{ github.event.inputs.commit_message || format('ci: sync prompts from {0}', github.sha) }}"
+          ARGS="$ARGS --message \"$MSG\""
+
+          # --labels
+          LABELS="${{ github.event.inputs.labels || 'production,latest' }}"
+          ARGS="$ARGS --labels \"$LABELS\""
+
+          # --dry-run
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+
+          echo "extra_args=$ARGS" >> "$GITHUB_OUTPUT"
+
+      - name: Sync prompts to Langfuse
+        env:
+          LANGFUSE_PUBLIC_KEY: ${{ secrets.LANGFUSE_PUBLIC_KEY }}
+          LANGFUSE_SECRET_KEY: ${{ secrets.LANGFUSE_SECRET_KEY }}
+          LANGFUSE_HOST: ${{ vars.LANGFUSE_BASE_URL || 'https://cloud.langfuse.com' }}
+        run: |
+          eval node .agents/skills/langfuse-prompt-sync/scripts/sync-prompts.js ${{ steps.args.outputs.extra_args }}
