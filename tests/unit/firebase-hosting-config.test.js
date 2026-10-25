@@ -68,4 +68,14 @@ describe('Firebase Hosting Configuration', () => {
 		expect(workflowContent).toContain('pull_request');
 		expect(workflowContent).toContain('channelId: live');
 	});
+
+	it('skips untrusted preview deployments and bounds redundant PR runs', () => {
+		const workflowContent = fs.readFileSync(workflowPath, 'utf8');
+
+		expect(workflowContent).toMatch(/if: \$\{\{ github\.event_name == 'pull_request' && github\.event\.pull_request\.head\.repo\.full_name == github\.repository && github\.actor != 'dependabot\[bot\]' \}\}/);
+		expect(workflowContent).toContain('timeout-minutes: 15');
+		expect(workflowContent).toContain('group: ${{ github.workflow }}-${{ github.ref }}');
+		expect(workflowContent).toContain("cancel-in-progress: ${{ github.event_name == 'pull_request' }}");
+		expect(workflowContent).toContain("if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}");
+	});
 });
