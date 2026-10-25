@@ -53,6 +53,7 @@ const { getVolumeTracker } = require('./webhooks/handlers/newsMonitor/volumeTrac
 const { getSelfTestService } = require('./diagnostics/selftest');
 const telegramCommandAuth = require('../lib/telegramCommandAuth');
 const { getAdminAuthStatus } = require('../lib/adminAuth');
+const { getNotificationManager } = require('./webhooks/handlers/alert/alert');
 const {
 	getDeploymentCommit,
 	isPreviewEnvironment,
@@ -685,6 +686,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				status: discord.status,
 			},
 		},
+		deliveryHealth: getNotificationManager()?.getDeliveryHealth?.() || {},
 		channelHealth: channelStatuses,
 		// Operator intent, not runtime reachability. Mirrors
 		// NotificationChannel.isConfigured(), which is the enable flag AND the

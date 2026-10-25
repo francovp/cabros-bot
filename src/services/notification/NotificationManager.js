@@ -48,6 +48,7 @@ class NotificationManager {
 		this.chatPreferenceService = preferenceService || chatPreferenceService;
 		this.zeroChannelBroadcastCount = 0;
 		this.lastZeroChannelAlertAt = 0;
+		this.deliveryHealth = new Map();
 		this.adminPagingState = this._createAdminPagingState();
 		notificationRedriveService.setNotificationManagerGetter(() => this);
 		registerAdminPagingManager(this);
@@ -99,7 +100,62 @@ class NotificationManager {
 	resetForTesting() {
 		this.zeroChannelBroadcastCount = 0;
 		this.lastZeroChannelAlertAt = 0;
+		this.deliveryHealth = new Map();
 		this.adminPagingState = this._createAdminPagingState();
+	}
+
+	/**
+	 * Record one channel's settled delivery result for process-local status reporting.
+	 * @param {string} channelName
+	 * @param {boolean} success
+	 */
+	recordDeliveryOutcome(channelName, success) {
+		if (typeof channelName !== 'string' || channelName.length === 0) {
+			return;
+		}
+
+		const now = Date.now();
+		const existing = this.deliveryHealth.get(channelName) || {
+			channel: channelName,
+			success: 0,
+			failure: 0,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			firstObservedAt: now,
+		};
+		const updated = { ...existing };
+		if (success === true) {
+			updated.success += 1;
+			updated.lastSuccessAt = now;
+		} else {
+			updated.failure += 1;
+			updated.lastFailureAt = now;
+		}
+		this.deliveryHealth.set(channelName, updated);
+	}
+
+	/**
+	 * Return delivery counters observed by this process. They reset on restart.
+	 * @returns {Object<string, {channel:string,success:number,failure:number,lastSuccessAt:(string|null),lastFailureAt:(string|null),firstObservedAt:string}>}
+	 */
+	getDeliveryHealth() {
+		const snapshot = {};
+		for (const [name, stats] of this.deliveryHealth.entries()) {
+			snapshot[name] = {
+				channel: stats.channel,
+				success: stats.success,
+				failure: stats.failure,
+				lastSuccessAt: stats.lastSuccessAt === null ? null : new Date(stats.lastSuccessAt).toISOString(),
+				lastFailureAt: stats.lastFailureAt === null ? null : new Date(stats.lastFailureAt).toISOString(),
+				firstObservedAt: new Date(stats.firstObservedAt).toISOString(),
+			};
+		}
+		return snapshot;
+	}
+
+	/** Reset process-local delivery counters in isolated tests. */
+	resetDeliveryHealth() {
+		this.deliveryHealth = new Map();
 	}
 
 	_recordAdminPagingAttempt(pageType, channelName, outcome) {
@@ -727,14 +783,22 @@ class NotificationManager {
 							signal,
 						});
 					})
-					.then((value) => ({
-						value,
-						durationMs: Date.now() - channelStartTime,
-					}))
-					.catch((error) => Promise.reject({
-						error,
-						durationMs: Date.now() - channelStartTime,
-					}))
+					.then((value) => {
+						if (!value?.skipped) {
+							this.recordDeliveryOutcome(ch.name, value?.success === true);
+						}
+						return {
+							value,
+							durationMs: Date.now() - channelStartTime,
+						};
+					})
+					.catch((error) => {
+						this.recordDeliveryOutcome(ch.name, false);
+						return Promise.reject({
+							error,
+							durationMs: Date.now() - channelStartTime,
+						});
+					})
 					.finally(() => {
 						sentryService.endSpan(sendSpan);
 					});

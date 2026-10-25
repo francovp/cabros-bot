@@ -167,6 +167,8 @@ Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schem
 
 `dependencies.persistentWriteHealth` is always present on `/api/status` and `/api/capabilities`. It reports process-local success/failure counts for alert storage, signal outcomes, notification redrive, and persistent news dedup. Each domain is `unconfigured` until a write is observed, `degraded` when the latest 100 attempts fail above 5% or a failure occurred in the last five minutes, and otherwise `ok`. Counters reset on process restart; only closed error categories are exposed, never provider messages.
 
+`deliveryHealth` reports per-channel successful and failed alert deliveries observed by the web process's in-memory `NotificationManager`. Each channel includes `lastSuccessAt`, `lastFailureAt`, and `firstObservedAt` timestamps; unused channels are omitted and counters reset on process restart. Worker-process deliveries are not included in this process-local block. `/api/capabilities` returns the same field.
+
 The scanner-preset scheduler enforces a 60-second minimum between runs of the same preset, even when `nextRunAt` is in the past. `/api/status` and `/api/capabilities` expose `dependencies.scannerPresetScheduler.lastRunDeferredByFloorCount` for due presets deferred by this floor.
 
 `POST /api/webhook/message` truncates inbound text above `GENERIC_MESSAGE_MAX_LENGTH` (integer, default `4000`, range `1`-`20000`). A fresh valid Firebase Remote Config value takes precedence over the environment value; invalid environment values use the default, while invalid Remote Config values are ignored so the environment/default remains effective. Response truncation metadata remains conditional on clipping.
