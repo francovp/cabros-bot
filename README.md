@@ -510,6 +510,10 @@ Setting the variable is **necessary but not sufficient**, because this layer is 
 
 `getAdminAuthStatus()` is booleans and counters only — the Firebase Web config stays behind `/admin/auth-config` and is never echoed into a status payload, and `/api/public/status` uses an explicit three-dependency allow-list that does not include this block. Counters are process-local and reset on restart, so `unverified` after a deploy is expected. See [API Reference](docs/api-reference.md#get-apistatus).
 
+### Admin Console Localization
+
+The `/admin` console supports both English (`en`, default) and Spanish (`es`) to match the bot's primary user language. Operators can switch language via the `<select id="admin-lang">` control in the brand lockup, the `?lang=es` / `?lang=en` URL parameter, or `localStorage.admin_lang`. Spanish localization covers section titles, action controls, empty/error states, status row labels (`ready`, `degraded`, `unconfigured`, `disabled`, `misconfigured`), and query filter forms, while updating `<html lang>`. See [API Reference](docs/api-reference.md#firebase-hosting-for-admin-console).
+
 ### Durable News-Monitor Analysis Records
 
 `ENABLE_FIRESTORE_NEWS_ANALYSIS=true` is enabled in production by `render.yaml` on the **web service only** (previews off), so every analyzed symbol is recorded in the `news_analysis` collection and `GET /api/news-monitor/analyses` and `GET /api/news-monitor/summary` have an audit trail to read. Previews stay off because a PR preview shares the production Firestore project.
