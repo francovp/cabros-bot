@@ -599,7 +599,7 @@ const expandedAnalysisCmd = createTradingViewJobCommand(
 		symbols: parseCsvOption(args, 'symbols', args.positionals),
 		timeframe: args.options.timeframe,
 		includeMultiTimeframe: parseBooleanOption(args.options.mtf ?? args.options.includeMultiTimeframe),
-		timeoutMs: parseIntegerOption(args.options.timeoutMs),
+		timeoutMs: parseIntegerOption(args.options.timeoutMs, 'timeoutMs'),
 	}),
 );
 
@@ -611,9 +611,9 @@ const marketScannerCmd = createTradingViewJobCommand(
 		scans: parseCsvOption(args, 'scans'),
 		exchange: args.options.exchange,
 		timeframe: args.options.timeframe,
-		limit: parseIntegerOption(args.options.limit),
-		bbw_threshold: parseNumberOption(args.options.bbw_threshold ?? args.options.bbwThreshold),
-		timeoutMs: parseIntegerOption(args.options.timeoutMs),
+		limit: parseIntegerOption(args.options.limit, 'limit'),
+		bbw_threshold: parseNumberOption(args.options.bbw_threshold ?? args.options.bbwThreshold, 'bbw_threshold'),
+		timeoutMs: parseIntegerOption(args.options.timeoutMs, 'timeoutMs'),
 	}),
 );
 
@@ -1319,14 +1319,22 @@ function parseBooleanOption(value) {
 	return value;
 }
 
-function parseIntegerOption(value) {
+function parseIntegerOption(value, optionName) {
 	if (value === undefined) return undefined;
-	return Number(value);
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
+		throw new Error(`${optionName} debe ser un número entero`);
+	}
+	return parsed;
 }
 
-function parseNumberOption(value) {
+function parseNumberOption(value, optionName) {
 	if (value === undefined) return undefined;
-	return Number(value);
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed)) {
+		throw new Error(`${optionName} debe ser un número`);
+	}
+	return parsed;
 }
 
 function buildBotFromContext(context) {
