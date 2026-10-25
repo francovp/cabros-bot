@@ -49,6 +49,18 @@ const CALIBRATION_SOURCE_RECOVERY_QUERIES = [
 ];
 const CALIBRATION_RECOVERY_TOTAL_SCAN_LIMIT = CALIBRATION_SOURCE_RECOVERY_QUERIES
 	.reduce((total, query) => total + query.maxScannedDocs, 0);
+const CALIBRATION_SCAN_BATCH_SIZE_FLOOR = 50;
+const CALIBRATION_SCAN_BATCH_SIZE_CEILING = 100;
+
+function computeCalibrationBatchSize(targetLimit) {
+	const numericLimit = Number(targetLimit);
+	const parsedLimit = Number.isFinite(numericLimit) && numericLimit > 0 ? numericLimit : CALIBRATION_SCAN_BATCH_SIZE_CEILING;
+	return Math.min(
+		Math.max(parsedLimit, CALIBRATION_SCAN_BATCH_SIZE_FLOOR),
+		CALIBRATION_SCAN_BATCH_SIZE_CEILING
+	);
+}
+
 const DEFAULT_LEASE_MS = 120000;
 const MIN_LEASE_MS = 10000;
 const MAX_LEASE_MS = 600000;
@@ -3883,7 +3895,7 @@ async function getOutcomesCalibration({
 	const targetWindowKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === targetWindow) || targetWindow;
 
 	const targetLimit = limit || 1000;
-	const batchSize = 100;
+	const batchSize = CALIBRATION_SCAN_BATCH_SIZE_CEILING;
 	const hasFilters = Boolean(symbol || exchange);
 	const maxScannedDocs = Math.max(targetLimit * 5, 2000);
 	const scanCalibrationQuery = async (applySourceFilters, scanLimit = maxScannedDocs) => {
@@ -3909,11 +3921,11 @@ async function getOutcomesCalibration({
 				query = applySourceFilters(query);
 			}
 			// Bound the first request and any pages after eligible rows have been
-			// found by the remaining result count. Before the first eligible row,
-			// retain bounded scan batches so sparse samples do not require one
-			// sequential Firestore RPC per rejected document.
+			// found by the remaining result count, while ensuring a minimum floor of
+			// CALIBRATION_SCAN_BATCH_SIZE_FLOOR (50) via computeCalibrationBatchSize
+			// so small limit queries do not trigger one-by-one sequential Firestore RPCs.
 			const pageSize = totalScanned === 0 || docs.length > 0
-				? Math.min(batchSize, targetLimit - docs.length)
+				? computeCalibrationBatchSize(targetLimit - docs.length)
 				: batchSize;
 			const pageLimit = Math.min(pageSize, scanLimit - totalScanned);
 			query = query.orderBy('receivedAt', 'desc').limit(pageLimit);
@@ -4082,6 +4094,9 @@ module.exports = {
 	exportOutcomes,
 	computeCalibration,
 	getOutcomesCalibration,
+	computeCalibrationBatchSize,
+	CALIBRATION_SCAN_BATCH_SIZE_FLOOR,
+	CALIBRATION_SCAN_BATCH_SIZE_CEILING,
 	normalizeSide,
 	normalizeSymbolAndExchange,
 	startWorker,
