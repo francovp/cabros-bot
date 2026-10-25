@@ -176,6 +176,43 @@ describe('Symbol analysis endpoint', () => {
 		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
 	});
 
+	it('echoes sanitized traderIntent in dry-run mode without calling TradingView MCP', async () => {
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis?dryRun=true')
+			.set('x-api-key', 'test-key')
+			.send({
+				symbol: 'BINANCE:BTCUSDT',
+				traderIntent: {
+					side: 'SELL', entry: 100, invalidation: 110, target: 80,
+					horizon: '4h', notes: '  fade resistance  ',
+				},
+			})
+			.expect(200);
+
+		expect(res.body.traderIntent).toEqual({
+			side: 'SELL', entry: 100, invalidation: 110, target: 80,
+			horizon: '4h', notes: 'fade resistance',
+		});
+		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
+	});
+
+	it('rejects invalid traderIntent before calling TradingView MCP', async () => {
+		const res = await request(app)
+			.post('/api/webhook/symbol-analysis')
+			.set('x-api-key', 'test-key')
+			.send({
+				symbol: 'BINANCE:BTCUSDT',
+				traderIntent: {
+					side: 'SELL', entry: 100, invalidation: 90, target: 80, horizon: '4h',
+				},
+			})
+			.expect(400);
+
+		expect(res.body).toEqual(expect.objectContaining({ code: 'INVALID_REQUEST' }));
+		expect(res.body.error).toContain('traderIntent.invalidation');
+		expect(tradingViewMcpService.analyzeSymbolIdentifier).not.toHaveBeenCalled();
+	});
+
 	it('returns a bounded upstream failure without delivery', async () => {
 		tradingViewMcpService.analyzeSymbolIdentifier.mockRejectedValueOnce(new Error('TradingView MCP unavailable'));
 

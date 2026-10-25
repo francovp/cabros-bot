@@ -555,6 +555,17 @@ describe('SignalOutcomeService', () => {
 			expect(saved.side).toBe('BUY');
 		});
 
+		it('persists a sanitized trader plan without replacing the bot setup', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const resId = await SignalOutcomeService.recordSignal({
+				symbol: 'BINANCE:BTCUSDT', price: 50000, side: 'BUY', stop: 48000, target: 55000,
+				traderIntent: { side: 'SELL', entry: 51000, target: 49000, invalidation: 52000, horizon: '1h', notes: '  manual plan  ' },
+			});
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toMatchObject({ price: 50000, side: 'BUY', stop: 48000, target: 55000 });
+			expect(saved.traderIntent).toEqual({ side: 'SELL', entry: 51000, target: 49000, invalidation: 52000, horizon: '1h', notes: 'manual plan' });
+		});
+
 		it('persists equity session context without mixing post-close windows into a tradable cohort', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
@@ -1501,6 +1512,28 @@ describe('SignalOutcomeService', () => {
 			expect(updated.outcomes['1h'].return).toBe(4); // ((52000-50000)/50000)*100
 			expect(updated.outcomes['1h'].rMultiple).toBe(0.4); // (52000-50000)/(50000-45000) = 2000/5000 = 0.4
 			expect(updated.outcomes['1h'].firstHitTime).toBeNull();
+		});
+
+		it('evaluates a complete trader plan only at its selected horizon without changing bot metrics', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const mockDocId = 'trader-plan-buy';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([[
+				mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate), symbol: 'BTCUSDT', exchange: 'BINANCE',
+					side: 'SELL', price: 100, stop: 110, target: 90, outcomeEvaluated: false,
+					traderIntent: { side: 'BUY', entry: 100, target: 120, invalidation: 95, horizon: '1h' },
+					outcomes: { '1h': { status: 'pending', targetTime: new Date(receivedAtDate.getTime() + 3600000).toISOString() } },
+				},
+			]]));
+			mockGetKlines.mockResolvedValue([[receivedAtDate.getTime(), '100', '121', '99', '119']]);
+
+			await SignalOutcomeService.evaluatePendingOutcomes();
+
+			const outcome = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId).outcomes['1h'];
+			expect(outcome).toMatchObject({ firstHit: 'stop', return: -10 });
+			expect(outcome.traderPlanOutcome).toMatchObject({ firstHit: 'target', targetHit: true, stopHit: false, price: 120, return: 20, rMultiple: 4 });
 		});
 
 		it('does not trigger false barrier hits on candle crossing entry price when stop and target are null (incomplete market-scanner setup)', async () => {
@@ -2996,6 +3029,18 @@ describe('SignalOutcomeService', () => {
 			expect(summary.expectancyR).toBeNull();
 		});
 
+		it('reports trader-plan hit rate and average R separately from bot metrics', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				['plan-win', { receivedAt: admin.firestore.Timestamp.fromDate(new Date()), symbol: 'BTCUSDT', exchange: 'BINANCE', price: 100, side: 'SELL', outcomeEvaluated: true, traderIntent: { side: 'BUY', entry: 100, target: 110, invalidation: 95, horizon: '1h' }, outcomes: { '1h': { status: 'evaluated', return: -1, maxFavorableExcursion: 1, maxAdverseExcursion: -2, traderPlanOutcome: { targetHit: true, rMultiple: 2 } } } }],
+				['plan-loss', { receivedAt: admin.firestore.Timestamp.fromDate(new Date()), symbol: 'ETHUSDT', exchange: 'BINANCE', price: 100, side: 'BUY', outcomeEvaluated: true, traderIntent: { side: 'SELL', entry: 100, target: 90, invalidation: 105, horizon: '1h' }, outcomes: { '1h': { status: 'evaluated', return: 1, maxFavorableExcursion: 2, maxAdverseExcursion: -1, traderPlanOutcome: { targetHit: false, rMultiple: -1 } } } }],
+			]));
+
+			const summary = await SignalOutcomeService.summarizeOutcomes();
+			expect(summary.byTraderPlan).toEqual({ samples: 2, hitRatePercent: 50, averageRMultiple: 0.5 });
+		});
+
 		it('throws STORAGE_UNAVAILABLE when Firestore is unavailable', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			const origGetFirestore = AlertStorageService.getFirestore;
@@ -3028,6 +3073,7 @@ describe('SignalOutcomeService', () => {
 				targetHitRatePercent: 0,
 				stopHitRatePercent: 0,
 				expectancyR: null,
+				byTraderPlan: { samples: 0, hitRatePercent: 0, averageRMultiple: null },
 				populationNote: 'No outcome measurements found for the requested criteria.',
 				exchangeBreakdown: {},
 				providerBreakdown: {},

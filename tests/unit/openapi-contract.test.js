@@ -24,6 +24,24 @@ describe('OpenAPI contract', () => {
 		expect(contract.components.schemas.AutoTradeOutcome.properties.reason.enum)
 			.toEqual(expect.arrayContaining(['ORDER_PENDING', 'SIGNAL_ID_REQUIRED', 'DURABLE_RESERVATION_UNAVAILABLE']));
 	});
+
+	it('documents optional request-level trader intent and independent outcome analytics', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const alertRequestProps = contract.components.schemas.AlertRequest.properties;
+		const symbolAnalysisRequestProps = contract.components.schemas.SymbolAnalysisRequest.properties;
+		const outcomesSummaryProps = contract.components.schemas.OutcomesSummary.properties;
+		const traderIntentSchema = contract.components.schemas.TraderIntent;
+
+		expect(alertRequestProps.traderIntent.$ref).toBe('#/components/schemas/TraderIntent');
+		expect(symbolAnalysisRequestProps.traderIntent.$ref).toBe('#/components/schemas/TraderIntent');
+		expect(traderIntentSchema.required).toEqual(['entry', 'horizon']);
+		expect(traderIntentSchema.properties.horizon.enum).toEqual(['1h', '4h', '1D', '1W']);
+		expect(traderIntentSchema.properties.side.enum).toEqual(['BUY', 'SELL']);
+		expect(outcomesSummaryProps.byTraderPlan).toEqual(expect.objectContaining({
+			type: 'object',
+			required: ['samples', 'hitRatePercent', 'averageRMultiple'],
+		}));
+	});
 	it('documents all decision-audit dispatch channel modes', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 

@@ -11573,6 +11573,9 @@
             ],
             "example": "breakout"
           },
+          "traderIntent": {
+            "$ref": "#/components/schemas/TraderIntent"
+          },
           "score": {
             "type": [
               "number",
@@ -11868,6 +11871,16 @@
               "null"
             ],
             "example": 1.25
+          },
+          "byTraderPlan": {
+            "type": "object",
+            "required": ["samples", "hitRatePercent", "averageRMultiple"],
+            "properties": {
+              "samples": { "type": "integer", "minimum": 0 },
+              "hitRatePercent": { "type": "number", "minimum": 0, "maximum": 100 },
+              "averageRMultiple": { "type": ["number", "null"] }
+            },
+            "description": "Metrics for complete request-level trader plans, evaluated only at the selected horizon and kept separate from bot metrics."
           },
           "populationNote": {
             "type": "string",
@@ -13871,6 +13884,20 @@
           }
         }
       },
+      "TraderIntent": {
+        "type": "object",
+        "required": ["entry", "horizon"],
+        "additionalProperties": false,
+        "properties": {
+          "side": { "type": "string", "enum": ["BUY", "SELL"], "description": "Required when target or invalidation is supplied." },
+          "entry": { "type": "number", "exclusiveMinimum": 0 },
+          "invalidation": { "type": "number", "exclusiveMinimum": 0 },
+          "target": { "type": "number", "exclusiveMinimum": 0 },
+          "horizon": { "type": "string", "enum": ["1h", "4h", "1D", "1W"] },
+          "notes": { "type": "string", "minLength": 1, "maxLength": 500 }
+        },
+        "description": "Optional request-level trader plan. Barrier ordering is validated against side and entry. Complete plans are evaluated independently from bot metrics."
+      },
       "AlertRequest": {
         "type": "object",
         "required": [
@@ -13969,6 +13996,9 @@
             "maxLength": 128,
             "pattern": "^[A-Za-z0-9._:-]+$",
             "description": "Stable occurrence ID supplied by the signal producer. Required for live auto-trade; reuse the same ID on retries and use a new ID for each new signal occurrence."
+          },
+          "traderIntent": {
+            "$ref": "#/components/schemas/TraderIntent"
           }
         }
       },
@@ -14367,6 +14397,9 @@
             "type": "boolean",
             "description": "When true, validates the request and returns a dryRun response without invoking the TradingView MCP coin_analysis (or multi_timeframe_analysis) call. Useful for probe requests that want to avoid the ~120s MCP budget.",
             "default": false
+          },
+          "traderIntent": {
+            "$ref": "#/components/schemas/TraderIntent"
           }
         },
         "additionalProperties": false
@@ -14439,6 +14472,9 @@
             "minimum": 0,
             "description": "Total endpoint execution time in milliseconds.",
             "example": 850
+          },
+          "traderIntent": {
+            "$ref": "#/components/schemas/TraderIntent"
           }
         }
       },
@@ -16286,6 +16322,9 @@
           "outcomeAnnotation": {
             "$ref": "#/components/schemas/OutcomeAnnotation"
           },
+          "traderIntent": {
+            "$ref": "#/components/schemas/TraderIntent"
+          },
           "payload": {
             "type": "object",
             "properties": {
@@ -16305,6 +16344,9 @@
                   "unknown"
                 ],
                 "description": "Classification category for the alert signal."
+              },
+              "traderIntent": {
+                "$ref": "#/components/schemas/TraderIntent"
               },
               "enrichedData": {
                 "type": [

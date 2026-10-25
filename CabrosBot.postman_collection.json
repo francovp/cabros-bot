@@ -3142,7 +3142,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\",\n  \"signalClass\": \"breakout\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"telegramThreadId\": 101\n}"
+              "raw": "{\n  \"text\": \"BTCUSDT: Price breakout above $85,000 with strong volume\",\n  \"signalClass\": \"breakout\",\n  \"channels\": [\"telegram\"],\n  \"telegramChatId\": \"-1001234567890\",\n  \"telegramThreadId\": 101,\n  \"traderIntent\": {\"side\": \"BUY\", \"entry\": 85000, \"invalidation\": 83000, \"target\": 90000, \"horizon\": \"4h\"}\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/alert",
@@ -6256,7 +6256,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"timeframe\": \"1D\",\n  \"analysisMode\": \"combined\",\n  \"includeMultiTimeframe\": true,\n  \"includeMultiAgent\": true\n}"
+              "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"timeframe\": \"1D\",\n  \"analysisMode\": \"combined\",\n  \"includeMultiTimeframe\": true,\n  \"includeMultiAgent\": true,\n  \"traderIntent\": {\"side\": \"SELL\", \"entry\": 85000, \"invalidation\": 87000, \"target\": 80000, \"horizon\": \"1D\"}\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/webhook/symbol-analysis",

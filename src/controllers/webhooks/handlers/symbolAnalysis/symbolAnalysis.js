@@ -17,6 +17,7 @@ const {
 const sentryService = require('../../../../services/monitoring/SentryService');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const symbolAnalysisStorageService = require('../../../../services/storage/SymbolAnalysisStorageService');
+const { validateTraderIntent } = require('../../../../lib/traderIntent');
 
 function resolveDryRun(req) {
 	const queryFlag = req.query && (req.query.dryRun === 'true' || req.query.dryRun === true);
@@ -34,6 +35,7 @@ function postSymbolAnalysis() {
 
 		try {
 			const parsed = parseSymbolAnalysisRequest(req);
+			const traderIntent = validateTraderIntent(req.body?.traderIntent);
 			if (resolveDryRun(req)) {
 				const input = parsed.symbols[0];
 				console.debug('[SymbolAnalysis] Dry-run mode: skipping TradingView MCP call');
@@ -49,6 +51,7 @@ function postSymbolAnalysis() {
 					side: null,
 					analysis: null,
 					analysisStatus: 'dry-run',
+					...(traderIntent ? { traderIntent } : {}),
 					requestId,
 					processingTimeMs: Math.max(0, Date.now() - startTime),
 				});
@@ -122,6 +125,7 @@ function postSymbolAnalysis() {
 				analysisStatus,
 				requestId,
 				processingTimeMs,
+				...(traderIntent ? { traderIntent } : {}),
 			};
 			if (multiAgent) {
 				responsePayload.multiAgent = multiAgent;
@@ -154,6 +158,7 @@ function postSymbolAnalysis() {
 					multiTimeframe: Boolean(multiTimeframe),
 					analysisStatus,
 					processingTimeMs,
+					traderIntent,
 				}).catch((storageErr) => {
 					console.warn('[SymbolAnalysis] Failed to record analysis in storage:', storageErr.message);
 				});
@@ -162,6 +167,15 @@ function postSymbolAnalysis() {
 			return;
 		} catch (error) {
 			const processingTimeMs = Math.max(0, Date.now() - startTime);
+			if (error?.statusCode === 400 && error?.code === 'INVALID_REQUEST') {
+				return sendErrorFrom(res, 400, {
+					success: false,
+					error: error.message,
+					code: error.code,
+					requestId,
+					processingTimeMs,
+				});
+			}
 			if (error instanceof ExpandedAnalysisAlertRequestError) {
 				return res.status(400).json({ error: error.message, code: error.code, requestId, processingTimeMs });
 			}
