@@ -815,6 +815,17 @@ describe('SentryService', () => {
 			expect(Sentry.startInactiveSpan).not.toHaveBeenCalled();
 		});
 
+		it('should treat a zero trace sample rate as disabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '0';
+			service.init();
+
+			expect(service.isTracingEnabled()).toBe(false);
+			expect(service.startInactiveSpan({ name: 'test-span' })).toBeNull();
+			expect(Sentry.startInactiveSpan).not.toHaveBeenCalled();
+		});
+
 		it('should start inactive span when tracing is enabled', () => {
 			process.env.ENABLE_SENTRY = 'true';
 			process.env.SENTRY_DSN = 'https://key@sentry.io/123';

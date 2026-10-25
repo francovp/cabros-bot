@@ -381,7 +381,9 @@ class SentryService {
 	 * @returns {boolean}
 	 */
 	isTracingEnabled() {
-		return this.state.enabled && !!this.config && this.config.tracesSampleRate !== undefined;
+		return this.state.enabled && !!this.config
+			&& this.config.tracesSampleRate !== undefined
+			&& this.config.tracesSampleRate > 0;
 	}
 
 	/**
