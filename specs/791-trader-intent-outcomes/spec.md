@@ -1,6 +1,6 @@
 # Feature Specification: Request-level Trader Intent Outcomes
 
-**Feature Branch**: `001-trader-intent-outcomes`  
+**Feature Branch**: `791-trader-intent`
 **Created**: 2026-10-25  
 **Status**: Draft  
 **Input**: GitHub issue #791, phase 1 selected by the issue automator.

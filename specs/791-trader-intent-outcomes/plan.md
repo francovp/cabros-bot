@@ -1,6 +1,6 @@
 # Request-level Trader Intent Outcomes Implementation Plan
 
-**Branch**: `001-trader-intent-outcomes` | **Date**: 2026-10-25 | **Spec**: [spec.md](spec.md)
+**Branch**: `791-trader-intent` | **Date**: 2026-10-25 | **Spec**: [spec.md](spec.md)
 
 ## Summary
 
@@ -30,7 +30,7 @@ Post-design re-check: PASS. No new subsystem, collection, dependency, or configu
 ## Project Structure
 
 ```text
-specs/001-trader-intent-outcomes/
+specs/791-trader-intent-outcomes/
 ├── spec.md
 ├── plan.md
 ├── research.md

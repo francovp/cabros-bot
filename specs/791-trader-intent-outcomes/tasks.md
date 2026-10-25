@@ -1,6 +1,6 @@
 # Tasks: Request-level Trader Intent Outcomes
 
-**Input**: Design documents in `specs/001-trader-intent-outcomes/`  
+**Input**: Design documents in `specs/791-trader-intent-outcomes/`
 **Prerequisites**: `spec.md`, `plan.md`, `research.md`, `data-model.md`, `contracts/trader-intent.yaml`
 
 ## Phase 1: Boundary contract
