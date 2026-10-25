@@ -146,6 +146,8 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `GET` | `/api/jobs/:jobId` | Poll background job progress and retrieve result | [Jobs API](docs/jobs.md#get-apijobsjobid) |
 | `POST` | `/api/news-monitor` | Trigger symbol news scanning & event detection | [News Monitoring](docs/news-monitor.md) |
 | `POST` | `/api/trading/binance/orders/preview` | Pre-trade Binance Spot cost & slippage preview | [API Reference](docs/api-reference.md#post-apitradingbinanceorderspreview) |
+| `POST` | `/api/trading/binance/orders` | Operator-gated Binance Spot market, limit, contingent, and native `BRACKET_LIMIT` OTOCO orders | [API Reference](docs/api-reference.md#post-apitradingbinanceorders) |
+| `GET`/`DELETE` | `/api/trading/binance/orders` | Read recent orders or reconcile order lists; cancel a single order | [API Reference](docs/api-reference.md#post-apitradingbinanceorders) |
 | `GET` | `/api/trading/binance/account/balances` | Read-only Binance Spot balances for allowed assets | [API Reference](docs/api-reference.md#get-apitradingbinanceaccountbalances) |
 | `GET`/`POST` | `/api/trading/binance/pause` | Read or activate the operator runtime kill-switch for Binance Spot orders | [API Reference](docs/api-reference.md) |
 | `POST` | `/api/trading/binance/resume` | Clear the operator runtime kill-switch and resume Binance Spot order flow | [API Reference](docs/api-reference.md) |

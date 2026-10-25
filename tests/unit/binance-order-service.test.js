@@ -239,6 +239,319 @@ describe('BinanceOrderService', () => {
 		expect(client.submitNewOrder).not.toHaveBeenCalled();
 	});
 
+	it('validates a Spot trailing stop-limit using the symbol trailing-delta filter', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				orderTypes: ['STOP_LOSS_LIMIT'],
+				filters: [
+					{ filterType: 'PRICE_FILTER', minPrice: '0.01', maxPrice: '1000000', tickSize: '0.01' },
+					{ filterType: 'LOT_SIZE', minQty: '0.0001', maxQty: '100', stepSize: '0.0001' },
+					{ filterType: 'MIN_NOTIONAL', minNotional: '10' },
+					{ filterType: 'TRAILING_DELTA', minTrailingAboveDelta: 10, maxTrailingAboveDelta: 500, minTrailingBelowDelta: 10, maxTrailingBelowDelta: 500 },
+				],
+			})),
+			submitNewOrder: jest.fn(),
+		};
+		const service = createServiceWithDefaultControl({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'SELL',
+			type: 'STOP_LOSS_LIMIT',
+			quantity: '0.2',
+			price: '99',
+			stopPrice: '100',
+			timeInForce: 'GTC',
+			trailingDelta: 100,
+		})).resolves.toMatchObject({
+			success: true,
+			dryRun: true,
+			order: {
+				type: 'STOP_LOSS_LIMIT',
+				stopPrice: '100',
+				trailingDelta: 100,
+			},
+		});
+
+		expect(client.submitNewOrder).not.toHaveBeenCalled();
+	});
+
+	it('rejects a trailing delta outside the side-specific Spot filter before submission', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				orderTypes: ['STOP_LOSS_LIMIT'],
+				filters: [
+					{ filterType: 'PRICE_FILTER', minPrice: '0.01', maxPrice: '1000000', tickSize: '0.01' },
+					{ filterType: 'LOT_SIZE', minQty: '0.0001', maxQty: '100', stepSize: '0.0001' },
+					{ filterType: 'MIN_NOTIONAL', minNotional: '10' },
+					{ filterType: 'TRAILING_DELTA', minTrailingAboveDelta: 10, maxTrailingAboveDelta: 500, minTrailingBelowDelta: 10, maxTrailingBelowDelta: 500 },
+				],
+			})),
+			submitNewOrder: jest.fn(),
+		};
+		const service = createServiceWithDefaultControl({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'SELL',
+			type: 'STOP_LOSS_LIMIT',
+			quantity: '0.2',
+			price: '99',
+			stopPrice: '100',
+			timeInForce: 'GTC',
+			trailingDelta: 501,
+		})).rejects.toThrow('trailingDelta');
+
+		expect(client.submitNewOrder).not.toHaveBeenCalled();
+	});
+
+	it('validates contingent stopPrice against the Spot price filter', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({ orderTypes: ['STOP_LOSS'] })),
+			getAvgPrice: jest.fn().mockResolvedValue({ price: '60000' }),
+			submitNewOrder: jest.fn(),
+		};
+		const service = createServiceWithDefaultControl({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'SELL',
+			type: 'STOP_LOSS',
+			quantity: '0.2',
+			stopPrice: '59000.001',
+		})).rejects.toMatchObject({
+			code: 'INVALID_ORDER_REQUEST',
+			message: expect.stringContaining('tick size'),
+		});
+
+		expect(client.submitNewOrder).not.toHaveBeenCalled();
+	});
+
+	it('builds a Spot OTOCO bracket preview with a limit maker target and stop-limit leg', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				orderTypes: ['LIMIT', 'LIMIT_MAKER', 'STOP_LOSS_LIMIT'],
+			})),
+			submitNewOrderListOTOCO: jest.fn(),
+		};
+		const service = createServiceWithDefaultControl({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'BRACKET_LIMIT',
+			quantity: '0.2',
+			price: '100',
+			stopPrice: '90',
+			stopLimitPrice: '89',
+			takeProfitPrice: '110',
+			timeInForce: 'GTC',
+		})).resolves.toMatchObject({
+			success: true,
+			dryRun: true,
+			orderList: {
+				workingType: 'LIMIT',
+				workingSide: 'BUY',
+				workingPrice: '100',
+				workingQuantity: '0.2',
+				pendingSide: 'SELL',
+				pendingAboveType: 'LIMIT_MAKER',
+				pendingAbovePrice: '110',
+				pendingBelowType: 'STOP_LOSS_LIMIT',
+				pendingBelowStopPrice: '90',
+				pendingBelowPrice: '89',
+			},
+		});
+
+		expect(client.submitNewOrderListOTOCO).not.toHaveBeenCalled();
+	});
+
+	it('builds a Spot OTOCO bracket preview for a SELL-entry with a TAKE_PROFIT_LIMIT target and stop-limit leg', async () => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				orderTypes: ['LIMIT', 'LIMIT_MAKER', 'STOP_LOSS_LIMIT'],
+			})),
+			submitNewOrderListOTOCO: jest.fn(),
+		};
+		const service = createServiceWithDefaultControl({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'SELL',
+			type: 'BRACKET_LIMIT',
+			quantity: '0.2',
+			price: '100',
+			stopPrice: '110',
+			stopLimitPrice: '111',
+			takeProfitPrice: '90',
+			timeInForce: 'GTC',
+		})).resolves.toMatchObject({
+			orderList: {
+				pendingSide: 'BUY',
+				pendingAboveType: 'STOP_LOSS_LIMIT',
+				pendingAboveStopPrice: '110',
+				pendingAbovePrice: '111',
+				pendingAboveTimeInForce: 'GTC',
+				pendingBelowType: 'TAKE_PROFIT_LIMIT',
+				pendingBelowStopPrice: '90',
+				pendingBelowPrice: '90',
+				pendingBelowTimeInForce: 'GTC',
+			},
+		});
+	});
+
+	it('reserves and submits a live OTOCO list once with deterministic component IDs', async () => {
+		const storage = {
+			reserve: jest.fn().mockImplementation(async (input) => ({
+				outcome: 'reserved',
+				state: 'RESERVED',
+				keyHash: 'b'.repeat(64),
+				...input,
+			})),
+			recordOrderList: jest.fn().mockResolvedValue({}),
+			updateReservation: jest.fn().mockResolvedValue({}),
+		};
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				orderTypes: ['LIMIT', 'LIMIT_MAKER', 'STOP_LOSS_LIMIT'],
+			})),
+			submitNewOrderListOTOCO: jest.fn().mockImplementation(async (params) => ({
+				orderListId: 77,
+				symbol: params.symbol,
+				listClientOrderId: params.listClientOrderId,
+				listOrderStatus: 'EXECUTING',
+				orders: [],
+				orderReports: [],
+			})),
+		};
+		const service = createServiceWithDefaultControl({
+			createClient: () => client,
+			bracketOrderStorageService: storage,
+		});
+
+		const result = await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'BRACKET_LIMIT',
+			quantity: '0.2',
+			price: '100',
+			stopPrice: '90',
+			stopLimitPrice: '89',
+			takeProfitPrice: '110',
+			timeInForce: 'GTC',
+			dryRun: false,
+		}, { idempotencyKey: 'live-bracket-key' });
+
+		expect(result).toMatchObject({ success: true, dryRun: false, orderList: { orderListId: 77 } });
+		expect(storage.reserve).toHaveBeenCalledTimes(1);
+		expect(client.submitNewOrderListOTOCO).toHaveBeenCalledTimes(1);
+		expect(storage.reserve.mock.invocationCallOrder[0]).toBeLessThan(client.submitNewOrderListOTOCO.mock.invocationCallOrder[0]);
+		expect(client.submitNewOrderListOTOCO).toHaveBeenCalledWith(expect.objectContaining({
+			listClientOrderId: expect.stringMatching(/^cb_[a-f0-9]{32}$/),
+			workingClientOrderId: expect.stringMatching(/^cb_[a-f0-9]{32}$/),
+			pendingAboveClientOrderId: expect.stringMatching(/^cb_[a-f0-9]{32}$/),
+			pendingBelowClientOrderId: expect.stringMatching(/^cb_[a-f0-9]{32}$/),
+			workingType: 'LIMIT',
+			pendingAboveType: 'LIMIT_MAKER',
+			pendingBelowType: 'STOP_LOSS_LIMIT',
+		}));
+		expect(storage.recordOrderList).toHaveBeenCalledWith(expect.objectContaining({
+			keyHash: 'b'.repeat(64),
+			requestFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/),
+		}));
+		expect(JSON.stringify(storage.recordOrderList.mock.calls[0])).not.toContain('live-bracket-key');
+	});
+
+	it('reconciles an existing bracket reservation and never submits it again', async () => {
+		const storage = {
+			reserve: jest.fn().mockImplementation(async (input) => ({
+				outcome: 'existing',
+				existingState: 'SUBMITTED',
+				state: 'SUBMITTED',
+				keyHash: 'c'.repeat(64),
+				...input,
+			})),
+			recordOrderList: jest.fn().mockResolvedValue({}),
+			updateReservation: jest.fn().mockResolvedValue({}),
+		};
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				orderTypes: ['LIMIT', 'LIMIT_MAKER', 'STOP_LOSS_LIMIT'],
+			})),
+			getOCO: jest.fn().mockImplementation(async ({ origClientOrderId }) => ({
+				orderListId: 77,
+				symbol: 'BTCUSDT',
+				listClientOrderId: origClientOrderId,
+				listOrderStatus: 'EXECUTING',
+				orders: [],
+				orderReports: [],
+			})),
+			submitNewOrderListOTOCO: jest.fn(),
+		};
+		const service = createServiceWithDefaultControl({
+			createClient: () => client,
+			bracketOrderStorageService: storage,
+		});
+
+		const result = await service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'BRACKET_LIMIT',
+			quantity: '0.2',
+			price: '100',
+			stopPrice: '90',
+			stopLimitPrice: '89',
+			takeProfitPrice: '110',
+			timeInForce: 'GTC',
+			dryRun: false,
+		}, { idempotencyKey: 'live-bracket-key' });
+
+		expect(result).toMatchObject({ success: true, orderList: { orderListId: 77 } });
+		expect(client.getOCO).toHaveBeenCalledWith({ symbol: 'BTCUSDT', origClientOrderId: storage.reserve.mock.calls[0][0].listClientOrderId });
+		expect(client.submitNewOrderListOTOCO).not.toHaveBeenCalled();
+	});
+
+	it('fails closed before OTOCO submission when durable reservation storage is unavailable', async () => {
+		const storage = {
+			reserve: jest.fn().mockRejectedValue(Object.assign(new Error('firestore unavailable'), { code: 'STORAGE_UNAVAILABLE' })),
+		};
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				orderTypes: ['LIMIT', 'LIMIT_MAKER', 'STOP_LOSS_LIMIT'],
+			})),
+			submitNewOrderListOTOCO: jest.fn(),
+		};
+		const service = createServiceWithDefaultControl({
+			createClient: () => client,
+			bracketOrderStorageService: storage,
+		});
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'BRACKET_LIMIT',
+			quantity: '0.2',
+			price: '100',
+			stopPrice: '90',
+			stopLimitPrice: '89',
+			takeProfitPrice: '110',
+			timeInForce: 'GTC',
+			dryRun: false,
+		}, { idempotencyKey: 'live-bracket-key' })).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE', statusCode: 503 });
+
+		expect(client.submitNewOrderListOTOCO).not.toHaveBeenCalled();
+	});
+
+	it('rejects the Futures-only trailing stop order name', async () => {
+		const service = createServiceWithDefaultControl({ createClient: jest.fn() });
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'SELL',
+			type: 'TRAILING_STOP_MARKET',
+			quantity: '0.1',
+		})).rejects.toThrow('type');
+	});
+
 	it('rejects a quantity that violates the Binance lot-size step before submission', async () => {
 		const client = { getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()) };
 		const service = createServiceWithDefaultControl({ createClient: () => client });

@@ -393,6 +393,25 @@ describe('Status endpoints', () => {
 		}));
 	});
 
+	it('publishes supported Binance Spot order types without changing the feature flag shape', async () => {
+		const supportedOrderTypes = [
+			'MARKET',
+			'LIMIT',
+			'LIMIT_MAKER',
+			'STOP_LOSS',
+			'STOP_LOSS_LIMIT',
+			'TAKE_PROFIT',
+			'TAKE_PROFIT_LIMIT',
+			'BRACKET_LIMIT',
+		];
+		for (const path of ['/api/status', '/api/capabilities']) {
+			const response = await request(app).get(path).set('x-api-key', 'status-key');
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.binanceTrading).toEqual(expect.any(Boolean));
+			expect(response.body.dependencies.binanceTrading.supportedOrderTypes).toEqual(supportedOrderTypes);
+		}
+	});
+
 	it('exposes only numeric background timer counts on both status aliases', async () => {
 		const status = await request(app)
 			.get('/api/status')
