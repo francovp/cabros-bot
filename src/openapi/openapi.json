@@ -5685,6 +5685,7 @@
           "Operations"
         ],
         "summary": "Alias for runtime status",
+        "description": "Alias for runtime status and capabilities. Exposes runtime dependencies, feature flags, and deployment build metadata also verifiable via the Telegram /version command.",
         "operationId": "getCapabilities",
         "responses": {
           "200": {
@@ -18042,6 +18043,9 @@
             "$ref": "#/components/schemas/BootstrapReadiness"
           },
           "service": {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          "build": {
             "$ref": "#/components/schemas/JsonObject"
           },
           "featureFlags": {

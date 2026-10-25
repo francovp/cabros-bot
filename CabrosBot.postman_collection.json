@@ -2924,7 +2924,7 @@
             "capabilities"
           ]
         },
-        "description": "Alias for /api/status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters; dependencies.signalOutcomeWorker.entryPriceSources reports the active non-secret crypto/equity provider chains; dependencies.signalOutcomeWorker leaseMs/lastRunLeaseHeld/leaseHeldSkipCount report the distributed sweep lease that keeps exactly one evaluator, and identify the winning evaluator from status alone instead of inferring it from the Render dashboard. Remote Config metadata is safe for operational inspection and does not include configured parameter values or secrets."
+        "description": "Alias for /api/status. Exposes runtime dependencies, feature flags, and deployment build metadata also verifiable via the Telegram /version command. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters; dependencies.signalOutcomeWorker.entryPriceSources reports the active non-secret crypto/equity provider chains; dependencies.signalOutcomeWorker leaseMs/lastRunLeaseHeld/leaseHeldSkipCount report the distributed sweep lease that keeps exactly one evaluator, and identify the winning evaluator from status alone instead of inferring it from the Render dashboard. Remote Config metadata is safe for operational inspection and does not include configured parameter values or secrets."
       },
       "response": [
         {
