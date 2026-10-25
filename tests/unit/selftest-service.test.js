@@ -212,7 +212,7 @@ describe('SelfTestService', () => {
 		process.env.BOT_TOKEN = originalEnv;
 	});
 
-	it('redacts sensitive evidence keys', async () => {
+	it('redacts sensitive evidence keys and URL credentials in endpoint', async () => {
 		const svc = createSelfTestService({ botOrGetter: () => null });
 		process.env.BOT_TOKEN = 't';
 		process.env.TELEGRAM_CHAT_ID = 'c';
@@ -223,8 +223,57 @@ describe('SelfTestService', () => {
 		process.env.TRADINGVIEW_MCP_URL = 'https://example.com?api-key=secret';
 		// re-run because the check is evaluated at run-time
 		const result2 = await svc.run({ only: 'tradingview_mcp.endpoint' });
-		expect(result2.checks[0].evidence).toEqual({ endpoint: 'https://example.com?api-key=secret' });
+		expect(result2.checks[0].evidence).toEqual({ endpoint: 'https://example.com' });
 		expect(result.checks[0].evidence).toBeNull();
+	});
+
+	it('redacts basic auth and query credentials from TRADINGVIEW_MCP_URL in evidence', async () => {
+		const svc = createSelfTestService({ botOrGetter: () => null });
+		process.env.BOT_TOKEN = 't';
+		process.env.TELEGRAM_CHAT_ID = 'c';
+		process.env.WEBHOOK_API_KEY = 'k';
+		process.env.RATE_LIMIT_MAX = '1';
+		process.env.RATE_LIMIT_WINDOW_MS = '1';
+
+		// Basic auth and query credentials stripped/redacted
+		process.env.TRADINGVIEW_MCP_URL = 'https://operator:supersecret@mcp.internal:8443/mcp?token=xyz123&apiKey=456';
+		const res1 = await svc.run({ only: 'tradingview_mcp.endpoint' });
+		expect(res1.checks[0].evidence).toEqual({ endpoint: 'https://mcp.internal:8443/mcp' });
+
+		// Standard URL without query or auth is preserved intact
+		process.env.TRADINGVIEW_MCP_URL = 'https://tradingview-mcp-yp6b.onrender.com/mcp';
+		const res2 = await svc.run({ only: 'tradingview_mcp.endpoint' });
+		expect(res2.checks[0].evidence).toEqual({ endpoint: 'https://tradingview-mcp-yp6b.onrender.com/mcp' });
+
+		// User-only basic auth
+		process.env.TRADINGVIEW_MCP_URL = 'https://operator@mcp.internal/mcp';
+		const res3 = await svc.run({ only: 'tradingview_mcp.endpoint' });
+		expect(res3.checks[0].evidence).toEqual({ endpoint: 'https://mcp.internal/mcp' });
+
+		// Password-only basic auth
+		process.env.TRADINGVIEW_MCP_URL = 'https://:supersecret@mcp.internal/mcp';
+		const res4 = await svc.run({ only: 'tradingview_mcp.endpoint' });
+		expect(res4.checks[0].evidence).toEqual({ endpoint: 'https://mcp.internal/mcp' });
+
+		// Encoded basic auth credentials
+		process.env.TRADINGVIEW_MCP_URL = 'https://user%40domain:pass%23word@mcp.internal:8443/mcp?token=xyz';
+		const res5 = await svc.run({ only: 'tradingview_mcp.endpoint' });
+		expect(res5.checks[0].evidence).toEqual({ endpoint: 'https://mcp.internal:8443/mcp' });
+
+		// Malformed URL with invalid port (> 65535) and basic auth
+		process.env.TRADINGVIEW_MCP_URL = 'https://operator:secretpass@127.0.0.1:99999/mcp?token=xyz123';
+		const res6 = await svc.run({ only: 'tradingview_mcp.endpoint' });
+		expect(res6.checks[0].evidence).toEqual({ endpoint: 'https://127.0.0.1:99999/mcp' });
+
+		// Schemeless URL with credentials
+		process.env.TRADINGVIEW_MCP_URL = 'operator:secretpass@mcp.internal:8080/mcp?token=xyz';
+		const res7 = await svc.run({ only: 'tradingview_mcp.endpoint' });
+		expect(res7.checks[0].evidence).toEqual({ endpoint: 'mcp.internal:8080/mcp' });
+
+		// Schemeless URL with invalid port and credentials
+		process.env.TRADINGVIEW_MCP_URL = 'operator:secretpass@mcp.internal:99999/mcp?token=xyz';
+		const res8 = await svc.run({ only: 'tradingview_mcp.endpoint' });
+		expect(res8.checks[0].evidence).toEqual({ endpoint: 'mcp.internal:99999/mcp' });
 	});
 
 	it('caches the last result and reports an age', async () => {

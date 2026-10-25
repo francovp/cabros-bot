@@ -153,8 +153,24 @@ describe('Self-test diagnostic endpoint (GH-801)', () => {
 			.set('x-api-key', 'test-key')
 			.send();
 		expect(res.status).toBe(200);
-		// The check exposes the endpoint value; ensure no redaction happens on
-		// env-style values that are not keys. The redactor is for object keys.
-		expect(res.body.checks[0].evidence).toEqual({ endpoint: 'https://example.com/mcp?api-key=should-redact' });
+		// The check exposes the endpoint value with query credentials stripped
+		expect(res.body.checks[0].evidence).toEqual({ endpoint: 'https://example.com/mcp' });
+	});
+
+	it('redacts basic auth and query credentials from TRADINGVIEW_MCP_URL in POST /api/selftest/run and cached GET', async () => {
+		process.env.TRADINGVIEW_MCP_URL = 'https://operator:secretpass@mcp.internal:9000/mcp?token=xyz123';
+		const runRes = await request(app)
+			.post('/api/selftest/run?only=tradingview_mcp.endpoint')
+			.set('x-api-key', 'test-key')
+			.send();
+		expect(runRes.status).toBe(200);
+		expect(runRes.body.checks[0].evidence).toEqual({ endpoint: 'https://mcp.internal:9000/mcp' });
+
+		const getRes = await request(app)
+			.get('/api/selftest')
+			.set('x-api-key', 'test-key');
+		expect(getRes.status).toBe(200);
+		const check = getRes.body.checks.find((c) => c.id === 'tradingview_mcp.endpoint');
+		expect(check.evidence).toEqual({ endpoint: 'https://mcp.internal:9000/mcp' });
 	});
 });
