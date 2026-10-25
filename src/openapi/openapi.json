@@ -4631,7 +4631,7 @@
             "$ref": "#/components/responses/BinanceOrderResult"
           },
           "400": {
-            "description": "Invalid order fields, unsupported Futures-only type, malformed trailingDelta, or exchange filter rejection.",
+            "description": "Invalid order fields, unsupported Futures-only type, malformed trailingDelta, an unbounded contingent market BUY, or exchange filter rejection.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4656,6 +4656,13 @@
                     "value": {
                       "success": false,
                       "error": "trailingDelta must be a positive integer number of BIPS",
+                      "code": "INVALID_ORDER_REQUEST"
+                    }
+                  },
+                  "unboundedContingentBuy": {
+                    "value": {
+                      "success": false,
+                      "error": "contingent market BUY orders require stopPrice to enforce the configured notional maximum",
                       "code": "INVALID_ORDER_REQUEST"
                     }
                   }

@@ -877,7 +877,7 @@ describe('Binance orders API', () => {
 				.set('x-api-key', 'test-key')
 				.expect(200);
 
-			expect(client.getOCO).toHaveBeenCalledWith({ symbol: 'BTCUSDT', origClientOrderId: 'cb-list-77' });
+			expect(client.getOCO).toHaveBeenCalledWith({ origClientOrderId: 'cb-list-77' });
 			expect(response.body.orderList).toMatchObject({ orderListId: 77, listClientOrderId: 'cb-list-77' });
 			expect(auditSpy).toHaveBeenCalledWith(expect.objectContaining({
 				status: 'confirmed',
@@ -907,7 +907,7 @@ describe('Binance orders API', () => {
 				.set('x-api-key', 'test-key')
 				.expect(200);
 
-			expect(client.getOCO).toHaveBeenCalledWith({ symbol: 'BTCUSDT', orderListId: 77 });
+			expect(client.getOCO).toHaveBeenCalledWith({ orderListId: 77 });
 			expect(response.body.orderList).toMatchObject({ orderListId: 77, listClientOrderId: 'cb-list-77' });
 		});
 

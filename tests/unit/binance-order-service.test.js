@@ -511,7 +511,7 @@ describe('BinanceOrderService', () => {
 		}, { idempotencyKey: 'live-bracket-key' });
 
 		expect(result).toMatchObject({ success: true, orderList: { orderListId: 77 } });
-		expect(client.getOCO).toHaveBeenCalledWith({ symbol: 'BTCUSDT', origClientOrderId: storage.reserve.mock.calls[0][0].listClientOrderId });
+		expect(client.getOCO).toHaveBeenCalledWith({ origClientOrderId: storage.reserve.mock.calls[0][0].listClientOrderId });
 		expect(client.submitNewOrderListOTOCO).not.toHaveBeenCalled();
 	});
 
@@ -1275,6 +1275,37 @@ describe('BinanceOrderService', () => {
 
 		expect(client.submitNewOrder).not.toHaveBeenCalled();
 		expect(client.getExchangeInfo).not.toHaveBeenCalled();
+	});
+
+	it('rejects reconciliation when a contingent order removes trailingDelta or stopPrice', async () => {
+		const client = {
+			getOrder: jest.fn().mockResolvedValue({
+				symbol: 'BTCUSDT',
+				orderId: 102,
+				clientOrderId: 'existing-trailing-stop',
+				status: 'NEW',
+				side: 'SELL',
+				type: 'STOP_LOSS',
+				stopPrice: '90.00000000',
+				trailingDelta: 100,
+				origQty: '0.1',
+			}),
+			getExchangeInfo: jest.fn(),
+			submitNewOrder: jest.fn(),
+		};
+		const service = createServiceWithDefaultControl({ createClient: () => client });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'SELL',
+			type: 'STOP_LOSS',
+			quantity: '0.1',
+			stopPrice: '90',
+			clientOrderId: 'existing-trailing-stop',
+			dryRun: false,
+		})).rejects.toMatchObject({ code: 'BINANCE_ORDER_CONFLICT', statusCode: 409 });
+
+		expect(client.submitNewOrder).not.toHaveBeenCalled();
 	});
 
 	it('reconciles exact decimal strings returned by Binance', async () => {

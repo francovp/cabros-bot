@@ -32899,6 +32899,49 @@
           ]
         },
         {
+          "name": "POST Binance order (invalid contingent market BUY without stopPrice)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"STOP_LOSS\",\n  \"quantity\": \"0.001\",\n  \"trailingDelta\": 100,\n  \"dryRun\": true\n}"
+            },
+            "description": "Trailing-only market BUYs have no fixed trigger price for the configured notional check and fail closed.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"contingent market BUY orders require stopPrice to enforce the configured notional maximum\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
           "name": "POST Binance order (invalid trailingDelta format)",
           "request": {
             "method": "POST",

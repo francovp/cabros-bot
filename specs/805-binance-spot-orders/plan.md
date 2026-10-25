@@ -38,6 +38,7 @@ Extend the existing operator-only Binance Spot order flow with supported conting
 4. Keep permanent idempotency reservations separate from bracket detail records so one-hour detail expiry cannot re-enable a replay. A reservation created before an exchange call stays nonterminal until reconciliation proves an exchange outcome.
 5. Reuse the existing `GET /api/trading/binance/orders` route with exactly one of `orderId`, `origClientOrderId`, `orderListId`, or `listClientOrderId`; no new route mount is required.
 6. Apply existing request validation, pause state, symbol allow-list, exchange-info filters, notional cap, and single-order test endpoint to all OTOCO legs where applicable. Since Binance exposes no OTOCO test endpoint, validate every component through `testNewOrder` when required and keep Binance's single final OTOCO submission authoritative.
+7. Preserve legacy MARKET/LIMIT client-order ID fingerprints. Reconcile durable bracket reservations before current symbol, notional, or exchange-filter gates. For market-executed contingent BUYs, include a fixed trigger price in the notional estimate and reject trailing-only requests whose exposure cannot be bounded.
 
 ## Project Structure
 

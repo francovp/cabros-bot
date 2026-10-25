@@ -5606,6 +5606,40 @@ describe('admin browser client', () => {
 		});
 	});
 
+	it('does not enable live submission when a bracket changes during dry-run validation', async () => {
+		let releaseValidation;
+		const pendingValidation = new Promise((resolve) => { releaseValidation = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/trading/binance/orders') return pendingValidation;
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const form = findForm(browser.elementsById.view, 'Place Spot bracket');
+		form.elements['bracket-symbol'].value = 'BTCUSDT';
+		form.elements['bracket-quantity'].value = '0.001';
+		form.elements['bracket-entry-price'].value = '60000';
+		form.elements['bracket-stop-price'].value = '58000';
+		form.elements['bracket-stop-limit-price'].value = '57900';
+		form.elements['bracket-take-profit-price'].value = '64000';
+		const validation = findButton(form, 'Validate bracket (Dry Run)').dispatch('click');
+		await flush();
+
+		form.elements['bracket-stop-price'].value = '57000';
+		await form.elements['bracket-stop-price'].dispatch('input');
+		releaseValidation(response({ success: true, dryRun: true, environment: 'testnet', orderList: {} }));
+		await validation;
+		await flush();
+
+		expect(form.elements['bracket-confirm'].disabled).toBe(true);
+		expect(findButton(form, 'Submit live bracket').disabled).toBe(true);
+		expect(find(form, (node) => node.className.includes('ticket-validation-notice')).textContent).toBe('');
+	});
+
 	it('reuses the same bracket idempotency key after an ambiguous submission response', async () => {
 		const liveRequests = [];
 		let liveAttempts = 0;

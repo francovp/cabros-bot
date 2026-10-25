@@ -4526,6 +4526,7 @@ const createSpotBracketForm = () => {
 	form.append(environmentBadge, dryRunButton, submitButton, validationNotice, output);
 
 	let currentEnvironment = 'testnet';
+	let formVersion = 0;
 	let dryRunSuccessful = false;
 	let liveIdempotencyKey = null;
 	let latestAlert = null;
@@ -4548,6 +4549,7 @@ const createSpotBracketForm = () => {
 		submitButton.title = 'Submit the validated Spot bracket';
 	};
 	const invalidateValidation = () => {
+		formVersion += 1;
 		dryRunSuccessful = false;
 		liveIdempotencyKey = null;
 		confirmInput.value = '';
@@ -4640,6 +4642,7 @@ const createSpotBracketForm = () => {
 
 	dryRunButton.addEventListener('click', async () => {
 		invalidateValidation();
+		const currentVersion = formVersion;
 		const payload = buildPayload(true);
 		if (!ORDER_LIST_QUERY_VALIDATION.symbol(payload.symbol)) {
 			showError(output, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
@@ -4653,7 +4656,7 @@ const createSpotBracketForm = () => {
 			output,
 			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
 		});
-		if (data && data.success) {
+		if (data && data.success && currentVersion === formVersion) {
 			dryRunSuccessful = true;
 			updateEnvironment(data.environment);
 			validationNotice.replaceChildren(element('p', {

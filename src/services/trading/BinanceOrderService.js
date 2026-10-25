@@ -1036,8 +1036,18 @@ function reconciledOrderMatchesRequest(order, existingOrder, clientOrderId, requ
 
 	if (order.quoteOrderQty !== undefined && compareDecimals(existingQuoteOrderQty, order.quoteOrderQty) !== 0) return false;
 	if (order.price !== undefined && compareDecimals(existingOrder.price, order.price) !== 0) return false;
-	if (order.stopPrice !== undefined && compareDecimals(existingOrder.stopPrice, order.stopPrice) !== 0) return false;
-	if (order.trailingDelta !== undefined && Number(existingOrder.trailingDelta) !== order.trailingDelta) return false;
+
+	if (order.stopPrice !== undefined) {
+		if (existingOrder.stopPrice === undefined || compareDecimals(existingOrder.stopPrice, order.stopPrice) !== 0) return false;
+	} else if (existingOrder.stopPrice !== undefined && compareDecimals(existingOrder.stopPrice, '0') > 0) {
+		return false;
+	}
+
+	if (order.trailingDelta !== undefined) {
+		if (Number(existingOrder.trailingDelta || 0) !== order.trailingDelta) return false;
+	} else if (existingOrder.trailingDelta !== undefined && Number(existingOrder.trailingDelta) > 0) {
+		return false;
+	}
 	return true;
 }
 
@@ -1398,7 +1408,6 @@ async function placeBracketOrder({
 		try {
 			if (typeof client.getOCO !== 'function') throw new Error('order-list query unavailable');
 			reconciled = await withTimeout(client.getOCO({
-				symbol: order.symbol,
 				origClientOrderId: reservation.listClientOrderId || identity.listClientOrderId,
 			}), config.timeoutMs);
 		} catch {
@@ -1700,10 +1709,12 @@ function createBinanceOrderService({
 				}
 				try {
 					const orderList = await withTimeout(client.getOCO({
-						symbol,
 						...(orderListId !== undefined ? { orderListId } : {}),
 						...(listClientOrderId !== undefined ? { origClientOrderId: listClientOrderId } : {}),
 					}), config.timeoutMs);
+					if (orderList && orderList.symbol && orderList.symbol !== symbol) {
+						throw new BinanceOrderRequestError('Binance order list not found', 'ORDER_LIST_NOT_FOUND', 404);
+					}
 					const sanitizedOrderList = sanitizeOrderListResponse(orderList || {});
 					try {
 						await bracketOrderStorageService.recordOrderList({

@@ -89,6 +89,7 @@ An operator can create a bracket from `/admin`, review the order preview and ris
 - **FR-009**: `/api/status` and `/api/capabilities` MUST expose the supported Spot order types without exposing credentials.
 - **FR-010**: `/admin` MUST provide an operator-only limit-bracket form and may prefill editable prices from the latest matching alert summary.
 - **FR-011**: Existing API-key/admin authorization, kill-switch, configured environment, notional cap, order-test, filter, audit, timeout, and no-retry guarantees MUST remain in force.
+- **FR-014**: Market-executed contingent BUYs MUST validate notional at `quantity × max(averagePrice, stopPrice)` and reject trailing-only BUYs without a fixed trigger price; limit-executed contingent orders MUST use their limit price.
 - **FR-012**: OpenAPI, Postman, README, `.env.example`, project entry-point documentation, and admin hosting output MUST describe the supported request variants and errors.
 - **FR-013**: No new environment variable is introduced. The order type list is static product capability, not runtime tuning, so no Remote Config schema key is eligible.
 

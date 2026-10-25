@@ -10,6 +10,8 @@ Retains existing operator auth, trading gate, pause state, idempotency middlewar
 
 For a contingent single order, Binance Spot fields are used: `STOP_LOSS`/`TAKE_PROFIT` require quantity and either `stopPrice` or `trailingDelta`; `STOP_LOSS_LIMIT`/`TAKE_PROFIT_LIMIT` also require `price` and `timeInForce`. `trailingDelta` is an integer BIPS value and must meet the symbol's filter. Futures names such as `TRAILING_STOP_MARKET` are rejected.
 
+For market-executed contingent BUYs, validate configured notional against `quantity × max(averagePrice, stopPrice)`. Reject trailing-only BUYs without a fixed `stopPrice`; limit-executed contingent orders use their limit `price`. Market execution may slip beyond the trigger after validation.
+
 For `BRACKET_LIMIT`, require `quantity`, entry `price`, `stopPrice`, `stopLimitPrice`, `takeProfitPrice`, and `timeInForce`. Submit one OTOCO order list. BUY entries use a pending-above `LIMIT_MAKER` take-profit and pending-below `STOP_LOSS_LIMIT`; SELL entries use a pending-above `STOP_LOSS_LIMIT` and pending-below `TAKE_PROFIT_LIMIT` with the target as both trigger and limit price.
 
 ### `GET /api/trading/binance/orders`
@@ -18,7 +20,7 @@ Exactly one identifier is required: `orderId`, `origClientOrderId`, `orderListId
 
 ## Error behavior
 
-- `400 INVALID_ORDER_REQUEST`: malformed fields, unsupported type, unsupported field combination, invalid trailing filter value.
+- `400 INVALID_ORDER_REQUEST`: malformed fields, unsupported type, unsupported field combination, invalid trailing filter value, contingent market BUY without a fixed `stopPrice`, or a notional estimate over the configured cap.
 - `403 FEATURE_DISABLED` / authorization errors: existing behavior.
 - `409 BINANCE_ORDER_CONFLICT`: key reused with different normalized payload or a reconciled exchange identity mismatch.
 - `503 STORAGE_UNAVAILABLE`: live bracket reservation storage unavailable; no exchange write is made.
