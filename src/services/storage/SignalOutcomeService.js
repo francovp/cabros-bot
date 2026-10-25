@@ -17,6 +17,7 @@ const {
 	getEntryPriceSourceChains: buildEntryPriceSourceChains,
 } = require('../../lib/signalOutcomeEntryPriceSources');
 const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
+const { validateTraderIntent, isCompleteTraderIntent } = require('../../lib/traderIntent');
 
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 
@@ -878,6 +879,36 @@ const WINDOW_CONFIGS = {
 	'1M': { durationMs: 30 * DAY_MS, interval: '1D' },
 };
 
+function evaluateTraderPlan(sortedKlines, intent) {
+	let exitPrice = parseFloat(sortedKlines[sortedKlines.length - 1][4]);
+	let firstHit = null;
+	let firstHitTime = null;
+	for (const kline of sortedKlines) {
+		const timestamp = Number(kline[0]);
+		const high = parseFloat(kline[2]);
+		const low = parseFloat(kline[3]);
+		const stopHit = intent.side === 'BUY' ? low <= intent.invalidation : high >= intent.invalidation;
+		const targetHit = intent.side === 'BUY' ? high >= intent.target : low <= intent.target;
+		if (stopHit || targetHit) {
+			firstHit = stopHit ? 'stop' : 'target';
+			exitPrice = stopHit ? intent.invalidation : intent.target;
+			firstHitTime = Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+			break;
+		}
+	}
+	const realizedGain = intent.side === 'BUY' ? exitPrice - intent.entry : intent.entry - exitPrice;
+	const initialRisk = Math.abs(intent.entry - intent.invalidation);
+	return {
+		price: exitPrice,
+		return: parseFloat(((realizedGain / intent.entry) * 100).toFixed(4)),
+		firstHit,
+		targetHit: firstHit === 'target',
+		stopHit: firstHit === 'stop',
+		firstHitTime,
+		rMultiple: parseFloat((realizedGain / initialRisk).toFixed(4)),
+	};
+}
+
 function normalizeConfidenceScore(val) {
 	if (typeof val !== 'number' || !Number.isFinite(val)) return null;
 	if (val >= 0 && val <= 1) return val;
@@ -917,6 +948,7 @@ async function recordSignalInternal({
 	processingTimeMs,
 	assetClass,
 	session,
+	traderIntent,
 } = {}) {
 	if (!isEnabled()) {
 		return null;
@@ -1097,6 +1129,7 @@ async function recordSignalInternal({
 		}
 
 		const rawSetupType = setupType !== undefined ? setupType : setup_type;
+		const cleanTraderIntent = traderIntent === undefined ? undefined : validateTraderIntent(traderIntent);
 		const cleanSetupType = typeof rawSetupType === 'string' && rawSetupType.trim()
 			? rawSetupType.trim().toLowerCase()
 			: null;
@@ -1204,6 +1237,7 @@ async function recordSignalInternal({
 			sources: Array.isArray(sources) ? sources : [],
 			tokenUsage: tokenUsage || null,
 			processingTimeMs: typeof processingTimeMs === 'number' && Number.isFinite(processingTimeMs) ? processingTimeMs : null,
+			...(cleanTraderIntent ? { traderIntent: cleanTraderIntent } : {}),
 			marketDataProvider: normSymbolInfo.exchange === 'BINANCE' ? 'binance' : (equityProviderName || null),
 			outcomeWindows,
 			outcomeWindowLabels,
@@ -1787,6 +1821,9 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 					if (rMultiple !== null) {
 						outcome.rMultiple = rMultiple;
 					}
+					if (isCompleteTraderIntent(data.traderIntent) && data.traderIntent.horizon === winKey) {
+						outcome.traderPlanOutcome = evaluateTraderPlan(sortedKlines, data.traderIntent);
+					}
 					docUpdated = true;
 				} catch (error) {
 					if (abortController) {
@@ -2186,6 +2223,7 @@ function createEmptyMetricsSummary(breakdownTypes = []) {
 		targetHitRatePercent: 0,
 		stopHitRatePercent: 0,
 		expectancyR: null,
+		byTraderPlan: { samples: 0, hitRatePercent: 0, averageRMultiple: null },
 		populationNote: 'No outcome measurements found for the requested criteria.',
 		exchangeBreakdown: {},
 		providerBreakdown: {},
@@ -2916,6 +2954,26 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 
 	const averageWorstMae = maeCount > 0 ? parseFloat((totalAllMae / maeCount).toFixed(4)) : 0;
 	const averageProcessingTimeMs = processingTimeCount > 0 ? Math.round(totalProcessingTime / processingTimeCount) : null;
+	let traderPlanSamples = 0;
+	let traderPlanHits = 0;
+	let traderPlanTotalR = 0;
+	let traderPlanRCount = 0;
+	for (const signal of evaluatedSignals) {
+		if (!isCompleteTraderIntent(signal.traderIntent)) continue;
+		const traderOutcome = signal.outcomes?.[signal.traderIntent.horizon]?.traderPlanOutcome;
+		if (!traderOutcome) continue;
+		traderPlanSamples++;
+		if (traderOutcome.targetHit === true) traderPlanHits++;
+		if (typeof traderOutcome.rMultiple === 'number' && Number.isFinite(traderOutcome.rMultiple)) {
+			traderPlanTotalR += traderOutcome.rMultiple;
+			traderPlanRCount++;
+		}
+	}
+	const byTraderPlan = {
+		samples: traderPlanSamples,
+		hitRatePercent: traderPlanSamples > 0 ? parseFloat(((traderPlanHits / traderPlanSamples) * 100).toFixed(2)) : 0,
+		averageRMultiple: traderPlanRCount > 0 ? parseFloat((traderPlanTotalR / traderPlanRCount).toFixed(4)) : null,
+	};
 	const coveragePercent = totalSignalsReceived > 0 ? parseFloat(((totalSignalsEvaluated / totalSignalsReceived) * 100).toFixed(2)) : 0;
 	const isCoverageComplete = totalSignalsEvaluated === totalSignalsReceived;
 
@@ -3011,6 +3069,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 		targetHitRatePercent: overallTargetHitRatePercent,
 		stopHitRatePercent: overallStopHitRatePercent,
 		expectancyR: overallExpectancyR,
+		byTraderPlan,
 		populationNote: !isCoverageComplete
 			? `Metrics represent ${totalSignalsEvaluated} evaluated signals out of ${totalSignalsReceived} total received signals (${coveragePercent}% coverage).`
 			: 'Metrics represent 100% of received signals.',
@@ -3226,6 +3285,7 @@ function formatOutcomeDocument(doc) {
 		sources: Array.isArray(data.sources) ? data.sources : [],
 		tokenUsage: summarizeTokenUsage(data.tokenUsage),
 		processingTimeMs: typeof data.processingTimeMs === 'number' && Number.isFinite(data.processingTimeMs) ? data.processingTimeMs : null,
+		...(data.traderIntent && typeof data.traderIntent === 'object' ? { traderIntent: data.traderIntent } : {}),
 	};
 
 	if (Object.prototype.hasOwnProperty.call(data, 'sessionContext')) {
@@ -3501,6 +3561,7 @@ function formatOutcomeExportRecord(doc) {
 		price: outcome.price,
 		setupType: outcome.setupType,
 		score: outcome.score,
+		traderIntent: outcome.traderIntent,
 		outcomes: outcome.outcomes,
 	};
 }

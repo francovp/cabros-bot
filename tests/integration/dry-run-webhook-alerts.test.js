@@ -131,6 +131,43 @@ describe('Dry-run mode for webhook alert endpoints', () => {
 			expect(res.body.payload.signalClass).toBe('breakout');
 		});
 
+		it('returns sanitized traderIntent in dry-run payload', async () => {
+			const res = await request(app)
+				.post('/api/webhook/alert?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.send({
+					text: 'BINANCE:BTCUSDT (1D) COMPRA',
+					traderIntent: {
+						side: 'BUY', entry: 60500, invalidation: 59000, target: 62000,
+						horizon: '1D', notes: '  Conservative plan  ',
+					},
+				})
+				.expect(200);
+
+			expect(res.body.payload.traderIntent).toEqual({
+				side: 'BUY', entry: 60500, invalidation: 59000, target: 62000,
+				horizon: '1D', notes: 'Conservative plan',
+			});
+			expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+		});
+
+		it('rejects inverted traderIntent before delivery', async () => {
+			const res = await request(app)
+				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
+				.send({
+					text: 'BINANCE:BTCUSDT (1D) COMPRA',
+					traderIntent: {
+						side: 'BUY', entry: 60500, invalidation: 61000, target: 62000, horizon: '1D',
+					},
+				})
+				.expect(400);
+
+			expect(res.body.code).toBe('INVALID_REQUEST');
+			expect(res.body.error).toContain('traderIntent.invalidation');
+			expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+		});
+
 		it('rejects invalid signalClass in request body with 400 INVALID_REQUEST', async () => {
 			const res = await request(app)
 				.post('/api/webhook/alert')

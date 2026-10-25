@@ -150,6 +150,8 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `GET`/`POST` | `/api/trading/binance/pause` | Read or activate the operator runtime kill-switch for Binance Spot orders | [API Reference](docs/api-reference.md) |
 | `POST` | `/api/trading/binance/resume` | Clear the operator runtime kill-switch and resume Binance Spot order flow | [API Reference](docs/api-reference.md) |
 | `GET` | `/api/trading/positions` | Query open Binance trading positions with mark prices and unrealized P&L | [API Reference](docs/api-reference.md#get-apitradingpositions) |
+
+`POST /api/webhook/alert` and `POST /api/webhook/symbol-analysis` accept an optional request-level `traderIntent` object. `entry` and `horizon` (`1h`, `4h`, `1D`, or `1W`) are required; `side` (`BUY`/`SELL`) is required when `target` or `invalidation` is present. Complete plans are persisted and evaluated independently from the bot setup, and `/api/outcomes/summary` reports the additive `byTraderPlan` block.
 | `GET` | `/api/trading/pnl/summary` | Realized & unrealized P&L, ROI %, win rate, drawdown, and equity series | [API Reference](docs/api-reference.md#get-apitradingpnlsummary) |
 | `GET` | `/api/trading/trades` | Historical trade fills and closed round trips with pagination | [API Reference](docs/api-reference.md#get-apitradingtrades) |
 | `GET` | `/api/alerts` | Query stored alerts with pagination & filtering | [Stored Alerts](docs/alerts.md#get-apialerts) |
