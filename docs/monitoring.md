@@ -39,7 +39,7 @@ SENTRY_DSN=https://key@o123.ingest.sentry.io/456
 # Optional: Explicit environment (auto-derived if not set)
 SENTRY_ENVIRONMENT=production
 
-# Optional: Explicit release (derived from RENDER_GIT_COMMIT or VERCEL_GIT_COMMIT_SHA if not set)
+# Optional: Explicit release (derived from deployment commit metadata or local Git SHA when available)
 SENTRY_RELEASE=v1.2.3
 
 # Optional: Privacy control (default: true = include alert text)
