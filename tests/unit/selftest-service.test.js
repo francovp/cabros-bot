@@ -95,6 +95,74 @@ describe('SelfTestService', () => {
 		expect(binance.status).toBe('skipped');
 	});
 
+	it('accepts a ready Binance status with a string environment', async () => {
+		process.env.ENABLE_BINANCE_TRADING = 'true';
+		process.env.BINANCE_API_KEY = 'key';
+		process.env.BINANCE_API_SECRET = 'secret';
+		const svc = createSelfTestService({
+			botOrGetter: () => null,
+			getBinanceOrderService: () => ({
+				getStatus: () => ({
+					ready: true,
+					status: 'ready',
+					environment: 'testnet',
+				}),
+			}),
+		});
+
+		const result = await svc.run({ only: 'binance.trading' });
+
+		expect(result.checks[0]).toMatchObject({ id: 'binance.trading', status: 'pass' });
+	});
+
+	it('reports a misconfigured Binance status without requiring an environment object', async () => {
+		process.env.ENABLE_BINANCE_TRADING = 'true';
+		process.env.BINANCE_API_KEY = 'key';
+		process.env.BINANCE_API_SECRET = 'secret';
+		const svc = createSelfTestService({
+			botOrGetter: () => null,
+			getBinanceOrderService: () => ({
+				getStatus: () => ({ ready: false, status: 'misconfigured', environment: null }),
+			}),
+		});
+
+		const result = await svc.run({ only: 'binance.trading' });
+
+		expect(result.checks[0]).toMatchObject({
+			id: 'binance.trading',
+			status: 'fail',
+			message: 'Binance trading is misconfigured: unknown',
+		});
+	});
+
+	it('uses rate limiter defaults when optional environment values are absent', async () => {
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'rate_limiter.config' });
+
+		expect(result.checks[0]).toMatchObject({
+			id: 'rate_limiter.config',
+			status: 'pass',
+			evidence: { max: 100, windowMs: 900000 },
+		});
+	});
+
+	it.each([
+		['RATE_LIMIT_MAX', '1.5', 'RATE_LIMIT_MAX is invalid'],
+		['RATE_LIMIT_MAX', '0', 'RATE_LIMIT_MAX is invalid'],
+		['RATE_LIMIT_MAX', '9007199254740992', 'RATE_LIMIT_MAX is invalid'],
+		['RATE_LIMIT_WINDOW_MS', '1.5', 'RATE_LIMIT_WINDOW_MS is invalid'],
+		['RATE_LIMIT_WINDOW_MS', '0', 'RATE_LIMIT_WINDOW_MS is invalid'],
+		['RATE_LIMIT_WINDOW_MS', '9007199254740992', 'RATE_LIMIT_WINDOW_MS is invalid'],
+	])('rejects invalid %s values', async (name, value, message) => {
+		process.env[name] = value;
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'rate_limiter.config' });
+
+		expect(result.checks[0]).toMatchObject({ id: 'rate_limiter.config', status: 'fail', message });
+	});
+
 	it.each(firestoreGateKeys)('enables the Firestore diagnostic when remote %s overrides a disabled environment gate', async (key) => {
 		process.env[key] = 'false';
 		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{}';
@@ -170,6 +238,21 @@ describe('SelfTestService', () => {
 		const result = await svc.run({ only: 'auth.api_key,service.metadata' });
 
 		expect(result.checks.map((c) => c.id).sort()).toEqual(['auth.api_key', 'service.metadata']);
+	});
+
+	it('fails a scoped run that includes both known and unknown check ids', async () => {
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'channels.enabled,invalid.check' });
+
+		expect(result.status).toBe('fail');
+		expect(result.checks.map((check) => check.id)).toEqual(['channels.enabled', 'unknown']);
+		expect(result.checks[0]).toMatchObject({ id: 'channels.enabled', status: 'warn' });
+		expect(result.checks[1]).toMatchObject({
+			id: 'unknown',
+			status: 'fail',
+			message: 'unknown checks: invalid.check',
+		});
 	});
 
 	it('reports unknown check ids as a fail result', async () => {

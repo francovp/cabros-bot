@@ -232,8 +232,8 @@ function buildChecks({ botOrGetter, getBinanceOrderService }) {
 			const service = typeof getBinanceOrderService === 'function' ? getBinanceOrderService() : null;
 			if (service && typeof service.getStatus === 'function') {
 				const status = service.getStatus();
-				if (status && status.environment && !status.environment.ok) {
-					return makeResult('fail', `Binance trading is misconfigured: ${status.environment.reason || 'unknown'}`, null);
+				if (status && (status.status === 'misconfigured' || status.environment?.ok === false)) {
+					return makeResult('fail', `Binance trading is misconfigured: ${status.environment?.reason || 'unknown'}`, null);
 				}
 			}
 			return makeResult('pass', 'Binance trading credentials are configured');
@@ -257,10 +257,14 @@ function buildChecks({ botOrGetter, getBinanceOrderService }) {
 	checks.push({
 		id: 'rate_limiter.config',
 		run: () => {
-			const max = Number(process.env.RATE_LIMIT_MAX);
-			const window = Number(process.env.RATE_LIMIT_WINDOW_MS);
-			if (!Number.isFinite(max) || max <= 0) return makeResult('fail', 'RATE_LIMIT_MAX is invalid', null);
-			if (!Number.isFinite(window) || window <= 0) return makeResult('fail', 'RATE_LIMIT_WINDOW_MS is invalid', null);
+			const maxRaw = process.env.RATE_LIMIT_MAX;
+			const windowRaw = process.env.RATE_LIMIT_WINDOW_MS;
+			const max = Number(maxRaw ?? 100);
+			const window = Number(windowRaw ?? 900000);
+			const isValid = (raw, value) => raw === undefined
+				|| (/^\d+$/.test(raw.trim()) && Number.isSafeInteger(value) && value > 0);
+			if (!isValid(maxRaw, max)) return makeResult('fail', 'RATE_LIMIT_MAX is invalid', null);
+			if (!isValid(windowRaw, window)) return makeResult('fail', 'RATE_LIMIT_WINDOW_MS is invalid', null);
 			return makeResult('pass', 'Rate limiter is configured', { max, windowMs: window });
 		},
 	});
@@ -323,13 +327,13 @@ function createSelfTestService({ botOrGetter, getBinanceOrderService } = {}) {
 		const unknownIds = allowedIds
 			? allowedIds.filter((id) => !allChecks.some((check) => check.id === id))
 			: [];
+		const unknownChecks = unknownIds.length > 0
+			? [{ id: 'unknown', status: 'fail', message: `unknown checks: ${unknownIds.join(', ')}`, durationMs: 0 }]
+			: [];
 
 		if (selected.length === 0) {
 			const finishedAt = nowIso();
-			const empty = unknownIds.length > 0
-				? [{ id: 'unknown', status: 'fail', message: `unknown checks: ${unknownIds.join(', ')}`, durationMs: 0 }]
-				: [];
-			const result = buildResult({ checks: empty, startedAt, finishedAt });
+			const result = buildResult({ checks: unknownChecks, startedAt, finishedAt });
 			lastResult = result;
 			lastRunAt = finishedAt;
 			return result;
@@ -337,7 +341,7 @@ function createSelfTestService({ botOrGetter, getBinanceOrderService } = {}) {
 
 		const ran = await Promise.all(selected.map((check) => runCheck(check, { perCheckTimeoutMs: DEFAULT_PER_CHECK_TIMEOUT_MS })));
 		const finishedAt = nowIso();
-		const result = buildResult({ checks: ran, startedAt, finishedAt });
+		const result = buildResult({ checks: [...ran, ...unknownChecks], startedAt, finishedAt });
 		lastResult = result;
 		lastRunAt = finishedAt;
 		return result;
