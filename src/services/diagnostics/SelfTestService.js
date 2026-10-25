@@ -16,6 +16,7 @@
 const packageJson = require('../../../package.json');
 const { getDeploymentCommit } = require('../../lib/deploymentEnvironment');
 const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
+const { redactString } = require('../../lib/logging');
 
 const DEFAULT_PER_CHECK_TIMEOUT_MS = 5000;
 const DEFAULT_SUITE_TIMEOUT_MS = 30000;
@@ -41,6 +42,47 @@ function nowIso() {
 	return new Date().toISOString();
 }
 
+function sanitizeUrlForEvidence(rawUrl) {
+	if (!rawUrl || typeof rawUrl !== 'string') return rawUrl;
+	if (/^https?:\/\//i.test(rawUrl)) {
+		try {
+			const parsed = new URL(rawUrl);
+			const baseWithoutQuery = rawUrl.split(/[?#]/)[0];
+			parsed.username = '';
+			parsed.password = '';
+			parsed.search = '';
+			parsed.hash = '';
+			let result = parsed.toString();
+			if (!baseWithoutQuery.endsWith('/') && result.endsWith('/')) {
+				result = result.slice(0, -1);
+			}
+			return redactString(result);
+		} catch {
+			const withoutQuery = rawUrl.split(/[?#]/)[0];
+			const withoutUserInfo = withoutQuery.replace(/^(https?:\/\/)[^/?#@]+(?::[^/?#@]*)?@/i, '$1');
+			return redactString(withoutUserInfo);
+		}
+	}
+
+	try {
+		const fallback = new URL(`http://${rawUrl}`);
+		const baseWithoutQuery = rawUrl.split(/[?#]/)[0];
+		fallback.username = '';
+		fallback.password = '';
+		fallback.search = '';
+		fallback.hash = '';
+		let res = fallback.toString().replace(/^http:\/\//, '');
+		if (!baseWithoutQuery.endsWith('/') && res.endsWith('/')) {
+			res = res.slice(0, -1);
+		}
+		return redactString(res);
+	} catch {
+		const withoutQuery = rawUrl.split(/[?#]/)[0];
+		const withoutUserInfo = withoutQuery.replace(/(^|\/\/)[^/?#@]+(?::[^/?#@]*)?@/i, '$1');
+		return redactString(withoutUserInfo);
+	}
+}
+
 function sanitizeEvidence(value) {
 	if (value == null) return value;
 	if (typeof value === 'string') return value.length > 256 ? `${value.slice(0, 256)}…` : value;
@@ -49,8 +91,14 @@ function sanitizeEvidence(value) {
 	if (typeof value !== 'object') return value;
 	const out = {};
 	for (const [key, val] of Object.entries(value)) {
-		if (SENSITIVE_KEYS.has(key.toLowerCase())) {
+		const lowerKey = key.toLowerCase();
+		if (SENSITIVE_KEYS.has(lowerKey)) {
 			out[key] = '[REDACTED]';
+			continue;
+		}
+		if ((lowerKey.endsWith('endpoint') || lowerKey.endsWith('url')) && typeof val === 'string') {
+			const sanitized = sanitizeUrlForEvidence(val);
+			out[key] = sanitized.length > 256 ? `${sanitized.slice(0, 256)}…` : sanitized;
 			continue;
 		}
 		out[key] = sanitizeEvidence(val);
