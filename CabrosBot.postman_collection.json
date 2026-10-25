@@ -30243,6 +30243,642 @@
           ]
         },
         {
+          "name": "GET Binance Trading Pause State",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Reads the current operator-gated runtime kill-switch state for the Binance Spot order workflow. Same state is exposed in /api/status under dependencies.binanceTrading.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/pause",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "pause"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Paused",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"state\": {\n    \"paused\": true,\n    \"pausedBy\": \"api-key\",\n    \"pausedAt\": \"2026-08-30T12:00:00Z\",\n    \"pausedReason\": \"suspected credential leak\",\n    \"lastChangedAt\": \"2026-08-30T12:00:00Z\",\n    \"lastChangedBy\": \"api-key\",\n    \"lastAction\": \"pause\",\n    \"unavailable\": false,\n    \"storage\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Open",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"state\": {\n    \"paused\": false,\n    \"pausedBy\": null,\n    \"pausedAt\": null,\n    \"pausedReason\": null,\n    \"lastChangedAt\": null,\n    \"lastChangedBy\": null,\n    \"lastAction\": null,\n    \"unavailable\": false,\n    \"storage\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\"error\":\"Missing API key\",\"code\":\"UNAUTHORIZED\"}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"req-rate-limit-429\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "60"
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "10"
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0"
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1726214460"
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429"
+                }
+              ]
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// When X-Request-Id is omitted, the server must generate and return a correlation ID.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "pm.test(\"X-Request-Id response header is populated\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\").length).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Trading Pause State (X-Request-Id echo)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh1272-test-001",
+                "type": "text",
+                "description": "Optional client-supplied correlation ID (1-128 printable ASCII). Returned in the X-Request-Id response header on every non-exempt route."
+              }
+            ],
+            "description": "Reads the current operator-gated runtime kill-switch state for the Binance Spot order workflow. Same state is exposed in /api/status under dependencies.binanceTrading.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/pause",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "pause"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Paused",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"state\": {\n    \"paused\": true,\n    \"pausedBy\": \"api-key\",\n    \"pausedAt\": \"2026-08-30T12:00:00Z\",\n    \"pausedReason\": \"suspected credential leak\",\n    \"lastChangedAt\": \"2026-08-30T12:00:00Z\",\n    \"lastChangedBy\": \"api-key\",\n    \"lastAction\": \"pause\",\n    \"unavailable\": false,\n    \"storage\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Open",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"state\": {\n    \"paused\": false,\n    \"pausedBy\": null,\n    \"pausedAt\": null,\n    \"pausedReason\": null,\n    \"lastChangedAt\": null,\n    \"lastChangedBy\": null,\n    \"lastAction\": null,\n    \"unavailable\": false,\n    \"storage\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\"error\":\"Missing API key\",\"code\":\"UNAUTHORIZED\"}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A valid X-Request-Id must be echoed back verbatim.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "pm.test(\"X-Request-Id is echoed\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh1272-test-001\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Binance Trading Pause",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "pause-incident-2026-08-30",
+                "type": "text"
+              }
+            ],
+            "description": "Operator-gated runtime kill-switch. With pause active, all Binance Spot order submissions (live and dryRun) fail with 503 TRADING_PAUSED before any signed Binance request. Idempotent. The optional reason field (max 280 chars) is logged and surfaced in /api/status.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"suspected credential leak\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/pause",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "pause"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Paused",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"action\": \"pause\",\n  \"state\": {\n    \"paused\": true,\n    \"pausedBy\": \"api-key\",\n    \"pausedAt\": \"2026-08-30T12:00:00Z\",\n    \"pausedReason\": \"suspected credential leak\",\n    \"lastChangedAt\": \"2026-08-30T12:00:00Z\",\n    \"lastChangedBy\": \"api-key\",\n    \"lastAction\": \"pause\",\n    \"unavailable\": false,\n    \"storage\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Idempotent replay",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"action\": \"pause\",\n  \"idempotencyReplayed\": true,\n  \"state\": {\n    \"paused\": true,\n    \"pausedBy\": \"api-key\",\n    \"pausedAt\": \"2026-08-30T12:00:00Z\",\n    \"pausedReason\": \"suspected credential leak\",\n    \"lastChangedAt\": \"2026-08-30T12:00:00Z\",\n    \"lastChangedBy\": \"api-key\",\n    \"lastAction\": \"pause\",\n    \"unavailable\": false,\n    \"storage\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Invalid Reason (400)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"reason must not exceed 280 characters\",\n  \"code\": \"INVALID_CONTROL_REQUEST\"\n}"
+            },
+            {
+              "name": "Trading disabled",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance trading is disabled; pause state cannot be set without an enabled order path\",\n  \"code\": \"TRADING_DISABLED\"\n}"
+            },
+            {
+              "name": "State unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Pause state is unavailable; refuse to update without authoritative storage\",\n  \"code\": \"TRADING_CONTROL_UNAVAILABLE\"\n}"
+            },
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\"error\":\"Missing API key\",\"code\":\"UNAUTHORIZED\"}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"req-rate-limit-429\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "60"
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "10"
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0"
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1726214460"
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429"
+                }
+              ]
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// When X-Request-Id is omitted, the server must generate and return a correlation ID.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "pm.test(\"X-Request-Id response header is populated\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\").length).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Binance Trading Pause (X-Request-Id echo)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "pause-incident-2026-08-30",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh1272-test-001",
+                "type": "text",
+                "description": "Optional client-supplied correlation ID (1-128 printable ASCII). Returned in the X-Request-Id response header on every non-exempt route."
+              }
+            ],
+            "description": "Operator-gated runtime kill-switch. With pause active, all Binance Spot order submissions (live and dryRun) fail with 503 TRADING_PAUSED before any signed Binance request. Idempotent. The optional reason field (max 280 chars) is logged and surfaced in /api/status.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"suspected credential leak\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/pause",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "pause"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Paused",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"action\": \"pause\",\n  \"state\": {\n    \"paused\": true,\n    \"pausedBy\": \"api-key\",\n    \"pausedAt\": \"2026-08-30T12:00:00Z\",\n    \"pausedReason\": \"suspected credential leak\",\n    \"lastChangedAt\": \"2026-08-30T12:00:00Z\",\n    \"lastChangedBy\": \"api-key\",\n    \"lastAction\": \"pause\",\n    \"unavailable\": false,\n    \"storage\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Idempotent replay",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"action\": \"pause\",\n  \"idempotencyReplayed\": true,\n  \"state\": {\n    \"paused\": true,\n    \"pausedBy\": \"api-key\",\n    \"pausedAt\": \"2026-08-30T12:00:00Z\",\n    \"pausedReason\": \"suspected credential leak\",\n    \"lastChangedAt\": \"2026-08-30T12:00:00Z\",\n    \"lastChangedBy\": \"api-key\",\n    \"lastAction\": \"pause\",\n    \"unavailable\": false,\n    \"storage\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Invalid Reason (400)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"reason must not exceed 280 characters\",\n  \"code\": \"INVALID_CONTROL_REQUEST\"\n}"
+            },
+            {
+              "name": "Trading disabled",
+              "status": "Conflict",
+              "code": 409,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance trading is disabled; pause state cannot be set without an enabled order path\",\n  \"code\": \"TRADING_DISABLED\"\n}"
+            },
+            {
+              "name": "State unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Pause state is unavailable; refuse to update without authoritative storage\",\n  \"code\": \"TRADING_CONTROL_UNAVAILABLE\"\n}"
+            },
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\"error\":\"Missing API key\",\"code\":\"UNAUTHORIZED\"}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A valid X-Request-Id must be echoed back verbatim.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "pm.test(\"X-Request-Id is echoed\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh1272-test-001\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Binance Trading Resume",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "resume-incident-2026-08-30",
+                "type": "text"
+              }
+            ],
+            "description": "Operator-gated counterpart to POST /api/trading/binance/pause. Clears the pause state and restores prior order submission behavior. Idempotent. The optional reason field (max 280 chars) is recorded in the audit log.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"mitigation applied\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/resume",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "resume"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Resumed",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"action\": \"resume\",\n  \"state\": {\n    \"paused\": false,\n    \"pausedBy\": null,\n    \"pausedAt\": null,\n    \"pausedReason\": null,\n    \"lastChangedAt\": \"2026-08-30T13:00:00Z\",\n    \"lastChangedBy\": \"api-key\",\n    \"lastAction\": \"resume\",\n    \"unavailable\": false,\n    \"storage\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Invalid Reason (400)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"reason must be a string\",\n  \"code\": \"INVALID_CONTROL_REQUEST\"\n}"
+            },
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\"error\":\"Missing API key\",\"code\":\"UNAUTHORIZED\"}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"requestId\": \"req-rate-limit-429\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "60"
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "10"
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0"
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1726214460"
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429"
+                }
+              ]
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// When X-Request-Id is omitted, the server must generate and return a correlation ID.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "pm.test(\"X-Request-Id response header is populated\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\").length).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Binance Trading Resume (X-Request-Id echo)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "resume-incident-2026-08-30",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh1272-test-001",
+                "type": "text",
+                "description": "Optional client-supplied correlation ID (1-128 printable ASCII). Returned in the X-Request-Id response header on every non-exempt route."
+              }
+            ],
+            "description": "Operator-gated counterpart to POST /api/trading/binance/pause. Clears the pause state and restores prior order submission behavior. Idempotent. The optional reason field (max 280 chars) is recorded in the audit log.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"mitigation applied\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/resume",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "resume"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Resumed",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"action\": \"resume\",\n  \"state\": {\n    \"paused\": false,\n    \"pausedBy\": null,\n    \"pausedAt\": null,\n    \"pausedReason\": null,\n    \"lastChangedAt\": \"2026-08-30T13:00:00Z\",\n    \"lastChangedBy\": \"api-key\",\n    \"lastAction\": \"resume\",\n    \"unavailable\": false,\n    \"storage\": \"firestore\"\n  }\n}"
+            },
+            {
+              "name": "Invalid Reason (400)",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"reason must be a string\",\n  \"code\": \"INVALID_CONTROL_REQUEST\"\n}"
+            },
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\"error\":\"Missing API key\",\"code\":\"UNAUTHORIZED\"}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A valid X-Request-Id must be echoed back verbatim.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "pm.test(\"X-Request-Id is echoed\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh1272-test-001\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order (paused - 503 TRADING_PAUSED)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Live order submission while the operator kill-switch is active. Returns 503 TRADING_PAUSED before any signed Binance request. Use POST /api/trading/binance/resume to restore order flow.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"MARKET\",\n  \"quoteOrderQty\": 50,\n  \"dryRun\": false\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Trading paused",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance order submissions are paused by api-key: suspected credential leak\",\n  \"code\": \"TRADING_PAUSED\"\n}"
+            },
+            {
+              "name": "Pause state unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Binance trading pause state is unavailable; refusing to submit until storage recovers\",\n  \"code\": \"TRADING_PAUSED\"\n}"
+            }
+          ]
+        },
+        {
           "name": "GET Binance Order Audit",
           "request": {
             "method": "GET",

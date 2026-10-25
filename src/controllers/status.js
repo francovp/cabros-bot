@@ -371,6 +371,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	const binancePriceCheckEnabled = isEnabled(process.env.ENABLE_BINANCE_PRICE_CHECK);
 	const binanceTradingEnabled = isEnabled(process.env.ENABLE_BINANCE_TRADING);
 	const binanceTradingStatus = binanceOrderService.getStatus();
+	const binanceTradingKillSwitchEnabled = binanceTradingEnabled;
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
 	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
@@ -637,6 +638,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			binanceTrading: binanceTradingEnabled,
 			binanceOrderAudit: binanceOrderAuditService.isEnabled(),
 			tradeLedger: tradeLedgerService.isEnabled(),
+			binanceTradingKillSwitch: binanceTradingKillSwitchEnabled,
 			llmAlertEnrichment: llmAlertEnrichmentEnabled,
 			cloudflareAig: cloudflareAigEnabled,
 			messageFooterMetadata: messageFooterMetadataEnabled,
@@ -829,7 +831,25 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			},
 			alertFeedback: alertFeedbackStorageService.getStatus(),
 			jobExecutionQueue: jobExecutionQueueStatus,
-			binanceTrading: binanceTradingStatus,
+			binanceTrading: {
+				enabled: binanceTradingStatus.enabled,
+				configured: binanceTradingStatus.configured,
+				ready: binanceTradingStatus.ready,
+				status: binanceTradingStatus.status,
+				environment: binanceTradingStatus.environment,
+				allowedSymbols: binanceTradingStatus.allowedSymbols,
+				maxNotionalConfigured: binanceTradingStatus.maxNotionalConfigured,
+				paused: binanceTradingStatus.paused,
+				pausedBy: binanceTradingStatus.pausedBy,
+				pausedAt: binanceTradingStatus.pausedAt,
+				pausedReason: binanceTradingStatus.pausedReason,
+				lastChangedAt: binanceTradingStatus.lastChangedAt,
+				lastChangedBy: binanceTradingStatus.lastChangedBy,
+				lastAction: binanceTradingStatus.lastAction,
+				controlStorage: binanceTradingStatus.controlStorage,
+				unavailable: binanceTradingStatus.unavailable,
+				blocked: binanceTradingStatus.blocked,
+			},
 			startupJitter: (() => {
 				const global = resolveStartupJitterMs({
 					globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
@@ -903,6 +923,13 @@ async function getApiStatus(req, res) {
 			await scannerPresetService.probeStorageReadiness();
 		} catch (_) {
 			// Fail-open for status endpoint
+		}
+		if (typeof binanceOrderService?.getPauseState === 'function') {
+			try {
+				await binanceOrderService.getPauseState();
+			} catch (_) {
+				// Fail-open for status endpoint
+			}
 		}
 		return res.status(200).json(getStatus({ skipTelemetrySync: true }));
 	} catch (error) {

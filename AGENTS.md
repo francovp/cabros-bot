@@ -41,6 +41,8 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/services/trading/AlertSignalRouter.js` — Opt-in alert-to-order bridge behind `ENABLE_AUTO_TRADE` + per-request `autoTrade=true`; derives a bounded `MARKET` `BUY` from a parsed TradingView signal and positive sentiment. Dry-run by default. Live execution requires a stable body `signalId`, supported raw timeframe, repeat suppression, and a permanent Firestore reservation; Binance work runs as a tracked background task. All auto-trade settings stay environment-only because they control order execution or monetary risk.
 - `src/services/trading/AutoTradeReservationService.js` — Atomically reserves each live signal occurrence in Firestore before Binance submission; keeps pending and ambiguous claims to prevent retry duplicates across replicas and restarts.
 - `src/controllers/trading/binanceOrders.js` — Operator-only `POST /api/trading/binance/orders`, `GET /api/trading/binance/orders`, `DELETE /api/trading/binance/orders`, and read-only `GET /api/trading/binance/account/balances` controllers. The balances controller returns only allow-listed asset/`free`/`locked` decimal strings (never float-converted, never the raw Binance account payload) behind the `admin.viewer`/API-key gate, and maps Binance failures to `502 BINANCE_BALANCE_QUERY_FAILED`.
+- `src/controllers/trading/binanceTradingControl.js` — Operator-gated runtime kill-switch controllers (`GET`/`POST` `/api/trading/binance/pause`, `POST /api/trading/binance/resume`).
+- `src/services/trading/TradingControlService.js` — Firestore-backed runtime kill-switch state with fail-closed semantics: when `ENABLE_BINANCE_TRADING=true` and the pause state is unreadable, every Binance order path is blocked. The pause state is intentionally excluded from Firebase Remote Config to stay consistent with the documented policy that route/security gates stay environment-only.
 - `src/services/trading/TradeLedgerService.js` / `src/services/trading/tradePnl.js` — Durable trade ledger service persisting normalized Binance Spot order fills to the `tradeFills` Firestore collection (no TTL) and pure BigInt fixed-point FIFO lot-matching / P&L engine.
 - `src/controllers/trading/tradeLedger.js` — Operator-facing `GET /api/trading/positions`, `GET /api/trading/pnl/summary`, and `GET /api/trading/trades` controllers calculating realized/unrealized P&L, ROI %, win rate, drawdown, and open lots with live fail-open mark prices.
 - `src/controllers/webhooks/handlers/alert/alert.js` — Webhook handler that forwards alert text to a Telegram chat.
@@ -2935,3 +2937,36 @@ The truncation fields are attached only to the `/api/webhook/alert` response. Th
 **Coverage**: `tests/unit/whatsapp-command-bridge.test.js` (handling outlasts the receive budget yet the receipt is still deleted; a 500 delete retries and the command still executes exactly once; a 4xx delete is not retried; a redelivered receiptId after both steps time out is skipped without re-execution; **one receiptId served across three `pollOnce()` calls by a provider that redelivers regardless, with a command that outlasts the receive budget — the handler runs exactly once, all three acknowledgements succeed, and no delete is ever issued on an already-aborted signal**; TTL expiry and map bounding; `stop()` aborts an in-flight poll fetch; a pending reply is suppressed after `stop()`), `tests/integration/whatsapp-command-bridge.test.js` (counter fields on `/api/status`, retry-then-redelivery end to end), `tests/unit/openapi-contract.test.js` and `tests/unit/postman-collection.test.js`.
 
 No new environment variable, Remote Config key, endpoint, or feature flag was added: the deadlines, retry count, TTL, and ceiling are code-level constants (constructor-overridable for tests), not operator tuning.
+
+## Binance Runtime Kill-Switch (CB-274 / Issue #586)
+
+Added an operator-gated runtime kill-switch for the optional Binance Spot order workflow. The pause state is stored in a small Firestore document (`tradingControl/state`) and is **intentionally excluded from Firebase Remote Config** to stay consistent with the documented policy that route/security gates stay environment-only. While the kill-switch is active, every Binance Spot order submission — including `dryRun: true`, which still issues a signed `testNewOrder` call — fails with `503 TRADING_PAUSED` before any Binance client is constructed or any signed request is sent. When `ENABLE_BINANCE_TRADING=true` and the authoritative pause state is unreadable, the gate fails closed (refuses the submission); when trading is disabled the gate is open by definition.
+
+Three new endpoints are mounted under `/api`:
+- `GET /api/trading/binance/pause` — `admin.viewer` (or stronger) read of the effective pause state.
+- `POST /api/trading/binance/pause` — `admin.operator` write that flips the kill-switch on, idempotent, accepts an optional `reason` string, audit-logged.
+- `POST /api/trading/binance/resume` — `admin.operator` write that clears the kill-switch, idempotent, accepts an optional `reason` string, audit-logged.
+
+`/api/status` exposes the effective state in `dependencies.binanceTrading` (`paused`, `pausedBy`, `pausedAt`, `pausedReason`, `lastChangedAt`, `lastChangedBy`, `lastAction`, `controlStorage`, `unavailable`, `blocked`) and a new `featureFlags.binanceTradingKillSwitch` flag; no secrets or provider responses are ever exposed. The kill-switch is automatic whenever `ENABLE_BINANCE_TRADING=true` — no new environment variable is required.
+
+**Core Components**:
+- `src/services/trading/TradingControlService.js` — Lazy Firestore singleton reused from `AlertStorageService`, fail-closed `getPauseState()`, bounded `pause()`/`resume()` writes with in-flight pause gating and post-timeout reconciliation, strict `reason` validation, audit logging, and a `TradingControlError` class for `INVALID_CONTROL_REQUEST` (400), `TRADING_DISABLED` (409), and `TRADING_CONTROL_UNAVAILABLE` (503).
+- `src/services/trading/BinanceOrderService.js` — `placeOrder()` checks the pause state after request validation and before client construction; throws a `BinanceOrderServiceError` with `code: "TRADING_PAUSED"`, `statusCode: 503`. The optional `controlService` factory parameter preserves the existing test seam.
+- `src/controllers/trading/binanceTradingControl.js` — Pause / resume / get-pause controllers; surface the operator actor (api-key, firebase-bearer, or admin role) and audit-logged reason; Sentry is reserved for unexpected internal failures.
+- `src/routes/index.js` — Three new routes under the existing `binanceOrderRead` / `binanceOrderWrite` middleware stacks; pause and resume route through the shared `idempotencyMiddleware`.
+- `src/controllers/status.js` — New `featureFlags.binanceTradingKillSwitch` and a richer `dependencies.binanceTrading` payload.
+
+**Coverage**:
+- `tests/unit/trading-control-service.test.js` — `isBlocked()` semantics, disabled-trading short-circuit, fail-closed when Firestore is missing or unreadable, Firestore round-trip, write timeout/reconciliation, in-flight pause gating, strict `reason` validation, audit log shape, `TRADING_DISABLED` and `TRADING_CONTROL_UNAVAILABLE` errors.
+- `tests/unit/binance-order-service.test.js` — Pause gate before Binance client construction, dryRun gating, fail-closed when unavailable, inactive-path bypass, and `getStatus()` projection.
+- `tests/integration/binance-orders-endpoint.test.js` — Endpoint coverage: `POST /api/trading/binance/orders` returns 503 `TRADING_PAUSED` when paused (no client call), dryRun path blocked while paused, fail-closed on unavailable state, pause/resume auth requirements, operator happy path, invalid `reason` 400 validation, and the `GET /api/trading/binance/pause` reader.
+
+**Configuration**:
+- No new environment variable. The kill-switch is always on when `ENABLE_BINANCE_TRADING=true`; the Firestore document lives at `tradingControl/state` and follows the existing lazy `firebase-admin` initialization. Pause state persists across replicas without manual coordination.
+
+**Contracts**:
+- `src/openapi/openapi.json` — New `BinanceTradingPauseState` schema, the three endpoint operations, and an enriched 503 response on `POST /api/trading/binance/orders` with `TRADING_PAUSED` examples.
+- `CabrosBot.postman_collection.json` — `GET`/`POST` pause and `POST` resume requests with valid body, error, and idempotent-replay examples; a new `POST Binance order (paused - 503 TRADING_PAUSED)` request documenting the gated failure.
+- `README.md` and `.env.example` — Document the operator surface, the deliberate Remote Config exclusion, and the fail-closed semantics.
+
+No new environment variable, Remote Config key, or external credential was added.

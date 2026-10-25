@@ -143,7 +143,9 @@ describe('OpenAPI contract', () => {
 			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary',
 			'GET /api/outcomes/calibration', 'GET /api/outcomes/export', 'GET /api/outcomes/{outcomeId}',
 			'GET /api/symbol-analyses', 'GET /api/symbol-analyses/summary',
-			'GET /api/trading/binance/orders', 'GET /api/trading/binance/orders/audit', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
+			'GET /api/trading/binance/orders', 'GET /api/trading/binance/orders/audit', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders',
+			'GET /api/trading/binance/pause', 'POST /api/trading/binance/pause', 'POST /api/trading/binance/resume',
+			'GET /api/status', 'GET /api/capabilities',
 			'POST /api/symbols/resolve', 'GET /api/symbols/aliases',
 			'POST /api/trading/binance/orders/preview', 'GET /api/trading/binance/account/balances',
 			'GET /api/trading/positions', 'GET /api/trading/pnl/summary', 'GET /api/trading/trades',
@@ -164,6 +166,9 @@ describe('OpenAPI contract', () => {
 			'GET /api/trading/binance/account/balances',
 			'POST /api/trading/binance/orders',
 			'DELETE /api/trading/binance/orders',
+			'GET /api/trading/binance/pause',
+			'POST /api/trading/binance/pause',
+			'POST /api/trading/binance/resume',
 		]);
 
 		for (const operation of operations) {
@@ -220,6 +225,9 @@ describe('OpenAPI contract', () => {
 			'GET /api/trading/trades': 'admin.viewer',
 			'POST /api/trading/binance/orders': 'admin.operator',
 			'DELETE /api/trading/binance/orders': 'admin.operator',
+			'GET /api/trading/binance/pause': 'admin.viewer',
+			'POST /api/trading/binance/pause': 'admin.operator',
+			'POST /api/trading/binance/resume': 'admin.operator',
 			'GET /api/alerts': 'admin.viewer',
 			'GET /api/jobs': 'admin.viewer',
 			'POST /api/alerts/{alertId}/replay': 'admin.operator',

@@ -4672,7 +4672,37 @@
             "$ref": "#/components/responses/BinanceOrderFailure"
           },
           "503": {
-            "$ref": "#/components/responses/Error"
+            "description": "Transient pre-flight failure or runtime kill-switch blocked order submission",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "tradingPaused": {
+                    "summary": "Binance Spot order submission is paused via the runtime kill-switch",
+                    "value": {
+                      "success": false,
+                      "error": "Binance Spot order submission is paused by incident-commander (reason: suspected credential leak)",
+                      "code": "TRADING_PAUSED"
+                    }
+                  },
+                  "tradingUnavailable": {
+                    "summary": "Authoritative pause state could not be read — failing closed",
+                    "value": {
+                      "success": false,
+                      "error": "Binance Spot order submission is unavailable (control state cannot be read; failing closed)",
+                      "code": "TRADING_PAUSED"
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -4945,6 +4975,388 @@
           }
         ],
         "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/trading/binance/pause": {
+      "get": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Read the runtime Binance Spot order kill-switch state",
+        "description": "Returns the authoritative pause state stored in Firestore (`tradingControl/state`) or the in-memory fallback when Binance trading is disabled. Requires `admin.viewer` or higher. Auth precedence: accepts Firebase bearer tokens when enabled; otherwise, when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted; otherwise falls back to AdminApiKeyHeader or ApiKeyHeader/ApiKeyQuery.",
+        "operationId": "getBinancePause",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current pause state returned",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "state"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "state": {
+                      "$ref": "#/components/schemas/BinanceTradingPauseState"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      },
+      "post": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Pause all new Binance Spot order submissions immediately",
+        "description": "Persists `paused: true` in Firestore (`tradingControl/state`) and logs the operator actor and optional reason. Subsequent `POST /api/trading/binance/orders` requests (live and dry-run) are rejected with `503 TRADING_PAUSED` before any signed Binance API call is made. Requires `admin.operator`. Auth precedence: accepts Firebase bearer tokens when enabled; otherwise, when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted; otherwise falls back to AdminApiKeyHeader or ApiKeyHeader/ApiKeyQuery.",
+        "operationId": "postBinancePause",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 280,
+                    "description": "Optional incident or maintenance reason recorded on the pause audit record"
+                  },
+                  "pauseReason": {
+                    "type": "string",
+                    "maxLength": 280,
+                    "description": "Alias for `reason`"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Binance Spot order submissions paused",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "action",
+                    "state"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "pause"
+                      ]
+                    },
+                    "state": {
+                      "$ref": "#/components/schemas/BinanceTradingPauseState"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "409": {
+            "description": "Binance trading is disabled via ENABLE_BINANCE_TRADING or duplicate idempotent request conflict",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "description": "Authoritative pause storage is unavailable — refusing to mutate state",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/trading/binance/resume": {
+      "post": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Resume Binance Spot order submissions after a runtime pause",
+        "description": "Clears `paused` in Firestore (`tradingControl/state`) and logs the operator actor and optional reason. Requires `admin.operator`. Auth precedence: accepts Firebase bearer tokens when enabled; otherwise, when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted; otherwise falls back to AdminApiKeyHeader or ApiKeyHeader/ApiKeyQuery.",
+        "operationId": "postBinanceResume",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 280,
+                    "description": "Optional reason recorded on the resume audit record"
+                  },
+                  "resumeReason": {
+                    "type": "string",
+                    "maxLength": 280,
+                    "description": "Alias for `reason`"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Binance Spot order submissions resumed",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "action",
+                    "state"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "resume"
+                      ]
+                    },
+                    "state": {
+                      "$ref": "#/components/schemas/BinanceTradingPauseState"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "409": {
+            "description": "Binance trading is disabled via ENABLE_BINANCE_TRADING or duplicate idempotent request conflict",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "description": "Authoritative pause storage is unavailable — refusing to mutate state",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
       }
     },
     "/api/trading/positions": {
@@ -20670,6 +21082,93 @@
             "type": "boolean",
             "const": true,
             "description": "Rate-limit responses are retryable after the indicated delay."
+          }
+        }
+      },
+      "BinanceTradingPauseState": {
+        "type": "object",
+        "required": [
+          "paused",
+          "unavailable",
+          "storage"
+        ],
+        "properties": {
+          "paused": {
+            "type": "boolean",
+            "description": "Whether Binance Spot order submissions are currently paused"
+          },
+          "pausedBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Actor who set the active pause, or null when unpaused"
+          },
+          "pausedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO-8601 timestamp when the active pause was set, or null"
+          },
+          "pausedReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reason recorded when the active pause was set, or null"
+          },
+          "resumedBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Actor who most recently cleared a pause, or null"
+          },
+          "resumedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO-8601 timestamp when a pause was most recently cleared, or null"
+          },
+          "lastChangedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO-8601 timestamp of the most recent pause/resume mutation"
+          },
+          "lastChangedBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Actor of the most recent pause/resume mutation"
+          },
+          "lastAction": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "pause",
+              "resume",
+              null
+            ],
+            "description": "Most recent action taken on the kill-switch"
+          },
+          "unavailable": {
+            "type": "boolean",
+            "description": "True when authoritative storage cannot be read while trading is enabled (submissions fail closed)"
+          },
+          "storage": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ],
+            "description": "Backing store that produced this snapshot"
           }
         }
       }

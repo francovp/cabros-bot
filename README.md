@@ -147,6 +147,8 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `POST` | `/api/news-monitor` | Trigger symbol news scanning & event detection | [News Monitoring](docs/news-monitor.md) |
 | `POST` | `/api/trading/binance/orders/preview` | Pre-trade Binance Spot cost & slippage preview | [API Reference](docs/api-reference.md#post-apitradingbinanceorderspreview) |
 | `GET` | `/api/trading/binance/account/balances` | Read-only Binance Spot balances for allowed assets | [API Reference](docs/api-reference.md#get-apitradingbinanceaccountbalances) |
+| `GET`/`POST` | `/api/trading/binance/pause` | Read or activate the operator runtime kill-switch for Binance Spot orders | [API Reference](docs/api-reference.md) |
+| `POST` | `/api/trading/binance/resume` | Clear the operator runtime kill-switch and resume Binance Spot order flow | [API Reference](docs/api-reference.md) |
 | `GET` | `/api/trading/positions` | Query open Binance trading positions with mark prices and unrealized P&L | [API Reference](docs/api-reference.md#get-apitradingpositions) |
 | `GET` | `/api/trading/pnl/summary` | Realized & unrealized P&L, ROI %, win rate, drawdown, and equity series | [API Reference](docs/api-reference.md#get-apitradingpnlsummary) |
 | `GET` | `/api/trading/trades` | Historical trade fills and closed round trips with pagination | [API Reference](docs/api-reference.md#get-apitradingtrades) |

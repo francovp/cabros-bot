@@ -2,6 +2,78 @@
 
 jest.mock('binance', () => ({ MainClient: jest.fn() }));
 
+// Default to an open control service for the trading control singleton
+// so tests that hit the module-level `binanceOrderService` don't trip
+// the fail-closed gate. Tests that need pause/unavailable behavior
+// build a custom service via `createBinanceOrderService` directly.
+const mockControl = {
+	paused: false,
+	unavailable: false,
+	pausedBy: null,
+	pausedAt: null,
+	pausedReason: null,
+};
+
+jest.mock('../../src/services/trading/TradingControlService', () => {
+	const openState = () => ({
+		paused: mockControl.paused,
+		pausedBy: mockControl.pausedBy,
+		pausedAt: mockControl.pausedAt,
+		pausedReason: mockControl.pausedReason,
+		resumedBy: null,
+		resumedAt: null,
+		lastChangedAt: null,
+		lastChangedBy: null,
+		lastAction: mockControl.paused ? 'pause' : null,
+		unavailable: mockControl.unavailable,
+		inactive: false,
+		storage: 'memory',
+		isBlocked() {
+			return this.paused || (this.unavailable && !this.inactive);
+		},
+	});
+	const tradingControlService = {
+		async getPauseState() { return openState(); },
+		async pause() { return openState(); },
+		async resume() { return openState(); },
+		getStatus() {
+			return {
+				enabled: true,
+				storage: 'memory',
+				paused: mockControl.paused,
+				pausedBy: mockControl.pausedBy,
+				pausedAt: mockControl.pausedAt,
+				pausedReason: mockControl.pausedReason,
+				lastChangedAt: null,
+				lastChangedBy: null,
+				lastAction: mockControl.paused ? 'pause' : null,
+				unavailable: mockControl.unavailable,
+				blocked: Boolean(mockControl.paused || mockControl.unavailable),
+				firestoreReady: false,
+			};
+		},
+		readAction() { return null; },
+		readReason() { return null; },
+		normalizeActor(a) { return typeof a === 'string' ? a.trim().slice(0, 80) : 'unknown'; },
+		normalizeReason(r) { return typeof r === 'string' ? r.trim().slice(0, 280) || null : null; },
+	};
+	return {
+		tradingControlService,
+		TradingControlError: class TradingControlError extends Error {
+			constructor(message, code, statusCode) {
+				super(message);
+				this.code = code;
+				this.statusCode = statusCode;
+			}
+		},
+		TradingControlState: class TradingControlState {},
+		STATE_DOC_PATH: 'tradingControl/state',
+		COLLECTION_NAME: 'tradingControl',
+		STATE_DOC_ID: 'state',
+		createTradingControlService: () => tradingControlService,
+	};
+});
+
 const {
 	BinanceOrderRequestError,
 	BinanceOrderServiceError,
@@ -15,6 +87,58 @@ const { resetOrderProvenanceForTesting } = require('../../src/services/trading/o
 const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 const AlertStorageService = require('../../src/services/storage/AlertStorageService');
 const { MainClient } = require('binance');
+
+// Default open control service: trading is enabled, pause is never active,
+// storage is always available. Tests that exercise the kill-switch inject
+// a custom `controlService` instead.
+function openControlService() {
+	return {
+		async getPauseState() {
+			return {
+				paused: false,
+				pausedBy: null,
+				pausedAt: null,
+				pausedReason: null,
+				resumedBy: null,
+				resumedAt: null,
+				lastChangedAt: null,
+				lastChangedBy: null,
+				lastAction: null,
+				unavailable: false,
+				inactive: false,
+				storage: 'memory',
+				isBlocked() { return false; },
+			};
+		},
+		getStatus() {
+			return {
+				enabled: true,
+				storage: 'memory',
+				paused: false,
+				pausedBy: null,
+				pausedAt: null,
+				pausedReason: null,
+				lastChangedAt: null,
+				lastChangedBy: null,
+				lastAction: null,
+				firestoreReady: false,
+			};
+		},
+	};
+}
+
+// Wrap createBinanceOrderService so existing tests get the open control
+// service by default. Tests that need different behavior pass
+// `controlService` explicitly.
+function createServiceWithDefaultControl(options = {}) {
+	if (options.controlService) {
+		return createBinanceOrderService(options);
+	}
+	return createBinanceOrderService({
+		...options,
+		controlService: openControlService(),
+	});
+}
 
 function exchangeInfo(overrides = {}) {
 	return {
@@ -56,6 +180,11 @@ describe('BinanceOrderService', () => {
 			if (!id || id.startsWith('nonexistent')) return null;
 			return { id, setupType: 'breakout' };
 		});
+		mockControl.paused = false;
+		mockControl.unavailable = false;
+		mockControl.pausedBy = null;
+		mockControl.pausedAt = null;
+		mockControl.pausedReason = null;
 	});
 
 	afterEach(() => {
@@ -67,7 +196,7 @@ describe('BinanceOrderService', () => {
 	it('rejects disabled trading before constructing a Binance client', async () => {
 		delete process.env.ENABLE_BINANCE_TRADING;
 		const createClient = jest.fn();
-		const service = createBinanceOrderService({ createClient });
+		const service = createServiceWithDefaultControl({ createClient });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -84,7 +213,7 @@ describe('BinanceOrderService', () => {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
 			submitNewOrder: jest.fn(),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -112,7 +241,7 @@ describe('BinanceOrderService', () => {
 
 	it('rejects a quantity that violates the Binance lot-size step before submission', async () => {
 		const client = { getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()) };
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -153,7 +282,7 @@ describe('BinanceOrderService', () => {
 				secret: 'must-not-escape',
 			}),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -194,7 +323,7 @@ describe('BinanceOrderService', () => {
 			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
 			testNewOrder: jest.fn().mockResolvedValue({}),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		const result = await service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -223,7 +352,7 @@ describe('BinanceOrderService', () => {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
 			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -243,7 +372,7 @@ describe('BinanceOrderService', () => {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
 			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		const result = await service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -266,7 +395,7 @@ describe('BinanceOrderService', () => {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
 			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		const result = await service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -289,7 +418,7 @@ describe('BinanceOrderService', () => {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
 			getAvgPrice,
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -308,7 +437,7 @@ describe('BinanceOrderService', () => {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
 			getAvgPrice: jest.fn().mockResolvedValue({ price: '100.2' }),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		const result = await service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -328,7 +457,7 @@ describe('BinanceOrderService', () => {
 			})),
 			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.123456789' }),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		const result = await service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -348,7 +477,7 @@ describe('BinanceOrderService', () => {
 			})),
 			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -373,7 +502,7 @@ describe('BinanceOrderService', () => {
 			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
 			testNewOrder: jest.fn().mockResolvedValue({}),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		const result = await service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -412,7 +541,7 @@ describe('BinanceOrderService', () => {
 				});
 			}),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -451,7 +580,7 @@ describe('BinanceOrderService', () => {
 				executedQty: '0.00100000',
 			})),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		const reconciled = await service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -484,7 +613,7 @@ describe('BinanceOrderService', () => {
 				executedQty: '0.00100000',
 			}),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -505,7 +634,7 @@ describe('BinanceOrderService', () => {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
 			getAvgPrice: jest.fn().mockRejectedValue(new Error('Binance price service unavailable')),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -530,7 +659,7 @@ describe('BinanceOrderService', () => {
 			})),
 			getAvgPrice: jest.fn().mockResolvedValue({ price: '50000.00' }),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -554,7 +683,7 @@ describe('BinanceOrderService', () => {
 				],
 			})),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -588,7 +717,7 @@ describe('BinanceOrderService', () => {
 				],
 			})),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -615,7 +744,7 @@ describe('BinanceOrderService', () => {
 			})),
 			submitNewOrder: jest.fn(),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -653,7 +782,7 @@ describe('BinanceOrderService', () => {
 			getExchangeInfo: jest.fn(),
 			submitNewOrder: jest.fn(),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -677,7 +806,7 @@ describe('BinanceOrderService', () => {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
 			submitNewOrder: jest.fn().mockResolvedValue({ symbol: 'BTCUSDT', status: 'NEW' }),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -743,7 +872,7 @@ describe('BinanceOrderService', () => {
 			})),
 			submitNewOrder: jest.fn(),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -777,7 +906,7 @@ describe('BinanceOrderService', () => {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({ status: 'BREAK' })),
 			submitNewOrder: jest.fn(),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -935,7 +1064,7 @@ describe('BinanceOrderService', () => {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
 			submitNewOrder: jest.fn(),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -974,7 +1103,7 @@ describe('BinanceOrderService', () => {
 			})),
 			testNewOrder: jest.fn().mockResolvedValue({}),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -1003,7 +1132,7 @@ describe('BinanceOrderService', () => {
 			})),
 			testNewOrder: jest.fn().mockResolvedValue({}),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -1040,7 +1169,7 @@ describe('BinanceOrderService', () => {
 			}),
 			testNewOrder: jest.fn().mockResolvedValue({}),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -1076,7 +1205,7 @@ describe('BinanceOrderService', () => {
 			}),
 			testNewOrder: jest.fn().mockResolvedValue({}),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -1113,7 +1242,7 @@ describe('BinanceOrderService', () => {
 			}),
 			testNewOrder: jest.fn().mockResolvedValue({}),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -1135,7 +1264,7 @@ describe('BinanceOrderService', () => {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
 			submitNewOrder: jest.fn().mockRejectedValue({ code: -2010, message: 'Account has insufficient balance' }),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -1158,7 +1287,7 @@ describe('BinanceOrderService', () => {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
 			submitNewOrder: jest.fn().mockRejectedValue({ code, statusCode }),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -1182,7 +1311,7 @@ describe('BinanceOrderService', () => {
 			})),
 			submitNewOrder: jest.fn().mockResolvedValue({ symbol: 'BTCUSDT', status: 'NEW' }),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -1212,7 +1341,7 @@ describe('BinanceOrderService', () => {
 			})),
 			testNewOrder: jest.fn().mockRejectedValue(new Error('request timeout')),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -1229,7 +1358,7 @@ describe('BinanceOrderService', () => {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
 			submitNewOrder: jest.fn().mockRejectedValue({ code: -1006, message: 'Unexpected response' }),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -1257,7 +1386,7 @@ describe('BinanceOrderService', () => {
 			}),
 			submitNewOrder: jest.fn(),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -1279,7 +1408,7 @@ describe('BinanceOrderService', () => {
 			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
 			submitNewOrder: jest.fn().mockRejectedValue(new Error('provider timeout')),
 		};
-		const service = createBinanceOrderService({ createClient: () => client });
+		const service = createServiceWithDefaultControl({ createClient: () => client });
 
 		await expect(service.placeOrder({
 			symbol: 'BTCUSDT',
@@ -1507,7 +1636,7 @@ describe('BinanceOrderService', () => {
 		it('rejects disabled trading before constructing a Binance client', async () => {
 			delete process.env.ENABLE_BINANCE_TRADING;
 			const createClient = jest.fn();
-			const service = createBinanceOrderService({ createClient });
+			const service = createServiceWithDefaultControl({ createClient });
 
 			await expect(service.getOrders({ symbol: 'BTCUSDT' })).rejects.toMatchObject({
 				code: 'FEATURE_DISABLED',
@@ -1519,7 +1648,7 @@ describe('BinanceOrderService', () => {
 		it('rejects unconfigured trading when credentials or symbols are missing', async () => {
 			delete process.env.BINANCE_API_KEY;
 			const createClient = jest.fn();
-			const service = createBinanceOrderService({ createClient });
+			const service = createServiceWithDefaultControl({ createClient });
 
 			await expect(service.getOrders({ symbol: 'BTCUSDT' })).rejects.toMatchObject({
 				code: 'BINANCE_TRADING_UNAVAILABLE',
@@ -1608,7 +1737,7 @@ describe('BinanceOrderService', () => {
 					secret: 'must-not-leak',
 				}),
 			};
-			const service = createBinanceOrderService({ createClient: () => client });
+			const service = createServiceWithDefaultControl({ createClient: () => client });
 
 			const result = await service.getOrders({ symbol: 'btcusdt', orderId: '42' });
 			expect(client.getOrder).toHaveBeenCalledWith({
@@ -1654,7 +1783,7 @@ describe('BinanceOrderService', () => {
 					side: 'BUY',
 				}),
 			};
-			const service = createBinanceOrderService({ createClient: () => client });
+			const service = createServiceWithDefaultControl({ createClient: () => client });
 
 			const result = await service.getOrders({ symbol: 'BTCUSDT', clientOrderId: 'custom-client-id' });
 			expect(client.getOrder).toHaveBeenCalledWith({
@@ -1678,7 +1807,7 @@ describe('BinanceOrderService', () => {
 			const client = {
 				getOrder: jest.fn().mockRejectedValue({ code: -2013, message: 'Order does not exist.' }),
 			};
-			const service = createBinanceOrderService({ createClient: () => client });
+			const service = createServiceWithDefaultControl({ createClient: () => client });
 
 			await expect(service.getOrders({ symbol: 'BTCUSDT', orderId: 9999 })).rejects.toMatchObject({
 				code: 'ORDER_NOT_FOUND',
@@ -1716,7 +1845,7 @@ describe('BinanceOrderService', () => {
 					},
 				]),
 			};
-			const service = createBinanceOrderService({ createClient: () => client });
+			const service = createServiceWithDefaultControl({ createClient: () => client });
 
 			const result = await service.getOrders({ symbol: 'BTCUSDT', limit: 200 }); // clamped to 100
 			expect(client.allOrders).toHaveBeenCalledWith({
@@ -1760,7 +1889,7 @@ describe('BinanceOrderService', () => {
 			const client = {
 				allOrders: jest.fn().mockResolvedValue([]),
 			};
-			const service = createBinanceOrderService({ createClient: () => client });
+			const service = createServiceWithDefaultControl({ createClient: () => client });
 
 			const result = await service.getOrders({ symbol: 'BTCUSDT' });
 			expect(client.allOrders).toHaveBeenCalledWith({
@@ -1779,7 +1908,7 @@ describe('BinanceOrderService', () => {
 			const client = {
 				allOrders: jest.fn().mockRejectedValue({ code: -1015, message: 'Too many requests' }),
 			};
-			const service = createBinanceOrderService({ createClient: () => client });
+			const service = createServiceWithDefaultControl({ createClient: () => client });
 
 			await expect(service.getOrders({ symbol: 'BTCUSDT' })).rejects.toMatchObject({
 				code: 'BINANCE_REQUEST_REJECTED',
@@ -1791,7 +1920,7 @@ describe('BinanceOrderService', () => {
 			const client = {
 				allOrders: jest.fn().mockRejectedValue(new Error('ETIMEDOUT')),
 			};
-			const service = createBinanceOrderService({ createClient: () => client });
+			const service = createServiceWithDefaultControl({ createClient: () => client });
 
 			await expect(service.getOrders({ symbol: 'BTCUSDT' })).rejects.toMatchObject({
 				code: 'BINANCE_QUERY_FAILED',
@@ -2790,6 +2919,264 @@ describe('BinanceOrderService', () => {
 				expect(result.alertId).toBe('valid-alert-123');
 				expect(result.origin).toBe('admin_alert');
 				expect(result.setupType).toBe('breakout');
+			});
+		});
+	});
+
+	describe('runtime kill-switch', () => {
+		function buildControlService(overrides = {}) {
+			return {
+				async getPauseState() {
+					return {
+						paused: Boolean(overrides.paused),
+						pausedBy: overrides.pausedBy || null,
+						pausedAt: overrides.pausedAt || null,
+						pausedReason: overrides.pausedReason || null,
+						resumedBy: overrides.resumedBy || null,
+						resumedAt: overrides.resumedAt || null,
+						lastChangedAt: overrides.lastChangedAt || null,
+						lastChangedBy: overrides.lastChangedBy || null,
+						lastAction: overrides.lastAction || null,
+						unavailable: Boolean(overrides.unavailable),
+						inactive: Boolean(overrides.inactive),
+						storage: overrides.storage || 'memory',
+						isBlocked() {
+							return this.paused || (this.unavailable && !this.inactive);
+						},
+					};
+				},
+				getStatus() {
+					return {
+						enabled: true,
+						storage: overrides.storage || 'memory',
+						paused: Boolean(overrides.paused),
+						pausedBy: overrides.pausedBy || null,
+						pausedAt: overrides.pausedAt || null,
+						pausedReason: overrides.pausedReason || null,
+						lastChangedAt: overrides.lastChangedAt || null,
+						lastChangedBy: overrides.lastChangedBy || null,
+						lastAction: overrides.lastAction || null,
+						unavailable: Boolean(overrides.unavailable),
+						firestoreReady: overrides.storage === 'firestore',
+					};
+				},
+				readAction() { return null; },
+				readReason() { return null; },
+				normalizeActor(a) { return typeof a === 'string' ? a.trim().slice(0, 80) : 'unknown'; },
+				normalizeReason(r) { return typeof r === 'string' ? r.trim().slice(0, 280) || null : null; },
+			};
+		}
+
+		it('rejects live order submissions with TRADING_PAUSED before constructing a client', async () => {
+			const createClient = jest.fn();
+			const controlService = buildControlService({
+				paused: true,
+				pausedBy: 'incident-commander',
+				pausedAt: '2026-08-30T12:00:00Z',
+				pausedReason: 'suspected credential leak',
+				lastAction: 'pause',
+			});
+			const service = createBinanceOrderService({ createClient, controlService });
+
+			await expect(service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+				quoteOrderQty: 50,
+			})).rejects.toMatchObject({
+				code: 'TRADING_PAUSED',
+				statusCode: 503,
+			});
+
+			expect(createClient).not.toHaveBeenCalled();
+		});
+
+		it('rejects dryRun submissions while paused to avoid signed testNewOrder calls', async () => {
+			const createClient = jest.fn();
+			const controlService = buildControlService({
+				paused: true,
+				pausedBy: 'incident-commander',
+				pausedReason: 'strategy rollback',
+			});
+			const service = createBinanceOrderService({ createClient, controlService });
+
+			await expect(service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+				quoteOrderQty: 50,
+				dryRun: true,
+			})).rejects.toMatchObject({
+				code: 'TRADING_PAUSED',
+				statusCode: 503,
+			});
+
+			expect(createClient).not.toHaveBeenCalled();
+		});
+
+		it('rechecks the pause state before a signed order-test request', async () => {
+			const openState = buildControlService().getPauseState;
+			const pausedState = buildControlService({ paused: true });
+			const getPauseState = jest.fn()
+				.mockResolvedValueOnce(await openState())
+				.mockResolvedValueOnce(await pausedState.getPauseState());
+			const controlService = {
+				getPauseState,
+			};
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+					filters: [
+						...exchangeInfo().symbols[0].filters,
+						{ filterType: 'PERCENT_PRICE', multiplierUp: '2', multiplierDown: '0.5', avgPriceMins: 5 },
+					],
+				})),
+				testNewOrder: jest.fn().mockResolvedValue({}),
+			};
+			const service = createBinanceOrderService({ createClient: () => client, controlService });
+
+			await expect(service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.1',
+				price: '100',
+				dryRun: true,
+			})).rejects.toMatchObject({ code: 'TRADING_PAUSED', statusCode: 503 });
+
+			expect(getPauseState).toHaveBeenCalledTimes(2);
+			expect(client.testNewOrder).not.toHaveBeenCalled();
+		});
+
+		it('rechecks the pause state before submitting a live order', async () => {
+			const openState = buildControlService().getPauseState;
+			const pausedState = buildControlService({ paused: true });
+			const getPauseState = jest.fn()
+				.mockResolvedValueOnce(await openState())
+				.mockResolvedValueOnce(await openState())
+				.mockResolvedValueOnce(await pausedState.getPauseState());
+			const controlService = { getPauseState };
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+					filters: [
+						...exchangeInfo().symbols[0].filters,
+						{ filterType: 'PERCENT_PRICE', multiplierUp: '2', multiplierDown: '0.5', avgPriceMins: 5 },
+					],
+				})),
+				testNewOrder: jest.fn().mockResolvedValue({}),
+				submitNewOrder: jest.fn().mockResolvedValue({ orderId: 1 }),
+			};
+			const service = createBinanceOrderService({ createClient: () => client, controlService });
+
+			await expect(service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.1',
+				price: '100',
+				clientOrderId: 'live-order-1',
+				dryRun: false,
+			})).rejects.toMatchObject({ code: 'TRADING_PAUSED', statusCode: 503 });
+
+			expect(getPauseState).toHaveBeenCalledTimes(3);
+			expect(client.testNewOrder).toHaveBeenCalledTimes(1);
+			expect(client.submitNewOrder).not.toHaveBeenCalled();
+		});
+
+		it('fails closed when the pause state is unavailable and trading is enabled', async () => {
+			const createClient = jest.fn();
+			const controlService = buildControlService({
+				unavailable: true,
+			});
+			const service = createBinanceOrderService({ createClient, controlService });
+
+			await expect(service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.1',
+				price: '100',
+				dryRun: true,
+			})).rejects.toMatchObject({
+				code: 'TRADING_PAUSED',
+				statusCode: 503,
+			});
+
+			expect(createClient).not.toHaveBeenCalled();
+		});
+
+		it('does not block submissions when the control service reports an inactive path', async () => {
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo()),
+				submitNewOrder: jest.fn(),
+			};
+			const controlService = buildControlService({ inactive: true });
+			const service = createBinanceOrderService({ createClient: () => client, controlService });
+
+			const result = await service.placeOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'LIMIT',
+				quantity: '0.1',
+				price: '100',
+				dryRun: true,
+			});
+
+			expect(result).toMatchObject({ success: true, dryRun: true });
+			expect(client.getExchangeInfo).toHaveBeenCalledTimes(1);
+		});
+
+		it('refreshes persisted pause state through getStatus without leaking secrets', async () => {
+			const controlService = buildControlService({
+				getPauseState: undefined,
+			});
+			const persistedState = buildControlService({
+				paused: true,
+				pausedBy: 'incident-commander',
+				pausedAt: '2026-08-30T12:00:00Z',
+				pausedReason: 'investigation',
+				storage: 'firestore',
+				lastAction: 'pause',
+			}).getPauseState;
+			controlService.getPauseState = jest.fn(() => persistedState());
+			const service = createBinanceOrderService({
+				createClient: jest.fn(),
+				controlService,
+			});
+
+			const status = await service.getStatus();
+			expect(status).toMatchObject({
+				ready: false,
+				status: 'paused',
+				paused: true,
+				blocked: true,
+				unavailable: false,
+				pausedBy: 'incident-commander',
+				pausedAt: '2026-08-30T12:00:00Z',
+				pausedReason: 'investigation',
+				controlStorage: 'firestore',
+				lastAction: 'pause',
+			});
+			expect(status).not.toHaveProperty('BINANCE_API_KEY');
+			expect(status).not.toHaveProperty('apiSecret');
+		});
+
+		it('reports ready: false and status: unavailable when control state is unavailable', async () => {
+			const controlService = buildControlService({
+				unavailable: true,
+				storage: 'memory',
+			});
+			const service = createBinanceOrderService({
+				createClient: jest.fn(),
+				controlService,
+			});
+
+			const status = await service.getStatus();
+			expect(status).toMatchObject({
+				ready: false,
+				status: 'unavailable',
+				paused: false,
+				unavailable: true,
+				blocked: true,
 			});
 		});
 	});
