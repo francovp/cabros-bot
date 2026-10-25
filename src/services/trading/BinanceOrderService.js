@@ -8,6 +8,7 @@ const {
 	resolveOrderProvenance,
 } = require('./orderProvenance');
 const AlertStorageService = require('../storage/AlertStorageService');
+const { tradingControlService } = require('./TradingControlService');
 
 const TESTNET_BASE_URL = 'https://testnet.binance.vision';
 const DEMO_BASE_URL = 'https://demo-api.binance.com';
@@ -926,7 +927,7 @@ function deriveBoundedMarketBuy(order, maxNotional, averagePrice, symbolInfo, fi
 	return { ...order, quantity: undefined, quoteOrderQty };
 }
 
-async function validateOrderTestFilters(client, order, orderParams, filters) {
+async function validateOrderTestFilters(client, order, orderParams, filters, beforeSignedRequest) {
 	const hasDynamicPriceFilters = order.type === 'LIMIT'
 		&& (filters.has('PERCENT_PRICE') || filters.has('PERCENT_PRICE_BY_SIDE'));
 	const hasAccountDependentFilters = [...ACCOUNT_DEPENDENT_FILTERS].some((filterType) => filters.has(filterType));
@@ -938,6 +939,7 @@ async function validateOrderTestFilters(client, order, orderParams, filters) {
 		);
 	}
 
+	if (typeof beforeSignedRequest === 'function') await beforeSignedRequest();
 	try {
 		await client.testNewOrder(orderParams);
 	} catch (error) {
@@ -949,6 +951,15 @@ async function validateOrderTestFilters(client, order, orderParams, filters) {
 			'BINANCE_VALIDATION_FAILED',
 		);
 	}
+}
+
+function getTradingPausedError(pauseState) {
+	const message = pauseState.paused
+		? `Binance order submissions are paused${pauseState.pausedBy ? ` by ${pauseState.pausedBy}` : ''}${pauseState.pausedReason ? `: ${pauseState.pausedReason}` : ''}`
+		: pauseState.unavailable
+			? 'Binance trading pause state is unavailable; refusing to submit until storage recovers'
+			: 'Binance order submissions are blocked';
+	return new BinanceOrderServiceError(message, 'TRADING_PAUSED', 503);
 }
 
 function sanitizeFill(fill) {
@@ -1090,25 +1101,83 @@ function normalizeCancelRequest(body = {}) {
 	return { symbol, orderId, origClientOrderId };
 }
 
-function createBinanceOrderService({ createClient = createBinanceClient } = {}) {
+function createBinanceOrderService({
+	createClient = createBinanceClient,
+	controlService = tradingControlService,
+} = {}) {
 	let balancesCache = {
 		timestamp: 0,
 		environment: null,
 		rawBalances: null,
 	};
 
+	function formatStatus(config, controlStatus = {}) {
+		const paused = Boolean(config.enabled && controlStatus.paused);
+		const unavailable = Boolean(config.enabled && controlStatus.unavailable && !controlStatus.inactive);
+		const blocked = Boolean(
+			config.enabled && (
+				paused
+				|| unavailable
+				|| (typeof controlStatus.isBlocked === 'function' && controlStatus.isBlocked())
+			),
+		);
+		let status = 'ready';
+		if (!config.enabled) {
+			status = 'disabled';
+		} else if (!config.configured) {
+			status = 'misconfigured';
+		} else if (unavailable) {
+			status = 'unavailable';
+		} else if (paused || blocked) {
+			status = 'paused';
+		}
+		return {
+			enabled: config.enabled,
+			configured: config.configured,
+			ready: Boolean(config.enabled && config.configured && !blocked),
+			status,
+			environment: config.environment,
+			allowedSymbols: config.allowedSymbols,
+			maxNotionalConfigured: Number.isFinite(config.maxNotional) && config.maxNotional > 0,
+			paused,
+			pausedBy: controlStatus.pausedBy || null,
+			pausedAt: controlStatus.pausedAt || null,
+			pausedReason: controlStatus.pausedReason || null,
+			lastChangedAt: controlStatus.lastChangedAt || null,
+			lastChangedBy: controlStatus.lastChangedBy || null,
+			lastAction: controlStatus.lastAction || null,
+			controlStorage: controlStatus.storage || 'memory',
+			unavailable,
+			blocked,
+		};
+	}
+
 	const service = {
 		getStatus() {
 			const config = getConfig();
-			return {
-				enabled: config.enabled,
-				configured: config.configured,
-				ready: config.enabled && config.configured,
-				status: !config.enabled ? 'disabled' : config.configured ? 'ready' : 'misconfigured',
-				environment: config.environment,
-				allowedSymbols: config.allowedSymbols,
-				maxNotionalConfigured: Number.isFinite(config.maxNotional) && config.maxNotional > 0,
-			};
+			const syncControlStatus = typeof controlService.getStatus === 'function'
+				? controlService.getStatus()
+				: { paused: false, unavailable: false, storage: 'memory' };
+			const statusObj = formatStatus(config, syncControlStatus);
+			if (typeof controlService.getPauseState === 'function') {
+				Object.defineProperty(statusObj, 'then', {
+					enumerable: false,
+					configurable: true,
+					value(onFulfilled, onRejected) {
+						return Promise.resolve(controlService.getPauseState())
+							.then((freshControlStatus) => formatStatus(getConfig(), freshControlStatus))
+							.then(onFulfilled, onRejected);
+					},
+				});
+			}
+			return statusObj;
+		},
+
+		async getPauseState() {
+			if (typeof controlService.getPauseState !== 'function') {
+				return { paused: false, inactive: true, storage: 'memory' };
+			}
+			return controlService.getPauseState();
 		},
 
 		async getOrders(query = {}) {
@@ -1280,6 +1349,15 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 					order.setupType = String(alertDoc.setupType).trim().toLowerCase();
 				}
 			}
+
+			const ensureTradingControlOpen = async () => {
+				if (typeof controlService.getPauseState !== 'function') return;
+				const pauseState = await controlService.getPauseState();
+				if (pauseState && typeof pauseState.isBlocked === 'function' && pauseState.isBlocked()) {
+					throw getTradingPausedError(pauseState);
+				}
+			};
+			await ensureTradingControlOpen();
 			const requestIdempotencyKey = hasValue(idempotencyKey)
 				? idempotencyKey
 				: [body.idempotencyKey, body.idempotency_key].find(hasValue);
@@ -1399,7 +1477,7 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 
 			const orderParams = buildOrderParams({ ...boundedOrder, clientOrderId });
 			if (order.dryRun) {
-				await validateOrderTestFilters(client, boundedOrder, orderParams, filters);
+				await validateOrderTestFilters(client, boundedOrder, orderParams, filters, ensureTradingControlOpen);
 				const result = {
 					success: true,
 					dryRun: true,
@@ -1412,7 +1490,8 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 				return result;
 			}
 
-			await validateOrderTestFilters(client, boundedOrder, orderParams, filters);
+			await validateOrderTestFilters(client, boundedOrder, orderParams, filters, ensureTradingControlOpen);
+			await ensureTradingControlOpen();
 			await bindOrderProvenance({
 				environment: config.environment,
 				symbol: order.symbol,

@@ -4,6 +4,77 @@ jest.mock('binance', () => ({
 	MainClient: jest.fn(),
 }));
 
+// Default to an open control service so the existing API surface keeps
+// passing. Pause/unavailable behavior is exercised by the dedicated
+// kill-switch describe block at the bottom of this file.
+const mockTradingControl = {
+	paused: false,
+	unavailable: false,
+	pausedBy: null,
+	pausedAt: null,
+	pausedReason: null,
+};
+
+jest.mock('../../src/services/trading/TradingControlService', () => {
+	const actual = jest.requireActual('../../src/services/trading/TradingControlService');
+	const openState = () => ({
+		paused: mockTradingControl.paused,
+		pausedBy: mockTradingControl.pausedBy,
+		pausedAt: mockTradingControl.pausedAt,
+		pausedReason: mockTradingControl.pausedReason,
+		resumedBy: null,
+		resumedAt: null,
+		lastChangedAt: null,
+		lastChangedBy: null,
+		lastAction: mockTradingControl.paused ? 'pause' : null,
+		unavailable: mockTradingControl.unavailable,
+		inactive: false,
+		storage: 'memory',
+		isBlocked() {
+			return this.paused || (this.unavailable && !this.inactive);
+		},
+	});
+	const realHelper = actual.createTradingControlService({
+		firestoreFactory: () => null,
+	});
+	const tradingControlService = {
+		async getPauseState() { return openState(); },
+		async pause({ reason } = {}) {
+			realHelper.normalizeReason(reason);
+			return openState();
+		},
+		async resume({ reason } = {}) {
+			realHelper.normalizeReason(reason);
+			return openState();
+		},
+		getStatus() {
+			return {
+				enabled: true,
+				storage: 'memory',
+				paused: mockTradingControl.paused,
+				pausedBy: mockTradingControl.pausedBy,
+				pausedAt: mockTradingControl.pausedAt,
+				pausedReason: mockTradingControl.pausedReason,
+				lastChangedAt: null,
+				lastChangedBy: null,
+				lastAction: mockTradingControl.paused ? 'pause' : null,
+				unavailable: mockTradingControl.unavailable,
+				blocked: Boolean(mockTradingControl.paused || mockTradingControl.unavailable),
+				firestoreReady: false,
+			};
+		},
+		readAction: (body) => realHelper.readAction(body),
+		readReason: (body) => realHelper.readReason(body),
+		normalizeActor: (a) => realHelper.normalizeActor(a),
+		normalizeReason: (r) => realHelper.normalizeReason(r),
+	};
+	return {
+		...actual,
+		tradingControlService,
+		createTradingControlService: () => tradingControlService,
+	};
+});
+
 const express = require('express');
 const request = require('supertest');
 const { MainClient } = require('binance');
@@ -84,6 +155,11 @@ describe('Binance orders API', () => {
 	afterEach(() => {
 		restoreEnv(savedEnv);
 		jest.clearAllMocks();
+		mockTradingControl.paused = false;
+		mockTradingControl.unavailable = false;
+		mockTradingControl.pausedBy = null;
+		mockTradingControl.pausedAt = null;
+		mockTradingControl.pausedReason = null;
 	});
 
 	it('requires operator authentication before touching Binance', async () => {
@@ -1675,6 +1751,211 @@ describe('Binance orders API', () => {
 			expect(response.body.code).toBe('BINANCE_BALANCE_QUERY_FAILED');
 			expect(JSON.stringify(response.body)).not.toContain('fake-key');
 			expect(JSON.stringify(response.body)).not.toContain('fake-secret');
+		});
+	});
+});
+
+describe('Binance runtime kill-switch API', () => {
+	let app;
+	let savedEnv;
+
+	beforeEach(() => {
+		savedEnv = saveEnv();
+		configureTrading();
+		idempotencyService.clear();
+		mockTradingControl.paused = false;
+		mockTradingControl.unavailable = false;
+		mockTradingControl.pausedBy = null;
+		mockTradingControl.pausedAt = null;
+		mockTradingControl.pausedReason = null;
+		app = express();
+		app.use(express.json());
+		app.use('/api', getRoutes(null));
+	});
+
+	afterEach(() => {
+		restoreEnv(savedEnv);
+		mockTradingControl.paused = false;
+		mockTradingControl.unavailable = false;
+		mockTradingControl.pausedBy = null;
+		mockTradingControl.pausedAt = null;
+		mockTradingControl.pausedReason = null;
+	});
+
+	it('blocks live orders with 503 TRADING_PAUSED when paused', async () => {
+		mockTradingControl.paused = true;
+		mockTradingControl.pausedBy = 'incident-commander';
+		mockTradingControl.pausedReason = 'suspected credential leak';
+		mockTradingControl.pausedAt = '2026-08-30T12:00:00Z';
+
+		const response = await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.send({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+				quoteOrderQty: 50,
+				dryRun: false,
+			})
+			.expect(503);
+
+		expect(response.body).toMatchObject({
+			success: false,
+			code: 'TRADING_PAUSED',
+		});
+		expect(response.body.error).toContain('paused');
+		expect(MainClient).not.toHaveBeenCalled();
+	});
+
+	it('blocks dryRun orders with 503 TRADING_PAUSED when paused', async () => {
+		mockTradingControl.paused = true;
+		mockTradingControl.pausedBy = 'incident-commander';
+
+		const response = await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.send({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+				quoteOrderQty: 50,
+				dryRun: true,
+			})
+			.expect(503);
+
+		expect(response.body).toMatchObject({
+			success: false,
+			code: 'TRADING_PAUSED',
+		});
+	});
+
+	it('fails closed with 503 TRADING_PAUSED when the pause state is unavailable', async () => {
+		mockTradingControl.unavailable = true;
+
+		const response = await request(app)
+			.post('/api/trading/binance/orders')
+			.set('x-api-key', 'test-key')
+			.send({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'MARKET',
+				quoteOrderQty: 50,
+				dryRun: false,
+			})
+			.expect(503);
+
+		expect(response.body).toMatchObject({
+			success: false,
+			code: 'TRADING_PAUSED',
+		});
+	});
+
+	it('requires admin operator auth to pause Binance submissions', async () => {
+		await request(app)
+			.post('/api/trading/binance/pause')
+			.send({ reason: 'test' })
+			.expect(401);
+	});
+
+	it('rejects unauthenticated callers attempting to resume', async () => {
+		await request(app)
+			.post('/api/trading/binance/resume')
+			.send({ reason: 'test' })
+			.expect(401);
+	});
+
+	it('accepts operator pause and updates the control state', async () => {
+		const response = await request(app)
+			.post('/api/trading/binance/pause')
+			.set('x-api-key', 'test-key')
+			.send({ reason: 'strategy rollback' })
+			.expect(200);
+
+		expect(response.body).toMatchObject({
+			success: true,
+			action: 'pause',
+		});
+		expect(response.body.state).toBeDefined();
+	});
+
+	it('accepts operator resume and clears the paused state', async () => {
+		mockTradingControl.paused = true;
+		mockTradingControl.pausedBy = 'incident-commander';
+		mockTradingControl.pausedReason = 'previous incident';
+
+		const response = await request(app)
+			.post('/api/trading/binance/resume')
+			.set('x-api-key', 'test-key')
+			.send({ reason: 'mitigation complete' })
+			.expect(200);
+
+		expect(response.body).toMatchObject({
+			success: true,
+			action: 'resume',
+		});
+	});
+
+	it('returns the current pause state via GET /api/trading/binance/pause', async () => {
+		mockTradingControl.paused = true;
+		mockTradingControl.pausedBy = 'incident-commander';
+		mockTradingControl.pausedReason = 'lockdown';
+
+		const response = await request(app)
+			.get('/api/trading/binance/pause')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(response.body).toMatchObject({
+			success: true,
+			state: {
+				paused: true,
+				pausedBy: 'incident-commander',
+				pausedReason: 'lockdown',
+			},
+		});
+	});
+
+	it('rejects non-string or >280-char reason on pause/resume with 400 INVALID_CONTROL_REQUEST', async () => {
+		const nonStringPause = await request(app)
+			.post('/api/trading/binance/pause')
+			.set('x-api-key', 'test-key')
+			.send({ reason: 123 })
+			.expect(400);
+
+		expect(nonStringPause.body).toMatchObject({
+			success: false,
+			code: 'INVALID_CONTROL_REQUEST',
+		});
+
+		const overlongResume = await request(app)
+			.post('/api/trading/binance/resume')
+			.set('x-api-key', 'test-key')
+			.send({ reason: 'x'.repeat(281) })
+			.expect(400);
+
+		expect(overlongResume.body).toMatchObject({
+			success: false,
+			code: 'INVALID_CONTROL_REQUEST',
+		});
+	});
+
+	it('reports ready: false and status: unavailable on GET /api/status when control state is unavailable', async () => {
+		mockTradingControl.unavailable = true;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+
+		expect(response.body.dependencies.binanceTrading).toMatchObject({
+			enabled: true,
+			configured: true,
+			ready: false,
+			status: 'unavailable',
+			paused: false,
+			unavailable: true,
+			blocked: true,
 		});
 	});
 });
