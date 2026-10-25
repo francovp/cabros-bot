@@ -56,6 +56,7 @@ const { getAdminAuthStatus } = require('../lib/adminAuth');
 const { getNotificationManager } = require('./webhooks/handlers/alert/alert');
 const {
 	getDeploymentCommit,
+	getBuildInfo,
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
 } = require('../lib/deploymentEnvironment');
@@ -608,6 +609,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			commit: getCommit(),
 			environment: getEnvironment(),
 		},
+		build: getBuildInfo(),
 		featureFlags: {
 			telegramBot: telegramFlagEnabled,
 			whatsappAlerts: whatsappEnabled,
