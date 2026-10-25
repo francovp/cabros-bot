@@ -852,6 +852,7 @@ describe('Telegram TradingView commands', () => {
 				{ command: 'outcomes', description: 'Rendimiento reciente de señales evaluadas' },
 				{ command: 'history', description: 'Consulta alertas recientes' },
 				{ command: 'preferencias', description: 'Preferencias de alertas para este chat' },
+				{ command: 'version', description: 'Confirma la versión, commit y uptime del bot' },
 				{ command: 'help', description: 'Muestra este mensaje de ayuda' },
 				{ command: 'start', description: 'Muestra este mensaje de ayuda' },
 			]);

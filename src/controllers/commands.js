@@ -12,6 +12,7 @@ const { resolveSymbolQuery } = require('../services/symbols/aliasResolver');
 const { isChatAuthorized } = require('../lib/telegramCommandAuth');
 const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
 const { smartEscapeMarkdownV2 } = require('../services/notification/formatters/markdownV2Formatter');
+const { getBuildInfo, formatVersionMessage } = require('../lib/deploymentEnvironment');
 const {
 	isMaintenanceModeEnabled,
 	telegramMaintenanceMode,
@@ -72,6 +73,7 @@ const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
 	alerta: { max: 10, windowMs: 60_000 },
 	history: { max: 10, windowMs: 60_000 },
 	reactions: { max: 10, windowMs: 60_000 },
+	version: { max: 10, windowMs: 60_000 },
 });
 const TELEGRAM_COMMAND_ALIASES = Object.freeze({
 	analysis: 'analisis',
@@ -1154,6 +1156,7 @@ function buildHelpMessage() {
 		'  _Comandos rápidos: `/filtro`, `/silencio`, `/umbral`, `/categorias`_',
 		'• `/jobs [jobId]` — Lista jobs recientes o muestra su estado \\(alias: `/trabajos`\\)',
 		'• `/history [simbolo] [limit]` — Consulta alertas recientes \\(alias: `/alertas`; admite `status=failed|partial|delivered`\\)',
+		'• `/version` — Confirma la versión, commit y uptime del bot',
 		'• `/help` / `/start` — Muestra este mensaje de ayuda',
 	].join('\n');
 }
@@ -1367,6 +1370,50 @@ const reactionsCommand = async (context) => {
 	return reactionsSymbol(context);
 };
 
+const versionCmd = async (context, env = process.env) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
+
+	const chatId = getChatId(context);
+	console.info(`command=version chatId=${chatId !== undefined && chatId !== null ? chatId : 'unknown'}`);
+
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.version',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/version',
+			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
+		},
+	});
+
+	try {
+		const build = getBuildInfo(env);
+		const message = formatVersionMessage(build);
+		await context.reply(message, { parse_mode: 'MarkdownV2' });
+		return { success: true, build, message };
+	} catch (error) {
+		console.error('[VersionCmd] Failed to send version reply:', error);
+		sentryService.captureRuntimeError({
+			channel: 'telegram',
+			error,
+			extra: {
+				command: 'versionCmd',
+				chatId,
+			},
+		});
+		try {
+			await context.reply('cabros-bot (version unavailable)');
+		} catch {
+			// Fail-open: swallow secondary reply failure
+		}
+	} finally {
+		sentryService.endSpan(commandSpan);
+	}
+};
+
 module.exports = {
 	getPrice,
 	userPriceAlertCmd,
@@ -1381,6 +1428,8 @@ module.exports = {
 	resolveCmd,
 	reactionsCommand,
 	reactionsSymbol,
+	versionCmd,
+	versionCommand: versionCmd,
 	preferenciasCmd,
 	filtroCmd,
 	silencioCmd,

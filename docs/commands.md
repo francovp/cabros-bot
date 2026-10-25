@@ -13,6 +13,22 @@ Display the list of available Telegram bot commands, argument syntax, and aliase
 /help
 ```
 
+### /version
+
+Confirms running build SHA, platform environment (Render, Vercel, Railway, unknown), and process uptime. Sourced from the same `build` object surfaced by `GET /api/capabilities`.
+
+**Example:**
+```
+/version
+```
+
+**Response:**
+```
+cabros-bot abcdef1 (render, uptime 2h 15m)
+
+Build details: /api/capabilities
+```
+
 ### /precio `<symbol>`
 
 Get real-time price for crypto pairs (Binance) or equities/stocks (Twelve Data).

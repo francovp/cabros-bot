@@ -195,6 +195,7 @@ When the Telegram bot is enabled (`ENABLE_TELEGRAM_BOT=true`), the bot provides 
 | `/jobs` | `[jobId]` | Inspects status or lists active background analysis jobs. |
 | `/noticias` | `[options]` | Trigger news monitoring analysis for specified crypto/equity tickers. |
 | `/reactions`, `/reacciones` | `<symbol>` | Returns top 3 setups by trader reaction approval over the last 7 days. |
+| `/version` | None | Confirms running build SHA, platform environment, and uptime. Sourced from the same `build` object as `GET /api/capabilities`. |
 
 See the [Telegram Commands Reference](docs/commands.md) for aliases, throttling rules, and examples.
 

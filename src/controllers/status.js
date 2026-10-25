@@ -55,6 +55,7 @@ const telegramCommandAuth = require('../lib/telegramCommandAuth');
 const { getAdminAuthStatus } = require('../lib/adminAuth');
 const {
 	getDeploymentCommit,
+	getBuildInfo,
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
 } = require('../lib/deploymentEnvironment');
@@ -607,6 +608,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			commit: getCommit(),
 			environment: getEnvironment(),
 		},
+		build: getBuildInfo(),
 		featureFlags: {
 			telegramBot: telegramFlagEnabled,
 			whatsappAlerts: whatsappEnabled,

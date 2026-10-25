@@ -139,6 +139,85 @@ function getDeploymentIdentity(env = process.env) {
 	}
 }
 
+const processStartedAt = new Date().toISOString();
+
+function getBuildInfo(env = process.env) {
+	try {
+		const targetEnv = (env && typeof env === 'object') ? env : process.env;
+		const platform = getDeploymentPlatform(targetEnv);
+		let fullCommit = getDeploymentCommit(targetEnv);
+		if (!fullCommit && (targetEnv === process.env || targetEnv.RESOLVE_LOCAL_GIT_SHA === 'true')) {
+			fullCommit = getLocalGitSha();
+		}
+		let shortCommit = null;
+		if (fullCommit && typeof fullCommit === 'string' && fullCommit.trim().length > 0) {
+			const trimmed = fullCommit.trim();
+			shortCommit = trimmed.length > 7 ? trimmed.slice(0, 7) : trimmed;
+		}
+		const repo = getDeploymentRepoSlug(targetEnv);
+
+		let environment = 'unknown';
+		if (targetEnv.SENTRY_ENVIRONMENT) {
+			environment = targetEnv.SENTRY_ENVIRONMENT;
+		} else if (isPreviewEnvironment(targetEnv)) {
+			environment = 'preview';
+		} else if (platform === 'render') {
+			environment = 'render';
+		} else if (platform === 'vercel') {
+			environment = 'vercel';
+		} else if (platform === 'railway') {
+			environment = 'railway';
+		} else if (isProductionLikeEnvironment(targetEnv)) {
+			environment = 'production';
+		} else if (targetEnv.NODE_ENV) {
+			environment = targetEnv.NODE_ENV;
+		}
+
+		return {
+			name: getDeploymentService(targetEnv),
+			version: getRuntimeVersion(targetEnv),
+			commit: shortCommit || 'unknown',
+			full: fullCommit || null,
+			repo: repo || null,
+			platform: platform || 'unknown',
+			environment: environment || 'unknown',
+			startedAt: processStartedAt,
+			uptimeSeconds: Math.floor(process.uptime()),
+		};
+	} catch {
+		return {
+			name: 'cabros-bot',
+			version: null,
+			commit: 'unknown',
+			full: null,
+			repo: null,
+			platform: 'unknown',
+			environment: 'unknown',
+			startedAt: processStartedAt,
+			uptimeSeconds: Math.floor(process.uptime()),
+		};
+	}
+}
+
+function formatVersionMessage(build = {}) {
+	const safeBuild = (build && typeof build === 'object') ? build : {};
+	const shortSha = (safeBuild.commit && safeBuild.commit !== 'unknown')
+		? safeBuild.commit
+		: (safeBuild.full ? safeBuild.full.slice(0, 7) : 'unknown');
+	const environment = (safeBuild.environment && safeBuild.environment !== 'unknown')
+		? safeBuild.environment
+		: (safeBuild.platform || 'unknown');
+	const uptimeSeconds = Number.isFinite(safeBuild.uptimeSeconds)
+		? Math.max(0, Math.floor(safeBuild.uptimeSeconds))
+		: Math.max(0, Math.floor(process.uptime()));
+	const hours = Math.floor(uptimeSeconds / 3600);
+	const minutes = Math.floor((uptimeSeconds % 3600) / 60);
+
+	const rawText = `cabros-bot ${shortSha} (${environment}, uptime ${hours}h ${minutes}m)\n\nBuild details: /api/capabilities`;
+	const { smartEscapeMarkdownV2 } = require('../services/notification/formatters/markdownV2Formatter');
+	return smartEscapeMarkdownV2(rawText);
+}
+
 module.exports = {
 	getDeploymentCommit,
 	getDeploymentRepoSlug,
@@ -147,6 +226,8 @@ module.exports = {
 	getRuntimeVersion,
 	getDeploymentIdentity,
 	deploymentIdentity: getDeploymentIdentity,
+	getBuildInfo,
+	formatVersionMessage,
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
 	_resetLocalGitShaCache,
