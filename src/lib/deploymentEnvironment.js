@@ -215,7 +215,9 @@ function formatVersionMessage(build = {}) {
 
 	const rawText = `cabros-bot ${shortSha} (${environment}, uptime ${hours}h ${minutes}m)\n\nBuild details: /api/capabilities`;
 	const { smartEscapeMarkdownV2 } = require('../services/notification/formatters/markdownV2Formatter');
-	return smartEscapeMarkdownV2(rawText);
+	return smartEscapeMarkdownV2(rawText)
+		.replace(/(?<!\\)_/g, '\\_')
+		.replace(/(?<!\\)\*/g, '\\*');
 }
 
 module.exports = {

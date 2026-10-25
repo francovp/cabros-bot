@@ -218,6 +218,15 @@ describe('Telegram /version command (issue #754)', () => {
 			expect(formatted).toContain('cabros\\-bot fedcba9');
 		});
 
+		it('escapes Markdown delimiters like underscores and asterisks in environment names', () => {
+			const formatted = formatVersionMessage({
+				commit: '1234567',
+				environment: 'pr_preview_branch*',
+				uptimeSeconds: 60,
+			});
+			expect(formatted).toContain('pr\\_preview\\_branch\\*');
+		});
+
 		it('identifies preview environment when deployment is a PR preview', () => {
 			const previewEnv = {
 				RENDER: 'true',
