@@ -911,6 +911,25 @@ describe('Binance orders API', () => {
 			expect(response.body.orderList).toMatchObject({ orderListId: 77, listClientOrderId: 'cb-list-77' });
 		});
 
+		it('does not return an order list when Binance resolves the ID to another symbol', async () => {
+			client.getOCO = jest.fn().mockResolvedValue({
+				orderListId: 77,
+				symbol: 'ETHUSDT',
+				listClientOrderId: 'cb-list-77',
+				listOrderStatus: 'EXECUTING',
+				orders: [],
+				orderReports: [],
+			});
+
+			const response = await request(app)
+				.get('/api/trading/binance/orders?symbol=BTCUSDT&orderListId=77')
+				.set('x-api-key', 'test-key')
+				.expect(404);
+
+			expect(client.getOCO).toHaveBeenCalledWith({ orderListId: 77 });
+			expect(response.body).toMatchObject({ success: false, code: 'ORDER_LIST_NOT_FOUND' });
+		});
+
 		it('returns 404 when order is not found on Binance', async () => {
 			client.getOrder = jest.fn().mockRejectedValue({ code: -2013, message: 'Unknown order sent.' });
 

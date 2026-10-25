@@ -230,6 +230,36 @@ async function reconcileOrder(client, symbol, clientOrderId) {
 	}
 }
 
+async function hydrateOrderListReports(client, orderList, timeoutMs) {
+	if (!orderList || !Array.isArray(orderList.orders) || orderList.orders.length === 0) {
+		return orderList;
+	}
+	const existingReports = Array.isArray(orderList.orderReports) ? orderList.orderReports : [];
+	const reportsByOrderId = new Map(existingReports.map((r) => [r.orderId, r]));
+
+	const hydratedReports = await Promise.all(
+		orderList.orders.map(async (item) => {
+			const existing = reportsByOrderId.get(item.orderId);
+			if (existing && Array.isArray(existing.fills) && existing.fills.length > 0) {
+				return existing;
+			}
+			try {
+				const reconciled = typeof withTimeout === 'function' && timeoutMs
+					? await withTimeout(reconcileOrder(client, item.symbol || orderList.symbol, item.clientOrderId), timeoutMs)
+					: await reconcileOrder(client, item.symbol || orderList.symbol, item.clientOrderId);
+				return reconciled || existing || item;
+			} catch {
+				return existing || item;
+			}
+		}),
+	);
+
+	return {
+		...orderList,
+		orderReports: hydratedReports,
+	};
+}
+
 function parsePositiveNumber(value, field) {
 	if ((typeof value !== 'number' && typeof value !== 'string') || String(value).trim() === '') {
 		throw new BinanceOrderRequestError(`${field} must be a positive number`);
@@ -1425,6 +1455,7 @@ async function placeBracketOrder({
 		if (!reconciled || reconciled.listClientOrderId !== identity.listClientOrderId || reconciled.symbol !== order.symbol) {
 			throw new BinanceOrderRequestError('Reconciled Binance order list does not match the request', 'BINANCE_ORDER_CONFLICT', 409);
 		}
+		reconciled = await hydrateOrderListReports(client, reconciled, config.timeoutMs);
 		await persistOrderList(reconciled, reservation);
 		return makeBracketSuccessResult({ config, order, orderList: reconciled, dryRun: false });
 	};
@@ -1707,39 +1738,41 @@ function createBinanceOrderService({
 				if (typeof client.getOCO !== 'function') {
 					throw new BinanceOrderServiceError('Binance order-list query method is unavailable', 'BINANCE_CLIENT_UNAVAILABLE', 503);
 				}
+				let orderList;
 				try {
-					const orderList = await withTimeout(client.getOCO({
+					orderList = await withTimeout(client.getOCO({
 						...(orderListId !== undefined ? { orderListId } : {}),
 						...(listClientOrderId !== undefined ? { origClientOrderId: listClientOrderId } : {}),
 					}), config.timeoutMs);
-					if (orderList && orderList.symbol && orderList.symbol !== symbol) {
-						throw new BinanceOrderRequestError('Binance order list not found', 'ORDER_LIST_NOT_FOUND', 404);
-					}
-					const sanitizedOrderList = sanitizeOrderListResponse(orderList || {});
-					try {
-						await bracketOrderStorageService.recordOrderList({
-							environment: config.environment,
-							symbol,
-							orderList: sanitizedOrderList,
-						});
-					} catch (error) {
-						console.warn('[BinanceOrderService] bracket order-list detail refresh failed:', error?.message || error);
-					}
-					return {
-						success: true,
-						environment: config.environment,
-						orderList: sanitizedOrderList,
-					};
 				} catch (error) {
 					if (isOrderNotFoundError(error)) {
 						throw new BinanceOrderRequestError('Binance order list not found', 'ORDER_LIST_NOT_FOUND', 404);
 					}
-					if (error instanceof BinanceOrderServiceError) throw error;
+					if (error instanceof BinanceOrderServiceError || error instanceof BinanceOrderRequestError) throw error;
 					if (isDefinitiveBinanceRejection(error)) {
 						throw new BinanceOrderRequestError('Binance rejected the order-list query', 'BINANCE_REQUEST_REJECTED', 400);
 					}
 					throw new BinanceOrderServiceError('Binance order-list query failed', 'BINANCE_QUERY_FAILED', 502);
 				}
+				if (orderList && orderList.symbol && orderList.symbol !== symbol) {
+					throw new BinanceOrderRequestError('Binance order list not found', 'ORDER_LIST_NOT_FOUND', 404);
+				}
+				orderList = await hydrateOrderListReports(client, orderList, config.timeoutMs);
+				const sanitizedOrderList = sanitizeOrderListResponse(orderList || {});
+				try {
+					await bracketOrderStorageService.recordOrderList({
+						environment: config.environment,
+						symbol,
+						orderList: sanitizedOrderList,
+					});
+				} catch (error) {
+					console.warn('[BinanceOrderService] bracket order-list detail refresh failed:', error?.message || error);
+				}
+				return {
+					success: true,
+					environment: config.environment,
+					orderList: sanitizedOrderList,
+				};
 			}
 
 			if (orderId !== undefined || origClientOrderId !== undefined) {

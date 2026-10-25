@@ -1277,7 +1277,10 @@ describe('BinanceOrderService', () => {
 		expect(client.getExchangeInfo).not.toHaveBeenCalled();
 	});
 
-	it('rejects reconciliation when a contingent order removes trailingDelta or stopPrice', async () => {
+	it.each([
+		['trailingDelta', { stopPrice: '90.00000000', trailingDelta: 100 }, { stopPrice: '90' }],
+		['stopPrice', { stopPrice: '90.00000000', trailingDelta: 100 }, { trailingDelta: 100 }],
+	])('rejects reconciliation when the retry omits existing %s', async (_field, existingFields, requestFields) => {
 		const client = {
 			getOrder: jest.fn().mockResolvedValue({
 				symbol: 'BTCUSDT',
@@ -1286,8 +1289,7 @@ describe('BinanceOrderService', () => {
 				status: 'NEW',
 				side: 'SELL',
 				type: 'STOP_LOSS',
-				stopPrice: '90.00000000',
-				trailingDelta: 100,
+				...existingFields,
 				origQty: '0.1',
 			}),
 			getExchangeInfo: jest.fn(),
@@ -1300,7 +1302,7 @@ describe('BinanceOrderService', () => {
 			side: 'SELL',
 			type: 'STOP_LOSS',
 			quantity: '0.1',
-			stopPrice: '90',
+			...requestFields,
 			clientOrderId: 'existing-trailing-stop',
 			dryRun: false,
 		})).rejects.toMatchObject({ code: 'BINANCE_ORDER_CONFLICT', statusCode: 409 });
@@ -2355,6 +2357,60 @@ describe('BinanceOrderService', () => {
 				code: 'ORDER_NOT_FOUND',
 				statusCode: 404,
 				message: 'Binance order not found',
+			});
+		});
+
+		it('hydrates component orderReports when querying orderList without pre-existing reports', async () => {
+			const client = {
+				getOCO: jest.fn().mockResolvedValue({
+					orderListId: 55,
+					symbol: 'BTCUSDT',
+					listClientOrderId: 'cb-list-55',
+					listOrderStatus: 'ALL_DONE',
+					orders: [
+						{ symbol: 'BTCUSDT', orderId: 201, clientOrderId: 'cb-work-55' },
+						{ symbol: 'BTCUSDT', orderId: 202, clientOrderId: 'cb-tp-55' },
+					],
+				}),
+				getOrder: jest.fn().mockImplementation(async ({ origClientOrderId }) => ({
+					symbol: 'BTCUSDT',
+					orderId: origClientOrderId === 'cb-work-55' ? 201 : 202,
+					clientOrderId: origClientOrderId,
+					status: 'FILLED',
+					executedQty: '0.1',
+					side: origClientOrderId === 'cb-work-55' ? 'BUY' : 'SELL',
+					type: 'LIMIT',
+					price: origClientOrderId === 'cb-work-55' ? '60000' : '65000',
+				})),
+				getAccountTradeList: jest.fn().mockResolvedValue([
+					{ price: '60000', qty: '0.1', commission: '0.0001', commissionAsset: 'BNB', time: 1000 },
+				]),
+			};
+			const service = createServiceWithDefaultControl({ createClient: () => client });
+
+			const result = await service.getOrders({ symbol: 'BTCUSDT', orderListId: 55 });
+			expect(result.orderList.orderReports).toHaveLength(2);
+			expect(result.orderList.orderReports[0]).toMatchObject({
+				orderId: 201,
+				status: 'FILLED',
+				fills: expect.any(Array),
+			});
+		});
+
+		it('preserves ORDER_LIST_NOT_FOUND (404) when returned order list belongs to a different symbol', async () => {
+			const client = {
+				getOCO: jest.fn().mockResolvedValue({
+					orderListId: 55,
+					symbol: 'ETHUSDT',
+					listClientOrderId: 'cb-list-55',
+				}),
+			};
+			process.env.BINANCE_TRADING_ALLOWED_SYMBOLS = 'BTCUSDT,ETHUSDT';
+			const service = createServiceWithDefaultControl({ createClient: () => client });
+
+			await expect(service.getOrders({ symbol: 'BTCUSDT', orderListId: 55 })).rejects.toMatchObject({
+				code: 'ORDER_LIST_NOT_FOUND',
+				statusCode: 404,
 			});
 		});
 
