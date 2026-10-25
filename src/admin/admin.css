@@ -48,11 +48,13 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .console-shell[data-sidebar="collapsed"] { grid-template-columns: 4.5rem minmax(0, 1fr); }
 .console-shell[data-sidebar="collapsed"] .brand-lockup { justify-content: center; }
 .console-shell[data-sidebar="collapsed"] .brand-lockup > div,
+.console-shell[data-sidebar="collapsed"] .admin-lang-select,
 .console-shell[data-sidebar="collapsed"] .console-nav .nav-label,
 .console-shell[data-sidebar="collapsed"] .nav-text,
 .console-shell[data-sidebar="collapsed"] .sidebar-note { display: none; }
 .console-shell[data-sidebar="collapsed"] .console-nav button { justify-content: center; padding-inline: 0; }
 .nav-text { min-width: 0; }
+.admin-lang-select { width: auto; min-height: 2rem; padding: .2rem .5rem; font-size: .78rem; font-weight: 700; border-radius: .5rem; background: #ffffff; border: 1px solid var(--border-bright); cursor: pointer; margin-left: auto; color: inherit; }
 .console-sidebar, .topbar, .connection-card, .operation-card { background: var(--panel); border: 1px solid var(--border); border-radius: 1rem; box-shadow: 0 2px 8px rgba(25, 40, 55, .025); }
 .console-sidebar { min-width: 0; position: sticky; top: 1rem; height: calc(100vh - 2rem); min-height: calc(100vh - 2rem); padding: 1rem; display: flex; flex-direction: column; gap: 1.5rem; }
 .brand-lockup { display: flex; align-items: center; gap: .75rem; }

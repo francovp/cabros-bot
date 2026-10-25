@@ -1,6 +1,10 @@
 'use strict';
 
-/* global document, window */
+/* global document, window, globalThis */
+
+const i18n = (typeof window !== 'undefined' && (window.CabrosAdminI18n || window.i18n))
+	|| (typeof globalThis !== 'undefined' && (globalThis.CabrosAdminI18n || globalThis.i18n))
+	|| { t: (k, opts) => (opts && opts.default !== undefined ? opts.default : k), resolveLocale: () => 'en', getLocale: () => 'en', setLocale: () => 'en' };
 
 const VIEWS = {
 	status: [{ method: 'GET', path: '/api/status', label: 'Refresh status' }],
@@ -258,6 +262,16 @@ const buildConsoleUrl = (view, filterParams = {}) => {
 		const ownsFilterScope = Object.keys(FILTER_SCOPE_VIEWS).some((scope) => key.startsWith(`${scope}.`));
 		if (key !== 'view' && !ownsFilterScope) params.set(key, value);
 	});
+	if (typeof i18n !== 'undefined') {
+		const currentLang = i18n.getLocale();
+		if (params.has('lang') || currentLang !== 'en') {
+			if (currentLang === 'en') {
+				params.delete('lang');
+			} else {
+				params.set('lang', currentLang);
+			}
+		}
+	}
 	params.set('view', view);
 	Object.entries(filterParams).forEach(([key, value]) => {
 		if (value !== undefined && value !== null && value !== '') params.set(key, value);
@@ -449,14 +463,18 @@ const createLoadingState = (label) => {
 		className: 'loading-state',
 		attributes: { role: 'status' },
 	});
+	const translated = (typeof i18n !== 'undefined' && i18n.t(label)) || label;
 	wrap.append(
 		element('span', { className: 'spinner', attributes: { 'aria-hidden': 'true' } }),
-		element('span', { text: label }),
+		element('span', { text: translated }),
 	);
 	return wrap;
 };
 
-const createEmptyState = (text) => element('p', { className: 'empty-state', text });
+const createEmptyState = (text) => element('p', {
+	className: 'empty-state',
+	text: (typeof i18n !== 'undefined' && i18n.t(text)) || text,
+});
 
 const formatRelativeTime = (value, now = Date.now()) => {
 	const date = new Date(value);
@@ -503,18 +521,24 @@ const copyToClipboard = async (text, button) => {
 	} catch (_) {
 		copied = false;
 	}
-	button.textContent = copied ? 'Copied!' : 'Copy unavailable';
+	button.textContent = copied
+		? (typeof i18n !== 'undefined' ? i18n.t('actions.copied', { default: 'Copied!' }) : 'Copied!')
+		: (typeof i18n !== 'undefined' ? i18n.t('actions.copyUnavailable', { default: 'Copy unavailable' }) : 'Copy unavailable');
 	setTimeout(() => {
 		button.textContent = original;
 	}, 2000);
 };
 
 const createCopyButton = (getText, label = 'Copy') => {
-	const button = element('button', { text: label });
+	const isDetails = label === 'Copy details' || label === 'actions.copyDetails';
+	const displayLabel = typeof i18n !== 'undefined'
+		? (label === 'Copy details' ? i18n.t('actions.copyDetails') : i18n.t(label, { default: label }))
+		: label;
+	const button = element('button', { text: displayLabel });
 	button.type = 'button';
 	button.className = 'copy-button';
 	button.addEventListener('click', () => copyToClipboard(
-		label === 'Copy details'
+		isDetails
 			? window.CabrosAdminComponents.plainText(window.CabrosAdminComponents.present(JSON.parse((typeof getText === 'function' ? getText() : getText) || 'null'), false, getElement('api-key')?.value || ''))
 			: typeof getText === 'function' ? String(getText() ?? '') : String(getText ?? ''),
 		button,
@@ -555,11 +579,11 @@ const loadFirebaseSdk = () => {
 	return firebaseSdkPromise;
 };
 
-const showAuthState = (message, isError = false) => {
+const showAuthState = (message, isError = false, options = {}) => {
 	const state = getElement('auth-state');
 	if (state) {
 		state.className = isError ? 'response-error' : 'request-state';
-		state.textContent = message;
+		state.textContent = (typeof i18n !== 'undefined' && i18n.t(message, options)) || message;
 	}
 };
 
@@ -630,13 +654,14 @@ const showSignedOutState = () => {
 	clearCredentialError();
 	showAuthState('Sign in to continue.');
 	const view = getElement('view');
-	if (view) view.replaceChildren(element('p', { className: 'request-state', text: 'Sign in required.' }));
+	if (view) view.replaceChildren(element('p', { className: 'request-state', text: typeof i18n !== 'undefined' ? i18n.t('Sign in required.') : 'Sign in required.' }));
 };
 
 const showSignedInState = () => {
 	setHidden('auth-form', true);
 	setHidden('sign-out', false);
-	showAuthState(`Signed in as ${authState.user.email || 'admin'}.`);
+	const user = authState.user.email || 'admin';
+	showAuthState('auth.signedInAs', false, { user, default: `Signed in as ${user}.` });
 };
 
 const setupFirebaseAuth = async (config) => {
@@ -1068,7 +1093,13 @@ const showResult = (output, serialized) => {
 };
 
 const addField = (form, labelText, name, options = {}) => {
-	const label = element('label', { text: labelText });
+	const currentLang = typeof i18n !== 'undefined' ? i18n.getLocale() : 'en';
+	const dict = typeof i18n !== 'undefined' && i18n.locales ? i18n.locales[currentLang] : null;
+	const key = `filters.${name}`;
+	const translatedText = typeof i18n !== 'undefined'
+		? (dict && dict[key] ? i18n.t(key) : i18n.t(labelText, { default: labelText }))
+		: labelText;
+	const label = element('label', { text: translatedText });
 	const input = element(options.tag || 'input');
 	input.name = name;
 	Object.entries(options).forEach(([key, value]) => {
@@ -1110,7 +1141,12 @@ const displayLabel = (value) => DISPLAY_LABELS[value] || String(value)
 	.replace(/[-_]/g, ' ')
 	.replace(/\b\w/g, (letter) => letter.toUpperCase());
 
-const displayStatus = (value) => STATUS_LABELS[value] || displayLabel(value || 'unknown');
+const displayStatus = (value) => {
+	const key = String(value || 'unknown').toLowerCase();
+	const translated = typeof i18n !== 'undefined' ? i18n.t(`status.${key}`) : null;
+	if (translated && translated !== `status.${key}`) return translated;
+	return STATUS_LABELS[value] || displayLabel(value || 'unknown');
+};
 
 const statusTone = (value) => ['ready', 'disabled', 'misconfigured'].includes(value) ? value : 'unknown';
 
@@ -2097,37 +2133,37 @@ const createStatusExplorer = () => {
 	const dashboard = element('div', { className: 'dashboard' });
 	const hero = element('section', { className: 'dashboard-hero' });
 	const heroCopy = element('div');
-	const lastChecked = element('p', { className: 'request-state', text: 'Waiting for live status…' });
+	const lastChecked = element('p', { className: 'request-state', text: i18n.t('Waiting for live status…') });
 	heroCopy.append(
-		element('p', { className: 'eyebrow', text: 'Runtime status' }),
-		element('h2', { text: 'Status' }),
-		element('p', { text: 'Inspect dependency readiness, delivery channels and worker health.' }),
+		element('p', { className: 'eyebrow', text: i18n.t('status.eyebrow', { default: 'Runtime status' }) }),
+		element('h2', { text: i18n.t('views.status') }),
+		element('p', { text: i18n.t('status.description', { default: 'Inspect dependency readiness, delivery channels and worker health.' }) }),
 		lastChecked,
 	);
-	const refreshButton = element('button', { className: 'button-primary', text: 'Refresh status' });
+	const refreshButton = element('button', { className: 'button-primary', text: i18n.t('actions.refreshStatus') });
 	refreshButton.type = 'button';
 	hero.append(heroCopy, refreshButton);
 
 	const metrics = element('div', { className: 'metric-grid' });
-	metrics.append(element('p', { className: 'request-state', text: 'Loading live status…' }));
+	metrics.append(element('p', { className: 'request-state', text: i18n.t('Loading live status…') }));
 	const channelGrid = element('div', { className: 'status-grid' });
 	const dependencyGrid = element('div', { className: 'status-grid' });
 	const featureGrid = element('div', { className: 'chip-grid' });
-	const searchLabel = element('label', { text: 'Search dependencies' });
+	const searchLabel = element('label', { text: i18n.t('filters.searchDependencies') });
 	const search = element('input');
 	search.name = 'dependency-search';
 	search.type = 'search';
-	search.placeholder = 'Name, provider or status';
+	search.placeholder = i18n.t('status.searchPlaceholder', { default: 'Name, provider or status' });
 	searchLabel.append(search);
-	const toneLabel = element('label', { text: 'Filter by status' });
+	const toneLabel = element('label', { text: i18n.t('filters.filterByStatus') });
 	const tone = element('select');
 	tone.name = 'dependency-tone';
 	[
-		['all', 'All statuses'],
-		['attention', 'Needs attention'],
-		['ready', 'Ready'],
-		['disabled', 'Disabled'],
-		['unknown', 'Unknown'],
+		['all', i18n.t('status.all')],
+		['attention', i18n.t('status.attention')],
+		['ready', i18n.t('status.ready')],
+		['disabled', i18n.t('status.disabled')],
+		['unknown', i18n.t('status.unknown')],
 	].forEach(([value, text]) => {
 		const option = element('option', { text });
 		option.value = value;
@@ -2137,13 +2173,13 @@ const createStatusExplorer = () => {
 	const filters = element('div', { className: 'status-filter-bar' });
 	filters.append(searchLabel, toneLabel);
 
-	const statusOutput = element('div', { className: 'response-block', text: 'No status response yet.' });
+	const statusOutput = element('div', { className: 'response-block', text: i18n.t('No status response yet.') });
 	let lastRawStatus = '';
-	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy details');
+	const rawCopyButton = createCopyButton(() => lastRawStatus, i18n.t('actions.copyDetails'));
 	rawCopyButton.hidden = true;
 	const rawStatus = element('details', { className: 'raw-status' });
 	rawStatus.append(
-		element('summary', { text: 'Response details' }),
+		element('summary', { text: i18n.t('Response details') }),
 		rawCopyButton,
 		statusOutput,
 	);
@@ -2156,10 +2192,10 @@ const createStatusExplorer = () => {
 	dashboard.append(
 		hero,
 		metrics,
-		section('Delivery channels', channelGrid),
-		section('Dependency filters', filters),
-		section('Dependency health', dependencyGrid),
-		section('Enabled capabilities', featureGrid),
+		section(i18n.t('status.deliveryChannels', { default: 'Delivery channels' }), channelGrid),
+		section(i18n.t('status.dependencyFilters', { default: 'Dependency filters' }), filters),
+		section(i18n.t('status.dependencyHealth', { default: 'Dependency health' }), dependencyGrid),
+		section(i18n.t('status.enabledCapabilities', { default: 'Enabled capabilities' }), featureGrid),
 		rawStatus,
 	);
 
@@ -2210,9 +2246,9 @@ const createDiagnosticsView = () => {
 		lastChecked,
 	);
 	const heroActions = element('div', { className: 'selftest-actions' });
-	const refreshButton = element('button', { className: 'button-ghost', text: 'Refresh report' });
+	const refreshButton = element('button', { className: 'button-ghost', text: typeof i18n !== 'undefined' ? i18n.t('actions.refreshReport', { default: 'Refresh report' }) : 'Refresh report' });
 	refreshButton.type = 'button';
-	const runButton = element('button', { className: 'button-primary', text: 'Run self-test' });
+	const runButton = element('button', { className: 'button-primary', text: typeof i18n !== 'undefined' ? i18n.t('actions.runSelfTest', { default: 'Run self-test' }) : 'Run self-test' });
 	runButton.type = 'button';
 	heroActions.append(refreshButton, runButton);
 	hero.append(heroCopy, heroActions);
@@ -2287,10 +2323,10 @@ const createOverviewDashboard = () => {
 	const dashboard = element('div', { className: 'dashboard' });
 	const hero = element('section', { className: 'dashboard-hero' });
 	const heroCopy = element('div');
-	const lastChecked = element('p', { className: 'request-state', text: 'Waiting for live status…' });
+	const lastChecked = element('p', { className: 'request-state', text: typeof i18n !== 'undefined' ? i18n.t('Waiting for live status…') : 'Waiting for live status…' });
 	heroCopy.append(
 		element('p', { className: 'eyebrow', text: 'Live control plane' }),
-		element('h2', { text: 'Operational overview' }),
+		element('h2', { text: typeof i18n !== 'undefined' ? i18n.t('views.operationalOverview', { default: 'Operational overview' }) : 'Operational overview' }),
 		element('p', { text: 'A quick read on service readiness, enabled capabilities and delivery health.' }),
 		element('p', {
 			className: 'dashboard-subtitle',
@@ -2298,22 +2334,22 @@ const createOverviewDashboard = () => {
 		}),
 		lastChecked,
 	);
-	const refreshButton = element('button', { className: 'button-primary', text: 'Refresh dashboard' });
+	const refreshButton = element('button', { className: 'button-primary', text: typeof i18n !== 'undefined' ? i18n.t('actions.refreshDashboard', { default: 'Refresh dashboard' }) : 'Refresh dashboard' });
 	refreshButton.type = 'button';
 	hero.append(heroCopy, refreshButton);
 
 	const metrics = element('div', { className: 'metric-grid' });
-	metrics.append(element('p', { className: 'request-state', text: 'Loading live status…' }));
+	metrics.append(element('p', { className: 'request-state', text: typeof i18n !== 'undefined' ? i18n.t('Loading live status…') : 'Loading live status…' }));
 	const channelGrid = element('div', { className: 'status-grid' });
 	const dependencyGrid = element('div', { className: 'status-grid' });
 	const featureGrid = element('div', { className: 'chip-grid' });
-	const statusOutput = element('div', { className: 'response-block', text: 'No status response yet.' });
+	const statusOutput = element('div', { className: 'response-block', text: typeof i18n !== 'undefined' ? i18n.t('No status response yet.') : 'No status response yet.' });
 	let lastRawStatus = '';
 	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawStatus = element('details', { className: 'raw-status' });
 	rawStatus.append(
-		element('summary', { text: 'Response details' }),
+		element('summary', { text: typeof i18n !== 'undefined' ? i18n.t('Response details') : 'Response details' }),
 		rawCopyButton,
 		statusOutput,
 	);
@@ -2508,7 +2544,7 @@ const createAlertListForm = () => {
 	source.setAttribute('list', 'alert-source-options');
 	const sourceOptions = element('datalist', { attributes: { id: 'alert-source-options' } });
 	[
-		['', 'All sources'],
+		['', typeof i18n !== 'undefined' ? i18n.t('filters.allSources', { default: 'All sources' }) : 'All sources'],
 		['webhook-alert', 'Webhook alert'],
 		['webhook-message', 'Webhook message'],
 		['webhook', 'Webhook (legacy)'],
@@ -2525,24 +2561,24 @@ const createAlertListForm = () => {
 	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
 	registerFilterScope('alerts.list', { limit, before, source, enriched });
 	[
-		['', 'All alerts'],
-		['true', 'Enriched only'],
-		['false', 'Not enriched'],
+		['', typeof i18n !== 'undefined' ? i18n.t('filters.allAlerts', { default: 'All alerts' }) : 'All alerts'],
+		['true', typeof i18n !== 'undefined' ? i18n.t('filters.enrichedOnly', { default: 'Enriched only' }) : 'Enriched only'],
+		['false', typeof i18n !== 'undefined' ? i18n.t('filters.notEnriched', { default: 'Not enriched' }) : 'Not enriched'],
 	].forEach(([value, text]) => {
 		const option = element('option', { text });
 		option.value = value;
 		enriched.append(option);
 	});
-	const activeFilters = element('p', { className: 'active-filters', text: 'Active filters: none' });
-	const clearFilters = element('button', { text: 'Clear filters' });
+	const activeFilters = element('p', { className: 'active-filters', text: typeof i18n !== 'undefined' ? i18n.t('filters.activeFiltersNone', { default: 'Active filters: none' }) : 'Active filters: none' });
+	const clearFilters = element('button', { text: typeof i18n !== 'undefined' ? i18n.t('actions.clearFilters', { default: 'Clear filters' }) : 'Clear filters' });
 	clearFilters.type = 'button';
 	clearFilters.disabled = true;
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
-	const prev = element('button', { text: 'Previous page' });
+	const prev = element('button', { text: typeof i18n !== 'undefined' ? i18n.t('actions.prevPage', { default: 'Previous page' }) : 'Previous page' });
 	prev.type = 'button';
 	prev.disabled = true;
-	const next = element('button', { text: 'Next page' });
+	const next = element('button', { text: typeof i18n !== 'undefined' ? i18n.t('actions.nextPage', { default: 'Next page' }) : 'Next page' });
 	next.type = 'button';
 	next.disabled = true;
 	const output = element('div', { className: 'response-block', text: 'No request sent.' });
@@ -2821,10 +2857,15 @@ const createAlertListForm = () => {
 		if (source.value) active.push(`source=${source.value}`);
 		if (enriched.value) active.push(`enriched=${enriched.value}`);
 		if (active.length === 0) {
-			activeFilters.textContent = 'Active filters: none';
+			activeFilters.textContent = typeof i18n !== 'undefined'
+				? i18n.t('filters.activeFiltersNone', { default: 'Active filters: none' })
+				: 'Active filters: none';
 			clearFilters.disabled = true;
 		} else {
-			activeFilters.textContent = `Active filters: ${active.join(', ')}`;
+			const label = typeof i18n !== 'undefined'
+				? i18n.t('filters.activeFilters', { filters: active.join(', '), default: `Active filters: ${active.join(', ')}` })
+				: `Active filters: ${active.join(', ')}`;
+			activeFilters.textContent = label;
 			clearFilters.disabled = false;
 		}
 	};
@@ -2949,9 +2990,9 @@ const addAlertReportFilters = (form, { requiredWindow = false, scope } = {}) => 
 	const source = addField(form, 'Source', 'source', { placeholder: 'webhook' });
 	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
 	[
-		['', 'All alerts'],
-		['true', 'Enriched only'],
-		['false', 'Not enriched'],
+		['', typeof i18n !== 'undefined' ? i18n.t('filters.allAlerts', { default: 'All alerts' }) : 'All alerts'],
+		['true', typeof i18n !== 'undefined' ? i18n.t('filters.enrichedOnly', { default: 'Enriched only' }) : 'Enriched only'],
+		['false', typeof i18n !== 'undefined' ? i18n.t('filters.notEnriched', { default: 'Not enriched' }) : 'Not enriched'],
 	].forEach(([value, text]) => {
 		const option = element('option', { text });
 		option.value = value;
@@ -3519,10 +3560,10 @@ const createOutcomesListForm = () => {
 	const exchange = addField(form, 'Exchange', 'exchange', { placeholder: 'BINANCE' });
 	const status = addField(form, 'Status', 'status', { tag: 'select' });
 	[
-		['', 'All statuses'],
-		['pending', 'Pending'],
-		['evaluated', 'Evaluated'],
-		['unavailable', 'Unavailable'],
+		['', typeof i18n !== 'undefined' ? i18n.t('filters.allStatuses', { default: 'All statuses' }) : 'All statuses'],
+		['pending', typeof i18n !== 'undefined' ? i18n.t('filters.pending', { default: 'Pending' }) : 'Pending'],
+		['evaluated', typeof i18n !== 'undefined' ? i18n.t('filters.evaluated', { default: 'Evaluated' }) : 'Evaluated'],
+		['unavailable', typeof i18n !== 'undefined' ? i18n.t('filters.unavailable', { default: 'Unavailable' }) : 'Unavailable'],
 	].forEach(([value, text]) => {
 		const option = element('option', { text });
 		option.value = value;
@@ -3530,7 +3571,7 @@ const createOutcomesListForm = () => {
 	});
 	const windowField = addField(form, 'Window', 'window', { tag: 'select' });
 	[
-		['', 'All windows'],
+		['', typeof i18n !== 'undefined' ? i18n.t('filters.allWindows', { default: 'All windows' }) : 'All windows'],
 		['1h', '1h'],
 		['4h', '4h'],
 		['1D', '1D'],
@@ -3548,10 +3589,10 @@ const createOutcomesListForm = () => {
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
-	const prev = element('button', { text: 'Previous page' });
+	const prev = element('button', { text: typeof i18n !== 'undefined' ? i18n.t('actions.prevPage', { default: 'Previous page' }) : 'Previous page' });
 	prev.type = 'button';
 	prev.disabled = true;
-	const next = element('button', { text: 'Next page' });
+	const next = element('button', { text: typeof i18n !== 'undefined' ? i18n.t('actions.nextPage', { default: 'Next page' }) : 'Next page' });
 	next.type = 'button';
 	next.disabled = true;
 	const output = element('div', { className: 'response-block', text: 'No request sent.' });
@@ -8369,7 +8410,9 @@ const renderView = async (name) => {
 			view.append(createNewsMonitorView());
 			return;
 		}
-		view.append(element('h2', { text: name[0].toUpperCase() + name.slice(1) }));
+		const headingKey = `views.${name}`;
+		const headingText = typeof i18n !== 'undefined' ? i18n.t(headingKey) : null;
+		view.append(element('h2', { text: (headingText && headingText !== headingKey) ? headingText : (name[0].toUpperCase() + name.slice(1)) }));
 		if (name === 'trading') {
 			view.append(createTradingView(contract));
 			return;
@@ -8569,10 +8612,15 @@ const markActiveView = (name) => {
 
 const setViewTitle = (name) => {
 	if (typeof document === 'undefined' || !document) return;
-	const label = VIEW_TITLES[name] || (name ? name[0].toUpperCase() + name.slice(1) : '');
+	const viewKey = `views.${name}`;
+	const translated = typeof i18n !== 'undefined' ? i18n.t(viewKey) : null;
+	const label = (translated && translated !== viewKey) ? translated : (VIEW_TITLES[name] || (name ? name[0].toUpperCase() + name.slice(1) : ''));
 	document.title = label ? `${label} · ${CONSOLE_TITLE_BASE}` : CONSOLE_TITLE_BASE;
 	const status = getElement('view-status');
-	if (status) status.textContent = label ? `${label} view` : '';
+	if (status) {
+		const suffix = (typeof i18n !== 'undefined' && i18n.t('shell.viewSuffix')) || 'view';
+		status.textContent = label ? `${label} ${suffix}` : '';
+	}
 };
 
 const moveFocusToView = (name) => {
@@ -8675,7 +8723,9 @@ const setupSidebarToggle = () => {
 	const apply = (collapsed) => {
 		if (collapsed) shell.setAttribute('data-sidebar', 'collapsed');
 		else shell.removeAttribute('data-sidebar');
-		toggle.textContent = collapsed ? LABELS.collapsed : LABELS.expanded;
+		toggle.textContent = collapsed
+			? (typeof i18n !== 'undefined' ? i18n.t('shell.expandSidebar') : LABELS.collapsed)
+			: (typeof i18n !== 'undefined' ? i18n.t('shell.collapseSidebar') : LABELS.expanded);
 		toggle.setAttribute('aria-pressed', collapsed ? 'true' : 'false');
 	};
 	let initialCollapsed = false;
@@ -8696,7 +8746,103 @@ const setupSidebarToggle = () => {
 	});
 };
 
+const updateShellTranslations = () => {
+	if (typeof document === 'undefined' || !document) return;
+	const query = (sel) => (typeof document.querySelector === 'function'
+		? document.querySelector(sel)
+		: (document.querySelectorAll ? document.querySelectorAll(sel)[0] : null));
+
+	const eyebrow = query('.brand-lockup .eyebrow');
+	if (eyebrow) eyebrow.textContent = i18n.t('shell.operations');
+
+	const navButtons = typeof document.querySelectorAll === 'function' ? document.querySelectorAll('[data-view]') : [];
+	navButtons.forEach((btn) => {
+		const view = btn.dataset?.view;
+		const navText = typeof btn.querySelector === 'function'
+			? btn.querySelector('.nav-text')
+			: (btn.querySelectorAll ? btn.querySelectorAll('.nav-text')[0] : null);
+		if (navText && view) {
+			const key = `nav.${view}`;
+			const text = i18n.t(key);
+			if (text && text !== key) navText.textContent = text;
+		}
+	});
+
+	const navLabel = query('.console-nav .nav-label');
+	if (navLabel) navLabel.textContent = i18n.t('shell.workspace');
+	const sidebarNote = query('.sidebar-note');
+	if (sidebarNote) sidebarNote.textContent = i18n.t('shell.sidebarNote');
+
+	const topbarEyebrow = query('.topbar .eyebrow');
+	if (topbarEyebrow) topbarEyebrow.textContent = i18n.t('shell.operatorWorkspace');
+	const topbarTitle = query('.topbar .topbar-title');
+	if (topbarTitle) topbarTitle.textContent = i18n.t('shell.topbarTitle');
+
+	const clearKey = getElement('clear-key');
+	if (clearKey) clearKey.textContent = i18n.t('shell.clearKey');
+
+	const toggle = getElement('toggle-sidebar');
+	const shell = getElement('console-shell');
+	if (toggle && shell) {
+		const collapsed = typeof shell.getAttribute === 'function'
+			? shell.getAttribute('data-sidebar') === 'collapsed'
+			: shell.attributes?.['data-sidebar'] === 'collapsed';
+		toggle.textContent = collapsed ? i18n.t('shell.expandSidebar') : i18n.t('shell.collapseSidebar');
+	}
+
+	const authTitle = getElement('firebase-auth-title');
+	if (authTitle) authTitle.textContent = i18n.t('auth.adminSignIn');
+	const emailLabel = query('label[for="auth-email"]');
+	if (emailLabel) emailLabel.textContent = i18n.t('auth.email');
+	const passLabel = query('label[for="auth-password"]');
+	if (passLabel) passLabel.textContent = i18n.t('auth.password');
+	const signInBtn = getElement('sign-in');
+	if (signInBtn) signInBtn.textContent = i18n.t('auth.signIn');
+	const signOutBtn = getElement('sign-out');
+	if (signOutBtn) signOutBtn.textContent = i18n.t('auth.signOut');
+
+	const connTitle = getElement('connection-title');
+	if (connTitle) connTitle.textContent = i18n.t('auth.sessionAccess');
+	const connChip = query('#legacy-connection .security-chip');
+	if (connChip) connChip.textContent = i18n.t('auth.sessionOnly');
+	const apiKeyLabel = query('label[for="api-key"]');
+	if (apiKeyLabel) apiKeyLabel.textContent = i18n.t('auth.apiKey');
+	const saveKeyBtn = getElement('save-key');
+	if (saveKeyBtn) saveKeyBtn.textContent = i18n.t('auth.useKeyForSession');
+
+	const langSelect = getElement('admin-lang');
+	if (langSelect) langSelect.value = i18n.getLocale();
+
+	if (typeof currentConsoleView === 'string') {
+		setViewTitle(currentConsoleView);
+	}
+};
+
 document.addEventListener('DOMContentLoaded', async () => {
+	const initialLocale = i18n.resolveLocale();
+	i18n.setLocale(initialLocale, { persist: false });
+	if (typeof document !== 'undefined' && document && document.documentElement) {
+		document.documentElement.lang = initialLocale;
+		document.documentElement.setAttribute('lang', initialLocale);
+	}
+
+	const langSelect = getElement('admin-lang');
+	if (langSelect) {
+		langSelect.value = initialLocale;
+		langSelect.addEventListener('change', (event) => {
+			const newLocale = i18n.setLocale(event.target.value);
+			if (typeof document !== 'undefined' && document && document.documentElement) {
+				document.documentElement.lang = newLocale;
+				document.documentElement.setAttribute('lang', newLocale);
+			}
+			updateShellTranslations();
+			if (typeof currentConsoleView === 'string') {
+				navigateToView(currentConsoleView, { history: 'replace' });
+			}
+		});
+	}
+	updateShellTranslations();
+
 	const view = getElement('view');
 	if (view) view.replaceChildren(createLoadingState('Checking authentication…'));
 	document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => navigateToView(button.dataset.view)));

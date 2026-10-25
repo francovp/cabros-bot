@@ -99,6 +99,10 @@ class FakeElement {
 		if (name === 'name') this.name = String(value);
 	}
 
+	getAttribute(name) {
+		return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null;
+	}
+
 	removeAttribute(name) {
 		delete this.attributes[name];
 	}
@@ -158,6 +162,10 @@ class FakeElement {
 			}
 			return false;
 		});
+	}
+
+	querySelector(selector) {
+		return this.querySelectorAll(selector)[0] || null;
 	}
 }
 
@@ -291,6 +299,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		['sse-label', 'span', {}],
 		['console-shell', 'div', {}],
 		['toggle-sidebar', 'button', { type: 'button' }],
+		['admin-lang', 'select', {}],
 	].forEach(([id, tag, attributes]) => {
 		const node = new FakeElement(tag);
 		node.id = id;
@@ -325,6 +334,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		createElementNS: (_namespaceURI, tag) => new FakeElement(tag),
 		getElementById: (id) => elementsById[id],
 		querySelectorAll: (selector) => body.querySelectorAll(selector),
+		querySelector: (selector) => body.querySelectorAll(selector)[0] || null,
 		addEventListener: (type, listener) => { documentListeners[type] = listener; },
 		execCommand: () => false,
 		get title() {
@@ -409,6 +419,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 	// shared `window` object that admin.js reads. Order mirrors the deferred <script> order
 	// in index.html.
 	[
+		'i18n.js',
 		'admin-charts.js',
 		'admin-diagnostics.js',
 		'admin-newsmonitor.js',

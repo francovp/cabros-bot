@@ -32,6 +32,7 @@ describe('admin console hosting parity', () => {
 			'admin.css',
 			'index.html',
 			'admin-request.js',
+			'i18n.js',
 		]));
 	});
 
