@@ -42,6 +42,7 @@ const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 const { runWithConcurrency } = require('../../lib/runWithConcurrency');
 const { adminSseService } = require('../sse/AdminSseService');
+const { normalizePresetDestinations } = require('../scannerPresets/scannerPresetRouting');
 
 const EXPIRATION_MS = 3600000; // 1 hour
 const DEFAULT_JOB_TIMEOUT_MS = 300000; // 5 minutes
@@ -475,9 +476,12 @@ class JobService {
 	 * @param {Function|Object} botOrGetter - Telegraf bot instance or getter
 	 * @returns {Object} The created job metadata
 	 */
-	async createJob(type, payload, botOrGetter) {
+	async createJob(type, payload, botOrGetter, options = {}) {
 		await this._cleanExpiredJobs();
 		const routing = parseNotificationRouting(payload);
+		const scannerPresetId = type === 'market-scanner' && typeof options.scannerPresetId === 'string'
+			? options.scannerPresetId
+			: undefined;
 		const mode = this._getExecutionMode();
 		const queueMode = this._isQueueMode();
 		const durableQueueMode = this._isDurableQueueMode();
@@ -559,6 +563,10 @@ class JobService {
 			...(routing.telegramThreadId !== undefined ? { telegramThreadId: routing.telegramThreadId } : {}),
 			...(routing.whatsappChatId ? { whatsappChatId: routing.whatsappChatId } : {}),
 			...(routing.discordWebhookUrl ? { discordWebhookUrl: routing.discordWebhookUrl } : {}),
+			...(scannerPresetId ? { scannerPresetId } : {}),
+			...(scannerPresetId && payload.destinations !== undefined
+				? { destinations: normalizePresetDestinations(payload.destinations) }
+				: {}),
 			...(type === 'expanded-analysis' ? {
 				symbols: parsed.symbols.map((s) => s.raw),
 				timeframe: parsed.timeframe,
@@ -1571,6 +1579,7 @@ class JobService {
 			telegramThreadId: metadata.telegramThreadId,
 			whatsappChatId: metadata.whatsappChatId,
 			discordWebhookUrl: metadata.discordWebhookUrl,
+			...(metadata.destinations ? { destinations: metadata.destinations } : {}),
 		};
 	}
 
@@ -1789,7 +1798,9 @@ class JobService {
 			};
 		}
 
-		const result = await this.createJob(job.requestMetadata.type, job.requestMetadata, botOrGetter);
+		const result = await this.createJob(job.requestMetadata.type, job.requestMetadata, botOrGetter, {
+			scannerPresetId: job.requestMetadata.scannerPresetId,
+		});
 		return {
 			success: true,
 			oldJobId: jobId,
@@ -1854,7 +1865,9 @@ class JobService {
 			...(type === 'expanded-analysis' ? { symbols: failedItems } : { scans: failedItems }),
 		};
 
-		const result = await this.createJob(type, retryPayload, botOrGetter);
+		const result = await this.createJob(type, retryPayload, botOrGetter, {
+			scannerPresetId: job.requestMetadata.scannerPresetId,
+		});
 		return {
 			success: true,
 			oldJobId: jobId,

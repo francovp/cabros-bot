@@ -418,6 +418,36 @@ async function sendWithNotificationRouting(notificationManager, alert, routing =
 		return results.flat();
 	}
 
+	if (routing.destinations) {
+		const destinationFields = {
+			telegram: ['telegramChatIds', 'telegramChatId'],
+			whatsapp: ['whatsappChatIds', 'whatsappChatId'],
+			discord: ['discordWebhookUrls', 'discordWebhookUrl'],
+		};
+		const channelNames = routing.channels || Object.entries(destinationFields)
+			.filter(([channel, [field]]) => channel && Array.isArray(routing.destinations[field]) && routing.destinations[field].length > 0)
+			.map(([channel]) => channel);
+		if (channelNames.length === 0) {
+			return [];
+		}
+
+		validateNotificationRouting(notificationManager, { ...routing, channels: channelNames });
+		const results = await Promise.all(channelNames.flatMap((channel) => {
+			const [destinationListField, destinationField] = destinationFields[channel] || [];
+			const recipients = routing.destinations[destinationListField];
+			if (!Array.isArray(recipients) || recipients.length === 0) {
+				// Preset-bound routing must never fall through to a channel's broadcast
+				// default when the selected channel has no saved recipient.
+				return [];
+			}
+			return recipients.map((recipient) => notificationManager.sendToChannels({
+				...alertPayload,
+				[destinationField]: recipient,
+			}, [channel], options));
+		}));
+		return results.flat();
+	}
+
 	if (routing.channels) {
 		// Late defensive backstop: fail-fast ordering should have already
 		// validated channel availability before any expensive work ran.
@@ -487,6 +517,16 @@ function getRequestedChannels(notificationManager, routing = {}, text) {
 
 	if (routing.channels) {
 		return routing.channels;
+	}
+	if (routing.destinations) {
+		const destinationChannelByField = {
+			telegramChatIds: 'telegram',
+			whatsappChatIds: 'whatsapp',
+			discordWebhookUrls: 'discord',
+		};
+		return Object.entries(destinationChannelByField)
+			.filter(([field]) => Array.isArray(routing.destinations[field]) && routing.destinations[field].length > 0)
+			.map(([, channel]) => channel);
 	}
 
 	return enabledChannels;

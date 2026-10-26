@@ -393,6 +393,24 @@ describe('Status endpoints', () => {
 		}));
 	});
 
+	it('reports preset destination routing support without exposing destination data', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.presetBoundDestinations).toBe(true);
+		expect(response.body.dependencies.presetBoundDestinations).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			channels: ['telegram', 'whatsapp', 'discord'],
+			maxDestinationsPerChannel: 20,
+		});
+		expect(response.text).not.toMatch(/telegramChatIds|whatsappChatIds|discordWebhookUrls/);
+	});
+
 	it('publishes supported Binance Spot order types without changing the feature flag shape', async () => {
 		const supportedOrderTypes = [
 			'MARKET',

@@ -105,6 +105,44 @@ describe('JobService Unit Tests', () => {
 			}));
 		});
 
+		it('persists preset destination arrays and restores them for worker delivery', async () => {
+			const runBackgroundJobSpy = jest.spyOn(jobService, '_runBackgroundJob').mockResolvedValue();
+			const metadata = await jobService.createJob('market-scanner', {
+				scans: ['top_gainers'],
+				channels: ['telegram'],
+				destinations: { telegramChatIds: ['-1001234567890', '-1009876543210'] },
+			}, undefined, { scannerPresetId: 'preset-1' });
+
+			expect(runBackgroundJobSpy).toHaveBeenCalledWith(metadata.jobId, expect.any(Object), expect.any(Object), undefined);
+			const rawJob = await jobService.repository.get(metadata.jobId);
+			expect(rawJob.requestMetadata.destinations).toEqual({
+				telegramChatIds: ['-1001234567890', '-1009876543210'],
+			});
+			expect(rawJob.requestMetadata.scannerPresetId).toBe('preset-1');
+			expect(jobService._getRoutingFromJob(rawJob)).toMatchObject({
+				channels: ['telegram'],
+				destinations: { telegramChatIds: ['-1001234567890', '-1009876543210'] },
+			});
+			const publicJob = await jobService.getJob(metadata.jobId);
+			expect(JSON.stringify(publicJob)).not.toContain('-1001234567890');
+			expect(publicJob).not.toHaveProperty('destinations');
+		});
+
+		it('does not persist destinations submitted to the general market-scanner job endpoint', async () => {
+			const runBackgroundJobSpy = jest.spyOn(jobService, '_runBackgroundJob').mockResolvedValue();
+			const metadata = await jobService.createJob('market-scanner', {
+				scans: ['top_gainers'],
+				channels: ['telegram'],
+				destinations: { telegramChatIds: ['-1001234567890'] },
+			});
+
+			const rawJob = await jobService.repository.get(metadata.jobId);
+			expect(rawJob.requestMetadata).not.toHaveProperty('destinations');
+			expect(rawJob.requestMetadata).not.toHaveProperty('scannerPresetId');
+			expect(jobService._getRoutingFromJob(rawJob)).not.toHaveProperty('destinations');
+			runBackgroundJobSpy.mockRestore();
+		});
+
 		it('correctly validates and parses timeoutMs string format like 1e3', async () => {
 			const metadata = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],

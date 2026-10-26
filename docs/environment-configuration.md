@@ -638,6 +638,12 @@ Audit writes are fail-open: a failed audit write is logged as a warning and neve
 - `pendingWrites`, `inFlightWrites`, `pendingDeletes`, `oldestPendingWriteAt`, and `lastReadFellBack` report local unsynced workload. They are deliberately **not** part of the verdict: an unsynced record is a pending-sync fact, not a store fault, so a record left behind by a failed write can never pin the process to `ephemeral`. Watch `pendingWrites > 0` with a rising `oldestPendingWriteAt` as the signal that records are at risk of being lost on restart.
 - The readiness counters are process-local and reset on restart. The probe issues the same indexed `orderBy('createdAt','desc')` query `listPresets()` uses, bounded to one document, so it needs no composite index beyond the single-field sort the list already requires.
 
+#### Scanner Preset Destination Routing
+
+Preset destination routing adds no environment variable. A new preset defaults to `mode: "inherit"` and retains broadcast delivery. Use `mode: "preset"` with one or more validated recipient IDs or Discord webhook URLs to bind delivery to that preset; destination arrays are capped at 20 entries per channel. Older mode-less presets keep their legacy `channels` and singular destination behavior.
+
+Manual and scheduled runs resolve the same saved destinations. The manual `POST /api/scanner-presets/:id/run` request can filter them with `channels` or replace the saved recipient for a channel using its existing singular destination field. A channel filter with no matching configured destination returns `400 INVALID_REQUEST` before scan or job work. Set `runAsyncJob: true` to submit through the existing market-scanner job execution mode and receive `202 Accepted`; synchronous execution remains the default. Destination values are persisted in private job metadata and omitted from async acceptance and status responses. Direct `/api/webhook/market-scanner-alert` routing is unaffected.
+
 #### Scanner Preset Optimistic Concurrency
 
 - `GET /api/scanner-presets/:id`, `POST /api/scanner-presets`, and `PUT /api/scanner-presets/:id` set an `ETag` response header (e.g. `ETag: "3"`) that mirrors a per-preset monotonic `version` field returned in the response body.

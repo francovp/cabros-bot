@@ -102,6 +102,64 @@ describe('requestRouting - discordWebhookUrl validation', () => {
 	});
 });
 
+describe('requestRouting - destination arrays', () => {
+	it('sends to every configured recipient with only that recipient in the payload', async () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram']),
+			sendToChannels: jest.fn(({ telegramChatId }, channels) => Promise.resolve([
+				{ success: true, channel: channels[0], recipient: telegramChatId },
+			])),
+			sendToAll: jest.fn(),
+		};
+
+		const results = await sendWithNotificationRouting(notificationManager, { text: 'Preset report' }, {
+			channels: ['telegram'],
+			destinations: { telegramChatIds: ['-1001234567890', '-1009876543210'] },
+		});
+
+		expect(notificationManager.sendToChannels).toHaveBeenCalledTimes(2);
+		expect(notificationManager.sendToChannels.mock.calls.map(([alert]) => alert.telegramChatId))
+			.toEqual(['-1001234567890', '-1009876543210']);
+		expect(notificationManager.sendToAll).not.toHaveBeenCalled();
+		expect(results).toEqual([
+			{ success: true, channel: 'telegram', recipient: '-1001234567890' },
+			{ success: true, channel: 'telegram', recipient: '-1009876543210' },
+		]);
+	});
+
+	it('does not broadcast when preset mode has no resolved destinations', async () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram', 'whatsapp']),
+			sendToChannels: jest.fn(),
+			sendToAll: jest.fn(),
+		};
+
+		await sendWithNotificationRouting(notificationManager, { text: 'Preset report' }, {
+			channels: [],
+			destinations: {},
+		});
+
+		expect(notificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(notificationManager.sendToAll).not.toHaveBeenCalled();
+	});
+
+	it('does not use the channel default when preset mode selects a channel without a saved destination', async () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram']),
+			sendToChannels: jest.fn(),
+			sendToAll: jest.fn(),
+		};
+
+		await sendWithNotificationRouting(notificationManager, { text: 'Preset report' }, {
+			channels: ['telegram'],
+			destinations: {},
+		});
+
+		expect(notificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(notificationManager.sendToAll).not.toHaveBeenCalled();
+	});
+});
+
 describe('requestRouting - strict chat ID validation (opt-in via { strictChatIds: true })', () => {
 	it('accepts numeric Telegram chat IDs and GreenAPI WhatsApp chat IDs when strict is enabled', () => {
 		const result = parseNotificationRouting(

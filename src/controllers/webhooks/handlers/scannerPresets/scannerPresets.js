@@ -38,6 +38,8 @@ const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteCo
 const { adminSseService } = require('../../../../services/sse/AdminSseService');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { sendErrorFrom, STANDARD_ERROR_CODES } = require('../../../../lib/errorEnvelope');
+const { jobService } = require('../../../../services/jobs/JobService');
+const { resolveScannerPresetRouting } = require('../../../../services/scannerPresets/scannerPresetRouting');
 
 const SUPPORTED_TIMEFRAME_ALIASES = new Set([
 	'5', '5M', '15', '15M', '60', '1H', '240', '4H',
@@ -444,15 +446,17 @@ function postRunPreset(botOrGetter) {
 			}
 
 			const dryRun = resolveDryRun(req);
+			const runAsyncJob = req.body && req.body.runAsyncJob;
+			if (runAsyncJob !== undefined && typeof runAsyncJob !== 'boolean') {
+				return sendErrorFrom(res, 400, {
+					error: 'runAsyncJob must be a boolean',
+					code: 'INVALID_REQUEST',
+					requestId,
+				});
+			}
 
 			const bodyRouting = parseNotificationRouting(req.body);
-			const routing = {
-				channels: bodyRouting.channels || preset.channels || undefined,
-				telegramChatId: bodyRouting.telegramChatId || preset.telegramChatId || undefined,
-				telegramThreadId: bodyRouting.telegramThreadId !== undefined ? bodyRouting.telegramThreadId : preset.telegramThreadId,
-				whatsappChatId: bodyRouting.whatsappChatId || preset.whatsappChatId || undefined,
-				discordWebhookUrl: bodyRouting.discordWebhookUrl || preset.discordWebhookUrl || undefined,
-			};
+			const routing = resolveScannerPresetRouting(preset, bodyRouting);
 
 			if (dryRun) {
 				console.debug('[ScannerPresets] Dry-run preview mode: skipping MCP calls and delivery');
@@ -461,7 +465,9 @@ function postRunPreset(botOrGetter) {
 				if (!notificationManager) {
 					try {
 						notificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
-					} catch (_) {}
+					} catch (_) {
+						// Dry-run channel discovery is best-effort; it must not block the preview.
+					}
 				}
 				const requestedChannels = getRequestedChannels(notificationManager, routing);
 
@@ -536,22 +542,49 @@ function postRunPreset(botOrGetter) {
 				});
 			}
 
+			let requestNotificationManager = null;
+			if (Array.isArray(routing.channels) && routing.channels.length > 0) {
+				requestNotificationManager = getNotificationManager();
+				if (!requestNotificationManager) {
+					requestNotificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
+				}
+				assertChannelsAvailable(requestNotificationManager, routing);
+			}
+
+			if (runAsyncJob === true) {
+				const job = await jobService.createJob('market-scanner', {
+					exchange: preset.exchange,
+					timeframe: preset.timeframe,
+					scans: preset.scans,
+					limit: preset.limit,
+					bbwThreshold: preset.bbwThreshold,
+					ranked: preset.ranked,
+					includeMultiTimeframe: preset.includeMultiTimeframe,
+					...routing,
+				}, resolveBot(botOrGetter), { scannerPresetId: preset.id });
+				if (!requestNotificationManager) {
+					requestNotificationManager = getNotificationManager();
+				}
+				if (!requestNotificationManager) {
+					try {
+						requestNotificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
+					} catch (_) {
+						// Channel metadata is optional after the durable job has been accepted.
+					}
+				}
+				return res.status(202).json({
+					success: true,
+					presetId: preset.id,
+					...job,
+					requestedChannels: getRequestedChannels(requestNotificationManager, routing),
+					requestId,
+				});
+			}
+
 			const timeoutMs = getScannerTimeoutMs();
 			const deadline = createScannerDeadline(timeoutMs, req.requestDeadlineSignal);
 
-			// Fail-fast channel availability check (GH-854): when the caller
-			// explicitly requests channels, validate they are enabled and
-			// configured BEFORE running any MCP scan. Each scan can take up
-			// to ~120s of TradingView MCP budget; spending that on a request
-			// that is guaranteed to fail (disabled channel) wastes quota
-			// and risks 502 timeouts before the validation error surfaces.
-			if (routing.channels) {
-				let presetNotificationManager = getNotificationManager();
-				if (!presetNotificationManager) {
-					presetNotificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
-				}
-				assertChannelsAvailable(presetNotificationManager, routing);
-			}
+			// Requested channel availability was checked before async job submission or scan work.
 			let scanResults;
 
 			try {
@@ -585,7 +618,7 @@ function postRunPreset(botOrGetter) {
 				now: new Date(),
 			});
 
-			let notificationManager = getNotificationManager();
+			let notificationManager = requestNotificationManager || getNotificationManager();
 			if (!notificationManager) {
 				notificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
 			}
@@ -641,6 +674,29 @@ function postRunPreset(botOrGetter) {
 				return sendErrorFrom(res, 400, {
 					error: error.message,
 					code: 'INVALID_REQUEST',
+					requestId,
+				});
+			}
+			if (error instanceof MarketScannerRequestError) {
+				const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 400;
+				return sendErrorFrom(res, statusCode, {
+					error: error.message,
+					code: error.code || 'INVALID_REQUEST',
+					requestId,
+				});
+			}
+			if (Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode < 500) {
+				return sendErrorFrom(res, error.statusCode, {
+					error: error.message || 'Job request could not be accepted',
+					code: error.code || 'JOB_REQUEST_FAILED',
+					requestId,
+				});
+			}
+			if (Number.isInteger(error.statusCode) && error.statusCode >= 500) {
+				return sendErrorFrom(res, error.statusCode, {
+					error: error.message || 'Job service is unavailable',
+					code: error.code || 'JOB_QUEUE_UNAVAILABLE',
+					...(typeof error.jobId === 'string' && error.jobId ? { jobId: error.jobId } : {}),
 					requestId,
 				});
 			}
