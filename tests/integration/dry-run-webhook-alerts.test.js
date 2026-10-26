@@ -3,7 +3,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
@@ -32,6 +32,7 @@ describe('Dry-run mode for webhook alert endpoints', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 		tradingViewMcpService.callScanTool.mockResolvedValue({ items: [] });
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'test-msg-id' });
@@ -108,6 +109,85 @@ describe('Dry-run mode for webhook alert endpoints', () => {
 				.expect(200);
 
 			expect(res.body.tokenUsage).toBeDefined();
+		});
+
+		it('defaults signalClass to unknown in dry-run payload when omitted', async () => {
+			const res = await request(app)
+				.post('/api/webhook/alert?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.send({ text: 'BTC breaks $70,000' })
+				.expect(200);
+
+			expect(res.body.payload.signalClass).toBe('unknown');
+		});
+
+		it('preserves valid signalClass in dry-run payload', async () => {
+			const res = await request(app)
+				.post('/api/webhook/alert?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.send({ text: 'BTC breaks $70,000', signalClass: 'breakout' })
+				.expect(200);
+
+			expect(res.body.payload.signalClass).toBe('breakout');
+		});
+
+		it('returns sanitized traderIntent in dry-run payload', async () => {
+			const res = await request(app)
+				.post('/api/webhook/alert?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.send({
+					text: 'BINANCE:BTCUSDT (1D) COMPRA',
+					traderIntent: {
+						side: 'BUY', entry: 60500, invalidation: 59000, target: 62000,
+						horizon: '1D', notes: '  Conservative plan  ',
+					},
+				})
+				.expect(200);
+
+			expect(res.body.payload.traderIntent).toEqual({
+				side: 'BUY', entry: 60500, invalidation: 59000, target: 62000,
+				horizon: '1D', notes: 'Conservative plan',
+			});
+			expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+		});
+
+		it('rejects inverted traderIntent before delivery', async () => {
+			const res = await request(app)
+				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
+				.send({
+					text: 'BINANCE:BTCUSDT (1D) COMPRA',
+					traderIntent: {
+						side: 'BUY', entry: 60500, invalidation: 61000, target: 62000, horizon: '1D',
+					},
+				})
+				.expect(400);
+
+			expect(res.body.code).toBe('INVALID_REQUEST');
+			expect(res.body.error).toContain('traderIntent.invalidation');
+			expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+		});
+
+		it('rejects invalid signalClass in request body with 400 INVALID_REQUEST', async () => {
+			const res = await request(app)
+				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
+				.send({ text: 'BTC breaks $70,000', signalClass: 'moon_rocket' })
+				.expect(400);
+
+			expect(res.body.code).toBe('INVALID_REQUEST');
+			expect(res.body.error).toContain('Invalid signalClass');
+		});
+
+		it('rejects invalid signalClass in query string with 400 INVALID_REQUEST', async () => {
+			const res = await request(app)
+				.post('/api/webhook/alert?signalClass=moon_rocket')
+				.set('x-api-key', 'test-key')
+				.send({ text: 'BTC breaks $70,000' })
+				.expect(400);
+
+			expect(res.body.code).toBe('INVALID_REQUEST');
+			expect(res.body.error).toContain('Invalid signalClass');
 		});
 	});
 

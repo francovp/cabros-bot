@@ -58,7 +58,6 @@ function calculateFallbackRiskLevels(currentPrice, timeframe = '1h', side = 'BUY
 		invalidation_level: formatDerivedLevel(invalidationLevel),
 		target_level: formatDerivedLevel(targetLevel),
 		risk_reward_ratio: riskRewardRatio,
-		setup_type: 'trend_continuation',
 		levelsSource: 'derived-quote',
 	};
 }

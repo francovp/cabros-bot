@@ -9,3 +9,33 @@ repos:
         pass_filenames: false
         always_run: false
         stages: [commit]
+      - id: gitleaks
+        name: gitleaks (secret scan)
+        # Runs gitleaks against staged changes only. The repo already
+        # uses the local Node `pre-commit` package (`pnpm dlx pre-commit install`)
+        # which consumes this same YAML schema.
+        #
+        # Behavior:
+        # - When `gitleaks` is on PATH: block the commit if any staged file
+        #   matches a known secret pattern. Configured via `.gitleaks.toml`,
+        #   which allowlists the public Firebase browser key in `render.yaml`.
+        # - When `gitleaks` is not installed locally: print a warning and let
+        #   the commit proceed so contributors without gitleaks installed are
+        #   not blocked. The `.github/workflows/secret-scan.yml` workflow still
+        #   scans the merged result on every push and PR, so a missing local
+        #   binary cannot bypass the gate on shared branches.
+        # - `--no-banner` keeps the output focused on findings.
+        # - `--redact` masks secret values in the report (defense-in-depth in
+        #   case the hook is ever piped to a shared log).
+        entry: |
+          if command -v gitleaks >/dev/null 2>&1; then
+            gitleaks protect --staged --redact --no-banner --config .gitleaks.toml
+          else
+            echo "pre-commit: gitleaks not installed locally; skipping staged scan." >&2
+            echo "pre-commit: install from https://github.com/gitleaks/gitleaks (or 'brew install gitleaks') to enable the gate." >&2
+            echo "pre-commit: the secret-scan.yml workflow still runs on every push and PR." >&2
+          fi
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [commit]
