@@ -5454,7 +5454,7 @@
           "Trading"
         ],
         "summary": "List ambiguous auto-trade reservations",
-        "description": "Lists indeterminate auto-trade reservations that require manual operator reconciliation. Filterable by symbol and status. Requires admin.viewer role or API key.",
+        "description": "Lists indeterminate auto-trade reservations that require manual operator reconciliation. Filterable by symbol and status. Requires admin.viewer role or API key. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
         "operationId": "getBinanceReconciliation",
         "parameters": [
           {
@@ -5550,7 +5550,7 @@
           "Trading"
         ],
         "summary": "Get ambiguous auto-trade reservation by ID",
-        "description": "Retrieves a single ambiguous auto-trade reservation by reservation ID or signal ID. Requires admin.viewer role or API key.",
+        "description": "Retrieves a single ambiguous auto-trade reservation by reservation ID or signal ID. Requires admin.viewer role or API key. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
         "operationId": "getBinanceReconciliationById",
         "parameters": [
           {
@@ -5622,7 +5622,7 @@
           "Trading"
         ],
         "summary": "Resolve ambiguous auto-trade reservation",
-        "description": "Settles an ambiguous auto-trade reservation as placed or not_placed, handling shared cooldowns and recording an audit trail. Requires admin.operator role.",
+        "description": "Settles an ambiguous auto-trade reservation as placed or not_placed, handling shared cooldowns and recording an audit trail. Requires admin.operator role. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
         "operationId": "postResolveAmbiguousReservation",
         "parameters": [
           {
