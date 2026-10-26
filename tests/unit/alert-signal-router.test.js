@@ -452,4 +452,35 @@ describe('routeAlertToOrder', () => {
 		const retry = await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), requestId: 'r2' });
 		expect(retry.executed).toBe(true);
 	});
+
+	it('finishes reservation as ambiguous when live order status is unknown (#1466)', async () => {
+		enableLiveAutoTrade();
+
+		const mockReservation = { state: 'reserved', docRef: { update: jest.fn() }, signalId: 'sig-test-123' };
+		mockReserveAutoTrade.mockResolvedValueOnce(mockReservation);
+
+		const unknownError = Object.assign(new Error('Execution status unknown'), {
+			code: 'BINANCE_ORDER_STATUS_UNKNOWN',
+			statusCode: 503,
+		});
+		mockPlaceOrder.mockRejectedValueOnce(unknownError);
+
+		const result = await routeAlertToOrder({
+			alert: buyAlert(),
+			parsed: buyParsed(),
+			requestId: 'r-live-unknown',
+			signalId: 'sig-test-123',
+		});
+
+		expect(result).toMatchObject({ executed: false, reason: 'ORDER_PENDING', dryRun: false });
+		await waitForBackgroundTasks();
+
+		expect(mockFinishAutoTrade).toHaveBeenCalledWith(
+			mockReservation,
+			'unknown',
+			expect.objectContaining({
+				errorCode: 'BINANCE_ORDER_STATUS_UNKNOWN',
+			}),
+		);
+	});
 });

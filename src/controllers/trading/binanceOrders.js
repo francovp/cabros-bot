@@ -12,6 +12,7 @@ const { getIdempotencyKey } = require('../../lib/idempotency');
 const { binanceOrderAuditService } = require('../../services/trading/BinanceOrderAuditService');
 const { tradeLedgerService } = require('../../services/trading/TradeLedgerService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const autoTradeReservationService = require('../../services/trading/AutoTradeReservationService');
 
 async function postBinanceOrder(req, res) {
 	const startTime = Date.now();
@@ -177,6 +178,25 @@ async function postBinanceOrder(req, res) {
 }
 
 async function getBinanceOrders(req, res) {
+	if (req.query?.reconciliation === 'ambiguous') {
+		try {
+			const result = await autoTradeReservationService.listAmbiguousReservations(req.query);
+			return res.status(200).json({
+				success: true,
+				reconciliation: true,
+				reservations: result.reservations,
+				count: result.count,
+				ambiguousCount: result.ambiguousCount,
+			});
+		} catch (error) {
+			console.error('[BinanceOrdersController] ambiguous reconciliation query failed:', error);
+			return sendErrorFrom(res, 500, {
+				success: false,
+				error: 'Failed to retrieve ambiguous reservations',
+				code: 'INTERNAL_ERROR',
+			});
+		}
+	}
 	const startTime = Date.now();
 	try {
 		const result = await binanceOrderService.getOrders(req.query);

@@ -75,6 +75,11 @@ const {
 	getPnlSummary,
 	getTrades,
 } = require('../controllers/trading/tradeLedger');
+const {
+	getBinanceReconciliation,
+	getBinanceReconciliationById,
+	postResolveAmbiguousReservation,
+} = require('../controllers/trading/binanceReconciliation');
 const { postTestAlert } = require('../controllers/admin/testAlert');
 const { handleSseStream } = require('../controllers/admin/sseEvents');
 const { idempotencyMiddleware } = require('../lib/idempotency');
@@ -169,6 +174,9 @@ function getRoutes(botOrGetter) {
 	router.get('/trading/binance/pause', ...binanceOrderRead, getBinancePause);
 	router.post('/trading/binance/pause', ...binanceOrderWrite, idempotencyMiddleware, postBinancePause);
 	router.post('/trading/binance/resume', ...binanceOrderWrite, idempotencyMiddleware, postBinanceResume);
+	router.get('/trading/binance/reconciliation', ...binanceOrderRead, getBinanceReconciliation);
+	router.get('/trading/binance/reconciliation/:reservationId', ...binanceOrderRead, getBinanceReconciliationById);
+	router.post('/trading/binance/reconciliation/:reservationId', ...binanceOrderWrite, idempotencyMiddleware, postResolveAmbiguousReservation);
 	router.get('/trading/positions', ...adminRead, getPositions);
 	router.get('/trading/pnl/summary', ...adminRead, getPnlSummary);
 	router.get('/trading/trades', ...adminRead, getTrades);

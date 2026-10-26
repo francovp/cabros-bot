@@ -5448,6 +5448,258 @@
         "x-admin-role": "admin.operator"
       }
     },
+    "/api/trading/binance/reconciliation": {
+      "get": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "List ambiguous auto-trade reservations",
+        "description": "Lists indeterminate auto-trade reservations that require manual operator reconciliation. Filterable by symbol and status. Requires admin.viewer role or API key.",
+        "operationId": "getBinanceReconciliation",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "description": "Filter by trading symbol (e.g. BTCUSDT)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Filter by reservation status (e.g. ambiguous)",
+            "schema": {
+              "type": "string",
+              "default": "ambiguous"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Max reservations to return (default 50, max 100)",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of ambiguous reservations",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinanceReconciliationListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/trading/binance/reconciliation/{reservationId}": {
+      "get": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Get ambiguous auto-trade reservation by ID",
+        "description": "Retrieves a single ambiguous auto-trade reservation by reservation ID or signal ID. Requires admin.viewer role or API key.",
+        "operationId": "getBinanceReconciliationById",
+        "parameters": [
+          {
+            "name": "reservationId",
+            "in": "path",
+            "required": true,
+            "description": "Reservation ID (SHA256 hex) or raw signalId",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ambiguous reservation details",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinanceReconciliationDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      },
+      "post": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Resolve ambiguous auto-trade reservation",
+        "description": "Settles an ambiguous auto-trade reservation as placed or not_placed, handling shared cooldowns and recording an audit trail. Requires admin.operator role.",
+        "operationId": "postResolveAmbiguousReservation",
+        "parameters": [
+          {
+            "name": "reservationId",
+            "in": "path",
+            "required": true,
+            "description": "Reservation ID (SHA256 hex) or raw signalId",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveAmbiguousReservationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ambiguous reservation successfully resolved",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveAmbiguousReservationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
     "/api/trading/positions": {
       "get": {
         "tags": [
@@ -21960,9 +22212,173 @@
           }
         }
       },
+      "BinanceReconciliationReservation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Reservation document ID (SHA-256 digest of signalId)."
+          },
+          "signalId": {
+            "type": "string",
+            "description": "Original signal identifier."
+          },
+          "status": {
+            "type": "string",
+            "description": "Reservation status (pending, submitted, failed, unknown)."
+          },
+          "ambiguous": {
+            "type": "boolean",
+            "description": "Whether the reservation is indeterminate and requires reconciliation."
+          },
+          "ambiguousReason": {
+            "type": "string",
+            "description": "Error code or reason why the reservation outcome is indeterminate."
+          },
+          "signalContext": {
+            "type": "object",
+            "description": "Context of the signal that produced the reservation."
+          },
+          "lastAttempt": {
+            "type": "object",
+            "description": "Details of the last Binance execution attempt."
+          },
+          "orderId": {
+            "type": "integer",
+            "description": "Resolved Binance exchange order ID if placed."
+          },
+          "resolvedAs": {
+            "type": "string",
+            "enum": [
+              "placed",
+              "not_placed"
+            ],
+            "description": "Operator resolution outcome."
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp when the reservation was reconciled."
+          },
+          "resolvedBy": {
+            "type": "string",
+            "description": "Operator actor that reconciled the reservation."
+          },
+          "notes": {
+            "type": "string",
+            "description": "Reconciliation notes."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BinanceReconciliationListResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "reservations",
+          "count"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "reservations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BinanceReconciliationReservation"
+            }
+          },
+          "count": {
+            "type": "integer"
+          },
+          "ambiguousCount": {
+            "type": "integer"
+          }
+        }
+      },
+      "BinanceReconciliationDetailResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "reservation"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "reservation": {
+            "$ref": "#/components/schemas/BinanceReconciliationReservation"
+          }
+        }
+      },
+      "ResolveAmbiguousReservationRequest": {
+        "type": "object",
+        "required": [
+          "resolvedAs"
+        ],
+        "properties": {
+          "resolvedAs": {
+            "type": "string",
+            "enum": [
+              "placed",
+              "not_placed"
+            ],
+            "description": "Operator determination of order status."
+          },
+          "orderId": {
+            "type": "integer",
+            "description": "Optional Binance exchange order ID if resolved as placed."
+          },
+          "notes": {
+            "type": "string",
+            "description": "Optional operator reconciliation notes."
+          }
+        }
+      },
+      "ResolveAmbiguousReservationResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "action",
+          "resolvedAs",
+          "reservation"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "action": {
+            "type": "string"
+          },
+          "resolvedAs": {
+            "type": "string"
+          },
+          "idempotent": {
+            "type": "boolean"
+          },
+          "reservation": {
+            "$ref": "#/components/schemas/BinanceReconciliationReservation"
+          }
+        }
+      },
       "BinanceTradingDependency": {
         "type": "object",
         "properties": {
+          "ambiguousCount": {
+            "type": "integer",
+            "description": "Bounded count of current ambiguous auto-trade reservations."
+          },
+          "ambiguousReservationsCount": {
+            "type": "integer",
+            "description": "Bounded count of current ambiguous auto-trade reservations."
+          },
           "supportedOrderTypes": {
             "type": "array",
             "items": {

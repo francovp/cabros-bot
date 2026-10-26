@@ -305,12 +305,19 @@ async function routeAlertToOrder({ alert, parsed, requestId, signalId }) {
 	}
 }
 
+function clearAutoTradeCooldown(key) {
+	if (key && autoTradeCooldown.has(key)) {
+		autoTradeCooldown.delete(key);
+	}
+}
+
 module.exports = {
 	routeAlertToOrder,
 	deriveOrderIntent,
 	buildAutoTradeKey,
 	getAutoTradeConfig,
 	isEnabled,
+	clearAutoTradeCooldown,
 	__resetForTesting: () => {
 		autoTradeCooldown.clear();
 	},
