@@ -26939,6 +26939,147 @@
               "code": 400,
               "body": "{\n  \"error\": \"callbackUrl must be a valid HTTPS URL (HTTP only allowed for local development)\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
+          ],
+          "event": []
+        },
+        {
+          "name": "POST Create TradingView Analysis Job (oversized non-webhook body - 413)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "{{jobCreateIdempotencyKey}}",
+                "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "job-create-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
+              },
+              {
+                "key": "x-request-id",
+                "value": "req-job-body-size-001",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"expanded-analysis\",\n  \"symbols\": [\"BINANCE:BTCUSDT\"],\n  \"_padding\": \"{{oversizedNonWebhookPadding}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "jobs",
+                "tradingview-analysis"
+              ]
+            },
+            "description": "Reproducible oversized non-webhook body: generated padding exceeds the explicit 100 KiB fallback parser limit and should return 413 before job validation or queueing."
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Fallback parsers outside webhook/news paths use an explicit 100 KiB limit.",
+                  "pm.variables.set('oversizedNonWebhookPadding', 'X'.repeat(100 * 1024 + 1024));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Non-webhook body over 100 KiB returns structured 413', function () {",
+                  "  pm.response.to.have.status(413);",
+                  "  const body = pm.response.json();",
+                  "  pm.expect(body.code).to.eql('PAYLOAD_TOO_LARGE');",
+                  "  pm.expect(body.retryable).to.eql(false);",
+                  "  pm.expect(pm.response.headers.get('X-Request-Id')).to.eql('req-job-body-size-001');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "response": [
+            {
+              "name": "413 Payload too large",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{adminApiKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "idempotency-key",
+                    "value": "{{jobCreateIdempotencyKey}}",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-idempotency-key",
+                    "value": "job-create-key-1",
+                    "type": "text",
+                    "description": "Alternative x-prefixed idempotency header variant",
+                    "disabled": true
+                  },
+                  {
+                    "key": "x-request-id",
+                    "value": "req-job-body-size-001",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"type\": \"expanded-analysis\",\n  \"symbols\": [\"BINANCE:BTCUSDT\"],\n  \"_padding\": \"{{oversizedNonWebhookPadding}}\"\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/jobs/tradingview-analysis",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "jobs",
+                    "tradingview-analysis"
+                  ]
+                },
+                "description": "Reproducible oversized non-webhook body: generated padding exceeds the explicit 100 KiB fallback parser limit and should return 413 before job validation or queueing."
+              },
+              "status": "Payload Too Large",
+              "code": 413,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-job-body-size-001"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Request body exceeds maximum size\",\n  \"code\": \"PAYLOAD_TOO_LARGE\",\n  \"requestId\": \"req-job-body-size-001\",\n  \"retryable\": false\n}"
+            }
           ]
         },
         {

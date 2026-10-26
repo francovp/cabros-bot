@@ -1272,6 +1272,35 @@ describe('Postman collection contract', () => {
 		expect(exportClassInvalid.response[0].code).toBe(400);
 	});
 
+	it('documents a runnable 413 example for the explicit 100kb non-webhook limit', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const oversizedJob = findItem(
+			collection.item,
+			'POST Create TradingView Analysis Job (oversized non-webhook body - 413)',
+		);
+		expect(oversizedJob.request.url.raw).toBe('{{baseUrl}}/api/jobs/tradingview-analysis');
+		expect(oversizedJob.request.body.raw).toContain('{{oversizedNonWebhookPadding}}');
+		const oversizedJobResponse = oversizedJob.response.find((response) => (
+			response.name === '413 Payload too large'
+		));
+		expect(oversizedJobResponse).toBeDefined();
+		expect(oversizedJobResponse.originalRequest.url.raw).toBe('{{baseUrl}}/api/jobs/tradingview-analysis');
+		expect(oversizedJobResponse.originalRequest.body.raw).toContain('{{oversizedNonWebhookPadding}}');
+		expect(oversizedJobResponse.code).toBe(413);
+		expect(JSON.parse(oversizedJobResponse.body)).toEqual(expect.objectContaining({
+			success: false,
+			error: 'Request body exceeds maximum size',
+			code: 'PAYLOAD_TOO_LARGE',
+			retryable: false,
+		}));
+		const preRequestScript = oversizedJob.event.find((event) => event.listen === 'prerequest').script.exec.join('\n');
+		expect(preRequestScript).toContain("pm.variables.set('oversizedNonWebhookPadding'");
+		expect(preRequestScript).toContain('100 * 1024 + 1024');
+		const testScript = oversizedJob.event.find((event) => event.listen === 'test').script.exec.join('\n');
+		expect(testScript).toContain('pm.response.to.have.status(413)');
+		expect(testScript).toContain("body.code).to.eql('PAYLOAD_TOO_LARGE')");
+	});
+
 	it('documents symbol analysis multi-agent state in status and capabilities examples', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');

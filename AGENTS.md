@@ -2973,3 +2973,6 @@ Three new endpoints are mounted under `/api`:
 - `README.md` and `.env.example` — Document the operator surface, the deliberate Remote Config exclusion, and the fail-closed semantics.
 
 No new environment variable, Remote Config key, or external credential was added.
+
+## Express Body Parser Limits (GH-607)
+Webhook and exact `/api/news-monitor` request parsers use `WEBHOOK_MAX_BODY_SIZE` (default `256kb`). Other JSON, text/plain, and URL-encoded parsers use an explicit `100kb` limit. Oversized bodies return the structured 413 `PAYLOAD_TOO_LARGE` response. OpenAPI documents 413 responses, and Postman includes oversized webhook and non-webhook examples. No new environment variable or Remote Config setting was added.
