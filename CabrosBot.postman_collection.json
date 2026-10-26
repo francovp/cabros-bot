@@ -29075,6 +29075,50 @@
           ]
         },
         {
+          "name": "POST Binance order preview (reject contingent order type)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"SELL\",\n  \"type\": \"STOP_LOSS_LIMIT\",\n  \"quantity\": \"0.01\",\n  \"price\": \"57900\",\n  \"stopPrice\": \"58000\",\n  \"timeInForce\": \"GTC\"\n}"
+            },
+            "description": "Read-only previews support MARKET and LIMIT only; contingent order previews are rejected before querying Binance.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders/preview",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders",
+                "preview"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Preview supports only MARKET and LIMIT orders\",\n  \"code\": \"INVALID_ORDER_REQUEST\",\n  \"preview\": true\n}"
+            }
+          ]
+        },
+        {
           "name": "POST Binance order preview (feature disabled)",
           "request": {
             "method": "POST",
@@ -33344,6 +33388,49 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"success\": false,\n  \"error\": \"BRACKET_LIMIT requires stopPrice, stopLimitPrice, and takeProfitPrice\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Binance order (invalid BRACKET_LIMIT IOC timeInForce)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"symbol\": \"BTCUSDT\",\n  \"side\": \"BUY\",\n  \"type\": \"BRACKET_LIMIT\",\n  \"quantity\": \"0.001\",\n  \"price\": \"65000\",\n  \"stopPrice\": \"62000\",\n  \"stopLimitPrice\": \"61900\",\n  \"takeProfitPrice\": \"70000\",\n  \"timeInForce\": \"IOC\",\n  \"dryRun\": true\n}"
+            },
+            "description": "BRACKET_LIMIT requires GTC so its working entry and protective stop cannot expire immediately.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "orders"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Bad Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"BRACKET_LIMIT requires GTC timeInForce to keep its entry and protective stop active\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
             }
           ]
         },

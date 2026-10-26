@@ -1,3 +1,4 @@
+/* global saveEnv, restoreEnv */
 'use strict';
 
 const crypto = require('crypto');
@@ -402,6 +403,34 @@ describe('BinanceOrderService', () => {
 		});
 	});
 
+	it.each(['IOC', 'FOK'])('rejects BRACKET_LIMIT timeInForce %s because its entry or protective stop could expire', async (timeInForce) => {
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				orderTypes: ['LIMIT', 'LIMIT_MAKER', 'STOP_LOSS_LIMIT'],
+			})),
+		};
+		const createClient = jest.fn(() => client);
+		const service = createServiceWithDefaultControl({ createClient });
+
+		await expect(service.placeOrder({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'BRACKET_LIMIT',
+			quantity: '0.2',
+			price: '100',
+			stopPrice: '90',
+			stopLimitPrice: '89',
+			takeProfitPrice: '110',
+			timeInForce,
+		})).rejects.toMatchObject({
+			code: 'INVALID_ORDER_REQUEST',
+			statusCode: 400,
+			message: expect.stringContaining('GTC'),
+		});
+
+		expect(createClient).not.toHaveBeenCalled();
+	});
+
 	it('reserves and submits a live OTOCO list once with deterministic component IDs', async () => {
 		const storage = {
 			getReservation: jest.fn().mockResolvedValue(null),
@@ -513,6 +542,244 @@ describe('BinanceOrderService', () => {
 		expect(result).toMatchObject({ success: true, orderList: { orderListId: 77 } });
 		expect(client.getOCO).toHaveBeenCalledWith({ origClientOrderId: storage.reserve.mock.calls[0][0].listClientOrderId });
 		expect(client.submitNewOrderListOTOCO).not.toHaveBeenCalled();
+	});
+
+	it('rejects bracket idempotency replays that change provenance', async () => {
+		let reservation = null;
+		const storage = {
+			getReservation: jest.fn(async () => reservation && { ...reservation }),
+			reserve: jest.fn(async (input) => {
+				reservation = {
+					keyHash: 'e'.repeat(64),
+					state: 'RESERVED',
+					...input,
+				};
+				return { outcome: 'reserved', ...reservation };
+			}),
+			recordOrderList: jest.fn(async () => { reservation.state = 'SUBMITTED'; }),
+			updateReservation: jest.fn().mockResolvedValue({}),
+		};
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				orderTypes: ['LIMIT', 'LIMIT_MAKER', 'STOP_LOSS_LIMIT'],
+			})),
+			submitNewOrderListOTOCO: jest.fn().mockImplementation(async (params) => ({
+				orderListId: 88,
+				symbol: params.symbol,
+				listClientOrderId: params.listClientOrderId,
+				listOrderStatus: 'EXECUTING',
+				orders: [],
+				orderReports: [],
+			})),
+			getOCO: jest.fn(),
+		};
+		const service = createServiceWithDefaultControl({
+			createClient: () => client,
+			bracketOrderStorageService: storage,
+		});
+		const request = {
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'BRACKET_LIMIT',
+			quantity: '0.2',
+			price: '100',
+			stopPrice: '90',
+			stopLimitPrice: '89',
+			takeProfitPrice: '110',
+			timeInForce: 'GTC',
+			dryRun: false,
+			origin: 'auto_trade',
+			setupType: 'breakout',
+		};
+
+		await service.placeOrder(request, { idempotencyKey: 'bracket-provenance-key' });
+
+		await expect(service.placeOrder({ ...request, origin: 'manual' }, { idempotencyKey: 'bracket-provenance-key' }))
+			.rejects.toMatchObject({ code: 'BINANCE_ORDER_CONFLICT', statusCode: 409 });
+		await expect(service.placeOrder({ ...request, setupType: 'pullback' }, { idempotencyKey: 'bracket-provenance-key' }))
+			.rejects.toMatchObject({ code: 'BINANCE_ORDER_CONFLICT', statusCode: 409 });
+
+		expect(client.getOCO).not.toHaveBeenCalled();
+		expect(client.submitNewOrderListOTOCO).toHaveBeenCalledTimes(1);
+	});
+
+	it('reconciles legacy bracket reservations without changing stored provenance', async () => {
+		const idempotencyKey = 'legacy-bracket-provenance-key';
+		const request = {
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'BRACKET_LIMIT',
+			quantity: '0.2',
+			price: '100',
+			stopPrice: '90',
+			stopLimitPrice: '89',
+			takeProfitPrice: '110',
+			timeInForce: 'GTC',
+			dryRun: false,
+			origin: 'auto_trade',
+			setupType: 'breakout',
+		};
+		const legacyFingerprint = crypto.createHash('sha256').update([
+			request.symbol,
+			request.side,
+			request.type,
+			request.quantity,
+			request.price,
+			request.stopPrice,
+			request.stopLimitPrice,
+			request.takeProfitPrice,
+			request.timeInForce,
+			request.alertId || '',
+		].join(':')).digest('hex');
+		const legacyListClientOrderId = `cb_${crypto.createHash('sha256')
+			.update(`cabros-binance-bracket:${idempotencyKey}:${legacyFingerprint}:list`)
+			.digest('hex')
+			.slice(0, 32)}`;
+		const storedRequest = {
+			symbol: request.symbol,
+			side: request.side,
+			type: request.type,
+			quantity: request.quantity,
+			price: request.price,
+			stopPrice: request.stopPrice,
+			stopLimitPrice: request.stopLimitPrice,
+			takeProfitPrice: request.takeProfitPrice,
+			timeInForce: request.timeInForce,
+			origin: request.origin,
+			setupType: request.setupType,
+		};
+		const reservation = {
+			keyHash: 'd'.repeat(64),
+			requestFingerprint: legacyFingerprint,
+			listClientOrderId: legacyListClientOrderId,
+			symbol: request.symbol,
+			environment: 'testnet',
+			state: 'SUBMITTED',
+		};
+		const orderList = {
+			orderListId: 90,
+			symbol: request.symbol,
+			listClientOrderId: legacyListClientOrderId,
+			listOrderStatus: 'EXECUTING',
+			orders: [],
+			orderReports: [],
+		};
+		const storage = {
+			getReservation: jest.fn(async () => ({ ...reservation })),
+			getBracketOrder: jest.fn().mockResolvedValue({ request: storedRequest }),
+			recordOrderList: jest.fn().mockResolvedValue({ request: storedRequest }),
+			updateReservation: jest.fn().mockResolvedValue({}),
+		};
+		const client = {
+			getOCO: jest.fn().mockResolvedValue(orderList),
+			submitNewOrderListOTOCO: jest.fn(),
+		};
+		const service = createServiceWithDefaultControl({
+			createClient: () => client,
+			bracketOrderStorageService: storage,
+		});
+
+		await expect(service.placeOrder(request, { idempotencyKey })).resolves.toMatchObject({
+			success: true,
+			origin: 'auto_trade',
+			setupType: 'breakout',
+		});
+		expect(client.getOCO).toHaveBeenCalledWith({ origClientOrderId: legacyListClientOrderId });
+		expect(storage.recordOrderList).toHaveBeenCalledWith(expect.objectContaining({
+			request: storedRequest,
+			requestFingerprint: legacyFingerprint,
+		}));
+
+		await expect(service.placeOrder({ ...request, origin: 'manual' }, { idempotencyKey }))
+			.rejects.toMatchObject({ code: 'BINANCE_ORDER_CONFLICT', statusCode: 409 });
+		await expect(service.placeOrder({ ...request, setupType: 'pullback' }, { idempotencyKey }))
+			.rejects.toMatchObject({ code: 'BINANCE_ORDER_CONFLICT', statusCode: 409 });
+
+		storage.getBracketOrder.mockResolvedValue(null);
+		const requestWithoutProvenance = { ...request };
+		delete requestWithoutProvenance.origin;
+		delete requestWithoutProvenance.setupType;
+		await expect(service.placeOrder(requestWithoutProvenance, { idempotencyKey }))
+			.rejects.toMatchObject({ code: 'BINANCE_ORDER_CONFLICT', statusCode: 409 });
+		expect(client.getOCO).toHaveBeenCalledTimes(1);
+		expect(client.submitNewOrderListOTOCO).not.toHaveBeenCalled();
+	});
+
+	it('allows a bracket idempotency key to retry after the kill switch blocks pre-submit', async () => {
+		let reservation = null;
+		let pauseChecks = 0;
+		const storage = {
+			getReservation: jest.fn(async () => reservation && { ...reservation }),
+			reserve: jest.fn(async (input) => {
+				if (reservation?.state === 'ABORTED_BEFORE_SUBMIT') {
+					reservation.state = 'RESERVED';
+					reservation.updatedAt = new Date();
+					return { outcome: 'reserved', ...reservation };
+				}
+				reservation = {
+					keyHash: 'f'.repeat(64),
+					state: 'RESERVED',
+					...input,
+				};
+				return { outcome: 'reserved', ...reservation };
+			}),
+			recordOrderList: jest.fn(async () => { reservation.state = 'SUBMITTED'; }),
+			updateReservation: jest.fn(async ({ state }) => {
+				reservation.state = state;
+				return { state };
+			}),
+		};
+		const controlService = {
+			async getPauseState() {
+				pauseChecks += 1;
+				const paused = pauseChecks === 3;
+				return {
+					paused,
+					unavailable: false,
+					isBlocked() { return this.paused; },
+				};
+			},
+		};
+		const client = {
+			getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+				orderTypes: ['LIMIT', 'LIMIT_MAKER', 'STOP_LOSS_LIMIT'],
+			})),
+			submitNewOrderListOTOCO: jest.fn().mockImplementation(async (params) => ({
+				orderListId: 89,
+				symbol: params.symbol,
+				listClientOrderId: params.listClientOrderId,
+				listOrderStatus: 'EXECUTING',
+				orders: [],
+				orderReports: [],
+			})),
+		};
+		const service = createBinanceOrderService({
+			createClient: () => client,
+			controlService,
+			bracketOrderStorageService: storage,
+		});
+		const request = {
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'BRACKET_LIMIT',
+			quantity: '0.2',
+			price: '100',
+			stopPrice: '90',
+			stopLimitPrice: '89',
+			takeProfitPrice: '110',
+			timeInForce: 'GTC',
+			dryRun: false,
+		};
+
+		await expect(service.placeOrder(request, { idempotencyKey: 'retry-blocked-bracket' }))
+			.rejects.toMatchObject({ code: 'TRADING_PAUSED', statusCode: 503 });
+		expect(reservation.state).toBe('ABORTED_BEFORE_SUBMIT');
+		expect(client.submitNewOrderListOTOCO).not.toHaveBeenCalled();
+
+		await expect(service.placeOrder(request, { idempotencyKey: 'retry-blocked-bracket' }))
+			.resolves.toMatchObject({ success: true, orderList: { orderListId: 89 } });
+
+		expect(client.submitNewOrderListOTOCO).toHaveBeenCalledTimes(1);
 	});
 
 	it('reconciles an existing bracket before applying changed symbol and notional gates', async () => {
@@ -2957,6 +3224,33 @@ describe('BinanceOrderService', () => {
 				quantity: '0.1',
 				maxSlippageBps: 0,
 			})).rejects.toMatchObject({ code: 'INVALID_ORDER_REQUEST', statusCode: 400 });
+		});
+
+		it('rejects contingent orders outside the preview contract before querying Binance', async () => {
+			const client = {
+				getExchangeInfo: jest.fn().mockResolvedValue(exchangeInfo({
+					orderTypes: ['MARKET', 'LIMIT', 'STOP_LOSS_LIMIT'],
+				})),
+				getAvgPrice: jest.fn().mockResolvedValue({ price: '100' }),
+			};
+			const service = createServiceWithDefaultControl({ createClient: () => client });
+
+			await expect(service.previewOrder({
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				type: 'STOP_LOSS_LIMIT',
+				quantity: '0.1',
+				price: '89',
+				stopPrice: '90',
+				timeInForce: 'GTC',
+			})).rejects.toMatchObject({
+				code: 'INVALID_ORDER_REQUEST',
+				statusCode: 400,
+				message: expect.stringContaining('MARKET and LIMIT'),
+			});
+
+			expect(client.getExchangeInfo).not.toHaveBeenCalled();
+			expect(client.getAvgPrice).not.toHaveBeenCalled();
 		});
 	});
 

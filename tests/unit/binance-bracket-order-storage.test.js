@@ -32,7 +32,7 @@ function createFirestore() {
 					create(documentRef, value) {
 						if (docs.has(documentRef.key)) {
 							const error = new Error('already exists');
-						throw error;
+							throw error;
 						}
 						docs.set(documentRef.key, value);
 					},
@@ -99,6 +99,54 @@ describe('BinanceBracketOrderStorageService', () => {
 		});
 		await expect(storage.reserve({ ...input, requestFingerprint: 'b'.repeat(64) }))
 			.rejects.toMatchObject({ code: 'BINANCE_ORDER_CONFLICT', statusCode: 409 });
+	});
+
+	it('reclaims a matching reservation that was aborted before Binance submission', async () => {
+		const input = {
+			idempotencyKey,
+			requestFingerprint,
+			listClientOrderId: 'cb_list_123',
+			symbol: 'BTCUSDT',
+			environment: 'testnet',
+		};
+		const original = await storage.reserve(input);
+		await storage.updateReservation({ keyHash: original.keyHash, state: 'ABORTED_BEFORE_SUBMIT' });
+
+		await expect(storage.reserve(input)).resolves.toMatchObject({
+			outcome: 'reserved',
+			state: 'RESERVED',
+			keyHash: original.keyHash,
+			requestFingerprint,
+		});
+		await expect(storage.reserve(input)).resolves.toMatchObject({
+			outcome: 'existing',
+			state: 'RESERVED',
+		});
+	});
+
+	it.each([
+		['symbol', { symbol: 'ETHUSDT' }],
+		['environment', { environment: 'live' }],
+		['list client order ID', { listClientOrderId: 'cb_list_other' }],
+	])('does not reclaim an aborted reservation with a different %s', async (_field, changes) => {
+		const input = {
+			idempotencyKey,
+			requestFingerprint,
+			listClientOrderId: 'cb_list_123',
+			symbol: 'BTCUSDT',
+			environment: 'testnet',
+		};
+		const original = await storage.reserve(input);
+		await storage.updateReservation({ keyHash: original.keyHash, state: 'ABORTED_BEFORE_SUBMIT' });
+
+		await expect(storage.reserve({ ...input, ...changes }))
+			.rejects.toMatchObject({ code: 'BINANCE_ORDER_CONFLICT', statusCode: 409 });
+		expect(memory.docs.get(`binanceBracketReservations/${original.keyHash}`)).toMatchObject({
+			state: 'ABORTED_BEFORE_SUBMIT',
+			symbol: input.symbol,
+			environment: input.environment,
+			listClientOrderId: input.listClientOrderId,
+		});
 	});
 
 	it('keeps nonterminal details without expiry and sets one-hour expiry after terminal state', async () => {
