@@ -100,28 +100,28 @@ function getModelProvider() {
 		: 'gemini';
 }
 
-function getCommit() {
-	return getDeploymentCommit();
+function getCommit(env = process.env) {
+	return getDeploymentCommit(env);
 }
 
-function isPreview() {
-	return isPreviewEnvironment();
+function isPreview(env = process.env) {
+	return isPreviewEnvironment(env);
 }
 
-function getEnvironment() {
-	if (process.env.SENTRY_ENVIRONMENT) {
-		return process.env.SENTRY_ENVIRONMENT;
+function getEnvironment(env = process.env) {
+	if (env.SENTRY_ENVIRONMENT) {
+		return env.SENTRY_ENVIRONMENT;
 	}
 
-	if (isPreview()) {
+	if (isPreview(env)) {
 		return 'preview';
 	}
 
-	if (isProductionLikeEnvironment()) {
+	if (isProductionLikeEnvironment(env)) {
 		return 'production';
 	}
 
-	return process.env.NODE_ENV || 'development';
+	return env.NODE_ENV || 'development';
 }
 
 function getReadinessStatus({ enabled, configured }) {
@@ -333,7 +333,7 @@ function getGeminiQuotaDependency({ gemini }) {
 }
 
 
-function getStatus({ skipTelemetrySync = false } = {}) {
+function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 	const previewEnvironment = isPreview();
 	const modelProvider = getModelProvider();
 	const runtimeConfig = remoteConfigService.getRuntimeConfig();
@@ -606,12 +606,12 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	return {
 		readiness: bootstrapReadiness.getStatus(),
 		service: {
-			name: process.env.SERVICE_NAME || packageJson.name || 'cabros-bot',
+			name: env.SERVICE_NAME || packageJson.name || 'cabros-bot',
 			version: packageJson.version || null,
-			commit: getCommit(),
-			environment: getEnvironment(),
+			commit: getCommit(env),
+			environment: getEnvironment(env),
 		},
-		build: getBuildInfo(),
+		build: getBuildInfo(env),
 		featureFlags: {
 			telegramBot: telegramFlagEnabled,
 			whatsappAlerts: whatsappEnabled,

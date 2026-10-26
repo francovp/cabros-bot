@@ -369,6 +369,21 @@ describe('Postman collection contract', () => {
 		]));
 	});
 
+	it('documents build metadata in Get Status response example (issue #753)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		expect(status).toBeDefined();
+		const responseBody = JSON.parse(status.response[0].body);
+		expect(responseBody.build).toMatchObject({
+			commit: expect.any(String),
+			full: expect.any(String),
+			repo: expect.any(String),
+			environment: expect.any(String),
+			startedAt: expect.any(String),
+			uptimeSeconds: expect.any(Number),
+		});
+	});
+
 	it('documents groundingCoalescing dependency in the Get Status response example', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');

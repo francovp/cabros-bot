@@ -18935,6 +18935,89 @@
         },
         "additionalProperties": false
       },
+      "BuildInfo": {
+        "type": "object",
+        "description": "Deployment build metadata and runtime identity exposed through /api/status, /api/capabilities, and the Telegram /version command.",
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Service name",
+            "example": "cabros-bot"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Package version",
+            "example": "0.1.0"
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Short SHA (first 7 characters) of the deployed commit",
+            "example": "abcdef1"
+          },
+          "full": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Full Git commit SHA when available",
+            "example": "abcdef1234567890abcdef1234567890abcdef12"
+          },
+          "repo": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Repository slug (e.g. owner/repo)",
+            "example": "francovp/cabros-bot"
+          },
+          "platform": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Hosting platform identifier (render, vercel, railway, local, unknown)",
+            "example": "render"
+          },
+          "environment": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Runtime environment (production, preview, development, unknown)",
+            "example": "production"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Process start timestamp in ISO-8601 format",
+            "example": "2026-10-26T00:00:00.000Z"
+          },
+          "uptimeSeconds": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Process uptime in seconds",
+            "example": 3600
+          }
+        },
+        "required": [
+          "commit",
+          "full",
+          "repo",
+          "environment",
+          "startedAt",
+          "uptimeSeconds"
+        ],
+        "additionalProperties": false
+      },
       "Status": {
         "type": "object",
         "required": [
@@ -18950,7 +19033,7 @@
             "$ref": "#/components/schemas/JsonObject"
           },
           "build": {
-            "$ref": "#/components/schemas/JsonObject"
+            "$ref": "#/components/schemas/BuildInfo"
           },
           "featureFlags": {
             "$ref": "#/components/schemas/StatusFeatureFlags"
