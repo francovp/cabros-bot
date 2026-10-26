@@ -334,7 +334,7 @@ function getGeminiQuotaDependency({ gemini }) {
 
 
 function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
-	const previewEnvironment = isPreview();
+	const previewEnvironment = isPreview(env);
 	const modelProvider = getModelProvider();
 	const runtimeConfig = remoteConfigService.getRuntimeConfig();
 	const notificationManager = notificationRedriveService.getNotificationManager();
