@@ -179,8 +179,14 @@ The scanner-preset scheduler enforces a 60-second minimum between runs of the sa
 
 `ENABLE_ALERT_DECISION_AUDIT` (default `false`) opts stored webhook alerts into a bounded audit of parsing, enrichment, gates, and channel dispatch. It is request-time tunable through Firebase Remote Config. `GET /api/alerts/summary?includeDecisionRollup=true` adds gate counts; `GET /api/alerts/export?includeDecision=true` includes per-alert audit fields, including the CSV column only when explicitly requested. See [Stored Alerts API](docs/alerts.md).
 
+`GET /api/admin/events` streams real-time operator updates (job progress, scanner results, alert delivery events, and delivery failures) over Server-Sent Events (SSE). The endpoint is enabled by default (`ENABLE_ADMIN_SSE=true`; process-startup gate, environment-only). SSE stream concurrency, total server capacity, keepalive cadence, and slow-client backpressure drain timeouts are runtime tunable through Firebase Remote Config.
+
 | Variable | Type | Default | Bounds | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| `ADMIN_SSE_MAX_CLIENT_CONNECTIONS` | Integer | `5` | `1`-`20` | Maximum concurrent SSE event streams per client key (IP, API key, or Firebase UID) on `GET /api/admin/events`. Older streams from the same client are gracefully evicted when exceeded. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored. |
+| `ADMIN_SSE_MAX_TOTAL_CONNECTIONS` | Integer | `100` | `10`-`1000` | Maximum total active SSE event streams allowed across all clients on `GET /api/admin/events`. New connections are rejected with 503 Service Unavailable when exceeded. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored. |
+| `ADMIN_SSE_HEARTBEAT_MS` | Integer | `30000` | `5000`-`120000` | Heartbeat interval in milliseconds for SSE comment keepalive frames (`:keepalive`). Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored. |
+| `ADMIN_SSE_DRAIN_TIMEOUT_MS` | Integer | `15000` | `1000`-`60000` | Maximum time in milliseconds to wait for a backpressured SSE client socket to drain before eviction. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored. |
 | `GENERIC_MESSAGE_MAX_LENGTH` | Integer | `4000` | `1`-`20000` | Maximum inbound characters before generic message webhook truncation. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored, leaving the environment/default effective. |
 | `TRADE_LEDGER_MAX_SCAN` | Integer | `5000` | `1`-`20000` | Maximum durable trade fills scanned per positions or P&L summary calculation. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored, leaving the environment/default effective. |
 
