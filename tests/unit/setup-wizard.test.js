@@ -1,16 +1,32 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
+
+let mockPromptAnswer = '';
+let mockPromptAnswersBySubstring = {};
 
 jest.mock('node:readline', () => ({
 	createInterface: jest.fn(() => ({
-		question: jest.fn((_q, cb) => cb('')),
+		question: jest.fn((q, cb) => {
+			for (const [pattern, answer] of Object.entries(mockPromptAnswersBySubstring)) {
+				if (q.includes(pattern)) {
+					return cb(answer);
+				}
+			}
+			cb(mockPromptAnswer);
+		}),
 		close: jest.fn(),
 	})),
 }));
 
 const wizard = require('../../scripts/setup-wizard');
+
+beforeEach(() => {
+	mockPromptAnswer = '';
+	mockPromptAnswersBySubstring = {};
+});
 
 describe('parseArgs', () => {
 	it('defaults to interactive without flags', () => {
@@ -149,7 +165,7 @@ describe('backupEnv', () => {
 	});
 
 	it('creates a backup file when source exists', () => {
-		const tmpDir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'cabros-wizard-backup-'));
+		const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cabros-wizard-backup-'));
 		const envPath = path.join(tmpDir, '.env');
 		fs.writeFileSync(envPath, 'FOO=bar\n');
 		try {
@@ -157,8 +173,107 @@ describe('backupEnv', () => {
 			expect(backupPath).toBeTruthy();
 			expect(fs.existsSync(backupPath)).toBe(true);
 			expect(fs.readFileSync(backupPath, 'utf8')).toBe('FOO=bar\n');
+			expect(fs.statSync(backupPath).mode & 0o777).toBe(0o600);
 		} finally {
 			fs.rmSync(tmpDir, { recursive: true, force: true });
 		}
+	});
+});
+
+describe('runWizard', () => {
+	let tmpDir;
+	let envPath;
+	const silentStdout = { write: jest.fn() };
+
+	beforeEach(() => {
+		tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cabros-wizard-run-'));
+		envPath = path.join(tmpDir, '.env');
+		silentStdout.write.mockClear();
+	});
+
+	afterEach(() => {
+		if (tmpDir && fs.existsSync(tmpDir)) {
+			fs.rmSync(tmpDir, { recursive: true, force: true });
+		}
+	});
+
+	it('creates a minimal .env with 0o600 permissions in non-interactive mode', async () => {
+		const code = await wizard.runWizard({
+			envPath,
+			nonInteractive: true,
+			minimal: true,
+			stdout: silentStdout,
+		});
+		expect(code).toBe(0);
+		expect(fs.existsSync(envPath)).toBe(true);
+		expect(fs.statSync(envPath).mode & 0o777).toBe(0o600);
+
+		const parsed = wizard.parseExistingEnv(fs.readFileSync(envPath, 'utf8'));
+		expect(parsed.WEBHOOK_API_KEY).toMatch(/^[A-Za-z0-9_-]+$/);
+		expect(parsed.JOB_CALLBACK_SIGNING_SECRET).toMatch(/^[A-Za-z0-9_-]+$/);
+		expect(parsed.ENABLE_TELEGRAM_BOT).toBe('false');
+	});
+
+	it('preserves existing variables and creates a backup when updating an existing .env', async () => {
+		fs.writeFileSync(envPath, 'PORT=4000\nCUSTOM_VAR=hello\n', { mode: 0o600 });
+
+		const code = await wizard.runWizard({
+			envPath,
+			nonInteractive: true,
+			minimal: true,
+			stdout: silentStdout,
+		});
+		expect(code).toBe(0);
+
+		const parsed = wizard.parseExistingEnv(fs.readFileSync(envPath, 'utf8'));
+		expect(parsed.PORT).toBe('4000');
+		expect(parsed.CUSTOM_VAR).toBe('hello');
+		expect(parsed.WEBHOOK_API_KEY).toBeTruthy();
+
+		const backupPath = `${envPath}.wizard.bak`;
+		expect(fs.existsSync(backupPath)).toBe(true);
+		expect(fs.statSync(backupPath).mode & 0o777).toBe(0o600);
+		const backupParsed = wizard.parseExistingEnv(fs.readFileSync(backupPath, 'utf8'));
+		expect(backupParsed.PORT).toBe('4000');
+		expect(backupParsed.CUSTOM_VAR).toBe('hello');
+	});
+
+	it('does not write .env when dryRun is true', async () => {
+		const code = await wizard.runWizard({
+			envPath,
+			dryRun: true,
+			nonInteractive: true,
+			minimal: true,
+			stdout: silentStdout,
+		});
+		expect(code).toBe(0);
+		expect(fs.existsSync(envPath)).toBe(false);
+	});
+
+	it('configures telegram bot as enabled when BOT_TOKEN is entered interactively', async () => {
+		mockPromptAnswersBySubstring = {
+			BOT_TOKEN: '123456:TEST_TOKEN',
+		};
+
+		const code = await wizard.runWizard({ envPath, stdout: silentStdout });
+		expect(code).toBe(0);
+		expect(fs.existsSync(envPath)).toBe(true);
+
+		const parsed = wizard.parseExistingEnv(fs.readFileSync(envPath, 'utf8'));
+		expect(parsed.BOT_TOKEN).toBe('123456:TEST_TOKEN');
+		expect(parsed.ENABLE_TELEGRAM_BOT).toBe('true');
+		expect(parsed.WEBHOOK_API_KEY).toBeTruthy();
+	});
+
+	it('disables telegram bot when BOT_TOKEN is skipped interactively', async () => {
+		mockPromptAnswer = '';
+
+		const code = await wizard.runWizard({ envPath, stdout: silentStdout });
+		expect(code).toBe(0);
+		expect(fs.existsSync(envPath)).toBe(true);
+
+		const parsed = wizard.parseExistingEnv(fs.readFileSync(envPath, 'utf8'));
+		expect(parsed.BOT_TOKEN).toBeUndefined();
+		expect(parsed.ENABLE_TELEGRAM_BOT).toBe('false');
 	});
 });

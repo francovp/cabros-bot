@@ -1,32 +1,51 @@
 #!/usr/bin/env node
 'use strict';
 
-const http = require('node:http');
+require('dotenv').config();
 
 const DEFAULT_HOST = '127.0.0.1';
 const DEFAULT_PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const DEFAULT_PATHS = ['/healthcheck', '/api/status'];
 const REQUEST_TIMEOUT_MS = 5000;
 
-function buildRequest(url) {
-	return new Promise((resolve) => {
-		const req = http.request(url, { method: 'GET', headers: { Accept: 'application/json' } }, (res) => {
-			const chunks = [];
-			res.on('data', (chunk) => chunks.push(chunk));
-			res.on('end', () => resolve({ status: res.statusCode || 0, body: Buffer.concat(chunks).toString('utf8') }));
-		});
-		req.on('error', (error) => resolve({ status: 0, error: error.message }));
-		req.setTimeout(REQUEST_TIMEOUT_MS, () => {
-			req.destroy(new Error(`request to ${url.href} timed out`));
-		});
-		req.end();
-	});
+function isStatusOk(path, status) {
+	if (status >= 200 && status < 300) {
+		return true;
+	}
+	if (path === '/healthcheck') {
+		return false;
+	}
+	return status === 401 || status === 403;
 }
 
-async function checkEndpoint(host, port, path) {
-	const url = new URL(`http://${host}:${port}${path}`);
-	const result = await buildRequest(url);
-	const ok = result.status >= 200 && result.status < 500;
+async function requestEndpoint(url, apiKey) {
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+	const headers = {
+		Accept: 'application/json',
+	};
+	if (apiKey) {
+		headers['x-api-key'] = apiKey;
+	}
+	try {
+		const response = await fetch(url, {
+			method: 'GET',
+			headers,
+			signal: controller.signal,
+		});
+		return { status: response.status, ok: response.ok };
+	} catch (error) {
+		const isAbort = error && (error.name === 'AbortError' || error.name === 'TimeoutError');
+		return { status: 0, error: isAbort ? `request to ${url} timed out` : (error && error.message ? error.message : String(error)) };
+	} finally {
+		clearTimeout(timeout);
+	}
+}
+
+async function checkEndpoint(host, port, path, apiKey = process.env.WEBHOOK_API_KEY) {
+	const url = `http://${host}:${port}${path}`;
+	const result = await requestEndpoint(url, apiKey);
+	const ok = isStatusOk(path, result.status);
 	return { path, status: result.status, ok, error: result.error };
 }
 
@@ -61,4 +80,4 @@ if (require.main === module) {
 	});
 }
 
-module.exports = { checkEndpoint, buildRequest };
+module.exports = { checkEndpoint, requestEndpoint, isStatusOk };

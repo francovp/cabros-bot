@@ -109,28 +109,50 @@ function backupEnv(targetPath) {
 		finalPath = `${backupPath}.${suffix}`;
 	}
 	fs.copyFileSync(targetPath, finalPath);
+	try {
+		fs.chmodSync(finalPath, 0o600);
+	} catch {
+		// best-effort chmod
+	}
 	return finalPath;
 }
 
-function createPrompt() {
-	const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+function createPrompt(opts = {}) {
+	const rl = readline.createInterface({
+		input: opts.input || process.stdin,
+		output: opts.output || process.stdout,
+	});
 	return {
 		rl,
 		ask(question, { defaultValue = '' } = {}) {
 			return new Promise((resolve) => {
 				const prompt = defaultValue ? `${question} [${defaultValue}]: ` : `${question}: `;
-				rl.question(prompt, (answer) => resolve(answer));
+				rl.question(prompt, (answer) => resolve(answer.trim() || defaultValue));
 			});
 		},
-		close() { rl.close(); },
+		close() {
+			rl.close();
+			if (process.stdin.unref) {
+				process.stdin.unref();
+			}
+		},
 	};
 }
 
-async function collectInteractiveAnswers(existingEnv, prompt) {
+async function collectInteractiveAnswers(existingEnv, prompt, stdout = process.stdout) {
 	const answers = {};
 	if (!('BOT_TOKEN' in existingEnv)) {
 		const v = await prompt.ask('Telegram BOT_TOKEN (get it from @BotFather)');
-		if (v) answers.BOT_TOKEN = v;
+		if (v) {
+			answers.BOT_TOKEN = v;
+			if (!('ENABLE_TELEGRAM_BOT' in existingEnv)) {
+				answers.ENABLE_TELEGRAM_BOT = 'true';
+			}
+		} else if (!('ENABLE_TELEGRAM_BOT' in existingEnv)) {
+			answers.ENABLE_TELEGRAM_BOT = 'false';
+		}
+	} else if (!('ENABLE_TELEGRAM_BOT' in existingEnv)) {
+		answers.ENABLE_TELEGRAM_BOT = 'true';
 	}
 	if (!('TELEGRAM_CHAT_ID' in existingEnv)) {
 		const v = await prompt.ask('Telegram TELEGRAM_CHAT_ID (use /start to discover)');
@@ -138,13 +160,13 @@ async function collectInteractiveAnswers(existingEnv, prompt) {
 	}
 	if (!('WEBHOOK_API_KEY' in existingEnv)) {
 		const generated = generateApiKey();
-		process.stdout.write(`\nGenerated WEBHOOK_API_KEY (printed once, copy now):\n  ${generated}\n\n`);
+		stdout.write(`\nGenerated WEBHOOK_API_KEY (printed once, copy now):\n  ${generated}\n\n`);
 		const confirm = await prompt.ask('Press Enter to write this key, or type "skip" to omit');
 		if (confirm !== 'skip') answers.WEBHOOK_API_KEY = generated;
 	}
 	if (!('JOB_CALLBACK_SIGNING_SECRET' in existingEnv)) {
 		const generated = generateCallbackSecret();
-		process.stdout.write(`\nGenerated JOB_CALLBACK_SIGNING_SECRET (printed once, copy now):\n  ${generated}\n\n`);
+		stdout.write(`\nGenerated JOB_CALLBACK_SIGNING_SECRET (printed once, copy now):\n  ${generated}\n\n`);
 		const confirm = await prompt.ask('Press Enter to write this secret, or type "skip" to omit');
 		if (confirm !== 'skip') answers.JOB_CALLBACK_SIGNING_SECRET = generated;
 	}
@@ -177,28 +199,34 @@ function resolveMinimalAnswers() {
 	};
 }
 
-async function runWizard(opts) {
+async function runWizard(opts = {}) {
+	const stdout = opts.stdout || process.stdout;
 	if (opts.help) { printHelp(); return 0; }
-	process.stdout.write(WIZARD_HEADER);
+	stdout.write(WIZARD_HEADER);
+
+	const envPath = opts.envPath || process.env.CABROS_ENV_PATH || ENV_PATH;
 
 	let existingEnv = {};
-	if (fs.existsSync(ENV_PATH)) {
-		process.stdout.write(`Existing .env detected at ${ENV_PATH}\n`);
-		existingEnv = parseExistingEnv(fs.readFileSync(ENV_PATH, 'utf8'));
-		process.stdout.write(`  → ${Object.keys(existingEnv).length} keys preserved\n\n`);
+	if (fs.existsSync(envPath)) {
+		stdout.write(`Existing .env detected at ${envPath}\n`);
+		existingEnv = parseExistingEnv(fs.readFileSync(envPath, 'utf8'));
+		stdout.write(`  → ${Object.keys(existingEnv).length} keys preserved\n\n`);
 	}
 
 	let nextEntries;
 	if (opts.nonInteractive && opts.minimal) {
-		nextEntries = { ...existingEnv, ...resolveMinimalAnswers() };
-		process.stdout.write('Generated minimal non-interactive .env content:\n');
+		const minimal = resolveMinimalAnswers();
+		stdout.write(`\nGenerated WEBHOOK_API_KEY (printed once, copy now):\n  ${minimal.WEBHOOK_API_KEY}\n\n`);
+		stdout.write(`Generated JOB_CALLBACK_SIGNING_SECRET (printed once, copy now):\n  ${minimal.JOB_CALLBACK_SIGNING_SECRET}\n\n`);
+		nextEntries = { ...existingEnv, ...minimal };
+		stdout.write('Generated minimal non-interactive .env content:\n');
 	} else if (opts.nonInteractive) {
 		nextEntries = { ...existingEnv };
-		process.stdout.write('Non-interactive mode without --minimal writes no new keys.\n');
+		stdout.write('Non-interactive mode without --minimal writes no new keys.\n');
 	} else {
-		const prompt = createPrompt();
+		const prompt = opts.prompt || createPrompt({ input: opts.input, output: opts.output });
 		try {
-			const answers = await collectInteractiveAnswers(existingEnv, prompt);
+			const answers = await collectInteractiveAnswers(existingEnv, prompt, stdout);
 			nextEntries = { ...existingEnv, ...answers };
 		} finally {
 			prompt.close();
@@ -208,29 +236,34 @@ async function runWizard(opts) {
 	const orderedEntries = Object.entries(nextEntries).sort(([a], [b]) => a.localeCompare(b));
 	const { added, changed } = diffEnvKeys(existingEnv, Object.fromEntries(orderedEntries));
 
-	process.stdout.write('\nPlanned .env changes:\n');
+	stdout.write('\nPlanned .env changes:\n');
 	if (added.length === 0 && changed.length === 0) {
-		process.stdout.write('  (none — your existing .env is already complete)\n');
+		stdout.write('  (none — your existing .env is already complete)\n');
 	} else {
-		for (const k of added) process.stdout.write(`  + ${k}\n`);
-		for (const k of changed) process.stdout.write(`  ~ ${k}\n`);
+		for (const k of added) stdout.write(`  + ${k}\n`);
+		for (const k of changed) stdout.write(`  ~ ${k}\n`);
 	}
 
 	if (opts.dryRun) {
-		process.stdout.write('\nDry-run requested; .env not written.\n');
+		stdout.write('\nDry-run requested; .env not written.\n');
 		return 0;
 	}
 
-	if (fs.existsSync(ENV_PATH)) {
-		const backup = backupEnv(ENV_PATH);
-		if (backup) process.stdout.write(`\nBacked up existing .env → ${backup}\n`);
+	if (fs.existsSync(envPath)) {
+		const backup = backupEnv(envPath);
+		if (backup) stdout.write(`\nBacked up existing .env → ${backup}\n`);
 	}
-	fs.writeFileSync(ENV_PATH, serializeEnv(orderedEntries), 'utf8');
-	process.stdout.write(`\nWrote ${orderedEntries.length} keys to ${ENV_PATH}\n`);
-	process.stdout.write('\nNext steps:\n');
-	process.stdout.write('  1. Run `pnpm run doctor` to validate the resulting config.\n');
-	process.stdout.write('  2. Run `pnpm run wizard:test` to smoke-test /healthcheck and /api/status.\n');
-	process.stdout.write('  3. Run `pnpm start` to boot the bot.\n');
+	fs.writeFileSync(envPath, serializeEnv(orderedEntries), { encoding: 'utf8', mode: 0o600 });
+	try {
+		fs.chmodSync(envPath, 0o600);
+	} catch {
+		// best-effort chmod
+	}
+	stdout.write(`\nWrote ${orderedEntries.length} keys to ${envPath}\n`);
+	stdout.write('\nNext steps:\n');
+	stdout.write('  1. Run `pnpm run doctor` to validate the resulting config.\n');
+	stdout.write('  2. Run `pnpm start` to boot the bot.\n');
+	stdout.write('  3. In another terminal, run `pnpm run wizard:test` to smoke-test /healthcheck and /api/status.\n');
 	return 0;
 }
 

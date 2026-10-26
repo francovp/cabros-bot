@@ -70,7 +70,7 @@ pnpm install --frozen-lockfile
 
 ### 3. Environment Configuration & Setup Wizard
 
-The fastest path to a working deployment is the first-run wizard. It walks you through Telegram essentials, mints a `WEBHOOK_API_KEY`, and writes a working `.env` — no manual copy-paste from `.env.example`:
+The fastest path to a working deployment is the first-run wizard. It walks you through Telegram essentials, mints a `WEBHOOK_API_KEY`, and writes a working `.env` with strict `0o600` file permissions — no manual copy-paste from `.env.example`:
 
 ```bash
 # Interactive (recommended for first-time setup)
@@ -79,11 +79,18 @@ pnpm run wizard
 # Non-interactive / minimal (CI, codegen, fresh container)
 pnpm run wizard -- --non-interactive --minimal
 
-# Smoke-test the resulting config
+# In another terminal, smoke-test /healthcheck and /api/status against your running server
 pnpm run wizard:test
 ```
 
-The wizard is **idempotent** — re-running it preserves existing `.env` values and only prompts for missing ones. The generated `WEBHOOK_API_KEY` is a 32-byte base64url key, printed once and stored locally; nothing is sent over the network except the final smoke test against `localhost:PORT`.
+The interactive wizard steps through each configuration section:
+- **Telegram Bot (`BOT_TOKEN`)**: Token from [@BotFather](https://t.me/BotFather). When provided, `ENABLE_TELEGRAM_BOT` is automatically set to `true`. Press Enter to skip if running webhook-only.
+- **Telegram Chat (`TELEGRAM_CHAT_ID`)**: Channel or personal chat ID for alerts (use `/start` in your bot chat to discover it).
+- **Webhook API Key (`WEBHOOK_API_KEY`)**: Auto-generates a secure 32-byte base64url credential for incoming webhooks. Printed once for your records.
+- **Job Callback Secret (`JOB_CALLBACK_SIGNING_SECRET`)**: Auto-generates a secret used to sign asynchronous background task callbacks.
+- **WhatsApp Alerts (optional)**: Opt-in setup for GreenAPI notifications (`WHATSAPP_API_URL`, `WHATSAPP_API_KEY`, `WHATSAPP_CHAT_ID`).
+
+The wizard is **idempotent** — re-running it preserves existing `.env` values and only prompts for missing ones. Before overwriting, it automatically backs up existing `.env` files to `.env.wizard.bak`. Generated keys are created client-side and never sent across the network.
 
 Alternatively, create a local `.env` file manually based on `.env.example`:
 
