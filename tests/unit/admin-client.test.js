@@ -5606,6 +5606,45 @@ describe('admin browser client', () => {
 		});
 	});
 
+	it('discards pending alert prefills when symbol changes before alert lookup completes', async () => {
+		let releaseAlert;
+		const pendingAlert = new Promise((resolve) => { releaseAlert = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) return pendingAlert;
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const form = findForm(browser.elementsById.view, 'Place Spot bracket');
+		form.elements['bracket-symbol'].value = 'BTCUSDT';
+		const loadingAlert = findButton(form, 'Load latest alert levels').dispatch('click');
+		await flush();
+
+		form.elements['bracket-symbol'].value = 'ETHUSDT';
+		await form.elements['bracket-symbol'].dispatch('input');
+
+		releaseAlert(response({
+			success: true,
+			alerts: [{
+				id: 'alert-latest-btc',
+				symbol: 'BTCUSDT',
+				enrichmentData: { symbol: 'BTCUSDT', invalidation_level: '58000', target_level: '64000' },
+				traderIntent: { side: 'BUY', entryPrice: '60000', invalidation: '58000', target: '64000' },
+			}],
+		}));
+		await loadingAlert;
+		await flush();
+
+		expect(form.elements['bracket-symbol'].value).toBe('ETHUSDT');
+		expect(form.elements['bracket-entry-price'].value).toBe('');
+		expect(form.elements['bracket-stop-price'].value).toBe('');
+		expect(form.elements['bracket-take-profit-price'].value).toBe('');
+	});
+
 	it('does not enable live submission when a bracket changes during dry-run validation', async () => {
 		let releaseValidation;
 		const pendingValidation = new Promise((resolve) => { releaseValidation = resolve; });

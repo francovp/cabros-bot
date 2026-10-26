@@ -1759,8 +1759,9 @@ function createBinanceOrderService({
 				}
 				orderList = await hydrateOrderListReports(client, orderList, config.timeoutMs);
 				const sanitizedOrderList = sanitizeOrderListResponse(orderList || {});
+				let persistedRecord = null;
 				try {
-					await bracketOrderStorageService.recordOrderList({
+					persistedRecord = await bracketOrderStorageService.recordOrderList({
 						environment: config.environment,
 						symbol,
 						orderList: sanitizedOrderList,
@@ -1768,10 +1769,25 @@ function createBinanceOrderService({
 				} catch (error) {
 					console.warn('[BinanceOrderService] bracket order-list detail refresh failed:', error?.message || error);
 				}
+				let storedRequest = persistedRecord?.request || null;
+				if (!storedRequest && typeof bracketOrderStorageService.getBracketOrder === 'function') {
+					try {
+						const storedDetail = await bracketOrderStorageService.getBracketOrder({
+							environment: config.environment,
+							listClientOrderId: sanitizedOrderList.listClientOrderId,
+						});
+						storedRequest = storedDetail?.request || null;
+					} catch {
+						storedRequest = null;
+					}
+				}
 				return {
 					success: true,
 					environment: config.environment,
 					orderList: sanitizedOrderList,
+					...(storedRequest?.origin ? { origin: storedRequest.origin } : {}),
+					...(storedRequest?.alertId ? { alertId: storedRequest.alertId } : {}),
+					...(storedRequest?.setupType ? { setupType: storedRequest.setupType } : {}),
 				};
 			}
 
@@ -2599,4 +2615,5 @@ module.exports = {
 	sellableQuantity,
 	deriveAllowedAssets,
 	deriveSymbolAssets,
+	bracketOrderStorageService: defaultBracketOrderStorageService,
 };

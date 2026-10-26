@@ -2397,6 +2397,41 @@ describe('BinanceOrderService', () => {
 			});
 		});
 
+		it('recovers stored bracket request provenance on getOrders query', async () => {
+			const client = {
+				getOCO: jest.fn().mockResolvedValue({
+					orderListId: 55,
+					symbol: 'BTCUSDT',
+					listClientOrderId: 'cb-list-55',
+					orders: [],
+					orderReports: [],
+				}),
+			};
+			const bracketStorage = {
+				recordOrderList: jest.fn().mockResolvedValue({
+					orderListId: 55,
+					terminal: false,
+					request: {
+						origin: 'admin_alert',
+						alertId: 'alert-provenance-1',
+						setupType: 'breakout',
+					},
+				}),
+			};
+			const service = createServiceWithDefaultControl({
+				createClient: () => client,
+				bracketOrderStorageService: bracketStorage,
+			});
+
+			const result = await service.getOrders({ symbol: 'BTCUSDT', orderListId: 55 });
+			expect(result).toMatchObject({
+				success: true,
+				origin: 'admin_alert',
+				alertId: 'alert-provenance-1',
+				setupType: 'breakout',
+			});
+		});
+
 		it('preserves ORDER_LIST_NOT_FOUND (404) when returned order list belongs to a different symbol', async () => {
 			const client = {
 				getOCO: jest.fn().mockResolvedValue({

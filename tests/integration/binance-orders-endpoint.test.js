@@ -82,6 +82,7 @@ const { getRoutes } = require('../../src/routes');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 const { binanceOrderAuditService } = require('../../src/services/trading/BinanceOrderAuditService');
 const { tradeLedgerService } = require('../../src/services/trading/TradeLedgerService');
+const { bracketOrderStorageService } = require('../../src/services/trading/BinanceOrderService');
 const AlertStorageService = require('../../src/services/storage/AlertStorageService');
 
 function exchangeInfo() {
@@ -871,6 +872,11 @@ describe('Binance orders API', () => {
 			});
 			const auditSpy = jest.spyOn(binanceOrderAuditService, 'recordMutation').mockResolvedValue({});
 			const ledgerSpy = jest.spyOn(tradeLedgerService, 'recordOrderFills').mockResolvedValue({});
+			const bracketStorageSpy = jest.spyOn(bracketOrderStorageService, 'recordOrderList').mockResolvedValue({
+				orderListId: 77,
+				terminal: false,
+				request: { origin: 'admin_alert', alertId: 'alert-77', setupType: 'breakout' },
+			});
 
 			const response = await request(app)
 				.get('/api/trading/binance/orders?symbol=BTCUSDT&listClientOrderId=cb-list-77')
@@ -887,9 +893,13 @@ describe('Binance orders API', () => {
 			expect(ledgerSpy).toHaveBeenCalledWith(expect.objectContaining({
 				environment: 'testnet',
 				order: expect.objectContaining({ orderId: 78, fills: expect.any(Array) }),
+				origin: 'admin_alert',
+				alertId: 'alert-77',
+				setupType: 'breakout',
 			}));
 			auditSpy.mockRestore();
 			ledgerSpy.mockRestore();
+			bracketStorageSpy.mockRestore();
 		});
 
 		it('reconciles an OTOCO order list by exchange orderListId', async () => {

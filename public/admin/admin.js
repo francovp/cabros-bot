@@ -4587,15 +4587,20 @@ const createSpotBracketForm = () => {
 			timeInForce: timeInForce.value,
 			dryRun,
 		};
-		if (latestAlert && latestAlert.id) {
+		const alertSymbol = latestAlert && (
+			(latestCandidate && latestCandidate.symbol)
+			|| trimFormValue(latestAlert.symbol || (latestAlert.enrichmentData && latestAlert.enrichmentData.symbol)).toUpperCase()
+		);
+		if (latestAlert && latestAlert.id && alertSymbol === payload.symbol) {
 			payload.alertId = String(latestAlert.id).trim();
 			payload.origin = 'admin_alert';
+			if (latestCandidate && latestCandidate.setupType) payload.setupType = latestCandidate.setupType;
 		}
-		if (latestCandidate && latestCandidate.setupType) payload.setupType = latestCandidate.setupType;
 		return payload;
 	};
 
 	loadLatestButton.addEventListener('click', async () => {
+		const requestedVersion = formVersion;
 		const symbolValue = trimFormValue(symbol.value).toUpperCase();
 		if (!ORDER_LIST_QUERY_VALIDATION.symbol(symbolValue)) {
 			showError(latestAlertStatus, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
@@ -4609,6 +4614,9 @@ const createSpotBracketForm = () => {
 			output: latestAlertStatus,
 			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
 		});
+		if (requestedVersion !== formVersion || trimFormValue(symbol.value).toUpperCase() !== symbolValue) {
+			return;
+		}
 		const alert = data && Array.isArray(data.alerts) ? data.alerts[0] : null;
 		if (!alert) {
 			latestAlert = null;

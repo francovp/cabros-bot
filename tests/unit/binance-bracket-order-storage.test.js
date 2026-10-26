@@ -249,6 +249,66 @@ describe('BinanceBracketOrderStorageService', () => {
 		expect(memory.docs.has(detailPath)).toBe(false);
 	});
 
+	it('preserves request metadata across subsequent recordOrderList calls and recovers via getBracketOrder', async () => {
+		const reservation = await storage.reserve({
+			idempotencyKey: 'bracket-meta-key',
+			requestFingerprint: 'b'.repeat(64),
+			listClientOrderId: 'cb_list_meta',
+			symbol: 'BTCUSDT',
+			environment: 'testnet',
+		});
+		const orderList = {
+			orderListId: 555,
+			listClientOrderId: 'cb_list_meta',
+			listOrderStatus: 'EXECUTING',
+			orderReports: [{ orderId: 10, status: 'NEW' }],
+		};
+		const initialRecord = await storage.recordOrderList({
+			keyHash: reservation.keyHash,
+			requestFingerprint: 'b'.repeat(64),
+			symbol: 'BTCUSDT',
+			environment: 'testnet',
+			request: {
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				origin: 'admin_alert',
+				alertId: 'alert-meta-1',
+				setupType: 'breakout',
+			},
+			orderList,
+		});
+		expect(initialRecord.request).toMatchObject({
+			origin: 'admin_alert',
+			alertId: 'alert-meta-1',
+			setupType: 'breakout',
+		});
+
+		// Subsequent record without request preserves existing metadata
+		const updatedRecord = await storage.recordOrderList({
+			symbol: 'BTCUSDT',
+			environment: 'testnet',
+			orderList: {
+				...orderList,
+				listOrderStatus: 'ALL_DONE',
+			},
+		});
+		expect(updatedRecord.request).toMatchObject({
+			origin: 'admin_alert',
+			alertId: 'alert-meta-1',
+			setupType: 'breakout',
+		});
+
+		const fetched = await storage.getBracketOrder({
+			environment: 'testnet',
+			listClientOrderId: 'cb_list_meta',
+		});
+		expect(fetched.request).toMatchObject({
+			origin: 'admin_alert',
+			alertId: 'alert-meta-1',
+			setupType: 'breakout',
+		});
+	});
+
 	it('fails closed when Firestore cannot provide transactional reservations', async () => {
 		const unavailable = createBinanceBracketOrderStorageService({ getFirestore: () => null });
 		await expect(unavailable.reserve({

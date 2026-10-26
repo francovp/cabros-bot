@@ -197,6 +197,9 @@ async function getBinanceOrders(req, res) {
 			console.warn('[BinanceOrdersController] audit logging failed:', err?.message || err);
 		});
 
+		const orderOrigin = result.origin ?? resultOrderList?.origin;
+		const orderAlertId = result.alertId ?? resultOrderList?.alertId;
+		const orderSetupType = result.setupType ?? resultOrderList?.setupType;
 		const reconciledOrders = [result.order, ...(Array.isArray(resultOrderList?.orderReports) ? resultOrderList.orderReports : [])];
 		for (const order of reconciledOrders) {
 			if (!Array.isArray(order?.fills) || order.fills.length === 0) continue;
@@ -204,6 +207,9 @@ async function getBinanceOrders(req, res) {
 				tradeLedgerService.recordOrderFills({
 					environment: result.environment,
 					order,
+					...(orderOrigin ? { origin: orderOrigin } : {}),
+					...(orderAlertId ? { alertId: orderAlertId } : {}),
+					...(orderSetupType ? { setupType: orderSetupType } : {}),
 				}).catch((err) => {
 					console.warn('[BinanceOrdersController] trade ledger fill recording failed on reconcile:', err?.message || err);
 				}),

@@ -173,6 +173,21 @@ function createBinanceBracketOrderStorageService({
 		}
 	}
 
+	async function getBracketOrder({ environment, listClientOrderId } = {}) {
+		if (typeof listClientOrderId !== 'string' || !listClientOrderId.trim()) {
+			return null;
+		}
+		const firestore = requireFirestore();
+		const detailRef = firestore.collection(ORDER_COLLECTION).doc(makeDocumentId(environment, { listClientOrderId: listClientOrderId.trim() }));
+		try {
+			const snapshot = await detailRef.get();
+			return snapshot.exists ? snapshot.data() || {} : null;
+		} catch (error) {
+			if (error instanceof BinanceBracketStorageError) throw error;
+			throw new BinanceBracketStorageError('Bracket order could not be read');
+		}
+	}
+
 	async function recordOrderList({
 		keyHash,
 		requestFingerprint,
@@ -188,12 +203,14 @@ function createBinanceBracketOrderStorageService({
 		const timestamp = new Date(now());
 		const terminal = isTerminalOrderList(orderList);
 		const detailRef = firestore.collection(ORDER_COLLECTION).doc(makeDocumentId(environment, orderList));
+		let persistedRequest = request || null;
 
 		try {
 			await firestore.runTransaction(async (transaction) => {
 				const existingSnapshot = await transaction.get(detailRef);
 				const existing = existingSnapshot.exists ? existingSnapshot.data() || {} : {};
 				const resolvedKeyHash = keyHash || existing.keyHash;
+				persistedRequest = request || existing.request || null;
 				const reservationRef = resolvedKeyHash
 					? firestore.collection(RESERVATION_COLLECTION).doc(resolvedKeyHash)
 					: null;
@@ -216,7 +233,7 @@ function createBinanceBracketOrderStorageService({
 					environment: environment || existing.environment,
 					symbol: symbol || existing.symbol,
 					type: 'BRACKET_LIMIT',
-					request: request || existing.request,
+					request: persistedRequest,
 					orderList,
 					status: orderList.listOrderStatus || orderList.listStatusType || 'UNKNOWN',
 					createdAt: existing.createdAt || timestamp,
@@ -237,7 +254,7 @@ function createBinanceBracketOrderStorageService({
 					transaction.set(reservationRef, reservationUpdate, { merge: true });
 				}
 			});
-			return { orderListId: orderList.orderListId ?? null, terminal };
+			return { orderListId: orderList.orderListId ?? null, terminal, request: persistedRequest };
 		} catch {
 			throw new BinanceBracketStorageError('Bracket order-list result could not be persisted');
 		}
@@ -247,6 +264,7 @@ function createBinanceBracketOrderStorageService({
 		reserve,
 		getReservation,
 		updateReservation,
+		getBracketOrder,
 		recordOrderList,
 	};
 }
