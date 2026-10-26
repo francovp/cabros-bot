@@ -10316,7 +10316,30 @@ describe('structured analysis forms', () => {
 		expect(viewText).toContain('No recent delivery metrics reported or alert storage disabled');
 		expect(viewText).toContain('Delivery metrics unavailable');
 		expect(viewText).not.toContain('All configured services and delivery channels operating normally');
-		expect(viewText).toContain('Some work metrics unavailable');
+		expect(viewText).toContain('Job metrics unavailable');
 		expect(viewText).toContain('No recent alerts stored or alert storage disabled');
+	});
+
+	it('renders available jobs independently of outcome tracking status', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response({ service: { name: 'cabros-bot' }, featureFlags: { signalOutcomeTracking: false } });
+				if (url.startsWith('/api/alerts/summary')) return response({ summary: { delivery: { totalFailure: 0 } } });
+				if (url.startsWith('/api/jobs')) return response({ jobs: [{ jobId: 'job-123', status: 'processing', type: 'analysis' }] });
+				if (url.startsWith('/api/outcomes')) return response({ error: 'disabled' }, 403);
+				return response({ alerts: [] });
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('Active background jobs (1)');
+		expect(viewText).toContain('job-123');
+		expect(viewText).toContain('Outcome tracking disabled');
+		expect(viewText).not.toContain('Outcome metrics unavailable');
+		expect(viewText).not.toContain('retry after dependencies recover');
 	});
 });

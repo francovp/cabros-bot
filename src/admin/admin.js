@@ -2311,6 +2311,7 @@ const renderDeliveryHealthDashboard = (container, deliverySummary) => {
 
 const renderActiveWorkDashboard = (container, { jobsData, outcomesData, status }) => {
 	container.replaceChildren();
+	const trackingEnabled = Boolean(status?.featureFlags?.signalOutcomeTracking);
 	const jobsAvailable = Array.isArray(jobsData?.jobs);
 	const outcomesAvailable = Array.isArray(outcomesData?.outcomes);
 	const jobs = jobsAvailable ? jobsData.jobs : [];
@@ -2324,47 +2325,60 @@ const renderActiveWorkDashboard = (container, { jobsData, outcomesData, status }
 	const evaluatedOutcomes = outcomes.filter((o) => Object.values(asObject(o.outcomes))
 		.some((window) => window?.status === 'evaluated'));
 
+	const pendingCountLabel = trackingEnabled
+		? (outcomesAvailable ? pendingOutcomes.length : '—')
+		: '—';
+	const pendingDetailLabel = trackingEnabled
+		? (outcomesAvailable ? `${evaluatedOutcomes.length} evaluated signals` : 'Outcome metrics unavailable')
+		: 'Outcome tracking disabled';
+
 	const metricsGrid = element('div', { className: 'metric-grid' });
 	metricsGrid.append(
 		createMetricCard('In-flight jobs', inFlightJobs.length, `${completedJobs.length} completed · ${failedJobs.length} failed`),
-		createMetricCard('Pending outcomes', outcomesAvailable ? pendingOutcomes.length : '—',
-			outcomesAvailable ? `${evaluatedOutcomes.length} evaluated signals` : 'Outcome metrics unavailable'),
-		createMetricCard('Outcome tracking', status?.featureFlags?.signalOutcomeTracking ? 'Active' : 'Disabled', 'Signal evaluation'),
+		createMetricCard('Pending outcomes', pendingCountLabel, pendingDetailLabel),
+		createMetricCard('Outcome tracking', trackingEnabled ? 'Active' : 'Disabled', 'Signal evaluation'),
 		createMetricCard('Worker health', displayStatus(status?.dependencies?.signalOutcomeWorker?.status || 'disabled'), 'Background worker'),
 	);
 
 	const workList = element('div', { className: 'form-fields' });
-	if (!jobsAvailable || !outcomesAvailable) {
-		workList.append(createEmptyState('Some work metrics unavailable; retry after dependencies recover.'));
-	} else if (!inFlightJobs.length && !pendingOutcomes.length) {
-		workList.append(createEmptyState('No in-flight background jobs or pending outcome evaluations.'));
-	} else {
-		if (inFlightJobs.length > 0) {
-			const jobGroup = element('div');
-			jobGroup.append(element('strong', { text: `Active background jobs (${inFlightJobs.length}):` }));
-			inFlightJobs.slice(0, 5).forEach((job) => {
-				const item = element('div', { className: 'mono-line' });
-				item.append(
-					element('span', { className: 'status-badge status-active', text: job.status }),
-					element('span', { text: `${job.jobId} · ${job.type || 'analysis'}` }),
-				);
-				jobGroup.append(item);
-			});
-			workList.append(jobGroup);
-		}
-		if (pendingOutcomes.length > 0) {
-			const outcomeGroup = element('div');
-			outcomeGroup.append(element('strong', { text: `Pending signal evaluations (${pendingOutcomes.length}):` }));
-			pendingOutcomes.slice(0, 5).forEach((outcome) => {
-				const item = element('div', { className: 'mono-line' });
-				item.append(
-						element('span', { className: 'status-badge status-active', text: 'pending' }),
-					element('span', { text: `${outcome.symbol || outcome.id} · waiting evaluation` }),
-				);
-				outcomeGroup.append(item);
-			});
-			workList.append(outcomeGroup);
-		}
+	if (inFlightJobs.length > 0) {
+		const jobGroup = element('div');
+		jobGroup.append(element('strong', { text: `Active background jobs (${inFlightJobs.length}):` }));
+		inFlightJobs.slice(0, 5).forEach((job) => {
+			const item = element('div', { className: 'mono-line' });
+			item.append(
+				element('span', { className: 'status-badge status-active', text: job.status }),
+				element('span', { text: `${job.jobId} · ${job.type || 'analysis'}` }),
+			);
+			jobGroup.append(item);
+		});
+		workList.append(jobGroup);
+	}
+	if (pendingOutcomes.length > 0) {
+		const outcomeGroup = element('div');
+		outcomeGroup.append(element('strong', { text: `Pending signal evaluations (${pendingOutcomes.length}):` }));
+		pendingOutcomes.slice(0, 5).forEach((outcome) => {
+			const item = element('div', { className: 'mono-line' });
+			item.append(
+				element('span', { className: 'status-badge status-active', text: 'pending' }),
+				element('span', { text: `${outcome.symbol || outcome.id} · waiting evaluation` }),
+			);
+			outcomeGroup.append(item);
+		});
+		workList.append(outcomeGroup);
+	}
+
+	if (!jobsAvailable) {
+		workList.append(createEmptyState('Job metrics unavailable; retry after dependencies recover.'));
+	}
+	if (trackingEnabled && !outcomesAvailable) {
+		workList.append(createEmptyState('Outcome metrics unavailable; retry after dependencies recover.'));
+	}
+
+	if (!inFlightJobs.length && !pendingOutcomes.length && jobsAvailable && (!trackingEnabled || outcomesAvailable)) {
+		workList.append(createEmptyState(trackingEnabled
+			? 'No in-flight background jobs or pending outcome evaluations.'
+			: 'No in-flight background jobs.'));
 	}
 
 	container.append(metricsGrid, element('p', { className: 'request-state', text: 'Counts reflect the latest 20 jobs and outcomes.' }), workList);
