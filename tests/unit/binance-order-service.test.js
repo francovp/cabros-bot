@@ -705,6 +705,102 @@ describe('BinanceOrderService', () => {
 		expect(client.submitNewOrderListOTOCO).not.toHaveBeenCalled();
 	});
 
+	it('allows existing non-GTC bracket reservations to be reconciled while rejecting new submissions', async () => {
+		const idempotencyKey = 'legacy-ioc-bracket-key';
+		const request = {
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'BRACKET_LIMIT',
+			quantity: '0.2',
+			price: '100',
+			stopPrice: '90',
+			stopLimitPrice: '89',
+			takeProfitPrice: '110',
+			timeInForce: 'IOC',
+			dryRun: false,
+		};
+		const legacyFingerprint = crypto.createHash('sha256').update([
+			request.symbol,
+			request.side,
+			request.type,
+			request.quantity,
+			request.price,
+			request.stopPrice,
+			request.stopLimitPrice,
+			request.takeProfitPrice,
+			request.timeInForce,
+			'',
+		].join(':')).digest('hex');
+		const legacyListClientOrderId = `cb_${crypto.createHash('sha256')
+			.update(`cabros-binance-bracket:${idempotencyKey}:${legacyFingerprint}:list`)
+			.digest('hex')
+			.slice(0, 32)}`;
+		const storedRequest = {
+			symbol: request.symbol,
+			side: request.side,
+			type: request.type,
+			quantity: request.quantity,
+			price: request.price,
+			stopPrice: request.stopPrice,
+			stopLimitPrice: request.stopLimitPrice,
+			takeProfitPrice: request.takeProfitPrice,
+			timeInForce: request.timeInForce,
+		};
+		const reservation = {
+			keyHash: 'f'.repeat(64),
+			requestFingerprint: legacyFingerprint,
+			listClientOrderId: legacyListClientOrderId,
+			symbol: request.symbol,
+			environment: 'testnet',
+			state: 'SUBMITTED',
+		};
+		const orderList = {
+			orderListId: 91,
+			symbol: request.symbol,
+			listClientOrderId: legacyListClientOrderId,
+			listOrderStatus: 'EXECUTING',
+			orders: [],
+			orderReports: [],
+		};
+		const storage = {
+			getReservation: jest.fn()
+				.mockResolvedValueOnce(null)
+				.mockResolvedValue({ ...reservation }),
+			getBracketOrder: jest.fn().mockResolvedValue({ request: storedRequest }),
+			recordOrderList: jest.fn().mockResolvedValue({ request: storedRequest }),
+			updateReservation: jest.fn().mockResolvedValue({}),
+		};
+		const client = {
+			getOCO: jest.fn().mockResolvedValue(orderList),
+			submitNewOrderListOTOCO: jest.fn(),
+		};
+		const createClient = jest.fn(() => client);
+		const service = createServiceWithDefaultControl({
+			createClient,
+			bracketOrderStorageService: storage,
+		});
+
+		// 1. Without reservation: rejected before client initialization or submission
+		await expect(service.placeOrder(request, { idempotencyKey })).rejects.toMatchObject({
+			code: 'INVALID_ORDER_REQUEST',
+			statusCode: 400,
+			message: expect.stringContaining('GTC'),
+		});
+		expect(createClient).not.toHaveBeenCalled();
+		expect(client.getOCO).not.toHaveBeenCalled();
+		expect(client.submitNewOrderListOTOCO).not.toHaveBeenCalled();
+
+		// 2. With matching existing reservation: successfully reconciled
+		await expect(service.placeOrder(request, { idempotencyKey })).resolves.toMatchObject({
+			success: true,
+			dryRun: false,
+			orderList: expect.objectContaining({ orderListId: 91 }),
+		});
+		expect(createClient).toHaveBeenCalledTimes(1);
+		expect(client.getOCO).toHaveBeenCalledWith({ origClientOrderId: legacyListClientOrderId });
+		expect(client.submitNewOrderListOTOCO).not.toHaveBeenCalled();
+	});
+
 	it('allows a bracket idempotency key to retry after the kill switch blocks pre-submit', async () => {
 		let reservation = null;
 		let pauseChecks = 0;

@@ -541,9 +541,6 @@ function normalizeRequest(body) {
 	if (type === 'MARKET' && timeInForce !== undefined) {
 		throw new BinanceOrderRequestError('MARKET orders do not accept timeInForce');
 	}
-	if (type === 'BRACKET_LIMIT' && timeInForce !== 'GTC') {
-		throw new BinanceOrderRequestError('BRACKET_LIMIT requires GTC timeInForce to keep its entry and protective stop active');
-	}
 	if (['LIMIT', 'STOP_LOSS_LIMIT', 'TAKE_PROFIT_LIMIT', 'BRACKET_LIMIT'].includes(type) && timeInForce === undefined) {
 		throw new BinanceOrderRequestError(`${type} orders require timeInForce`);
 	}
@@ -1426,10 +1423,15 @@ async function placeBracketOrder({
 	config,
 	order,
 	requestIdempotencyKey,
-	client,
+	client: clientArg,
 	storage,
 	ensureTradingControlOpen,
 }) {
+	const resolveClient = () => {
+		if (typeof clientArg === 'function') return clientArg();
+		return clientArg;
+	};
+
 	if (!order.dryRun && !hasValue(requestIdempotencyKey)) {
 		throw new BinanceOrderRequestError('Live BRACKET_LIMIT orders require an Idempotency-Key header', 'LIVE_ORDER_ID_REQUIRED');
 	}
@@ -1473,8 +1475,9 @@ async function placeBracketOrder({
 		}
 		let reconciled;
 		try {
-			if (typeof client.getOCO !== 'function') throw new Error('order-list query unavailable');
-			reconciled = await withTimeout(client.getOCO({
+			const binanceClient = resolveClient();
+			if (typeof binanceClient.getOCO !== 'function') throw new Error('order-list query unavailable');
+			reconciled = await withTimeout(binanceClient.getOCO({
 				origClientOrderId: reservation.listClientOrderId || replayIdentity.listClientOrderId,
 			}), config.timeoutMs);
 		} catch {
@@ -1492,7 +1495,7 @@ async function placeBracketOrder({
 		if (!reconciled || reconciled.listClientOrderId !== replayIdentity.listClientOrderId || reconciled.symbol !== order.symbol) {
 			throw new BinanceOrderRequestError('Reconciled Binance order list does not match the request', 'BINANCE_ORDER_CONFLICT', 409);
 		}
-		reconciled = await hydrateOrderListReports(client, reconciled, config.timeoutMs);
+		reconciled = await hydrateOrderListReports(resolveClient(), reconciled, config.timeoutMs);
 		await persistOrderList(reconciled, reservation, { identity: replayIdentity, request: storedRequest });
 		return makeBracketSuccessResult({ config, order: resultOrder, orderList: reconciled, dryRun: false });
 	};
@@ -1556,6 +1559,10 @@ async function placeBracketOrder({
 		}
 	}
 
+	if (order.timeInForce !== 'GTC') {
+		throw new BinanceOrderRequestError('BRACKET_LIMIT requires GTC timeInForce to keep its entry and protective stop active');
+	}
+
 	if (!config.allowedSymbols.includes(order.symbol)) {
 		throw new BinanceOrderRequestError('symbol is not allowed for Binance trading');
 	}
@@ -1563,7 +1570,7 @@ async function placeBracketOrder({
 	let exchangeInfo;
 	let symbolInfo;
 	try {
-		exchangeInfo = await client.getExchangeInfo({ symbol: order.symbol });
+		exchangeInfo = await resolveClient().getExchangeInfo({ symbol: order.symbol });
 		symbolInfo = getSymbolInfo(exchangeInfo, order.symbol);
 	} catch {
 		throw new BinanceOrderServiceError('Binance symbol validation failed', 'BINANCE_VALIDATION_FAILED');
@@ -1627,7 +1634,7 @@ async function placeBracketOrder({
 		},
 	];
 	for (const testOrder of testOrders) {
-		await validateOrderTestFilters(client, testOrder, buildOrderParams(testOrder), filters, ensureTradingControlOpen);
+		await validateOrderTestFilters(resolveClient(), testOrder, buildOrderParams(testOrder), filters, ensureTradingControlOpen);
 	}
 	if (order.dryRun) {
 		return {
@@ -1671,7 +1678,7 @@ async function placeBracketOrder({
 		throw error;
 	}
 	try {
-		const response = await client.submitNewOrderListOTOCO(orderListParams);
+		const response = await resolveClient().submitNewOrderListOTOCO(orderListParams);
 		if (!response || response.symbol !== order.symbol || response.listClientOrderId !== identity.listClientOrderId) {
 			try {
 				await storage.updateReservation({ keyHash: reservation.keyHash, state: 'AMBIGUOUS' });
@@ -1685,7 +1692,12 @@ async function placeBracketOrder({
 			);
 		}
 		await persistOrderList(response, reservation);
-		return makeBracketSuccessResult({ config, order, orderList: response, dryRun: false });
+		return makeBracketSuccessResult({
+			config,
+			order,
+			orderList: await hydrateOrderListReports(resolveClient(), response, config.timeoutMs),
+			dryRun: false,
+		});
 	} catch (error) {
 		if (error instanceof BinanceOrderServiceError && error.code === 'BINANCE_ORDER_STATUS_UNKNOWN') throw error;
 		if (isDefinitiveBinanceRejection(error)) {
@@ -2042,21 +2054,28 @@ function createBinanceOrderService({
 				);
 			}
 			let client;
-			try {
-				client = createClient(config);
-			} catch (error) {
-				throw new BinanceOrderServiceError('Binance client could not be initialized', 'BINANCE_CLIENT_UNAVAILABLE', 503);
-			}
+			const getClient = () => {
+				if (!client) {
+					try {
+						client = createClient(config);
+					} catch (error) {
+						throw new BinanceOrderServiceError('Binance client could not be initialized', 'BINANCE_CLIENT_UNAVAILABLE', 503);
+					}
+				}
+				return client;
+			};
 			if (order.type === 'BRACKET_LIMIT') {
 				return placeBracketOrder({
 					config,
 					order,
 					requestIdempotencyKey,
-					client,
+					client: getClient,
 					storage: bracketOrderStorageService,
 					ensureTradingControlOpen,
 				});
 			}
+
+			client = getClient();
 
 			const clientOrderId = order.clientOrderId
 				|| (!order.dryRun ? deriveClientOrderId(requestIdempotencyKey, order) : undefined);
