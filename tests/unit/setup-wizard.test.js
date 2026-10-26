@@ -68,6 +68,11 @@ describe('serializeEnv', () => {
 		const out = wizard.serializeEnv([['KEY', 'has space']]);
 		expect(out).toMatch(/KEY="has space"/);
 	});
+
+	it('escapes quotes and backslashes in quoted values', () => {
+		const out = wizard.serializeEnv([['KEY', 'quote"and\\slash']]);
+		expect(out).toMatch(/KEY="quote\\"and\\\\slash"/);
+	});
 });
 
 describe('generateApiKey and generateCallbackSecret', () => {

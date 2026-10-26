@@ -77,8 +77,8 @@ function serializeEnv(entries) {
 		'',
 	];
 	for (const [key, value] of entries) {
-		const needsQuotes = /[\s#"'=]/.test(String(value));
-		const formatted = needsQuotes ? `"${String(value).replace(/"/g, '\\"')}"` : value;
+		const needsQuotes = /[\s#"'=\\]/.test(String(value));
+		const formatted = needsQuotes ? `"${String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"` : value;
 		lines.push(`${key}=${formatted}`);
 	}
 	lines.push('');
