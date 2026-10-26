@@ -1,5 +1,6 @@
 'use strict';
 
+const { generateKeyPairSync } = require('crypto');
 const mockRemoteOverrides = {};
 const firestoreGateKeys = [
 	'ENABLE_FIRESTORE_ALERT_STORAGE',
@@ -8,11 +9,21 @@ const firestoreGateKeys = [
 	'ENABLE_FIRESTORE_IDEMPOTENCY',
 ];
 
+const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
+	type: 'pkcs1',
+	format: 'pem',
+});
+const validFirestoreServiceAccountJson = JSON.stringify({
+	project_id: 'selftest-test',
+	client_email: 'firebase-adminsdk@test-project.iam.gserviceaccount.com',
+	private_key: testPrivateKey,
+});
+
 jest.mock('../../src/services/remoteConfig/resolveRemoteOverride', () => ({
 	resolveRemoteOverride: jest.fn((key) => mockRemoteOverrides[key]),
 }));
 
-const { createSelfTestService, RESULT_TTL_MS } = require('../../src/services/diagnostics/SelfTestService');
+const { createSelfTestService, RESULT_TTL_MS, FIRESTORE_STORAGE_GATES } = require('../../src/services/diagnostics/SelfTestService');
 
 function resetEnv() {
 	delete process.env.BOT_TOKEN;
@@ -27,8 +38,32 @@ function resetEnv() {
 	delete process.env.ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE;
 	delete process.env.ENABLE_FIRESTORE_JOB_STORAGE;
 	delete process.env.ENABLE_FIRESTORE_SCANNER_PRESETS;
+	delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
+	delete process.env.ENABLE_FIRESTORE_NEWS_ANALYSIS;
+	delete process.env.ENABLE_FIRESTORE_ALERT_FEEDBACK;
+	delete process.env.ENABLE_FIRESTORE_CHAT_PREFERENCES;
+	delete process.env.ENABLE_FIRESTORE_ALERT_SUBSCRIBERS;
+	delete process.env.ENABLE_BINANCE_ORDER_AUDIT;
+	delete process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE;
+	delete process.env.ENABLE_TRADE_LEDGER;
+	delete process.env.ENABLE_AUTO_TRADE;
+	delete process.env.ENABLE_NOTIFICATION_REDRIVE;
+	delete process.env.ENABLE_USER_PRICE_ALERTS;
+	delete process.env.ENABLE_ALERT_SCHEDULER;
+	delete process.env.ENABLE_NEWS_MONITOR_SCHEDULER;
+	delete process.env.ENABLE_TOKEN_COST_BUDGET;
 	delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 	delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+	delete process.env.FIREBASE_PROJECT_ID;
+	delete process.env.GOOGLE_CLOUD_PROJECT;
+	delete process.env.GCLOUD_PROJECT;
+	delete process.env.K_SERVICE;
+	delete process.env.K_REVISION;
+	delete process.env.FUNCTION_TARGET;
+	delete process.env.FUNCTION_NAME;
+	delete process.env.GAE_SERVICE;
+	delete process.env.GCE_METADATA_HOST;
+	delete process.env.GCE_METADATA_IP;
 	delete process.env.ENABLE_BINANCE_TRADING;
 	delete process.env.BINANCE_API_KEY;
 	delete process.env.BINANCE_API_SECRET;
@@ -97,7 +132,7 @@ describe('SelfTestService', () => {
 
 	it.each(firestoreGateKeys)('enables the Firestore diagnostic when remote %s overrides a disabled environment gate', async (key) => {
 		process.env[key] = 'false';
-		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{}';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
 		mockRemoteOverrides[key] = true;
 		const svc = createSelfTestService({ botOrGetter: () => null });
 
@@ -122,7 +157,7 @@ describe('SelfTestService', () => {
 
 	it('uses the legacy idempotency environment alias when no remote value is published', async () => {
 		process.env.ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE = 'true';
-		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{}';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
 		const svc = createSelfTestService({ botOrGetter: () => null });
 
 		const result = await svc.run({ only: 'firestore.collections' });
@@ -142,6 +177,121 @@ describe('SelfTestService', () => {
 			status: 'skipped',
 			message: 'No Firestore feature is enabled',
 		});
+	});
+
+	it('fails the Firestore diagnostic when credentials are malformed JSON string', async () => {
+		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{"project_id":';
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'firestore.collections' });
+
+		expect(result.checks[0]).toMatchObject({
+			id: 'firestore.collections',
+			status: 'fail',
+			message: 'Firestore enabled but credentials are missing',
+		});
+	});
+
+	it('fails the Firestore diagnostic when inline credentials contain invalid/empty JSON object', async () => {
+		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = '{}';
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'firestore.collections' });
+
+		expect(result.checks[0]).toMatchObject({
+			id: 'firestore.collections',
+			status: 'fail',
+			message: 'Firestore enabled but credentials are missing',
+		});
+	});
+
+	it('fails the Firestore diagnostic when storage is enabled but credentials are completely missing', async () => {
+		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'firestore.collections' });
+
+		expect(result.checks[0]).toMatchObject({
+			id: 'firestore.collections',
+			status: 'fail',
+			message: 'Firestore enabled but credentials are missing',
+		});
+	});
+
+	it('passes the Firestore diagnostic on GCP managed runtime using ADC without explicit credentials', async () => {
+		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+		process.env.K_SERVICE = 'cabros-bot-worker';
+		process.env.FIREBASE_PROJECT_ID = 'test-gcp-project';
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'firestore.collections' });
+
+		expect(result.checks[0]).toMatchObject({
+			id: 'firestore.collections',
+			status: 'pass',
+			message: 'Firestore credentials are configured',
+		});
+	});
+
+	it.each([
+		'ENABLE_SIGNAL_OUTCOME_TRACKING',
+		'ENABLE_FIRESTORE_NEWS_ANALYSIS',
+		'ENABLE_FIRESTORE_ALERT_FEEDBACK',
+		'ENABLE_FIRESTORE_CHAT_PREFERENCES',
+		'ENABLE_FIRESTORE_ALERT_SUBSCRIBERS',
+		'ENABLE_BINANCE_ORDER_AUDIT',
+		'ENABLE_SYMBOL_ANALYSIS_STORAGE',
+		'ENABLE_TRADE_LEDGER',
+		'ENABLE_AUTO_TRADE',
+		'ENABLE_NOTIFICATION_REDRIVE',
+		'ENABLE_USER_PRICE_ALERTS',
+		'ENABLE_ALERT_SCHEDULER',
+		'ENABLE_NEWS_MONITOR_SCHEDULER',
+		'ENABLE_TOKEN_COST_BUDGET',
+	])('triggers the Firestore diagnostic check when %s is enabled', async (key) => {
+		process.env[key] = 'true';
+		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'firestore.collections' });
+
+		expect(result.checks[0]).toMatchObject({
+			id: 'firestore.collections',
+			status: 'pass',
+			message: 'Firestore credentials are configured',
+		});
+	});
+
+	it('skips the Firestore diagnostic when all storage gates are disabled', async () => {
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'firestore.collections' });
+
+		expect(result.checks[0]).toMatchObject({
+			id: 'firestore.collections',
+			status: 'skipped',
+			message: 'No Firestore feature is enabled',
+		});
+	});
+
+	it('exports FIRESTORE_STORAGE_GATES array containing all known storage features', () => {
+		expect(Array.isArray(FIRESTORE_STORAGE_GATES)).toBe(true);
+		expect(FIRESTORE_STORAGE_GATES).toContain('ENABLE_FIRESTORE_ALERT_STORAGE');
+		expect(FIRESTORE_STORAGE_GATES).toContain('ENABLE_SIGNAL_OUTCOME_TRACKING');
+		expect(FIRESTORE_STORAGE_GATES).toContain('ENABLE_FIRESTORE_NEWS_ANALYSIS');
+		expect(FIRESTORE_STORAGE_GATES).toContain('ENABLE_FIRESTORE_ALERT_FEEDBACK');
+		expect(FIRESTORE_STORAGE_GATES).toContain('ENABLE_BINANCE_ORDER_AUDIT');
+		expect(FIRESTORE_STORAGE_GATES).toContain('ENABLE_TRADE_LEDGER');
+		expect(FIRESTORE_STORAGE_GATES).toContain('ENABLE_AUTO_TRADE');
+		expect(FIRESTORE_STORAGE_GATES).toContain('ENABLE_NOTIFICATION_REDRIVE');
+		expect(FIRESTORE_STORAGE_GATES).toContain('ENABLE_USER_PRICE_ALERTS');
+		expect(FIRESTORE_STORAGE_GATES).toContain('ENABLE_TOKEN_COST_BUDGET');
 	});
 
 	it('fails Gemini grounding when enabled without API key', async () => {
