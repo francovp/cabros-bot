@@ -956,6 +956,23 @@ describe('profiling configuration', () => {
 		expect(service.isProfilingEnabled()).toBe(false);
 	});
 
+	it('treats a zero profile sample rate as disabled', () => {
+		process.env.ENABLE_SENTRY = 'true';
+		process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+		process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+		process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE = '0';
+		service.init();
+
+		expect(service.isProfilingEnabled()).toBe(false);
+		const initCall = Sentry.init.mock.calls[0][0];
+		expect(initCall.profileSessionSampleRate).toBeUndefined();
+		expect(initCall.profileLifecycle).toBeUndefined();
+		expect(initCall.integrations(['default-integration'])).toEqual([
+			'default-integration',
+			'console-logging-integration',
+		]);
+	});
+
 	it('isProfilingEnabled() should return false when tracing is disabled', () => {
 		process.env.ENABLE_SENTRY = 'true';
 		process.env.SENTRY_DSN = 'https://key@sentry.io/123';

@@ -257,8 +257,8 @@ class SentryService {
 		const dsn = process.env.SENTRY_DSN || undefined;
 		const enabled = process.env.ENABLE_SENTRY === 'true' && !!dsn;
 		const tracesSampleRate = this._parseOptionalSampleRate(process.env.SENTRY_TRACES_SAMPLE_RATE);
-		// Profiling requires tracing; only parse profile rate when tracing is enabled
-		const profileSessionSampleRate = tracesSampleRate !== undefined
+		// Profiling requires active tracing; a zero trace rate disables it.
+		const profileSessionSampleRate = tracesSampleRate > 0
 			? this._parseOptionalSampleRate(process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE)
 			: undefined;
 
@@ -314,8 +314,8 @@ class SentryService {
 					const extra = [Sentry.consoleLoggingIntegration({ levels: this.config.consoleLogLevels })];
 					// Add profiling integration only when tracing + profiling are both enabled
 					if (
-						this.config.tracesSampleRate !== undefined &&
-						this.config.profileSessionSampleRate !== undefined
+						this.config.tracesSampleRate > 0 &&
+						this.config.profileSessionSampleRate > 0
 					) {
 						extra.push(nodeProfilingIntegration());
 					}
@@ -336,8 +336,8 @@ class SentryService {
 
 			// Profiling: attach profileSessionSampleRate and profileLifecycle only when tracing is on
 			if (
-				this.config.tracesSampleRate !== undefined &&
-				this.config.profileSessionSampleRate !== undefined
+				this.config.tracesSampleRate > 0 &&
+				this.config.profileSessionSampleRate > 0
 			) {
 				initOptions.profileSessionSampleRate = this.config.profileSessionSampleRate;
 				initOptions.profileLifecycle = 'trace';
@@ -391,7 +391,9 @@ class SentryService {
 	 * @returns {boolean}
 	 */
 	isProfilingEnabled() {
-		return this.isTracingEnabled() && !!this.config && this.config.profileSessionSampleRate !== undefined;
+		return this.isTracingEnabled() && !!this.config
+			&& this.config.profileSessionSampleRate !== undefined
+			&& this.config.profileSessionSampleRate > 0;
 	}
 
 	/**
