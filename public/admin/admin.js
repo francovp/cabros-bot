@@ -2206,6 +2206,14 @@ const renderSystemIssuesWarning = (container, { dependencies, deliverySummary, j
 			tone: 'unknown',
 		});
 	}
+	const newsMonitorEnabled = status?.dependencies?.newsMonitor?.enabled ?? status?.featureFlags?.newsMonitor ?? true;
+	if (newsMonitorEnabled && (status?.dependencies?.newsMonitor?.paused || status?.featureFlags?.newsMonitorPaused)) {
+		issues.push({
+			label: 'News monitor paused',
+			detail: 'News ingestion and analysis are paused.',
+			tone: 'unknown',
+		});
+	}
 
 	if (deliverySummary && deliverySummary.summary && deliverySummary.summary.delivery) {
 		const { totalFailure, byChannel } = deliverySummary.summary.delivery;

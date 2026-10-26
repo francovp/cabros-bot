@@ -10342,4 +10342,31 @@ describe('structured analysis forms', () => {
 		expect(viewText).not.toContain('Outcome metrics unavailable');
 		expect(viewText).not.toContain('retry after dependencies recover');
 	});
+
+	it('warns when news monitor is paused instead of declaring healthy', async () => {
+		const status = {
+			service: { name: 'cabros-bot', version: '0.1.0' },
+			featureFlags: { newsMonitor: true, newsMonitorPaused: true },
+			dependencies: {
+				telegram: { enabled: true, ready: true, status: 'ready' },
+				newsMonitor: { enabled: true, paused: true },
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				if (url.startsWith('/api/alerts/summary')) return response({ summary: { delivery: { totalFailure: 0 } } });
+				if (url.startsWith('/api/jobs')) return response({ jobs: [] });
+				return response({ alerts: [] });
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('News monitor paused');
+		expect(viewText).not.toContain('All configured services and delivery channels operating normally');
+	});
 });
