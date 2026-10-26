@@ -402,6 +402,28 @@ describe('NotificationRedriveService', () => {
 			expect(pending.destinationOverride.whatsappChatId).toBe('120363@g.us');
 		});
 
+		it('keeps recipient-specific failures under distinct in-memory and Firestore redrive IDs', async () => {
+			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
+			const alert = { text: 'Alert body', requestId: 'delivery-1' };
+			const failure = [{ channel: 'telegram', success: false, error: 'Connection refused' }];
+			const firstRecipientKey = 'a'.repeat(64);
+			const secondRecipientKey = 'b'.repeat(64);
+
+			const firstIds = await service.recordDeliveryResults(alert, failure, {
+				redriveRecipientKey: firstRecipientKey,
+			});
+			const secondIds = await service.recordDeliveryResults(alert, failure, {
+				redriveRecipientKey: secondRecipientKey,
+			});
+
+			expect(firstIds).toEqual([`delivery-1_telegram_${firstRecipientKey}`]);
+			expect(secondIds).toEqual([`delivery-1_telegram_${secondRecipientKey}`]);
+			expect(service.getPendingCount()).toBe(2);
+			expect(mockDocs.has(firstIds[0])).toBe(true);
+			expect(mockDocs.has(secondIds[0])).toBe(true);
+			expect(mockDocs.size).toBe(2);
+		});
+
 		it('updates the cached durable pending count for local enqueue and terminalization', async () => {
 			service.persistedPendingCount = 7;
 			const alert = { text: 'Alert body', correlationId: 'corr-local-count' };

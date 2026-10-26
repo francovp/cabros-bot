@@ -105,6 +105,44 @@ describe('JobService Unit Tests', () => {
 			}));
 		});
 
+		it('persists preset destination arrays and restores them for worker delivery', async () => {
+			const runBackgroundJobSpy = jest.spyOn(jobService, '_runBackgroundJob').mockResolvedValue();
+			const metadata = await jobService.createJob('market-scanner', {
+				scans: ['top_gainers'],
+				channels: ['telegram'],
+				destinations: { telegramChatIds: ['-1001234567890', '-1009876543210'] },
+			}, undefined, { scannerPresetId: 'preset-1' });
+
+			expect(runBackgroundJobSpy).toHaveBeenCalledWith(metadata.jobId, expect.any(Object), expect.any(Object), undefined);
+			const rawJob = await jobService.repository.get(metadata.jobId);
+			expect(rawJob.requestMetadata.destinations).toEqual({
+				telegramChatIds: ['-1001234567890', '-1009876543210'],
+			});
+			expect(rawJob.requestMetadata.scannerPresetId).toBe('preset-1');
+			expect(jobService._getRoutingFromJob(rawJob)).toMatchObject({
+				channels: ['telegram'],
+				destinations: { telegramChatIds: ['-1001234567890', '-1009876543210'] },
+			});
+			const publicJob = await jobService.getJob(metadata.jobId);
+			expect(JSON.stringify(publicJob)).not.toContain('-1001234567890');
+			expect(publicJob).not.toHaveProperty('destinations');
+		});
+
+		it('does not persist destinations submitted to the general market-scanner job endpoint', async () => {
+			const runBackgroundJobSpy = jest.spyOn(jobService, '_runBackgroundJob').mockResolvedValue();
+			const metadata = await jobService.createJob('market-scanner', {
+				scans: ['top_gainers'],
+				channels: ['telegram'],
+				destinations: { telegramChatIds: ['-1001234567890'] },
+			});
+
+			const rawJob = await jobService.repository.get(metadata.jobId);
+			expect(rawJob.requestMetadata).not.toHaveProperty('destinations');
+			expect(rawJob.requestMetadata).not.toHaveProperty('scannerPresetId');
+			expect(jobService._getRoutingFromJob(rawJob)).not.toHaveProperty('destinations');
+			runBackgroundJobSpy.mockRestore();
+		});
+
 		it('correctly validates and parses timeoutMs string format like 1e3', async () => {
 			const metadata = await jobService.createJob('expanded-analysis', {
 				symbols: ['BINANCE:BTCUSDT'],
@@ -812,6 +850,31 @@ describe('JobService Unit Tests', () => {
 				itemCount: 1,
 			});
 			expect(job.deliveryResults).toBeDefined();
+		});
+
+		it('preserves scanner-preset source for async preset jobs', async () => {
+			const notificationManager = require('../../src/controllers/webhooks/handlers/alert/alert').getNotificationManager();
+			tradingViewMcpService.callScanTool.mockResolvedValue([
+				{ symbol: 'BINANCE:ETHUSDT', changePercent: 5.0, indicators: { close: 3200, RSI: 55 } },
+			]);
+
+			await jobService.createJob('market-scanner', { scans: ['top_gainers'] });
+			await jobService.waitForActiveJobs();
+			expect(notificationManager.sendToAll).toHaveBeenCalledWith(
+				expect.objectContaining({ source: 'tradingview-analysis', category: 'scanner' }),
+				expect.any(Object),
+			);
+
+			notificationManager.sendToAll.mockClear();
+			await jobService.createJob('market-scanner', { scans: ['top_gainers'] }, undefined, {
+				scannerPresetId: 'preset-1',
+			});
+			await jobService.waitForActiveJobs();
+
+			expect(notificationManager.sendToAll).toHaveBeenCalledWith(
+				expect.objectContaining({ source: 'scanner-preset', category: 'scanner' }),
+				expect.any(Object),
+			);
 		});
 
 		it('preserves market-scanner enrichment options for background execution', async () => {

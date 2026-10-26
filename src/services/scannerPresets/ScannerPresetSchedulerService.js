@@ -17,6 +17,7 @@ const requestRoutingModule = require('../notification/requestRouting');
 const sentryService = require('../monitoring/SentryService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
+const { resolveScannerPresetRouting } = require('./scannerPresetRouting');
 
 const DEFAULT_SCHEDULER_INTERVAL_MS = 60000;
 const MIN_SCHEDULER_INTERVAL_MS = 1000;
@@ -541,13 +542,7 @@ class ScannerPresetSchedulerService {
 				}
 
 				if (notificationManager) {
-					const routing = {
-						channels: preset.channels,
-						telegramChatId: preset.telegramChatId,
-						telegramThreadId: preset.telegramThreadId,
-						whatsappChatId: preset.whatsappChatId,
-						discordWebhookUrl: preset.discordWebhookUrl,
-					};
+					const routing = resolveScannerPresetRouting(preset);
 					await requestRoutingModule.sendWithNotificationRouting(notificationManager, { text: alertText, source: 'scanner-preset' }, routing, {
 						parentSpan: sentryService.getActiveSpan(),
 					});

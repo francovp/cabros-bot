@@ -2185,7 +2185,8 @@
             "$ref": "#/components/responses/ScannerPresetResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/Error",
+            "description": "Malformed preset fields return INVALID_REQUEST. Malformed destination arrays or values return 400 INVALID_DESTINATIONS."
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
@@ -2315,7 +2316,7 @@
             "$ref": "#/components/responses/ScannerPresetResult"
           },
           "400": {
-            "description": "Malformed request body, or malformed If-Match header (e.g. a comma-separated entity-tag list or the wildcard \"*\").",
+            "description": "Malformed preset fields return INVALID_REQUEST. Malformed destination arrays or values return 400 INVALID_DESTINATIONS. Malformed If-Match header (e.g. a comma-separated entity-tag list or the wildcard \"*\") returns INVALID_IF_MATCH.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2507,8 +2508,24 @@
           "200": {
             "$ref": "#/components/responses/AnalysisResult"
           },
+          "202": {
+            "description": "The scanner preset run was accepted as an asynchronous market-scanner job. Destination values remain in private job metadata and are not returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerPresetAsyncRunResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/Error",
+            "description": "Invalid routing overrides, a channel filter with no configured destination for its selected channels, or runAsyncJob return 400 INVALID_REQUEST. Invalid preset destinations return 400 INVALID_DESTINATIONS."
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -2533,6 +2550,10 @@
           },
           "502": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "The existing async job queue or durable job store is unavailable; the run was not accepted unless the error includes a jobId."
           },
           "504": {
             "$ref": "#/components/responses/Error"
@@ -8515,7 +8536,13 @@
                       "top_gainers"
                     ],
                     "limit": 5,
-                    "bbwThreshold": 0.05
+                    "bbwThreshold": 0.05,
+                    "destinations": {
+                      "telegramChatIds": [
+                        "-1001234567890"
+                      ],
+                      "discordWebhookCount": 1
+                    }
                   }
                 }
               },
@@ -15192,6 +15219,75 @@
           },
           "bbwThreshold": {
             "type": "number"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "preset",
+              "inherit"
+            ],
+            "default": "inherit",
+            "description": "inherit preserves broadcast behavior; preset sends only to configured destinations. Older records without mode retain their legacy routing."
+          },
+          "destinations": {
+            "$ref": "#/components/schemas/ScannerPresetDestinations"
+          }
+        }
+      },
+      "ScannerPresetDestinations": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Destinations accepted on create and update requests. Discord webhook URLs are stored for delivery and are never returned by preset APIs.",
+        "properties": {
+          "telegramChatIds": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "pattern": "^-?\\d{5,20}$"
+            }
+          },
+          "whatsappChatIds": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{6,20}@(c|g)\\.us$"
+            }
+          },
+          "discordWebhookUrls": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://(?:[A-Za-z0-9-]+\\.)*discord(?:app)?\\.com/api/webhooks/\\d+/[A-Za-z0-9_-]+(?:/.*)?$"
+            }
+          }
+        }
+      },
+      "ScannerPresetResponseDestinations": {
+        "type": "object",
+        "description": "Safe destination projection returned by preset APIs. Discord webhook URLs are never returned; discordWebhookCount reports how many are configured.",
+        "properties": {
+          "telegramChatIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^-?\\d{5,20}$"
+            }
+          },
+          "whatsappChatIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{6,20}@(c|g)\\.us$"
+            }
+          },
+          "discordWebhookCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Configured Discord webhooks. Their URLs and tokens are omitted from all preset responses."
           }
         }
       },
@@ -15201,6 +15297,11 @@
           "dryRun": {
             "type": "boolean",
             "description": "When true, returns configuration validation, MCP readiness, estimated call volume, and resolved channels without executing scans or delivering messages."
+          },
+          "runAsyncJob": {
+            "type": "boolean",
+            "default": false,
+            "description": "When true and dryRun is false, submits the preset through the existing market-scanner job execution path and returns HTTP 202. Synchronous execution remains the default."
           },
           "scans": {
             "type": "array",
@@ -15230,6 +15331,7 @@
           },
           "channels": {
             "type": "array",
+            "description": "Filters the configured preset destinations. If no selected channel has a configured destination, the request returns 400 INVALID_REQUEST before scanning or job creation.",
             "items": {
               "type": "string",
               "enum": [
@@ -16047,6 +16149,7 @@
       },
       "ScannerPreset": {
         "type": "object",
+        "description": "Safe preset response projection. Discord webhook URLs and tokens are omitted; destinations.discordWebhookCount reports configured webhook count.",
         "properties": {
           "id": {
             "type": "string"
@@ -16071,6 +16174,17 @@
           },
           "bbwThreshold": {
             "type": "number"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "preset",
+              "inherit"
+            ],
+            "description": "Mode-less records are legacy presets and keep their prior routing behavior."
+          },
+          "destinations": {
+            "$ref": "#/components/schemas/ScannerPresetResponseDestinations"
           },
           "schedule": {
             "type": "object",
@@ -16114,10 +16228,6 @@
             "type": "string",
             "pattern": "^\\d{6,20}@(c|g)\\.us$",
             "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
-          },
-          "discordWebhookUrl": {
-            "type": "string",
-            "format": "uri"
           },
           "lastRunAt": {
             "type": "string",
@@ -18511,7 +18621,7 @@
             "$ref": "#/components/schemas/JsonObject"
           },
           "featureFlags": {
-            "$ref": "#/components/schemas/JsonObject"
+            "$ref": "#/components/schemas/StatusFeatureFlags"
           },
           "deliveryChannels": {
             "$ref": "#/components/schemas/JsonObject"
@@ -18619,6 +18729,9 @@
               },
               "binanceTrading": {
                 "$ref": "#/components/schemas/BinanceTradingDependency"
+              },
+              "presetBoundDestinations": {
+                "$ref": "#/components/schemas/PresetBoundDestinationsDependency"
               }
             }
           }
@@ -21982,6 +22095,112 @@
           }
         },
         "additionalProperties": true
+      },
+      "ScannerPresetAsyncRunResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Job"
+          },
+          {
+            "type": "object",
+            "required": [
+              "presetId",
+              "requestId",
+              "requestedChannels"
+            ],
+            "properties": {
+              "presetId": {
+                "type": "string"
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "requestedChannels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "telegram",
+                    "whatsapp",
+                    "discord"
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "description": "Accepted scanner-preset job metadata. Resolved destination values are stored in private job metadata and are not returned."
+      },
+      "PresetBoundDestinationsDependency": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "channels",
+          "maxDestinationsPerChannel"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "configured": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "ready": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready"
+            ]
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            }
+          },
+          "maxDestinationsPerChannel": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "additionalProperties": false,
+        "description": "Static support metadata for preset-bound destination routing. Never includes configured destinations."
+      },
+      "StatusFeatureFlags": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "presetBoundDestinations": {
+                "type": "boolean",
+                "description": "Preset routing supports bounded saved Telegram, WhatsApp, and Discord destinations."
+              }
+            }
+          }
+        ]
       }
     },
     "headers": {

@@ -382,6 +382,28 @@ If `status` is `unreachable`, roll the web service back to `local` first — in 
 | `JOB_QUEUE_CONNECT_TIMEOUT_MS` | `5000` | positive | Broker connect timeout for the queue connection. |
 | `JOB_QUEUE_PROBE_TIMEOUT_MS` | `5000` | `1`–`120000` | Startup readiness-probe deadline. Environment-only — a safety deadline, excluded from Firebase Remote Config. |
 
+### Scanner Preset Destinations
+
+Scanner presets can save multiple Telegram, WhatsApp, and Discord destinations. A new preset defaults to `mode: "inherit"`, which keeps the existing broadcast behavior. Set `mode: "preset"` with at least one destination to restrict delivery to the saved recipients; each channel accepts up to 20 validated destination values. Older presets without a mode keep their existing legacy routing.
+
+```json
+{
+  "name": "Private BTC Watchlist",
+  "mode": "preset",
+  "destinations": {
+    "telegramChatIds": ["-1001234567890"],
+    "whatsappChatIds": ["56912345678@c.us"],
+    "discordWebhookUrls": ["https://discord.com/api/webhooks/123456789012345678/example-token"]
+  }
+}
+```
+
+Manual runs and scheduled runs share the same routing rules. A manual run can override the saved destination for a channel with the existing `telegramChatId`, `whatsappChatId`, or `discordWebhookUrl` request field; `channels` filters the preset's configured destinations. If the filter matches no configured destination, the route returns `400 INVALID_REQUEST` before scanning or job creation. Set `runAsyncJob: true` on `POST /api/scanner-presets/:id/run` to submit through the existing market-scanner job path and receive `202 Accepted`; runs stay synchronous by default. If `dryRun` is true, the request returns its preview without submitting a job.
+
+Preset API responses include configured Telegram and WhatsApp chat IDs, but omit Discord webhook URLs and tokens. `destinations.discordWebhookCount` reports the number of saved Discord webhooks.
+
+`GET /api/status` and `/api/capabilities` report `featureFlags.presetBoundDestinations` and the non-sensitive `dependencies.presetBoundDestinations` capability. Destination values are not included in those status responses or in the async job acceptance response. The direct `/api/webhook/market-scanner-alert` endpoint continues using its request routing and does not read preset destinations.
+
 ### Signal Outcome Single-Evaluator Guarantee
 
 `ENABLE_SIGNAL_OUTCOME_TRACKING=true` is enabled in production. It gates three things at once — recording signals on the alert path, the evaluation sweep, and the whole `/api/outcomes` surface — so it is pinned in `render.yaml` rather than left to the Render dashboard, where an operator reading the repo could not tell which process was actually enabled.

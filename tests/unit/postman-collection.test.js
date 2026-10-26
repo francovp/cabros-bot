@@ -222,6 +222,60 @@ function collectRequestsAndSavedExamples(items, result = []) {
 }
 
 describe('Postman collection contract', () => {
+	it('documents preset-bound destinations, invalid routes, async runs, and status readiness', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const create = findItem(collection.item, 'POST Create Scanner Preset (bound destinations)');
+		const invalid = findItem(collection.item, 'POST Create Scanner Preset (invalid destinations - 400)');
+		const update = findItem(collection.item, 'PUT Update Scanner Preset (bound destinations)');
+		const asyncRun = findItem(collection.item, 'POST Run Scanner Preset (async job)');
+		const unboundChannelRun = findItem(collection.item, 'POST Run Scanner Preset (unbound channel - 400)');
+		const openapi = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+
+		expect(JSON.parse(create.request.body.raw)).toMatchObject({
+			mode: 'preset',
+			destinations: { telegramChatIds: ['-1001234567890'] },
+		});
+		expect(create.response.find((response) => response.code === 201)).toBeDefined();
+		const redactedExample = create.response.find((response) => response.name === 'Created with Discord destination (webhook redacted)');
+		expect(redactedExample).toBeDefined();
+		const redactedResponse = JSON.parse(redactedExample.body);
+		expect(redactedResponse.preset.destinations).toEqual(expect.objectContaining({ discordWebhookCount: 1 }));
+		expect(JSON.stringify(redactedResponse)).not.toMatch(/discordWebhookUrls|discordWebhookUrl/);
+		expect(invalid.response.find((response) => response.code === 400).body).toContain('INVALID_DESTINATIONS');
+		expect(JSON.parse(update.request.body.raw)).toMatchObject({
+			mode: 'preset',
+			destinations: { whatsappChatIds: ['56912345678@c.us'] },
+		});
+		expect(asyncRun.request.body.raw).toContain('"runAsyncJob": true');
+		expect(asyncRun.response.find((response) => response.code === 202)).toBeDefined();
+		expect(JSON.parse(unboundChannelRun.request.body.raw)).toEqual({ channels: ['whatsapp'] });
+		expect(JSON.parse(unboundChannelRun.response.find((response) => response.code === 400).body))
+			.toMatchObject({ code: 'INVALID_REQUEST' });
+
+		const destinationSchema = openapi.components.schemas.ScannerPresetDestinations;
+		expect(destinationSchema.properties.telegramChatIds.maxItems).toBe(20);
+		const responsePresetSchema = openapi.components.schemas.ScannerPreset;
+		expect(responsePresetSchema.properties.destinations.$ref)
+			.toBe('#/components/schemas/ScannerPresetResponseDestinations');
+		expect(responsePresetSchema.properties).not.toHaveProperty('discordWebhookUrl');
+		expect(openapi.components.schemas.ScannerPresetResponseDestinations.properties)
+			.toHaveProperty('discordWebhookCount');
+		expect(openapi.components.schemas.ScannerPresetResponseDestinations.properties)
+			.not.toHaveProperty('discordWebhookUrls');
+		expect(openapi.components.schemas.ScannerPresetRunRequest.properties.runAsyncJob.type).toBe('boolean');
+		expect(openapi.paths['/api/webhook/alert'].post.responses['400'].description).toBeUndefined();
+		expect(openapi.paths['/api/scanner-presets'].post.responses['400'].description).toContain('INVALID_DESTINATIONS');
+		expect(openapi.paths['/api/scanner-presets/{id}'].put.responses['400'].description).toContain('INVALID_DESTINATIONS');
+		expect(openapi.paths['/api/scanner-presets/{id}/run'].post.responses['400'].description).toContain('no configured destination for its selected channels');
+		expect(openapi.components.schemas.ScannerPresetRunRequest.properties.channels.description)
+			.toContain('400 INVALID_REQUEST');
+		expect(openapi.paths['/api/scanner-presets/{id}/run'].post.responses['202']).toBeDefined();
+		expect(openapi.components.schemas.Status.properties.dependencies.properties.presetBoundDestinations)
+			.toBeDefined();
+		expect(openapi.components.schemas.Status.properties.featureFlags.$ref)
+			.toBe('#/components/schemas/StatusFeatureFlags');
+	});
+
 	it('covers valid and invalid body-only auto-trade requests', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const valid = findItem(collection.item, 'POST Send Alert (autoTrade body only)');
