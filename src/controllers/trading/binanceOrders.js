@@ -12,6 +12,7 @@ const { getIdempotencyKey } = require('../../lib/idempotency');
 const { binanceOrderAuditService } = require('../../services/trading/BinanceOrderAuditService');
 const { tradeLedgerService } = require('../../services/trading/TradeLedgerService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const autoTradeReservationService = require('../../services/trading/AutoTradeReservationService');
 
 async function postBinanceOrder(req, res) {
 	const startTime = Date.now();
@@ -177,6 +178,54 @@ async function postBinanceOrder(req, res) {
 }
 
 async function getBinanceOrders(req, res) {
+	if (req.query?.reconciliation === 'ambiguous') {
+		let limit = 50;
+		if (req.query.limit !== undefined && req.query.limit !== null && req.query.limit !== '') {
+			const str = String(req.query.limit).trim();
+			if (!/^\d+$/.test(str)) {
+				return sendErrorFrom(res, 400, {
+					error: 'limit must be an integer between 1 and 100',
+					code: 'INVALID_REQUEST',
+				}, { req });
+			}
+			const parsed = parseInt(str, 10);
+			if (parsed < 1 || parsed > 100) {
+				return sendErrorFrom(res, 400, {
+					error: 'limit must be an integer between 1 and 100',
+					code: 'INVALID_REQUEST',
+				}, { req });
+			}
+			limit = parsed;
+		}
+		try {
+			const result = await autoTradeReservationService.listAmbiguousReservations({
+				limit,
+				symbol: req.query.symbol,
+				status: 'ambiguous',
+			});
+			if (!result || !result.success) {
+				return sendErrorFrom(res, 503, {
+					error: result?.error || 'Storage unavailable',
+					code: result?.code || 'STORAGE_UNAVAILABLE',
+					retryable: true,
+				}, { req });
+			}
+			return res.status(200).json({
+				success: true,
+				reconciliation: true,
+				reservations: result.reservations,
+				count: result.count,
+				ambiguousCount: result.ambiguousCount,
+			});
+		} catch (error) {
+			console.error('[BinanceOrdersController] ambiguous reconciliation query failed:', error);
+			return sendErrorFrom(res, error.statusCode || 500, {
+				error: error.message || 'Failed to retrieve ambiguous reservations',
+				code: error.code || 'INTERNAL_ERROR',
+				retryable: error.statusCode === 503,
+			}, { req });
+		}
+	}
 	const startTime = Date.now();
 	try {
 		const result = await binanceOrderService.getOrders(req.query);

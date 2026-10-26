@@ -2185,7 +2185,8 @@
             "$ref": "#/components/responses/ScannerPresetResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/Error",
+            "description": "Malformed preset fields return INVALID_REQUEST. Malformed destination arrays or values return 400 INVALID_DESTINATIONS."
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
@@ -2315,7 +2316,7 @@
             "$ref": "#/components/responses/ScannerPresetResult"
           },
           "400": {
-            "description": "Malformed request body, or malformed If-Match header (e.g. a comma-separated entity-tag list or the wildcard \"*\").",
+            "description": "Malformed preset fields return INVALID_REQUEST. Malformed destination arrays or values return 400 INVALID_DESTINATIONS. Malformed If-Match header (e.g. a comma-separated entity-tag list or the wildcard \"*\") returns INVALID_IF_MATCH.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2507,8 +2508,24 @@
           "200": {
             "$ref": "#/components/responses/AnalysisResult"
           },
+          "202": {
+            "description": "The scanner preset run was accepted as an asynchronous market-scanner job. Destination values remain in private job metadata and are not returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerPresetAsyncRunResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/Error",
+            "description": "Invalid routing overrides, a channel filter with no configured destination for its selected channels, or runAsyncJob return 400 INVALID_REQUEST. Invalid preset destinations return 400 INVALID_DESTINATIONS."
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -2533,6 +2550,10 @@
           },
           "502": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "The existing async job queue or durable job store is unavailable; the run was not accepted unless the error includes a jobId."
           },
           "504": {
             "$ref": "#/components/responses/Error"
@@ -5453,6 +5474,273 @@
                 }
               }
             }
+          }
+        },
+        "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/trading/binance/reconciliation": {
+      "get": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "List ambiguous auto-trade reservations",
+        "description": "Lists indeterminate auto-trade reservations that require manual operator reconciliation. Filterable by symbol and status. Requires admin.viewer role or API key. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
+        "operationId": "getBinanceReconciliation",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "description": "Filter by trading symbol (e.g. BTCUSDT)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Filter by reservation status (e.g. ambiguous)",
+            "schema": {
+              "type": "string",
+              "default": "ambiguous"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Max reservations to return (default 50, max 100)",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of ambiguous reservations",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinanceReconciliationListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/trading/binance/reconciliation/{reservationId}": {
+      "get": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Get ambiguous auto-trade reservation by ID",
+        "description": "Retrieves a single ambiguous auto-trade reservation by reservation ID or signal ID. Requires admin.viewer role or API key. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
+        "operationId": "getBinanceReconciliationById",
+        "parameters": [
+          {
+            "name": "reservationId",
+            "in": "path",
+            "required": true,
+            "description": "Reservation ID (SHA256 hex) or raw signalId",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ambiguous reservation details",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinanceReconciliationDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      },
+      "post": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Resolve ambiguous auto-trade reservation",
+        "description": "Settles an ambiguous auto-trade reservation as placed or not_placed, handling shared cooldowns and recording an audit trail. Requires admin.operator role. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
+        "operationId": "postResolveAmbiguousReservation",
+        "parameters": [
+          {
+            "name": "reservationId",
+            "in": "path",
+            "required": true,
+            "description": "Reservation ID (SHA256 hex) or raw signalId",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveAmbiguousReservationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ambiguous reservation successfully resolved",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveAmbiguousReservationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
           }
         },
         "security": [
@@ -8557,7 +8845,13 @@
                       "top_gainers"
                     ],
                     "limit": 5,
-                    "bbwThreshold": 0.05
+                    "bbwThreshold": 0.05,
+                    "destinations": {
+                      "telegramChatIds": [
+                        "-1001234567890"
+                      ],
+                      "discordWebhookCount": 1
+                    }
                   }
                 }
               },
@@ -15234,6 +15528,75 @@
           },
           "bbwThreshold": {
             "type": "number"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "preset",
+              "inherit"
+            ],
+            "default": "inherit",
+            "description": "inherit preserves broadcast behavior; preset sends only to configured destinations. Older records without mode retain their legacy routing."
+          },
+          "destinations": {
+            "$ref": "#/components/schemas/ScannerPresetDestinations"
+          }
+        }
+      },
+      "ScannerPresetDestinations": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Destinations accepted on create and update requests. Discord webhook URLs are stored for delivery and are never returned by preset APIs.",
+        "properties": {
+          "telegramChatIds": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "pattern": "^-?\\d{5,20}$"
+            }
+          },
+          "whatsappChatIds": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{6,20}@(c|g)\\.us$"
+            }
+          },
+          "discordWebhookUrls": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://(?:[A-Za-z0-9-]+\\.)*discord(?:app)?\\.com/api/webhooks/\\d+/[A-Za-z0-9_-]+(?:/.*)?$"
+            }
+          }
+        }
+      },
+      "ScannerPresetResponseDestinations": {
+        "type": "object",
+        "description": "Safe destination projection returned by preset APIs. Discord webhook URLs are never returned; discordWebhookCount reports how many are configured.",
+        "properties": {
+          "telegramChatIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^-?\\d{5,20}$"
+            }
+          },
+          "whatsappChatIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{6,20}@(c|g)\\.us$"
+            }
+          },
+          "discordWebhookCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Configured Discord webhooks. Their URLs and tokens are omitted from all preset responses."
           }
         }
       },
@@ -15243,6 +15606,11 @@
           "dryRun": {
             "type": "boolean",
             "description": "When true, returns configuration validation, MCP readiness, estimated call volume, and resolved channels without executing scans or delivering messages."
+          },
+          "runAsyncJob": {
+            "type": "boolean",
+            "default": false,
+            "description": "When true and dryRun is false, submits the preset through the existing market-scanner job execution path and returns HTTP 202. Synchronous execution remains the default."
           },
           "scans": {
             "type": "array",
@@ -15272,6 +15640,7 @@
           },
           "channels": {
             "type": "array",
+            "description": "Filters the configured preset destinations. If no selected channel has a configured destination, the request returns 400 INVALID_REQUEST before scanning or job creation.",
             "items": {
               "type": "string",
               "enum": [
@@ -16089,6 +16458,7 @@
       },
       "ScannerPreset": {
         "type": "object",
+        "description": "Safe preset response projection. Discord webhook URLs and tokens are omitted; destinations.discordWebhookCount reports configured webhook count.",
         "properties": {
           "id": {
             "type": "string"
@@ -16113,6 +16483,17 @@
           },
           "bbwThreshold": {
             "type": "number"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "preset",
+              "inherit"
+            ],
+            "description": "Mode-less records are legacy presets and keep their prior routing behavior."
+          },
+          "destinations": {
+            "$ref": "#/components/schemas/ScannerPresetResponseDestinations"
           },
           "schedule": {
             "type": "object",
@@ -16156,10 +16537,6 @@
             "type": "string",
             "pattern": "^\\d{6,20}@(c|g)\\.us$",
             "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
-          },
-          "discordWebhookUrl": {
-            "type": "string",
-            "format": "uri"
           },
           "lastRunAt": {
             "type": "string",
@@ -18577,7 +18954,7 @@
             "$ref": "#/components/schemas/JsonObject"
           },
           "featureFlags": {
-            "$ref": "#/components/schemas/JsonObject"
+            "$ref": "#/components/schemas/StatusFeatureFlags"
           },
           "deliveryChannels": {
             "$ref": "#/components/schemas/JsonObject"
@@ -18685,6 +19062,9 @@
               },
               "binanceTrading": {
                 "$ref": "#/components/schemas/BinanceTradingDependency"
+              },
+              "presetBoundDestinations": {
+                "$ref": "#/components/schemas/PresetBoundDestinationsDependency"
               }
             }
           }
@@ -22026,9 +22406,173 @@
           }
         }
       },
+      "BinanceReconciliationReservation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Reservation document ID (SHA-256 digest of signalId)."
+          },
+          "signalId": {
+            "type": "string",
+            "description": "Original signal identifier."
+          },
+          "status": {
+            "type": "string",
+            "description": "Reservation status (pending, submitted, failed, unknown)."
+          },
+          "ambiguous": {
+            "type": "boolean",
+            "description": "Whether the reservation is indeterminate and requires reconciliation."
+          },
+          "ambiguousReason": {
+            "type": "string",
+            "description": "Error code or reason why the reservation outcome is indeterminate."
+          },
+          "signalContext": {
+            "type": "object",
+            "description": "Context of the signal that produced the reservation."
+          },
+          "lastAttempt": {
+            "type": "object",
+            "description": "Details of the last Binance execution attempt."
+          },
+          "orderId": {
+            "type": "integer",
+            "description": "Resolved Binance exchange order ID if placed."
+          },
+          "resolvedAs": {
+            "type": "string",
+            "enum": [
+              "placed",
+              "not_placed"
+            ],
+            "description": "Operator resolution outcome."
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp when the reservation was reconciled."
+          },
+          "resolvedBy": {
+            "type": "string",
+            "description": "Operator actor that reconciled the reservation."
+          },
+          "notes": {
+            "type": "string",
+            "description": "Reconciliation notes."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BinanceReconciliationListResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "reservations",
+          "count"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "reservations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BinanceReconciliationReservation"
+            }
+          },
+          "count": {
+            "type": "integer"
+          },
+          "ambiguousCount": {
+            "type": "integer"
+          }
+        }
+      },
+      "BinanceReconciliationDetailResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "reservation"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "reservation": {
+            "$ref": "#/components/schemas/BinanceReconciliationReservation"
+          }
+        }
+      },
+      "ResolveAmbiguousReservationRequest": {
+        "type": "object",
+        "required": [
+          "resolvedAs"
+        ],
+        "properties": {
+          "resolvedAs": {
+            "type": "string",
+            "enum": [
+              "placed",
+              "not_placed"
+            ],
+            "description": "Operator determination of order status."
+          },
+          "orderId": {
+            "type": "integer",
+            "description": "Optional Binance exchange order ID if resolved as placed."
+          },
+          "notes": {
+            "type": "string",
+            "description": "Optional operator reconciliation notes."
+          }
+        }
+      },
+      "ResolveAmbiguousReservationResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "action",
+          "resolvedAs",
+          "reservation"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "action": {
+            "type": "string"
+          },
+          "resolvedAs": {
+            "type": "string"
+          },
+          "idempotent": {
+            "type": "boolean"
+          },
+          "reservation": {
+            "$ref": "#/components/schemas/BinanceReconciliationReservation"
+          }
+        }
+      },
       "BinanceTradingDependency": {
         "type": "object",
         "properties": {
+          "ambiguousCount": {
+            "type": "integer",
+            "description": "Bounded count of current ambiguous auto-trade reservations."
+          },
+          "ambiguousReservationsCount": {
+            "type": "integer",
+            "description": "Bounded count of current ambiguous auto-trade reservations."
+          },
           "supportedOrderTypes": {
             "type": "array",
             "items": {
@@ -22048,6 +22592,112 @@
           }
         },
         "additionalProperties": true
+      },
+      "ScannerPresetAsyncRunResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Job"
+          },
+          {
+            "type": "object",
+            "required": [
+              "presetId",
+              "requestId",
+              "requestedChannels"
+            ],
+            "properties": {
+              "presetId": {
+                "type": "string"
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "requestedChannels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "telegram",
+                    "whatsapp",
+                    "discord"
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "description": "Accepted scanner-preset job metadata. Resolved destination values are stored in private job metadata and are not returned."
+      },
+      "PresetBoundDestinationsDependency": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "channels",
+          "maxDestinationsPerChannel"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "configured": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "ready": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready"
+            ]
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            }
+          },
+          "maxDestinationsPerChannel": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "additionalProperties": false,
+        "description": "Static support metadata for preset-bound destination routing. Never includes configured destinations."
+      },
+      "StatusFeatureFlags": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "presetBoundDestinations": {
+                "type": "boolean",
+                "description": "Preset routing supports bounded saved Telegram, WhatsApp, and Discord destinations."
+              }
+            }
+          }
+        ]
       }
     },
     "headers": {

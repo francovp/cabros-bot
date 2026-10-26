@@ -38,6 +38,8 @@ const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteCo
 const { adminSseService } = require('../../../../services/sse/AdminSseService');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { sendErrorFrom, STANDARD_ERROR_CODES } = require('../../../../lib/errorEnvelope');
+const { jobService } = require('../../../../services/jobs/JobService');
+const { resolveScannerPresetRouting } = require('../../../../services/scannerPresets/scannerPresetRouting');
 
 const SUPPORTED_TIMEFRAME_ALIASES = new Set([
 	'5', '5M', '15', '15M', '60', '1H', '240', '4H',
@@ -49,6 +51,38 @@ const MAX_SCANNER_TIMEOUT_MS = 120000;
 
 function getStorageMetadata() {
 	return scannerPresetService.getStorageStatus();
+}
+
+function projectPresetResponse(preset) {
+	if (!preset || typeof preset !== 'object') {
+		return preset;
+	}
+
+	const response = { ...preset };
+	const destinations = preset.destinations && typeof preset.destinations === 'object'
+		? { ...preset.destinations }
+		: null;
+	const discordWebhookUrls = destinations && Array.isArray(destinations.discordWebhookUrls)
+		? destinations.discordWebhookUrls
+		: [];
+	const hasDiscordWebhookUrls = destinations && Object.hasOwn(destinations, 'discordWebhookUrls');
+	const hasLegacyDiscordWebhookUrl = typeof preset.discordWebhookUrl === 'string' && preset.discordWebhookUrl.length > 0;
+
+	if (destinations) {
+		delete destinations.discordWebhookUrls;
+	}
+	delete response.discordWebhookUrl;
+
+	if (destinations || hasLegacyDiscordWebhookUrl) {
+		response.destinations = {
+			...(destinations || {}),
+			...(hasDiscordWebhookUrls || hasLegacyDiscordWebhookUrl
+				? { discordWebhookCount: discordWebhookUrls.length + (hasLegacyDiscordWebhookUrl ? 1 : 0) }
+				: {}),
+		};
+	}
+
+	return response;
 }
 
 function resolveBot(botOrGetter) {
@@ -127,7 +161,7 @@ function postPreset(req, res) {
 			return res.status(201).json({
 				success: true,
 				storage: getStorageMetadata(),
-				preset,
+				preset: projectPresetResponse(preset),
 			});
 		} catch (error) {
 			if (error instanceof MarketScannerRequestError) {
@@ -138,7 +172,7 @@ function postPreset(req, res) {
 					storage: getStorageMetadata(),
 				};
 				if (error.code === 'NAME_CONFLICT' && error.preset) {
-					body.preset = error.preset;
+					body.preset = projectPresetResponse(error.preset);
 					setPresetEtag(res, error.preset);
 				}
 				return sendErrorFrom(res, statusCode, body);
@@ -166,7 +200,7 @@ function listPresets(req, res) {
 			return res.status(200).json({
 				success: true,
 				storage: getStorageMetadata(),
-				presets,
+				presets: presets.map(projectPresetResponse),
 			});
 		} catch (error) {
 			console.error('[ScannerPresets] List failed:', error.message);
@@ -220,7 +254,7 @@ function getPreset(req, res) {
 			return res.status(200).json({
 				success: true,
 				storage: getStorageMetadata(),
-				preset,
+				preset: projectPresetResponse(preset),
 			});
 		} catch (error) {
 			console.error('[ScannerPresets] Get failed:', error.message);
@@ -267,7 +301,7 @@ function deletePreset(req, res) {
 					storage: getStorageMetadata(),
 				};
 				if (error.code === 'PRECONDITION_FAILED' && error.preset) {
-					body.preset = error.preset;
+					body.preset = projectPresetResponse(error.preset);
 					setPresetEtag(res, error.preset);
 				}
 				return sendErrorFrom(res, statusCode, body);
@@ -312,7 +346,7 @@ function updatePreset(req, res) {
 			return res.status(200).json({
 				success: true,
 				storage: getStorageMetadata(),
-				preset,
+				preset: projectPresetResponse(preset),
 			});
 		} catch (error) {
 			if (error instanceof MarketScannerRequestError) {
@@ -323,7 +357,7 @@ function updatePreset(req, res) {
 					storage: getStorageMetadata(),
 				};
 				if (error.code === 'PRECONDITION_FAILED' && error.preset) {
-					body.preset = error.preset;
+					body.preset = projectPresetResponse(error.preset);
 					setPresetEtag(res, error.preset);
 				}
 				if (error.code === 'PRESET_LOCKED') {
@@ -331,12 +365,12 @@ function updatePreset(req, res) {
 						body.lockedUntil = error.lockedUntil;
 					}
 					if (error.preset) {
-						body.preset = error.preset;
+						body.preset = projectPresetResponse(error.preset);
 						setPresetEtag(res, error.preset);
 					}
 				}
 				if (error.code === 'NAME_CONFLICT' && error.preset) {
-					body.preset = error.preset;
+					body.preset = projectPresetResponse(error.preset);
 					setPresetEtag(res, error.preset);
 				}
 				return sendErrorFrom(res, statusCode, body);
@@ -444,15 +478,17 @@ function postRunPreset(botOrGetter) {
 			}
 
 			const dryRun = resolveDryRun(req);
+			const runAsyncJob = req.body && req.body.runAsyncJob;
+			if (runAsyncJob !== undefined && typeof runAsyncJob !== 'boolean') {
+				return sendErrorFrom(res, 400, {
+					error: 'runAsyncJob must be a boolean',
+					code: 'INVALID_REQUEST',
+					requestId,
+				});
+			}
 
 			const bodyRouting = parseNotificationRouting(req.body);
-			const routing = {
-				channels: bodyRouting.channels || preset.channels || undefined,
-				telegramChatId: bodyRouting.telegramChatId || preset.telegramChatId || undefined,
-				telegramThreadId: bodyRouting.telegramThreadId !== undefined ? bodyRouting.telegramThreadId : preset.telegramThreadId,
-				whatsappChatId: bodyRouting.whatsappChatId || preset.whatsappChatId || undefined,
-				discordWebhookUrl: bodyRouting.discordWebhookUrl || preset.discordWebhookUrl || undefined,
-			};
+			const routing = resolveScannerPresetRouting(preset, bodyRouting);
 
 			if (dryRun) {
 				console.debug('[ScannerPresets] Dry-run preview mode: skipping MCP calls and delivery');
@@ -461,7 +497,9 @@ function postRunPreset(botOrGetter) {
 				if (!notificationManager) {
 					try {
 						notificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
-					} catch (_) {}
+					} catch (_) {
+						// Dry-run channel discovery is best-effort; it must not block the preview.
+					}
 				}
 				const requestedChannels = getRequestedChannels(notificationManager, routing);
 
@@ -536,22 +574,49 @@ function postRunPreset(botOrGetter) {
 				});
 			}
 
+			let requestNotificationManager = null;
+			if (Array.isArray(routing.channels) && routing.channels.length > 0) {
+				requestNotificationManager = getNotificationManager();
+				if (!requestNotificationManager) {
+					requestNotificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
+				}
+				assertChannelsAvailable(requestNotificationManager, routing);
+			}
+
+			if (runAsyncJob === true) {
+				const job = await jobService.createJob('market-scanner', {
+					exchange: preset.exchange,
+					timeframe: preset.timeframe,
+					scans: preset.scans,
+					limit: preset.limit,
+					bbw_threshold: preset.bbwThreshold,
+					ranked: preset.ranked,
+					includeMultiTimeframe: preset.includeMultiTimeframe,
+					...routing,
+				}, resolveBot(botOrGetter), { scannerPresetId: preset.id });
+				if (!requestNotificationManager) {
+					requestNotificationManager = getNotificationManager();
+				}
+				if (!requestNotificationManager) {
+					try {
+						requestNotificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
+					} catch (_) {
+						// Channel metadata is optional after the durable job has been accepted.
+					}
+				}
+				return res.status(202).json({
+					success: true,
+					presetId: preset.id,
+					...job,
+					requestedChannels: getRequestedChannels(requestNotificationManager, routing),
+					requestId,
+				});
+			}
+
 			const timeoutMs = getScannerTimeoutMs();
 			const deadline = createScannerDeadline(timeoutMs, req.requestDeadlineSignal);
 
-			// Fail-fast channel availability check (GH-854): when the caller
-			// explicitly requests channels, validate they are enabled and
-			// configured BEFORE running any MCP scan. Each scan can take up
-			// to ~120s of TradingView MCP budget; spending that on a request
-			// that is guaranteed to fail (disabled channel) wastes quota
-			// and risks 502 timeouts before the validation error surfaces.
-			if (routing.channels) {
-				let presetNotificationManager = getNotificationManager();
-				if (!presetNotificationManager) {
-					presetNotificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
-				}
-				assertChannelsAvailable(presetNotificationManager, routing);
-			}
+			// Requested channel availability was checked before async job submission or scan work.
 			let scanResults;
 
 			try {
@@ -585,7 +650,7 @@ function postRunPreset(botOrGetter) {
 				now: new Date(),
 			});
 
-			let notificationManager = getNotificationManager();
+			let notificationManager = requestNotificationManager || getNotificationManager();
 			if (!notificationManager) {
 				notificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
 			}
@@ -641,6 +706,29 @@ function postRunPreset(botOrGetter) {
 				return sendErrorFrom(res, 400, {
 					error: error.message,
 					code: 'INVALID_REQUEST',
+					requestId,
+				});
+			}
+			if (error instanceof MarketScannerRequestError) {
+				const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 400;
+				return sendErrorFrom(res, statusCode, {
+					error: error.message,
+					code: error.code || 'INVALID_REQUEST',
+					requestId,
+				});
+			}
+			if (Number.isInteger(error.statusCode) && error.statusCode >= 400 && error.statusCode < 500) {
+				return sendErrorFrom(res, error.statusCode, {
+					error: error.message || 'Job request could not be accepted',
+					code: error.code || 'JOB_REQUEST_FAILED',
+					requestId,
+				});
+			}
+			if (Number.isInteger(error.statusCode) && error.statusCode >= 500) {
+				return sendErrorFrom(res, error.statusCode, {
+					error: error.message || 'Job service is unavailable',
+					code: error.code || 'JOB_QUEUE_UNAVAILABLE',
+					...(typeof error.jobId === 'string' && error.jobId ? { jobId: error.jobId } : {}),
 					requestId,
 				});
 			}

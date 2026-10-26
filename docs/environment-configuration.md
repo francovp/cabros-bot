@@ -478,6 +478,16 @@ pnpm test:firebase
 
 - `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` - Chat ID for deployment alerts and fail-open notification-channel failure pages
 
+#### Admin Server-Sent Events (SSE)
+
+Real-time administrative events (job progress, scanner results, alert delivery events, and delivery failures) are streamed to operator consoles via `GET /api/admin/events`.
+
+- `ENABLE_ADMIN_SSE` - Enable real-time SSE events streaming endpoint (`true` or `false`, default: `true`). Classified as **environment-only** (process-startup and route-enablement gate; excluded from Firebase Remote Config).
+- `ADMIN_SSE_MAX_CLIENT_CONNECTIONS` - Maximum concurrent SSE event streams per client key (IP, API key, or Firebase UID) (`1`-`20`, integer, default: `5`, Remote Config supported). Older streams from the same client key are gracefully evicted when exceeded.
+- `ADMIN_SSE_MAX_TOTAL_CONNECTIONS` - Maximum total active SSE event streams allowed across all clients (`10`-`1000`, integer, default: `100`, Remote Config supported). New connections are rejected with `503 Service Unavailable` when exceeded.
+- `ADMIN_SSE_HEARTBEAT_MS` - Heartbeat interval in milliseconds for SSE comment keepalive frames (`5000`-`120000`, integer, default: `30000`, Remote Config supported). Prevents intermediate proxies from closing idle event streams.
+- `ADMIN_SSE_DRAIN_TIMEOUT_MS` - Timeout in milliseconds to wait for a backpressured SSE client stream socket to drain before evicting the slow consumer (`1000`-`60000`, integer, default: `15000`, Remote Config supported).
+
 #### Server Configuration
 
 - `PORT` - HTTP server port (default: `80`)
@@ -637,6 +647,12 @@ Audit writes are fail-open: a failed audit write is logged as a warning and neve
 - Alongside the verdict: `readiness`, `failOpen` (always `true` — preset CRUD keeps serving from the in-memory mirror), `collection`, the `operationsAttempted`/`operationsSucceeded`/`operationsFailed`/`consecutiveFailures` counters, `lastSuccessAt`/`lastFailureAt`, and a closed-enum `lastErrorReason` (`firestore_not_initialized`, `firestore_unavailable`, `firestore_probe_timeout`) that never contains a provider message.
 - `pendingWrites`, `inFlightWrites`, `pendingDeletes`, `oldestPendingWriteAt`, and `lastReadFellBack` report local unsynced workload. They are deliberately **not** part of the verdict: an unsynced record is a pending-sync fact, not a store fault, so a record left behind by a failed write can never pin the process to `ephemeral`. Watch `pendingWrites > 0` with a rising `oldestPendingWriteAt` as the signal that records are at risk of being lost on restart.
 - The readiness counters are process-local and reset on restart. The probe issues the same indexed `orderBy('createdAt','desc')` query `listPresets()` uses, bounded to one document, so it needs no composite index beyond the single-field sort the list already requires.
+
+#### Scanner Preset Destination Routing
+
+Preset destination routing adds no environment variable. A new preset defaults to `mode: "inherit"` and retains broadcast delivery. Use `mode: "preset"` with one or more validated recipient IDs or Discord webhook URLs to bind delivery to that preset; destination arrays are capped at 20 entries per channel. Older mode-less presets keep their legacy `channels` and singular destination behavior.
+
+Manual and scheduled runs resolve the same saved destinations. The manual `POST /api/scanner-presets/:id/run` request can filter them with `channels` or replace the saved recipient for a channel using its existing singular destination field. A channel filter with no matching configured destination returns `400 INVALID_REQUEST` before scan or job work. Set `runAsyncJob: true` to submit through the existing market-scanner job execution mode and receive `202 Accepted`; synchronous execution remains the default. Destination values are persisted in private job metadata and omitted from async acceptance and status responses. Direct `/api/webhook/market-scanner-alert` routing is unaffected.
 
 #### Scanner Preset Optimistic Concurrency
 

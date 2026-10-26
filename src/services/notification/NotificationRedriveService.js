@@ -557,10 +557,14 @@ class NotificationRedriveService {
 		const nextAttemptAtDate = new Date(nowMs + calculateBackoffMs(0));
 
 		const recordedIds = [];
+		const redriveRecipientKey = typeof options.redriveRecipientKey === 'string'
+			&& /^[a-f0-9]{64}$/.test(options.redriveRecipientKey)
+			? options.redriveRecipientKey
+			: null;
 
 		for (const failure of failures) {
 			const channel = failure.channel;
-			const recordId = `${alertId}_${channel}`;
+			const recordId = `${alertId}_${channel}${redriveRecipientKey ? `_${redriveRecipientKey}` : ''}`;
 			const chunkResume = extractChunkResumeContext(failure);
 			const record = {
 				id: recordId,

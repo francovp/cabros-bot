@@ -17,10 +17,31 @@ const packageJson = require('../../../package.json');
 const { getDeploymentCommit } = require('../../lib/deploymentEnvironment');
 const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 const { redactString } = require('../../lib/logging');
+const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 
 const DEFAULT_PER_CHECK_TIMEOUT_MS = 5000;
 const DEFAULT_SUITE_TIMEOUT_MS = 30000;
 const RESULT_TTL_MS = 60_000;
+const FIRESTORE_STORAGE_GATES = Object.freeze([
+	'ENABLE_FIRESTORE_ALERT_STORAGE',
+	'ENABLE_FIRESTORE_JOB_STORAGE',
+	'ENABLE_FIRESTORE_SCANNER_PRESETS',
+	'ENABLE_FIRESTORE_IDEMPOTENCY',
+	'ENABLE_SIGNAL_OUTCOME_TRACKING',
+	'ENABLE_FIRESTORE_NEWS_ANALYSIS',
+	'ENABLE_FIRESTORE_ALERT_FEEDBACK',
+	'ENABLE_FIRESTORE_CHAT_PREFERENCES',
+	'ENABLE_FIRESTORE_ALERT_SUBSCRIBERS',
+	'ENABLE_BINANCE_ORDER_AUDIT',
+	'ENABLE_SYMBOL_ANALYSIS_STORAGE',
+	'ENABLE_TRADE_LEDGER',
+	'ENABLE_AUTO_TRADE',
+	'ENABLE_NOTIFICATION_REDRIVE',
+	'ENABLE_USER_PRICE_ALERTS',
+	'ENABLE_ALERT_SCHEDULER',
+	'ENABLE_NEWS_MONITOR_SCHEDULER',
+	'ENABLE_TOKEN_COST_BUDGET',
+]);
 const SENSITIVE_KEYS = new Set([
 	'authorization',
 	'x-api-key',
@@ -252,16 +273,11 @@ function buildChecks({ botOrGetter, getBinanceOrderService }) {
 	checks.push({
 		id: 'firestore.collections',
 		run: () => {
-			const firestoreEnabled = [
-				'ENABLE_FIRESTORE_ALERT_STORAGE',
-				'ENABLE_FIRESTORE_JOB_STORAGE',
-				'ENABLE_FIRESTORE_SCANNER_PRESETS',
-				'ENABLE_FIRESTORE_IDEMPOTENCY',
-			].some(isRuntimeGateEnabled);
+			const firestoreEnabled = FIRESTORE_STORAGE_GATES.some(isRuntimeGateEnabled);
 			if (!firestoreEnabled) {
 				return { status: 'skipped', message: 'No Firestore feature is enabled' };
 			}
-			if (!hasValue(process.env.FIREBASE_SERVICE_ACCOUNT_JSON) && !hasValue(process.env.GOOGLE_APPLICATION_CREDENTIALS)) {
+			if (!isFirestoreConfigured()) {
 				return makeResult('fail', 'Firestore enabled but credentials are missing', null);
 			}
 			return makeResult('pass', 'Firestore credentials are configured');
@@ -436,4 +452,5 @@ module.exports = {
 	DEFAULT_PER_CHECK_TIMEOUT_MS,
 	DEFAULT_SUITE_TIMEOUT_MS,
 	RESULT_TTL_MS,
+	FIRESTORE_STORAGE_GATES,
 };

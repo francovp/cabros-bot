@@ -5,6 +5,7 @@ const {
 	scannerPresetService,
 	scannerPresetSchedulerService,
 } = require('../services/scannerPresets');
+const { MAX_DESTINATIONS_PER_CHANNEL } = require('../services/scannerPresets/scannerPresetRouting');
 const { newsMonitorSchedulerService } = require('../services/newsMonitorScheduler');
 const { alertSchedulerService } = require('../services/scheduler');
 const { alertSubscriberService } = require('../services/subscribers/AlertSubscriberService');
@@ -19,6 +20,7 @@ const remoteConfigService = require('../services/remoteConfig/RemoteConfigServic
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
 const { binanceOrderAuditService } = require('../services/trading/BinanceOrderAuditService');
+const autoTradeReservationService = require('../services/trading/AutoTradeReservationService');
 const { tradeLedgerService } = require('../services/trading/TradeLedgerService');
 const symbolAnalysisStorageService = require('../services/storage/SymbolAnalysisStorageService');
 const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
@@ -631,6 +633,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			firestoreNewsAnalysis: newsAnalysisStorageService.isEnabled(),
 			firestoreChatPreferences: chatPreferenceService.isEnabled(),
 			scannerPresetScheduler: scannerPresetSchedulerService.isEnabled(),
+			presetBoundDestinations: true,
 			newsMonitorScheduler: newsMonitorSchedulerService.isEnabled(),
 			alertScheduler: alertSchedulerService.isEnabled(),
 			sentryMonitoring: sentryEnabled,
@@ -777,6 +780,14 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			firebaseRemoteConfig: remoteConfigStatus,
 			chatPreferences: chatPreferenceService.getStatus(),
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
+			presetBoundDestinations: {
+				enabled: true,
+				configured: true,
+				ready: true,
+				status: 'ready',
+				channels: ['telegram', 'whatsapp', 'discord'],
+				maxDestinationsPerChannel: MAX_DESTINATIONS_PER_CHANNEL,
+			},
 			alertSubscribers: alertSubscriberService.getStorageStatus(),
 			newsAnalysisStorage: newsAnalysisStorageService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
@@ -854,6 +865,8 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				controlStorage: binanceTradingStatus.controlStorage,
 				unavailable: binanceTradingStatus.unavailable,
 				blocked: binanceTradingStatus.blocked,
+				ambiguousCount: autoTradeReservationService.getAmbiguousCount(),
+				ambiguousReservationsCount: autoTradeReservationService.getAmbiguousCount(),
 			},
 			startupJitter: (() => {
 				const global = resolveStartupJitterMs({

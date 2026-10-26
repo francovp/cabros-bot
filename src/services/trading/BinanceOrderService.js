@@ -1771,6 +1771,22 @@ function createBinanceOrderService({
 			controlStorage: controlStatus.storage || 'memory',
 			unavailable,
 			blocked,
+			ambiguousCount: (() => {
+				try {
+					const { getAmbiguousCount } = require('./AutoTradeReservationService');
+					return typeof getAmbiguousCount === 'function' ? getAmbiguousCount() : 0;
+				} catch {
+					return 0;
+				}
+			})(),
+			ambiguousReservationsCount: (() => {
+				try {
+					const { getAmbiguousCount } = require('./AutoTradeReservationService');
+					return typeof getAmbiguousCount === 'function' ? getAmbiguousCount() : 0;
+				} catch {
+					return 0;
+				}
+			})(),
 		};
 	}
 

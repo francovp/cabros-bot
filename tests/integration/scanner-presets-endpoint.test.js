@@ -15,6 +15,7 @@ const { initializeNotificationServices, resetNotificationManagerForTesting } = r
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const { _resetForTesting: resetScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+const { jobService } = require('../../src/services/jobs/JobService');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
 	type: 'pkcs1',
@@ -152,6 +153,100 @@ describe('Scanner presets API integration tests', () => {
 			.get(`/api/scanner-presets/${presetId}`)
 			.set('x-api-key', 'test-key')
 			.expect(404);
+	});
+
+	it('omits Discord webhook secrets from preset success and conflict responses', async () => {
+		const discordWebhookUrl = 'https://discord.com/api/webhooks/123456789012345678/scanner-preset-secret-token';
+		const safePreset = (preset) => {
+			expect(preset.destinations).toEqual(expect.objectContaining({ discordWebhookCount: 1 }));
+			expect(preset.destinations).not.toHaveProperty('discordWebhookUrls');
+			expect(JSON.stringify(preset)).not.toContain(discordWebhookUrl);
+		};
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({
+				name: 'Discord destination preset',
+				mode: 'preset',
+				destinations: { discordWebhookUrls: [discordWebhookUrl] },
+			})
+			.expect(201);
+		const presetId = createResponse.body.preset.id;
+		const initialVersion = createResponse.body.preset.version;
+		safePreset(createResponse.body.preset);
+
+		const listResponse = await request(app)
+			.get('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+		safePreset(listResponse.body.presets.find((preset) => preset.id === presetId));
+
+		const getResponse = await request(app)
+			.get(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+		safePreset(getResponse.body.preset);
+
+		const updateResponse = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.send({ limit: 7 })
+			.expect(200);
+		safePreset(updateResponse.body.preset);
+
+		const createConflict = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Discord destination preset' })
+			.expect(409);
+		safePreset(createConflict.body.preset);
+
+		const otherPreset = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Other preset' })
+			.expect(201);
+		const updateConflict = await request(app)
+			.put(`/api/scanner-presets/${otherPreset.body.preset.id}`)
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Discord destination preset' })
+			.expect(409);
+		safePreset(updateConflict.body.preset);
+
+		const staleUpdate = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.set('If-Match', '"999"')
+			.send({ limit: 8 })
+			.expect(412);
+		safePreset(staleUpdate.body.preset);
+
+		await admin.firestore().collection('scannerPresets').doc(presetId).update({
+			lockedUntil: new Date(Date.now() + 60000).toISOString(),
+			lockedBy: 'scheduler',
+		});
+		const lockedUpdate = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.send({ limit: 8 })
+			.expect(409);
+		safePreset(lockedUpdate.body.preset);
+
+		const staleDelete = await request(app)
+			.delete(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.set('If-Match', `"${initialVersion}"`)
+			.expect(412);
+		safePreset(staleDelete.body.preset);
+
+		const legacyWebhookUrl = 'https://discord.com/api/webhooks/123456789012345678/legacy-secret-token';
+		const legacyPreset = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Legacy Discord destination', discordWebhookUrl: legacyWebhookUrl })
+			.expect(201);
+		expect(legacyPreset.body.preset.destinations).toEqual({ discordWebhookCount: 1 });
+		expect(JSON.stringify(legacyPreset.body.preset)).not.toContain(legacyWebhookUrl);
 	});
 
 	it('includes storage metadata on not-found responses', async () => {
@@ -417,6 +512,174 @@ describe('Scanner presets API integration tests', () => {
 			expect.any(Object),
 		);
 		expect(mockFetch).not.toHaveBeenCalled();
+	});
+
+	it('routes manual runs to saved destinations and lets request destinations override them', async () => {
+		tradingViewMcpService.callScanTool.mockResolvedValue([
+			{ symbol: 'BINANCE:BTCUSDT', changePercent: 5, indicators: { close: 65000 } },
+		]);
+		const created = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({
+				name: 'Bound telegram preset',
+				scans: ['top_gainers'],
+				mode: 'preset',
+				destinations: { telegramChatIds: ['-1001234567890'] },
+			})
+			.expect(201);
+
+		await request(app)
+			.post(`/api/scanner-presets/${created.body.preset.id}/run`)
+			.set('x-api-key', 'test-key')
+			.send({})
+			.expect(200);
+		await request(app)
+			.post(`/api/scanner-presets/${created.body.preset.id}/run`)
+			.set('x-api-key', 'test-key')
+			.send({ channels: ['telegram'], telegramChatId: '-1009876543210' })
+			.expect(200);
+
+		expect(mockTelegramSendMessage).toHaveBeenCalledWith('-1001234567890', expect.any(String), expect.any(Object));
+		expect(mockTelegramSendMessage).toHaveBeenCalledWith('-1009876543210', expect.any(String), expect.any(Object));
+		expect(mockTelegramSendMessage).not.toHaveBeenCalledWith('123456789', expect.any(String), expect.any(Object));
+	});
+
+	it('rejects a manual channel filter without a saved destination before sync or async work', async () => {
+		const created = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({
+				name: 'Telegram-only preset',
+				scans: ['top_gainers'],
+				mode: 'preset',
+				destinations: { telegramChatIds: ['-1001234567890'] },
+			})
+			.expect(201);
+		const createJobSpy = jest.spyOn(jobService, 'createJob').mockResolvedValue({
+			success: true,
+			jobId: 'filtered-preset-job',
+			status: 'processing',
+			createdAt: '2026-10-26T00:00:00.000Z',
+		});
+
+		try {
+			for (const body of [{ channels: ['whatsapp'] }, { channels: ['whatsapp'], runAsyncJob: true }]) {
+				const response = await request(app)
+					.post(`/api/scanner-presets/${created.body.preset.id}/run`)
+					.set('x-api-key', 'test-key')
+					.send(body)
+					.expect(400);
+				expect(response.body.code).toBe('INVALID_REQUEST');
+			}
+			expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+			expect(createJobSpy).not.toHaveBeenCalled();
+		} finally {
+			createJobSpy.mockRestore();
+		}
+	});
+
+	it('rejects invalid destination arrays on create and update', async () => {
+		const invalidCreate = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({
+				name: 'Invalid telegram route',
+				mode: 'preset',
+				destinations: { telegramChatIds: ['not-numeric'] },
+			})
+			.expect(400);
+		expect(invalidCreate.body.code).toBe('INVALID_DESTINATIONS');
+
+		const created = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Valid destination preset' })
+			.expect(201);
+		const invalidUpdate = await request(app)
+			.put(`/api/scanner-presets/${created.body.preset.id}`)
+			.set('x-api-key', 'test-key')
+			.send({ destinations: { discordWebhookUrls: ['http://discord.com/api/webhooks/123456789012345678/token'] } })
+			.expect(400);
+		expect(invalidUpdate.body.code).toBe('INVALID_DESTINATIONS');
+	});
+
+	it('creates an async market-scanner job with resolved preset destinations', async () => {
+		const created = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({
+				name: 'Async destination preset',
+				scans: ['top_gainers', 'bollinger_scan'],
+				bbwThreshold: 0.08,
+				mode: 'preset',
+				destinations: { telegramChatIds: ['-1001234567890'] },
+			})
+			.expect(201);
+		const createJobSpy = jest.spyOn(jobService, 'createJob').mockResolvedValue({
+			success: true,
+			jobId: 'preset-job-1',
+			status: 'processing',
+			createdAt: '2026-10-26T00:00:00.000Z',
+		});
+
+		try {
+			const response = await request(app)
+				.post(`/api/scanner-presets/${created.body.preset.id}/run`)
+				.set('x-api-key', 'test-key')
+				.send({ runAsyncJob: true })
+				.expect(202);
+
+			expect(createJobSpy).toHaveBeenCalledWith('market-scanner', expect.objectContaining({
+				exchange: 'BINANCE',
+				timeframe: '4h',
+				scans: ['top_gainers', 'bollinger_scan'],
+				bbw_threshold: 0.08,
+				channels: ['telegram'],
+				destinations: { telegramChatIds: ['-1001234567890'] },
+			}), expect.anything(), { scannerPresetId: created.body.preset.id });
+			expect(createJobSpy.mock.calls[0][1]).not.toHaveProperty('bbwThreshold');
+			expect(response.body).toMatchObject({ success: true, jobId: 'preset-job-1' });
+			expect(response.body).not.toHaveProperty('destinations');
+			expect(response.headers['x-request-id']).toBe(response.body.requestId);
+			expect(tradingViewMcpService.callScanTool).not.toHaveBeenCalled();
+		} finally {
+			createJobSpy.mockRestore();
+		}
+	});
+
+	it('preserves a durable job ID when async queue acceptance is ambiguous', async () => {
+		const created = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({
+				name: 'Ambiguous async preset',
+				scans: ['top_gainers'],
+				mode: 'preset',
+				destinations: { telegramChatIds: ['-1001234567890'] },
+			})
+			.expect(201);
+		const queueError = Object.assign(new Error('Queue acknowledgement was lost'), {
+			statusCode: 503,
+			code: 'JOB_QUEUE_ACCEPTANCE_UNKNOWN',
+			jobId: 'preset-job-ambiguous',
+		});
+		const createJobSpy = jest.spyOn(jobService, 'createJob').mockRejectedValue(queueError);
+
+		try {
+			const response = await request(app)
+				.post(`/api/scanner-presets/${created.body.preset.id}/run`)
+				.set('x-api-key', 'test-key')
+				.send({ runAsyncJob: true })
+				.expect(503);
+
+			expect(response.body).toMatchObject({
+				code: 'JOB_QUEUE_ACCEPTANCE_UNKNOWN',
+				jobId: 'preset-job-ambiguous',
+			});
+		} finally {
+			createJobSpy.mockRestore();
+		}
 	});
 
 	it('creates a scheduled preset and executes it via scheduler sweep', async () => {

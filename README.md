@@ -151,6 +151,8 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `GET` | `/api/trading/binance/account/balances` | Read-only Binance Spot balances for allowed assets | [API Reference](docs/api-reference.md#get-apitradingbinanceaccountbalances) |
 | `GET`/`POST` | `/api/trading/binance/pause` | Read or activate the operator runtime kill-switch for Binance Spot orders | [API Reference](docs/api-reference.md) |
 | `POST` | `/api/trading/binance/resume` | Clear the operator runtime kill-switch and resume Binance Spot order flow | [API Reference](docs/api-reference.md) |
+| `GET` | `/api/trading/binance/reconciliation` | List ambiguous auto-trade reservations requiring reconciliation | [API Reference](docs/api-reference.md#get-apitradingbinancereconciliation) |
+| `GET`/`POST` | `/api/trading/binance/reconciliation/:reservationId` | Read or resolve an ambiguous auto-trade reservation as placed or not_placed | [API Reference](docs/api-reference.md#post-apitradingbinancereconciliationreservationid) |
 | `GET` | `/api/trading/positions` | Query open Binance trading positions with mark prices and unrealized P&L | [API Reference](docs/api-reference.md#get-apitradingpositions) |
 
 `POST /api/webhook/alert` and `POST /api/webhook/symbol-analysis` accept an optional request-level `traderIntent` object. `entry` and `horizon` (`1h`, `4h`, `1D`, or `1W`) are required; `side` (`BUY`/`SELL`) is required when `target` or `invalidation` is present. Complete plans are persisted and evaluated independently from the bot setup, and `/api/outcomes/summary` reports the additive `byTraderPlan` block.
@@ -177,8 +179,14 @@ The scanner-preset scheduler enforces a 60-second minimum between runs of the sa
 
 `ENABLE_ALERT_DECISION_AUDIT` (default `false`) opts stored webhook alerts into a bounded audit of parsing, enrichment, gates, and channel dispatch. It is request-time tunable through Firebase Remote Config. `GET /api/alerts/summary?includeDecisionRollup=true` adds gate counts; `GET /api/alerts/export?includeDecision=true` includes per-alert audit fields, including the CSV column only when explicitly requested. See [Stored Alerts API](docs/alerts.md).
 
+`GET /api/admin/events` streams real-time operator updates (job progress, scanner results, alert delivery events, and delivery failures) over Server-Sent Events (SSE). The endpoint is enabled by default (`ENABLE_ADMIN_SSE=true`; process-startup gate, environment-only). SSE stream concurrency, total server capacity, keepalive cadence, and slow-client backpressure drain timeouts are runtime tunable through Firebase Remote Config.
+
 | Variable | Type | Default | Bounds | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| `ADMIN_SSE_MAX_CLIENT_CONNECTIONS` | Integer | `5` | `1`-`20` | Maximum concurrent SSE event streams per client key (IP, API key, or Firebase UID) on `GET /api/admin/events`. Older streams from the same client are gracefully evicted when exceeded. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored. |
+| `ADMIN_SSE_MAX_TOTAL_CONNECTIONS` | Integer | `100` | `10`-`1000` | Maximum total active SSE event streams allowed across all clients on `GET /api/admin/events`. New connections are rejected with 503 Service Unavailable when exceeded. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored. |
+| `ADMIN_SSE_HEARTBEAT_MS` | Integer | `30000` | `5000`-`120000` | Heartbeat interval in milliseconds for SSE comment keepalive frames (`:keepalive`). Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored. |
+| `ADMIN_SSE_DRAIN_TIMEOUT_MS` | Integer | `15000` | `1000`-`60000` | Maximum time in milliseconds to wait for a backpressured SSE client socket to drain before eviction. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored. |
 | `GENERIC_MESSAGE_MAX_LENGTH` | Integer | `4000` | `1`-`20000` | Maximum inbound characters before generic message webhook truncation. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored, leaving the environment/default effective. |
 | `TRADE_LEDGER_MAX_SCAN` | Integer | `5000` | `1`-`20000` | Maximum durable trade fills scanned per positions or P&L summary calculation. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored, leaving the environment/default effective. |
 
@@ -381,6 +389,28 @@ If `status` is `unreachable`, roll the web service back to `local` first — in 
 | `JOB_QUEUE_CLAIM_LEASE_MS` | `60000` | positive | Durable claim lease held by an executing worker. |
 | `JOB_QUEUE_CONNECT_TIMEOUT_MS` | `5000` | positive | Broker connect timeout for the queue connection. |
 | `JOB_QUEUE_PROBE_TIMEOUT_MS` | `5000` | `1`–`120000` | Startup readiness-probe deadline. Environment-only — a safety deadline, excluded from Firebase Remote Config. |
+
+### Scanner Preset Destinations
+
+Scanner presets can save multiple Telegram, WhatsApp, and Discord destinations. A new preset defaults to `mode: "inherit"`, which keeps the existing broadcast behavior. Set `mode: "preset"` with at least one destination to restrict delivery to the saved recipients; each channel accepts up to 20 validated destination values. Older presets without a mode keep their existing legacy routing.
+
+```json
+{
+  "name": "Private BTC Watchlist",
+  "mode": "preset",
+  "destinations": {
+    "telegramChatIds": ["-1001234567890"],
+    "whatsappChatIds": ["56912345678@c.us"],
+    "discordWebhookUrls": ["https://discord.com/api/webhooks/123456789012345678/example-token"]
+  }
+}
+```
+
+Manual runs and scheduled runs share the same routing rules. A manual run can override the saved destination for a channel with the existing `telegramChatId`, `whatsappChatId`, or `discordWebhookUrl` request field; `channels` filters the preset's configured destinations. If the filter matches no configured destination, the route returns `400 INVALID_REQUEST` before scanning or job creation. Set `runAsyncJob: true` on `POST /api/scanner-presets/:id/run` to submit through the existing market-scanner job path and receive `202 Accepted`; runs stay synchronous by default. If `dryRun` is true, the request returns its preview without submitting a job.
+
+Preset API responses include configured Telegram and WhatsApp chat IDs, but omit Discord webhook URLs and tokens. `destinations.discordWebhookCount` reports the number of saved Discord webhooks.
+
+`GET /api/status` and `/api/capabilities` report `featureFlags.presetBoundDestinations` and the non-sensitive `dependencies.presetBoundDestinations` capability. Destination values are not included in those status responses or in the async job acceptance response. The direct `/api/webhook/market-scanner-alert` endpoint continues using its request routing and does not read preset destinations.
 
 ### Signal Outcome Single-Evaluator Guarantee
 
