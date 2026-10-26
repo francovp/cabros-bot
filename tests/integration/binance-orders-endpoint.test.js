@@ -1680,6 +1680,30 @@ describe('Binance orders API', () => {
 			expect(client.submitNewOrder).not.toHaveBeenCalled();
 		});
 
+		it('rejects contingent previews before querying Binance', async () => {
+			const response = await request(app)
+				.post('/api/trading/binance/orders/preview')
+				.set('x-api-key', 'test-key')
+				.send({
+					symbol: 'BTCUSDT',
+					side: 'SELL',
+					type: 'STOP_LOSS_LIMIT',
+					quantity: '0.01',
+					price: '57900',
+					stopPrice: '58000',
+					timeInForce: 'GTC',
+				})
+				.expect(400);
+
+			expect(response.body).toMatchObject({
+				success: false,
+				preview: true,
+				code: 'INVALID_ORDER_REQUEST',
+				error: 'Preview supports only MARKET and LIMIT orders',
+			});
+			expect(MainClient).not.toHaveBeenCalled();
+		});
+
 		it('rejects preview with 400 when the order does not match the LOT_SIZE filter', async () => {
 			const response = await request(app)
 				.post('/api/trading/binance/orders/preview')

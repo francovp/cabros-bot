@@ -112,12 +112,22 @@ function createBinanceBracketOrderStorageService({
 				const snapshot = await transaction.get(ref);
 				if (snapshot.exists) {
 					const existing = snapshot.data() || {};
-					if (existing.requestFingerprint !== normalized.requestFingerprint) {
+					if (
+						existing.requestFingerprint !== normalized.requestFingerprint
+						|| existing.symbol !== normalized.symbol
+						|| existing.environment !== normalized.environment
+						|| existing.listClientOrderId !== normalized.listClientOrderId
+					) {
 						throw new BinanceBracketStorageError(
 							'Bracket idempotency key was reused with a different request',
 							'BINANCE_ORDER_CONFLICT',
 							409,
 						);
+					}
+					if (existing.state === 'ABORTED_BEFORE_SUBMIT') {
+						const reactivated = { state: 'RESERVED', updatedAt: timestamp };
+						transaction.set(ref, reactivated, { merge: true });
+						return { outcome: 'reserved', ...existing, ...reactivated, keyHash: normalized.keyHash };
 					}
 					return { outcome: 'existing', existingState: existing.state, ...existing, keyHash: normalized.keyHash };
 				}
@@ -157,7 +167,7 @@ function createBinanceBracketOrderStorageService({
 	}
 
 	async function updateReservation({ keyHash, state, orderListId, errorCode } = {}) {
-		if (!/^[a-f0-9]{64}$/i.test(String(keyHash || '')) || !['SUBMITTED', 'COMPLETED', 'AMBIGUOUS', 'REJECTED'].includes(state)) {
+		if (!/^[a-f0-9]{64}$/i.test(String(keyHash || '')) || !['SUBMITTED', 'COMPLETED', 'AMBIGUOUS', 'REJECTED', 'ABORTED_BEFORE_SUBMIT'].includes(state)) {
 			throw new BinanceBracketStorageError('Bracket reservation update is invalid', 'INVALID_ORDER_REQUEST', 400);
 		}
 		const firestore = requireFirestore();

@@ -103,7 +103,41 @@ function deriveClientOrderId(idempotencyKey, order) {
 	return `cb_${digest}`;
 }
 
+function buildBracketIdentity(idempotencyKey, payloadFingerprint) {
+	const idForRole = (role) => `cb_${crypto.createHash('sha256')
+		.update(`cabros-binance-bracket:${idempotencyKey}:${payloadFingerprint}:${role}`)
+		.digest('hex')
+		.slice(0, 32)}`;
+	return {
+		requestFingerprint: payloadFingerprint,
+		listClientOrderId: idForRole('list'),
+		workingClientOrderId: idForRole('working'),
+		pendingAboveClientOrderId: idForRole('above'),
+		pendingBelowClientOrderId: idForRole('below'),
+	};
+}
+
 function createBracketIdentity(idempotencyKey, order) {
+	const payloadFingerprint = crypto.createHash('sha256')
+		.update(JSON.stringify([
+			order.symbol,
+			order.side,
+			order.type,
+			order.quantity,
+			order.price,
+			order.stopPrice,
+			order.stopLimitPrice,
+			order.takeProfitPrice,
+			order.timeInForce,
+			order.alertId || '',
+			order.origin || '',
+			order.setupType || '',
+		]))
+		.digest('hex');
+	return buildBracketIdentity(idempotencyKey, payloadFingerprint);
+}
+
+function createLegacyBracketIdentity(idempotencyKey, order) {
 	const payloadFingerprint = crypto.createHash('sha256')
 		.update([
 			order.symbol,
@@ -118,17 +152,7 @@ function createBracketIdentity(idempotencyKey, order) {
 			order.alertId || '',
 		].join(':'))
 		.digest('hex');
-	const idForRole = (role) => `cb_${crypto.createHash('sha256')
-		.update(`cabros-binance-bracket:${idempotencyKey}:${payloadFingerprint}:${role}`)
-		.digest('hex')
-		.slice(0, 32)}`;
-	return {
-		requestFingerprint: payloadFingerprint,
-		listClientOrderId: idForRole('list'),
-		workingClientOrderId: idForRole('working'),
-		pendingAboveClientOrderId: idForRole('above'),
-		pendingBelowClientOrderId: idForRole('below'),
-	};
+	return buildBracketIdentity(idempotencyKey, payloadFingerprint);
 }
 
 function buildBracketOrderListParams(order, identity = {}) {
@@ -588,6 +612,9 @@ function normalizeRequest(body) {
 
 function normalizePreviewRequest(body) {
 	const order = normalizeRequest(body);
+	if (!['MARKET', 'LIMIT'].includes(order.type)) {
+		throw new BinanceOrderRequestError('Preview supports only MARKET and LIMIT orders');
+	}
 
 	let maxSlippageBps;
 	if (body.maxSlippageBps !== undefined) {
@@ -1214,18 +1241,18 @@ function sanitizeOrderResponse(response) {
 function sanitizeOrderListResponse(response = {}) {
 	return Object.fromEntries(Object.entries({
 		orderListId: response.orderListId,
-	contingencyType: response.contingencyType,
-	listStatusType: response.listStatusType,
-	listOrderStatus: response.listOrderStatus,
-	listClientOrderId: response.listClientOrderId,
-	transactionTime: response.transactionTime,
-	symbol: response.symbol,
-	orders: Array.isArray(response.orders) ? response.orders.map((order) => Object.fromEntries(Object.entries({
-		symbol: order?.symbol,
-		orderId: order?.orderId,
-		clientOrderId: order?.clientOrderId,
-	}).filter(([, value]) => value !== undefined))) : undefined,
-	orderReports: Array.isArray(response.orderReports) ? response.orderReports.map(sanitizeOrderResponse) : undefined,
+		contingencyType: response.contingencyType,
+		listStatusType: response.listStatusType,
+		listOrderStatus: response.listOrderStatus,
+		listClientOrderId: response.listClientOrderId,
+		transactionTime: response.transactionTime,
+		symbol: response.symbol,
+		orders: Array.isArray(response.orders) ? response.orders.map((order) => Object.fromEntries(Object.entries({
+			symbol: order?.symbol,
+			orderId: order?.orderId,
+			clientOrderId: order?.clientOrderId,
+		}).filter(([, value]) => value !== undefined))) : undefined,
+		orderReports: Array.isArray(response.orderReports) ? response.orderReports.map(sanitizeOrderResponse) : undefined,
 	}).filter(([, value]) => value !== undefined));
 }
 
@@ -1396,10 +1423,15 @@ async function placeBracketOrder({
 	config,
 	order,
 	requestIdempotencyKey,
-	client,
+	client: clientArg,
 	storage,
 	ensureTradingControlOpen,
 }) {
+	const resolveClient = () => {
+		if (typeof clientArg === 'function') return clientArg();
+		return clientArg;
+	};
+
 	if (!order.dryRun && !hasValue(requestIdempotencyKey)) {
 		throw new BinanceOrderRequestError('Live BRACKET_LIMIT orders require an Idempotency-Key header', 'LIVE_ORDER_ID_REQUIRED');
 	}
@@ -1407,14 +1439,17 @@ async function placeBracketOrder({
 	const identity = !order.dryRun && hasValue(requestIdempotencyKey)
 		? createBracketIdentity(requestIdempotencyKey, order)
 		: {};
-	const persistOrderList = async (orderList, reservation) => {
+	const persistOrderList = async (orderList, reservation, {
+		identity: resultIdentity = identity,
+		request: storedRequest = buildBracketStorageRequest(order),
+	} = {}) => {
 		try {
 			await storage.recordOrderList({
 				keyHash: reservation.keyHash,
-				requestFingerprint: identity.requestFingerprint,
+				requestFingerprint: resultIdentity.requestFingerprint,
 				symbol: order.symbol,
 				environment: config.environment,
-				request: buildBracketStorageRequest(order),
+				request: storedRequest,
 				orderList: sanitizeOrderListResponse(orderList),
 			});
 		} catch {
@@ -1430,15 +1465,20 @@ async function placeBracketOrder({
 			);
 		}
 	};
-	const reconcileExistingReservation = async (reservation) => {
+	const reconcileExistingReservation = async (reservation, {
+		identity: replayIdentity = identity,
+		request: storedRequest = buildBracketStorageRequest(order),
+		resultOrder = order,
+	} = {}) => {
 		if ((reservation.existingState || reservation.state) === 'REJECTED') {
 			throw new BinanceOrderRequestError('Binance previously rejected this bracket request', 'BINANCE_ORDER_REJECTED', 400);
 		}
 		let reconciled;
 		try {
-			if (typeof client.getOCO !== 'function') throw new Error('order-list query unavailable');
-			reconciled = await withTimeout(client.getOCO({
-				origClientOrderId: reservation.listClientOrderId || identity.listClientOrderId,
+			const binanceClient = resolveClient();
+			if (typeof binanceClient.getOCO !== 'function') throw new Error('order-list query unavailable');
+			reconciled = await withTimeout(binanceClient.getOCO({
+				origClientOrderId: reservation.listClientOrderId || replayIdentity.listClientOrderId,
 			}), config.timeoutMs);
 		} catch {
 			try {
@@ -1452,15 +1492,16 @@ async function placeBracketOrder({
 				503,
 			);
 		}
-		if (!reconciled || reconciled.listClientOrderId !== identity.listClientOrderId || reconciled.symbol !== order.symbol) {
+		if (!reconciled || reconciled.listClientOrderId !== replayIdentity.listClientOrderId || reconciled.symbol !== order.symbol) {
 			throw new BinanceOrderRequestError('Reconciled Binance order list does not match the request', 'BINANCE_ORDER_CONFLICT', 409);
 		}
-		reconciled = await hydrateOrderListReports(client, reconciled, config.timeoutMs);
-		await persistOrderList(reconciled, reservation);
-		return makeBracketSuccessResult({ config, order, orderList: reconciled, dryRun: false });
+		reconciled = await hydrateOrderListReports(resolveClient(), reconciled, config.timeoutMs);
+		await persistOrderList(reconciled, reservation, { identity: replayIdentity, request: storedRequest });
+		return makeBracketSuccessResult({ config, order: resultOrder, orderList: reconciled, dryRun: false });
 	};
 
 	if (!order.dryRun) {
+		const legacyIdentity = createLegacyBracketIdentity(requestIdempotencyKey, order);
 		let existingReservation;
 		try {
 			if (typeof storage.getReservation !== 'function') throw new Error('bracket reservation lookup unavailable');
@@ -1469,15 +1510,57 @@ async function placeBracketOrder({
 			throw mapBracketStorageError(error, 'reservation lookup');
 		}
 		if (existingReservation) {
+			const matchesCurrentIdentity = existingReservation.requestFingerprint === identity.requestFingerprint;
+			const matchesLegacyIdentity = existingReservation.requestFingerprint === legacyIdentity.requestFingerprint;
 			if (
-				existingReservation.requestFingerprint !== identity.requestFingerprint
+				(!matchesCurrentIdentity && !matchesLegacyIdentity)
 				|| existingReservation.symbol !== order.symbol
 				|| existingReservation.environment !== config.environment
 			) {
 				throw new BinanceOrderRequestError('Bracket idempotency key was reused with a different request', 'BINANCE_ORDER_CONFLICT', 409);
 			}
-			return reconcileExistingReservation(existingReservation);
+			let replayOptions;
+			if (!matchesCurrentIdentity) {
+				let storedRequest = null;
+				if (typeof storage.getBracketOrder === 'function') {
+					try {
+						const detail = await storage.getBracketOrder({
+							environment: config.environment,
+							listClientOrderId: existingReservation.listClientOrderId || legacyIdentity.listClientOrderId,
+						});
+						storedRequest = detail?.request || null;
+					} catch (error) {
+						throw mapBracketStorageError(error, 'detail lookup');
+					}
+				}
+				if (
+					storedRequest
+					&& (storedRequest.origin !== order.origin || storedRequest.setupType !== order.setupType)
+				) {
+					throw new BinanceOrderRequestError('Bracket idempotency key was reused with different provenance', 'BINANCE_ORDER_CONFLICT', 409);
+				}
+				if (!storedRequest) {
+					throw new BinanceOrderRequestError('Bracket provenance cannot be verified for this legacy reservation', 'BINANCE_ORDER_CONFLICT', 409);
+				}
+				replayOptions = {
+					identity: legacyIdentity,
+					request: storedRequest,
+					resultOrder: {
+						...order,
+						origin: storedRequest?.origin,
+						alertId: storedRequest?.alertId,
+						setupType: storedRequest?.setupType,
+					},
+				};
+			}
+			if (existingReservation.state !== 'ABORTED_BEFORE_SUBMIT') {
+				return reconcileExistingReservation(existingReservation, replayOptions);
+			}
 		}
+	}
+
+	if (order.timeInForce !== 'GTC') {
+		throw new BinanceOrderRequestError('BRACKET_LIMIT requires GTC timeInForce to keep its entry and protective stop active');
 	}
 
 	if (!config.allowedSymbols.includes(order.symbol)) {
@@ -1487,7 +1570,7 @@ async function placeBracketOrder({
 	let exchangeInfo;
 	let symbolInfo;
 	try {
-		exchangeInfo = await client.getExchangeInfo({ symbol: order.symbol });
+		exchangeInfo = await resolveClient().getExchangeInfo({ symbol: order.symbol });
 		symbolInfo = getSymbolInfo(exchangeInfo, order.symbol);
 	} catch {
 		throw new BinanceOrderServiceError('Binance symbol validation failed', 'BINANCE_VALIDATION_FAILED');
@@ -1551,7 +1634,7 @@ async function placeBracketOrder({
 		},
 	];
 	for (const testOrder of testOrders) {
-		await validateOrderTestFilters(client, testOrder, buildOrderParams(testOrder), filters, ensureTradingControlOpen);
+		await validateOrderTestFilters(resolveClient(), testOrder, buildOrderParams(testOrder), filters, ensureTradingControlOpen);
 	}
 	if (order.dryRun) {
 		return {
@@ -1580,9 +1663,22 @@ async function placeBracketOrder({
 		return reconcileExistingReservation(reservation);
 	}
 
-	await ensureTradingControlOpen();
 	try {
-		const response = await client.submitNewOrderListOTOCO(orderListParams);
+		await ensureTradingControlOpen();
+	} catch (error) {
+		try {
+			await storage.updateReservation({ keyHash: reservation.keyHash, state: 'ABORTED_BEFORE_SUBMIT' });
+		} catch {
+			throw new BinanceOrderServiceError(
+				'Bracket submission was blocked before Binance was called, but retry state could not be saved; reconcile before reusing this key',
+				'BINANCE_ORDER_STATUS_UNKNOWN',
+				503,
+			);
+		}
+		throw error;
+	}
+	try {
+		const response = await resolveClient().submitNewOrderListOTOCO(orderListParams);
 		if (!response || response.symbol !== order.symbol || response.listClientOrderId !== identity.listClientOrderId) {
 			try {
 				await storage.updateReservation({ keyHash: reservation.keyHash, state: 'AMBIGUOUS' });
@@ -1596,7 +1692,12 @@ async function placeBracketOrder({
 			);
 		}
 		await persistOrderList(response, reservation);
-		return makeBracketSuccessResult({ config, order, orderList: response, dryRun: false });
+		return makeBracketSuccessResult({
+			config,
+			order,
+			orderList: await hydrateOrderListReports(resolveClient(), response, config.timeoutMs),
+			dryRun: false,
+		});
 	} catch (error) {
 		if (error instanceof BinanceOrderServiceError && error.code === 'BINANCE_ORDER_STATUS_UNKNOWN') throw error;
 		if (isDefinitiveBinanceRejection(error)) {
@@ -1969,21 +2070,28 @@ function createBinanceOrderService({
 				);
 			}
 			let client;
-			try {
-				client = createClient(config);
-			} catch (error) {
-				throw new BinanceOrderServiceError('Binance client could not be initialized', 'BINANCE_CLIENT_UNAVAILABLE', 503);
-			}
+			const getClient = () => {
+				if (!client) {
+					try {
+						client = createClient(config);
+					} catch (error) {
+						throw new BinanceOrderServiceError('Binance client could not be initialized', 'BINANCE_CLIENT_UNAVAILABLE', 503);
+					}
+				}
+				return client;
+			};
 			if (order.type === 'BRACKET_LIMIT') {
 				return placeBracketOrder({
 					config,
 					order,
 					requestIdempotencyKey,
-					client,
+					client: getClient,
 					storage: bracketOrderStorageService,
 					ensureTradingControlOpen,
 				});
 			}
+
+			client = getClient();
 
 			const clientOrderId = order.clientOrderId
 				|| (!order.dryRun ? deriveClientOrderId(requestIdempotencyKey, order) : undefined);
