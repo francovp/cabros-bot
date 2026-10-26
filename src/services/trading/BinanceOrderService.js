@@ -2,6 +2,18 @@
 
 const crypto = require('crypto');
 const { MainClient } = require('binance');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const {
+	bindOrderProvenance,
+	resolveOrderProvenance,
+} = require('./orderProvenance');
+const AlertStorageService = require('../storage/AlertStorageService');
+const { tradingControlService } = require('./TradingControlService');
+const { createBinanceBracketOrderStorageService } = require('./BinanceBracketOrderStorageService');
+
+const defaultBracketOrderStorageService = createBinanceBracketOrderStorageService({
+	getFirestore: () => AlertStorageService.isEnabled() ? AlertStorageService.getFirestore() : null,
+});
 
 const TESTNET_BASE_URL = 'https://testnet.binance.vision';
 const DEMO_BASE_URL = 'https://demo-api.binance.com';
@@ -9,9 +21,32 @@ const LIVE_BASE_URL = 'https://api.binance.com';
 const DEFAULT_BINANCE_DATA_BASE_URL = 'https://api.binance.com';
 const DEFAULT_TIMEOUT_MS = 10000;
 const MAX_TIMEOUT_MS = 30000;
-const ALLOWED_ORDER_TYPES = new Set(['MARKET', 'LIMIT']);
+const PREVIEW_TTL_MS = 5000;
+const PREVIEW_DEPTH_TIMEOUT_MS = 4000;
+const PREVIEW_DEFAULT_MAKER_BPS = 10;
+const PREVIEW_DEFAULT_TAKER_BPS = 10;
+const PREVIEW_DEPTH_NOTIONAL_FRACTION = 0.0005;
+const DEFAULT_BALANCE_CACHE_MS = 3000;
+const MIN_BALANCE_CACHE_MS = 1000;
+const MAX_BALANCE_CACHE_MS = 60000;
+const CRYPTO_QUOTE_SUFFIXES = ['USDT', 'USDC', 'BUSD', 'FDUSD', 'TUSD', 'BTC', 'ETH', 'BNB', 'EUR', 'TRY'];
+const ALLOWED_ORDER_TYPES = new Set([
+	'MARKET',
+	'LIMIT',
+	'LIMIT_MAKER',
+	'STOP_LOSS',
+	'STOP_LOSS_LIMIT',
+	'TAKE_PROFIT',
+	'TAKE_PROFIT_LIMIT',
+	'BRACKET_LIMIT',
+]);
+const CONTINGENT_ORDER_TYPES = new Set(['STOP_LOSS', 'STOP_LOSS_LIMIT', 'TAKE_PROFIT', 'TAKE_PROFIT_LIMIT']);
+const LIMIT_ORDER_TYPES = new Set(['LIMIT', 'LIMIT_MAKER', 'STOP_LOSS_LIMIT', 'TAKE_PROFIT_LIMIT']);
+const MARKET_EXECUTION_ORDER_TYPES = new Set(['MARKET', 'STOP_LOSS', 'TAKE_PROFIT']);
+const SUPPORTED_SPOT_ORDER_TYPES = Object.freeze([...ALLOWED_ORDER_TYPES]);
 const ALLOWED_SIDES = new Set(['BUY', 'SELL']);
 const ALLOWED_TIME_IN_FORCE = new Set(['GTC', 'IOC', 'FOK']);
+const ALLOWED_ORIGINS = new Set(['manual', 'auto_trade', 'admin_alert', 'alert']);
 const DEFINITIVE_BINANCE_ERROR_CODES = new Set([-1003, -1015, -1021, -1034]);
 const RETRYABLE_BINANCE_ERROR_CODES = new Set([-1001, -1006, -1007]);
 const ACCOUNT_DEPENDENT_FILTERS = new Set([
@@ -48,7 +83,7 @@ function hasValue(value) {
 
 function deriveClientOrderId(idempotencyKey, order) {
 	if (!hasValue(idempotencyKey)) return undefined;
-	const fingerprint = order ? [
+	const fingerprintParts = order ? [
 		order.symbol,
 		order.side,
 		order.type,
@@ -56,12 +91,80 @@ function deriveClientOrderId(idempotencyKey, order) {
 		order.quoteOrderQty ?? '',
 		order.price ?? '',
 		order.timeInForce ?? '',
-	].join(':') : '';
+	] : [];
+	if (order && CONTINGENT_ORDER_TYPES.has(order.type)) {
+		fingerprintParts.push(order.stopPrice ?? '', order.trailingDelta ?? '');
+	}
+	const fingerprint = fingerprintParts.join(':');
 	const digest = crypto.createHash('sha256')
 		.update(`cabros-binance-order:${idempotencyKey}:${fingerprint}`)
 		.digest('hex')
 		.slice(0, 32);
 	return `cb_${digest}`;
+}
+
+function createBracketIdentity(idempotencyKey, order) {
+	const payloadFingerprint = crypto.createHash('sha256')
+		.update([
+			order.symbol,
+			order.side,
+			order.type,
+			order.quantity,
+			order.price,
+			order.stopPrice,
+			order.stopLimitPrice,
+			order.takeProfitPrice,
+			order.timeInForce,
+			order.alertId || '',
+		].join(':'))
+		.digest('hex');
+	const idForRole = (role) => `cb_${crypto.createHash('sha256')
+		.update(`cabros-binance-bracket:${idempotencyKey}:${payloadFingerprint}:${role}`)
+		.digest('hex')
+		.slice(0, 32)}`;
+	return {
+		requestFingerprint: payloadFingerprint,
+		listClientOrderId: idForRole('list'),
+		workingClientOrderId: idForRole('working'),
+		pendingAboveClientOrderId: idForRole('above'),
+		pendingBelowClientOrderId: idForRole('below'),
+	};
+}
+
+function buildBracketOrderListParams(order, identity = {}) {
+	const pendingSide = order.side === 'BUY' ? 'SELL' : 'BUY';
+	const takeProfitIsAbove = order.side === 'BUY';
+	const params = {
+		symbol: order.symbol,
+		workingType: 'LIMIT',
+		workingSide: order.side,
+		workingPrice: order.price,
+		workingQuantity: order.quantity,
+		workingTimeInForce: order.timeInForce,
+		pendingSide,
+		pendingQuantity: order.quantity,
+		pendingAboveType: takeProfitIsAbove ? 'LIMIT_MAKER' : 'STOP_LOSS_LIMIT',
+		pendingBelowType: takeProfitIsAbove ? 'STOP_LOSS_LIMIT' : 'TAKE_PROFIT_LIMIT',
+		newOrderRespType: 'FULL',
+		...(identity.listClientOrderId ? { listClientOrderId: identity.listClientOrderId } : {}),
+		...(identity.workingClientOrderId ? { workingClientOrderId: identity.workingClientOrderId } : {}),
+		...(identity.pendingAboveClientOrderId ? { pendingAboveClientOrderId: identity.pendingAboveClientOrderId } : {}),
+		...(identity.pendingBelowClientOrderId ? { pendingBelowClientOrderId: identity.pendingBelowClientOrderId } : {}),
+	};
+	if (takeProfitIsAbove) {
+		params.pendingAbovePrice = order.takeProfitPrice;
+		params.pendingBelowStopPrice = order.stopPrice;
+		params.pendingBelowPrice = order.stopLimitPrice;
+		params.pendingBelowTimeInForce = order.timeInForce;
+	} else {
+		params.pendingAboveStopPrice = order.stopPrice;
+		params.pendingAbovePrice = order.stopLimitPrice;
+		params.pendingAboveTimeInForce = order.timeInForce;
+		params.pendingBelowStopPrice = order.takeProfitPrice;
+		params.pendingBelowPrice = order.takeProfitPrice;
+		params.pendingBelowTimeInForce = order.timeInForce;
+	}
+	return params;
 }
 
 function isOrderNotFoundError(error) {
@@ -98,7 +201,25 @@ async function reconcileOrder(client, symbol, clientOrderId) {
 	if (!clientOrderId || typeof client.getOrder !== 'function') return null;
 
 	try {
-		return await client.getOrder({ symbol, origClientOrderId: clientOrderId });
+		const order = await client.getOrder({ symbol, origClientOrderId: clientOrderId });
+		if (order && !order.fills && typeof client.getAccountTradeList === 'function' && Number(order.executedQty) > 0) {
+			try {
+				const trades = await client.getAccountTradeList({ symbol, orderId: order.orderId });
+				if (Array.isArray(trades) && trades.length > 0) {
+					order.fills = trades.map((t) => ({
+						price: t.price,
+						qty: t.qty,
+						commission: t.commission,
+						commissionAsset: t.commissionAsset,
+						tradeId: t.id,
+						time: t.time,
+					}));
+				}
+			} catch {
+				// fail-open: keep order without extra trade list query
+			}
+		}
+		return order;
 	} catch (error) {
 		if (isOrderNotFoundError(error)) return null;
 		throw new BinanceOrderServiceError(
@@ -107,6 +228,36 @@ async function reconcileOrder(client, symbol, clientOrderId) {
 			503,
 		);
 	}
+}
+
+async function hydrateOrderListReports(client, orderList, timeoutMs) {
+	if (!orderList || !Array.isArray(orderList.orders) || orderList.orders.length === 0) {
+		return orderList;
+	}
+	const existingReports = Array.isArray(orderList.orderReports) ? orderList.orderReports : [];
+	const reportsByOrderId = new Map(existingReports.map((r) => [r.orderId, r]));
+
+	const hydratedReports = await Promise.all(
+		orderList.orders.map(async (item) => {
+			const existing = reportsByOrderId.get(item.orderId);
+			if (existing && Array.isArray(existing.fills) && existing.fills.length > 0) {
+				return existing;
+			}
+			try {
+				const reconciled = typeof withTimeout === 'function' && timeoutMs
+					? await withTimeout(reconcileOrder(client, item.symbol || orderList.symbol, item.clientOrderId), timeoutMs)
+					: await reconcileOrder(client, item.symbol || orderList.symbol, item.clientOrderId);
+				return reconciled || existing || item;
+			} catch {
+				return existing || item;
+			}
+		}),
+	);
+
+	return {
+		...orderList,
+		orderReports: hydratedReports,
+	};
 }
 
 function parsePositiveNumber(value, field) {
@@ -243,6 +394,36 @@ function createBinanceClient(config) {
 	});
 }
 
+async function withTimeout(promise, timeoutMs) {
+	let timer;
+	const timeoutPromise = new Promise((_, reject) => {
+		timer = setTimeout(() => reject(new Error(`operation timed out after ${timeoutMs}ms`)), timeoutMs);
+	});
+	try {
+		return await Promise.race([promise, timeoutPromise]);
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+}
+
+function computeSlippageBps(referencePrice, fillPrice, side) {
+	const refParts = decimalParts(referencePrice);
+	const fillParts = decimalParts(fillPrice);
+	if (!refParts || !fillParts) return null;
+	const scale = Math.max(refParts.scale, fillParts.scale);
+	const refScaled = refParts.integer * (10n ** BigInt(scale - refParts.scale));
+	const fillScaled = fillParts.integer * (10n ** BigInt(scale - fillParts.scale));
+	if (refScaled === 0n) return null;
+	// BUY: slippage = (fillPrice - refPrice) / refPrice (positive = adverse)
+	// SELL: slippage = (refPrice - fillPrice) / refPrice (positive = adverse)
+	const diff = side === 'BUY'
+		? fillScaled - refScaled
+		: refScaled - fillScaled;
+	if (diff === 0n) return 0;
+	const scaledBps = (diff * 10000n) / refScaled;
+	return Number(scaledBps);
+}
+
 function normalizeRequest(body) {
 	if (!body || typeof body !== 'object' || Array.isArray(body)) {
 		throw new BinanceOrderRequestError('Request body must be an object');
@@ -250,7 +431,9 @@ function normalizeRequest(body) {
 
 	const allowedKeys = new Set([
 		'symbol', 'side', 'type', 'quantity', 'quoteOrderQty', 'price',
+		'stopPrice', 'trailingDelta', 'stopLimitPrice', 'takeProfitPrice',
 		'timeInForce', 'clientOrderId', 'dryRun', 'idempotencyKey', 'idempotency_key',
+		'maxSlippageBps', 'origin', 'alertId', 'setupType',
 	]);
 	const unknownKey = Object.keys(body).find((key) => !allowedKeys.has(key));
 	if (unknownKey) throw new BinanceOrderRequestError(`Unsupported order field: ${unknownKey}`);
@@ -263,22 +446,67 @@ function normalizeRequest(body) {
 	const side = typeof body.side === 'string' ? body.side.trim().toUpperCase() : '';
 	const type = typeof body.type === 'string' ? body.type.trim().toUpperCase() : '';
 	if (!ALLOWED_SIDES.has(side)) throw new BinanceOrderRequestError('side must be BUY or SELL');
-	if (!ALLOWED_ORDER_TYPES.has(type)) throw new BinanceOrderRequestError('type must be MARKET or LIMIT');
+	if (!ALLOWED_ORDER_TYPES.has(type)) {
+		throw new BinanceOrderRequestError(`type must be one of: ${[...ALLOWED_ORDER_TYPES].join(', ')}`);
+	}
 
 	const hasQuantity = body.quantity !== undefined;
 	const hasQuoteOrderQty = body.quoteOrderQty !== undefined;
+	const isBracket = type === 'BRACKET_LIMIT';
+	const isLimitOrder = LIMIT_ORDER_TYPES.has(type);
+	const isMarketExecution = MARKET_EXECUTION_ORDER_TYPES.has(type);
+	const isContingent = CONTINGENT_ORDER_TYPES.has(type);
 	if (type === 'MARKET' && hasQuantity === hasQuoteOrderQty) {
 		throw new BinanceOrderRequestError('MARKET orders require exactly one of quantity or quoteOrderQty');
 	}
-	if (type === 'LIMIT' && (!hasQuantity || hasQuoteOrderQty)) {
-		throw new BinanceOrderRequestError('LIMIT orders require quantity and do not accept quoteOrderQty');
+	if (type !== 'MARKET' && (!hasQuantity || hasQuoteOrderQty)) {
+		throw new BinanceOrderRequestError(`${type} orders require quantity and do not accept quoteOrderQty`);
 	}
 
 	const quantity = hasQuantity ? parsePositiveNumber(body.quantity, 'quantity') : undefined;
 	const quoteOrderQty = hasQuoteOrderQty ? parsePositiveNumber(body.quoteOrderQty, 'quoteOrderQty') : undefined;
 	const price = body.price === undefined ? undefined : parsePositiveNumber(body.price, 'price');
-	if (type === 'MARKET' && price !== undefined) throw new BinanceOrderRequestError('MARKET orders do not accept price');
-	if (type === 'LIMIT' && price === undefined) throw new BinanceOrderRequestError('LIMIT orders require price');
+	const stopPrice = body.stopPrice === undefined ? undefined : parsePositiveNumber(body.stopPrice, 'stopPrice');
+	const stopLimitPrice = body.stopLimitPrice === undefined ? undefined : parsePositiveNumber(body.stopLimitPrice, 'stopLimitPrice');
+	const takeProfitPrice = body.takeProfitPrice === undefined ? undefined : parsePositiveNumber(body.takeProfitPrice, 'takeProfitPrice');
+	let trailingDelta;
+	if (body.trailingDelta !== undefined) {
+		const rawDelta = String(body.trailingDelta).trim();
+		const parsedDelta = Number(rawDelta);
+		if (!/^\d+$/.test(rawDelta) || !Number.isSafeInteger(parsedDelta) || parsedDelta <= 0) {
+			throw new BinanceOrderRequestError('trailingDelta must be a positive integer number of BIPS');
+		}
+		trailingDelta = parsedDelta;
+	}
+
+	if (isMarketExecution && price !== undefined) throw new BinanceOrderRequestError(`${type} orders do not accept price`);
+	if (type === 'MARKET' && (stopPrice !== undefined || trailingDelta !== undefined || stopLimitPrice !== undefined || takeProfitPrice !== undefined)) {
+		throw new BinanceOrderRequestError('MARKET orders do not accept contingent order fields');
+	}
+	if (isLimitOrder && price === undefined) throw new BinanceOrderRequestError(`${type} orders require price`);
+	if (!isContingent && !isBracket && (stopPrice !== undefined || trailingDelta !== undefined || stopLimitPrice !== undefined || takeProfitPrice !== undefined)) {
+		throw new BinanceOrderRequestError(`${type} orders do not accept contingent order fields`);
+	}
+	if (isContingent && (stopLimitPrice !== undefined || takeProfitPrice !== undefined)) {
+		throw new BinanceOrderRequestError(`${type} orders do not accept bracket price fields`);
+	}
+	if (isContingent && stopPrice === undefined && trailingDelta === undefined) {
+		throw new BinanceOrderRequestError(`${type} orders require stopPrice or trailingDelta`);
+	}
+	if (isBracket) {
+		if (price === undefined) throw new BinanceOrderRequestError('BRACKET_LIMIT requires entry price');
+		if (trailingDelta !== undefined) throw new BinanceOrderRequestError('BRACKET_LIMIT does not accept trailingDelta');
+		if (stopPrice === undefined || stopLimitPrice === undefined || takeProfitPrice === undefined) {
+			throw new BinanceOrderRequestError('BRACKET_LIMIT requires stopPrice, stopLimitPrice, and takeProfitPrice');
+		}
+		if (body.clientOrderId !== undefined) {
+			throw new BinanceOrderRequestError('BRACKET_LIMIT uses the idempotency key for its order-list identity');
+		}
+		if ((side === 'BUY' && !(compareDecimals(stopPrice, price) < 0 && compareDecimals(stopLimitPrice, stopPrice) <= 0 && compareDecimals(takeProfitPrice, price) > 0))
+			|| (side === 'SELL' && !(compareDecimals(stopPrice, price) > 0 && compareDecimals(stopLimitPrice, stopPrice) >= 0 && compareDecimals(takeProfitPrice, price) < 0))) {
+			throw new BinanceOrderRequestError('BRACKET_LIMIT stop and take-profit prices must be on the protective sides of the entry price');
+		}
+	}
 
 	const timeInForce = body.timeInForce === undefined
 		? (type === 'LIMIT' ? 'GTC' : undefined)
@@ -288,6 +516,15 @@ function normalizeRequest(body) {
 	}
 	if (type === 'MARKET' && timeInForce !== undefined) {
 		throw new BinanceOrderRequestError('MARKET orders do not accept timeInForce');
+	}
+	if (['LIMIT', 'STOP_LOSS_LIMIT', 'TAKE_PROFIT_LIMIT', 'BRACKET_LIMIT'].includes(type) && timeInForce === undefined) {
+		throw new BinanceOrderRequestError(`${type} orders require timeInForce`);
+	}
+	if (type === 'LIMIT_MAKER' && timeInForce !== undefined) {
+		throw new BinanceOrderRequestError('LIMIT_MAKER orders do not accept timeInForce');
+	}
+	if (['STOP_LOSS', 'TAKE_PROFIT'].includes(type) && timeInForce !== undefined) {
+		throw new BinanceOrderRequestError(`${type} orders do not accept timeInForce`);
 	}
 
 	const clientOrderId = body.clientOrderId === undefined ? undefined : String(body.clientOrderId).trim();
@@ -302,6 +539,33 @@ function normalizeRequest(body) {
 		else throw new BinanceOrderRequestError('dryRun must be boolean');
 	}
 
+	let origin;
+	if (body.origin !== undefined) {
+		if (typeof body.origin !== 'string' || !body.origin.trim()) {
+			throw new BinanceOrderRequestError('origin must be a non-empty string', 'INVALID_REQUEST', 400);
+		}
+		origin = body.origin.trim().toLowerCase();
+		if (!ALLOWED_ORIGINS.has(origin)) {
+			throw new BinanceOrderRequestError(`origin must be one of: ${[...ALLOWED_ORIGINS].join(', ')}`, 'INVALID_REQUEST', 400);
+		}
+	}
+
+	let alertId;
+	if (body.alertId !== undefined) {
+		if (typeof body.alertId !== 'string' || !body.alertId.trim()) {
+			throw new BinanceOrderRequestError('alertId must be a non-empty string', 'INVALID_REQUEST', 400);
+		}
+		alertId = body.alertId.trim();
+	}
+
+	let setupType;
+	if (body.setupType !== undefined) {
+		if (typeof body.setupType !== 'string' || !body.setupType.trim()) {
+			throw new BinanceOrderRequestError('setupType must be a non-empty string', 'INVALID_REQUEST', 400);
+		}
+		setupType = body.setupType.trim().toLowerCase();
+	}
+
 	return {
 		symbol,
 		side,
@@ -309,10 +573,376 @@ function normalizeRequest(body) {
 		quantity,
 		quoteOrderQty,
 		price,
+		stopPrice,
+		trailingDelta,
+		stopLimitPrice,
+		takeProfitPrice,
 		timeInForce,
 		clientOrderId,
 		dryRun,
+		origin,
+		alertId,
+		setupType,
 	};
+}
+
+function normalizePreviewRequest(body) {
+	const order = normalizeRequest(body);
+
+	let maxSlippageBps;
+	if (body.maxSlippageBps !== undefined) {
+		if (typeof body.maxSlippageBps !== 'number' && typeof body.maxSlippageBps !== 'string') {
+			throw new BinanceOrderRequestError('maxSlippageBps must be a positive number');
+		}
+		const parsed = Number(String(body.maxSlippageBps).trim());
+		if (!Number.isFinite(parsed) || parsed <= 0) {
+			throw new BinanceOrderRequestError('maxSlippageBps must be a positive number');
+		}
+		maxSlippageBps = parsed;
+	}
+
+	return { ...order, maxSlippageBps };
+}
+
+function formatDecimalParts(parts) {
+	if (!parts) return null;
+	const digits = String(parts.integer);
+	const scale = parts.scale;
+	if (scale <= 0) return digits + '0'.repeat(-scale);
+	const padded = digits.padStart(scale + 1, '0');
+	const whole = padded.slice(0, padded.length - scale);
+	const fraction = padded.slice(padded.length - scale).replace(/0+$/, '');
+	return fraction ? `${whole}.${fraction}` : whole;
+}
+
+function roundDownToStep(value, stepSize) {
+	const valueParts = decimalParts(value);
+	const stepParts = decimalParts(stepSize);
+	if (!valueParts || !stepParts || stepParts.integer === 0n) return value;
+
+	const scale = Math.max(valueParts.scale, stepParts.scale);
+	const valueInteger = valueParts.integer * (10n ** BigInt(scale - valueParts.scale));
+	const stepInteger = stepParts.integer * (10n ** BigInt(scale - stepParts.scale));
+	const stepped = (valueInteger / stepInteger) * stepInteger;
+	const resultParts = { integer: stepped, scale };
+	return formatDecimalParts(resultParts);
+}
+
+function parseBalanceCacheTtl(value) {
+	const parsed = Number.parseInt(value || `${DEFAULT_BALANCE_CACHE_MS}`, 10);
+	if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_BALANCE_CACHE_MS;
+	return Math.min(Math.max(parsed, MIN_BALANCE_CACHE_MS), MAX_BALANCE_CACHE_MS);
+}
+
+function deriveSymbolAssets(symbol, symbolInfo = null) {
+	if (symbolInfo?.baseAsset && symbolInfo?.quoteAsset) {
+		return {
+			baseAsset: String(symbolInfo.baseAsset).toUpperCase(),
+			quoteAsset: String(symbolInfo.quoteAsset).toUpperCase(),
+		};
+	}
+	const normalized = String(symbol || '').trim().toUpperCase();
+	const quote = CRYPTO_QUOTE_SUFFIXES.find((s) => normalized.endsWith(s));
+	if (quote && normalized.length > quote.length) {
+		return {
+			baseAsset: normalized.slice(0, -quote.length),
+			quoteAsset: quote,
+		};
+	}
+	return {
+		baseAsset: normalized,
+		quoteAsset: null,
+	};
+}
+
+function deriveAllowedAssets(allowedSymbols = [], exchangeInfo = null) {
+	const symbolList = typeof allowedSymbols === 'string'
+		? allowedSymbols.split(',').map((s) => s.trim()).filter(Boolean)
+		: (Array.isArray(allowedSymbols) ? allowedSymbols : []);
+	const assets = new Set();
+	for (const symbol of symbolList) {
+		const symbolInfo = getSymbolInfo(exchangeInfo, symbol);
+		const { baseAsset, quoteAsset } = deriveSymbolAssets(symbol, symbolInfo);
+		if (baseAsset) assets.add(baseAsset);
+		if (quoteAsset) assets.add(quoteAsset);
+	}
+	return Array.from(assets).sort();
+}
+
+function sellableQuantity(symbolOrParams, requestedQtyArg, optionsArg = {}) {
+	let params;
+	if (typeof symbolOrParams === 'object' && symbolOrParams !== null) {
+		params = symbolOrParams;
+	} else {
+		params = {
+			symbol: symbolOrParams,
+			requestedQuantity: requestedQtyArg,
+			...optionsArg,
+		};
+	}
+
+	const symbol = params.symbol ? String(params.symbol).trim().toUpperCase() : null;
+	const { baseAsset } = symbol ? deriveSymbolAssets(symbol, params.symbolInfo) : { baseAsset: null };
+
+	let free = null;
+	let locked = null;
+
+	if (params.freeBalance !== undefined && params.freeBalance !== null) {
+		free = String(params.freeBalance).trim();
+	} else if (params.free !== undefined && params.free !== null) {
+		free = String(params.free).trim();
+	} else if (Array.isArray(params.balances)) {
+		const match = params.balances.find((b) => b && (
+			(baseAsset && String(b.asset).toUpperCase() === baseAsset)
+			|| (!baseAsset && symbol && String(b.asset).toUpperCase() === symbol)
+		));
+		if (match) {
+			free = String(match.free ?? '0').trim();
+			locked = String(match.locked ?? '0').trim();
+		} else {
+			free = '0';
+			locked = '0';
+		}
+	} else {
+		free = '0';
+	}
+
+	if (locked === null) {
+		if (params.lockedBalance !== undefined && params.lockedBalance !== null) {
+			locked = String(params.lockedBalance).trim();
+		} else if (params.locked !== undefined && params.locked !== null) {
+			locked = String(params.locked).trim();
+		} else {
+			locked = '0';
+		}
+	}
+
+	let filtersMap = params.filters instanceof Map ? params.filters : null;
+	if (!filtersMap && params.symbolInfo) {
+		filtersMap = getFilters(params.symbolInfo, params.exchangeInfo);
+	}
+
+	const lotSizeFilter = filtersMap?.get('LOT_SIZE') || {};
+	const notionalFilter = filtersMap?.get('NOTIONAL') || filtersMap?.get('MIN_NOTIONAL') || {};
+
+	const stepSize = params.stepSize ?? lotSizeFilter.stepSize ?? null;
+	const minQty = params.minQty ?? lotSizeFilter.minQty ?? null;
+	const maxQty = params.maxQty ?? lotSizeFilter.maxQty ?? null;
+	const minNotional = params.minNotional ?? notionalFilter.minNotional ?? null;
+	const price = params.price ?? params.currentPrice ?? params.effectivePrice ?? null;
+
+	const rawRequested = params.requestedQuantity ?? params.quantity;
+	const requestedStr = (rawRequested !== undefined && rawRequested !== null && rawRequested !== '' && rawRequested !== 'ALL')
+		? String(rawRequested).trim()
+		: null;
+
+	const freeParts = decimalParts(free);
+	const hasFreeBalance = freeParts && compareDecimals(free, '0') > 0;
+
+	if (!hasFreeBalance) {
+		const result = {
+			symbol,
+			sellable: false,
+			quantity: '0',
+			requestedQuantity: requestedStr,
+			freeBalance: free,
+			lockedBalance: locked,
+			stepSize,
+			minQty,
+			maxQty,
+			minNotional,
+			effectivePrice: price ? String(price).trim() : null,
+			estimatedNotional: '0',
+			adjusted: requestedStr !== null && requestedStr !== '0',
+			clampedToBalance: requestedStr !== null && compareDecimals(requestedStr, '0') > 0,
+			belowMinQty: false,
+			belowMinNotional: false,
+			exceedsMaxQty: false,
+			reason: 'ZERO_BALANCE',
+		};
+		Object.defineProperty(result, 'toString', { value: () => result.quantity });
+		return result;
+	}
+
+	let available = free;
+	let clampedToBalance = false;
+	if (requestedStr) {
+		const reqParts = decimalParts(requestedStr);
+		if (reqParts && compareDecimals(requestedStr, '0') > 0) {
+			if (compareDecimals(requestedStr, free) > 0) {
+				available = free;
+				clampedToBalance = true;
+			} else {
+				available = requestedStr;
+			}
+		}
+	}
+
+	let stepped = available;
+	if (stepSize && decimalParts(String(stepSize).trim())) {
+		stepped = roundDownToStep(available, String(stepSize).trim());
+	}
+
+	const steppedParts = decimalParts(stepped);
+	if (!steppedParts || compareDecimals(stepped, '0') <= 0) {
+		const result = {
+			symbol,
+			sellable: false,
+			quantity: '0',
+			requestedQuantity: requestedStr,
+			freeBalance: free,
+			lockedBalance: locked,
+			stepSize,
+			minQty,
+			maxQty,
+			minNotional,
+			effectivePrice: price ? String(price).trim() : null,
+			estimatedNotional: '0',
+			adjusted: requestedStr !== null ? requestedStr !== '0' : false,
+			clampedToBalance,
+			belowMinQty: false,
+			belowMinNotional: false,
+			exceedsMaxQty: false,
+			reason: 'BELOW_STEP_SIZE',
+		};
+		Object.defineProperty(result, 'toString', { value: () => result.quantity });
+		return result;
+	}
+
+	let exceedsMaxQty = false;
+	if (maxQty && decimalParts(String(maxQty).trim())) {
+		if (compareDecimals(stepped, String(maxQty).trim()) > 0) {
+			exceedsMaxQty = true;
+			stepped = stepSize ? roundDownToStep(String(maxQty).trim(), String(stepSize).trim()) : String(maxQty).trim();
+		}
+	}
+
+	const belowMinQty = Boolean(minQty && decimalParts(String(minQty).trim()) && compareDecimals(stepped, String(minQty).trim()) < 0);
+
+	let estimatedNotional = null;
+	let belowMinNotional = false;
+	if (price && decimalParts(String(price).trim())) {
+		const priceStr = String(price).trim();
+		const notionalParts = multiplyDecimals(stepped, priceStr);
+		if (notionalParts) {
+			estimatedNotional = formatDecimalParts(notionalParts);
+			if (minNotional && decimalParts(String(minNotional).trim())) {
+				belowMinNotional = compareDecimals(estimatedNotional, String(minNotional).trim()) < 0;
+			}
+		}
+	}
+
+	let sellable = true;
+	let reason = null;
+	if (belowMinQty) {
+		sellable = false;
+		reason = 'BELOW_MIN_QTY';
+	} else if (belowMinNotional) {
+		sellable = false;
+		reason = 'BELOW_MIN_NOTIONAL';
+	}
+
+	const adjusted = requestedStr !== null ? stepped !== requestedStr : false;
+
+	const result = {
+		symbol,
+		sellable,
+		quantity: stepped,
+		requestedQuantity: requestedStr,
+		freeBalance: free,
+		lockedBalance: locked,
+		stepSize,
+		minQty,
+		maxQty,
+		minNotional,
+		effectivePrice: price ? String(price).trim() : null,
+		estimatedNotional,
+		adjusted,
+		clampedToBalance,
+		belowMinQty,
+		belowMinNotional,
+		exceedsMaxQty,
+		reason,
+	};
+	Object.defineProperty(result, 'toString', { value: () => result.quantity });
+	return result;
+}
+
+function readBps(source, ...keys) {
+	for (const key of keys) {
+		const value = source && source[key];
+		if (typeof value === 'number' && Number.isFinite(value)) return value;
+		if (typeof value === 'string' && value.trim() !== '') {
+			const parsed = Number(value);
+			if (Number.isFinite(parsed)) return parsed;
+		}
+	}
+	return null;
+}
+
+function calculateDepthFill(asks, quantity) {
+	if (!Array.isArray(asks) || asks.length === 0 || !quantity) return null;
+	let remaining = decimalParts(quantity);
+	if (!remaining) return null;
+	let totalQuote = decimalParts('0');
+	let totalBase = decimalParts('0');
+	let worstPrice = null;
+
+	for (const level of asks) {
+		if (!Array.isArray(level) || level.length < 2) continue;
+		const priceParts = decimalParts(level[0]);
+		const levelQtyParts = decimalParts(level[1]);
+		if (!priceParts || !levelQtyParts) continue;
+		const availableAtLevel = levelQtyParts;
+		const scale = Math.max(remaining.scale, availableAtLevel.scale);
+		const remScaled = remaining.integer * (10n ** BigInt(scale - remaining.scale));
+		const availScaled = availableAtLevel.integer * (10n ** BigInt(scale - availableAtLevel.scale));
+		const fillScaled = remScaled <= availScaled ? remScaled : availScaled;
+		if (fillScaled <= 0n) break;
+		const fillParts = { integer: fillScaled, scale };
+		const levelQuote = multiplyDecimals(formatDecimalParts(fillParts), formatDecimalParts(priceParts));
+		if (levelQuote) {
+			const newQuoteScale = Math.max(totalQuote.scale, levelQuote.scale);
+			totalQuote = {
+				integer: totalQuote.integer * (10n ** BigInt(newQuoteScale - totalQuote.scale))
+					+ levelQuote.integer * (10n ** BigInt(newQuoteScale - levelQuote.scale)),
+				scale: newQuoteScale,
+			};
+		}
+		const newBaseScale = Math.max(totalBase.scale, fillParts.scale);
+		totalBase = {
+			integer: totalBase.integer * (10n ** BigInt(newBaseScale - totalBase.scale))
+				+ fillParts.integer * (10n ** BigInt(newBaseScale - fillParts.scale)),
+			scale: newBaseScale,
+		};
+		remaining = {
+			integer: remScaled - fillScaled,
+			scale,
+		};
+		worstPrice = formatDecimalParts(priceParts);
+		if (remaining.integer <= 0n) {
+			remaining = decimalParts('0');
+			break;
+		}
+	}
+
+	if (totalBase.integer === 0n) return null;
+	const filledBase = formatDecimalParts(totalBase);
+	const filledQuote = formatDecimalParts(totalQuote);
+	const filledNotionalParts = totalQuote;
+	const baseParts = totalBase;
+	// notional has baseParts.scale decimals after point; we divide notional by base to get
+	// a price with the same scale as the inputs. align the scales first.
+	const scale = Math.max(baseParts.scale, filledNotionalParts.scale);
+	const baseScaled = baseParts.integer * (10n ** BigInt(scale - baseParts.scale));
+	const notionalScaled = filledNotionalParts.integer * (10n ** BigInt(scale - filledNotionalParts.scale));
+	if (baseScaled === 0n) return null;
+	// price = notional_scaled / base_scaled, result has scale == (notional.scale - base.scale) when alignment is preserved.
+	// To preserve the notional scale exactly we multiply by 10^(notional.scale) then divide.
+	const priceScale = Math.max(filledNotionalParts.scale - baseParts.scale, 0);
+	const averageScaled = (notionalScaled * (10n ** BigInt(priceScale))) / baseScaled;
+	const averageStr = formatDecimalParts({ integer: averageScaled, scale: priceScale });
+	return { filledBase, filledQuote, averagePrice: averageStr, worstPrice, fullyFilled: remaining.integer <= 0n };
 }
 
 function getSymbolInfo(exchangeInfo, symbol) {
@@ -375,6 +1005,26 @@ function validateNotional(notional, filters, maxNotional, isMarketOrder = false)
 	}
 }
 
+function validateTrailingDelta(order, filters) {
+	if (order.trailingDelta === undefined) return;
+	const filter = filters.get('TRAILING_DELTA');
+	if (!filter) {
+		throw new BinanceOrderRequestError('Binance trailing-delta filters are unavailable for this symbol');
+	}
+	const above = (
+		(order.type.startsWith('STOP_LOSS') && order.side === 'BUY')
+		|| (order.type.startsWith('TAKE_PROFIT') && order.side === 'SELL')
+	);
+	const minimum = Number(above ? filter.minTrailingAboveDelta : filter.minTrailingBelowDelta);
+	const maximum = Number(above ? filter.maxTrailingAboveDelta : filter.maxTrailingBelowDelta);
+	if (!Number.isSafeInteger(minimum) || !Number.isSafeInteger(maximum) || minimum <= 0 || maximum < minimum) {
+		throw new BinanceOrderRequestError('Binance trailing-delta filter bounds are invalid for this symbol');
+	}
+	if (order.trailingDelta < minimum || order.trailingDelta > maximum) {
+		throw new BinanceOrderRequestError(`trailingDelta must be between ${minimum} and ${maximum} BIPS for this order type and side`);
+	}
+}
+
 function buildOrderParams(order) {
 	return Object.fromEntries(Object.entries({
 		symbol: order.symbol,
@@ -383,6 +1033,8 @@ function buildOrderParams(order) {
 		quantity: order.quantity,
 		quoteOrderQty: order.quoteOrderQty,
 		price: order.price,
+		stopPrice: order.stopPrice,
+		trailingDelta: order.trailingDelta,
 		timeInForce: order.timeInForce,
 		newClientOrderId: order.clientOrderId,
 		newOrderRespType: 'FULL',
@@ -393,7 +1045,7 @@ function reconciledOrderMatchesRequest(order, existingOrder, clientOrderId, requ
 	if (existingOrder.symbol !== order.symbol || existingOrder.clientOrderId !== clientOrderId) return false;
 	if (String(existingOrder.side).toUpperCase() !== order.side) return false;
 	if (String(existingOrder.type).toUpperCase() !== order.type) return false;
-	if (order.type === 'LIMIT' && String(existingOrder.timeInForce || '').toUpperCase() !== order.timeInForce) return false;
+	if (order.timeInForce !== undefined && String(existingOrder.timeInForce || '').toUpperCase() !== order.timeInForce) return false;
 
 	const existingQuantity = existingOrder.origQty ?? existingOrder.quantity;
 	const existingQuoteOrderQty = existingOrder.origQuoteOrderQty ?? existingOrder.quoteOrderQty;
@@ -414,6 +1066,18 @@ function reconciledOrderMatchesRequest(order, existingOrder, clientOrderId, requ
 
 	if (order.quoteOrderQty !== undefined && compareDecimals(existingQuoteOrderQty, order.quoteOrderQty) !== 0) return false;
 	if (order.price !== undefined && compareDecimals(existingOrder.price, order.price) !== 0) return false;
+
+	if (order.stopPrice !== undefined) {
+		if (existingOrder.stopPrice === undefined || compareDecimals(existingOrder.stopPrice, order.stopPrice) !== 0) return false;
+	} else if (existingOrder.stopPrice !== undefined && compareDecimals(existingOrder.stopPrice, '0') > 0) {
+		return false;
+	}
+
+	if (order.trailingDelta !== undefined) {
+		if (Number(existingOrder.trailingDelta || 0) !== order.trailingDelta) return false;
+	} else if (existingOrder.trailingDelta !== undefined && Number(existingOrder.trailingDelta) > 0) {
+		return false;
+	}
 	return true;
 }
 
@@ -472,8 +1136,8 @@ function deriveBoundedMarketBuy(order, maxNotional, averagePrice, symbolInfo, fi
 	return { ...order, quantity: undefined, quoteOrderQty };
 }
 
-async function validateOrderTestFilters(client, order, orderParams, filters) {
-	const hasDynamicPriceFilters = order.type === 'LIMIT'
+async function validateOrderTestFilters(client, order, orderParams, filters, beforeSignedRequest) {
+	const hasDynamicPriceFilters = LIMIT_ORDER_TYPES.has(order.type)
 		&& (filters.has('PERCENT_PRICE') || filters.has('PERCENT_PRICE_BY_SIDE'));
 	const hasAccountDependentFilters = [...ACCOUNT_DEPENDENT_FILTERS].some((filterType) => filters.has(filterType));
 	if (!hasDynamicPriceFilters && !hasAccountDependentFilters) return;
@@ -484,6 +1148,7 @@ async function validateOrderTestFilters(client, order, orderParams, filters) {
 		);
 	}
 
+	if (typeof beforeSignedRequest === 'function') await beforeSignedRequest();
 	try {
 		await client.testNewOrder(orderParams);
 	} catch (error) {
@@ -497,6 +1162,15 @@ async function validateOrderTestFilters(client, order, orderParams, filters) {
 	}
 }
 
+function getTradingPausedError(pauseState) {
+	const message = pauseState.paused
+		? `Binance order submissions are paused${pauseState.pausedBy ? ` by ${pauseState.pausedBy}` : ''}${pauseState.pausedReason ? `: ${pauseState.pausedReason}` : ''}`
+		: pauseState.unavailable
+			? 'Binance trading pause state is unavailable; refusing to submit until storage recovers'
+			: 'Binance order submissions are blocked';
+	return new BinanceOrderServiceError(message, 'TRADING_PAUSED', 503);
+}
+
 function sanitizeFill(fill) {
 	return Object.fromEntries(Object.entries({
 		price: fill.price,
@@ -504,6 +1178,7 @@ function sanitizeFill(fill) {
 		commission: fill.commission,
 		commissionAsset: fill.commissionAsset,
 		tradeId: fill.tradeId,
+		time: fill.time,
 	}).filter(([, value]) => value !== undefined));
 }
 
@@ -524,6 +1199,7 @@ function sanitizeOrderResponse(response) {
 		type: response.type,
 		side: response.side,
 		stopPrice: response.stopPrice,
+		trailingDelta: response.trailingDelta,
 		icebergQty: response.icebergQty,
 		time: response.time,
 		updateTime: response.updateTime,
@@ -533,6 +1209,24 @@ function sanitizeOrderResponse(response) {
 		fills: Array.isArray(response.fills) ? response.fills.map(sanitizeFill) : undefined,
 	}).filter(([, value]) => value !== undefined));
 	return order;
+}
+
+function sanitizeOrderListResponse(response = {}) {
+	return Object.fromEntries(Object.entries({
+		orderListId: response.orderListId,
+	contingencyType: response.contingencyType,
+	listStatusType: response.listStatusType,
+	listOrderStatus: response.listOrderStatus,
+	listClientOrderId: response.listClientOrderId,
+	transactionTime: response.transactionTime,
+	symbol: response.symbol,
+	orders: Array.isArray(response.orders) ? response.orders.map((order) => Object.fromEntries(Object.entries({
+		symbol: order?.symbol,
+		orderId: order?.orderId,
+		clientOrderId: order?.clientOrderId,
+	}).filter(([, value]) => value !== undefined))) : undefined,
+	orderReports: Array.isArray(response.orderReports) ? response.orderReports.map(sanitizeOrderResponse) : undefined,
+	}).filter(([, value]) => value !== undefined));
 }
 
 function hasQueryParam(value) {
@@ -571,6 +1265,27 @@ function normalizeOrderQuery(query = {}) {
 		origClientOrderId = clientOrderIdStr;
 	}
 
+	let orderListId;
+	if (hasQueryParam(query.orderListId)) {
+		const orderListIdStr = String(query.orderListId).trim();
+		if (!/^\d+$/.test(orderListIdStr) || !Number.isSafeInteger(Number(orderListIdStr)) || Number(orderListIdStr) < 0) {
+			throw new BinanceOrderRequestError('orderListId must be a non-negative integer');
+		}
+		orderListId = Number.parseInt(orderListIdStr, 10);
+	}
+
+	let listClientOrderId;
+	if (hasQueryParam(query.listClientOrderId)) {
+		listClientOrderId = String(query.listClientOrderId).trim();
+		if (!/^[A-Za-z0-9._:-]{1,36}$/.test(listClientOrderId)) {
+			throw new BinanceOrderRequestError('listClientOrderId must contain 1-36 safe characters');
+		}
+	}
+	const identifierCount = [orderId, origClientOrderId, orderListId, listClientOrderId].filter((value) => value !== undefined).length;
+	if (identifierCount > 1) {
+		throw new BinanceOrderRequestError('order queries may include only one order or order-list identifier');
+	}
+
 	let limit = 50;
 	if (hasQueryParam(query.limit)) {
 		const limitStr = String(query.limit).trim();
@@ -585,6 +1300,8 @@ function normalizeOrderQuery(query = {}) {
 		symbol,
 		orderId,
 		origClientOrderId,
+		orderListId,
+		listClientOrderId,
 		limit,
 	};
 }
@@ -635,19 +1352,353 @@ function normalizeCancelRequest(body = {}) {
 	return { symbol, orderId, origClientOrderId };
 }
 
-function createBinanceOrderService({ createClient = createBinanceClient } = {}) {
-	return {
+function buildBracketStorageRequest(order) {
+	return Object.fromEntries(Object.entries({
+		symbol: order.symbol,
+		side: order.side,
+		type: order.type,
+		quantity: order.quantity,
+		price: order.price,
+		stopPrice: order.stopPrice,
+		stopLimitPrice: order.stopLimitPrice,
+		takeProfitPrice: order.takeProfitPrice,
+		timeInForce: order.timeInForce,
+		origin: order.origin,
+		alertId: order.alertId,
+		setupType: order.setupType,
+	}).filter(([, value]) => value !== undefined));
+}
+
+function makeBracketSuccessResult({ config, order, orderList, dryRun }) {
+	const result = {
+		success: true,
+		dryRun,
+		environment: config.environment,
+		orderList: sanitizeOrderListResponse(orderList),
+	};
+	if (order.origin !== undefined) result.origin = order.origin;
+	if (order.alertId !== undefined) result.alertId = order.alertId;
+	if (order.setupType !== undefined) result.setupType = order.setupType;
+	return result;
+}
+
+function mapBracketStorageError(error, action = 'reservation') {
+	if (error?.code === 'BINANCE_ORDER_CONFLICT') {
+		return new BinanceOrderRequestError(error.message || 'Bracket idempotency key conflicts with another request', 'BINANCE_ORDER_CONFLICT', 409);
+	}
+	if (error?.statusCode === 400) {
+		return new BinanceOrderRequestError(error.message || 'Bracket request is invalid', error.code || 'INVALID_ORDER_REQUEST', 400);
+	}
+	return new BinanceOrderServiceError(`Bracket ${action} storage is unavailable`, 'STORAGE_UNAVAILABLE', 503);
+}
+
+async function placeBracketOrder({
+	config,
+	order,
+	requestIdempotencyKey,
+	client,
+	storage,
+	ensureTradingControlOpen,
+}) {
+	if (!order.dryRun && !hasValue(requestIdempotencyKey)) {
+		throw new BinanceOrderRequestError('Live BRACKET_LIMIT orders require an Idempotency-Key header', 'LIVE_ORDER_ID_REQUIRED');
+	}
+
+	const identity = !order.dryRun && hasValue(requestIdempotencyKey)
+		? createBracketIdentity(requestIdempotencyKey, order)
+		: {};
+	const persistOrderList = async (orderList, reservation) => {
+		try {
+			await storage.recordOrderList({
+				keyHash: reservation.keyHash,
+				requestFingerprint: identity.requestFingerprint,
+				symbol: order.symbol,
+				environment: config.environment,
+				request: buildBracketStorageRequest(order),
+				orderList: sanitizeOrderListResponse(orderList),
+			});
+		} catch {
+			try {
+				await storage.updateReservation({ keyHash: reservation.keyHash, state: 'AMBIGUOUS' });
+			} catch {
+				// The original reservation remains locked even if the state update fails.
+			}
+			throw new BinanceOrderServiceError(
+				'Binance accepted the bracket but its durable result could not be saved; reconcile before retrying',
+				'BINANCE_ORDER_STATUS_UNKNOWN',
+				503,
+			);
+		}
+	};
+	const reconcileExistingReservation = async (reservation) => {
+		if ((reservation.existingState || reservation.state) === 'REJECTED') {
+			throw new BinanceOrderRequestError('Binance previously rejected this bracket request', 'BINANCE_ORDER_REJECTED', 400);
+		}
+		let reconciled;
+		try {
+			if (typeof client.getOCO !== 'function') throw new Error('order-list query unavailable');
+			reconciled = await withTimeout(client.getOCO({
+				origClientOrderId: reservation.listClientOrderId || identity.listClientOrderId,
+			}), config.timeoutMs);
+		} catch {
+			try {
+				await storage.updateReservation({ keyHash: reservation.keyHash, state: 'AMBIGUOUS' });
+			} catch {
+				// Preserve the original permanent reservation on storage failure.
+			}
+			throw new BinanceOrderServiceError(
+				'Bracket submission status is unknown; reconcile this idempotency key before any further submission',
+				'BINANCE_ORDER_STATUS_UNKNOWN',
+				503,
+			);
+		}
+		if (!reconciled || reconciled.listClientOrderId !== identity.listClientOrderId || reconciled.symbol !== order.symbol) {
+			throw new BinanceOrderRequestError('Reconciled Binance order list does not match the request', 'BINANCE_ORDER_CONFLICT', 409);
+		}
+		reconciled = await hydrateOrderListReports(client, reconciled, config.timeoutMs);
+		await persistOrderList(reconciled, reservation);
+		return makeBracketSuccessResult({ config, order, orderList: reconciled, dryRun: false });
+	};
+
+	if (!order.dryRun) {
+		let existingReservation;
+		try {
+			if (typeof storage.getReservation !== 'function') throw new Error('bracket reservation lookup unavailable');
+			existingReservation = await storage.getReservation(requestIdempotencyKey);
+		} catch (error) {
+			throw mapBracketStorageError(error, 'reservation lookup');
+		}
+		if (existingReservation) {
+			if (
+				existingReservation.requestFingerprint !== identity.requestFingerprint
+				|| existingReservation.symbol !== order.symbol
+				|| existingReservation.environment !== config.environment
+			) {
+				throw new BinanceOrderRequestError('Bracket idempotency key was reused with a different request', 'BINANCE_ORDER_CONFLICT', 409);
+			}
+			return reconcileExistingReservation(existingReservation);
+		}
+	}
+
+	if (!config.allowedSymbols.includes(order.symbol)) {
+		throw new BinanceOrderRequestError('symbol is not allowed for Binance trading');
+	}
+
+	let exchangeInfo;
+	let symbolInfo;
+	try {
+		exchangeInfo = await client.getExchangeInfo({ symbol: order.symbol });
+		symbolInfo = getSymbolInfo(exchangeInfo, order.symbol);
+	} catch {
+		throw new BinanceOrderServiceError('Binance symbol validation failed', 'BINANCE_VALIDATION_FAILED');
+	}
+	if (!symbolInfo || symbolInfo.status !== 'TRADING' || symbolInfo.isSpotTradingAllowed === false) {
+		throw new BinanceOrderRequestError('symbol is not available for Spot trading');
+	}
+	const requiredOrderTypes = ['LIMIT', 'LIMIT_MAKER', 'STOP_LOSS_LIMIT'];
+	if (!Array.isArray(symbolInfo.orderTypes) || requiredOrderTypes.some((type) => !symbolInfo.orderTypes.includes(type))) {
+		throw new BinanceOrderRequestError('order-list types are not supported for this symbol');
+	}
+
+	const filters = getFilters(symbolInfo, exchangeInfo);
+	const quantityFilter = filters.get('LOT_SIZE');
+	const priceFilter = filters.get('PRICE_FILTER');
+	if (!quantityFilter) throw new BinanceOrderRequestError('Binance quantity filters are unavailable for this symbol');
+	if (!priceFilter) throw new BinanceOrderRequestError('Binance price filters are unavailable for this symbol');
+	if (!filters.has('NOTIONAL') && !filters.has('MIN_NOTIONAL')) {
+		throw new BinanceOrderRequestError('Binance notional filters are unavailable for this symbol');
+	}
+	validateFilterRange(order.quantity, quantityFilter, 'quantity', 'lot-size');
+	for (const value of [
+		order.price,
+		order.stopPrice,
+		order.stopLimitPrice,
+		order.takeProfitPrice,
+	]) {
+		validatePriceRange(value, priceFilter);
+		validateNotional(multiplyDecimals(order.quantity, value), filters, config.maxNotional, false);
+	}
+
+	const orderListParams = buildBracketOrderListParams(order, identity);
+	const testOrders = [
+		{
+			type: 'LIMIT',
+			symbol: order.symbol,
+			side: order.side,
+			quantity: order.quantity,
+			price: order.price,
+			timeInForce: order.timeInForce,
+		},
+		{
+			type: order.side === 'BUY' ? 'LIMIT_MAKER' : 'TAKE_PROFIT_LIMIT',
+			symbol: order.symbol,
+			side: order.side === 'BUY' ? 'SELL' : 'BUY',
+			quantity: order.quantity,
+			price: order.takeProfitPrice,
+			...(order.side === 'SELL' ? {
+				stopPrice: order.takeProfitPrice,
+				timeInForce: order.timeInForce,
+			} : {}),
+		},
+		{
+			type: 'STOP_LOSS_LIMIT',
+			symbol: order.symbol,
+			side: order.side === 'BUY' ? 'SELL' : 'BUY',
+			quantity: order.quantity,
+			price: order.stopLimitPrice,
+			stopPrice: order.stopPrice,
+			timeInForce: order.timeInForce,
+		},
+	];
+	for (const testOrder of testOrders) {
+		await validateOrderTestFilters(client, testOrder, buildOrderParams(testOrder), filters, ensureTradingControlOpen);
+	}
+	if (order.dryRun) {
+		return {
+			success: true,
+			dryRun: true,
+			environment: config.environment,
+			orderList: orderListParams,
+		};
+	}
+
+	await ensureTradingControlOpen();
+	let reservation;
+	try {
+		reservation = await storage.reserve({
+			idempotencyKey: requestIdempotencyKey,
+			requestFingerprint: identity.requestFingerprint,
+			listClientOrderId: identity.listClientOrderId,
+			symbol: order.symbol,
+			environment: config.environment,
+		});
+	} catch (error) {
+		throw mapBracketStorageError(error, 'reservation');
+	}
+
+	if (reservation.outcome === 'existing') {
+		return reconcileExistingReservation(reservation);
+	}
+
+	await ensureTradingControlOpen();
+	try {
+		const response = await client.submitNewOrderListOTOCO(orderListParams);
+		if (!response || response.symbol !== order.symbol || response.listClientOrderId !== identity.listClientOrderId) {
+			try {
+				await storage.updateReservation({ keyHash: reservation.keyHash, state: 'AMBIGUOUS' });
+			} catch {
+				// Keep the original reservation locked.
+			}
+			throw new BinanceOrderServiceError(
+				'Binance returned an incomplete bracket response; reconcile before retrying',
+				'BINANCE_ORDER_STATUS_UNKNOWN',
+				503,
+			);
+		}
+		await persistOrderList(response, reservation);
+		return makeBracketSuccessResult({ config, order, orderList: response, dryRun: false });
+	} catch (error) {
+		if (error instanceof BinanceOrderServiceError && error.code === 'BINANCE_ORDER_STATUS_UNKNOWN') throw error;
+		if (isDefinitiveBinanceRejection(error)) {
+			try {
+				await storage.updateReservation({ keyHash: reservation.keyHash, state: 'REJECTED', errorCode: 'BINANCE_ORDER_REJECTED' });
+			} catch {
+				// The reservation is still present, so replay remains fail-closed.
+			}
+			throw new BinanceOrderRequestError('Binance rejected the bracket order list', 'BINANCE_ORDER_REJECTED', 400);
+		}
+		try {
+			await storage.updateReservation({ keyHash: reservation.keyHash, state: 'AMBIGUOUS' });
+		} catch {
+			// Keep the original reservation locked.
+		}
+		throw new BinanceOrderServiceError(
+			'Binance accepted or may have accepted the bracket order list; reconcile before retrying',
+			'BINANCE_ORDER_STATUS_UNKNOWN',
+			503,
+		);
+	}
+}
+
+function createBinanceOrderService({
+	createClient = createBinanceClient,
+	controlService = tradingControlService,
+	bracketOrderStorageService = defaultBracketOrderStorageService,
+} = {}) {
+	let balancesCache = {
+		timestamp: 0,
+		environment: null,
+		rawBalances: null,
+	};
+
+	function formatStatus(config, controlStatus = {}) {
+		const paused = Boolean(config.enabled && controlStatus.paused);
+		const unavailable = Boolean(config.enabled && controlStatus.unavailable && !controlStatus.inactive);
+		const blocked = Boolean(
+			config.enabled && (
+				paused
+				|| unavailable
+				|| (typeof controlStatus.isBlocked === 'function' && controlStatus.isBlocked())
+			),
+		);
+		let status = 'ready';
+		if (!config.enabled) {
+			status = 'disabled';
+		} else if (!config.configured) {
+			status = 'misconfigured';
+		} else if (unavailable) {
+			status = 'unavailable';
+		} else if (paused || blocked) {
+			status = 'paused';
+		}
+		return {
+			enabled: config.enabled,
+			configured: config.configured,
+			ready: Boolean(config.enabled && config.configured && !blocked),
+			status,
+			environment: config.environment,
+			allowedSymbols: config.allowedSymbols,
+			supportedOrderTypes: [...SUPPORTED_SPOT_ORDER_TYPES],
+			maxNotionalConfigured: Number.isFinite(config.maxNotional) && config.maxNotional > 0,
+			paused,
+			pausedBy: controlStatus.pausedBy || null,
+			pausedAt: controlStatus.pausedAt || null,
+			pausedReason: controlStatus.pausedReason || null,
+			lastChangedAt: controlStatus.lastChangedAt || null,
+			lastChangedBy: controlStatus.lastChangedBy || null,
+			lastAction: controlStatus.lastAction || null,
+			controlStorage: controlStatus.storage || 'memory',
+			unavailable,
+			blocked,
+		};
+	}
+
+	const service = {
 		getStatus() {
 			const config = getConfig();
-			return {
-				enabled: config.enabled,
-				configured: config.configured,
-				ready: config.enabled && config.configured,
-				status: !config.enabled ? 'disabled' : config.configured ? 'ready' : 'misconfigured',
-				environment: config.environment,
-				allowedSymbols: config.allowedSymbols,
-				maxNotionalConfigured: Number.isFinite(config.maxNotional) && config.maxNotional > 0,
-			};
+			const syncControlStatus = typeof controlService.getStatus === 'function'
+				? controlService.getStatus()
+				: { paused: false, unavailable: false, storage: 'memory' };
+			const statusObj = formatStatus(config, syncControlStatus);
+			if (typeof controlService.getPauseState === 'function') {
+				Object.defineProperty(statusObj, 'then', {
+					enumerable: false,
+					configurable: true,
+					value(onFulfilled, onRejected) {
+						return Promise.resolve(controlService.getPauseState())
+							.then((freshControlStatus) => formatStatus(getConfig(), freshControlStatus))
+							.then(onFulfilled, onRejected);
+					},
+				});
+			}
+			return statusObj;
+		},
+
+		async getPauseState() {
+			if (typeof controlService.getPauseState !== 'function') {
+				return { paused: false, inactive: true, storage: 'memory' };
+			}
+			return controlService.getPauseState();
 		},
 
 		async getOrders(query = {}) {
@@ -663,7 +1714,14 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 				);
 			}
 
-			const { symbol, orderId, origClientOrderId, limit } = normalizeOrderQuery(query);
+			const {
+				symbol,
+				orderId,
+				origClientOrderId,
+				orderListId,
+				listClientOrderId,
+				limit,
+			} = normalizeOrderQuery(query);
 
 			if (!config.allowedSymbols.includes(symbol)) {
 				throw new BinanceOrderRequestError('symbol is not allowed for Binance trading');
@@ -674,6 +1732,63 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 				client = createClient(config);
 			} catch (error) {
 				throw new BinanceOrderServiceError('Binance client could not be initialized', 'BINANCE_CLIENT_UNAVAILABLE', 503);
+			}
+
+			if (orderListId !== undefined || listClientOrderId !== undefined) {
+				if (typeof client.getOCO !== 'function') {
+					throw new BinanceOrderServiceError('Binance order-list query method is unavailable', 'BINANCE_CLIENT_UNAVAILABLE', 503);
+				}
+				let orderList;
+				try {
+					orderList = await withTimeout(client.getOCO({
+						...(orderListId !== undefined ? { orderListId } : {}),
+						...(listClientOrderId !== undefined ? { origClientOrderId: listClientOrderId } : {}),
+					}), config.timeoutMs);
+				} catch (error) {
+					if (isOrderNotFoundError(error)) {
+						throw new BinanceOrderRequestError('Binance order list not found', 'ORDER_LIST_NOT_FOUND', 404);
+					}
+					if (error instanceof BinanceOrderServiceError || error instanceof BinanceOrderRequestError) throw error;
+					if (isDefinitiveBinanceRejection(error)) {
+						throw new BinanceOrderRequestError('Binance rejected the order-list query', 'BINANCE_REQUEST_REJECTED', 400);
+					}
+					throw new BinanceOrderServiceError('Binance order-list query failed', 'BINANCE_QUERY_FAILED', 502);
+				}
+				if (orderList && orderList.symbol && orderList.symbol !== symbol) {
+					throw new BinanceOrderRequestError('Binance order list not found', 'ORDER_LIST_NOT_FOUND', 404);
+				}
+				orderList = await hydrateOrderListReports(client, orderList, config.timeoutMs);
+				const sanitizedOrderList = sanitizeOrderListResponse(orderList || {});
+				let persistedRecord = null;
+				try {
+					persistedRecord = await bracketOrderStorageService.recordOrderList({
+						environment: config.environment,
+						symbol,
+						orderList: sanitizedOrderList,
+					});
+				} catch (error) {
+					console.warn('[BinanceOrderService] bracket order-list detail refresh failed:', error?.message || error);
+				}
+				let storedRequest = persistedRecord?.request || null;
+				if (!storedRequest && typeof bracketOrderStorageService.getBracketOrder === 'function') {
+					try {
+						const storedDetail = await bracketOrderStorageService.getBracketOrder({
+							environment: config.environment,
+							listClientOrderId: sanitizedOrderList.listClientOrderId,
+						});
+						storedRequest = storedDetail?.request || null;
+					} catch {
+						storedRequest = null;
+					}
+				}
+				return {
+					success: true,
+					environment: config.environment,
+					orderList: sanitizedOrderList,
+					...(storedRequest?.origin ? { origin: storedRequest.origin } : {}),
+					...(storedRequest?.alertId ? { alertId: storedRequest.alertId } : {}),
+					...(storedRequest?.setupType ? { setupType: storedRequest.setupType } : {}),
+				};
 			}
 
 			if (orderId !== undefined || origClientOrderId !== undefined) {
@@ -763,20 +1878,26 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 				};
 			} catch (error) {
 				if (isOrderNotFoundError(error) || isAlreadyTerminalOrderError(error)) {
-					throw new BinanceOrderRequestError('Binance order not found', 'ORDER_NOT_FOUND', 404);
+					const reqError = new BinanceOrderRequestError('Binance order not found', 'ORDER_NOT_FOUND', 404);
+					reqError.clientOrderId = origClientOrderId || null;
+					throw reqError;
 				}
 				if (isDefinitiveBinanceRejection(error)) {
-					throw new BinanceOrderRequestError(
+					const reqError = new BinanceOrderRequestError(
 						'Binance rejected the cancel request',
 						'BINANCE_REQUEST_REJECTED',
 						400,
 					);
+					reqError.clientOrderId = origClientOrderId || null;
+					throw reqError;
 				}
-				throw new BinanceOrderServiceError(
+				const svcError = new BinanceOrderServiceError(
 					'Binance cancel request failed; the order may still be open, retry the status check before resubmitting',
 					'BINANCE_QUERY_FAILED',
 					502,
 				);
+				svcError.clientOrderId = origClientOrderId || null;
+				throw svcError;
 			}
 		},
 
@@ -792,6 +1913,36 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			}
 
 			const order = normalizeRequest(body);
+			if (order.alertId) {
+				if (!AlertStorageService.isEnabled()) {
+					throw new BinanceOrderRequestError('Alert storage is disabled', 'ALERT_LINK_UNAVAILABLE', 409);
+				}
+				const firestore = AlertStorageService.getFirestore();
+				if (!firestore) {
+					throw new BinanceOrderRequestError('Alert storage is unavailable', 'ALERT_LINK_UNAVAILABLE', 409);
+				}
+				let alertDoc;
+				try {
+					alertDoc = await AlertStorageService.getAlertById(order.alertId);
+				} catch {
+					throw new BinanceOrderRequestError('Alert storage is unavailable', 'ALERT_LINK_UNAVAILABLE', 409);
+				}
+				if (!alertDoc) {
+					throw new BinanceOrderRequestError('Alert not found', 'ALERT_NOT_FOUND', 404);
+				}
+				if (!order.setupType && alertDoc.setupType) {
+					order.setupType = String(alertDoc.setupType).trim().toLowerCase();
+				}
+			}
+
+			const ensureTradingControlOpen = async () => {
+				if (typeof controlService.getPauseState !== 'function') return;
+				const pauseState = await controlService.getPauseState();
+				if (pauseState && typeof pauseState.isBlocked === 'function' && pauseState.isBlocked()) {
+					throw getTradingPausedError(pauseState);
+				}
+			};
+			await ensureTradingControlOpen();
 			const requestIdempotencyKey = hasValue(idempotencyKey)
 				? idempotencyKey
 				: [body.idempotencyKey, body.idempotency_key].find(hasValue);
@@ -807,6 +1958,16 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			} catch (error) {
 				throw new BinanceOrderServiceError('Binance client could not be initialized', 'BINANCE_CLIENT_UNAVAILABLE', 503);
 			}
+			if (order.type === 'BRACKET_LIMIT') {
+				return placeBracketOrder({
+					config,
+					order,
+					requestIdempotencyKey,
+					client,
+					storage: bracketOrderStorageService,
+					ensureTradingControlOpen,
+				});
+			}
 
 			const clientOrderId = order.clientOrderId
 				|| (!order.dryRun ? deriveClientOrderId(requestIdempotencyKey, order) : undefined);
@@ -820,11 +1981,24 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 							409,
 						);
 					}
+					const provenance = await resolveOrderProvenance({
+						environment: config.environment,
+						symbol: order.symbol,
+						clientOrderId,
+						binanceOrderId: existingOrder.orderId,
+						origin: order.origin,
+						alertId: order.alertId,
+						setupType: order.setupType,
+						ErrorClass: BinanceOrderRequestError,
+					});
 					return {
 						success: true,
 						dryRun: false,
 						environment: config.environment,
 						order: sanitizeOrderResponse(existingOrder),
+						origin: provenance.origin,
+						alertId: provenance.alertId,
+						setupType: provenance.setupType,
 					};
 				}
 			}
@@ -853,33 +2027,42 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 			}
 
 			const filters = getFilters(symbolInfo, exchangeInfo);
-			const quantityFilter = filters.get(order.type === 'MARKET' ? 'MARKET_LOT_SIZE' : 'LOT_SIZE') || filters.get('LOT_SIZE');
+			const quantityFilter = filters.get(MARKET_EXECUTION_ORDER_TYPES.has(order.type) ? 'MARKET_LOT_SIZE' : 'LOT_SIZE') || filters.get('LOT_SIZE');
 			const priceFilter = filters.get('PRICE_FILTER');
 			const notionalFilter = filters.get('NOTIONAL') || filters.get('MIN_NOTIONAL');
 			if (order.quantity !== undefined && !quantityFilter) {
 				throw new BinanceOrderRequestError('Binance quantity filters are unavailable for this symbol');
 			}
-			if (order.price !== undefined && !priceFilter) {
+			if ((order.price !== undefined || order.stopPrice !== undefined) && !priceFilter) {
 				throw new BinanceOrderRequestError('Binance price filters are unavailable for this symbol');
 			}
 			if (!notionalFilter) {
 				throw new BinanceOrderRequestError('Binance notional filters are unavailable for this symbol');
 			}
+			validateTrailingDelta(order, filters);
 			if (order.quantity !== undefined) validateFilterRange(order.quantity, quantityFilter, 'quantity', 'lot-size');
 			if (order.price !== undefined) validatePriceRange(order.price, priceFilter);
+			if (order.stopPrice !== undefined) validatePriceRange(order.stopPrice, priceFilter);
 
 			let notional;
 			let boundedOrder = order;
 			if (order.quoteOrderQty !== undefined) {
 				notional = decimalParts(order.quoteOrderQty);
-			} else if (order.type === 'LIMIT') {
+			} else if (LIMIT_ORDER_TYPES.has(order.type)) {
 				notional = multiplyDecimals(order.quantity, order.price);
 			} else {
 				try {
 					const averagePrice = await client.getAvgPrice({ symbol: order.symbol });
 					const price = averagePrice && averagePrice.price;
 					if (!price || !decimalParts(price)) throw new Error('invalid average price');
-					notional = multiplyDecimals(order.quantity, price);
+					let exposurePrice = price;
+					if (order.side === 'BUY' && CONTINGENT_ORDER_TYPES.has(order.type)) {
+						if (order.stopPrice === undefined) {
+							throw new BinanceOrderRequestError('contingent market BUY orders require stopPrice to enforce the configured notional maximum');
+						}
+						if (compareDecimals(order.stopPrice, exposurePrice) > 0) exposurePrice = order.stopPrice;
+					}
+					notional = multiplyDecimals(order.quantity, exposurePrice);
 
 					boundedOrder = deriveBoundedMarketBuy(order, config.maxNotional, price, symbolInfo, filters);
 					if (boundedOrder.quoteOrderQty !== undefined) {
@@ -894,40 +2077,527 @@ function createBinanceOrderService({ createClient = createBinanceClient } = {}) 
 					throw new BinanceOrderServiceError('Binance market price validation failed', 'BINANCE_VALIDATION_FAILED');
 				}
 			}
-			validateNotional(notional, filters, config.maxNotional, order.type === 'MARKET');
+			validateNotional(notional, filters, config.maxNotional, MARKET_EXECUTION_ORDER_TYPES.has(order.type));
 
 			const orderParams = buildOrderParams({ ...boundedOrder, clientOrderId });
 			if (order.dryRun) {
-				await validateOrderTestFilters(client, boundedOrder, orderParams, filters);
-				return {
+				await validateOrderTestFilters(client, boundedOrder, orderParams, filters, ensureTradingControlOpen);
+				const result = {
 					success: true,
 					dryRun: true,
 					environment: config.environment,
 					order: orderParams,
 				};
+				if (order.origin !== undefined) result.origin = order.origin;
+				if (order.alertId !== undefined) result.alertId = order.alertId;
+				if (order.setupType !== undefined) result.setupType = order.setupType;
+				return result;
 			}
 
-			await validateOrderTestFilters(client, boundedOrder, orderParams, filters);
+			await validateOrderTestFilters(client, boundedOrder, orderParams, filters, ensureTradingControlOpen);
+			await ensureTradingControlOpen();
+			await bindOrderProvenance({
+				environment: config.environment,
+				symbol: order.symbol,
+				clientOrderId,
+				origin: order.origin,
+				alertId: order.alertId,
+				setupType: order.setupType,
+			});
 			try {
 				const response = await client.submitNewOrder(orderParams);
-				return {
+				if (response?.orderId) {
+					bindOrderProvenance({
+						environment: config.environment,
+						symbol: order.symbol,
+						clientOrderId,
+						binanceOrderId: response.orderId,
+						origin: order.origin,
+						alertId: order.alertId,
+						setupType: order.setupType,
+					}).catch(() => {});
+				}
+				const result = {
 					success: true,
 					dryRun: false,
 					environment: config.environment,
 					order: sanitizeOrderResponse(response || {}),
 				};
+				if (order.origin !== undefined) result.origin = order.origin;
+				if (order.alertId !== undefined) result.alertId = order.alertId;
+				if (order.setupType !== undefined) result.setupType = order.setupType;
+				return result;
 			} catch (error) {
 				if (isDefinitiveBinanceRejection(error)) {
-					throw new BinanceOrderRequestError('Binance rejected the order', 'BINANCE_ORDER_REJECTED');
+					const reqError = new BinanceOrderRequestError('Binance rejected the order', 'BINANCE_ORDER_REJECTED');
+					if (clientOrderId) reqError.clientOrderId = clientOrderId;
+					throw reqError;
 				}
-				throw new BinanceOrderServiceError(
+				const svcError = new BinanceOrderServiceError(
 					'Binance accepted or may have accepted the order, but its final status is unknown; do not resubmit with a new idempotency key',
 					'BINANCE_ORDER_STATUS_UNKNOWN',
 					503,
 				);
+				if (clientOrderId) svcError.clientOrderId = clientOrderId;
+				throw svcError;
 			}
 		},
+
+		async previewOrder(body) {
+			const config = getConfig();
+			if (!config.enabled) {
+				throw new BinanceOrderRequestError('Binance trading is disabled', 'FEATURE_DISABLED', 403);
+			}
+			if (!config.configured) {
+				throw new BinanceOrderRequestError(
+					'Binance trading is enabled but not configured',
+					'BINANCE_TRADING_UNAVAILABLE',
+					503,
+				);
+			}
+
+			const order = normalizePreviewRequest(body);
+
+			if (!config.allowedSymbols.includes(order.symbol)) {
+				throw new BinanceOrderRequestError('symbol is not allowed for Binance trading');
+			}
+
+			let client;
+			try {
+				client = createClient(config);
+			} catch (error) {
+				throw new BinanceOrderServiceError('Binance client could not be initialized', 'BINANCE_CLIENT_UNAVAILABLE', 503);
+			}
+
+			let exchangeInfo;
+			let symbolInfo;
+			try {
+				exchangeInfo = await client.getExchangeInfo({ symbol: order.symbol });
+				symbolInfo = getSymbolInfo(exchangeInfo, order.symbol);
+			} catch (error) {
+				throw new BinanceOrderServiceError('Binance symbol validation failed', 'BINANCE_VALIDATION_FAILED');
+			}
+
+			if (!symbolInfo || symbolInfo.status !== 'TRADING' || symbolInfo.isSpotTradingAllowed === false) {
+				throw new BinanceOrderRequestError('symbol is not available for Spot trading');
+			}
+			if (!Array.isArray(symbolInfo.orderTypes) || !symbolInfo.orderTypes.includes(order.type)) {
+				throw new BinanceOrderRequestError('order type is not supported for this symbol');
+			}
+
+			const filters = getFilters(symbolInfo, exchangeInfo);
+			const quantityFilter = filters.get(order.type === 'MARKET' ? 'MARKET_LOT_SIZE' : 'LOT_SIZE') || filters.get('LOT_SIZE');
+			const priceFilter = filters.get('PRICE_FILTER');
+			const notionalFilter = filters.get('NOTIONAL') || filters.get('MIN_NOTIONAL');
+
+			const lotSizeOk = !order.quantity || !quantityFilter
+				|| (compareDecimals(order.quantity, quantityFilter.minQty || '0') >= 0
+					&& (!quantityFilter.maxQty || Number(quantityFilter.maxQty) <= 0 || compareDecimals(order.quantity, quantityFilter.maxQty) <= 0)
+					&& (!quantityFilter.stepSize || Number(quantityFilter.stepSize) <= 0 || isDecimalMultiple(order.quantity, quantityFilter.stepSize)));
+			const priceFilterOk = !order.price || !priceFilter
+				|| ((!priceFilter.minPrice || Number(priceFilter.minPrice) <= 0 || compareDecimals(order.price, priceFilter.minPrice) >= 0)
+					&& (!priceFilter.maxPrice || Number(priceFilter.maxPrice) <= 0 || compareDecimals(order.price, priceFilter.maxPrice) <= 0)
+					&& (!priceFilter.tickSize || Number(priceFilter.tickSize) <= 0 || isDecimalMultiple(order.price, priceFilter.tickSize)));
+
+			const adjustedQuantity = order.quantity && quantityFilter?.stepSize && Number(quantityFilter.stepSize) > 0
+				? roundDownToStep(order.quantity, quantityFilter.stepSize)
+				: order.quantity;
+
+			if (lotSizeOk === false && order.quantity !== undefined) {
+				throw new BinanceOrderRequestError(
+					`quantity does not match Binance lot-size step; suggested adjustedQuantity: ${adjustedQuantity}`,
+					'INVALID_ORDER_REQUEST',
+					400,
+				);
+			}
+
+			const baseConstraints = {
+				lotSize: quantityFilter ? {
+					minQty: quantityFilter.minQty,
+					maxQty: quantityFilter.maxQty,
+					stepSize: quantityFilter.stepSize,
+				} : null,
+				priceFilter: priceFilter ? {
+					minPrice: priceFilter.minPrice,
+					maxPrice: priceFilter.maxPrice,
+					tickSize: priceFilter.tickSize,
+				} : null,
+				notional: notionalFilter ? {
+					minNotional: notionalFilter.minNotional,
+					maxNotional: notionalFilter.maxNotional,
+					applyMinToMarket: notionalFilter.applyMinToMarket,
+					applyMaxToMarket: notionalFilter.applyMaxToMarket,
+				} : null,
+			};
+
+			let effectivePrice = null;
+			let priceSource = 'none';
+			let marketPriceError = null;
+			if (order.type === 'LIMIT') {
+				effectivePrice = order.price;
+				priceSource = 'limitPrice';
+			} else if (order.quoteOrderQty !== undefined) {
+				effectivePrice = null;
+				priceSource = 'quoteOrderQty';
+			} else {
+				try {
+					const averagePrice = await client.getAvgPrice({ symbol: order.symbol });
+					const price = averagePrice && averagePrice.price;
+					if (price && decimalParts(price)) {
+						effectivePrice = String(price);
+						priceSource = 'avgPrice';
+					} else {
+						marketPriceError = 'Binance average price response was empty';
+					}
+				} catch (error) {
+					marketPriceError = error instanceof Error ? error.message : 'avg price unavailable';
+				}
+			}
+
+			let notionalParts = null;
+			let adjustedNotional = null;
+			if (order.quoteOrderQty !== undefined) {
+				notionalParts = decimalParts(order.quoteOrderQty);
+			} else if (effectivePrice && adjustedQuantity) {
+				notionalParts = multiplyDecimals(adjustedQuantity, effectivePrice);
+			} else if (effectivePrice && order.quantity) {
+				notionalParts = multiplyDecimals(order.quantity, effectivePrice);
+			}
+			if (notionalParts) adjustedNotional = formatDecimalParts(notionalParts);
+
+			let minNotionalOk = true;
+			let minNotionalExceededReason = null;
+			if (notionalParts && notionalFilter?.minNotional) {
+				const minAppliesToMarket = order.type !== 'MARKET' || (notionalFilter.applyMinToMarket !== false);
+				if (minAppliesToMarket) {
+					minNotionalOk = compareDecimalParts(notionalParts, decimalParts(notionalFilter.minNotional)) >= 0;
+					if (!minNotionalOk) minNotionalExceededReason = 'below Binance minimum';
+				}
+			}
+
+			let maxNotionalOk = true;
+			let maxNotionalExceededReason = null;
+			if (notionalParts) {
+				if (notionalFilter?.maxNotional
+					&& Number(notionalFilter.maxNotional) > 0
+					&& (order.type !== 'MARKET' || notionalFilter.applyMaxToMarket !== false)) {
+					const exceedsBinanceMax = compareDecimalParts(notionalParts, decimalParts(notionalFilter.maxNotional)) > 0;
+					if (exceedsBinanceMax) {
+						maxNotionalOk = false;
+						maxNotionalExceededReason = 'above Binance maximum';
+					}
+				}
+				if (maxNotionalOk && Number.isFinite(config.maxNotional) && config.maxNotional > 0) {
+					const exceedsConfigured = compareDecimalParts(notionalParts, decimalParts(config.maxNotional)) > 0;
+					if (exceedsConfigured) {
+						maxNotionalOk = false;
+						maxNotionalExceededReason = 'above configured maximum';
+					}
+				}
+			}
+
+			if (notionalParts && Number.isFinite(config.maxNotional) && config.maxNotional > 0
+				&& compareDecimalParts(notionalParts, decimalParts(config.maxNotional)) > 0) {
+				throw new BinanceOrderRequestError(
+					'order notional exceeds configured maximum',
+					'MAX_NOTIONAL_EXCEEDED',
+					403,
+				);
+			}
+
+			const feeBps = readBps(symbolInfo, 'takerCommission', 'commissionTakerBps');
+			const makerBps = readBps(symbolInfo, 'makerCommission', 'commissionMakerBps');
+			const takerFeeBps = typeof feeBps === 'number' ? feeBps : PREVIEW_DEFAULT_TAKER_BPS;
+			const makerFeeBps = typeof makerBps === 'number' ? makerBps : PREVIEW_DEFAULT_MAKER_BPS;
+			const feeSide = order.type === 'LIMIT' ? makerFeeBps : takerFeeBps;
+			const estimatedFeeQuote = notionalParts
+				? formatDecimalParts(multiplyDecimals(formatDecimalParts(notionalParts), String(feeSide / 10000)))
+				: null;
+
+			let depthSnapshot = null;
+			let depthError = null;
+			if (order.type === 'MARKET' && order.side === 'BUY' && order.quantity && typeof client.depth === 'function') {
+				try {
+					const depthLimit = Math.max(5, Math.min(100, Math.ceil(Number(order.quantity) * 100) || 20));
+					const depthResult = await withTimeout(
+						client.depth({ symbol: order.symbol, limit: depthLimit }),
+						PREVIEW_DEPTH_TIMEOUT_MS,
+					);
+					if (depthResult && Array.isArray(depthResult.asks)) {
+						depthSnapshot = {
+							asks: depthResult.asks,
+							limit: depthResult.limit || depthLimit,
+							fetchedAt: new Date().toISOString(),
+						};
+					}
+				} catch (error) {
+					depthError = error instanceof Error ? error.message : 'depth unavailable';
+				}
+			}
+
+			let slippageEstimate = null;
+			if (depthSnapshot) {
+				const fill = calculateDepthFill(depthSnapshot.asks, order.quantity);
+				if (fill) {
+					const mid = effectivePrice || null;
+					if (mid && fill.averagePrice) {
+						const bps = computeSlippageBps(mid, fill.averagePrice, order.side);
+						slippageEstimate = {
+							worstPrice: fill.worstPrice,
+							averagePrice: fill.averagePrice,
+							filledBase: fill.filledBase,
+							filledQuote: fill.filledQuote,
+							fullyFilled: fill.fullyFilled,
+							slippageBps: bps,
+						};
+					}
+				}
+			}
+
+			let wouldExceedBudget = null;
+			if (order.maxSlippageBps !== undefined) {
+				if (!slippageEstimate || slippageEstimate.slippageBps === null) {
+					wouldExceedBudget = null;
+				} else {
+					wouldExceedBudget = slippageEstimate.slippageBps > order.maxSlippageBps;
+				}
+			}
+
+			const previewExpiresAt = new Date(Date.now() + PREVIEW_TTL_MS).toISOString();
+			const previewFingerprint = crypto.createHash('sha256')
+				.update(`cabros-binance-preview:${order.symbol}:${order.side}:${order.type}:${adjustedQuantity || ''}:${order.quoteOrderQty || ''}:${order.price || ''}:${order.timeInForce || ''}:${previewExpiresAt}`)
+				.digest('hex')
+				.slice(0, 24);
+
+			const result = {
+				success: true,
+				preview: true,
+				environment: config.environment,
+				order: {
+					symbol: order.symbol,
+					side: order.side,
+					type: order.type,
+					quantity: adjustedQuantity,
+					quoteOrderQty: order.quoteOrderQty,
+					price: order.price,
+					timeInForce: order.timeInForce,
+					clientOrderId: order.clientOrderId,
+				},
+				adjustedQuantity,
+				adjustedNotional,
+				constraints: baseConstraints,
+				flags: {
+					lotSizeOk,
+					priceFilterOk,
+					minNotionalOk,
+					maxNotionalOk,
+					minNotionalExceededReason,
+					maxNotionalExceededReason,
+				},
+				effectivePriceEstimate: effectivePrice,
+				priceSource,
+				marketPriceError,
+				feeEstimate: {
+					takerFeeBps,
+					makerFeeBps,
+					appliedFeeBps: feeSide,
+					estimatedFeeQuote,
+					label: 'estimate — not a Binance fill guarantee',
+				},
+				slippage: slippageEstimate ? {
+					slippageBudgetBps: order.maxSlippageBps ?? null,
+					wouldExceedBudget,
+				} : null,
+				depthSnapshot: depthSnapshot ? {
+					limit: depthSnapshot.limit,
+					fetchedAt: depthSnapshot.fetchedAt,
+					available: true,
+				} : (depthError ? { available: false, error: depthError } : { available: false }),
+				expiresAt: previewExpiresAt,
+				previewFingerprint,
+			};
+
+			return result;
+		},
+
+		async getBalances(query = {}) {
+			const config = getConfig();
+			if (!config.enabled) {
+				throw new BinanceOrderRequestError('Binance trading is disabled', 'FEATURE_DISABLED', 403);
+			}
+			if (!config.configured) {
+				throw new BinanceOrderRequestError(
+					'Binance trading is enabled but not configured',
+					'BINANCE_TRADING_UNAVAILABLE',
+					503,
+				);
+			}
+
+			const allowedAssetsList = deriveAllowedAssets(config.allowedSymbols);
+			const allowedAssetsSet = new Set(allowedAssetsList);
+
+			const targetAsset = query.asset && typeof query.asset === 'string' && query.asset.trim()
+				? query.asset.trim().toUpperCase()
+				: null;
+			const targetSymbol = query.symbol && typeof query.symbol === 'string' && query.symbol.trim()
+				? query.symbol.trim().toUpperCase()
+				: null;
+
+			if (targetAsset && !allowedAssetsSet.has(targetAsset)) {
+				throw new BinanceOrderRequestError('asset is not allowed for Binance trading', 'INVALID_ORDER_REQUEST', 400);
+			}
+
+			if (targetSymbol && !config.allowedSymbols.includes(targetSymbol)) {
+				throw new BinanceOrderRequestError('symbol is not allowed for Binance trading', 'INVALID_ORDER_REQUEST', 400);
+			}
+
+			const now = Date.now();
+			const cacheTtlMs = parseBalanceCacheTtl(getRuntimeConfig().BINANCE_BALANCE_CACHE_MS);
+			const forceRefresh = query.refresh === true || query.refresh === 'true';
+
+			let rawBalances;
+			let fromCache = false;
+
+			if (!forceRefresh
+				&& balancesCache.rawBalances
+				&& balancesCache.environment === config.environment
+				&& (now - balancesCache.timestamp) < cacheTtlMs) {
+				rawBalances = balancesCache.rawBalances;
+				fromCache = true;
+			} else {
+				let client;
+				try {
+					client = createClient(config);
+				} catch (error) {
+					throw new BinanceOrderServiceError('Binance client could not be initialized', 'BINANCE_CLIENT_UNAVAILABLE', 503);
+				}
+
+				if (typeof client.getAccountInformation !== 'function') {
+					throw new BinanceOrderServiceError('Binance account information method unavailable', 'BINANCE_CLIENT_UNAVAILABLE', 503);
+				}
+
+				let accountInfo;
+				try {
+					accountInfo = await withTimeout(client.getAccountInformation(), config.timeoutMs);
+				} catch (error) {
+					if (isDefinitiveBinanceRejection(error)) {
+						throw new BinanceOrderRequestError('Binance rejected the request', 'BINANCE_REQUEST_REJECTED', 400);
+					}
+					throw new BinanceOrderServiceError('Binance balance query failed', 'BINANCE_BALANCE_QUERY_FAILED', 502);
+				}
+
+				rawBalances = Array.isArray(accountInfo?.balances) ? accountInfo.balances : [];
+				balancesCache = {
+					timestamp: now,
+					environment: config.environment,
+					rawBalances,
+				};
+			}
+
+			let filtered = rawBalances
+				.filter((b) => b && typeof b.asset === 'string' && allowedAssetsSet.has(b.asset.toUpperCase()))
+				.map((b) => ({
+					asset: String(b.asset).toUpperCase(),
+					free: String(b.free ?? '0'),
+					locked: String(b.locked ?? '0'),
+				}));
+
+			const presentAssets = new Set(filtered.map((b) => b.asset));
+			for (const asset of allowedAssetsList) {
+				if (!presentAssets.has(asset)) {
+					filtered.push({
+						asset,
+						free: '0.00000000',
+						locked: '0.00000000',
+					});
+				}
+			}
+
+			filtered.sort((a, b) => a.asset.localeCompare(b.asset));
+
+			if (targetAsset) {
+				filtered = filtered.filter((b) => b.asset === targetAsset);
+			} else if (targetSymbol) {
+				const { baseAsset, quoteAsset } = deriveSymbolAssets(targetSymbol);
+				filtered = filtered.filter((b) => b.asset === baseAsset || b.asset === quoteAsset);
+			}
+
+			return {
+				success: true,
+				environment: config.environment,
+				balances: filtered,
+				cached: fromCache,
+			};
+		},
+
+		async getSellableQuantity(symbol, requestedQuantity, options = {}) {
+			const config = getConfig();
+			if (!config.enabled) {
+				throw new BinanceOrderRequestError('Binance trading is disabled', 'FEATURE_DISABLED', 403);
+			}
+			if (!config.configured) {
+				throw new BinanceOrderRequestError(
+					'Binance trading is enabled but not configured',
+					'BINANCE_TRADING_UNAVAILABLE',
+					503,
+				);
+			}
+
+			const normalizedSymbol = String(symbol || '').trim().toUpperCase();
+			if (!config.allowedSymbols.includes(normalizedSymbol)) {
+				throw new BinanceOrderRequestError(
+					`symbol ${normalizedSymbol} is not allowed for Binance trading`,
+					'INVALID_ORDER_REQUEST',
+					400,
+				);
+			}
+
+			let balances = options.balances;
+			if (!balances) {
+				const balanceRes = await this.getBalances({ symbol: normalizedSymbol });
+				balances = balanceRes.balances;
+			}
+
+			let symbolInfo = options.symbolInfo;
+			let filters = options.filters;
+			if (!symbolInfo && !filters) {
+				try {
+					const client = createClient(config);
+					const exchangeInfo = await client.getExchangeInfo({ symbol: normalizedSymbol });
+					symbolInfo = getSymbolInfo(exchangeInfo, normalizedSymbol);
+					if (symbolInfo) {
+						filters = getFilters(symbolInfo, exchangeInfo);
+					}
+				} catch {
+					// Fallback to suffix matching / basic lot size if exchangeInfo call fails
+				}
+			}
+
+			let price = options.price;
+			if (!price) {
+				try {
+					const client = createClient(config);
+					const avg = await client.getAvgPrice({ symbol: normalizedSymbol });
+					if (avg?.price) price = String(avg.price);
+				} catch {
+					// Ignore price fetch error if not available
+				}
+			}
+
+			return sellableQuantity({
+				...options,
+				symbol: normalizedSymbol,
+				requestedQuantity,
+				balances,
+				symbolInfo,
+				filters,
+				price,
+			});
+		},
 	};
+
+	service.sellableQuantity = service.getSellableQuantity.bind(service);
+	return service;
 }
 
 const binanceOrderService = createBinanceOrderService();
@@ -940,4 +2610,10 @@ module.exports = {
 	createBinanceOrderService,
 	binanceOrderService,
 	getConfig,
+	deriveClientOrderId,
+	SUPPORTED_SPOT_ORDER_TYPES,
+	sellableQuantity,
+	deriveAllowedAssets,
+	deriveSymbolAssets,
+	bracketOrderStorageService: defaultBracketOrderStorageService,
 };

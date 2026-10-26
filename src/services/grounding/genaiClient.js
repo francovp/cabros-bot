@@ -2,9 +2,7 @@ const { GoogleGenAI } = require('@google/genai');
 const config = require('./config');
 const {
 	GEMINI_API_KEY,
-	GROUNDING_MODEL_NAME,
 	ENABLE_NEWS_MONITOR_TEST_MODE,
-	GEMINI_MODEL_NAME,
 	MODEL_PROVIDER,
 	BRAVE_SEARCH_API_KEY,
 	BRAVE_SEARCH_ENDPOINT,
@@ -12,12 +10,12 @@ const {
 	AZURE_LLM_MODEL,
 	OPENROUTER_MODEL,
 	CF_AIG_MODEL,
-	GEMINI_MODEL_NAME_FALLBACK,
 } = config;
+const { getGroundingModelName, getGeminiModelName, getGeminiFallbackModelName } = require('./runtimeModels');
 const { getAzureAIClient } = require('../inference/azureAiClient');
 const { getOpenRouterClient } = require('../inference/openRouterClient');
 const { getCloudflareAiClient } = require('../inference/cloudflareAiClient');
-const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
+const { normalizeUsageMetadata, tokenCostBudgetService } = require('../../lib/tokenUsage');
 const sentryService = require('../monitoring/SentryService');
 const geminiQuotaManager = require('./geminiQuotaManager');
 
@@ -85,10 +83,12 @@ class GenaiClient {
 			// Parse Brave results
 			// Brave structure: { web: { results: [ { title, url, description, profile: { name } } ] } }
 			const results = data.web?.results?.map(result => {
+				// Prefer the URL hostname. `profile.name` is a human-readable display
+				// label ("Reuters", "Medium"), not a domain, and domainQuality
+				// classifies on domain strings — passing the display name through made
+				// essentially every Brave-sourced result classify as `unknown`.
 				let sourceDomain = '';
-				if (result.profile && result.profile.name) {
-					sourceDomain = result.profile.name;
-				} else if (result.url) {
+				if (result.url) {
 					try {
 						sourceDomain = new URL(result.url).hostname;
 					} catch (e) {
@@ -156,6 +156,7 @@ class GenaiClient {
 		}
 
 		let abortCleanup = null;
+		geminiQuotaManager.recordRequest();
 		let generatePromise = this.genAI.models.generateContent({
 			model: model,
 			contents: query,
@@ -225,10 +226,12 @@ class GenaiClient {
 			results,
 			totalResults: groundingChunks.length,
 			searchResultText: searchResultText,
+			usage: response?.usageMetadata || null,
+			modelUsed: model,
 		};
 	}
 
-	async search({ query, model = GROUNDING_MODEL_NAME, maxResults = 3, textWithCitations = false, rethrowQuotaErrors = false, signal = null }) {
+	async search({ query, model = getGroundingModelName(), maxResults = 3, textWithCitations = false, rethrowQuotaErrors = false, signal = null }) {
 		if (ENABLE_NEWS_MONITOR_TEST_MODE) {
 			console.debug('[genaiClient] News Monitor Test Mode enabled - returning mock search results');
 			return {
@@ -255,6 +258,11 @@ class GenaiClient {
 			throw signal.reason || new Error('Grounding timeout');
 		}
 
+		if (await tokenCostBudgetService.isBudgetExceededAsync()) {
+			console.warn('[genaiClient] Daily token cost budget exceeded. Falling back to Brave Search for grounding.');
+			return this._executeBraveSearch(query, maxResults, signal);
+		}
+
 		// Logic: Force Brave -> Google -> Fallback Brave
 		// Access FORCE_BRAVE_SEARCH dynamically from config object
 		if (FORCE_BRAVE_SEARCH) {
@@ -262,6 +270,12 @@ class GenaiClient {
 		}
 
 		if (geminiQuotaManager.isCooldownActive()) {
+			// Callers passing rethrowQuotaErrors (such as geminiPriceService or news
+			// analyzer) require structured LLM completion/price extraction that raw web
+			// search cannot fulfill. They manage their own backoff loops and fail-open
+			// policies, so they deliberately bypass Brave Search fallback and rethrow
+			// 429 immediately. Thus, braveFallbacksDuringCooldown accurately records
+			// only paths where Brave Search fallback was actually executed.
 			if (rethrowQuotaErrors) {
 				const remainingMs = geminiQuotaManager.getRemainingCooldownMs();
 				const error = new Error(`Gemini quota cooldown active (${remainingMs}ms remaining)`);
@@ -275,6 +289,11 @@ class GenaiClient {
 			return this._executeBraveSearch(query, maxResults, signal);
 		}
 
+		// Tracks whether quota exhaustion (rather than an empty result set or a
+		// non-quota error) is what actually selected the Brave fallback, so the
+		// first quota-triggered fallback is counted too (#718).
+		let braveFallbackCausedByQuota = false;
+
 		try {
 			const googleResult = await this._executeGoogleSearch(query, model, maxResults, textWithCitations, signal);
 			if (googleResult.results && googleResult.results.length > 0) {
@@ -287,6 +306,7 @@ class GenaiClient {
 			}
 			if (isGeminiQuotaError(error)) {
 				geminiQuotaManager.triggerQuotaCooldown(error);
+				braveFallbackCausedByQuota = true;
 			}
 			if (rethrowQuotaErrors && isGeminiQuotaError(error)) {
 				throw error;
@@ -299,6 +319,9 @@ class GenaiClient {
 		}
 
 		// Fallback to Brave
+		if (braveFallbackCausedByQuota) {
+			geminiQuotaManager.recordBraveFallbackDuringCooldown();
+		}
 		return this._executeBraveSearch(query, maxResults, signal);
 	}
 
@@ -327,7 +350,7 @@ class GenaiClient {
 	}
 
 	async llmCall({ prompt, context = {}, opts = {} }) {
-		const { model = GEMINI_MODEL_NAME, temperature = 0.2, signal } = opts;
+		const { model = getGeminiModelName(), temperature = 0.2, signal } = opts;
 
 		if (signal?.aborted) {
 			throw signal.reason || new Error('Grounding timeout');
@@ -343,6 +366,7 @@ class GenaiClient {
 		}
 
 		let abortCleanup = null;
+		geminiQuotaManager.recordRequest();
 		let generatePromise = this.genAI.models.generateContent({
 			model,
 			contents: prompt,
@@ -419,7 +443,11 @@ class GenaiClient {
 					{ ...error, provider: 'gemini' },
 				);
 			}
-			throw new Error(`LLM call failed: ${error.message}`);
+			const wrappedError = new Error(`LLM call failed: ${error.message}`);
+			if (isGeminiQuotaError(error)) {
+				geminiQuotaManager.markQuotaErrorCounted(wrappedError);
+			}
+			throw wrappedError;
 		}
 	}
 
@@ -434,15 +462,23 @@ class GenaiClient {
          * @returns {Promise<{text: string, citations: Array}>} Response text and citations
          */
 	async llmCallv2({ systemPrompt, userPrompt, context = {}, opts = {} }) {
+		if (await tokenCostBudgetService.isBudgetExceededAsync()) {
+			const error = new Error('Daily token cost budget exceeded');
+			error.code = 'TOKEN_BUDGET_EXCEEDED';
+			error.status = 429;
+			throw error;
+		}
+
 		let lastError;
+		const geminiModelName = getGeminiModelName();
 
 		// 1. Try Gemini
-		if (MODEL_PROVIDER === 'gemini' && GEMINI_MODEL_NAME) {
+		if (MODEL_PROVIDER === 'gemini' && geminiModelName) {
 			try {
 				// Previous calls were like: prompt = `${systemPrompt}\n\n${userPrompt}`.
 				const startTime = Date.now();
 				const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
-				const modelUsed = opts.model || GEMINI_MODEL_NAME || GEMINI_MODEL_NAME_FALLBACK;
+				const modelUsed = opts.model || geminiModelName || getGeminiFallbackModelName();
 				console.debug('[GenaiClient] Attempting Gemini LLM call');
 				const response = await this.llmCall({
 					prompt: combinedPrompt,
@@ -561,7 +597,13 @@ class GenaiClient {
 		}
 
 		// If we reach here, all configured providers failed
-		throw new Error(`All LLM providers failed. Last error: ${lastError ? lastError.message : 'No providers configured'}`);
+		const finalError = new Error(`All LLM providers failed. Last error: ${lastError ? lastError.message : 'No providers configured'}`);
+		if (lastError?.code === 'GEMINI_QUOTA_EXHAUSTED') {
+			finalError.code = 'GEMINI_QUOTA_EXHAUSTED';
+		} else if (lastError && isGeminiQuotaError(lastError)) {
+			geminiQuotaManager.markQuotaErrorCounted(finalError);
+		}
+		throw finalError;
 	}
 
 	_addCitations(text, supports, chunks) {

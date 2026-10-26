@@ -6,7 +6,7 @@ const { getRoutes } = require('../../src/routes');
 const NotificationManager = require('../../src/services/notification/NotificationManager');
 const WhatsAppService = require('../../src/services/notification/WhatsAppService');
 const TelegramService = require('../../src/services/notification/TelegramService');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 
 describe('WhatsApp Webhook Error Handling & Resiliency (GH-337 / CB-136)', () => {
 	const API_KEY = 'test-api-key';
@@ -45,6 +45,7 @@ describe('WhatsApp Webhook Error Handling & Resiliency (GH-337 / CB-136)', () =>
 				getMe: jest.fn().mockResolvedValue({ id: 1, username: 'testbot' }),
 			},
 		};
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 		router = getRoutes(() => mockBot);
 		app.use('/api', router);
@@ -178,7 +179,10 @@ describe('WhatsApp Webhook Error Handling & Resiliency (GH-337 / CB-136)', () =>
 			});
 
 		expect(res1.status).toBe(200);
-		expect(fetchMock).toHaveBeenCalledTimes(3); // 3 retry attempts for initial request
+		// AMBIGUOUS_OUTCOME is terminal after the first attempt to prevent
+		// duplicate WhatsApp delivery; only 1 fetch should fire on the
+		// initial request (matches TelegramService / DiscordService parity).
+		expect(fetchMock).toHaveBeenCalledTimes(1);
 
 		// Replay request with same key
 		const res2 = await request(app)
@@ -193,7 +197,7 @@ describe('WhatsApp Webhook Error Handling & Resiliency (GH-337 / CB-136)', () =>
 		expect(res2.status).toBe(200);
 		expect(res2.header['idempotency-replay']).toBe('true');
 		expect(res2.body.idempotencyReplayed).toBe(true);
-		expect(fetchMock).toHaveBeenCalledTimes(3); // No new network calls made on replay
+		expect(fetchMock).toHaveBeenCalledTimes(1); // No new network calls made on replay
 	});
 
 	it('should capture actionable Sentry error event with endpoint, channel, provider, and sanitized error context on WhatsApp 500', async () => {
