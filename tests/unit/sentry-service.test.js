@@ -380,6 +380,22 @@ describe('SentryService', () => {
 			expect(service.isTracingEnabled()).toBe(true);
 		});
 
+		it('should log profiling as disabled when its sample rate is zero', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '0.2';
+			process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE = '0';
+
+			const consoleInfo = jest.spyOn(console, 'info').mockImplementation(() => {});
+			try {
+				service.init();
+				expect(consoleInfo).toHaveBeenCalledWith(expect.stringContaining('profiling=disabled'));
+				expect(Sentry.init.mock.calls[0][0].profileSessionSampleRate).toBeUndefined();
+			} finally {
+				consoleInfo.mockRestore();
+			}
+		});
+
 		it('should enable Sentry logs for console warn and error', () => {
 			process.env.ENABLE_SENTRY = 'true';
 			process.env.SENTRY_DSN = 'https://key@sentry.io/123';

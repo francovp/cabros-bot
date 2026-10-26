@@ -352,7 +352,7 @@ class SentryService {
 				lastInitError: undefined,
 			};
 
-			const profilingStatus = this.config.profileSessionSampleRate !== undefined
+			const profilingStatus = this.isProfilingEnabled()
 				? `enabled (rate=${this.config.profileSessionSampleRate})`
 				: 'disabled';
 			console.info(
