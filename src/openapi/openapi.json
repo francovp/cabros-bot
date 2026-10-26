@@ -8536,7 +8536,13 @@
                       "top_gainers"
                     ],
                     "limit": 5,
-                    "bbwThreshold": 0.05
+                    "bbwThreshold": 0.05,
+                    "destinations": {
+                      "telegramChatIds": [
+                        "-1001234567890"
+                      ],
+                      "discordWebhookCount": 1
+                    }
                   }
                 }
               },
@@ -15231,6 +15237,7 @@
       "ScannerPresetDestinations": {
         "type": "object",
         "additionalProperties": false,
+        "description": "Destinations accepted on create and update requests. Discord webhook URLs are stored for delivery and are never returned by preset APIs.",
         "properties": {
           "telegramChatIds": {
             "type": "array",
@@ -15256,6 +15263,31 @@
               "format": "uri",
               "pattern": "^https://(?:[A-Za-z0-9-]+\\.)*discord(?:app)?\\.com/api/webhooks/\\d+/[A-Za-z0-9_-]+(?:/.*)?$"
             }
+          }
+        }
+      },
+      "ScannerPresetResponseDestinations": {
+        "type": "object",
+        "description": "Safe destination projection returned by preset APIs. Discord webhook URLs are never returned; discordWebhookCount reports how many are configured.",
+        "properties": {
+          "telegramChatIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^-?\\d{5,20}$"
+            }
+          },
+          "whatsappChatIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{6,20}@(c|g)\\.us$"
+            }
+          },
+          "discordWebhookCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Configured Discord webhooks. Their URLs and tokens are omitted from all preset responses."
           }
         }
       },
@@ -16117,6 +16149,7 @@
       },
       "ScannerPreset": {
         "type": "object",
+        "description": "Safe preset response projection. Discord webhook URLs and tokens are omitted; destinations.discordWebhookCount reports configured webhook count.",
         "properties": {
           "id": {
             "type": "string"
@@ -16151,7 +16184,7 @@
             "description": "Mode-less records are legacy presets and keep their prior routing behavior."
           },
           "destinations": {
-            "$ref": "#/components/schemas/ScannerPresetDestinations"
+            "$ref": "#/components/schemas/ScannerPresetResponseDestinations"
           },
           "schedule": {
             "type": "object",
@@ -16195,10 +16228,6 @@
             "type": "string",
             "pattern": "^\\d{6,20}@(c|g)\\.us$",
             "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
-          },
-          "discordWebhookUrl": {
-            "type": "string",
-            "format": "uri"
           },
           "lastRunAt": {
             "type": "string",

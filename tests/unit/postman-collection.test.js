@@ -236,6 +236,11 @@ describe('Postman collection contract', () => {
 			destinations: { telegramChatIds: ['-1001234567890'] },
 		});
 		expect(create.response.find((response) => response.code === 201)).toBeDefined();
+		const redactedExample = create.response.find((response) => response.name === 'Created with Discord destination (webhook redacted)');
+		expect(redactedExample).toBeDefined();
+		const redactedResponse = JSON.parse(redactedExample.body);
+		expect(redactedResponse.preset.destinations).toEqual(expect.objectContaining({ discordWebhookCount: 1 }));
+		expect(JSON.stringify(redactedResponse)).not.toMatch(/discordWebhookUrls|discordWebhookUrl/);
 		expect(invalid.response.find((response) => response.code === 400).body).toContain('INVALID_DESTINATIONS');
 		expect(JSON.parse(update.request.body.raw)).toMatchObject({
 			mode: 'preset',
@@ -249,6 +254,14 @@ describe('Postman collection contract', () => {
 
 		const destinationSchema = openapi.components.schemas.ScannerPresetDestinations;
 		expect(destinationSchema.properties.telegramChatIds.maxItems).toBe(20);
+		const responsePresetSchema = openapi.components.schemas.ScannerPreset;
+		expect(responsePresetSchema.properties.destinations.$ref)
+			.toBe('#/components/schemas/ScannerPresetResponseDestinations');
+		expect(responsePresetSchema.properties).not.toHaveProperty('discordWebhookUrl');
+		expect(openapi.components.schemas.ScannerPresetResponseDestinations.properties)
+			.toHaveProperty('discordWebhookCount');
+		expect(openapi.components.schemas.ScannerPresetResponseDestinations.properties)
+			.not.toHaveProperty('discordWebhookUrls');
 		expect(openapi.components.schemas.ScannerPresetRunRequest.properties.runAsyncJob.type).toBe('boolean');
 		expect(openapi.paths['/api/webhook/alert'].post.responses['400'].description).toBeUndefined();
 		expect(openapi.paths['/api/scanner-presets'].post.responses['400'].description).toContain('INVALID_DESTINATIONS');

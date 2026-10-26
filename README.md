@@ -400,6 +400,8 @@ Scanner presets can save multiple Telegram, WhatsApp, and Discord destinations. 
 
 Manual runs and scheduled runs share the same routing rules. A manual run can override the saved destination for a channel with the existing `telegramChatId`, `whatsappChatId`, or `discordWebhookUrl` request field; `channels` filters the preset's configured destinations. If the filter matches no configured destination, the route returns `400 INVALID_REQUEST` before scanning or job creation. Set `runAsyncJob: true` on `POST /api/scanner-presets/:id/run` to submit through the existing market-scanner job path and receive `202 Accepted`; runs stay synchronous by default. If `dryRun` is true, the request returns its preview without submitting a job.
 
+Preset API responses include configured Telegram and WhatsApp chat IDs, but omit Discord webhook URLs and tokens. `destinations.discordWebhookCount` reports the number of saved Discord webhooks.
+
 `GET /api/status` and `/api/capabilities` report `featureFlags.presetBoundDestinations` and the non-sensitive `dependencies.presetBoundDestinations` capability. Destination values are not included in those status responses or in the async job acceptance response. The direct `/api/webhook/market-scanner-alert` endpoint continues using its request routing and does not read preset destinations.
 
 ### Signal Outcome Single-Evaluator Guarantee

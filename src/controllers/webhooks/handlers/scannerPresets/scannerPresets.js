@@ -53,6 +53,38 @@ function getStorageMetadata() {
 	return scannerPresetService.getStorageStatus();
 }
 
+function projectPresetResponse(preset) {
+	if (!preset || typeof preset !== 'object') {
+		return preset;
+	}
+
+	const response = { ...preset };
+	const destinations = preset.destinations && typeof preset.destinations === 'object'
+		? { ...preset.destinations }
+		: null;
+	const discordWebhookUrls = destinations && Array.isArray(destinations.discordWebhookUrls)
+		? destinations.discordWebhookUrls
+		: [];
+	const hasDiscordWebhookUrls = destinations && Object.hasOwn(destinations, 'discordWebhookUrls');
+	const hasLegacyDiscordWebhookUrl = typeof preset.discordWebhookUrl === 'string' && preset.discordWebhookUrl.length > 0;
+
+	if (destinations) {
+		delete destinations.discordWebhookUrls;
+	}
+	delete response.discordWebhookUrl;
+
+	if (destinations || hasLegacyDiscordWebhookUrl) {
+		response.destinations = {
+			...(destinations || {}),
+			...(hasDiscordWebhookUrls || hasLegacyDiscordWebhookUrl
+				? { discordWebhookCount: discordWebhookUrls.length + (hasLegacyDiscordWebhookUrl ? 1 : 0) }
+				: {}),
+		};
+	}
+
+	return response;
+}
+
 function resolveBot(botOrGetter) {
 	if (typeof botOrGetter === 'function') {
 		return botOrGetter();
@@ -129,7 +161,7 @@ function postPreset(req, res) {
 			return res.status(201).json({
 				success: true,
 				storage: getStorageMetadata(),
-				preset,
+				preset: projectPresetResponse(preset),
 			});
 		} catch (error) {
 			if (error instanceof MarketScannerRequestError) {
@@ -140,7 +172,7 @@ function postPreset(req, res) {
 					storage: getStorageMetadata(),
 				};
 				if (error.code === 'NAME_CONFLICT' && error.preset) {
-					body.preset = error.preset;
+					body.preset = projectPresetResponse(error.preset);
 					setPresetEtag(res, error.preset);
 				}
 				return sendErrorFrom(res, statusCode, body);
@@ -168,7 +200,7 @@ function listPresets(req, res) {
 			return res.status(200).json({
 				success: true,
 				storage: getStorageMetadata(),
-				presets,
+				presets: presets.map(projectPresetResponse),
 			});
 		} catch (error) {
 			console.error('[ScannerPresets] List failed:', error.message);
@@ -222,7 +254,7 @@ function getPreset(req, res) {
 			return res.status(200).json({
 				success: true,
 				storage: getStorageMetadata(),
-				preset,
+				preset: projectPresetResponse(preset),
 			});
 		} catch (error) {
 			console.error('[ScannerPresets] Get failed:', error.message);
@@ -269,7 +301,7 @@ function deletePreset(req, res) {
 					storage: getStorageMetadata(),
 				};
 				if (error.code === 'PRECONDITION_FAILED' && error.preset) {
-					body.preset = error.preset;
+					body.preset = projectPresetResponse(error.preset);
 					setPresetEtag(res, error.preset);
 				}
 				return sendErrorFrom(res, statusCode, body);
@@ -314,7 +346,7 @@ function updatePreset(req, res) {
 			return res.status(200).json({
 				success: true,
 				storage: getStorageMetadata(),
-				preset,
+				preset: projectPresetResponse(preset),
 			});
 		} catch (error) {
 			if (error instanceof MarketScannerRequestError) {
@@ -325,7 +357,7 @@ function updatePreset(req, res) {
 					storage: getStorageMetadata(),
 				};
 				if (error.code === 'PRECONDITION_FAILED' && error.preset) {
-					body.preset = error.preset;
+					body.preset = projectPresetResponse(error.preset);
 					setPresetEtag(res, error.preset);
 				}
 				if (error.code === 'PRESET_LOCKED') {
@@ -333,12 +365,12 @@ function updatePreset(req, res) {
 						body.lockedUntil = error.lockedUntil;
 					}
 					if (error.preset) {
-						body.preset = error.preset;
+						body.preset = projectPresetResponse(error.preset);
 						setPresetEtag(res, error.preset);
 					}
 				}
 				if (error.code === 'NAME_CONFLICT' && error.preset) {
-					body.preset = error.preset;
+					body.preset = projectPresetResponse(error.preset);
 					setPresetEtag(res, error.preset);
 				}
 				return sendErrorFrom(res, statusCode, body);
@@ -557,7 +589,7 @@ function postRunPreset(botOrGetter) {
 					timeframe: preset.timeframe,
 					scans: preset.scans,
 					limit: preset.limit,
-					bbwThreshold: preset.bbwThreshold,
+					bbw_threshold: preset.bbwThreshold,
 					ranked: preset.ranked,
 					includeMultiTimeframe: preset.includeMultiTimeframe,
 					...routing,

@@ -10974,6 +10974,14 @@
                 }
               ],
               "cookie": []
+            },
+            {
+              "name": "Created with Discord destination (webhook redacted)",
+              "status": "Created",
+              "code": 201,
+              "body": "{\n  \"success\": true,\n  \"preset\": {\n    \"id\": \"83d1a85e-d433-4aa1-96b9-e62468bf0397\",\n    \"name\": \"Discord destination preset\",\n    \"mode\": \"preset\",\n    \"destinations\": {\n      \"telegramChatIds\": [\n        \"-1001234567890\"\n      ],\n      \"discordWebhookCount\": 1\n    }\n  }\n}",
+              "header": [],
+              "cookie": []
             }
           ]
         },

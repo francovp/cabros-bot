@@ -155,6 +155,100 @@ describe('Scanner presets API integration tests', () => {
 			.expect(404);
 	});
 
+	it('omits Discord webhook secrets from preset success and conflict responses', async () => {
+		const discordWebhookUrl = 'https://discord.com/api/webhooks/123456789012345678/scanner-preset-secret-token';
+		const safePreset = (preset) => {
+			expect(preset.destinations).toEqual(expect.objectContaining({ discordWebhookCount: 1 }));
+			expect(preset.destinations).not.toHaveProperty('discordWebhookUrls');
+			expect(JSON.stringify(preset)).not.toContain(discordWebhookUrl);
+		};
+		const createResponse = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({
+				name: 'Discord destination preset',
+				mode: 'preset',
+				destinations: { discordWebhookUrls: [discordWebhookUrl] },
+			})
+			.expect(201);
+		const presetId = createResponse.body.preset.id;
+		const initialVersion = createResponse.body.preset.version;
+		safePreset(createResponse.body.preset);
+
+		const listResponse = await request(app)
+			.get('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.expect(200);
+		safePreset(listResponse.body.presets.find((preset) => preset.id === presetId));
+
+		const getResponse = await request(app)
+			.get(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.expect(200);
+		safePreset(getResponse.body.preset);
+
+		const updateResponse = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.send({ limit: 7 })
+			.expect(200);
+		safePreset(updateResponse.body.preset);
+
+		const createConflict = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Discord destination preset' })
+			.expect(409);
+		safePreset(createConflict.body.preset);
+
+		const otherPreset = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Other preset' })
+			.expect(201);
+		const updateConflict = await request(app)
+			.put(`/api/scanner-presets/${otherPreset.body.preset.id}`)
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Discord destination preset' })
+			.expect(409);
+		safePreset(updateConflict.body.preset);
+
+		const staleUpdate = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.set('If-Match', '"999"')
+			.send({ limit: 8 })
+			.expect(412);
+		safePreset(staleUpdate.body.preset);
+
+		await admin.firestore().collection('scannerPresets').doc(presetId).update({
+			lockedUntil: new Date(Date.now() + 60000).toISOString(),
+			lockedBy: 'scheduler',
+		});
+		const lockedUpdate = await request(app)
+			.put(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.send({ limit: 8 })
+			.expect(409);
+		safePreset(lockedUpdate.body.preset);
+
+		const staleDelete = await request(app)
+			.delete(`/api/scanner-presets/${presetId}`)
+			.set('x-api-key', 'test-key')
+			.set('If-Match', `"${initialVersion}"`)
+			.expect(412);
+		safePreset(staleDelete.body.preset);
+
+		const legacyWebhookUrl = 'https://discord.com/api/webhooks/123456789012345678/legacy-secret-token';
+		const legacyPreset = await request(app)
+			.post('/api/scanner-presets')
+			.set('x-api-key', 'test-key')
+			.send({ name: 'Legacy Discord destination', discordWebhookUrl: legacyWebhookUrl })
+			.expect(201);
+		expect(legacyPreset.body.preset.destinations).toEqual({ discordWebhookCount: 1 });
+		expect(JSON.stringify(legacyPreset.body.preset)).not.toContain(legacyWebhookUrl);
+	});
+
 	it('includes storage metadata on not-found responses', async () => {
 		const missingId = 'missing-preset-id';
 		const expectedStorage = expect.objectContaining({
@@ -516,7 +610,8 @@ describe('Scanner presets API integration tests', () => {
 			.set('x-api-key', 'test-key')
 			.send({
 				name: 'Async destination preset',
-				scans: ['top_gainers'],
+				scans: ['top_gainers', 'bollinger_scan'],
+				bbwThreshold: 0.08,
 				mode: 'preset',
 				destinations: { telegramChatIds: ['-1001234567890'] },
 			})
@@ -538,10 +633,12 @@ describe('Scanner presets API integration tests', () => {
 			expect(createJobSpy).toHaveBeenCalledWith('market-scanner', expect.objectContaining({
 				exchange: 'BINANCE',
 				timeframe: '4h',
-				scans: ['top_gainers'],
+				scans: ['top_gainers', 'bollinger_scan'],
+				bbw_threshold: 0.08,
 				channels: ['telegram'],
 				destinations: { telegramChatIds: ['-1001234567890'] },
 			}), expect.anything(), { scannerPresetId: created.body.preset.id });
+			expect(createJobSpy.mock.calls[0][1]).not.toHaveProperty('bbwThreshold');
 			expect(response.body).toMatchObject({ success: true, jobId: 'preset-job-1' });
 			expect(response.body).not.toHaveProperty('destinations');
 			expect(response.headers['x-request-id']).toBe(response.body.requestId);
