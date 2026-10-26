@@ -207,9 +207,10 @@ class FakeAbortController {
 	}
 }
 
-const response = (body, status = 200) => ({
+const response = (body, status = 200, headers = {}) => ({
 	ok: status >= 200 && status < 300,
 	status,
+	headers: { get: (name) => headers[name.toLowerCase()] ?? null },
 	json: async () => body,
 	text: async () => JSON.stringify(body),
 });
@@ -4263,6 +4264,8 @@ describe('admin browser client', () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => {
 				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts/summary')) return response({ summary: { delivery: { totalFailure: 0, byChannel: {} } } });
+				if (url.startsWith('/api/jobs')) return response({ jobs: [] });
 				if (url === '/api/status') {
 					statusCalls += 1;
 					if (statusCalls === 1) return response(status);
@@ -4279,6 +4282,7 @@ describe('admin browser client', () => {
 		const copyButton = findButton(browser.elementsById.view, 'Copy details');
 		expect(copyButton).toBeDefined();
 		expect(copyButton.hidden).toBe(false);
+		expect(browser.elementsById.view.textContent).toContain('All configured services and delivery channels operating normally');
 
 		const refreshButton = findButton(browser.elementsById.view, 'Refresh dashboard');
 		await refreshButton.dispatch('click');
@@ -4286,6 +4290,8 @@ describe('admin browser client', () => {
 
 		expect(statusCalls).toBe(2);
 		expect(copyButton.hidden).toBe(true);
+		expect(browser.elementsById.view.textContent).not.toContain('All configured services and delivery channels operating normally');
+		expect(browser.elementsById.view.textContent).toContain('Dashboard data unavailable');
 	});
 
 	it('sends job actions confirmed during an in-flight auto-refresh', async () => {
@@ -10027,5 +10033,340 @@ describe('structured analysis forms', () => {
 			// Clamped to free balance of 0.04 from 0.05 position
 			expect(qtyInput.value).toBe('0.04');
 		});
+	});
+
+	it('renders a unified operational dashboard combining status, delivery health, active work, recent alerts, and issue warnings', async () => {
+		const status = {
+			service: { name: 'cabros-bot', version: '0.1.0', environment: 'production', commit: 'abc12345' },
+			featureFlags: { telegramBot: true, signalOutcomeTracking: true, marketScanner: false },
+			deliveryChannels: {
+				telegram: { enabled: true, status: 'ready' },
+				whatsapp: { enabled: false, status: 'disabled' },
+			},
+			dependencies: {
+				telegram: { enabled: true, configured: true, ready: true, status: 'ready' },
+				tradingViewMcp: { enabled: true, configured: false, ready: false, status: 'misconfigured' },
+				signalOutcomeWorker: { enabled: true, configured: true, ready: true, status: 'ready' },
+			},
+		};
+		const summary = {
+			success: true,
+			summary: {
+				totalAlerts: 15,
+				delivery: {
+					totalSuccess: 12,
+					totalFailure: 3,
+					byChannel: {
+						telegram: { total: 10, success: 9, failure: 1 },
+						whatsapp: { total: 5, success: 3, failure: 2 },
+					},
+				},
+			},
+		};
+		const jobs = {
+			success: true,
+			jobs: [
+				{ jobId: 'job-101', status: 'processing', type: 'analysis' },
+				{ jobId: 'job-102', status: 'completed', type: 'scanner' },
+				{ jobId: 'job-103', status: 'failed', type: 'analysis' },
+			],
+		};
+		const outcomes = {
+			success: true,
+			outcomes: [
+				{ id: 'out-1', symbol: 'BINANCE:BTCUSDT', outcomeEvaluated: false, outcomes: { '1h': { status: 'pending' } } },
+				{ id: 'out-2', symbol: 'BINANCE:ETHUSDT', outcomeEvaluated: true, outcomes: { '1h': { status: 'evaluated' } } },
+			],
+		};
+		const alerts = {
+			alerts: [
+				{
+					id: 'alt-01',
+					enriched: true,
+					receivedAt: '2026-08-30T12:00:00.000Z',
+					deliveryResults: [{ channel: 'telegram', success: true }],
+				},
+			],
+		};
+
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				if (url.startsWith('/api/alerts/summary')) return response(summary);
+				if (url.startsWith('/api/jobs')) return response(jobs);
+				if (url.startsWith('/api/outcomes')) return response(outcomes);
+				if (url.startsWith('/api/alerts')) return response(alerts);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		const viewText = browser.elementsById.view.textContent;
+		// System Health
+		expect(viewText).toContain('Operational overview');
+		expect(viewText).toContain('cabros-bot');
+		expect(viewText).toContain('2 enabled');
+		// Issues / Warnings Panel
+		expect(viewText).toContain('TradingView MCP');
+		expect(viewText).toContain('Delivery alerts had 3 failures');
+		expect(viewText).toContain('1 background job failed');
+		// Delivery Health Panel
+		expect(viewText).toContain('Delivery health');
+		expect(viewText).toContain('15');
+		expect(viewText).toContain('12');
+		expect(viewText).toContain('80%');
+		expect(viewText).toContain('Telegram');
+		// Active Work Panel
+		expect(viewText).toContain('Active work');
+		expect(viewText).toContain('Counts reflect the latest 20 jobs and outcomes');
+		expect(viewText).toContain('In-flight jobs1');
+		expect(viewText).toContain('Pending outcomes1');
+		expect(viewText).toContain('1 evaluated signals');
+		expect(viewText).toContain('job-101 · analysis');
+		expect(viewText).toContain('pendingBINANCE:BTCUSDT');
+		expect(viewText).toContain('BINANCE:BTCUSDT');
+		// Recent Alerts Panel
+		expect(viewText).toContain('Recent alerts');
+		expect(viewText).toContain('Enriched');
+		expect(viewText).toContain('alt-01');
+		expect(viewText).toContain(new Date('2026-08-30T12:00:00.000Z').toLocaleString());
+	});
+
+	it('auto-refreshes operational dashboard on configured interval and detaches cleanly', async () => {
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') {
+					statusCalls++;
+					return response({ service: { name: 'cabros-bot' } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		expect(statusCalls).toBe(1);
+		expect([...browser.timerDelays.values()]).toContain(30000);
+
+		// Fire auto-refresh timer
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+
+		// Switch view to detach
+		await selectView(browser, 'status');
+		await flush();
+		expect(browser.timers.size).toBe(0);
+	});
+
+	it('retries operational dashboard polling after a transient status failure', async () => {
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') {
+					statusCalls += 1;
+					return statusCalls === 2
+						? response({ error: 'temporary failure' }, 503)
+						: response({ service: { name: 'cabros-bot' }, dependencies: {} });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+		expect([...browser.timerDelays.values()]).toContain(30000);
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(3);
+	});
+
+	it('budgets supplementary dashboard polling and backs off after a 429', async () => {
+		let now = 1000000;
+		const calls = [];
+		let summaryStatus = 200;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				calls.push(url);
+				if (url === '/api/status') return response({ service: { name: 'cabros-bot' } });
+				if (url.startsWith('/api/alerts/summary')) return response({ summary: { delivery: {} } }, summaryStatus, { 'retry-after': '120' });
+				if (url.startsWith('/api/jobs')) return response({ jobs: [] });
+				if (url.startsWith('/api/outcomes')) return response({ outcomes: [] });
+				return response({ alerts: [] });
+			},
+		});
+		browser.context.Date = class extends Date { static now() { return now; } };
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+		for (let i = 0; i < 3; i++) {
+			now += 30000;
+			for (const fireTimer of [...browser.timers.values()]) fireTimer();
+			await flush();
+		}
+		expect(calls.filter((url) => url.startsWith('/api/alerts/summary'))).toHaveLength(2);
+		summaryStatus = 429;
+		now += 30000;
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(calls.filter((url) => url.startsWith('/api/alerts/summary'))).toHaveLength(3);
+		for (let i = 0; i < 3; i++) {
+			now += 30000;
+			for (const fireTimer of [...browser.timers.values()]) fireTimer();
+			await flush();
+		}
+		expect(calls.filter((url) => url.startsWith('/api/alerts/summary'))).toHaveLength(3);
+	});
+
+	it('marks outcome metrics unavailable instead of claiming an empty queue', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response({ service: { name: 'cabros-bot' }, featureFlags: { signalOutcomeTracking: true } });
+				if (url.startsWith('/api/alerts/summary')) return response({ summary: { delivery: { totalFailure: 0 } } });
+				if (url.startsWith('/api/jobs')) return response({ jobs: [] });
+				if (url.startsWith('/api/outcomes')) return response({ error: 'unavailable' }, 503);
+				return response({ alerts: [] });
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('Outcome metrics unavailable');
+		expect(viewText).not.toContain('No in-flight background jobs or pending outcome evaluations');
+		expect(viewText).not.toContain('All configured services and delivery channels operating normally');
+	});
+
+	it('renders healthy state when all dependencies are ready and 0 failures occur', async () => {
+		const status = {
+			service: { name: 'cabros-bot', version: '0.1.0' },
+			dependencies: {
+				telegram: { enabled: true, ready: true, status: 'ready' },
+				persistentWriteHealth: { window: { durationMs: 60000 }, byDomain: {} },
+			},
+		};
+		const summary = {
+			success: true,
+			summary: {
+				totalAlerts: 5,
+				delivery: { totalSuccess: 5, totalFailure: 0, byChannel: { telegram: { total: 5, success: 5, failure: 0 } } },
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				if (url.startsWith('/api/alerts/summary')) return response(summary);
+				if (url.startsWith('/api/jobs')) return response({ jobs: [] });
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('All configured services and delivery channels operating normally');
+		expect(viewText).not.toContain('Persistent Write Health: Unknown');
+	});
+
+	it('renders fail-open graceful fallbacks when supplementary data endpoints fail or are disabled', async () => {
+		const status = {
+			service: { name: 'cabros-bot', version: '0.1.0' },
+			featureFlags: { telegramBot: true },
+			deliveryChannels: { telegram: { enabled: true, status: 'ready' } },
+			dependencies: { telegram: { enabled: true, ready: true, status: 'ready' } },
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				if (url.startsWith('/api/alerts/summary')) return response({ error: 'Service Unavailable' }, 503);
+				if (url.startsWith('/api/jobs')) return response({ error: 'Feature disabled' }, 403);
+				if (url.startsWith('/api/outcomes')) return response({ error: 'Feature disabled' }, 403);
+				if (url.startsWith('/api/alerts')) return response({ error: 'Feature disabled' }, 403);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('Operational overview');
+		expect(viewText).toContain('No recent delivery metrics reported or alert storage disabled');
+		expect(viewText).toContain('Delivery metrics unavailable');
+		expect(viewText).not.toContain('All configured services and delivery channels operating normally');
+		expect(viewText).toContain('Job metrics unavailable');
+		expect(viewText).toContain('No recent alerts stored or alert storage disabled');
+	});
+
+	it('renders available jobs independently of outcome tracking status', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response({ service: { name: 'cabros-bot' }, featureFlags: { signalOutcomeTracking: false } });
+				if (url.startsWith('/api/alerts/summary')) return response({ summary: { delivery: { totalFailure: 0 } } });
+				if (url.startsWith('/api/jobs')) return response({ jobs: [{ jobId: 'job-123', status: 'processing', type: 'analysis' }] });
+				if (url.startsWith('/api/outcomes')) return response({ error: 'disabled' }, 403);
+				return response({ alerts: [] });
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('Active background jobs (1)');
+		expect(viewText).toContain('job-123');
+		expect(viewText).toContain('Outcome tracking disabled');
+		expect(viewText).not.toContain('Outcome metrics unavailable');
+		expect(viewText).not.toContain('retry after dependencies recover');
+	});
+
+	it('warns when news monitor is paused instead of declaring healthy', async () => {
+		const status = {
+			service: { name: 'cabros-bot', version: '0.1.0' },
+			featureFlags: { newsMonitor: true, newsMonitorPaused: true },
+			dependencies: {
+				telegram: { enabled: true, ready: true, status: 'ready' },
+				newsMonitor: { enabled: true, paused: true },
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				if (url.startsWith('/api/alerts/summary')) return response({ summary: { delivery: { totalFailure: 0 } } });
+				if (url.startsWith('/api/jobs')) return response({ jobs: [] });
+				return response({ alerts: [] });
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('News monitor paused');
+		expect(viewText).not.toContain('All configured services and delivery channels operating normally');
 	});
 });
