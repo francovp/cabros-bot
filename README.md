@@ -179,6 +179,8 @@ The scanner-preset scheduler enforces a 60-second minimum between runs of the sa
 
 `ENABLE_ALERT_DECISION_AUDIT` (default `false`) opts stored webhook alerts into a bounded audit of parsing, enrichment, gates, and channel dispatch. It is request-time tunable through Firebase Remote Config. `GET /api/alerts/summary?includeDecisionRollup=true` adds gate counts; `GET /api/alerts/export?includeDecision=true` includes per-alert audit fields, including the CSV column only when explicitly requested. See [Stored Alerts API](docs/alerts.md).
 
+`ENABLE_REQUEST_VALIDATION` (default `true` in production) enables runtime OpenAPI 3.1 request schema validation for webhook ingest routes (`/api/webhook/alert`, `/api/webhook/message`, etc.). Malformed requests are rejected with a structured `400 VALIDATION_ERROR` carrying sanitized field paths and schema keywords before reaching handler execution or claiming idempotency keys. When set to `false`, requests bypass schema validation and retain handler-level checks. This request-security gate is environment-only and excluded from Firebase Remote Config.
+
 `GET /api/admin/events` streams real-time operator updates (job progress, scanner results, alert delivery events, and delivery failures) over Server-Sent Events (SSE). The endpoint is enabled by default (`ENABLE_ADMIN_SSE=true`; process-startup gate, environment-only). SSE stream concurrency, total server capacity, keepalive cadence, and slow-client backpressure drain timeouts are runtime tunable through Firebase Remote Config.
 
 | Variable | Type | Default | Bounds | Description |

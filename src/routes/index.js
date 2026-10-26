@@ -56,6 +56,7 @@ const {
 	testSubscriber,
 } = require('../controllers/subscribers/alertSubscribers');
 const { validateApiKey } = require('../lib/auth');
+const { validateRequest } = require('../lib/requestValidator');
 const { getApiStatus } = require('../controllers/status');
 const {
 	postBinanceOrder,
@@ -102,17 +103,17 @@ function getRoutes(botOrGetter) {
 	const sseRead = [requireConfiguredSseAccess, requireAdminRole(ADMIN_VIEWER)];
 	const binanceOrderRead = [requireConfiguredBinanceTradingAccess, requireAdminRole(ADMIN_VIEWER)];
 	const binanceOrderWrite = [requireConfiguredBinanceTradingAccess, requireAdminRole(ADMIN_OPERATOR)];
-	router.post('/webhook/alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postAlert(botOrGetter));
-	router.post('/webhook/message', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postMessage(botOrGetter));
-	router.post('/webhook/expanded-analysis-alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
-	router.post('/webhook/market-scanner-alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
+	router.post('/webhook/alert', validateApiKey, maintenanceModeMiddleware, validateRequest('/api/webhook/alert'), idempotencyMiddleware, postAlert(botOrGetter));
+	router.post('/webhook/message', validateApiKey, maintenanceModeMiddleware, validateRequest('/api/webhook/message'), idempotencyMiddleware, postMessage(botOrGetter));
+	router.post('/webhook/expanded-analysis-alert', validateApiKey, maintenanceModeMiddleware, validateRequest('/api/webhook/expanded-analysis-alert'), idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
+	router.post('/webhook/market-scanner-alert', validateApiKey, maintenanceModeMiddleware, validateRequest('/api/webhook/market-scanner-alert'), idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
 	// Rate limited by the app-wide src/lib/rateLimiter (app.use): volume confirmation
 	// uses the standard tier (30/minute), and symbol analysis uses the heavy tier (5/minute).
 	// CodeQL's js/missing-rate-limiting cannot see the app-level middleware.
 	/* codeql[js/missing-rate-limiting] */
-	router.post('/webhook/volume-confirmation', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postVolumeConfirmation());
+	router.post('/webhook/volume-confirmation', validateApiKey, maintenanceModeMiddleware, validateRequest('/api/webhook/volume-confirmation'), idempotencyMiddleware, postVolumeConfirmation());
 	/* codeql[js/missing-rate-limiting] */
-	router.post('/webhook/symbol-analysis', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postSymbolAnalysis());
+	router.post('/webhook/symbol-analysis', validateApiKey, maintenanceModeMiddleware, validateRequest('/api/webhook/symbol-analysis'), idempotencyMiddleware, postSymbolAnalysis());
 	router.get('/alerts', ...adminRead, listAlerts);
 	router.get('/alerts/replays', ...adminRead, listReplays);
 	router.get('/alerts/summary', ...adminRead, summarizeAlerts);
