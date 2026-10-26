@@ -176,7 +176,7 @@ function getBuildInfo(env = process.env) {
 		return {
 			name: getDeploymentService(targetEnv),
 			version: getRuntimeVersion(targetEnv),
-			commit: shortCommit || 'unknown',
+			commit: shortCommit || null,
 			full: fullCommit || null,
 			repo: repo || null,
 			platform: platform || 'unknown',
@@ -188,7 +188,7 @@ function getBuildInfo(env = process.env) {
 		return {
 			name: 'cabros-bot',
 			version: null,
-			commit: 'unknown',
+			commit: null,
 			full: null,
 			repo: null,
 			platform: 'unknown',

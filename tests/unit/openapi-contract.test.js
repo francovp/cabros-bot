@@ -49,6 +49,21 @@ describe('OpenAPI contract', () => {
 			.toEqual(['explicit', 'symbol_route', 'broadcast']);
 	});
 
+	it('documents build info schema under components and references it from Status (issue #753)', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		expect(contract.components.schemas.Status.properties.build.$ref).toBe('#/components/schemas/BuildInfo');
+		const buildSchema = contract.components.schemas.BuildInfo;
+		expect(buildSchema).toBeDefined();
+		expect(buildSchema.required).toEqual(expect.arrayContaining([
+			'commit',
+			'full',
+			'repo',
+			'environment',
+			'startedAt',
+			'uptimeSeconds',
+		]));
+	});
+
 	it('documents sanitized per-provider enrichment audit outcomes', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const providers = contract.components.schemas.AlertDecision.properties.enrichment.properties.providers;
