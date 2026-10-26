@@ -13207,6 +13207,158 @@
           ]
         },
         {
+          "name": "POST News Monitor (category filter)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"crypto\": [\"BTCUSDT\"],\n  \"categories\": [\"price_surge\", \"regulatory\"],\n  \"channels\": [\"telegram\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK - Category filtered analysis",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"crypto\": [\"BTCUSDT\"],\n  \"categories\": [\"price_surge\", \"regulatory\"],\n  \"channels\": [\"telegram\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/news-monitor",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "news-monitor"
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"status\": \"analyzed\",\n      \"alert\": {\n        \"symbol\": \"BTCUSDT\",\n        \"eventCategory\": \"price_surge\",\n        \"headline\": \"Bitcoin breaks resistance at $68,000 with strong volume\",\n        \"sentimentScore\": 0.65,\n        \"confidence\": 0.85,\n        \"sources\": [\n          \"https://www.coindesk.com/markets/2026/08/bitcoin-resistance\"\n        ],\n        \"formattedMessage\": \"BTCUSDT breakout above resistance (confidence 0.85).\",\n        \"timestamp\": 1724745600000,\n        \"marketContext\": {\n          \"price\": 68500,\n          \"change24h\": 2.4,\n          \"volume24h\": 18500000000,\n          \"source\": \"binance\",\n          \"timestamp\": 1724745599000\n        },\n        \"stop\": 67130,\n        \"target\": 71925\n      },\n      \"deliveryResults\": [],\n      \"cached\": false,\n      \"requestId\": \"req-cat123\",\n      \"totalDurationMs\": 800\n    }\n  ],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 1\n  },\n  \"requestedChannels\": [\"telegram\"],\n  \"deliveredChannels\": [],\n  \"totalDurationMs\": 850,\n  \"requestId\": \"req-cat123\",\n  \"tokenUsage\": {\n    \"inputTokens\": 10,\n    \"outputTokens\": 20,\n    \"totalTokens\": 30\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST News Monitor (invalid categories)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"crypto\": [\"BTCUSDT\"],\n  \"categories\": [\"invalid_category\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid category",
+              "originalRequest": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"crypto\": [\"BTCUSDT\"],\n  \"categories\": [\"invalid_category\"]\n}"
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/news-monitor",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "news-monitor"
+                  ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Invalid category: \\\"invalid_category\\\". Allowed categories: price_surge, price_decline, public_figure, regulatory\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
           "name": "GET News Monitor",
           "request": {
             "method": "GET",
@@ -13366,6 +13518,162 @@
                   "});"
                 ]
               }
+            }
+          ]
+        },
+        {
+          "name": "GET News Monitor (category filter)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor?crypto=BTCUSDT&categories=price_surge,regulatory",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor"
+              ],
+              "query": [
+                {
+                  "key": "crypto",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "categories",
+                  "value": "price_surge,regulatory"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 OK - Category filtered analysis",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/news-monitor?crypto=BTCUSDT&categories=price_surge,regulatory",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "news-monitor"
+                  ],
+                  "query": [
+                    {
+                      "key": "crypto",
+                      "value": "BTCUSDT"
+                    },
+                    {
+                      "key": "categories",
+                      "value": "price_surge,regulatory"
+                    }
+                  ]
+                }
+              },
+              "status": "OK",
+              "code": 200,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"symbol\": \"BTCUSDT\",\n      \"status\": \"analyzed\",\n      \"alert\": {\n        \"symbol\": \"BTCUSDT\",\n        \"eventCategory\": \"price_surge\",\n        \"headline\": \"Bitcoin breaks resistance at $68,000 with strong volume\",\n        \"sentimentScore\": 0.65,\n        \"confidence\": 0.85,\n        \"sources\": [\n          \"https://www.coindesk.com/markets/2026/08/bitcoin-resistance\"\n        ],\n        \"formattedMessage\": \"BTCUSDT breakout above resistance (confidence 0.85).\",\n        \"timestamp\": 1724745600000,\n        \"marketContext\": {\n          \"price\": 68500,\n          \"change24h\": 2.4,\n          \"volume24h\": 18500000000,\n          \"source\": \"binance\",\n          \"timestamp\": 1724745599000\n        },\n        \"stop\": 67130,\n        \"target\": 71925\n      },\n      \"deliveryResults\": [],\n      \"cached\": false,\n      \"requestId\": \"req-cat123\",\n      \"totalDurationMs\": 800\n    }\n  ],\n  \"summary\": {\n    \"total\": 1,\n    \"analyzed\": 1,\n    \"cached\": 0,\n    \"timeout\": 0,\n    \"error\": 0,\n    \"quota_exhausted\": 0,\n    \"alerts_sent\": 1\n  },\n  \"requestedChannels\": [\"telegram\"],\n  \"deliveredChannels\": [],\n  \"totalDurationMs\": 850,\n  \"requestId\": \"req-cat123\",\n  \"tokenUsage\": {\n    \"inputTokens\": 10,\n    \"outputTokens\": 20,\n    \"totalTokens\": 30\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET News Monitor (invalid categories)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/news-monitor?crypto=BTCUSDT&categories=invalid_category",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "news-monitor"
+              ],
+              "query": [
+                {
+                  "key": "crypto",
+                  "value": "BTCUSDT"
+                },
+                {
+                  "key": "categories",
+                  "value": "invalid_category"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid category",
+              "originalRequest": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "url": {
+                  "raw": "{{baseUrl}}/api/news-monitor?crypto=BTCUSDT&categories=invalid_category",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "news-monitor"
+                  ],
+                  "query": [
+                    {
+                      "key": "crypto",
+                      "value": "BTCUSDT"
+                    },
+                    {
+                      "key": "categories",
+                      "value": "invalid_category"
+                    }
+                  ]
+                }
+              },
+              "status": "Bad Request",
+              "code": 400,
+              "_postman_previewlanguage": "json",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "body": "{\n  \"error\": \"Invalid category: \\\"invalid_category\\\". Allowed categories: price_surge, price_decline, public_figure, regulatory\",\n  \"code\": \"INVALID_REQUEST\"\n}"
             }
           ]
         },

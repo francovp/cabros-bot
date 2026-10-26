@@ -8,7 +8,7 @@
 const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const { getAnalyzer, setNotificationManager } = require('./analyzer');
 const { getCacheInstance } = require('./cache');
-const { AnalysisStatus } = require('./constants');
+const { AnalysisStatus, ALLOWED_EVENT_CATEGORIES } = require('./constants');
 const { getVolumeTracker } = require('./volumeTracker');
 const {
 	getNotificationManager,
@@ -99,7 +99,18 @@ class NewsMonitorHandler {
 				? parseNotificationRouting(req.query, { allowQueryChannels: true })
 				: parseNotificationRouting(req.body);
 			validateNotificationRouting(notificationManager, routing);
-			const { crypto, stocks } = this.parseRequest(req);
+			const { crypto, stocks, categories } = this.parseRequest(req);
+			const categoriesError = this.validateCategories(categories);
+			if (categoriesError) {
+				return sendErrorFrom(res, 400, {
+					error: categoriesError,
+					code: 'INVALID_REQUEST',
+					requestId,
+				});
+			}
+			const normalizedCategories = categories
+				? [...new Set(categories.map(c => c.trim().toLowerCase()))]
+				: undefined;
 			const allSymbols = [...(crypto || []), ...(stocks || [])];
 			const useDefaultSymbols = allSymbols.length === 0;
 			const symbolsToAnalyze = useDefaultSymbols
@@ -144,6 +155,7 @@ class NewsMonitorHandler {
 					() => this.analyzer.analyzeSymbols(symbolsToAnalyze, requestId, tokenUsage, routing, {
 						dryRun,
 						assetClassBySymbol,
+						categories: normalizedCategories,
 					}),
 				);
 				summary = this.generateSummary(results);
@@ -398,29 +410,71 @@ class NewsMonitorHandler {
 	/**
    * Parse POST request body
    * @param {Express.Request} req - HTTP request
-   * @returns {Object} Parsed crypto and stocks arrays
+   * @returns {Object} Parsed crypto, stocks, and categories arrays
    */
 	parsePostRequest(req) {
 		const body = req.body || {};
 		const crypto = Array.isArray(body.crypto) ? body.crypto : undefined;
 		const stocks = Array.isArray(body.stocks) ? body.stocks : undefined;
+		const categories = body.categories !== undefined ? body.categories : undefined;
 		return {
 			crypto,
 			stocks,
+			categories,
 		};
 	}
 
 	/**
    * Parse GET query parameters
    * @param {Express.Request} req - HTTP request
-   * @returns {Object} Parsed crypto and stocks arrays
+   * @returns {Object} Parsed crypto, stocks, and categories arrays
    */
 	parseGetRequest(req) {
-		const { crypto, stocks } = req.query || {};
+		const { crypto, stocks, categories } = req.query || {};
+		let parsedCategories;
+		if (typeof categories === 'string') {
+			parsedCategories = categories.split(',').map(s => s.trim());
+		} else if (Array.isArray(categories)) {
+			parsedCategories = categories.map(s => (typeof s === 'string' ? s.trim() : s));
+		} else if (categories !== undefined) {
+			parsedCategories = categories;
+		}
 		return {
 			crypto: typeof crypto === 'string' ? crypto.split(',').map(s => s.trim()) : undefined,
 			stocks: typeof stocks === 'string' ? stocks.split(',').map(s => s.trim()) : undefined,
+			categories: parsedCategories,
 		};
+	}
+
+	/**
+   * Validate categories parameter
+   * @param {string[]|undefined} categories - Array of categories
+   * @returns {string|null} Error message or null if valid
+   */
+	validateCategories(categories) {
+		if (categories === undefined) {
+			return null;
+		}
+
+		if (!Array.isArray(categories)) {
+			return 'Categories must be an array';
+		}
+
+		if (categories.length === 0) {
+			return 'Categories must not be empty';
+		}
+
+		for (const cat of categories) {
+			if (typeof cat !== 'string' || !cat.trim()) {
+				return 'Categories must contain non-empty strings';
+			}
+			const normalized = cat.trim().toLowerCase();
+			if (!ALLOWED_EVENT_CATEGORIES.includes(normalized)) {
+				return `Invalid category: "${cat}". Allowed categories: ${ALLOWED_EVENT_CATEGORIES.join(', ')}`;
+			}
+		}
+
+		return null;
 	}
 
 	/**
