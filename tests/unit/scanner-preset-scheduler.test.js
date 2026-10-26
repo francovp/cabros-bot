@@ -229,6 +229,30 @@ describe('ScannerPresetSchedulerService', () => {
 			expect(updated.lockedUntil).toBeNull();
 		});
 
+		it('routes scheduled preset runs only to bound destinations', async () => {
+			const preset = await scannerPresetService.createPreset({
+				name: 'Bound scheduled preset',
+				mode: 'preset',
+				destinations: { telegramChatIds: ['-1001234567890'] },
+				schedule: { enabled: true, cadence: '5m' },
+				nextRunAt: new Date(Date.now() - 60000).toISOString(),
+			});
+			jest.spyOn(marketScannerController, 'runScans').mockResolvedValue([
+				{ scan: 'top_gainers', status: 'success', items: [{ symbol: 'BTCUSDT', change: 5.2 }] },
+			]);
+			const sendSpy = jest.spyOn(requestRouting, 'sendWithNotificationRouting').mockResolvedValue([
+				{ channel: 'telegram', success: true },
+			]);
+			jest.spyOn(notificationAlertModule, 'getNotificationManager').mockReturnValue({});
+
+			await scheduler._executePreset(preset);
+
+			expect(sendSpy.mock.calls[0][2]).toEqual({
+				channels: ['telegram'],
+				destinations: { telegramChatIds: ['-1001234567890'] },
+			});
+		});
+
 		it('records signal outcomes for executed presets when enabled', async () => {
 			jest.spyOn(signalOutcomeService, 'isEnabled').mockReturnValue(true);
 			const recordSpy = jest.spyOn(signalOutcomeService, 'recordSignal').mockResolvedValue({});

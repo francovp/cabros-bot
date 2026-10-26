@@ -197,6 +197,26 @@ describe('SymbolAnalysisStorageService', () => {
 			expect(savedData.createdAt).toBeDefined();
 		});
 
+		it('persists request-level trader intent with the analysis record', async () => {
+			process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE = 'true';
+
+			await SymbolAnalysisStorageService.recordAnalysis({
+				requestId: 'test-intent-123',
+				symbol: 'BINANCE:BTCUSDT',
+				traderIntent: {
+					side: 'SELL', entry: 100, invalidation: 110, target: 80,
+					horizon: '1D', notes: 'fade resistance',
+				},
+			});
+
+			expect(mockDocSet).toHaveBeenCalledWith(expect.objectContaining({
+				traderIntent: {
+					side: 'SELL', entry: 100, invalidation: 110, target: 80,
+					horizon: '1D', notes: 'fade resistance',
+				},
+			}));
+		});
+
 		it('strips undefined properties before saving to Firestore', async () => {
 			process.env.ENABLE_SYMBOL_ANALYSIS_STORAGE = 'true';
 			const record = {

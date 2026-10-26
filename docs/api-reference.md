@@ -293,6 +293,7 @@ The `/admin` console is deployed as a static site on Firebase Hosting for the `c
 - **Shareable URLs**: the active view and report filters live in the query string. `?view=<name>` selects one of `overview`, `status`, `alerts`, `outcomes`, `presets`, `jobs`, `orders`, `analysis`, or `playground`; filter fields are namespaced per form as `<scope>.<field>` (for example `?view=alerts&alerts.summary.from=2026-08-01T00:00&alerts.summary.limit=500`). Scope prefixes keep the Alerts summary and export filter sets independent because they are separate forms with separate defaults. Browser Back/Forward move between views without a page reload, a refresh preserves the view and its filters, and an unrecognized `view` value falls back to `overview` and rewrites the URL rather than rendering a blank workspace. A shared link still respects authentication: an unauthenticated deep link shows the sign-in card and issues no API request until sign-in.
 - **CORS & CSP Policy**: Backend CORS permits requests from the explicit allowlist (`https://cabros-bot.web.app`, `https://cabros-bot.firebaseapp.com`, `https://cabros-bot-production.up.railway.app`, `http://localhost:*`, and optional `CORS_ALLOWED_ORIGINS`), and Helmet CSP allows `connect-src` to Google Auth, Firebase Hosting origins, and the backend origin.
 - **CI/CD Deployment**: `.github/workflows/firebase-hosting.yml` automatically deploys pull requests to ephemeral Firebase preview channels and deploys the `live` channel on releases merged to `master`.
+- **Console Localization (`en` / `es`)**: The `/admin` console supports bilingual localization matching the bot's primary user language (`es`) and default English (`en`). Operators can toggle languages via the brand lockup selector (`<select id="admin-lang">`), the `?lang=es` or `?lang=en` URL query parameter, or `localStorage.admin_lang` (with fallback to `navigator.language` / `en`). Section titles, common actions, empty and error states, status row labels (`ready`, `degraded`, `unconfigured`, `disabled`, `misconfigured`), and filter form labels update dynamically while maintaining synchronization with `<html lang>`.
 - **Browser verification**: With the local console open in Playwright CLI, run `playwright-cli run-code --filename=scripts/check-admin-browser.js`. The check visits contract operations, edits and restores fields, submits to intercepted API responses, and checks mobile overflow. Screenshots are saved under `output/playwright/`.
 - **Local Testing**: Run `pnpm run build:hosting` then `firebase emulators:start --only hosting` to test the static hosting deployment locally on port 5000.
 - **Rollback**: In the Firebase Console (Hosting > Release history) or via Firebase CLI: `firebase hosting:rollback` / `firebase hosting:clone cabros-bot:previous_version cabros-bot:live`.
@@ -391,6 +392,16 @@ The `/admin` console is deployed as a static site on Firebase Hosting for the `c
 
 ## Trading Endpoints
 
+### POST /api/trading/binance/orders
+
+The existing operator-gated Spot order route supports `MARKET`, `LIMIT`, `LIMIT_MAKER`, `STOP_LOSS`, `STOP_LOSS_LIMIT`, `TAKE_PROFIT`, and `TAKE_PROFIT_LIMIT`. `trailingDelta` is an integer BIPS offset and must fit the symbol's side/type-specific Binance `TRAILING_DELTA` filter. `GET` lists recent orders or looks up one order with `orderId` / `origClientOrderId`; it also reconciles an OTOCO list with `orderListId` / `listClientOrderId` (exactly one identifier per request). `DELETE` cancels one order using exactly one supported single-order identifier.
+
+For market-executed contingent BUYs (`STOP_LOSS` and `TAKE_PROFIT`), the configured notional cap uses `quantity × max(averagePrice, stopPrice)`. A trailing-only BUY without a fixed `stopPrice` fails closed because its trigger has no bounded price. This is a pre-trade estimate; a market fill can still slip beyond its trigger price. Limit-executed contingent orders use their limit `price` for the cap check.
+
+`BRACKET_LIMIT` submits one native Spot OTOCO order list with a LIMIT entry and pending OCO exits, armed by Binance after the entry fills. For a BUY entry, the take-profit is a pending-above `LIMIT_MAKER` and the protective stop is a pending-below `STOP_LOSS_LIMIT`; for a SELL entry, the protective stop is pending-above `STOP_LOSS_LIMIT` and the take-profit is pending-below `TAKE_PROFIT_LIMIT` (using `takeProfitPrice` as both trigger and limit). It requires `quantity`, `price`, `stopPrice`, `stopLimitPrice`, `takeProfitPrice`, and `timeInForce`. `BRACKET_MARKET` and Futures-only order types are unsupported. Live brackets require a durable Firestore idempotency reservation before the single exchange submission; unavailable storage fails closed and an ambiguous result must be reconciled before retrying with the same key.
+
+Bracket lifecycle detail has no expiry while pending or partially filled. Once terminal, `expiresAt` is set to one hour after the observed terminal transition and Firestore TTL cleanup is asynchronous; the permanent reservation remains keyed by the SHA-256 idempotency-key hash. The `/admin` Orders view has an operator-only bracket form whose latest-alert prices remain editable suggestions. No new environment or Firebase Remote Config setting is required.
+
 ### POST /api/trading/binance/orders/preview
 
 `POST /api/trading/binance/orders/preview` returns a pre-trade cost preview without ever calling `submitNewOrder`. It is exposed behind the existing `admin.viewer`/`admin.operator` flow (API-key or Firebase bearer) and fails closed if neither mechanism is configured, mirroring the live endpoint.
@@ -424,3 +435,29 @@ Query parameters are all optional:
 An `asset` or `symbol` outside the configured allow-list is rejected with `400 INVALID_ORDER_REQUEST` *before* any provider call, so the endpoint cannot be used to probe arbitrary balances. `ENABLE_BINANCE_TRADING=false` returns `403 FEATURE_DISABLED`; missing credentials return `503 BINANCE_TRADING_UNAVAILABLE`; a Binance timeout, network error or unclassified provider failure returns `502 BINANCE_BALANCE_QUERY_FAILED`. The 502 body and the structured log line carry only the sanitized message — no API key, signature, or raw Binance payload.
 
 Responses are cached in-process for a few seconds so an operator console polling the endpoint cannot spike Binance request weight. See [`BINANCE_BALANCE_CACHE_MS`](environment-configuration.md#binance-spot-order-execution) for the bound and its Remote Config parity.
+
+### GET /api/trading/binance/reconciliation
+
+`GET /api/trading/binance/reconciliation` lists indeterminate auto-trade reservations requiring manual operator reconciliation. Mounted behind `admin.viewer`/`admin.operator` access (API-key or Firebase bearer).
+
+Query parameters:
+- `symbol` — restrict to a single trading symbol (e.g. `BTCUSDT`).
+- `status` — filter by reservation status (default: `ambiguous`).
+- `limit` — integer limit (default: 50, maximum: 100).
+
+Returns `{ success: true, reservations: [...], count, ambiguousCount }`.
+
+### POST /api/trading/binance/reconciliation/:reservationId
+
+`POST /api/trading/binance/reconciliation/:reservationId` resolves an ambiguous auto-trade reservation as `placed` or `not_placed`. Mounted behind `admin.operator` access with idempotency middleware.
+
+Request body:
+- `resolvedAs` (`placed` | `not_placed`, required)
+- `orderId` (integer, optional)
+- `notes` (string, optional)
+
+Behavior:
+- When resolved as `not_placed`: marks status as `failed`, clears both Firestore and in-memory repeat suppression cooldowns so subsequent valid signals are not blocked, pages admin chat if configured, and audits the mutation.
+- When resolved as `placed`: marks status as `submitted`, updates `orderId`, retains repeat suppression cooldown, and audits the mutation.
+- Fully idempotent: repeat calls with identical determinations return `{ success: true, idempotent: true, action: 'already_resolved', reservation }`. Conflicting determinations fail closed with `409 CONFLICT`.
+

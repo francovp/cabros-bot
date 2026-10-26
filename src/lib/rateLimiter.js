@@ -19,14 +19,15 @@ function deriveApiKeyHash(apiKey) {
 // src/lib/rateLimiter.js
 
 const rateLimit = new Map();
-// Store: rateLimitKey -> { count, resetTime }
+// Store: bucketKey -> { count, resetTime }
 
 const MAX_KEYS = 10000;
 // Protection against memory exhaustion
 const DEFAULT_MAX_REQUESTS = 100;
-// ponytail: fixed 1,000-request webhook bucket; split by API-key identity if isolation needs to scale.
+// All webhook ingest paths share this aggregate ceiling in addition to endpoint tiers.
 const WEBHOOK_MAX_REQUESTS = 1000;
 const DEFAULT_WINDOW_MS = 900000;
+const ENDPOINT_WINDOW_MS = 60000;
 const WEBHOOK_INGEST_PATHS = new Set([
 	'/api/webhook/alert',
 	'/api/webhook/message',
@@ -35,6 +36,17 @@ const WEBHOOK_INGEST_PATHS = new Set([
 	'/api/webhook/volume-confirmation',
 	'/api/webhook/symbol-analysis',
 	'/api/news-monitor',
+]);
+const ENDPOINT_LIMITS = new Map([
+	['/api/webhook/expanded-analysis-alert', { tier: 'heavy', max: 5 }],
+	['/api/webhook/market-scanner-alert', { tier: 'heavy', max: 5 }],
+	['/api/webhook/symbol-analysis', { tier: 'heavy', max: 5 }],
+	['/api/news-monitor', { tier: 'heavy', max: 5 }],
+	['/api/trading/binance/orders', { tier: 'trading', max: 10 }],
+	['/api/trading/binance/orders/preview', { tier: 'trading', max: 10 }],
+	['/api/webhook/volume-confirmation', { tier: 'standard', max: 30 }],
+	['/api/status', { tier: 'light', max: 100 }],
+	['/api/capabilities', { tier: 'light', max: 100 }],
 ]);
 const invalidConfigWarnings = new Set();
 
@@ -112,15 +124,85 @@ function rateLimiter(req, res, next) {
 		.split('?')[0]
 		.replace(/\/+$/, '')
 		.toLowerCase();
+	const endpointLimit = ENDPOINT_LIMITS.get(requestPath);
 	const isWebhookIngest = WEBHOOK_INGEST_PATHS.has(requestPath);
-	const maxRequests = isWebhookIngest
-		? WEBHOOK_MAX_REQUESTS
-		: readPositiveInteger('RATE_LIMIT_MAX', DEFAULT_MAX_REQUESTS);
-	const windowMs = readPositiveInteger('RATE_LIMIT_WINDOW_MS', DEFAULT_WINDOW_MS);
-
-	const bucketKey = isWebhookIngest ? `webhook:${getRateLimitKey(req)}` : getRateLimitKey(req);
+	const rateLimitIdentity = getRateLimitKey(req);
 	const now = Date.now();
+	let data;
+	let maxRequests;
 
+	if (endpointLimit && isWebhookIngest) {
+		// Tiered webhook ingest keeps both the existing aggregate ingress ceiling and its
+		// narrower per-endpoint budget. Count every request against both buckets.
+		const webhookWindowMs = readPositiveInteger('RATE_LIMIT_WINDOW_MS', DEFAULT_WINDOW_MS);
+		const webhookData = consumeBucket('webhook:' + rateLimitIdentity, webhookWindowMs, now);
+		const endpointData = consumeBucket(
+			'endpoint:' + requestPath + ':' + rateLimitIdentity,
+			ENDPOINT_WINDOW_MS,
+			now,
+		);
+		const endpointMaxRequests = readPositiveInteger(
+			'RATE_LIMIT_TIER_' + endpointLimit.tier.toUpperCase() + '_MAX',
+			endpointLimit.max,
+		);
+		const webhookLimitExceeded = webhookData.count > WEBHOOK_MAX_REQUESTS;
+		const endpointLimitExceeded = endpointData.count > endpointMaxRequests;
+
+		if (webhookLimitExceeded && endpointLimitExceeded) {
+			// Advertise the bucket that takes longer to reset so Retry-After is sufficient.
+			if (endpointData.resetTime > webhookData.resetTime) {
+				data = endpointData;
+				maxRequests = endpointMaxRequests;
+			} else {
+				data = webhookData;
+				maxRequests = WEBHOOK_MAX_REQUESTS;
+			}
+		} else if (webhookLimitExceeded) {
+			data = webhookData;
+			maxRequests = WEBHOOK_MAX_REQUESTS;
+		} else {
+			data = endpointData;
+			maxRequests = endpointMaxRequests;
+		}
+	} else {
+		maxRequests = endpointLimit
+			? readPositiveInteger(
+				'RATE_LIMIT_TIER_' + endpointLimit.tier.toUpperCase() + '_MAX',
+				endpointLimit.max,
+			)
+			: isWebhookIngest
+				? WEBHOOK_MAX_REQUESTS
+				: readPositiveInteger('RATE_LIMIT_MAX', DEFAULT_MAX_REQUESTS);
+		const windowMs = endpointLimit
+			? ENDPOINT_WINDOW_MS
+			: readPositiveInteger('RATE_LIMIT_WINDOW_MS', DEFAULT_WINDOW_MS);
+		const bucketKey = endpointLimit
+			? 'endpoint:' + requestPath + ':' + rateLimitIdentity
+			: isWebhookIngest
+				? 'webhook:' + rateLimitIdentity
+				: rateLimitIdentity;
+		data = consumeBucket(bucketKey, windowMs, now);
+	}
+
+	const remaining = Math.max(0, maxRequests - data.count);
+	const resetSeconds = Math.ceil(data.resetTime / 1000);
+	res.setHeader('X-RateLimit-Limit', String(maxRequests));
+	res.setHeader('X-RateLimit-Remaining', String(remaining));
+	res.setHeader('X-RateLimit-Reset', String(resetSeconds));
+
+	if (data.count > maxRequests) {
+		const retryAfterSeconds = Math.max(1, Math.ceil((data.resetTime - now) / 1000));
+		res.setHeader('Retry-After', String(retryAfterSeconds));
+		return sendErrorFrom(res, 429, {
+			error: 'Too many requests, please try again later.',
+			retryAfterSeconds,
+		}, { req });
+	}
+
+	next();
+}
+
+function consumeBucket(bucketKey, windowMs, now) {
 	let data = rateLimit.get(bucketKey);
 
 	if (!data) {
@@ -143,22 +225,7 @@ function rateLimiter(req, res, next) {
 		data.count++;
 	}
 
-	const remaining = Math.max(0, maxRequests - data.count);
-	const resetSeconds = Math.ceil(data.resetTime / 1000);
-	res.setHeader('X-RateLimit-Limit', String(maxRequests));
-	res.setHeader('X-RateLimit-Remaining', String(remaining));
-	res.setHeader('X-RateLimit-Reset', String(resetSeconds));
-
-	if (data.count > maxRequests) {
-		const retryAfterSeconds = Math.max(1, Math.ceil((data.resetTime - now) / 1000));
-		res.setHeader('Retry-After', String(retryAfterSeconds));
-		return sendErrorFrom(res, 429, {
-			error: 'Too many requests, please try again later.',
-			retryAfterSeconds,
-		});
-	}
-
-	next();
+	return data;
 }
 
 rateLimiter.enableTestMode = function () {

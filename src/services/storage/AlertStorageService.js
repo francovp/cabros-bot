@@ -51,6 +51,7 @@ const {
 const { deriveAssetContext, parseTradingViewSignal } = require('../tradingview/parseTradingViewSignal');
 const { analyzeSentimentScoreDistribution } = require('../grounding/sentimentDistribution');
 const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
+const { validateTraderIntent } = require('../../lib/traderIntent');
 
 function createEmptySignalClassCounts() {
 	return {
@@ -416,6 +417,9 @@ function formatAlertDocument(doc, options = {}) {
 		useTradingViewData: Boolean(data.useTradingViewData),
 		tradingViewEnrichmentApplied: Boolean(data.tradingViewEnrichmentApplied),
 	};
+	if (data.traderIntent && typeof data.traderIntent === 'object') {
+		docObj.traderIntent = data.traderIntent;
+	}
 	if (includeEnrichmentSummary) {
 		docObj.enrichmentSummary = docObj.enrichmentData;
 	}
@@ -2292,6 +2296,7 @@ async function saveAlertInternal(params = {}) {
 		side,
 		session,
 		decision,
+		traderIntent,
 		alertId: providedAlertId,
 	} = params;
 	if (!isEnabled()) {
@@ -2352,6 +2357,8 @@ async function saveAlertInternal(params = {}) {
 			tradingViewEnrichmentApplied: Boolean(tradingViewEnrichmentApplied),
 			deployment: getDeploymentIdentity(),
 		};
+		const sanitizedTraderIntent = validateTraderIntent(traderIntent);
+		if (sanitizedTraderIntent) document.traderIntent = sanitizedTraderIntent;
 		const collectedTelegramMessageIds = new Set();
 		if (Array.isArray(params.telegramMessageIds)) {
 			for (const mid of params.telegramMessageIds) {

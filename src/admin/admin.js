@@ -1,6 +1,10 @@
 'use strict';
 
-/* global document, window */
+/* global document, window, globalThis */
+
+const i18n = (typeof window !== 'undefined' && (window.CabrosAdminI18n || window.i18n))
+	|| (typeof globalThis !== 'undefined' && (globalThis.CabrosAdminI18n || globalThis.i18n))
+	|| { t: (k, opts) => (opts && opts.default !== undefined ? opts.default : k), resolveLocale: () => 'en', getLocale: () => 'en', setLocale: () => 'en' };
 
 const VIEWS = {
 	status: [{ method: 'GET', path: '/api/status', label: 'Refresh status' }],
@@ -215,6 +219,70 @@ const readConsoleParams = () => {
 	}
 };
 
+const safeDecodeURIComponent = (value) => {
+	if (typeof value !== 'string') return '';
+	try {
+		return decodeURIComponent(value);
+	} catch (_) {
+		return value;
+	}
+};
+
+const readConsoleHash = () => {
+	try {
+		const location = getWindowLocation();
+		return location && typeof location.hash === 'string' ? location.hash : '';
+	} catch (_) {
+		return '';
+	}
+};
+
+const parseConsoleHash = (rawHash) => {
+	if (!rawHash || typeof rawHash !== 'string') return null;
+	const trimmed = rawHash.replace(/^#\/?/, '').replace(/\/+$/, '').trim();
+	if (!trimmed) return null;
+
+	const alertTradeMatch = trimmed.match(/^alerts\/([^/]+)(?:\/trade)?$/i);
+	if (alertTradeMatch) {
+		return {
+			view: 'alerts',
+			alertId: safeDecodeURIComponent(alertTradeMatch[1]),
+			raw: rawHash,
+		};
+	}
+
+	const tradeMatch = trimmed.match(/^trade(?:\/([^/]+))?$/i);
+	if (tradeMatch) {
+		if (tradeMatch[1]) {
+			return {
+				view: 'alerts',
+				alertId: safeDecodeURIComponent(tradeMatch[1]),
+				raw: rawHash,
+			};
+		}
+		return {
+			view: 'trading',
+			raw: rawHash,
+		};
+	}
+
+	const normalizedView = CONSOLE_VIEW_NAMES.find(
+		(v) => v.toLowerCase() === trimmed.toLowerCase().replace(/[-_]/g, ''),
+	);
+	if (normalizedView) {
+		return {
+			view: normalizedView,
+			raw: rawHash,
+		};
+	}
+
+	return {
+		view: trimmed,
+		unrecognised: true,
+		raw: rawHash,
+	};
+};
+
 const resolveConsoleView = (value) => {
 	const name = typeof value === 'string' ? value.trim() : '';
 	return CONSOLE_VIEW_NAMES.includes(name) ? name : DEFAULT_CONSOLE_VIEW;
@@ -222,13 +290,29 @@ const resolveConsoleView = (value) => {
 
 const readConsoleUrlState = () => {
 	const params = readConsoleParams();
+	const hashState = parseConsoleHash(readConsoleHash());
+
+	if (hashState) {
+		const view = resolveConsoleView(hashState.view);
+		return {
+			view,
+			viewRequested: true,
+			viewRecognised: !hashState.unrecognised && CONSOLE_VIEW_NAMES.includes(view),
+			alertId: hashState.alertId || null,
+			params,
+			hash: hashState.raw,
+		};
+	}
+
 	const requested = params.get('view');
 	const view = resolveConsoleView(requested);
 	return {
 		view,
 		viewRequested: requested !== null,
 		viewRecognised: view === requested,
+		alertId: null,
 		params,
+		hash: '',
 	};
 };
 
@@ -245,7 +329,7 @@ const filterParamsForView = (view, params) => {
 	return carried;
 };
 
-const buildConsoleUrl = (view, filterParams = {}) => {
+const buildConsoleUrl = (view, filterParams = {}, explicitHash = null) => {
 	const location = getWindowLocation();
 	let pathname = '';
 	try {
@@ -258,12 +342,27 @@ const buildConsoleUrl = (view, filterParams = {}) => {
 		const ownsFilterScope = Object.keys(FILTER_SCOPE_VIEWS).some((scope) => key.startsWith(`${scope}.`));
 		if (key !== 'view' && !ownsFilterScope) params.set(key, value);
 	});
+	if (typeof i18n !== 'undefined') {
+		const currentLang = i18n.getLocale();
+		if (params.has('lang') || currentLang !== 'en') {
+			if (currentLang === 'en') {
+				params.delete('lang');
+			} else {
+				params.set('lang', currentLang);
+			}
+		}
+	}
 	params.set('view', view);
 	Object.entries(filterParams).forEach(([key, value]) => {
 		if (value !== undefined && value !== null && value !== '') params.set(key, value);
 	});
 	const search = params.toString();
-	return `${pathname}${search ? `?${search}` : ''}`;
+	const base = `${pathname}${search ? `?${search}` : ''}`;
+	if (explicitHash) {
+		const formattedHash = explicitHash.startsWith('#') ? explicitHash : `#${explicitHash}`;
+		return `${base}${formattedHash}`;
+	}
+	return base;
 };
 
 const writeConsoleUrl = (url, { replace = false } = {}) => {
@@ -449,14 +548,18 @@ const createLoadingState = (label) => {
 		className: 'loading-state',
 		attributes: { role: 'status' },
 	});
+	const translated = (typeof i18n !== 'undefined' && i18n.t(label)) || label;
 	wrap.append(
 		element('span', { className: 'spinner', attributes: { 'aria-hidden': 'true' } }),
-		element('span', { text: label }),
+		element('span', { text: translated }),
 	);
 	return wrap;
 };
 
-const createEmptyState = (text) => element('p', { className: 'empty-state', text });
+const createEmptyState = (text) => element('p', {
+	className: 'empty-state',
+	text: (typeof i18n !== 'undefined' && i18n.t(text)) || text,
+});
 
 const formatRelativeTime = (value, now = Date.now()) => {
 	const date = new Date(value);
@@ -503,18 +606,24 @@ const copyToClipboard = async (text, button) => {
 	} catch (_) {
 		copied = false;
 	}
-	button.textContent = copied ? 'Copied!' : 'Copy unavailable';
+	button.textContent = copied
+		? (typeof i18n !== 'undefined' ? i18n.t('actions.copied', { default: 'Copied!' }) : 'Copied!')
+		: (typeof i18n !== 'undefined' ? i18n.t('actions.copyUnavailable', { default: 'Copy unavailable' }) : 'Copy unavailable');
 	setTimeout(() => {
 		button.textContent = original;
 	}, 2000);
 };
 
 const createCopyButton = (getText, label = 'Copy') => {
-	const button = element('button', { text: label });
+	const isDetails = label === 'Copy details' || label === 'actions.copyDetails';
+	const displayLabel = typeof i18n !== 'undefined'
+		? (label === 'Copy details' ? i18n.t('actions.copyDetails') : i18n.t(label, { default: label }))
+		: label;
+	const button = element('button', { text: displayLabel });
 	button.type = 'button';
 	button.className = 'copy-button';
 	button.addEventListener('click', () => copyToClipboard(
-		label === 'Copy details'
+		isDetails
 			? window.CabrosAdminComponents.plainText(window.CabrosAdminComponents.present(JSON.parse((typeof getText === 'function' ? getText() : getText) || 'null'), false, getElement('api-key')?.value || ''))
 			: typeof getText === 'function' ? String(getText() ?? '') : String(getText ?? ''),
 		button,
@@ -555,11 +664,11 @@ const loadFirebaseSdk = () => {
 	return firebaseSdkPromise;
 };
 
-const showAuthState = (message, isError = false) => {
+const showAuthState = (message, isError = false, options = {}) => {
 	const state = getElement('auth-state');
 	if (state) {
 		state.className = isError ? 'response-error' : 'request-state';
-		state.textContent = message;
+		state.textContent = (typeof i18n !== 'undefined' && i18n.t(message, options)) || message;
 	}
 };
 
@@ -630,13 +739,14 @@ const showSignedOutState = () => {
 	clearCredentialError();
 	showAuthState('Sign in to continue.');
 	const view = getElement('view');
-	if (view) view.replaceChildren(element('p', { className: 'request-state', text: 'Sign in required.' }));
+	if (view) view.replaceChildren(element('p', { className: 'request-state', text: typeof i18n !== 'undefined' ? i18n.t('Sign in required.') : 'Sign in required.' }));
 };
 
 const showSignedInState = () => {
 	setHidden('auth-form', true);
 	setHidden('sign-out', false);
-	showAuthState(`Signed in as ${authState.user.email || 'admin'}.`);
+	const user = authState.user.email || 'admin';
+	showAuthState('auth.signedInAs', false, { user, default: `Signed in as ${user}.` });
 };
 
 const setupFirebaseAuth = async (config) => {
@@ -689,7 +799,7 @@ const setupFirebaseAuth = async (config) => {
 				const requested = readConsoleUrlState();
 				navigateToView(
 					requested.viewRequested ? requested.view : FIREBASE_SIGN_IN_LANDING_VIEW,
-					{ history: 'replace' },
+					{ history: 'replace', alertId: requested.alertId, hash: requested.hash },
 				);
 			} catch (error) {
 				disconnectSse();
@@ -1068,7 +1178,13 @@ const showResult = (output, serialized) => {
 };
 
 const addField = (form, labelText, name, options = {}) => {
-	const label = element('label', { text: labelText });
+	const currentLang = typeof i18n !== 'undefined' ? i18n.getLocale() : 'en';
+	const dict = typeof i18n !== 'undefined' && i18n.locales ? i18n.locales[currentLang] : null;
+	const key = `filters.${name}`;
+	const translatedText = typeof i18n !== 'undefined'
+		? (dict && dict[key] ? i18n.t(key) : i18n.t(labelText, { default: labelText }))
+		: labelText;
+	const label = element('label', { text: translatedText });
 	const input = element(options.tag || 'input');
 	input.name = name;
 	Object.entries(options).forEach(([key, value]) => {
@@ -1110,7 +1226,12 @@ const displayLabel = (value) => DISPLAY_LABELS[value] || String(value)
 	.replace(/[-_]/g, ' ')
 	.replace(/\b\w/g, (letter) => letter.toUpperCase());
 
-const displayStatus = (value) => STATUS_LABELS[value] || displayLabel(value || 'unknown');
+const displayStatus = (value) => {
+	const key = String(value || 'unknown').toLowerCase();
+	const translated = typeof i18n !== 'undefined' ? i18n.t(`status.${key}`) : null;
+	if (translated && translated !== `status.${key}`) return translated;
+	return STATUS_LABELS[value] || displayLabel(value || 'unknown');
+};
 
 const statusTone = (value) => ['ready', 'disabled', 'misconfigured'].includes(value) ? value : 'unknown';
 
@@ -1809,6 +1930,21 @@ const appendRiskRows = (dl, data) => [
 	dl.append(element('dt', { text: label }), element('dd', { text: String(value) }));
 });
 
+const buildTradeUrl = (alertId) => {
+	const tradeHash = `#/alerts/${encodeURIComponent(String(alertId))}/trade`;
+	const loc = getWindowLocation();
+	const origin = (loc && loc.origin) ? loc.origin : '';
+	const pathname = (loc && loc.pathname) ? loc.pathname : '/admin';
+	const search = (loc && loc.search) ? loc.search : '';
+	return `${origin}${pathname}${search}${tradeHash}`;
+};
+
+const appendTradeLinkCopyButton = (container, alertId) => {
+	if (!container || !alertId) return;
+	const tradeUrl = buildTradeUrl(alertId);
+	container.append(createCopyButton(tradeUrl, 'Copy trade link'));
+};
+
 const createAlertDetailPanel = (alert) => {
 	const panel = element('article', { className: 'operation-card alert-detail' });
 	const headCopy = element('div');
@@ -1816,6 +1952,7 @@ const createAlertDetailPanel = (alert) => {
 	if (alert && alert.id) {
 		const idLine = element('p', { className: 'mono-line', text: String(alert.id) });
 		idLine.append(createCopyButton(String(alert.id), 'Copy ID'));
+		appendTradeLinkCopyButton(idLine, alert.id);
 		headCopy.append(idLine);
 	}
 	const badges = element('div', { className: 'badge-row' });
@@ -1928,6 +2065,7 @@ const createAlertCard = (alert, { onSelect, isSelected = false, registerCheckbox
 	if (alert && alert.id) {
 		const idLine = element('p', { className: 'mono-line', text: String(alert.id) });
 		idLine.append(createCopyButton(String(alert.id), 'Copy ID'));
+		appendTradeLinkCopyButton(idLine, alert.id);
 		headCopy.append(idLine);
 	}
 	const badges = element('div', { className: 'badge-row' });
@@ -2038,14 +2176,29 @@ const renderSystemIssuesWarning = (container, { dependencies, deliverySummary, j
 	const issues = [];
 
 	(dependencies || []).forEach(([name, detail]) => {
-		if (!['ready', 'disabled'].includes(detail.status)) {
+		if (statusNeedsAttention(detail)) {
+			const status = effectiveStatus(detail);
 			issues.push({
-				label: `${displayLabel(name)}: ${displayStatus(detail.status)}`,
+				label: `${displayLabel(name)}: ${displayStatus(status)}`,
 				detail: detail.provider ? `Provider: ${detail.provider}` : (detail.error || 'Check configuration and service credentials.'),
-				tone: statusTone(detail.status),
+				tone: statusTone(status),
 			});
 		}
 	});
+	if (!deliverySummary?.summary?.delivery) {
+		issues.push({
+			label: 'Delivery metrics unavailable',
+			detail: 'Alert storage may be disabled or the summary request failed.',
+			tone: 'unknown',
+		});
+	}
+	if (!Array.isArray(jobsData?.jobs)) {
+		issues.push({
+			label: 'Job metrics unavailable',
+			detail: 'The jobs request did not return a list.',
+			tone: 'unknown',
+		});
+	}
 
 	if (deliverySummary && deliverySummary.summary && deliverySummary.summary.delivery) {
 		const { totalFailure, byChannel } = deliverySummary.summary.delivery;
@@ -2152,7 +2305,7 @@ const renderDeliveryHealthDashboard = (container, deliverySummary) => {
 const renderActiveWorkDashboard = (container, { jobsData, outcomesData, status }) => {
 	container.replaceChildren();
 	const jobs = Array.isArray(jobsData?.jobs) ? jobsData.jobs : [];
-	const inFlightJobs = jobs.filter((j) => ['queued', 'running', 'pending'].includes(j.status));
+	const inFlightJobs = jobs.filter((j) => ['pending', 'processing'].includes(j.status));
 	const completedJobs = jobs.filter((j) => j.status === 'completed');
 	const failedJobs = jobs.filter((j) => j.status === 'failed');
 
@@ -2179,7 +2332,7 @@ const renderActiveWorkDashboard = (container, { jobsData, outcomesData, status }
 				const item = element('div', { className: 'mono-line' });
 				item.append(
 					element('span', { className: 'status-badge status-active', text: job.status }),
-					element('span', { text: `${job.id} · ${job.type || 'analysis'}` }),
+					element('span', { text: `${job.jobId} · ${job.type || 'analysis'}` }),
 				);
 				jobGroup.append(item);
 			});
@@ -2200,7 +2353,7 @@ const renderActiveWorkDashboard = (container, { jobsData, outcomesData, status }
 		}
 	}
 
-	container.append(metricsGrid, workList);
+	container.append(metricsGrid, element('p', { className: 'request-state', text: 'Counts reflect the latest 20 jobs and outcomes.' }), workList);
 };
 
 const renderRecentAlertsDashboard = (container, alertsData) => {
@@ -2214,11 +2367,11 @@ const renderRecentAlertsDashboard = (container, alertsData) => {
 	alerts.slice(0, 10).forEach((alert) => {
 		const card = element('article', { className: 'alert-card status-card' });
 		const header = element('div');
-		const symbolOrSource = alert.symbol || alert.source || alert.alertId || 'Alert';
+		const symbolOrSource = alert.symbol || alert.source || alert.id || 'Alert';
 		const chips = deliveryChips(alert.deliveryResults);
 		header.append(
 			element('strong', { text: symbolOrSource }),
-			element('small', { text: `${alert.enriched ? 'Enriched' : 'Plain'} · ${alert.createdAt ? new Date(alert.createdAt).toLocaleString() : 'Recent'}` }),
+			element('small', { text: `${alert.enriched ? 'Enriched' : 'Plain'} · ${alert.receivedAt ? new Date(alert.receivedAt).toLocaleString() : 'Recent'}` }),
 		);
 		const badge = element('span', {
 			className: `status-badge ${alert.enriched ? 'status-ready' : 'status-disabled'}`,
@@ -2297,37 +2450,37 @@ const createStatusExplorer = () => {
 	const dashboard = element('div', { className: 'dashboard' });
 	const hero = element('section', { className: 'dashboard-hero' });
 	const heroCopy = element('div');
-	const lastChecked = element('p', { className: 'request-state', text: 'Waiting for live status…' });
+	const lastChecked = element('p', { className: 'request-state', text: i18n.t('Waiting for live status…') });
 	heroCopy.append(
-		element('p', { className: 'eyebrow', text: 'Runtime status' }),
-		element('h2', { text: 'Status' }),
-		element('p', { text: 'Inspect dependency readiness, delivery channels and worker health.' }),
+		element('p', { className: 'eyebrow', text: i18n.t('status.eyebrow', { default: 'Runtime status' }) }),
+		element('h2', { text: i18n.t('views.status') }),
+		element('p', { text: i18n.t('status.description', { default: 'Inspect dependency readiness, delivery channels and worker health.' }) }),
 		lastChecked,
 	);
-	const refreshButton = element('button', { className: 'button-primary', text: 'Refresh status' });
+	const refreshButton = element('button', { className: 'button-primary', text: i18n.t('actions.refreshStatus') });
 	refreshButton.type = 'button';
 	hero.append(heroCopy, refreshButton);
 
 	const metrics = element('div', { className: 'metric-grid' });
-	metrics.append(element('p', { className: 'request-state', text: 'Loading live status…' }));
+	metrics.append(element('p', { className: 'request-state', text: i18n.t('Loading live status…') }));
 	const channelGrid = element('div', { className: 'status-grid' });
 	const dependencyGrid = element('div', { className: 'status-grid' });
 	const featureGrid = element('div', { className: 'chip-grid' });
-	const searchLabel = element('label', { text: 'Search dependencies' });
+	const searchLabel = element('label', { text: i18n.t('filters.searchDependencies') });
 	const search = element('input');
 	search.name = 'dependency-search';
 	search.type = 'search';
-	search.placeholder = 'Name, provider or status';
+	search.placeholder = i18n.t('status.searchPlaceholder', { default: 'Name, provider or status' });
 	searchLabel.append(search);
-	const toneLabel = element('label', { text: 'Filter by status' });
+	const toneLabel = element('label', { text: i18n.t('filters.filterByStatus') });
 	const tone = element('select');
 	tone.name = 'dependency-tone';
 	[
-		['all', 'All statuses'],
-		['attention', 'Needs attention'],
-		['ready', 'Ready'],
-		['disabled', 'Disabled'],
-		['unknown', 'Unknown'],
+		['all', i18n.t('status.all')],
+		['attention', i18n.t('status.attention')],
+		['ready', i18n.t('status.ready')],
+		['disabled', i18n.t('status.disabled')],
+		['unknown', i18n.t('status.unknown')],
 	].forEach(([value, text]) => {
 		const option = element('option', { text });
 		option.value = value;
@@ -2337,13 +2490,13 @@ const createStatusExplorer = () => {
 	const filters = element('div', { className: 'status-filter-bar' });
 	filters.append(searchLabel, toneLabel);
 
-	const statusOutput = element('div', { className: 'response-block', text: 'No status response yet.' });
+	const statusOutput = element('div', { className: 'response-block', text: i18n.t('No status response yet.') });
 	let lastRawStatus = '';
-	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy details');
+	const rawCopyButton = createCopyButton(() => lastRawStatus, i18n.t('actions.copyDetails'));
 	rawCopyButton.hidden = true;
 	const rawStatus = element('details', { className: 'raw-status' });
 	rawStatus.append(
-		element('summary', { text: 'Response details' }),
+		element('summary', { text: i18n.t('Response details') }),
 		rawCopyButton,
 		statusOutput,
 	);
@@ -2356,10 +2509,10 @@ const createStatusExplorer = () => {
 	dashboard.append(
 		hero,
 		metrics,
-		section('Delivery channels', channelGrid),
-		section('Dependency filters', filters),
-		section('Dependency health', dependencyGrid),
-		section('Enabled capabilities', featureGrid),
+		section(i18n.t('status.deliveryChannels', { default: 'Delivery channels' }), channelGrid),
+		section(i18n.t('status.dependencyFilters', { default: 'Dependency filters' }), filters),
+		section(i18n.t('status.dependencyHealth', { default: 'Dependency health' }), dependencyGrid),
+		section(i18n.t('status.enabledCapabilities', { default: 'Enabled capabilities' }), featureGrid),
 		rawStatus,
 	);
 
@@ -2410,9 +2563,9 @@ const createDiagnosticsView = () => {
 		lastChecked,
 	);
 	const heroActions = element('div', { className: 'selftest-actions' });
-	const refreshButton = element('button', { className: 'button-ghost', text: 'Refresh report' });
+	const refreshButton = element('button', { className: 'button-ghost', text: typeof i18n !== 'undefined' ? i18n.t('actions.refreshReport', { default: 'Refresh report' }) : 'Refresh report' });
 	refreshButton.type = 'button';
-	const runButton = element('button', { className: 'button-primary', text: 'Run self-test' });
+	const runButton = element('button', { className: 'button-primary', text: typeof i18n !== 'undefined' ? i18n.t('actions.runSelfTest', { default: 'Run self-test' }) : 'Run self-test' });
 	runButton.type = 'button';
 	heroActions.append(refreshButton, runButton);
 	hero.append(heroCopy, heroActions);
@@ -2487,10 +2640,10 @@ const createOverviewDashboard = () => {
 	const dashboard = element('div', { className: 'dashboard' });
 	const hero = element('section', { className: 'dashboard-hero' });
 	const heroCopy = element('div');
-	const lastChecked = element('p', { className: 'request-state', text: 'Waiting for live status…' });
+	const lastChecked = element('p', { className: 'request-state', text: typeof i18n !== 'undefined' ? i18n.t('Waiting for live status…') : 'Waiting for live status…' });
 	heroCopy.append(
 		element('p', { className: 'eyebrow', text: 'Live control plane' }),
-		element('h2', { text: 'Operational overview' }),
+		element('h2', { text: typeof i18n !== 'undefined' ? i18n.t('views.operationalOverview', { default: 'Operational overview' }) : 'Operational overview' }),
 		element('p', { text: 'A quick read on service readiness, enabled capabilities and delivery health.' }),
 		element('p', {
 			className: 'dashboard-subtitle',
@@ -2498,7 +2651,6 @@ const createOverviewDashboard = () => {
 		}),
 		lastChecked,
 	);
-
 	const controls = element('div', { className: 'dashboard-controls' });
 	const intervalLabel = element('label', { className: 'interval-select-label', text: 'Auto-refresh ' });
 	const intervalSelect = element('select');
@@ -2515,14 +2667,14 @@ const createOverviewDashboard = () => {
 	});
 	intervalLabel.append(intervalSelect);
 
-	const refreshButton = element('button', { className: 'button-primary', text: 'Refresh dashboard' });
+	const refreshButton = element('button', { className: 'button-primary', text: typeof i18n !== 'undefined' ? i18n.t('actions.refreshDashboard', { default: 'Refresh dashboard' }) : 'Refresh dashboard' });
 	refreshButton.type = 'button';
 	controls.append(intervalLabel, refreshButton);
 	hero.append(heroCopy, controls);
 
 	const issuesContainer = element('div', { className: 'dashboard-section' });
 	const metrics = element('div', { className: 'metric-grid' });
-	metrics.append(element('p', { className: 'request-state', text: 'Loading live status…' }));
+	metrics.append(element('p', { className: 'request-state', text: typeof i18n !== 'undefined' ? i18n.t('Loading live status…') : 'Loading live status…' }));
 	const channelGrid = element('div', { className: 'status-grid' });
 	const dependencyGrid = element('div', { className: 'status-grid' });
 	const featureGrid = element('div', { className: 'chip-grid' });
@@ -2530,13 +2682,13 @@ const createOverviewDashboard = () => {
 	const activeWorkContainer = element('div');
 	const recentAlertsContainer = element('div');
 
-	const statusOutput = element('div', { className: 'response-block', text: 'No status response yet.' });
+	const statusOutput = element('div', { className: 'response-block', text: typeof i18n !== 'undefined' ? i18n.t('No status response yet.') : 'No status response yet.' });
 	let lastRawStatus = '';
 	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawStatus = element('details', { className: 'raw-status' });
 	rawStatus.append(
-		element('summary', { text: 'Response details' }),
+		element('summary', { text: typeof i18n !== 'undefined' ? i18n.t('Response details') : 'Response details' }),
 		rawCopyButton,
 		statusOutput,
 	);
@@ -2615,6 +2767,8 @@ const createOverviewDashboard = () => {
 
 		const currentEpoch = dashboardEpoch;
 		const isCurrentEpoch = () => currentEpoch === dashboardVersion;
+		let statusCode;
+		let statusOutcome;
 
 		const statusPromise = sendRequest({
 			definition: STATUS_DEFINITION,
@@ -2622,6 +2776,8 @@ const createOverviewDashboard = () => {
 			button: refreshButton,
 			output: statusOutput,
 			isCurrent: isCurrentEpoch,
+			captureResponseStatus: (code) => { statusCode = code; },
+			captureOutcome: (outcome) => { statusOutcome = outcome; },
 		});
 
 		const summaryPromise = fetchSilent({ method: 'GET', path: '/api/alerts/summary' });
@@ -2652,9 +2808,17 @@ const createOverviewDashboard = () => {
 			renderActiveWorkDashboard(activeWorkContainer, { jobsData, outcomesData, status });
 			renderRecentAlertsDashboard(recentAlertsContainer, alertsData);
 
-			schedulePoll();
 		} else {
 			renderStatusUnavailable({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked });
+			issuesContainer.replaceChildren(createEmptyState('Dashboard data unavailable while status is unavailable.'));
+			deliveryHealthContainer.replaceChildren();
+			activeWorkContainer.replaceChildren();
+			recentAlertsContainer.replaceChildren();
+		}
+		if ((status && typeof status === 'object' && status.service)
+			|| statusCode >= 500
+			|| [REQUEST_OUTCOMES.TIMED_OUT, REQUEST_OUTCOMES.NETWORK_ERROR].includes(statusOutcome)) {
+			schedulePoll();
 		}
 	};
 	refreshButton.addEventListener('click', () => { loadDashboard(); });
@@ -2816,7 +2980,7 @@ const createAlertListForm = () => {
 	source.setAttribute('list', 'alert-source-options');
 	const sourceOptions = element('datalist', { attributes: { id: 'alert-source-options' } });
 	[
-		['', 'All sources'],
+		['', typeof i18n !== 'undefined' ? i18n.t('filters.allSources', { default: 'All sources' }) : 'All sources'],
 		['webhook-alert', 'Webhook alert'],
 		['webhook-message', 'Webhook message'],
 		['webhook', 'Webhook (legacy)'],
@@ -2831,26 +2995,25 @@ const createAlertListForm = () => {
 	});
 	form.append(sourceOptions);
 	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
-	registerFilterScope('alerts.list', { limit, before, source, enriched });
 	[
-		['', 'All alerts'],
-		['true', 'Enriched only'],
-		['false', 'Not enriched'],
+		['', typeof i18n !== 'undefined' ? i18n.t('filters.allAlerts', { default: 'All alerts' }) : 'All alerts'],
+		['true', typeof i18n !== 'undefined' ? i18n.t('filters.enrichedOnly', { default: 'Enriched only' }) : 'Enriched only'],
+		['false', typeof i18n !== 'undefined' ? i18n.t('filters.notEnriched', { default: 'Not enriched' }) : 'Not enriched'],
 	].forEach(([value, text]) => {
 		const option = element('option', { text });
 		option.value = value;
 		enriched.append(option);
 	});
-	const activeFilters = element('p', { className: 'active-filters', text: 'Active filters: none' });
-	const clearFilters = element('button', { text: 'Clear filters' });
+	const activeFilters = element('p', { className: 'active-filters', text: typeof i18n !== 'undefined' ? i18n.t('filters.activeFiltersNone', { default: 'Active filters: none' }) : 'Active filters: none' });
+	const clearFilters = element('button', { text: typeof i18n !== 'undefined' ? i18n.t('actions.clearFilters', { default: 'Clear filters' }) : 'Clear filters' });
 	clearFilters.type = 'button';
 	clearFilters.disabled = true;
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
-	const prev = element('button', { text: 'Previous page' });
+	const prev = element('button', { text: typeof i18n !== 'undefined' ? i18n.t('actions.prevPage', { default: 'Previous page' }) : 'Previous page' });
 	prev.type = 'button';
 	prev.disabled = true;
-	const next = element('button', { text: 'Next page' });
+	const next = element('button', { text: typeof i18n !== 'undefined' ? i18n.t('actions.nextPage', { default: 'Next page' }) : 'Next page' });
 	next.type = 'button';
 	next.disabled = true;
 	const output = element('div', { className: 'response-block', text: 'No request sent.' });
@@ -3129,17 +3292,24 @@ const createAlertListForm = () => {
 		if (source.value) active.push(`source=${source.value}`);
 		if (enriched.value) active.push(`enriched=${enriched.value}`);
 		if (active.length === 0) {
-			activeFilters.textContent = 'Active filters: none';
+			activeFilters.textContent = typeof i18n !== 'undefined'
+				? i18n.t('filters.activeFiltersNone', { default: 'Active filters: none' })
+				: 'Active filters: none';
 			clearFilters.disabled = true;
 		} else {
-			activeFilters.textContent = `Active filters: ${active.join(', ')}`;
+			const label = typeof i18n !== 'undefined'
+				? i18n.t('filters.activeFilters', { filters: active.join(', '), default: `Active filters: ${active.join(', ')}` })
+				: `Active filters: ${active.join(', ')}`;
+			activeFilters.textContent = label;
 			clearFilters.disabled = false;
 		}
 	};
+	registerFilterScope('alerts.list', { limit, before, source, enriched }, updateActiveFilters);
 	clearFilters.addEventListener('click', () => {
 		source.value = '';
 		enriched.value = '';
 		resetPagination({ clearCursor: true });
+		syncConsoleUrlFromFilters();
 	});
 	[limit, source, enriched].forEach((field) => {
 		field.addEventListener('input', () => resetPagination({ clearCursor: true }));
@@ -3192,9 +3362,9 @@ const resetFilterScopes = () => {
 	activeFilterScopes = [];
 };
 
-const registerFilterScope = (scope, fields) => {
+const registerFilterScope = (scope, fields, onRestore) => {
 	if (FILTER_SCOPE_VIEWS[scope]) {
-		activeFilterScopes.push({ scope, fields: { ...fields } });
+		activeFilterScopes.push({ scope, fields: { ...fields }, onRestore });
 	}
 	return fields;
 };
@@ -3219,7 +3389,7 @@ const collectFilterParams = (view) => {
 
 const applyFilterParams = (params) => {
 	if (!params) return;
-	activeFilterScopes.forEach(({ scope, fields }) => {
+	activeFilterScopes.forEach(({ scope, fields, onRestore }) => {
 		Object.entries(fields).forEach(([name, input]) => {
 			const key = `${scope}.${name}`;
 			if (!input || !params.has(key)) return;
@@ -3227,6 +3397,7 @@ const applyFilterParams = (params) => {
 			if (input.type === 'checkbox') input.checked = value === 'true';
 			else input.value = value;
 		});
+		if (typeof onRestore === 'function') onRestore();
 	});
 };
 
@@ -3257,9 +3428,9 @@ const addAlertReportFilters = (form, { requiredWindow = false, scope } = {}) => 
 	const source = addField(form, 'Source', 'source', { placeholder: 'webhook' });
 	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
 	[
-		['', 'All alerts'],
-		['true', 'Enriched only'],
-		['false', 'Not enriched'],
+		['', typeof i18n !== 'undefined' ? i18n.t('filters.allAlerts', { default: 'All alerts' }) : 'All alerts'],
+		['true', typeof i18n !== 'undefined' ? i18n.t('filters.enrichedOnly', { default: 'Enriched only' }) : 'Enriched only'],
+		['false', typeof i18n !== 'undefined' ? i18n.t('filters.notEnriched', { default: 'Not enriched' }) : 'Not enriched'],
 	].forEach(([value, text]) => {
 		const option = element('option', { text });
 		option.value = value;
@@ -3827,10 +3998,10 @@ const createOutcomesListForm = () => {
 	const exchange = addField(form, 'Exchange', 'exchange', { placeholder: 'BINANCE' });
 	const status = addField(form, 'Status', 'status', { tag: 'select' });
 	[
-		['', 'All statuses'],
-		['pending', 'Pending'],
-		['evaluated', 'Evaluated'],
-		['unavailable', 'Unavailable'],
+		['', typeof i18n !== 'undefined' ? i18n.t('filters.allStatuses', { default: 'All statuses' }) : 'All statuses'],
+		['pending', typeof i18n !== 'undefined' ? i18n.t('filters.pending', { default: 'Pending' }) : 'Pending'],
+		['evaluated', typeof i18n !== 'undefined' ? i18n.t('filters.evaluated', { default: 'Evaluated' }) : 'Evaluated'],
+		['unavailable', typeof i18n !== 'undefined' ? i18n.t('filters.unavailable', { default: 'Unavailable' }) : 'Unavailable'],
 	].forEach(([value, text]) => {
 		const option = element('option', { text });
 		option.value = value;
@@ -3838,7 +4009,7 @@ const createOutcomesListForm = () => {
 	});
 	const windowField = addField(form, 'Window', 'window', { tag: 'select' });
 	[
-		['', 'All windows'],
+		['', typeof i18n !== 'undefined' ? i18n.t('filters.allWindows', { default: 'All windows' }) : 'All windows'],
 		['1h', '1h'],
 		['4h', '4h'],
 		['1D', '1D'],
@@ -3856,10 +4027,10 @@ const createOutcomesListForm = () => {
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
-	const prev = element('button', { text: 'Previous page' });
+	const prev = element('button', { text: typeof i18n !== 'undefined' ? i18n.t('actions.prevPage', { default: 'Previous page' }) : 'Previous page' });
 	prev.type = 'button';
 	prev.disabled = true;
-	const next = element('button', { text: 'Next page' });
+	const next = element('button', { text: typeof i18n !== 'undefined' ? i18n.t('actions.nextPage', { default: 'Next page' }) : 'Next page' });
 	next.type = 'button';
 	next.disabled = true;
 	const output = element('div', { className: 'response-block', text: 'No request sent.' });
@@ -4741,6 +4912,233 @@ function createTradeTicket({ alert, position, defaultOrigin = 'manual', onOrderS
 
 	return panel;
 }
+
+const createSpotBracketForm = () => {
+	const form = element('form', { className: 'operation-card trade-ticket' });
+	form.append(
+		element('h3', { text: 'Place Spot bracket' }),
+		element('code', { text: 'POST /api/trading/binance/orders · BRACKET_LIMIT' }),
+		element('p', {
+			className: 'hint',
+			text: 'A LIMIT entry arms a Spot OTOCO take-profit and stop-limit pair after it fills. Review every level before submitting.',
+		}),
+	);
+	const symbol = addField(form, 'Symbol', 'bracket-symbol', { placeholder: 'BTCUSDT', required: true });
+	const side = addField(form, 'Entry side', 'bracket-side', { tag: 'select' });
+	['BUY', 'SELL'].forEach((value) => {
+		const option = element('option', { text: value });
+		option.value = value;
+		side.append(option);
+	});
+	const quantity = addField(form, 'Quantity', 'bracket-quantity', { placeholder: 'e.g. 0.001', required: true });
+	const entryPrice = addField(form, 'Entry limit price', 'bracket-entry-price', { placeholder: 'e.g. 60000.00', required: true });
+	const stopPrice = addField(form, 'Stop trigger price', 'bracket-stop-price', { placeholder: 'From alert invalidation level', required: true });
+	const stopLimitPrice = addField(form, 'Stop limit price', 'bracket-stop-limit-price', { placeholder: 'Set the limit price for the stop exit', required: true });
+	const takeProfitPrice = addField(form, 'Take-profit price', 'bracket-take-profit-price', { placeholder: 'From alert target level', required: true });
+	const timeInForce = addField(form, 'Time in force', 'bracket-time-in-force', { tag: 'select' });
+	['GTC', 'IOC', 'FOK'].forEach((value) => {
+		const option = element('option', { text: value });
+		option.value = value;
+		timeInForce.append(option);
+	});
+	timeInForce.value = 'GTC';
+
+	const loadLatestButton = element('button', { text: 'Load latest alert levels' });
+	loadLatestButton.type = 'button';
+	const latestAlertStatus = element('p', { className: 'request-state', text: 'No alert levels loaded.' });
+	form.append(loadLatestButton, latestAlertStatus);
+	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: testnet' });
+	const dryRunButton = element('button', { text: 'Validate bracket (Dry Run)' });
+	dryRunButton.type = 'button';
+	const confirmInput = addField(form, 'Type CONFIRM to enable live submission', 'bracket-confirm', {
+		placeholder: 'CONFIRM',
+	});
+	confirmInput.disabled = true;
+	const submitButton = element('button', { text: 'Submit live bracket' });
+	submitButton.type = 'button';
+	submitButton.disabled = true;
+	const validationNotice = element('div', { className: 'ticket-validation-notice' });
+	const output = element('div', { className: 'response-block ticket-output', text: 'No validation run yet.' });
+	form.append(environmentBadge, dryRunButton, submitButton, validationNotice, output);
+
+	let currentEnvironment = 'testnet';
+	let formVersion = 0;
+	let dryRunSuccessful = false;
+	let liveIdempotencyKey = null;
+	let latestAlert = null;
+	let latestCandidate = null;
+	const updateEnvironment = (value) => {
+		currentEnvironment = value || currentEnvironment;
+		environmentBadge.replaceChildren(formatOrderEnvironment(currentEnvironment));
+		checkSubmitReadiness();
+	};
+	const checkSubmitReadiness = () => {
+		const isOperator = typeof canPerformMutation === 'function' ? canPerformMutation() : true;
+		if (!isOperator || currentEnvironment === 'live' || !dryRunSuccessful || confirmInput.value.trim() !== 'CONFIRM') {
+			submitButton.disabled = true;
+			submitButton.title = currentEnvironment === 'live'
+				? 'Live submissions are disabled in the admin ticket'
+				: 'Validate the bracket, then type CONFIRM to enable submission';
+			return;
+		}
+		submitButton.disabled = false;
+		submitButton.title = 'Submit the validated Spot bracket';
+	};
+	const invalidateValidation = () => {
+		formVersion += 1;
+		dryRunSuccessful = false;
+		liveIdempotencyKey = null;
+		confirmInput.value = '';
+		confirmInput.disabled = true;
+		submitButton.disabled = true;
+		validationNotice.replaceChildren();
+		output.className = 'response-block request-state';
+		output.textContent = 'Inputs changed. Validate the bracket again before submitting.';
+	};
+	[symbol, side, quantity, entryPrice, stopPrice, stopLimitPrice, takeProfitPrice, timeInForce].forEach((field) => {
+		field.addEventListener(field === side || field === timeInForce ? 'change' : 'input', invalidateValidation);
+	});
+	confirmInput.addEventListener('input', checkSubmitReadiness);
+	symbol.addEventListener('input', () => {
+		latestAlert = null;
+		latestCandidate = null;
+		entryPrice.value = '';
+		stopPrice.value = '';
+		stopLimitPrice.value = '';
+		takeProfitPrice.value = '';
+		latestAlertStatus.textContent = 'Symbol changed. Load alert levels again if needed.';
+	});
+	form.addEventListener('submit', (event) => event.preventDefault());
+
+	const buildPayload = (dryRun) => {
+		const payload = {
+			symbol: trimFormValue(symbol.value).toUpperCase(),
+			side: side.value,
+			type: 'BRACKET_LIMIT',
+			quantity: trimFormValue(quantity.value),
+			price: trimFormValue(entryPrice.value),
+			stopPrice: trimFormValue(stopPrice.value),
+			stopLimitPrice: trimFormValue(stopLimitPrice.value),
+			takeProfitPrice: trimFormValue(takeProfitPrice.value),
+			timeInForce: timeInForce.value,
+			dryRun,
+		};
+		const alertSymbol = latestAlert && (
+			(latestCandidate && latestCandidate.symbol)
+			|| trimFormValue(latestAlert.symbol || (latestAlert.enrichmentData && latestAlert.enrichmentData.symbol)).toUpperCase()
+		);
+		if (latestAlert && latestAlert.id && alertSymbol === payload.symbol) {
+			payload.alertId = String(latestAlert.id).trim();
+			payload.origin = 'admin_alert';
+			if (latestCandidate && latestCandidate.setupType) payload.setupType = latestCandidate.setupType;
+		}
+		return payload;
+	};
+
+	loadLatestButton.addEventListener('click', async () => {
+		const requestedVersion = formVersion;
+		const symbolValue = trimFormValue(symbol.value).toUpperCase();
+		if (!ORDER_LIST_QUERY_VALIDATION.symbol(symbolValue)) {
+			showError(latestAlertStatus, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
+			return;
+		}
+		const data = await sendRequest({
+			definition: { method: 'GET', path: '/api/alerts', label: 'Load latest alert levels', requiredRole: 'admin.viewer' },
+			path: '/api/alerts',
+			query: { symbol: symbolValue, limit: '1' },
+			button: loadLatestButton,
+			output: latestAlertStatus,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+		if (requestedVersion !== formVersion || trimFormValue(symbol.value).toUpperCase() !== symbolValue) {
+			return;
+		}
+		const alert = data && Array.isArray(data.alerts) ? data.alerts[0] : null;
+		if (!alert) {
+			latestAlert = null;
+			latestCandidate = null;
+			latestAlertStatus.textContent = `No stored alert found for ${symbolValue}.`;
+			return;
+		}
+		const candidate = parseAlertTradeCandidate(alert);
+		if (candidate.symbol && candidate.symbol !== symbolValue) {
+			latestAlertStatus.textContent = 'The latest alert did not match the requested symbol.';
+			return;
+		}
+		const enrichment = asObject(alert.enrichmentData);
+		const traderIntent = asObject(alert.traderIntent);
+		const validPrice = (...values) => values.map(trimFormValue).find((value) => (
+			/^\d+(?:\.\d+)?$/.test(value) && Number.isFinite(Number(value)) && Number(value) > 0
+		)) || '';
+		const invalidation = validPrice(traderIntent.invalidation, enrichment.invalidation_level, enrichment.invalidationLevel);
+		const target = validPrice(traderIntent.target, enrichment.target_level, enrichment.targetLevel);
+		latestAlert = alert;
+		latestCandidate = candidate;
+		if (candidate.side) side.value = candidate.side;
+		if (candidate.price) entryPrice.value = candidate.price;
+		if (invalidation) stopPrice.value = invalidation;
+		if (target) takeProfitPrice.value = target;
+		invalidateValidation();
+		latestAlertStatus.textContent = invalidation && target
+			? `Loaded ${alert.id || 'latest alert'}; set the stop-limit price and review all levels.`
+			: `Loaded ${alert.id || 'latest alert'}, but it has no complete invalidation/target pair.`;
+	});
+
+	dryRunButton.addEventListener('click', async () => {
+		invalidateValidation();
+		const currentVersion = formVersion;
+		const payload = buildPayload(true);
+		if (!ORDER_LIST_QUERY_VALIDATION.symbol(payload.symbol)) {
+			showError(output, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
+			return;
+		}
+		const data = await sendRequest({
+			definition: { method: 'POST', path: '/api/trading/binance/orders', label: 'Validate Spot bracket', requiredRole: 'admin.operator' },
+			path: '/api/trading/binance/orders',
+			body: payload,
+			button: dryRunButton,
+			output,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+		if (data && data.success && currentVersion === formVersion) {
+			dryRunSuccessful = true;
+			updateEnvironment(data.environment);
+			validationNotice.replaceChildren(element('p', {
+				className: 'status-badge status-ready',
+				text: `Bracket validated (${data.environment || currentEnvironment}); the pending OCO exits arm after the LIMIT entry fills.`,
+			}));
+			confirmInput.disabled = false;
+			checkSubmitReadiness();
+		}
+	});
+
+	submitButton.addEventListener('click', async () => {
+		if (submitButton.disabled) return;
+		const payload = buildPayload(false);
+		if (!liveIdempotencyKey) {
+			liveIdempotencyKey = `bracket-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+		}
+		payload.idempotencyKey = liveIdempotencyKey;
+		const data = await sendRequest({
+			definition: { method: 'POST', path: '/api/trading/binance/orders', label: 'Submit live bracket', requiredRole: 'admin.operator' },
+			path: '/api/trading/binance/orders',
+			body: payload,
+		headers: { 'idempotency-key': liveIdempotencyKey },
+			button: submitButton,
+			output,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+		if (data && data.success) {
+			submitButton.disabled = true;
+			validationNotice.replaceChildren(element('p', {
+				className: 'status-badge status-ready',
+				text: `Bracket submitted: #${data.orderList?.orderListId || 'submitted'}`,
+			}));
+		}
+	});
+
+	return form;
+};
 
 const createOrderListForm = () => {
 	const definition = { method: 'GET', path: '/api/trading/binance/orders', label: 'Load recent orders' };
@@ -8677,7 +9075,9 @@ const renderView = async (name) => {
 			view.append(createNewsMonitorView());
 			return;
 		}
-		view.append(element('h2', { text: name[0].toUpperCase() + name.slice(1) }));
+		const headingKey = `views.${name}`;
+		const headingText = typeof i18n !== 'undefined' ? i18n.t(headingKey) : null;
+		view.append(element('h2', { text: (headingText && headingText !== headingKey) ? headingText : (name[0].toUpperCase() + name.slice(1)) }));
 		if (name === 'trading') {
 			view.append(createTradingView(contract));
 			return;
@@ -8704,6 +9104,7 @@ const renderView = async (name) => {
 			return;
 		}
 		if (name === 'orders') {
+			view.append(createSpotBracketForm());
 			view.append(createOrderListForm());
 			view.append(createOrderLookupForm());
 			return;
@@ -8841,7 +9242,35 @@ const renderView = async (name) => {
 	}
 };
 
-const navigateToView = (name, { history: historyMode = 'push' } = {}) => {
+const handleAlertDeepLink = (alertId) => {
+	if (!alertId || typeof document === 'undefined' || !document) return;
+	const viewNode = document.getElementById('view');
+	if (!viewNode) return;
+	const alertInput = (typeof viewNode.querySelector === 'function')
+		? (viewNode.querySelector('input[name="path-alertId"]') || viewNode.querySelector('input[name=path-alertId]'))
+		: null;
+	if (alertInput) {
+		alertInput.value = alertId;
+		let form = alertInput.parentNode;
+		while (form && form.tagName !== 'FORM') {
+			form = form.parentNode;
+		}
+		if (form) {
+			if (typeof form.dispatch === 'function') {
+				form.dispatch('submit');
+			} else if (typeof form.requestSubmit === 'function') {
+				form.requestSubmit();
+			} else if (typeof form.dispatchEvent === 'function') {
+				const event = (typeof Event === 'function')
+					? new Event('submit', { cancelable: true, bubbles: true })
+					: { type: 'submit' };
+				form.dispatchEvent(event);
+			}
+		}
+	}
+};
+
+const navigateToView = (name, { history: historyMode = 'push', alertId = null, hash = null } = {}) => {
 	if (authState.enabled && !authState.user) return showSignedOutState();
 	const target = resolveConsoleView(name);
 	currentConsoleView = target;
@@ -8849,17 +9278,34 @@ const navigateToView = (name, { history: historyMode = 'push' } = {}) => {
 	setViewTitle(target);
 	if (historyMode !== 'none') {
 		const carried = historyMode === 'push' ? {} : filterParamsForView(target, readConsoleParams());
-		writeConsoleUrl(buildConsoleUrl(target, carried), { replace: historyMode === 'replace' });
+		let targetHash = hash;
+		if (!targetHash) {
+			if (target === 'alerts' && alertId) {
+				targetHash = `#/alerts/${encodeURIComponent(String(alertId))}/trade`;
+			} else if (historyMode === 'replace') {
+				const currentHashState = parseConsoleHash(readConsoleHash());
+				if (currentHashState && !currentHashState.unrecognised && currentHashState.view === target) {
+					targetHash = currentHashState.raw;
+				}
+			}
+		}
+		writeConsoleUrl(buildConsoleUrl(target, carried, targetHash), { replace: historyMode === 'replace' });
 	}
 	return renderView(target).then(() => {
 		applyFilterParams(readConsoleParams());
 		bindFilterScopeListeners();
 		moveFocusToView(target);
+		const activeUrlState = readConsoleUrlState();
+		const targetAlertId = alertId || (activeUrlState.view === 'alerts' ? activeUrlState.alertId : null);
+		if (target === 'alerts' && targetAlertId) {
+			handleAlertDeepLink(targetAlertId);
+		}
 	});
 };
 
 const handleConsolePopState = () => {
-	navigateToView(readConsoleUrlState().view, { history: 'none' });
+	const state = readConsoleUrlState();
+	navigateToView(state.view, { history: 'none', alertId: state.alertId });
 };
 
 const canonicaliseConsoleUrl = () => {
@@ -8877,10 +9323,15 @@ const markActiveView = (name) => {
 
 const setViewTitle = (name) => {
 	if (typeof document === 'undefined' || !document) return;
-	const label = VIEW_TITLES[name] || (name ? name[0].toUpperCase() + name.slice(1) : '');
+	const viewKey = `views.${name}`;
+	const translated = typeof i18n !== 'undefined' ? i18n.t(viewKey) : null;
+	const label = (translated && translated !== viewKey) ? translated : (VIEW_TITLES[name] || (name ? name[0].toUpperCase() + name.slice(1) : ''));
 	document.title = label ? `${label} · ${CONSOLE_TITLE_BASE}` : CONSOLE_TITLE_BASE;
 	const status = getElement('view-status');
-	if (status) status.textContent = label ? `${label} view` : '';
+	if (status) {
+		const suffix = (typeof i18n !== 'undefined' && i18n.t('shell.viewSuffix')) || 'view';
+		status.textContent = label ? `${label} ${suffix}` : '';
+	}
 };
 
 const moveFocusToView = (name) => {
@@ -8983,7 +9434,9 @@ const setupSidebarToggle = () => {
 	const apply = (collapsed) => {
 		if (collapsed) shell.setAttribute('data-sidebar', 'collapsed');
 		else shell.removeAttribute('data-sidebar');
-		toggle.textContent = collapsed ? LABELS.collapsed : LABELS.expanded;
+		toggle.textContent = collapsed
+			? (typeof i18n !== 'undefined' ? i18n.t('shell.expandSidebar') : LABELS.collapsed)
+			: (typeof i18n !== 'undefined' ? i18n.t('shell.collapseSidebar') : LABELS.expanded);
 		toggle.setAttribute('aria-pressed', collapsed ? 'true' : 'false');
 	};
 	let initialCollapsed = false;
@@ -9004,13 +9457,111 @@ const setupSidebarToggle = () => {
 	});
 };
 
+const updateShellTranslations = () => {
+	if (typeof document === 'undefined' || !document) return;
+	const query = (sel) => (typeof document.querySelector === 'function'
+		? document.querySelector(sel)
+		: (document.querySelectorAll ? document.querySelectorAll(sel)[0] : null));
+
+	const eyebrow = query('.brand-lockup .eyebrow');
+	if (eyebrow) eyebrow.textContent = i18n.t('shell.operations');
+
+	const navButtons = typeof document.querySelectorAll === 'function' ? document.querySelectorAll('[data-view]') : [];
+	navButtons.forEach((btn) => {
+		const view = btn.dataset?.view;
+		const navText = typeof btn.querySelector === 'function'
+			? btn.querySelector('.nav-text')
+			: (btn.querySelectorAll ? btn.querySelectorAll('.nav-text')[0] : null);
+		if (navText && view) {
+			const key = `nav.${view}`;
+			const text = i18n.t(key);
+			if (text && text !== key) navText.textContent = text;
+		}
+	});
+
+	const navLabel = query('.console-nav .nav-label');
+	if (navLabel) navLabel.textContent = i18n.t('shell.workspace');
+	const sidebarNote = query('.sidebar-note');
+	if (sidebarNote) sidebarNote.textContent = i18n.t('shell.sidebarNote');
+
+	const topbarEyebrow = query('.topbar .eyebrow');
+	if (topbarEyebrow) topbarEyebrow.textContent = i18n.t('shell.operatorWorkspace');
+	const topbarTitle = query('.topbar .topbar-title');
+	if (topbarTitle) topbarTitle.textContent = i18n.t('shell.topbarTitle');
+
+	const clearKey = getElement('clear-key');
+	if (clearKey) clearKey.textContent = i18n.t('shell.clearKey');
+
+	const toggle = getElement('toggle-sidebar');
+	const shell = getElement('console-shell');
+	if (toggle && shell) {
+		const collapsed = typeof shell.getAttribute === 'function'
+			? shell.getAttribute('data-sidebar') === 'collapsed'
+			: shell.attributes?.['data-sidebar'] === 'collapsed';
+		toggle.textContent = collapsed ? i18n.t('shell.expandSidebar') : i18n.t('shell.collapseSidebar');
+	}
+
+	const authTitle = getElement('firebase-auth-title');
+	if (authTitle) authTitle.textContent = i18n.t('auth.adminSignIn');
+	const emailLabel = query('label[for="auth-email"]');
+	if (emailLabel) emailLabel.textContent = i18n.t('auth.email');
+	const passLabel = query('label[for="auth-password"]');
+	if (passLabel) passLabel.textContent = i18n.t('auth.password');
+	const signInBtn = getElement('sign-in');
+	if (signInBtn) signInBtn.textContent = i18n.t('auth.signIn');
+	const signOutBtn = getElement('sign-out');
+	if (signOutBtn) signOutBtn.textContent = i18n.t('auth.signOut');
+
+	const connTitle = getElement('connection-title');
+	if (connTitle) connTitle.textContent = i18n.t('auth.sessionAccess');
+	const connChip = query('#legacy-connection .security-chip');
+	if (connChip) connChip.textContent = i18n.t('auth.sessionOnly');
+	const apiKeyLabel = query('label[for="api-key"]');
+	if (apiKeyLabel) apiKeyLabel.textContent = i18n.t('auth.apiKey');
+	const saveKeyBtn = getElement('save-key');
+	if (saveKeyBtn) saveKeyBtn.textContent = i18n.t('auth.useKeyForSession');
+
+	const langSelect = getElement('admin-lang');
+	if (langSelect) langSelect.value = i18n.getLocale();
+
+	if (typeof currentConsoleView === 'string') {
+		setViewTitle(currentConsoleView);
+	}
+};
+
 document.addEventListener('DOMContentLoaded', async () => {
+	const initialLocale = i18n.resolveLocale();
+	i18n.setLocale(initialLocale, { persist: false });
+	if (typeof document !== 'undefined' && document && document.documentElement) {
+		document.documentElement.lang = initialLocale;
+		document.documentElement.setAttribute('lang', initialLocale);
+	}
+
+	const langSelect = getElement('admin-lang');
+	if (langSelect) {
+		langSelect.value = initialLocale;
+		langSelect.addEventListener('change', (event) => {
+			const newLocale = i18n.setLocale(event.target.value);
+			if (typeof document !== 'undefined' && document && document.documentElement) {
+				document.documentElement.lang = newLocale;
+				document.documentElement.setAttribute('lang', newLocale);
+			}
+			updateShellTranslations();
+			if (typeof currentConsoleView === 'string') {
+				const state = readConsoleUrlState();
+				navigateToView(currentConsoleView, { history: 'replace', alertId: state.alertId });
+			}
+		});
+	}
+	updateShellTranslations();
+
 	const view = getElement('view');
 	if (view) view.replaceChildren(createLoadingState('Checking authentication…'));
 	document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => navigateToView(button.dataset.view)));
 	setupSidebarToggle();
 	if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
 		window.addEventListener('popstate', handleConsolePopState);
+		window.addEventListener('hashchange', handleConsolePopState);
 	}
 	canonicaliseConsoleUrl();
 
@@ -9036,6 +9587,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 	setHidden('legacy-connection', false);
 	setupLegacyConsole();
 	if (getElement('api-key')?.value) setupSseStream();
-	navigateToView(readConsoleUrlState().view, { history: 'none' });
+	const initialRequested = readConsoleUrlState();
+	navigateToView(initialRequested.view, { history: 'none', alertId: initialRequested.alertId });
 
 });

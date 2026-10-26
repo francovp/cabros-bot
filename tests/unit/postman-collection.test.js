@@ -222,6 +222,60 @@ function collectRequestsAndSavedExamples(items, result = []) {
 }
 
 describe('Postman collection contract', () => {
+	it('documents preset-bound destinations, invalid routes, async runs, and status readiness', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const create = findItem(collection.item, 'POST Create Scanner Preset (bound destinations)');
+		const invalid = findItem(collection.item, 'POST Create Scanner Preset (invalid destinations - 400)');
+		const update = findItem(collection.item, 'PUT Update Scanner Preset (bound destinations)');
+		const asyncRun = findItem(collection.item, 'POST Run Scanner Preset (async job)');
+		const unboundChannelRun = findItem(collection.item, 'POST Run Scanner Preset (unbound channel - 400)');
+		const openapi = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+
+		expect(JSON.parse(create.request.body.raw)).toMatchObject({
+			mode: 'preset',
+			destinations: { telegramChatIds: ['-1001234567890'] },
+		});
+		expect(create.response.find((response) => response.code === 201)).toBeDefined();
+		const redactedExample = create.response.find((response) => response.name === 'Created with Discord destination (webhook redacted)');
+		expect(redactedExample).toBeDefined();
+		const redactedResponse = JSON.parse(redactedExample.body);
+		expect(redactedResponse.preset.destinations).toEqual(expect.objectContaining({ discordWebhookCount: 1 }));
+		expect(JSON.stringify(redactedResponse)).not.toMatch(/discordWebhookUrls|discordWebhookUrl/);
+		expect(invalid.response.find((response) => response.code === 400).body).toContain('INVALID_DESTINATIONS');
+		expect(JSON.parse(update.request.body.raw)).toMatchObject({
+			mode: 'preset',
+			destinations: { whatsappChatIds: ['56912345678@c.us'] },
+		});
+		expect(asyncRun.request.body.raw).toContain('"runAsyncJob": true');
+		expect(asyncRun.response.find((response) => response.code === 202)).toBeDefined();
+		expect(JSON.parse(unboundChannelRun.request.body.raw)).toEqual({ channels: ['whatsapp'] });
+		expect(JSON.parse(unboundChannelRun.response.find((response) => response.code === 400).body))
+			.toMatchObject({ code: 'INVALID_REQUEST' });
+
+		const destinationSchema = openapi.components.schemas.ScannerPresetDestinations;
+		expect(destinationSchema.properties.telegramChatIds.maxItems).toBe(20);
+		const responsePresetSchema = openapi.components.schemas.ScannerPreset;
+		expect(responsePresetSchema.properties.destinations.$ref)
+			.toBe('#/components/schemas/ScannerPresetResponseDestinations');
+		expect(responsePresetSchema.properties).not.toHaveProperty('discordWebhookUrl');
+		expect(openapi.components.schemas.ScannerPresetResponseDestinations.properties)
+			.toHaveProperty('discordWebhookCount');
+		expect(openapi.components.schemas.ScannerPresetResponseDestinations.properties)
+			.not.toHaveProperty('discordWebhookUrls');
+		expect(openapi.components.schemas.ScannerPresetRunRequest.properties.runAsyncJob.type).toBe('boolean');
+		expect(openapi.paths['/api/webhook/alert'].post.responses['400'].description).toBeUndefined();
+		expect(openapi.paths['/api/scanner-presets'].post.responses['400'].description).toContain('INVALID_DESTINATIONS');
+		expect(openapi.paths['/api/scanner-presets/{id}'].put.responses['400'].description).toContain('INVALID_DESTINATIONS');
+		expect(openapi.paths['/api/scanner-presets/{id}/run'].post.responses['400'].description).toContain('no configured destination for its selected channels');
+		expect(openapi.components.schemas.ScannerPresetRunRequest.properties.channels.description)
+			.toContain('400 INVALID_REQUEST');
+		expect(openapi.paths['/api/scanner-presets/{id}/run'].post.responses['202']).toBeDefined();
+		expect(openapi.components.schemas.Status.properties.dependencies.properties.presetBoundDestinations)
+			.toBeDefined();
+		expect(openapi.components.schemas.Status.properties.featureFlags.$ref)
+			.toBe('#/components/schemas/StatusFeatureFlags');
+	});
+
 	it('covers valid and invalid body-only auto-trade requests', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const valid = findItem(collection.item, 'POST Send Alert (autoTrade body only)');
@@ -329,6 +383,32 @@ describe('Postman collection contract', () => {
 			misses: 0,
 			failures: 0,
 		});
+	});
+
+	it('documents bounded Gemini quota telemetry and only reachable quota states', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const statusBody = JSON.parse(findItem(collection.item, 'Get Status').response[0].body);
+		const contract = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+		const statusSchema = contract.components.schemas.Status;
+		const quotaSchema = contract.components.schemas.GeminiQuotaDependency;
+		const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+
+		expect(statusBody.dependencies.geminiQuota).toEqual(expect.objectContaining({
+			windowDurationMs: 60000,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			quotaStatus: 'healthy',
+		}));
+		expect(statusSchema.properties.dependencies.properties.geminiQuota).toEqual({
+			$ref: '#/components/schemas/GeminiQuotaDependency',
+		});
+		expect(quotaSchema.properties.quotaStatus.enum).toEqual(['healthy', 'exhausted']);
+		expect(statusExample.dependencies.geminiQuota).toEqual(expect.objectContaining({
+			windowDurationMs: 60000,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			quotaStatus: 'healthy',
+		}));
 	});
 
 	it('documents bounded startup jitter in the Get Status response example', () => {
@@ -630,6 +710,79 @@ describe('Postman collection contract', () => {
 				body: expect.stringContaining('"lastReplay"'),
 			}),
 		]));
+	});
+
+	it('stores the rate-limit response example at the Postman item level', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const alertRequest = findItem(collection.item, 'POST Send Alert (with TradingView data)');
+		const response = alertRequest.response.find((item) => item.code === 429);
+
+		expect(collection.info.description).toContain('All webhook/news ingest paths share an aggregate 1,000-request bucket');
+		expect(alertRequest.request.response).toBeUndefined();
+		expect(response).toEqual(expect.objectContaining({
+			name: '429 Rate limit exceeded',
+			status: 'Too Many Requests',
+			code: 429,
+		}));
+		expect(JSON.parse(response.body)).toEqual(expect.objectContaining({
+			success: false,
+			error: 'Too many requests, please try again later.',
+			code: 'RATE_LIMITED',
+			retryable: true,
+			retryAfterSeconds: 60,
+		}));
+		expect(response.header.map(({ key }) => key.toLowerCase())).toEqual(expect.arrayContaining([
+			'x-ratelimit-limit',
+			'x-ratelimit-remaining',
+			'x-ratelimit-reset',
+			'retry-after',
+			'x-request-id',
+		]));
+	});
+
+	it('documents valid 429 examples for every OpenAPI rate-limited operation', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const contract = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+		const requestItems = collectRequestItems(collection.item);
+		const operations = Object.entries(contract.paths).flatMap(([routePath, pathItem]) =>
+			Object.entries(pathItem)
+				.filter(([method, operation]) => ['get', 'post', 'put', 'patch', 'delete'].includes(method)
+					&& operation.responses?.['429']?.$ref === '#/components/responses/RateLimitExceeded')
+				.map(([method]) => ({ routePath, method: method.toUpperCase() })));
+
+		for (const operation of operations) {
+			const matchingItems = requestItems.filter((candidate) => candidate.request.method === operation.method
+				&& `/${candidate.request.url?.path?.join('/')}` === operation.routePath);
+			const responses = matchingItems.flatMap((item) => item.response || [])
+				.filter((response) => response.code === 429);
+
+			expect(responses.length).toBeGreaterThan(0);
+			for (const response of responses) {
+				expect(response.status).toBe('Too Many Requests');
+				expect(JSON.parse(response.body)).toEqual(expect.objectContaining({
+					success: false,
+					error: 'Too many requests, please try again later.',
+					code: 'RATE_LIMITED',
+					retryable: true,
+					retryAfterSeconds: expect.any(Number),
+				}));
+				expect(response.header.map(({ key }) => key.toLowerCase())).toEqual(expect.arrayContaining([
+					'x-ratelimit-limit',
+					'x-ratelimit-remaining',
+					'x-ratelimit-reset',
+					'retry-after',
+					'x-request-id',
+				]));
+			}
+		}
+	});
+
+	it('stores saved examples beside Postman requests, not inside request objects', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const nestedResponseRequests = collectRequestItems(collection.item)
+			.filter((item) => item.request.response !== undefined);
+
+		expect(nestedResponseRequests).toEqual([]);
 	});
 
 	it('includes runnable replay cursor and invalid-input variants', () => {
@@ -1171,6 +1324,35 @@ describe('Postman collection contract', () => {
 		const exportClassInvalid = findItem(collection.item, 'GET Export Alerts (invalid signalClass - 400 Bad Request)');
 		expect(exportClassInvalid).toBeDefined();
 		expect(exportClassInvalid.response[0].code).toBe(400);
+	});
+
+	it('documents a runnable 413 example for the explicit 100kb non-webhook limit', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const oversizedJob = findItem(
+			collection.item,
+			'POST Create TradingView Analysis Job (oversized non-webhook body - 413)',
+		);
+		expect(oversizedJob.request.url.raw).toBe('{{baseUrl}}/api/jobs/tradingview-analysis');
+		expect(oversizedJob.request.body.raw).toContain('{{oversizedNonWebhookPadding}}');
+		const oversizedJobResponse = oversizedJob.response.find((response) => (
+			response.name === '413 Payload too large'
+		));
+		expect(oversizedJobResponse).toBeDefined();
+		expect(oversizedJobResponse.originalRequest.url.raw).toBe('{{baseUrl}}/api/jobs/tradingview-analysis');
+		expect(oversizedJobResponse.originalRequest.body.raw).toContain('{{oversizedNonWebhookPadding}}');
+		expect(oversizedJobResponse.code).toBe(413);
+		expect(JSON.parse(oversizedJobResponse.body)).toEqual(expect.objectContaining({
+			success: false,
+			error: 'Request body exceeds maximum size',
+			code: 'PAYLOAD_TOO_LARGE',
+			retryable: false,
+		}));
+		const preRequestScript = oversizedJob.event.find((event) => event.listen === 'prerequest').script.exec.join('\n');
+		expect(preRequestScript).toContain("pm.variables.set('oversizedNonWebhookPadding'");
+		expect(preRequestScript).toContain('100 * 1024 + 1024');
+		const testScript = oversizedJob.event.find((event) => event.listen === 'test').script.exec.join('\n');
+		expect(testScript).toContain('pm.response.to.have.status(413)');
+		expect(testScript).toContain("body.code).to.eql('PAYLOAD_TOO_LARGE')");
 	});
 
 	it('documents symbol analysis multi-agent state in status and capabilities examples', () => {
@@ -2250,6 +2432,83 @@ describe('scoped API key Postman examples', () => {
 					: '{{adminApiKey}}';
 			expect(header.value).toBe(expected);
 		}
+	});
+});
+
+describe('Binance Spot contingent order contracts (issue #805)', () => {
+	it('publishes dry-run examples for each new Spot order shape and validates order-list lookup', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const contract = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+		const examples = [
+			['POST Binance order (dry-run LIMIT_MAKER)', 'LIMIT_MAKER'],
+			['POST Binance order (dry-run STOP_LOSS)', 'STOP_LOSS'],
+			['POST Binance order (dry-run STOP_LOSS_LIMIT)', 'STOP_LOSS_LIMIT'],
+			['POST Binance order (dry-run TAKE_PROFIT)', 'TAKE_PROFIT'],
+			['POST Binance order (dry-run TAKE_PROFIT_LIMIT)', 'TAKE_PROFIT_LIMIT'],
+			['POST Binance order (dry-run BRACKET_LIMIT OTOCO)', 'BRACKET_LIMIT'],
+			['POST Binance order (dry-run BRACKET_LIMIT OTOCO SELL entry)', 'BRACKET_LIMIT'],
+		];
+		for (const [name, type] of examples) {
+			const item = findItem(collection.item, name);
+			expect(item).toBeDefined();
+			const request = JSON.parse(item.request.body.raw);
+			const response = JSON.parse(item.response[0].body);
+			expect(request).toMatchObject({ type, dryRun: true });
+			expect(response).toMatchObject({ success: true, dryRun: true, environment: 'testnet' });
+		}
+
+		const trailing = findItem(collection.item, 'POST Binance order (dry-run STOP_LOSS_LIMIT trailingDelta)');
+		expect(JSON.parse(trailing.request.body.raw)).toMatchObject({ type: 'STOP_LOSS_LIMIT', trailingDelta: 100 });
+		const invalidFutures = findItem(collection.item, 'POST Binance order (invalid Futures-only type)');
+		expect(invalidFutures.response[0].code).toBe(400);
+		expect(JSON.parse(invalidFutures.response[0].body).code).toBe('INVALID_ORDER_REQUEST');
+		const invalidDelta = findItem(collection.item, 'POST Binance order (invalid trailingDelta format)');
+		expect(JSON.parse(invalidDelta.request.body.raw).trailingDelta).toBe('1.5');
+		expect(JSON.parse(invalidDelta.response[0].body).error).toBe('trailingDelta must be a positive integer number of BIPS');
+		expect(findItem(collection.item, 'GET Binance Orders (by orderListId)')).toBeDefined();
+		expect(findItem(collection.item, 'GET Binance Orders (by listClientOrderId)')).toBeDefined();
+		const sellBracket = JSON.parse(findItem(collection.item, 'POST Binance order (dry-run BRACKET_LIMIT OTOCO SELL entry)').response[0].body);
+		expect(sellBracket.orderList).toMatchObject({
+			pendingAboveType: 'STOP_LOSS_LIMIT',
+			pendingBelowType: 'TAKE_PROFIT_LIMIT',
+			pendingBelowStopPrice: '62000',
+			pendingBelowPrice: '62000',
+		});
+
+		const getOperation = contract.paths['/api/trading/binance/orders'].get;
+		const queryNames = getOperation.parameters.map((parameter) => parameter.name);
+		expect(queryNames).toEqual(expect.arrayContaining(['orderListId', 'listClientOrderId']));
+		const orderTypes = contract.components.schemas.BinanceOrderRequest.properties.type.enum;
+		expect(orderTypes).toEqual(expect.arrayContaining(examples.map(([, type]) => type)));
+		expect(contract.components.schemas.BinanceOrderRequest.properties).toEqual(expect.objectContaining({
+			stopPrice: expect.any(Object),
+			stopLimitPrice: expect.any(Object),
+			takeProfitPrice: expect.any(Object),
+			trailingDelta: expect.any(Object),
+		}));
+		expect(contract.components.schemas.BinanceOrderResult.properties.orderList).toBeDefined();
+		expect(contract.components.schemas.BinanceOrdersQueryResult.properties.orderList).toBeDefined();
+		expect(contract.components.schemas.Status.properties.dependencies.properties.binanceTrading.$ref)
+			.toBe('#/components/schemas/BinanceTradingDependency');
+		const orderRequestExamples = contract.components.requestBodies.BinanceOrder.content['application/json'].examples;
+		expect(orderRequestExamples).toEqual(expect.objectContaining({
+			dryRunBracketLimit: expect.any(Object),
+			dryRunSellBracketLimit: expect.any(Object),
+			dryRunTrailingDelta: expect.any(Object),
+			invalidFuturesOrderType: expect.any(Object),
+			invalidBracketMissingStopLimit: expect.any(Object),
+		}));
+		const successExamples = contract.components.responses.BinanceOrderResult.content['application/json'].examples;
+		expect(successExamples.sellBracketDryRun.value.orderList).toMatchObject({
+			pendingAboveType: 'STOP_LOSS_LIMIT',
+			pendingBelowType: 'TAKE_PROFIT_LIMIT',
+		});
+		const firestore = JSON.parse(fs.readFileSync(path.join(__dirname, '../../firestore.indexes.json'), 'utf8'));
+		expect(firestore.fieldOverrides).toContainEqual(expect.objectContaining({
+			collectionGroup: 'binanceBracketOrders',
+			fieldPath: 'expiresAt',
+			ttl: true,
+		}));
 	});
 });
 

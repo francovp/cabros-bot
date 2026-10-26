@@ -5,6 +5,7 @@ const {
 	scannerPresetService,
 	scannerPresetSchedulerService,
 } = require('../services/scannerPresets');
+const { MAX_DESTINATIONS_PER_CHANNEL } = require('../services/scannerPresets/scannerPresetRouting');
 const { newsMonitorSchedulerService } = require('../services/newsMonitorScheduler');
 const { alertSchedulerService } = require('../services/scheduler');
 const { alertSubscriberService } = require('../services/subscribers/AlertSubscriberService');
@@ -19,6 +20,7 @@ const remoteConfigService = require('../services/remoteConfig/RemoteConfigServic
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
 const { binanceOrderAuditService } = require('../services/trading/BinanceOrderAuditService');
+const autoTradeReservationService = require('../services/trading/AutoTradeReservationService');
 const { tradeLedgerService } = require('../services/trading/TradeLedgerService');
 const symbolAnalysisStorageService = require('../services/storage/SymbolAnalysisStorageService');
 const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
@@ -53,8 +55,10 @@ const { getVolumeTracker } = require('./webhooks/handlers/newsMonitor/volumeTrac
 const { getSelfTestService } = require('./diagnostics/selftest');
 const telegramCommandAuth = require('../lib/telegramCommandAuth');
 const { getAdminAuthStatus } = require('../lib/adminAuth');
+const { getNotificationManager } = require('./webhooks/handlers/alert/alert');
 const {
 	getDeploymentCommit,
+	getBuildInfo,
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
 } = require('../lib/deploymentEnvironment');
@@ -312,6 +316,12 @@ function getGeminiQuotaDependency({ gemini }) {
 		configured: gemini.configured,
 		ready: gemini.ready && !snapshot.cooldownActive,
 		status,
+		windowStartedAt: snapshot.windowStartedAt,
+		windowDurationMs: snapshot.windowDurationMs,
+		requestsInWindow: snapshot.requestsInWindow,
+		exhaustedEventsInWindow: snapshot.exhaustedEventsInWindow,
+		lastExhaustedAt: snapshot.lastExhaustedAt,
+		quotaStatus: snapshot.quotaStatus,
 		cooldownActive: snapshot.cooldownActive,
 		remainingCooldownMs: snapshot.remainingCooldownMs,
 		lastTriggeredAt: snapshot.lastTriggeredAt,
@@ -365,6 +375,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 	const binancePriceCheckEnabled = isEnabled(process.env.ENABLE_BINANCE_PRICE_CHECK);
 	const binanceTradingEnabled = isEnabled(process.env.ENABLE_BINANCE_TRADING);
 	const binanceTradingStatus = binanceOrderService.getStatus();
+	const binanceTradingKillSwitchEnabled = binanceTradingEnabled;
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
 	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
@@ -600,6 +611,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			commit: getCommit(),
 			environment: getEnvironment(),
 		},
+		build: getBuildInfo(),
 		featureFlags: {
 			telegramBot: telegramFlagEnabled,
 			whatsappAlerts: whatsappEnabled,
@@ -621,6 +633,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			firestoreNewsAnalysis: newsAnalysisStorageService.isEnabled(),
 			firestoreChatPreferences: chatPreferenceService.isEnabled(),
 			scannerPresetScheduler: scannerPresetSchedulerService.isEnabled(),
+			presetBoundDestinations: true,
 			newsMonitorScheduler: newsMonitorSchedulerService.isEnabled(),
 			alertScheduler: alertSchedulerService.isEnabled(),
 			sentryMonitoring: sentryEnabled,
@@ -631,6 +644,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			binanceTrading: binanceTradingEnabled,
 			binanceOrderAudit: binanceOrderAuditService.isEnabled(),
 			tradeLedger: tradeLedgerService.isEnabled(),
+			binanceTradingKillSwitch: binanceTradingKillSwitchEnabled,
 			llmAlertEnrichment: llmAlertEnrichmentEnabled,
 			cloudflareAig: cloudflareAigEnabled,
 			messageFooterMetadata: messageFooterMetadataEnabled,
@@ -677,6 +691,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				status: discord.status,
 			},
 		},
+		deliveryHealth: getNotificationManager()?.getDeliveryHealth?.() || {},
 		channelHealth: channelStatuses,
 		// Operator intent, not runtime reachability. Mirrors
 		// NotificationChannel.isConfigured(), which is the enable flag AND the
@@ -765,6 +780,14 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			firebaseRemoteConfig: remoteConfigStatus,
 			chatPreferences: chatPreferenceService.getStatus(),
 			scannerPresetStorage: scannerPresetService.getStorageStatus(),
+			presetBoundDestinations: {
+				enabled: true,
+				configured: true,
+				ready: true,
+				status: 'ready',
+				channels: ['telegram', 'whatsapp', 'discord'],
+				maxDestinationsPerChannel: MAX_DESTINATIONS_PER_CHANNEL,
+			},
 			alertSubscribers: alertSubscriberService.getStorageStatus(),
 			newsAnalysisStorage: newsAnalysisStorageService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
@@ -823,7 +846,28 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 			},
 			alertFeedback: alertFeedbackStorageService.getStatus(),
 			jobExecutionQueue: jobExecutionQueueStatus,
-			binanceTrading: binanceTradingStatus,
+			binanceTrading: {
+				enabled: binanceTradingStatus.enabled,
+				configured: binanceTradingStatus.configured,
+				ready: binanceTradingStatus.ready,
+				status: binanceTradingStatus.status,
+				environment: binanceTradingStatus.environment,
+				allowedSymbols: binanceTradingStatus.allowedSymbols,
+				supportedOrderTypes: binanceTradingStatus.supportedOrderTypes,
+				maxNotionalConfigured: binanceTradingStatus.maxNotionalConfigured,
+				paused: binanceTradingStatus.paused,
+				pausedBy: binanceTradingStatus.pausedBy,
+				pausedAt: binanceTradingStatus.pausedAt,
+				pausedReason: binanceTradingStatus.pausedReason,
+				lastChangedAt: binanceTradingStatus.lastChangedAt,
+				lastChangedBy: binanceTradingStatus.lastChangedBy,
+				lastAction: binanceTradingStatus.lastAction,
+				controlStorage: binanceTradingStatus.controlStorage,
+				unavailable: binanceTradingStatus.unavailable,
+				blocked: binanceTradingStatus.blocked,
+				ambiguousCount: autoTradeReservationService.getAmbiguousCount(),
+				ambiguousReservationsCount: autoTradeReservationService.getAmbiguousCount(),
+			},
 			startupJitter: (() => {
 				const global = resolveStartupJitterMs({
 					globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
@@ -897,6 +941,13 @@ async function getApiStatus(req, res) {
 			await scannerPresetService.probeStorageReadiness();
 		} catch (_) {
 			// Fail-open for status endpoint
+		}
+		if (typeof binanceOrderService?.getPauseState === 'function') {
+			try {
+				await binanceOrderService.getPauseState();
+			} catch (_) {
+				// Fail-open for status endpoint
+			}
 		}
 		return res.status(200).json(getStatus({ skipTelemetrySync: true }));
 	} catch (error) {

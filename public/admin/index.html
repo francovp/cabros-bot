@@ -13,9 +13,13 @@
       <div class="brand-lockup">
         <span class="brand-mark" aria-hidden="true">CB</span>
         <div>
-          <p class="eyebrow">Operations</p>
+          <p class="eyebrow" data-i18n="shell.operations">Operations</p>
           <h1>Cabros Bot</h1>
         </div>
+        <select id="admin-lang" class="admin-lang-select" aria-label="Language">
+          <option value="en">EN</option>
+          <option value="es">ES</option>
+        </select>
       </div>
       <nav id="console-nav" class="console-nav" aria-label="Console sections">
         <p class="nav-label">Workspace</p>
@@ -98,6 +102,7 @@
   <script src="/admin/vue.runtime.global.prod.js" defer></script>
   <script src="/admin/admin-components.js" defer></script>
   <script src="/admin/admin-request.js" defer></script>
+  <script src="/admin/i18n.js" defer></script>
   <script src="/admin/admin-charts.js" defer></script>
   <script src="/admin/admin-diagnostics.js" defer></script>
   <script src="/admin/admin-newsmonitor.js" defer></script>

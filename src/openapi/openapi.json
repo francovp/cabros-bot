@@ -3,7 +3,7 @@
   "info": {
     "title": "Cabros Bot API",
     "version": "0.1.0",
-    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter is deprecated and exists only for legacy compatibility — it may leak through reverse-proxy access logs. A one-time per-process deprecation warning is emitted on use; setting API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) rejects query-parameter auth with 401 API_KEY_QUERY_REMOVED after the date. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true."
+    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter is deprecated and exists only for legacy compatibility — it may leak through reverse-proxy access logs. A one-time per-process deprecation warning is emitted on use; setting API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) rejects query-parameter auth with 401 API_KEY_QUERY_REMOVED after the date. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true. HTTP 429 responses include Retry-After and retryAfterSeconds. Dedicated per-endpoint limits default to heavy 5, trading 10, standard 30, and light 100 requests per 60 seconds. All webhook/news ingest paths share an aggregate 1,000-request bucket per RATE_LIMIT_WINDOW_MS; tiered webhook routes enforce both the aggregate and per-endpoint limits, while alert/message use only the aggregate. Other routes use RATE_LIMIT_WINDOW_MS and RATE_LIMIT_MAX."
   },
   "servers": [
     {
@@ -591,6 +591,9 @@
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
           "500": {
             "$ref": "#/components/responses/ExpressFallthroughError"
           },
@@ -660,6 +663,9 @@
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           },
@@ -722,6 +728,9 @@
           },
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -792,6 +801,9 @@
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           },
@@ -844,6 +856,9 @@
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           },
@@ -875,6 +890,7 @@
           "Webhooks"
         ],
         "summary": "Analyze one TradingView symbol without delivery",
+        "description": "Runs TradingView MCP `coin_analysis` (and optionally `combined_analysis` / `multi_timeframe_analysis`) for a single EXCHANGE:SYMBOL identifier and returns decision-ready structured analysis plus a Spanish markdown report. Plans below SYMBOL_ANALYSIS_MIN_RISK_REWARD_RATIO (default 1.5) are downgraded to NO_TRADE with an explicit Spanish warning and `risk.rejectionReason: 'risk_reward_below_minimum'`; when a higher S/R level, Bollinger band, or ATR target clears the floor, the controller upgrades the take-profit automatically before flagging the plan.",
         "operationId": "postSymbolAnalysis",
         "requestBody": {
           "$ref": "#/components/requestBodies/SymbolAnalysis"
@@ -897,6 +913,9 @@
           },
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -2166,7 +2185,8 @@
             "$ref": "#/components/responses/ScannerPresetResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/Error",
+            "description": "Malformed preset fields return INVALID_REQUEST. Malformed destination arrays or values return 400 INVALID_DESTINATIONS."
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
@@ -2296,7 +2316,7 @@
             "$ref": "#/components/responses/ScannerPresetResult"
           },
           "400": {
-            "description": "Malformed request body, or malformed If-Match header (e.g. a comma-separated entity-tag list or the wildcard \"*\").",
+            "description": "Malformed preset fields return INVALID_REQUEST. Malformed destination arrays or values return 400 INVALID_DESTINATIONS. Malformed If-Match header (e.g. a comma-separated entity-tag list or the wildcard \"*\") returns INVALID_IF_MATCH.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2488,8 +2508,24 @@
           "200": {
             "$ref": "#/components/responses/AnalysisResult"
           },
+          "202": {
+            "description": "The scanner preset run was accepted as an asynchronous market-scanner job. Destination values remain in private job metadata and are not returned.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScannerPresetAsyncRunResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/Error",
+            "description": "Invalid routing overrides, a channel filter with no configured destination for its selected channels, or runAsyncJob return 400 INVALID_REQUEST. Invalid preset destinations return 400 INVALID_DESTINATIONS."
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -2514,6 +2550,10 @@
           },
           "502": {
             "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error",
+            "description": "The existing async job queue or durable job store is unavailable; the run was not accepted unless the error includes a jobId."
           },
           "504": {
             "$ref": "#/components/responses/Error"
@@ -3078,6 +3118,9 @@
             "$ref": "#/components/parameters/StockSymbols"
           },
           {
+            "$ref": "#/components/parameters/NewsCategories"
+          },
+          {
             "$ref": "#/components/parameters/DryRun"
           },
           {
@@ -3099,6 +3142,9 @@
           },
           "413": {
             "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -3151,6 +3197,9 @@
           },
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -3837,6 +3886,199 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/outcomes/export": {
+      "get": {
+        "tags": [
+          "Signal outcomes"
+        ],
+        "summary": "Export bounded signal outcomes",
+        "operationId": "exportOutcomes",
+        "description": "Stream a bounded window of recorded signal outcomes as JSONL or CSV with optional symbol, exchange, and setupType filters. Requires both `from` and `to` ISO-8601 timestamps and caps the window at 31 days and `limit` at 1000. Each request scans at most 10,000 documents; if that scan cannot collect the requested result limit, the endpoint returns 400 INVALID_REQUEST and asks the caller to narrow the time range or add a filter. The export never includes rawMcpPayload, prompt text, provider responses, or credentials.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FromRequired"
+          },
+          {
+            "$ref": "#/components/parameters/ToRequired"
+          },
+          {
+            "$ref": "#/components/parameters/ExportFormat"
+          },
+          {
+            "$ref": "#/components/parameters/ExportLimit"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeSymbol"
+          },
+          {
+            "$ref": "#/components/parameters/OutcomeExchange"
+          },
+          {
+            "name": "setupType",
+            "in": "query",
+            "required": false,
+            "description": "Optional outcome setup-type filter (e.g. breakout, mean-reversion).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "JSON Lines or CSV export",
+            "headers": {
+              "Content-Disposition": {
+                "description": "Attachment filename in the format outcomes-YYYY-MM-DD-YYYY-MM-DD.{jsonl|csv}.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/x-ndjson": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/outcomes/{outcomeId}": {
+      "get": {
+        "tags": [
+          "Signal outcomes"
+        ],
+        "summary": "Get a stored signal outcome by id",
+        "operationId": "getOutcomeById",
+        "description": "Returns a single sanitized signal outcome document by its Firestore document id. 404 when the id is unknown or retention-expired; 503 when Firestore is unavailable.",
+        "parameters": [
+          {
+            "name": "outcomeId",
+            "in": "path",
+            "required": true,
+            "description": "Firestore document id of the signal outcome.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stored signal outcome detail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "outcome"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "outcome": {
+                      "$ref": "#/components/schemas/SignalOutcome"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/trading/binance/account/balances": {
       "get": {
         "tags": [
@@ -4182,6 +4424,9 @@
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           },
@@ -4223,7 +4468,7 @@
           "Trading"
         ],
         "summary": "Read Binance Spot order status or recent order history",
-        "description": "Reads a single order status by orderId or origClientOrderId, or lists recent orders for an allowed symbol when no specific order identifier is provided. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
+        "description": "Reads a single order status by orderId or origClientOrderId, an order list by orderListId or listClientOrderId, or recent orders for an allowed symbol when no specific order identifier is provided. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
         "operationId": "getBinanceSpotOrders",
         "parameters": [
           {
@@ -4254,6 +4499,28 @@
             }
           },
           {
+            "name": "orderListId",
+            "in": "query",
+            "required": false,
+            "description": "Binance Spot order-list ID. Mutually exclusive with other order identifiers.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "listClientOrderId",
+            "in": "query",
+            "required": false,
+            "description": "Stable client order-list ID. Mutually exclusive with other order identifiers.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 36,
+              "pattern": "^[A-Za-z0-9._:-]{1,36}$"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -4274,7 +4541,28 @@
             "$ref": "#/components/responses/BinanceOrdersQueryResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "description": "Malformed symbol, identifier, or order-list query.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "multipleIdentifiers": {
+                    "value": {
+                      "success": false,
+                      "error": "order queries may include only one order or order-list identifier",
+                      "code": "INVALID_ORDER_REQUEST"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -4305,6 +4593,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -4340,7 +4631,7 @@
           "Trading"
         ],
         "summary": "Validate or submit a Binance Spot order",
-        "description": "Live requests require an idempotency key or clientOrderId. Decimal quantities, prices, and quote amounts may be strings to preserve precision. MARKET orders must omit timeInForce. Binance PERCENT_PRICE, PERCENT_PRICE_BY_SIDE, and account-dependent filters such as MAX_POSITION or MAX_NUM_ORDERS use Binance order-test validation before acceptance. Definitive pre-execution or exchange rejections return 400 BINANCE_ORDER_REJECTED; a reconciled order mismatch returns 409 BINANCE_ORDER_CONFLICT; transient order-test failures return retryable 502 BINANCE_VALIDATION_FAILED. Binance execution-unknown code -1006 remains BINANCE_ORDER_STATUS_UNKNOWN. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
+        "description": "Supports Spot MARKET, LIMIT, LIMIT_MAKER, STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT, and TAKE_PROFIT_LIMIT orders plus BRACKET_LIMIT through one native OTOCO order-list submission. trailingDelta is in BIPS and must pass the symbol and side/type-specific TRAILING_DELTA filter. BRACKET_LIMIT requires a LIMIT entry, stop trigger, stop-limit execution price, take-profit price, quantity, and timeInForce; BUY entries use a pending-above LIMIT_MAKER take-profit, while SELL entries use a pending-below TAKE_PROFIT_LIMIT with the target as trigger and limit. Pending OCO exits arm after the entry fills. Live brackets require a durable idempotency reservation and never automatically resubmit an ambiguous result. Live requests require an idempotency key or clientOrderId. Decimal quantities, prices, and quote amounts may be strings to preserve precision. MARKET orders must omit timeInForce. Binance PERCENT_PRICE, PERCENT_PRICE_BY_SIDE, and account-dependent filters such as MAX_POSITION or MAX_NUM_ORDERS use Binance order-test validation before acceptance. Definitive pre-execution or exchange rejections return 400 BINANCE_ORDER_REJECTED; a reconciled order mismatch returns 409 BINANCE_ORDER_CONFLICT; transient order-test failures return retryable 502 BINANCE_VALIDATION_FAILED. Binance execution-unknown code -1006 remains BINANCE_ORDER_STATUS_UNKNOWN. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
         "operationId": "postBinanceSpotOrder",
         "parameters": [
           {
@@ -4364,7 +4655,49 @@
             "$ref": "#/components/responses/BinanceOrderResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "description": "Invalid order fields, unsupported Futures-only type, malformed trailingDelta, an unbounded contingent market BUY, or exchange filter rejection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "invalidOrder": {
+                    "value": {
+                      "success": false,
+                      "error": "type must be one of: MARKET, LIMIT, LIMIT_MAKER, STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT, BRACKET_LIMIT",
+                      "code": "INVALID_ORDER_REQUEST"
+                    }
+                  },
+                  "invalidBracket": {
+                    "value": {
+                      "success": false,
+                      "error": "BRACKET_LIMIT requires stopPrice, stopLimitPrice, and takeProfitPrice",
+                      "code": "INVALID_ORDER_REQUEST"
+                    }
+                  },
+                  "invalidTrailingDelta": {
+                    "value": {
+                      "success": false,
+                      "error": "trailingDelta must be a positive integer number of BIPS",
+                      "code": "INVALID_ORDER_REQUEST"
+                    }
+                  },
+                  "unboundedContingentBuy": {
+                    "value": {
+                      "success": false,
+                      "error": "contingent market BUY orders require stopPrice to enforce the configured notional maximum",
+                      "code": "INVALID_ORDER_REQUEST"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -4439,6 +4772,9 @@
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           },
@@ -4446,7 +4782,37 @@
             "$ref": "#/components/responses/BinanceOrderFailure"
           },
           "503": {
-            "$ref": "#/components/responses/Error"
+            "description": "Transient pre-flight failure or runtime kill-switch blocked order submission",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "tradingPaused": {
+                    "summary": "Binance Spot order submission is paused via the runtime kill-switch",
+                    "value": {
+                      "success": false,
+                      "error": "Binance Spot order submission is paused by incident-commander (reason: suspected credential leak)",
+                      "code": "TRADING_PAUSED"
+                    }
+                  },
+                  "tradingUnavailable": {
+                    "summary": "Authoritative pause state could not be read — failing closed",
+                    "value": {
+                      "success": false,
+                      "error": "Binance Spot order submission is unavailable (control state cannot be read; failing closed)",
+                      "code": "TRADING_PAUSED"
+                    }
+                  }
+                }
+              }
+            }
           }
         },
         "security": [
@@ -4552,6 +4918,9 @@
           },
           "415": {
             "$ref": "#/components/responses/ExpressParserError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -4716,6 +5085,655 @@
           }
         ],
         "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/trading/binance/pause": {
+      "get": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Read the runtime Binance Spot order kill-switch state",
+        "description": "Returns the authoritative pause state stored in Firestore (`tradingControl/state`) or the in-memory fallback when Binance trading is disabled. Requires `admin.viewer` or higher. Auth precedence: accepts Firebase bearer tokens when enabled; otherwise, when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted; otherwise falls back to AdminApiKeyHeader or ApiKeyHeader/ApiKeyQuery.",
+        "operationId": "getBinancePause",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current pause state returned",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "state"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "state": {
+                      "$ref": "#/components/schemas/BinanceTradingPauseState"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      },
+      "post": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Pause all new Binance Spot order submissions immediately",
+        "description": "Persists `paused: true` in Firestore (`tradingControl/state`) and logs the operator actor and optional reason. Subsequent `POST /api/trading/binance/orders` requests (live and dry-run) are rejected with `503 TRADING_PAUSED` before any signed Binance API call is made. Requires `admin.operator`. Auth precedence: accepts Firebase bearer tokens when enabled; otherwise, when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted; otherwise falls back to AdminApiKeyHeader or ApiKeyHeader/ApiKeyQuery.",
+        "operationId": "postBinancePause",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 280,
+                    "description": "Optional incident or maintenance reason recorded on the pause audit record"
+                  },
+                  "pauseReason": {
+                    "type": "string",
+                    "maxLength": 280,
+                    "description": "Alias for `reason`"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Binance Spot order submissions paused",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "action",
+                    "state"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "pause"
+                      ]
+                    },
+                    "state": {
+                      "$ref": "#/components/schemas/BinanceTradingPauseState"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "409": {
+            "description": "Binance trading is disabled via ENABLE_BINANCE_TRADING or duplicate idempotent request conflict",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "description": "Authoritative pause storage is unavailable — refusing to mutate state",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/trading/binance/resume": {
+      "post": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Resume Binance Spot order submissions after a runtime pause",
+        "description": "Clears `paused` in Firestore (`tradingControl/state`) and logs the operator actor and optional reason. Requires `admin.operator`. Auth precedence: accepts Firebase bearer tokens when enabled; otherwise, when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted; otherwise falls back to AdminApiKeyHeader or ApiKeyHeader/ApiKeyQuery.",
+        "operationId": "postBinanceResume",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 280,
+                    "description": "Optional reason recorded on the resume audit record"
+                  },
+                  "resumeReason": {
+                    "type": "string",
+                    "maxLength": 280,
+                    "description": "Alias for `reason`"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Binance Spot order submissions resumed",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "action",
+                    "state"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "resume"
+                      ]
+                    },
+                    "state": {
+                      "$ref": "#/components/schemas/BinanceTradingPauseState"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "409": {
+            "description": "Binance trading is disabled via ENABLE_BINANCE_TRADING or duplicate idempotent request conflict",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "description": "Authoritative pause storage is unavailable — refusing to mutate state",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/trading/binance/reconciliation": {
+      "get": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "List ambiguous auto-trade reservations",
+        "description": "Lists indeterminate auto-trade reservations that require manual operator reconciliation. Filterable by symbol and status. Requires admin.viewer role or API key. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
+        "operationId": "getBinanceReconciliation",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "description": "Filter by trading symbol (e.g. BTCUSDT)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Filter by reservation status (e.g. ambiguous)",
+            "schema": {
+              "type": "string",
+              "default": "ambiguous"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Max reservations to return (default 50, max 100)",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 50
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of ambiguous reservations",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinanceReconciliationListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/trading/binance/reconciliation/{reservationId}": {
+      "get": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Get ambiguous auto-trade reservation by ID",
+        "description": "Retrieves a single ambiguous auto-trade reservation by reservation ID or signal ID. Requires admin.viewer role or API key. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
+        "operationId": "getBinanceReconciliationById",
+        "parameters": [
+          {
+            "name": "reservationId",
+            "in": "path",
+            "required": true,
+            "description": "Reservation ID (SHA256 hex) or raw signalId",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Ambiguous reservation details",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinanceReconciliationDetailResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      },
+      "post": {
+        "tags": [
+          "Trading"
+        ],
+        "summary": "Resolve ambiguous auto-trade reservation",
+        "description": "Settles an ambiguous auto-trade reservation as placed or not_placed, handling shared cooldowns and recording an audit trail. Requires admin.operator role. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
+        "operationId": "postResolveAmbiguousReservation",
+        "parameters": [
+          {
+            "name": "reservationId",
+            "in": "path",
+            "required": true,
+            "description": "Reservation ID (SHA256 hex) or raw signalId",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveAmbiguousReservationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Ambiguous reservation successfully resolved",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveAmbiguousReservationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "BinanceTradingApiKeyHeader": []
+          },
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
       }
     },
     "/api/trading/positions": {
@@ -5008,6 +6026,9 @@
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
           },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
           "500": {
             "$ref": "#/components/responses/Error"
           }
@@ -5040,6 +6061,7 @@
           "Operations"
         ],
         "summary": "Alias for runtime status",
+        "description": "Alias for runtime status and capabilities. Exposes runtime dependencies, feature flags, and deployment build metadata also verifiable via the Telegram /version command.",
         "operationId": "getCapabilities",
         "responses": {
           "200": {
@@ -5047,6 +6069,9 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
             "$ref": "#/components/responses/Error"
@@ -6101,6 +7126,15 @@
         },
         "example": "NVDA,MSFT"
       },
+      "NewsCategories": {
+        "name": "categories",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "Optional comma-separated list of alertable event categories to deliver. When specified, only detected news events matching one of these categories will trigger notifications. Omitted defaults to delivering all categories. Valid values: price_surge, price_decline, public_figure, regulatory.",
+        "example": "regulatory,price_surge"
+      },
       "XIdempotencyKeyHeader": {
         "name": "x-idempotency-key",
         "in": "header",
@@ -6716,6 +7750,10 @@
               "stocks": [
                 "NVDA"
               ],
+              "categories": [
+                "price_surge",
+                "regulatory"
+              ],
               "channels": [
                 "telegram"
               ],
@@ -6763,6 +7801,147 @@
                   "type": "LIMIT",
                   "quantity": 0.00105,
                   "price": 60000,
+                  "dryRun": true
+                }
+              },
+              "dryRunLimitMaker": {
+                "summary": "Safe LIMIT_MAKER validation",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "BUY",
+                  "type": "LIMIT_MAKER",
+                  "quantity": "0.001",
+                  "price": "60000",
+                  "dryRun": true
+                }
+              },
+              "dryRunStopLoss": {
+                "summary": "Safe STOP_LOSS validation",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "SELL",
+                  "type": "STOP_LOSS",
+                  "quantity": "0.001",
+                  "stopPrice": "58000",
+                  "dryRun": true
+                }
+              },
+              "dryRunStopLossLimit": {
+                "summary": "Safe STOP_LOSS_LIMIT validation",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "SELL",
+                  "type": "STOP_LOSS_LIMIT",
+                  "quantity": "0.001",
+                  "price": "57900",
+                  "stopPrice": "58000",
+                  "timeInForce": "GTC",
+                  "dryRun": true
+                }
+              },
+              "dryRunTakeProfit": {
+                "summary": "Safe TAKE_PROFIT validation",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "SELL",
+                  "type": "TAKE_PROFIT",
+                  "quantity": "0.001",
+                  "stopPrice": "68000",
+                  "dryRun": true
+                }
+              },
+              "dryRunTakeProfitLimit": {
+                "summary": "Safe TAKE_PROFIT_LIMIT validation",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "SELL",
+                  "type": "TAKE_PROFIT_LIMIT",
+                  "quantity": "0.001",
+                  "price": "68100",
+                  "stopPrice": "68000",
+                  "timeInForce": "GTC",
+                  "dryRun": true
+                }
+              },
+              "dryRunTrailingDelta": {
+                "summary": "Safe STOP_LOSS_LIMIT trailing validation (BIPS)",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "SELL",
+                  "type": "STOP_LOSS_LIMIT",
+                  "quantity": "0.001",
+                  "price": "57900",
+                  "stopPrice": "58000",
+                  "trailingDelta": 100,
+                  "timeInForce": "GTC",
+                  "dryRun": true
+                }
+              },
+              "dryRunBracketLimit": {
+                "summary": "Safe native OTOCO bracket validation (BUY entry)",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "BUY",
+                  "type": "BRACKET_LIMIT",
+                  "quantity": "0.001",
+                  "price": "65000",
+                  "stopPrice": "62000",
+                  "stopLimitPrice": "61900",
+                  "takeProfitPrice": "70000",
+                  "timeInForce": "GTC",
+                  "dryRun": true
+                }
+              },
+              "dryRunSellBracketLimit": {
+                "summary": "Safe native OTOCO bracket validation (SELL entry)",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "SELL",
+                  "type": "BRACKET_LIMIT",
+                  "quantity": "0.001",
+                  "price": "65000",
+                  "stopPrice": "68000",
+                  "stopLimitPrice": "68100",
+                  "takeProfitPrice": "62000",
+                  "timeInForce": "GTC",
+                  "dryRun": true
+                }
+              },
+              "invalidFuturesOrderType": {
+                "summary": "Rejected Futures-only order type",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "SELL",
+                  "type": "TRAILING_STOP_MARKET",
+                  "quantity": "0.001",
+                  "stopPrice": "58000",
+                  "dryRun": true
+                }
+              },
+              "invalidBracketMissingStopLimit": {
+                "summary": "Rejected bracket missing required stopLimitPrice",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "BUY",
+                  "type": "BRACKET_LIMIT",
+                  "quantity": "0.001",
+                  "price": "65000",
+                  "stopPrice": "62000",
+                  "takeProfitPrice": "70000",
+                  "timeInForce": "GTC",
+                  "dryRun": true
+                }
+              },
+              "invalidTrailingDelta": {
+                "summary": "Rejected malformed trailingDelta",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "SELL",
+                  "type": "STOP_LOSS_LIMIT",
+                  "quantity": "0.001",
+                  "price": "57900",
+                  "trailingDelta": "1.5",
+                  "timeInForce": "GTC",
                   "dryRun": true
                 }
               }
@@ -6941,6 +8120,64 @@
                   ],
                   "count": 1
                 }
+              },
+              "orderList": {
+                "value": {
+                  "success": true,
+                  "environment": "testnet",
+                  "orderList": {
+                    "orderListId": 77,
+                    "contingencyType": "OTOCO",
+                    "listStatusType": "EXEC_STARTED",
+                    "listOrderStatus": "EXECUTING",
+                    "listClientOrderId": "cb-list-77",
+                    "symbol": "BTCUSDT",
+                    "orders": [
+                      {
+                        "symbol": "BTCUSDT",
+                        "orderId": 101,
+                        "clientOrderId": "cb-work-77"
+                      },
+                      {
+                        "symbol": "BTCUSDT",
+                        "orderId": 102,
+                        "clientOrderId": "cb-tp-77"
+                      },
+                      {
+                        "symbol": "BTCUSDT",
+                        "orderId": 103,
+                        "clientOrderId": "cb-stop-77"
+                      }
+                    ],
+                    "orderReports": [
+                      {
+                        "symbol": "BTCUSDT",
+                        "orderId": 101,
+                        "status": "FILLED",
+                        "type": "LIMIT",
+                        "side": "BUY",
+                        "executedQty": "0.00100000"
+                      },
+                      {
+                        "symbol": "BTCUSDT",
+                        "orderId": 102,
+                        "status": "NEW",
+                        "type": "LIMIT_MAKER",
+                        "side": "SELL",
+                        "price": "70000.00000000"
+                      },
+                      {
+                        "symbol": "BTCUSDT",
+                        "orderId": 103,
+                        "status": "NEW",
+                        "type": "STOP_LOSS_LIMIT",
+                        "side": "SELL",
+                        "stopPrice": "62000.00000000",
+                        "price": "61900.00000000"
+                      }
+                    ]
+                  }
+                }
               }
             }
           }
@@ -7002,6 +8239,56 @@
                     "status": "FILLED",
                     "type": "MARKET",
                     "side": "BUY"
+                  }
+                }
+              },
+              "bracketDryRun": {
+                "value": {
+                  "success": true,
+                  "dryRun": true,
+                  "environment": "testnet",
+                  "orderList": {
+                    "symbol": "BTCUSDT",
+                    "workingType": "LIMIT",
+                    "workingSide": "BUY",
+                    "workingPrice": "65000",
+                    "workingQuantity": "0.001",
+                    "workingTimeInForce": "GTC",
+                    "pendingSide": "SELL",
+                    "pendingQuantity": "0.001",
+                    "pendingAboveType": "LIMIT_MAKER",
+                    "pendingAbovePrice": "70000",
+                    "pendingBelowType": "STOP_LOSS_LIMIT",
+                    "pendingBelowStopPrice": "62000",
+                    "pendingBelowPrice": "61900",
+                    "pendingBelowTimeInForce": "GTC",
+                    "newOrderRespType": "FULL"
+                  }
+                }
+              },
+              "sellBracketDryRun": {
+                "value": {
+                  "success": true,
+                  "dryRun": true,
+                  "environment": "testnet",
+                  "orderList": {
+                    "symbol": "BTCUSDT",
+                    "workingType": "LIMIT",
+                    "workingSide": "SELL",
+                    "workingPrice": "65000",
+                    "workingQuantity": "0.001",
+                    "workingTimeInForce": "GTC",
+                    "pendingSide": "BUY",
+                    "pendingQuantity": "0.001",
+                    "pendingAboveType": "STOP_LOSS_LIMIT",
+                    "pendingAboveStopPrice": "68000",
+                    "pendingAbovePrice": "68100",
+                    "pendingAboveTimeInForce": "GTC",
+                    "pendingBelowType": "TAKE_PROFIT_LIMIT",
+                    "pendingBelowStopPrice": "62000",
+                    "pendingBelowPrice": "62000",
+                    "pendingBelowTimeInForce": "GTC",
+                    "newOrderRespType": "FULL"
                   }
                 }
               }
@@ -7516,7 +8803,13 @@
                       "top_gainers"
                     ],
                     "limit": 5,
-                    "bbwThreshold": 0.05
+                    "bbwThreshold": 0.05,
+                    "destinations": {
+                      "telegramChatIds": [
+                        "-1001234567890"
+                      ],
+                      "discordWebhookCount": 1
+                    }
                   }
                 }
               },
@@ -8194,7 +9487,12 @@
                     "error": 0,
                     "quota_exhausted": 0,
                     "throttled": 0,
-                    "alerts_sent": 1
+                    "alerts_sent": 1,
+                    "barrierProvenance": {
+                      "derivedAlertsCount": 1,
+                      "marketContextAlertsCount": 0,
+                      "totalAlertsWithBarriers": 1
+                    }
                   },
                   "requestedChannels": [
                     "telegram",
@@ -8478,7 +9776,13 @@
                     "successRequests": 0,
                     "failureRequests": 0,
                     "timeoutRequests": 0
-                  }
+                  },
+                  "windowStartedAt": null,
+                  "windowDurationMs": 60000,
+                  "requestsInWindow": 0,
+                  "exhaustedEventsInWindow": 0,
+                  "lastExhaustedAt": null,
+                  "quotaStatus": "healthy"
                 },
                 "grounding": {
                   "enabled": true,
@@ -9123,12 +10427,69 @@
             }
           }
         }
+      },
+      "RateLimitExceeded": {
+        "description": "The client exceeded the applicable per-endpoint, shared webhook/news ingest, or global rate limit. Tiered webhook/news ingest requests also enforce the shared aggregate limit of 1,000 requests per RATE_LIMIT_WINDOW_MS.",
+        "headers": {
+          "X-RateLimit-Limit": {
+            "description": "Maximum requests permitted in the current rate-limit window.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "5"
+              ]
+            }
+          },
+          "X-RateLimit-Remaining": {
+            "description": "Requests remaining in the current window. This is zero on a throttled response.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "0"
+              ]
+            }
+          },
+          "X-RateLimit-Reset": {
+            "description": "Unix timestamp in seconds when the current window resets.",
+            "schema": {
+              "type": "string",
+              "examples": [
+                "1756819200"
+              ]
+            }
+          },
+          "Retry-After": {
+            "description": "Seconds until the current rate-limit window resets.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/RateLimitError"
+            },
+            "example": {
+              "success": false,
+              "error": "Too many requests, please try again later.",
+              "code": "RATE_LIMITED",
+              "requestId": "6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c",
+              "retryable": true,
+              "retryAfterSeconds": 60
+            }
+          }
+        }
       }
     },
     "schemas": {
       "RateLimitHeaders": {
         "type": "object",
-        "description": "Standard X-RateLimit-* response headers emitted by the global rate limiter on every protected /api response (success and throttled). The webhook ingest endpoints use an isolated 1,000-request bucket; ordinary /api endpoints use RATE_LIMIT_MAX.",
+        "description": "Standard X-RateLimit-* response headers emitted by the API rate limiter. Dedicated endpoints use independent 60-second per-endpoint buckets. All webhook/news ingest paths share an aggregate 1,000-request bucket per RATE_LIMIT_WINDOW_MS; tiered webhook routes enforce both this aggregate ceiling and their endpoint tier. Other routes use RATE_LIMIT_MAX.",
         "required": [
           "X-RateLimit-Limit",
           "X-RateLimit-Remaining",
@@ -9719,6 +11080,68 @@
             "additionalProperties": {
               "$ref": "#/components/schemas/DeliveryChannelMetrics"
             }
+          }
+        }
+      },
+      "DeliveryHealth": {
+        "type": "object",
+        "description": "Per-channel delivery outcomes observed by the web process's in-memory NotificationManager. Worker-process deliveries are not included. Counters reset on process restart; channels with no observed delivery are omitted.",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/DeliveryHealthChannel"
+        }
+      },
+      "DeliveryHealthChannel": {
+        "type": "object",
+        "description": "Per-channel success and failure counters with observation timestamps.",
+        "required": [
+          "channel",
+          "success",
+          "failure",
+          "lastSuccessAt",
+          "lastFailureAt",
+          "firstObservedAt"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "channel": {
+            "type": "string",
+            "enum": [
+              "telegram",
+              "whatsapp",
+              "discord"
+            ],
+            "description": "Notification channel identifier."
+          },
+          "success": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Successful deliveries observed since this process started."
+          },
+          "failure": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Failed deliveries observed since this process started."
+          },
+          "lastSuccessAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Timestamp of the most recent successful delivery, or null when none succeeded."
+          },
+          "lastFailureAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Timestamp of the most recent failed delivery, or null when none failed."
+          },
+          "firstObservedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp of the first delivery outcome observed for this channel."
           }
         }
       },
@@ -10857,6 +12280,9 @@
             ],
             "example": "breakout"
           },
+          "traderIntent": {
+            "$ref": "#/components/schemas/TraderIntent"
+          },
           "score": {
             "type": [
               "number",
@@ -11097,6 +12523,7 @@
           "providerBreakdown",
           "entryPriceSourceBreakdown",
           "eligibilityBreakdown",
+          "barrierSourceBreakdown",
           "windows",
           "drawdownProxy",
           "falsePositiveCandidatesCount",
@@ -11151,6 +12578,32 @@
               "null"
             ],
             "example": 1.25
+          },
+          "byTraderPlan": {
+            "type": "object",
+            "required": [
+              "samples",
+              "hitRatePercent",
+              "averageRMultiple"
+            ],
+            "properties": {
+              "samples": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "hitRatePercent": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "averageRMultiple": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "description": "Metrics for complete request-level trader plans, evaluated only at the selected horizon and kept separate from bot metrics."
           },
           "populationNote": {
             "type": "string",
@@ -11221,6 +12674,13 @@
           "truncated": {
             "type": "boolean",
             "description": "Present when a breakdown was requested; true when any grouping omitted buckets after reaching its cap."
+          },
+          "barrierSourceBreakdown": {
+            "description": "Barrier provenance breakdown. Counts each signal by the source of its stop/target so operators can compare derived (heuristic) barriers against provider-supplied (marketContext) barriers. Keys are typically derived, marketContext, and none.",
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/BarrierSourceBucket"
+            }
           },
           "windows": {
             "type": "object",
@@ -11501,6 +12961,54 @@
               "number",
               "null"
             ]
+          }
+        }
+      },
+      "BarrierSourceBucket": {
+        "type": "object",
+        "description": "Counts and hit-rate metrics for one barrier provenance bucket (derived heuristic, provider marketContext, or none). targetHits/stopHits count explicit target/stop hits with firstHit fallbacks, and targetEligible/stopEligible are the denominator (signals that produced that window with a positive finite target or stop). Hit rates are zero-fill when the denominator is zero.",
+        "required": [
+          "received",
+          "eligible",
+          "targetEligible",
+          "stopEligible",
+          "targetHits",
+          "stopHits",
+          "targetHitRatePercent",
+          "stopHitRatePercent"
+        ],
+        "properties": {
+          "received": {
+            "type": "integer",
+            "example": 12
+          },
+          "eligible": {
+            "type": "integer",
+            "example": 12
+          },
+          "targetEligible": {
+            "type": "integer",
+            "example": 12
+          },
+          "stopEligible": {
+            "type": "integer",
+            "example": 12
+          },
+          "targetHits": {
+            "type": "integer",
+            "example": 6
+          },
+          "stopHits": {
+            "type": "integer",
+            "example": 2
+          },
+          "targetHitRatePercent": {
+            "type": "number",
+            "example": 50
+          },
+          "stopHitRatePercent": {
+            "type": "number",
+            "example": 16.67
           }
         }
       },
@@ -13099,6 +14607,51 @@
           }
         }
       },
+      "TraderIntent": {
+        "type": "object",
+        "required": [
+          "entry",
+          "horizon"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "side": {
+            "type": "string",
+            "enum": [
+              "BUY",
+              "SELL"
+            ],
+            "description": "Required when target or invalidation is supplied."
+          },
+          "entry": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "invalidation": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "target": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "horizon": {
+            "type": "string",
+            "enum": [
+              "1h",
+              "4h",
+              "1D",
+              "1W"
+            ]
+          },
+          "notes": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        },
+        "description": "Optional request-level trader plan. Barrier ordering is validated against side and entry. Complete plans are evaluated independently from bot metrics."
+      },
       "AlertRequest": {
         "type": "object",
         "required": [
@@ -13197,6 +14750,9 @@
             "maxLength": 128,
             "pattern": "^[A-Za-z0-9._:-]+$",
             "description": "Stable occurrence ID supplied by the signal producer. Required for live auto-trade; reuse the same ID on retries and use a new ID for each new signal occurrence."
+          },
+          "traderIntent": {
+            "$ref": "#/components/schemas/TraderIntent"
           }
         }
       },
@@ -13595,6 +15151,9 @@
             "type": "boolean",
             "description": "When true, validates the request and returns a dryRun response without invoking the TradingView MCP coin_analysis (or multi_timeframe_analysis) call. Useful for probe requests that want to avoid the ~120s MCP budget.",
             "default": false
+          },
+          "traderIntent": {
+            "$ref": "#/components/schemas/TraderIntent"
           }
         },
         "additionalProperties": false
@@ -13642,7 +15201,22 @@
             ]
           },
           "analysis": {
-            "$ref": "#/components/schemas/JsonObject"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/JsonObject"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "risk": {
+                    "$ref": "#/components/schemas/SymbolAnalysisRisk"
+                  },
+                  "decision": {
+                    "$ref": "#/components/schemas/SymbolAnalysisDecision"
+                  }
+                }
+              }
+            ]
           },
           "requestId": {
             "type": "string"
@@ -13652,6 +15226,9 @@
             "minimum": 0,
             "description": "Total endpoint execution time in milliseconds.",
             "example": 850
+          },
+          "traderIntent": {
+            "$ref": "#/components/schemas/TraderIntent"
           }
         }
       },
@@ -13764,6 +15341,122 @@
           }
         }
       },
+      "SymbolAnalysisRisk": {
+        "type": "object",
+        "description": "Plan-quality gate. When risk_reward_ratio is below the configured floor (default 1.5), `valid` is false and `rejectionReason` is `risk_reward_below_minimum`. Eligible for Firebase Remote Config override via SYMBOL_ANALYSIS_MIN_RISK_REWARD_RATIO.",
+        "required": [
+          "side",
+          "valid"
+        ],
+        "properties": {
+          "entry_price": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "side": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "BUY",
+              "SELL",
+              null
+            ]
+          },
+          "stop_loss": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "target": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "invalidation_level": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "risk_reward_ratio": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "rejectionReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "missing_levels",
+              "invalid_directional_levels",
+              "risk_reward_below_minimum",
+              null
+            ]
+          },
+          "minRiskRewardRatio": {
+            "type": "number",
+            "minimum": 0.1,
+            "maximum": 10
+          }
+        }
+      },
+      "SymbolAnalysisDecision": {
+        "type": "object",
+        "required": [
+          "action",
+          "dataSufficient"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "BUY",
+              "SELL",
+              "NO_TRADE"
+            ]
+          },
+          "confidence": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dataSufficient": {
+            "type": "boolean"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Spanish warnings surfaced from the plan-quality gate (e.g. R/R por debajo del mínimo)."
+          }
+        }
+      },
       "ScannerPresetRequest": {
         "type": "object",
         "required": [
@@ -13793,6 +15486,75 @@
           },
           "bbwThreshold": {
             "type": "number"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "preset",
+              "inherit"
+            ],
+            "default": "inherit",
+            "description": "inherit preserves broadcast behavior; preset sends only to configured destinations. Older records without mode retain their legacy routing."
+          },
+          "destinations": {
+            "$ref": "#/components/schemas/ScannerPresetDestinations"
+          }
+        }
+      },
+      "ScannerPresetDestinations": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "Destinations accepted on create and update requests. Discord webhook URLs are stored for delivery and are never returned by preset APIs.",
+        "properties": {
+          "telegramChatIds": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "pattern": "^-?\\d{5,20}$"
+            }
+          },
+          "whatsappChatIds": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{6,20}@(c|g)\\.us$"
+            }
+          },
+          "discordWebhookUrls": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://(?:[A-Za-z0-9-]+\\.)*discord(?:app)?\\.com/api/webhooks/\\d+/[A-Za-z0-9_-]+(?:/.*)?$"
+            }
+          }
+        }
+      },
+      "ScannerPresetResponseDestinations": {
+        "type": "object",
+        "description": "Safe destination projection returned by preset APIs. Discord webhook URLs are never returned; discordWebhookCount reports how many are configured.",
+        "properties": {
+          "telegramChatIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^-?\\d{5,20}$"
+            }
+          },
+          "whatsappChatIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\d{6,20}@(c|g)\\.us$"
+            }
+          },
+          "discordWebhookCount": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Configured Discord webhooks. Their URLs and tokens are omitted from all preset responses."
           }
         }
       },
@@ -13802,6 +15564,11 @@
           "dryRun": {
             "type": "boolean",
             "description": "When true, returns configuration validation, MCP readiness, estimated call volume, and resolved channels without executing scans or delivering messages."
+          },
+          "runAsyncJob": {
+            "type": "boolean",
+            "default": false,
+            "description": "When true and dryRun is false, submits the preset through the existing market-scanner job execution path and returns HTTP 202. Synchronous execution remains the default."
           },
           "scans": {
             "type": "array",
@@ -13831,6 +15598,7 @@
           },
           "channels": {
             "type": "array",
+            "description": "Filters the configured preset destinations. If no selected channel has a configured destination, the request returns 400 INVALID_REQUEST before scanning or job creation.",
             "items": {
               "type": "string",
               "enum": [
@@ -14648,6 +16416,7 @@
       },
       "ScannerPreset": {
         "type": "object",
+        "description": "Safe preset response projection. Discord webhook URLs and tokens are omitted; destinations.discordWebhookCount reports configured webhook count.",
         "properties": {
           "id": {
             "type": "string"
@@ -14672,6 +16441,17 @@
           },
           "bbwThreshold": {
             "type": "number"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "preset",
+              "inherit"
+            ],
+            "description": "Mode-less records are legacy presets and keep their prior routing behavior."
+          },
+          "destinations": {
+            "$ref": "#/components/schemas/ScannerPresetResponseDestinations"
           },
           "schedule": {
             "type": "object",
@@ -14715,10 +16495,6 @@
             "type": "string",
             "pattern": "^\\d{6,20}@(c|g)\\.us$",
             "description": "Optional WhatsApp chat ID override. When ENABLE_STRICT_CHAT_ID_VALIDATION=true, must match the GreenAPI format <digits>@<c.us|g.us>; free-form strings are rejected with 400 INVALID_REQUEST."
-          },
-          "discordWebhookUrl": {
-            "type": "string",
-            "format": "uri"
           },
           "lastRunAt": {
             "type": "string",
@@ -14935,6 +16711,20 @@
               "type": "string"
             }
           },
+          "categories": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "price_surge",
+                "price_decline",
+                "public_figure",
+                "regulatory"
+              ]
+            },
+            "description": "Optional list of alertable event categories to deliver. When specified, only detected news events matching one of these categories will trigger notifications. Omitted defaults to delivering all categories. Valid values: price_surge, price_decline, public_figure, regulatory."
+          },
           "dryRun": {
             "type": "boolean",
             "default": false,
@@ -15024,6 +16814,24 @@
               },
               "alerts_sent": {
                 "type": "integer"
+              },
+              "barrierProvenance": {
+                "type": "object",
+                "description": "Counts of alerts grouped by the source of their stop/target. derived alerts used the NewsAnalyzer.deriveBarriers() heuristic; marketContext alerts carried provider-supplied levels. Reported when at least one alert with a barrier was generated.",
+                "properties": {
+                  "derivedAlertsCount": {
+                    "type": "integer",
+                    "example": 2
+                  },
+                  "marketContextAlertsCount": {
+                    "type": "integer",
+                    "example": 0
+                  },
+                  "totalAlertsWithBarriers": {
+                    "type": "integer",
+                    "example": 2
+                  }
+                }
               }
             }
           },
@@ -15365,6 +17173,9 @@
           "outcomeAnnotation": {
             "$ref": "#/components/schemas/OutcomeAnnotation"
           },
+          "traderIntent": {
+            "$ref": "#/components/schemas/TraderIntent"
+          },
           "payload": {
             "type": "object",
             "properties": {
@@ -15384,6 +17195,9 @@
                   "unknown"
                 ],
                 "description": "Classification category for the alert signal."
+              },
+              "traderIntent": {
+                "$ref": "#/components/schemas/TraderIntent"
               },
               "enrichedData": {
                 "type": [
@@ -15779,15 +17593,22 @@
             "type": "string",
             "enum": [
               "MARKET",
-              "LIMIT"
-            ]
+              "LIMIT",
+              "LIMIT_MAKER",
+              "STOP_LOSS",
+              "STOP_LOSS_LIMIT",
+              "TAKE_PROFIT",
+              "TAKE_PROFIT_LIMIT",
+              "BRACKET_LIMIT"
+            ],
+            "description": "Supported Binance Spot order type. Futures-only order types are rejected."
           },
           "quantity": {
             "type": [
               "number",
               "string"
             ],
-            "description": "Base-asset quantity. Required for LIMIT. Optional for MARKET (evaluated using average price against the notional cap; MARKET BUYs are converted to an exchange-enforced quoteOrderQty at the estimated average price). Send as a string when exact decimal precision matters."
+            "description": "Base-asset quantity. Required for all contingent orders and BRACKET_LIMIT. Optional for MARKET (evaluated against the notional cap); send as a string when exact decimal precision matters."
           },
           "quoteOrderQty": {
             "type": [
@@ -15801,7 +17622,7 @@
               "number",
               "string"
             ],
-            "description": "Required for LIMIT orders. Send as a string when exact decimal precision matters."
+            "description": "Required for LIMIT, LIMIT_MAKER, STOP_LOSS_LIMIT, TAKE_PROFIT_LIMIT, and BRACKET_LIMIT. STOP_LOSS and TAKE_PROFIT use stopPrice. Send as a string when exact decimal precision matters."
           },
           "timeInForce": {
             "type": "string",
@@ -15811,7 +17632,7 @@
               "FOK"
             ],
             "default": "GTC",
-            "description": "LIMIT-only. MARKET orders must omit this field."
+            "description": "Required for LIMIT, STOP_LOSS_LIMIT, TAKE_PROFIT_LIMIT, and BRACKET_LIMIT; MARKET, LIMIT_MAKER, STOP_LOSS, and TAKE_PROFIT requests omit it."
           },
           "clientOrderId": {
             "type": "string",
@@ -15850,6 +17671,32 @@
           "setupType": {
             "type": "string",
             "description": "Optional trading setup category for trade ledger grouping (e.g. breakout, pullback)."
+          },
+          "stopPrice": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Required for STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT, and BRACKET_LIMIT; optional when trailingDelta is used. Decimal string recommended."
+          },
+          "stopLimitPrice": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Required for STOP_LOSS_LIMIT and BRACKET_LIMIT; execution limit price for the protective stop leg."
+          },
+          "takeProfitPrice": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Required for BRACKET_LIMIT; price of the pending take-profit leg (LIMIT_MAKER for BUY entries, TAKE_PROFIT_LIMIT for SELL entries). For SELL entries it is both the take-profit trigger and limit price."
+          },
+          "trailingDelta": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional trailing offset in BIPS. Must be allowed by the symbol TRAILING_DELTA filter for this side and order type."
           }
         },
         "oneOf": [
@@ -16082,6 +17929,9 @@
           },
           "count": {
             "type": "integer"
+          },
+          "orderList": {
+            "$ref": "#/components/schemas/JsonObject"
           }
         }
       },
@@ -16090,8 +17940,7 @@
         "required": [
           "success",
           "dryRun",
-          "environment",
-          "order"
+          "environment"
         ],
         "properties": {
           "success": {
@@ -16113,8 +17962,24 @@
           },
           "order": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "orderList": {
+            "$ref": "#/components/schemas/JsonObject"
           }
-        }
+        },
+        "description": "Validated dry-run or confirmed Binance Spot order or native OTOCO order list. A replay includes idempotencyReplayed=true.",
+        "oneOf": [
+          {
+            "required": [
+              "order"
+            ]
+          },
+          {
+            "required": [
+              "orderList"
+            ]
+          }
+        ]
       },
       "BinanceAssetBalance": {
         "type": "object",
@@ -17008,7 +18873,8 @@
       "Status": {
         "type": "object",
         "required": [
-          "dependencies"
+          "dependencies",
+          "deliveryHealth"
         ],
         "description": "Runtime status. featureFlags.maintenanceMode reports whether incident response maintenance mode is enabled (ENABLE_MAINTENANCE_MODE or Remote Config); readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, per-tool latency and success metrics (callCount, successCount, failureCount, timeoutCount, totalDurationMs, averageDurationMs, lastCallAt, lastErrorCategory), and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports scanner-preset persistence, where mode/backend are intent-derived and must not flip to memory while the gate and credentials are present (#1342): scannerPresetStorage.configured is credential shape only, scannerPresetStorage.ready is true only after an observed durable read or write and is proven on this endpoint by a bounded durable read, and scannerPresetStorage.status is disabled, misconfigured when credentials are genuinely absent, unverified before any durable attempt, ready, or degraded after a failure that nothing has answered since, with readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps, closed-enum lastErrorReason, and the pendingWrites/inFlightWrites/pendingDeletes/oldestPendingWriteAt unsynced-workload fields exposing the process-local observed window, which resets on process restart; a transient failure downgrades the verdict only until the next success; dependencies.scannerPresetScheduler reports the effective 60-second per-preset floor and lastRunDeferredByFloorCount, the process-local count of due presets deferred by that floor; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters, plus the distributed sweep lease observability that identifies the winning evaluator: leaseMs (SIGNAL_OUTCOME_EVALUATION_LEASE_MS, default 120000, valid range 10000-600000, environment-only), lastRunLeaseHeld and leaseHeldSkipCount, where lastRunLeaseHeld is true whenever the most recent sweep did not run to completion as the lease holder and leaseHeldSkipCount counts those sweeps cumulatively since process start; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.newsMonitorClassifier reports ENABLE_NEWS_MONITOR_CLASSIFIER and defaults to false; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway readiness, including whether the gateway is actually in the runtime request path: dependencies.cloudflareAig.provider is the selected MODEL_PROVIDER and dependencies.cloudflareAig.routed reports whether that provider is cloudflare. ENABLE_CLOUDFLARE_AIG alone does not route LLM traffic, so credentials present while another provider are selected report ready false with status inactive; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation. equityMarketData.configured reports credential shape only (gate on, provider selected, key present) and must not be read as proof the feature works: equityMarketData.ready is true only after an observed successful provider call, and equityMarketData.status is disabled, misconfigured, unverified before any call is observed, ready, or degraded after a failed call. equityMarketData.readiness plus the requestsAttempted/requestsSucceeded/requestsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and sanitized lastErrorReason expose the observed provider outcome window, which resets on process restart. featureFlags.firestoreIdempotency reports ENABLE_FIRESTORE_IDEMPOTENCY and dependencies.idempotencyStorage reports durable webhook idempotency state; idempotencyStorage.configured is credential shape only and must not be read as proof that duplicates are suppressed, because every Firestore failure in this layer falls open to in-memory idempotency: idempotencyStorage.ready is true only after an observed successful durable operation and idempotencyStorage.status is disabled, misconfigured, unverified before any durable attempt, ready, or degraded after a failure, with mode/backend reporting configured intent and failOpen always true. idempotencyStorage.readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and closed-enum lastErrorReason expose the observed durable outcome window, which resets on process restart. featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). featureFlags.alertBurstAggregation reports ENABLE_ALERT_SYNTH_BURST_AGGREGATION and dependencies.alertBurstAggregation reports the effective window and minimum plus non-secret aggregation counters (openWindows, aggregatedBurstCount, aggregatedSignalCount, aggregatedFailoverCount, releasedSignalCount, lastAggregatedAt, lastWindowClosedAt); these counters are process-local, so enabled true with every counter at 0 is expected right after a deploy. dependencies.firestoreWriteMetrics reports in-memory per-domain Firestore write counters (alerts, alertReplays, jobs) with overall success/failure and per-domain breakdown when at least one write has been recorded; the field is omitted entirely when nothing has been recorded yet and is reset on process restart. Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports scanner-preset persistence, where mode/backend are intent-derived and must not flip to memory while the gate and credentials are present (#1342): scannerPresetStorage.configured is credential shape only, scannerPresetStorage.ready is true only after an observed durable read or write and is proven on this endpoint by a bounded durable read, and scannerPresetStorage.status is disabled, misconfigured when credentials are genuinely absent, unverified before any durable attempt, ready, or degraded after a failure that nothing has answered since, with readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps, closed-enum lastErrorReason, and the pendingWrites/inFlightWrites/pendingDeletes/oldestPendingWriteAt unsynced-workload fields exposing the process-local observed window, which resets on process restart; a transient failure downgrades the verdict only until the next success; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters, plus the distributed sweep lease observability that identifies the winning evaluator: leaseMs (SIGNAL_OUTCOME_EVALUATION_LEASE_MS, default 120000, valid range 10000-600000, environment-only), lastRunLeaseHeld and leaseHeldSkipCount, where lastRunLeaseHeld is true whenever the most recent sweep did not run to completion as the lease holder and leaseHeldSkipCount counts those sweeps cumulatively since process start; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway readiness, including whether the gateway is actually in the runtime request path: dependencies.cloudflareAig.provider is the selected MODEL_PROVIDER and dependencies.cloudflareAig.routed reports whether that provider is cloudflare. ENABLE_CLOUDFLARE_AIG alone does not route LLM traffic, so credentials present while another provider are selected report ready false with status inactive; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation. equityMarketData.configured reports credential shape only (gate on, provider selected, key present) and must not be read as proof the feature works: equityMarketData.ready is true only after an observed successful provider call, and equityMarketData.status is disabled, misconfigured, unverified before any call is observed, ready, or degraded after a failed call. equityMarketData.readiness plus the requestsAttempted/requestsSucceeded/requestsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and sanitized lastErrorReason expose the observed provider outcome window, which resets on process restart. featureFlags.firestoreIdempotency reports ENABLE_FIRESTORE_IDEMPOTENCY and dependencies.idempotencyStorage reports durable webhook idempotency state; idempotencyStorage.configured is credential shape only and must not be read as proof that duplicates are suppressed, because every Firestore failure in this layer falls open to in-memory idempotency: idempotencyStorage.ready is true only after an observed successful durable operation and idempotencyStorage.status is disabled, misconfigured, unverified before any durable attempt, ready, or degraded after a failure, with mode/backend reporting configured intent and failOpen always true. idempotencyStorage.readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and closed-enum lastErrorReason expose the observed durable outcome window, which resets on process restart. featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). featureFlags.alertCrossTimeframeSuppression reports ENABLE_ALERT_CROSS_TF_SUPPRESSION and dependencies.alertCrossTimeframeSuppression reports the enabled state, the effective ALERT_CROSS_TF_WINDOW_MS window, plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). featureFlags.alertHtfRender reports ENABLE_ALERT_HTF_RENDER. featureFlags.symbolAnalysisMultiAgent reports ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT. featureFlags.apiOnlyMode reports ENABLE_API_ONLY_MODE. dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts. featureFlags.alertModeration reports ENABLE_ALERT_MODERATION and dependencies.alertModeration reports the enabled state plus non-sensitive accepted/rejected/regexMatches/lastRejectedAt counters (no payload content). notificationChannelIntent reports the operator-intent view of notification channel configuration (telegram, whatsapp, discord), mirroring NotificationChannel.isConfigured() (enable flag plus required credentials) so the zero-channel admin page can be reconciled from the status response alone; a channel with credentials present but its enable flag off reports as not configured, and only channel names are exposed, never credentials or destinations. featureFlags.whatsappCommands reports ENABLE_WHATSAPP_COMMANDS and dependencies.whatsappCommandBridge reports the inbound WhatsApp command bridge: the gate, credential shape, running state, and the receipt-acknowledgement counters that show whether unacknowledged GreenAPI receipts are being re-executed (duplicateSkippedCount for receipts absorbed by the seen-receipt suppression window, deleteFailureCount/deleteRetryCount/deleteAbortedCount for acknowledgements that failed, were retried, or hit their own deadline, and trackedReceiptCount for the bounded suppression window itself); counters are process-local and reset on restart, and no chat id, api key, or message content is exposed. featureFlags.firebaseAdminAuth reports the ENABLE_FIREBASE_ADMIN_AUTH gate and dependencies.adminAuth reports the browser-console Firebase ID-token trust domain; verifierConfigured reports credential shape only, so adminAuth.ready is true only after an observed successful token verification and adminAuth.status is disabled, misconfigured, unverified, ready, or degraded. A rejected bearer token never records a failure, because any unauthenticated caller could otherwise force a false degraded verdict. dependencies.adminAuth carries booleans and counters only and never the Firebase Web configuration served by /admin/auth-config. featureFlags.outcomeInformedDelivery reports ENABLE_OUTCOME_INFORMED_DELIVERY and dependencies.outcomeInformedDelivery reports the bounded lookup counters (lookups, annotated, disabled, errors, lastAnnotatedAt) without exposing prompt text or provider credentials. featureFlags.binanceOrderAudit reports ENABLE_BINANCE_ORDER_AUDIT (environment or Remote Config override) and dependencies.binanceOrderAudit reports the audit trail's enabled/configured/ready state, Firestore collection, and retention days; its configured field reflects credential readiness independently of the gate, so an operator can tell credentials-present-but-audit-off from audit-on-but-storage-unconfigured, its ready field is credential readiness only (enabled && configured) and does not prove a write has succeeded since audit writes are fail-open, and no operator identifier or exchange credential is ever returned. featureFlags.discordSourceRouting reports ENABLE_DISCORD_SOURCE_ROUTING and dependencies.discordSourceRouting reports the configured key list, default-key presence, and aggregate resolution/fallback counters without webhook URLs. featureFlags.telegramCommandRateLimiting reports ENABLE_TELEGRAM_COMMAND_RATE_LIMITING.",
         "properties": {
@@ -17018,11 +18884,17 @@
           "service": {
             "$ref": "#/components/schemas/JsonObject"
           },
-          "featureFlags": {
+          "build": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "featureFlags": {
+            "$ref": "#/components/schemas/StatusFeatureFlags"
           },
           "deliveryChannels": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "deliveryHealth": {
+            "$ref": "#/components/schemas/DeliveryHealth"
           },
           "notificationChannelIntent": {
             "$ref": "#/components/schemas/NotificationChannelIntent"
@@ -17118,6 +18990,15 @@
               },
               "backgroundTimers": {
                 "$ref": "#/components/schemas/BackgroundTimerStats"
+              },
+              "geminiQuota": {
+                "$ref": "#/components/schemas/GeminiQuotaDependency"
+              },
+              "binanceTrading": {
+                "$ref": "#/components/schemas/BinanceTradingDependency"
+              },
+              "presetBoundDestinations": {
+                "$ref": "#/components/schemas/PresetBoundDestinationsDependency"
               }
             }
           }
@@ -20233,6 +22114,524 @@
           }
         },
         "additionalProperties": false
+      },
+      "GeminiQuotaDependency": {
+        "type": "object",
+        "description": "Non-sensitive Gemini quota and request-window telemetry. The counters are process-local and reset at the declared 60-second window boundary.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "windowStartedAt",
+          "windowDurationMs",
+          "requestsInWindow",
+          "exhaustedEventsInWindow",
+          "lastExhaustedAt",
+          "quotaStatus"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "misconfigured",
+              "degraded",
+              "ready"
+            ]
+          },
+          "windowStartedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "windowDurationMs": {
+            "type": "integer",
+            "minimum": 1,
+            "example": 60000
+          },
+          "requestsInWindow": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "exhaustedEventsInWindow": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastExhaustedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "quotaStatus": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "exhausted"
+            ]
+          },
+          "cooldownActive": {
+            "type": "boolean"
+          },
+          "remainingCooldownMs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastTriggeredAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "triggersTotal": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "braveFallbacksDuringCooldown": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastBraveFallbackAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "metrics": {
+            "$ref": "#/components/schemas/JsonObject"
+          }
+        }
+      },
+      "RateLimitError": {
+        "type": "object",
+        "description": "Standard error envelope returned when a rate limit is exceeded, with the seconds until retry is permitted.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Error"
+          }
+        ],
+        "required": [
+          "success",
+          "error",
+          "code",
+          "retryable",
+          "retryAfterSeconds"
+        ],
+        "properties": {
+          "retryAfterSeconds": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Seconds until the current rate-limit window resets.",
+            "examples": [
+              60
+            ]
+          },
+          "code": {
+            "type": "string",
+            "const": "RATE_LIMITED",
+            "description": "Machine-readable rate-limit error code."
+          },
+          "retryable": {
+            "type": "boolean",
+            "const": true,
+            "description": "Rate-limit responses are retryable after the indicated delay."
+          }
+        }
+      },
+      "BinanceTradingPauseState": {
+        "type": "object",
+        "required": [
+          "paused",
+          "unavailable",
+          "storage"
+        ],
+        "properties": {
+          "paused": {
+            "type": "boolean",
+            "description": "Whether Binance Spot order submissions are currently paused"
+          },
+          "pausedBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Actor who set the active pause, or null when unpaused"
+          },
+          "pausedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO-8601 timestamp when the active pause was set, or null"
+          },
+          "pausedReason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reason recorded when the active pause was set, or null"
+          },
+          "resumedBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Actor who most recently cleared a pause, or null"
+          },
+          "resumedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO-8601 timestamp when a pause was most recently cleared, or null"
+          },
+          "lastChangedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "ISO-8601 timestamp of the most recent pause/resume mutation"
+          },
+          "lastChangedBy": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Actor of the most recent pause/resume mutation"
+          },
+          "lastAction": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "pause",
+              "resume",
+              null
+            ],
+            "description": "Most recent action taken on the kill-switch"
+          },
+          "unavailable": {
+            "type": "boolean",
+            "description": "True when authoritative storage cannot be read while trading is enabled (submissions fail closed)"
+          },
+          "storage": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ],
+            "description": "Backing store that produced this snapshot"
+          }
+        }
+      },
+      "BinanceReconciliationReservation": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Reservation document ID (SHA-256 digest of signalId)."
+          },
+          "signalId": {
+            "type": "string",
+            "description": "Original signal identifier."
+          },
+          "status": {
+            "type": "string",
+            "description": "Reservation status (pending, submitted, failed, unknown)."
+          },
+          "ambiguous": {
+            "type": "boolean",
+            "description": "Whether the reservation is indeterminate and requires reconciliation."
+          },
+          "ambiguousReason": {
+            "type": "string",
+            "description": "Error code or reason why the reservation outcome is indeterminate."
+          },
+          "signalContext": {
+            "type": "object",
+            "description": "Context of the signal that produced the reservation."
+          },
+          "lastAttempt": {
+            "type": "object",
+            "description": "Details of the last Binance execution attempt."
+          },
+          "orderId": {
+            "type": "integer",
+            "description": "Resolved Binance exchange order ID if placed."
+          },
+          "resolvedAs": {
+            "type": "string",
+            "enum": [
+              "placed",
+              "not_placed"
+            ],
+            "description": "Operator resolution outcome."
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp when the reservation was reconciled."
+          },
+          "resolvedBy": {
+            "type": "string",
+            "description": "Operator actor that reconciled the reservation."
+          },
+          "notes": {
+            "type": "string",
+            "description": "Reconciliation notes."
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BinanceReconciliationListResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "reservations",
+          "count"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "reservations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BinanceReconciliationReservation"
+            }
+          },
+          "count": {
+            "type": "integer"
+          },
+          "ambiguousCount": {
+            "type": "integer"
+          }
+        }
+      },
+      "BinanceReconciliationDetailResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "reservation"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "reservation": {
+            "$ref": "#/components/schemas/BinanceReconciliationReservation"
+          }
+        }
+      },
+      "ResolveAmbiguousReservationRequest": {
+        "type": "object",
+        "required": [
+          "resolvedAs"
+        ],
+        "properties": {
+          "resolvedAs": {
+            "type": "string",
+            "enum": [
+              "placed",
+              "not_placed"
+            ],
+            "description": "Operator determination of order status."
+          },
+          "orderId": {
+            "type": "integer",
+            "description": "Optional Binance exchange order ID if resolved as placed."
+          },
+          "notes": {
+            "type": "string",
+            "description": "Optional operator reconciliation notes."
+          }
+        }
+      },
+      "ResolveAmbiguousReservationResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "action",
+          "resolvedAs",
+          "reservation"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "action": {
+            "type": "string"
+          },
+          "resolvedAs": {
+            "type": "string"
+          },
+          "idempotent": {
+            "type": "boolean"
+          },
+          "reservation": {
+            "$ref": "#/components/schemas/BinanceReconciliationReservation"
+          }
+        }
+      },
+      "BinanceTradingDependency": {
+        "type": "object",
+        "properties": {
+          "ambiguousCount": {
+            "type": "integer",
+            "description": "Bounded count of current ambiguous auto-trade reservations."
+          },
+          "ambiguousReservationsCount": {
+            "type": "integer",
+            "description": "Bounded count of current ambiguous auto-trade reservations."
+          },
+          "supportedOrderTypes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "MARKET",
+                "LIMIT",
+                "LIMIT_MAKER",
+                "STOP_LOSS",
+                "STOP_LOSS_LIMIT",
+                "TAKE_PROFIT",
+                "TAKE_PROFIT_LIMIT",
+                "BRACKET_LIMIT"
+              ]
+            },
+            "description": "Static supported Binance Spot order types."
+          }
+        },
+        "additionalProperties": true
+      },
+      "ScannerPresetAsyncRunResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Job"
+          },
+          {
+            "type": "object",
+            "required": [
+              "presetId",
+              "requestId",
+              "requestedChannels"
+            ],
+            "properties": {
+              "presetId": {
+                "type": "string"
+              },
+              "requestId": {
+                "type": "string"
+              },
+              "requestedChannels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "telegram",
+                    "whatsapp",
+                    "discord"
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "description": "Accepted scanner-preset job metadata. Resolved destination values are stored in private job metadata and are not returned."
+      },
+      "PresetBoundDestinationsDependency": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "channels",
+          "maxDestinationsPerChannel"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "configured": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "ready": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready"
+            ]
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "telegram",
+                "whatsapp",
+                "discord"
+              ]
+            }
+          },
+          "maxDestinationsPerChannel": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          }
+        },
+        "additionalProperties": false,
+        "description": "Static support metadata for preset-bound destination routing. Never includes configured destinations."
+      },
+      "StatusFeatureFlags": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/JsonObject"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "presetBoundDestinations": {
+                "type": "boolean",
+                "description": "Preset routing supports bounded saved Telegram, WhatsApp, and Discord destinations."
+              }
+            }
+          }
+        ]
       }
     },
     "headers": {

@@ -24,6 +24,24 @@ describe('OpenAPI contract', () => {
 		expect(contract.components.schemas.AutoTradeOutcome.properties.reason.enum)
 			.toEqual(expect.arrayContaining(['ORDER_PENDING', 'SIGNAL_ID_REQUIRED', 'DURABLE_RESERVATION_UNAVAILABLE']));
 	});
+
+	it('documents optional request-level trader intent and independent outcome analytics', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const alertRequestProps = contract.components.schemas.AlertRequest.properties;
+		const symbolAnalysisRequestProps = contract.components.schemas.SymbolAnalysisRequest.properties;
+		const outcomesSummaryProps = contract.components.schemas.OutcomesSummary.properties;
+		const traderIntentSchema = contract.components.schemas.TraderIntent;
+
+		expect(alertRequestProps.traderIntent.$ref).toBe('#/components/schemas/TraderIntent');
+		expect(symbolAnalysisRequestProps.traderIntent.$ref).toBe('#/components/schemas/TraderIntent');
+		expect(traderIntentSchema.required).toEqual(['entry', 'horizon']);
+		expect(traderIntentSchema.properties.horizon.enum).toEqual(['1h', '4h', '1D', '1W']);
+		expect(traderIntentSchema.properties.side.enum).toEqual(['BUY', 'SELL']);
+		expect(outcomesSummaryProps.byTraderPlan).toEqual(expect.objectContaining({
+			type: 'object',
+			required: ['samples', 'hitRatePercent', 'averageRMultiple'],
+		}));
+	});
 	it('documents all decision-audit dispatch channel modes', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 
@@ -140,9 +158,13 @@ describe('OpenAPI contract', () => {
 			'POST /api/alert-subscribers/{id}/test',
 			'POST /api/jobs/tradingview-analysis', 'GET /api/jobs', 'GET /api/jobs/{jobId}',
 			'POST /api/jobs/{jobId}/cancel', 'POST /api/jobs/{jobId}/retry',
-			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary', 'GET /api/outcomes/calibration',
+			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary',
+			'GET /api/outcomes/calibration', 'GET /api/outcomes/export', 'GET /api/outcomes/{outcomeId}',
 			'GET /api/symbol-analyses', 'GET /api/symbol-analyses/summary',
-			'GET /api/trading/binance/orders', 'GET /api/trading/binance/orders/audit', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders', 'GET /api/status', 'GET /api/capabilities',
+			'GET /api/trading/binance/orders', 'GET /api/trading/binance/orders/audit', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders',
+			'GET /api/trading/binance/pause', 'POST /api/trading/binance/pause', 'POST /api/trading/binance/resume',
+			'GET /api/trading/binance/reconciliation', 'GET /api/trading/binance/reconciliation/{reservationId}', 'POST /api/trading/binance/reconciliation/{reservationId}',
+			'GET /api/status', 'GET /api/capabilities',
 			'POST /api/symbols/resolve', 'GET /api/symbols/aliases',
 			'POST /api/trading/binance/orders/preview', 'GET /api/trading/binance/account/balances',
 			'GET /api/trading/positions', 'GET /api/trading/pnl/summary', 'GET /api/trading/trades',
@@ -163,6 +185,12 @@ describe('OpenAPI contract', () => {
 			'GET /api/trading/binance/account/balances',
 			'POST /api/trading/binance/orders',
 			'DELETE /api/trading/binance/orders',
+			'GET /api/trading/binance/pause',
+			'POST /api/trading/binance/pause',
+			'POST /api/trading/binance/resume',
+			'GET /api/trading/binance/reconciliation',
+			'GET /api/trading/binance/reconciliation/{reservationId}',
+			'POST /api/trading/binance/reconciliation/{reservationId}',
 		]);
 
 		for (const operation of operations) {
@@ -206,6 +234,8 @@ describe('OpenAPI contract', () => {
 			'GET /api/outcomes': 'admin.viewer',
 			'GET /api/outcomes/summary': 'admin.viewer',
 			'GET /api/outcomes/calibration': 'admin.viewer',
+			'GET /api/outcomes/export': 'admin.viewer',
+			'GET /api/outcomes/{outcomeId}': 'admin.viewer',
 			'GET /api/symbol-analyses': 'admin.viewer',
 			'GET /api/symbol-analyses/summary': 'admin.viewer',
 			'GET /api/trading/binance/orders': 'admin.viewer',
@@ -217,6 +247,9 @@ describe('OpenAPI contract', () => {
 			'GET /api/trading/trades': 'admin.viewer',
 			'POST /api/trading/binance/orders': 'admin.operator',
 			'DELETE /api/trading/binance/orders': 'admin.operator',
+			'GET /api/trading/binance/pause': 'admin.viewer',
+			'POST /api/trading/binance/pause': 'admin.operator',
+			'POST /api/trading/binance/resume': 'admin.operator',
 			'GET /api/alerts': 'admin.viewer',
 			'GET /api/jobs': 'admin.viewer',
 			'POST /api/alerts/{alertId}/replay': 'admin.operator',
@@ -1162,6 +1195,59 @@ describe('status dependency contract drift', () => {
 		expect(deploymentIdentity.properties).toHaveProperty('service');
 		expect(deploymentIdentity.properties).toHaveProperty('runtimeVersion');
 		expect(deploymentSummaryItem.required).toEqual(expect.arrayContaining(['count', 'lastSeen']));
+	});
+
+	it('documents tiered rate-limit responses and their positive retry delay', () => {
+		const spec = require('../../src/openapi/openapi.json');
+		const response = spec.components.responses.RateLimitExceeded;
+		const schema = spec.components.schemas.RateLimitError;
+
+		expect(spec.info.description).toContain('All webhook/news ingest paths share an aggregate 1,000-request bucket');
+		expect(response.description).toContain('Tiered webhook/news ingest requests also enforce the shared aggregate limit');
+		expect(response.content['application/json'].schema).toEqual({
+			$ref: '#/components/schemas/RateLimitError',
+		});
+		expect(Object.keys(response.headers)).toEqual(expect.arrayContaining([
+			'X-RateLimit-Limit',
+			'X-RateLimit-Remaining',
+			'X-RateLimit-Reset',
+			'Retry-After',
+			'X-Request-Id',
+		]));
+		expect(schema.required).toEqual(expect.arrayContaining([
+			'success',
+			'error',
+			'code',
+			'retryable',
+			'retryAfterSeconds',
+		]));
+		expect(schema.properties.retryAfterSeconds).toEqual(expect.objectContaining({
+			type: 'integer',
+			minimum: 1,
+		}));
+
+		const tieredOperations = [
+			['/api/webhook/alert', 'post'],
+			['/api/webhook/message', 'post'],
+			['/api/webhook/expanded-analysis-alert', 'post'],
+			['/api/webhook/market-scanner-alert', 'post'],
+			['/api/webhook/symbol-analysis', 'post'],
+			['/api/webhook/volume-confirmation', 'post'],
+			['/api/news-monitor', 'get'],
+			['/api/news-monitor', 'post'],
+			['/api/trading/binance/orders', 'get'],
+			['/api/trading/binance/orders', 'post'],
+			['/api/trading/binance/orders', 'delete'],
+			['/api/trading/binance/orders/preview', 'post'],
+			['/api/status', 'get'],
+			['/api/capabilities', 'get'],
+		];
+
+		for (const [routePath, method] of tieredOperations) {
+			expect(spec.paths[routePath][method].responses['429']).toEqual({
+				$ref: '#/components/responses/RateLimitExceeded',
+			});
+		}
 	});
 
 	describe('Batch alert IDs nonblank contract (GH-1174)', () => {

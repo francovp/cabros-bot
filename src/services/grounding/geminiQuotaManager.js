@@ -1,5 +1,7 @@
 'use strict';
 
+const QUOTA_WINDOW_DURATION_MS = 60_000;
+
 /**
  * GeminiQuotaManager - Shared process-level Gemini API quota cooldown manager
  * Prevents cascading 429 errors across concurrent workers and requests
@@ -8,6 +10,11 @@
 class GeminiQuotaManager {
 	constructor() {
 		this.quotaCooldownUntil = 0;
+		this.windowStartedAt = null;
+		this.requestsInWindow = 0;
+		this.exhaustedEventsInWindow = 0;
+		this.lastExhaustedAt = null;
+		this.recordedQuotaErrors = new WeakSet();
 		this.lastTriggeredAt = null;
 		this.lastTriggeredAtMs = null;
 		this.triggersTotal = 0;
@@ -53,6 +60,34 @@ class GeminiQuotaManager {
 		return 1800000; // 30 minutes default
 	}
 
+	_startWindowIfNeeded(now = Date.now()) {
+		const windowAnchor = this.windowStartedAt;
+		if (windowAnchor === null || now - windowAnchor >= QUOTA_WINDOW_DURATION_MS) {
+			this.windowStartedAt = now;
+			this.requestsInWindow = 0;
+			this.exhaustedEventsInWindow = 0;
+			this.lastExhaustedAt = null;
+		}
+	}
+
+	_resetExpiredWindow() {
+		const windowAnchor = this.windowStartedAt;
+		if (windowAnchor !== null && Date.now() - windowAnchor >= QUOTA_WINDOW_DURATION_MS) {
+			this.windowStartedAt = null;
+			this.requestsInWindow = 0;
+			this.exhaustedEventsInWindow = 0;
+			this.lastExhaustedAt = null;
+		}
+	}
+
+	/**
+	 * Record one actual Gemini API request.
+	 */
+	recordRequest() {
+		this._startWindowIfNeeded();
+		this.requestsInWindow += 1;
+	}
+
 	/**
 	 * Check if an error is a Gemini 429 quota exhaustion error
 	 * @param {Error|object} error
@@ -74,6 +109,16 @@ class GeminiQuotaManager {
 			message.includes('RESOURCE_EXHAUSTED') ||
 			message.includes('QUOTA')
 		);
+	}
+
+	/**
+	 * Mark a wrapped quota error as already counted at the provider boundary.
+	 * @param {Error|object} error
+	 */
+	markQuotaErrorCounted(error) {
+		if (error !== null && (typeof error === 'object' || typeof error === 'function')) {
+			this.recordedQuotaErrors.add(error);
+		}
 	}
 
 	/**
@@ -148,8 +193,24 @@ class GeminiQuotaManager {
 	 * @returns {number} Cooldown delay in milliseconds
 	 */
 	triggerQuotaCooldown(error, attempt = 1, baseDelayMs = 1000) {
+		if (error?.code === 'GEMINI_QUOTA_EXHAUSTED') {
+			return this.isCooldownActive()
+				? this.extendQuotaCooldown(error, attempt, baseDelayMs)
+				: 0;
+		}
+
 		const delayMs = this.extractRetryDelayMs(error, attempt, baseDelayMs);
 		const now = Date.now();
+		this._startWindowIfNeeded(now);
+		const isObjectError = error !== null && (typeof error === 'object' || typeof error === 'function');
+		const isNewQuotaError = !isObjectError || !this.recordedQuotaErrors.has(error);
+		if (isObjectError) {
+			this.recordedQuotaErrors.add(error);
+		}
+		if (isNewQuotaError) {
+			this.exhaustedEventsInWindow += 1;
+			this.lastExhaustedAt = new Date(now).toISOString();
+		}
 		const newCooldownUntil = now + delayMs;
 		this.triggersTotal += 1;
 		this.lastTriggeredAt = new Date(now).toISOString();
@@ -179,7 +240,16 @@ class GeminiQuotaManager {
 	 * @returns {object}
 	 */
 	getSnapshot() {
+		this._resetExpiredWindow();
+		const quotaStatus = this.exhaustedEventsInWindow === 0 ? 'healthy' : 'exhausted';
+
 		return {
+			windowStartedAt: this.windowStartedAt === null ? null : new Date(this.windowStartedAt).toISOString(),
+			windowDurationMs: QUOTA_WINDOW_DURATION_MS,
+			requestsInWindow: this.requestsInWindow,
+			exhaustedEventsInWindow: this.exhaustedEventsInWindow,
+			lastExhaustedAt: this.lastExhaustedAt,
+			quotaStatus,
 			cooldownActive: this.isCooldownActive(),
 			remainingCooldownMs: this.getRemainingCooldownMs(),
 			lastTriggeredAt: this.lastTriggeredAt,
@@ -265,6 +335,11 @@ class GeminiQuotaManager {
 	 */
 	resetForTesting() {
 		this.quotaCooldownUntil = 0;
+		this.windowStartedAt = null;
+		this.requestsInWindow = 0;
+		this.exhaustedEventsInWindow = 0;
+		this.lastExhaustedAt = null;
+		this.recordedQuotaErrors = new WeakSet();
 		this.lastTriggeredAt = null;
 		this.lastTriggeredAtMs = null;
 		this.triggersTotal = 0;

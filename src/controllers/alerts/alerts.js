@@ -47,6 +47,12 @@ const EXPORT_FIELDS = [
 	'currentPrice',
 	'priceCurrency',
 	'session',
+	'traderIntent.side',
+	'traderIntent.entry',
+	'traderIntent.invalidation',
+	'traderIntent.target',
+	'traderIntent.horizon',
+	'traderIntent.notes',
 ];
 
 function parseLimit(rawLimit) {
@@ -590,7 +596,10 @@ function buildCsv(alerts, optionsOrIncludeText, maybeIncludeEnrichment) {
 		}
 		return true;
 	});
-	const rows = alerts.map(alert => fields.map(field => escapeCsvValue(alert[field])).join(','));
+	const rows = alerts.map(alert => fields.map((field) => {
+		const value = field.startsWith('traderIntent.') ? alert.traderIntent?.[field.slice('traderIntent.'.length)] : alert[field];
+		return escapeCsvValue(value);
+	}).join(','));
 	return [fields.join(','), ...rows].join('\n');
 }
 
@@ -1055,6 +1064,7 @@ function replayAlert(botOrGetter) {
 				source: storedAlert.source || 'alert-replay',
 				signalClass: storedAlert.signalClass || undefined,
 				session: storedAlert.session || undefined,
+				traderIntent: storedAlert.traderIntent || undefined,
 				replay: {
 					originalAlertId: alertId,
 					idempotencyKey: idempotencyKey.trim(),

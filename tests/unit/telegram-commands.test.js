@@ -314,6 +314,23 @@ describe('Telegram TradingView commands', () => {
 		expect(context.reply).toHaveBeenCalledWith('Job job-2 creado para market-scanner. Estado: pending.');
 	});
 
+	it.each([
+		['/scanner limit=abc', marketScannerCmd, 'limit debe ser un número entero'],
+		['/scanner limit=1.5', marketScannerCmd, 'limit debe ser un número entero'],
+		['/scanner bbw_threshold=abc', marketScannerCmd, 'bbw_threshold debe ser un número'],
+		['/scanner timeoutMs=abc', marketScannerCmd, 'timeoutMs debe ser un número entero'],
+		['/analisis BINANCE:BTCUSDT timeoutMs=abc', expandedAnalysisCmd, 'timeoutMs debe ser un número entero'],
+	])('rejects invalid numeric options before job validation: %s', async (command, handler, expectedMessage) => {
+		const context = buildContext(command);
+		jobService.createJob.mockResolvedValue({ jobId: 'job-invalid', status: 'pending' });
+
+		await handler(context);
+
+		expect(context.reply).toHaveBeenCalledWith(`Comando inválido: ${expectedMessage}`);
+		expect(jobService.validateJobRequest).not.toHaveBeenCalled();
+		expect(jobService.createJob).not.toHaveBeenCalled();
+	});
+
 	describe('jobsCommand', () => {
 		it('lists recent bounded job summaries', async () => {
 			jobService.listJobs.mockResolvedValue([
@@ -852,6 +869,7 @@ describe('Telegram TradingView commands', () => {
 				{ command: 'outcomes', description: 'Rendimiento reciente de señales evaluadas' },
 				{ command: 'history', description: 'Consulta alertas recientes' },
 				{ command: 'preferencias', description: 'Preferencias de alertas para este chat' },
+				{ command: 'version', description: 'Confirma la versión, commit y uptime del bot' },
 				{ command: 'help', description: 'Muestra este mensaje de ayuda' },
 				{ command: 'start', description: 'Muestra este mensaje de ayuda' },
 			]);

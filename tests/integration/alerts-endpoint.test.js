@@ -1156,6 +1156,7 @@ describe('Alerts API Integration Tests', () => {
 					suppressedRepeat: true,
 					tokenUsage: null,
 					text: '=@SUM(1,1), "quoted"\r\n+next',
+					traderIntent: { side: 'BUY', entry: 100, invalidation: 95, target: 110, horizon: '1h', notes: 'manual' },
 				},
 			],
 		});
@@ -1183,6 +1184,8 @@ describe('Alerts API Integration Tests', () => {
 		expect(res.text).toContain('PROVIDER_LIMIT');
 		expect(res.text).toContain('}]",true,,');
 		expect(res.text.split('\n')[0]).not.toContain('decision');
+		expect(res.text.split('\n')[0]).toContain('traderIntent.side,traderIntent.entry,traderIntent.invalidation,traderIntent.target,traderIntent.horizon,traderIntent.notes');
+		expect(res.text).toContain(',BUY,100,95,110,1h,manual');
 	});
 
 	it('includes the decision CSV column only when explicitly requested', async () => {
@@ -1517,6 +1520,7 @@ describe('Alerts API Integration Tests', () => {
 			deliveryResults: [{ channel: 'whatsapp', success: false }],
 			source: 'webhook',
 			useTradingViewData: false,
+			traderIntent: { side: 'BUY', entry: 100, target: 110, invalidation: 95, horizon: '1h' },
 		});
 
 		const res = await request(app)
@@ -1530,6 +1534,7 @@ describe('Alerts API Integration Tests', () => {
 			text: 'Replay me',
 			enriched: { sentiment: 'bullish' },
 			source: 'webhook',
+			traderIntent: { side: 'BUY', entry: 100, target: 110, invalidation: 95, horizon: '1h' },
 			replay: {
 				originalAlertId: 'alert-123',
 				idempotencyKey: 'replay-key-1',

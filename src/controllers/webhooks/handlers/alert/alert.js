@@ -22,6 +22,7 @@ const {
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { resolveDryRun } = require('../../../../lib/dryRunRequest');
+const { validateTraderIntent } = require('../../../../lib/traderIntent');
 const { parseTradingViewSignal, TIMEFRAME_MAP } = require('../../../../services/tradingview/parseTradingViewSignal');
 const { signalRepeatCooldown, oppositeKeyOf, buildSignalKey } = require('../../../../services/alerts/signalRepeatCooldown');
 const {
@@ -612,6 +613,9 @@ function postAlert(botOrGetter) {
 		try {
 			const requestSpan = sentryService.getActiveSpan();
 			const routing = parseNotificationRouting(typeof body === 'object' ? body : undefined);
+			const traderIntent = validateTraderIntent(
+				typeof body === 'object' && body ? body.traderIntent : undefined,
+			);
 
 			if (typeof body === 'object' && 'text' in body) {
 				alertText = body.text;
@@ -663,7 +667,14 @@ function postAlert(botOrGetter) {
 			const parsedSignal = parseTradingViewSignal(text);
 			const session = parsedSignal?.session
 				|| (parsedSignal?.exchange && isEquityExchange(parsedSignal.exchange) ? classifySession({ exchange: parsedSignal.exchange, symbol: parsedSignal.symbol }) : undefined);
-			alert = { text, source, signalClass, ...(session ? { session } : {}), ...truncation };
+			alert = {
+				text,
+				source,
+				signalClass,
+				...(session ? { session } : {}),
+				...(traderIntent ? { traderIntent } : {}),
+				...truncation,
+			};
 
 			if (alertModeration.isEnabled()) {
 				alertModeration.refreshConfig();
@@ -736,6 +747,7 @@ function postAlert(botOrGetter) {
 						text: alert.text,
 						enrichedData: alert.enriched || null,
 						signalClass: alert.signalClass,
+						...(alert.traderIntent ? { traderIntent: alert.traderIntent } : {}),
 					},
 					tokenUsage: tokenUsageJSON,
 					requestId,
@@ -1134,6 +1146,7 @@ function postAlert(botOrGetter) {
 				burstAggregateId,
 				burstSignalCount,
 				decision: decisionAudit,
+				traderIntent: alert.traderIntent,
 			});
 			const postPersistenceTask = Promise.resolve(saveAlertPromise)
 				.then((storedAlertId) => {
@@ -1221,6 +1234,7 @@ function postAlert(botOrGetter) {
 						invalidationLevel: stopLevel,
 						targetLevel,
 						riskRewardRatio,
+						traderIntent: alert.traderIntent,
 						priceSource,
 						sources: alert.enriched && Array.isArray(alert.enriched.sources) ? alert.enriched.sources : [],
 						tokenUsage: tokenUsageJSON,

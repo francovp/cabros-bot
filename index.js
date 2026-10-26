@@ -18,6 +18,7 @@ const {
 	outcomesCommand,
 	resolveCmd,
 	reactionsCommand,
+	versionCmd,
 	preferenciasCmd,
 	filtroCmd,
 	silencioCmd,
@@ -214,6 +215,7 @@ async function bootstrapApplication() {
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
 		bot.command(['resolve'], resolveCmd);
 		bot.command(['reactions', 'reacciones'], reactionsCommand);
+		bot.command(['version'], versionCmd);
 		bot.command(['preferencias', 'preferences'], preferenciasCmd);
 
 		if (process.env.ENABLE_TELEGRAM_REACTION_AGGREGATION === 'true') {

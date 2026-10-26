@@ -14,6 +14,10 @@ describe('Rate Limiter Middleware', () => {
 		savedRateLimitEnv = {
 			RATE_LIMIT_MAX: process.env.RATE_LIMIT_MAX,
 			RATE_LIMIT_WINDOW_MS: process.env.RATE_LIMIT_WINDOW_MS,
+			RATE_LIMIT_TIER_HEAVY_MAX: process.env.RATE_LIMIT_TIER_HEAVY_MAX,
+			RATE_LIMIT_TIER_TRADING_MAX: process.env.RATE_LIMIT_TIER_TRADING_MAX,
+			RATE_LIMIT_TIER_STANDARD_MAX: process.env.RATE_LIMIT_TIER_STANDARD_MAX,
+			RATE_LIMIT_TIER_LIGHT_MAX: process.env.RATE_LIMIT_TIER_LIGHT_MAX,
 		};
 		rateLimiter.enableTestMode();
 		rateLimiter.reset();
@@ -159,16 +163,8 @@ describe('Rate Limiter Middleware', () => {
 
 	test.each([
 		'/api/webhook/alert',
-		'/api/webhook/alert/',
-		'/API/WEBHOOK/MESSAGE/',
-		'/api/webhook/expanded-analysis-alert',
-		'/API/WEBHOOK/EXPANDED-ANALYSIS-ALERT/',
-		'/api/webhook/market-scanner-alert',
-		'/api/webhook/volume-confirmation',
-		'/api/webhook/symbol-analysis',
-		'/api/news-monitor',
-		'/API/NEWS-MONITOR/',
-	])('uses a separate high-capacity bucket for %s', (url) => {
+		'/api/webhook/message',
+	])('preserves the high-capacity webhook bucket for ordinary ingest endpoint %s', (url) => {
 		process.env.RATE_LIMIT_MAX = '2';
 		req.method = 'POST';
 		req.url = url;
@@ -179,6 +175,32 @@ describe('Rate Limiter Middleware', () => {
 		}
 
 		expect(next).toHaveBeenCalledTimes(101);
+	});
+
+	test('layers endpoint tiers on top of the shared webhook ingest bucket', () => {
+		process.env.RATE_LIMIT_MAX = '2';
+		req.method = 'POST';
+		req.url = '/api/webhook/alert';
+		req.originalUrl = '/api/webhook/alert';
+
+		for (let i = 0; i < rateLimiter.WEBHOOK_MAX_REQUESTS; i++) {
+			rateLimiter(req, httpMocks.createResponse(), jest.fn());
+		}
+
+		const tieredWebhookReq = httpMocks.createRequest({
+			method: 'POST',
+			url: '/api/webhook/symbol-analysis',
+			originalUrl: '/api/webhook/symbol-analysis',
+			ip: req.ip,
+		});
+		const blockedResponse = httpMocks.createResponse();
+		const tieredNext = jest.fn();
+		rateLimiter(tieredWebhookReq, blockedResponse, tieredNext);
+
+		expect(tieredNext).not.toHaveBeenCalled();
+		expect(blockedResponse.statusCode).toBe(429);
+		expect(blockedResponse.getHeader('X-RateLimit-Limit')).toBe('1000');
+		expect(blockedResponse.getHeader('X-RateLimit-Remaining')).toBe('0');
 	});
 
 	test('exports WEBHOOK_INGEST_PATHS containing all six webhook/MCP endpoints and news-monitor', () => {
@@ -351,8 +373,8 @@ describe('Rate Limiter Middleware', () => {
 
 		test('isolates authenticated callers sharing the same API key by trusted client IP on webhook ingest paths', () => {
 			req.method = 'POST';
-			req.url = '/api/webhook/alert';
-			req.originalUrl = '/api/webhook/alert';
+			req.url = '/api/webhook/message';
+			req.originalUrl = '/api/webhook/message';
 			req.ip = '192.168.1.10';
 			req.headers['x-api-key'] = 'shared-webhook-key';
 
@@ -367,8 +389,8 @@ describe('Rate Limiter Middleware', () => {
 			// Client B with same API key on webhook ingest must not be blocked
 			const reqClientB = httpMocks.createRequest({
 				method: 'POST',
-				url: '/api/webhook/alert',
-				originalUrl: '/api/webhook/alert',
+				url: '/api/webhook/message',
+				originalUrl: '/api/webhook/message',
 				ip: '192.168.1.20',
 				headers: { 'x-api-key': 'shared-webhook-key' },
 			});
@@ -382,11 +404,11 @@ describe('Rate Limiter Middleware', () => {
 		test('webhook ingest paths use API key aware bucket key', () => {
 			process.env.RATE_LIMIT_MAX = '2';
 			req.method = 'POST';
-			req.url = '/api/webhook/alert';
-			req.originalUrl = '/api/webhook/alert';
+			req.url = '/api/webhook/message';
+			req.originalUrl = '/api/webhook/message';
 			req.headers['x-api-key'] = 'webhook-key';
 
-			// Should not hit limit at 101 requests (webhook max is 1000)
+			// Unmapped webhook ingest retains its 1,000-request bucket.
 			for (let i = 0; i < 101; i++) {
 				rateLimiter(req, res, next);
 			}
@@ -395,8 +417,8 @@ describe('Rate Limiter Middleware', () => {
 			// Different API key on webhook should be separate
 			const req2 = httpMocks.createRequest({
 				method: 'POST',
-				url: '/api/webhook/alert',
-				originalUrl: '/api/webhook/alert',
+				url: '/api/webhook/message',
+				originalUrl: '/api/webhook/message',
 				ip: '127.0.0.1',
 				headers: { 'user-agent': 'test-agent/1.0', 'x-api-key': 'webhook-key-2' },
 			});
@@ -511,22 +533,169 @@ describe('Rate Limiter Middleware', () => {
 		Date.now = jest.fn(() => mockTime);
 		process.env.RATE_LIMIT_MAX = '5';
 		process.env.RATE_LIMIT_WINDOW_MS = '60000';
+		process.env.RATE_LIMIT_TIER_STANDARD_MAX = '9';
 
 		try {
 			rateLimiter(req, res, next);
 			expect(res.getHeader('X-RateLimit-Limit')).toBe('5');
 			expect(res.getHeader('X-RateLimit-Remaining')).toBe('4');
 
-			const webhookReq = httpMocks.createRequest({
+		const webhookReq = httpMocks.createRequest({
 				method: 'POST',
-				url: '/api/webhook/alert',
+			url: '/api/webhook/volume-confirmation',
 				ip: '127.0.0.1',
 			});
 			const webhookRes = httpMocks.createResponse();
 			rateLimiter(webhookReq, webhookRes, jest.fn());
 
-			expect(webhookRes.getHeader('X-RateLimit-Limit')).toBe('1000');
-			expect(webhookRes.getHeader('X-RateLimit-Remaining')).toBe('999');
+			expect(webhookRes.getHeader('X-RateLimit-Limit')).toBe('9');
+			expect(webhookRes.getHeader('X-RateLimit-Remaining')).toBe('8');
+		} finally {
+			Date.now = realNow;
+		}
+	});
+
+	test('applies endpoint tiers independently while retaining API-key and client-IP isolation', () => {
+		process.env.RATE_LIMIT_MAX = '1';
+		process.env.RATE_LIMIT_TIER_HEAVY_MAX = '1';
+
+		const hit = (url, ip, apiKey) => {
+			const request = httpMocks.createRequest({
+				method: 'POST',
+				url,
+				originalUrl: url,
+				ip,
+				headers: { 'x-api-key': apiKey },
+			});
+			const response = httpMocks.createResponse();
+			const continuation = jest.fn();
+			rateLimiter(request, response, continuation);
+			return { response, continuation };
+		};
+
+		expect(hit('/api/webhook/expanded-analysis-alert', '10.0.0.1', 'key-a').continuation).toHaveBeenCalled();
+		expect(hit('/api/webhook/expanded-analysis-alert?source=test', '10.0.0.1', 'key-a').response.statusCode).toBe(429);
+		expect(hit('/api/webhook/market-scanner-alert', '10.0.0.1', 'key-a').continuation).toHaveBeenCalled();
+		expect(hit('/api/webhook/expanded-analysis-alert', '10.0.0.1', 'key-b').continuation).toHaveBeenCalled();
+		expect(hit('/api/webhook/expanded-analysis-alert', '10.0.0.2', 'key-a').continuation).toHaveBeenCalled();
+	});
+
+	test.each([
+		['/api/webhook/expanded-analysis-alert', 'HEAVY', 5],
+		['/api/webhook/market-scanner-alert', 'HEAVY', 5],
+		['/api/webhook/symbol-analysis', 'HEAVY', 5],
+		['/api/news-monitor', 'HEAVY', 5],
+		['/api/trading/binance/orders', 'TRADING', 10],
+		['/api/trading/binance/orders/preview', 'TRADING', 10],
+		['/api/webhook/volume-confirmation', 'STANDARD', 30],
+		['/api/status', 'LIGHT', 100],
+		['/api/capabilities', 'LIGHT', 100],
+	])('uses the configured 60-second tier for %s', (url, tier, defaultLimit) => {
+		process.env['RATE_LIMIT_TIER_' + tier + '_MAX'] = String(defaultLimit);
+		req.method = 'POST';
+		req.url = url;
+		req.originalUrl = url;
+		rateLimiter(req, res, next);
+		expect(res.getHeader('X-RateLimit-Limit')).toBe(String(defaultLimit));
+	});
+
+	test('expires tiered endpoint buckets after 60 seconds', () => {
+		const realNow = Date.now;
+		let mockTime = 1_000_000;
+		Date.now = jest.fn(() => mockTime);
+		process.env.RATE_LIMIT_TIER_HEAVY_MAX = '1';
+		req.method = 'POST';
+		req.url = '/api/news-monitor';
+		req.originalUrl = req.url;
+
+		try {
+			rateLimiter(req, res, next);
+			const blocked = httpMocks.createResponse();
+			rateLimiter(req, blocked, jest.fn());
+			expect(blocked.statusCode).toBe(429);
+			expect(JSON.parse(blocked._getData()).retryAfterSeconds).toBe(60);
+
+			mockTime += 60001;
+			const afterWindow = httpMocks.createResponse();
+			const afterWindowNext = jest.fn();
+			rateLimiter(req, afterWindow, afterWindowNext);
+			expect(afterWindowNext).toHaveBeenCalled();
+			expect(afterWindow.statusCode).toBe(200);
+		} finally {
+			Date.now = realNow;
+		}
+	});
+
+	test.each(['/healthcheck', '/ready', '/openapi.json', '/docs'])(
+		'does not assign a tier to pre-limiter route %s',
+		(url) => {
+			process.env.RATE_LIMIT_MAX = '1';
+			req.method = 'GET';
+			req.url = url;
+			req.originalUrl = url;
+			rateLimiter(req, res, next);
+			expect(res.getHeader('X-RateLimit-Limit')).toBe('1');
+		},
+	);
+
+	test('returns the standard retryable RATE_LIMITED error envelope with a positive retry delay', () => {
+		process.env.RATE_LIMIT_TIER_STANDARD_MAX = '1';
+		req.method = 'POST';
+		req.url = '/api/webhook/volume-confirmation';
+		req.originalUrl = req.url;
+		rateLimiter(req, res, next);
+		const blocked = httpMocks.createResponse();
+		rateLimiter(req, blocked, jest.fn());
+
+		expect(blocked.statusCode).toBe(429);
+		expect(JSON.parse(blocked._getData())).toEqual(expect.objectContaining({
+			success: false,
+			code: 'RATE_LIMITED',
+			retryable: true,
+			retryAfterSeconds: expect.any(Number),
+		}));
+		expect(JSON.parse(blocked._getData()).retryAfterSeconds).toBeGreaterThan(0);
+	});
+
+	test('uses the request logger request ID in the 429 body', () => {
+		process.env.RATE_LIMIT_MAX = '1';
+		const requestId = 'req-rate-limit-429-test';
+		req.requestId = requestId;
+		rateLimiter(req, res, next);
+
+		const blocked = httpMocks.createResponse();
+		blocked.setHeader('X-Request-Id', requestId);
+		rateLimiter(req, blocked, jest.fn());
+
+		expect(JSON.parse(blocked._getData()).requestId).toBe(requestId);
+		expect(blocked.getHeader('X-Request-Id')).toBe(requestId);
+	});
+
+	test('reports the longer retry window when both webhook buckets are exceeded', () => {
+		const realNow = Date.now;
+		Date.now = jest.fn(() => 1000);
+		process.env.RATE_LIMIT_WINDOW_MS = '30000';
+		process.env.RATE_LIMIT_TIER_HEAVY_MAX = '1';
+
+		try {
+			req.method = 'POST';
+			req.url = '/api/webhook/alert';
+			req.originalUrl = req.url;
+			for (let i = 0; i < rateLimiter.WEBHOOK_MAX_REQUESTS; i++) {
+				rateLimiter(req, httpMocks.createResponse(), jest.fn());
+			}
+
+			req.url = '/api/webhook/symbol-analysis';
+			req.originalUrl = req.url;
+			rateLimiter(req, httpMocks.createResponse(), jest.fn());
+			const blocked = httpMocks.createResponse();
+			rateLimiter(req, blocked, jest.fn());
+
+			expect(blocked.statusCode).toBe(429);
+			expect(blocked.getHeader('X-RateLimit-Limit')).toBe('1');
+			expect(blocked.getHeader('X-RateLimit-Remaining')).toBe('0');
+			expect(blocked.getHeader('Retry-After')).toBe('60');
+			expect(JSON.parse(blocked._getData()).retryAfterSeconds).toBe(60);
 		} finally {
 			Date.now = realNow;
 		}

@@ -87,6 +87,7 @@ describe('GenaiClient robustness', () => {
 			expect(res.results).toHaveLength(1);
 			expect(res.results[0].title).toBe('G1');
 			expect(res.searchResultText).toBe('Google Answer');
+			expect(geminiQuotaManager.getSnapshot().requestsInWindow).toBe(1);
 
 			// Should not call Brave (fetch)
 			expect(global.fetch).not.toHaveBeenCalled();
@@ -133,6 +134,11 @@ describe('GenaiClient robustness', () => {
 			expect(res.results).toHaveLength(1);
 			expect(res.results[0].title).toBe('BraveQuotaFallback');
 			expect(global.fetch).toHaveBeenCalledTimes(1);
+			expect(geminiQuotaManager.getSnapshot()).toEqual(expect.objectContaining({
+				requestsInWindow: 1,
+				exhaustedEventsInWindow: 1,
+				quotaStatus: 'exhausted',
+			}));
 		});
 
 		it('rethrows Gemini quota exhaustion when requested by caller', async () => {
@@ -438,6 +444,27 @@ describe('GenaiClient robustness', () => {
 	});
 
 	describe('llmCall quota cooldown handling', () => {
+		it('marks wrapped quota errors as already recorded by the provider boundary', async () => {
+			const providerError = Object.assign(new Error('RESOURCE_EXHAUSTED: quota exceeded'), {
+				status: 429,
+				retryDelay: 1000,
+			});
+			genaiClient.genAI.models.generateContent.mockRejectedValueOnce(providerError);
+
+			let wrappedError;
+			try {
+				await genaiClient.llmCall({ prompt: 'test prompt' });
+			} catch (error) {
+				wrappedError = error;
+			}
+
+			expect(wrappedError).toMatchObject({
+				message: expect.stringContaining('RESOURCE_EXHAUSTED'),
+			});
+			geminiQuotaManager.triggerQuotaCooldown(wrappedError);
+			expect(geminiQuotaManager.getSnapshot().exhaustedEventsInWindow).toBe(1);
+		});
+
 		it('throws quota error and does not invoke generateContent when cooldown is active', async () => {
 			geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 10000 });
 

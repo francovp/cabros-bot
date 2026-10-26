@@ -12,6 +12,10 @@ const {
 } = require('../tradingview/parseTradingViewSignal');
 const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
+const {
+	normalizePresetDestinations,
+	normalizePresetMode,
+} = require('./scannerPresetRouting');
 
 const COLLECTION_NAME = 'scannerPresets';
 const DEFAULT_SCAN_LIMIT = 5;
@@ -314,6 +318,12 @@ function clonePreset(preset) {
 	};
 	if (Array.isArray(preset.channels)) {
 		cloned.channels = [...preset.channels];
+	}
+	if (preset.destinations && typeof preset.destinations === 'object') {
+		cloned.destinations = Object.fromEntries(Object.entries(preset.destinations).map(([field, values]) => [
+			field,
+			Array.isArray(values) ? [...values] : values,
+		]));
 	}
 	if (Number.isInteger(cloned.version) && cloned.version < 1) {
 		cloned.version = 1;
@@ -852,6 +862,15 @@ class ScannerPresetService {
 		const bbwThreshold = normalizeBbwThreshold(params.bbwThreshold);
 		const schedule = normalizeSchedule(params.schedule);
 		const routing = this._parseRouting(params);
+		const mode = normalizePresetMode(params.mode, params);
+		const destinations = normalizePresetDestinations(params.destinations);
+		if (mode === 'preset' && !Object.values(destinations || {}).some((values) => Array.isArray(values) && values.length > 0)) {
+			throw new MarketScannerRequestError(
+				'mode "preset" requires at least one configured destination',
+				'INVALID_DESTINATIONS',
+				{ statusCode: 400, details: { field: 'destinations' } },
+			);
+		}
 		const id = typeof params.id === 'string' && params.id.trim() ? params.id.trim() : uuidv4();
 		const createdAt = typeof params.createdAt === 'string' && params.createdAt.trim()
 			? params.createdAt.trim()
@@ -925,6 +944,8 @@ class ScannerPresetService {
 		if (routing.telegramThreadId !== undefined) preset.telegramThreadId = routing.telegramThreadId;
 		if (routing.whatsappChatId !== undefined) preset.whatsappChatId = routing.whatsappChatId;
 		if (routing.discordWebhookUrl !== undefined) preset.discordWebhookUrl = routing.discordWebhookUrl;
+		if (mode !== undefined) preset.mode = mode;
+		if (destinations !== undefined) preset.destinations = destinations;
 
 		return preset;
 	}
@@ -1381,6 +1402,10 @@ class ScannerPresetService {
 		if (typeof data.telegramThreadId === 'number' && Number.isSafeInteger(data.telegramThreadId) && data.telegramThreadId >= 0) preset.telegramThreadId = data.telegramThreadId;
 		if (typeof data.whatsappChatId === 'string') preset.whatsappChatId = data.whatsappChatId;
 		if (typeof data.discordWebhookUrl === 'string') preset.discordWebhookUrl = data.discordWebhookUrl;
+		if (data.mode === 'preset' || data.mode === 'inherit') preset.mode = data.mode;
+		if (data.destinations && typeof data.destinations === 'object' && !Array.isArray(data.destinations)) {
+			preset.destinations = normalizePresetDestinations(data.destinations);
+		}
 
 		return clonePreset(preset);
 	}

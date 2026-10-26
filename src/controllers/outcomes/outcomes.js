@@ -9,6 +9,22 @@ const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
 const DEFAULT_CALIBRATION_LIMIT = 1000;
 const MAX_CALIBRATION_LIMIT = 1000;
+const DEFAULT_EXPORT_LIMIT = 100;
+const MAX_EXPORT_LIMIT = 1000;
+const MAX_EXPORT_WINDOW_DAYS = 31;
+const MAX_EXPORT_WINDOW_MS = MAX_EXPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+const OUTCOME_EXPORT_FIELDS = [
+	'id',
+	'receivedAt',
+	'source',
+	'symbol',
+	'exchange',
+	'side',
+	'price',
+	'setupType',
+	'score',
+	'outcomes',
+];
 const VALID_STATUSES = new Set(['pending', 'evaluated', 'unavailable']);
 const VALID_WINDOWS = {
 	'1m': '1m',
@@ -64,6 +80,60 @@ function parseCalibrationLimit(rawLimit) {
 	}
 
 	return limit;
+}
+
+function parseExportLimit(rawLimit) {
+	if (rawLimit === undefined) {
+		return DEFAULT_EXPORT_LIMIT;
+	}
+	if ((typeof rawLimit !== 'string' && typeof rawLimit !== 'number') || !/^\d+$/.test(String(rawLimit).trim())) {
+		return null;
+	}
+	const limit = Number.parseInt(String(rawLimit).trim(), 10);
+	return Number.isInteger(limit) && limit >= 1 && limit <= MAX_EXPORT_LIMIT ? limit : null;
+}
+
+function parseExportFormat(rawFormat) {
+	const format = rawFormat === undefined ? 'jsonl' : String(rawFormat).trim().toLowerCase();
+	return ['jsonl', 'csv'].includes(format) ? format : null;
+}
+
+function parseOptionalSetupType(rawSetupType) {
+	if (typeof rawSetupType !== 'string') return undefined;
+	return rawSetupType.trim() || undefined;
+}
+
+function escapeCsvValue(value) {
+	if (value === null || value === undefined) return '';
+	const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
+	const safeSerialized = typeof value === 'string'
+		&& /^[\t\r\n]*[=+\-@＝＋－＠]/u.test(value)
+		&& !Number.isFinite(Number(value))
+		? `'${serialized}`
+		: serialized;
+	return /[",\n\r]/.test(safeSerialized)
+		? `"${safeSerialized.replace(/"/g, '""')}"`
+		: safeSerialized;
+}
+
+function buildOutcomeCsv(outcomes) {
+	const rows = outcomes.map((outcome) => OUTCOME_EXPORT_FIELDS
+		.map((field) => escapeCsvValue(outcome[field]))
+		.join(','));
+	return [OUTCOME_EXPORT_FIELDS.join(','), ...rows].join('\n');
+}
+
+function validateExportWindow(from, to) {
+	if (new Date(from).getTime() > new Date(to).getTime()) {
+		return { error: 'Invalid time window. from must be before or equal to to.', code: 'INVALID_REQUEST' };
+	}
+	if (new Date(to).getTime() - new Date(from).getTime() > MAX_EXPORT_WINDOW_MS) {
+		return {
+			error: `Invalid export window. Maximum export window is ${MAX_EXPORT_WINDOW_DAYS} days.`,
+			code: 'INVALID_REQUEST',
+		};
+	}
+	return null;
 }
 
 function parseStatus(rawStatus) {
@@ -314,6 +384,83 @@ function summarizeOutcomes(req, res) {
 	});
 }
 
+function getOutcomeById(req, res) {
+	return handleAsync(req, res, `/api/outcomes/${req.params.outcomeId}`, async () => {
+		if (!signalOutcomeService.isEnabled()) {
+			return sendErrorFrom(res, 403, {
+				error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+		const outcomeId = typeof req.params.outcomeId === 'string' ? req.params.outcomeId.trim() : '';
+		if (!outcomeId) {
+			return sendErrorFrom(res, 400, { error: 'Missing outcomeId parameter', code: 'INVALID_REQUEST' });
+		}
+		const outcome = await signalOutcomeService.getOutcomeById(outcomeId);
+		if (!outcome) return sendErrorFrom(res, 404, { error: 'Outcome not found', code: 'NOT_FOUND' });
+		return res.status(200).json({ success: true, outcome });
+	});
+}
+
+function exportOutcomes(req, res) {
+	return handleAsync(req, res, '/api/outcomes/export', async () => {
+		if (!signalOutcomeService.isEnabled()) {
+			return sendErrorFrom(res, 403, {
+				error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+		const format = parseExportFormat(req.query.format);
+		if (!format) return sendErrorFrom(res, 400, { error: 'Invalid export format. Use jsonl or csv.', code: 'INVALID_REQUEST' });
+		const limit = parseExportLimit(req.query.limit);
+		if (limit === null) {
+			return sendErrorFrom(res, 400, {
+				error: `Invalid limit. Use an integer between 1 and ${MAX_EXPORT_LIMIT}.`,
+				code: 'INVALID_REQUEST',
+			});
+		}
+		const from = parseOptionalTimestamp(req.query.from, 'from');
+		if (from.error) return sendErrorFrom(res, 400, from.error);
+		const to = parseOptionalTimestamp(req.query.to, 'to');
+		if (to.error) return sendErrorFrom(res, 400, to.error);
+		if (!from.value || !to.value) {
+			return sendErrorFrom(res, 400, {
+				error: 'Export requests require bounded from and to ISO-8601 timestamps.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+		const windowError = validateExportWindow(from.value, to.value);
+		if (windowError) return sendErrorFrom(res, 400, windowError);
+		const symbol = typeof req.query.symbol === 'string' && req.query.symbol.trim() ? req.query.symbol.trim() : undefined;
+		const exchange = typeof req.query.exchange === 'string' && req.query.exchange.trim() ? req.query.exchange.trim() : undefined;
+		const setupType = parseOptionalSetupType(req.query.setupType);
+		if (req.query.setupType !== undefined && setupType === undefined) {
+			return sendErrorFrom(res, 400, {
+				error: 'Invalid setupType parameter. Use a single non-empty value.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+		const result = await signalOutcomeService.exportOutcomes({
+			from: from.value,
+			to: to.value,
+			limit,
+			symbol,
+			exchange,
+			setupType,
+			signal: req.requestDeadlineSignal,
+		});
+		const extension = format === 'csv' ? 'csv' : 'jsonl';
+		res.set('Content-Disposition', `attachment; filename="outcomes-${result.window.from.substring(0, 10)}-${result.window.to.substring(0, 10)}.${extension}"`);
+		if (format === 'csv') {
+			res.type('text/csv; charset=utf-8');
+			return res.status(200).send(`${buildOutcomeCsv(result.outcomes)}\n`);
+		}
+		res.type('application/x-ndjson; charset=utf-8');
+		const body = result.outcomes.map((outcome) => JSON.stringify(outcome)).join('\n');
+		return res.status(200).send(body ? `${body}\n` : '');
+	});
+}
+
 function getOutcomesCalibration(req, res) {
 	return handleAsync(req, res, '/api/outcomes/calibration', async () => {
 		if (!signalOutcomeService.isEnabled()) {
@@ -383,6 +530,7 @@ function getOutcomesCalibration(req, res) {
 
 function handleAsync(req, res, endpoint, handler) {
 	return Promise.resolve(handler()).catch((error) => {
+		if (error.code === 'ABORTED' && req.requestDeadlineSignal?.aborted) return undefined;
 		console.error('[OutcomesController] Request failed:', error.message);
 		const statusCode = error.statusCode || error.status || (error.code === signalOutcomeService.STORAGE_UNAVAILABLE_CODE ? 503 : (error.code === 'INVALID_REQUEST' ? 400 : 500));
 		sentryService.captureRuntimeError({
@@ -421,7 +569,7 @@ function handleError(error, req, res, route) {
 		});
 	}
 
-	if (statusCode === 400) {
+	if (statusCode === 400 || error.code === 'INVALID_REQUEST') {
 		return sendErrorFrom(res, 400, {
 			error: error.message,
 			code: 'INVALID_REQUEST',
@@ -438,8 +586,18 @@ module.exports = {
 	listOutcomes,
 	summarizeOutcomes,
 	getOutcomesCalibration,
+	getOutcomeById,
+	exportOutcomes,
 	parseLimit,
 	parseCalibrationLimit,
+	parseExportFormat,
+	parseExportLimit,
+	parseOptionalSetupType,
+	buildOutcomeCsv,
+	escapeCsvValue,
+	OUTCOME_EXPORT_FIELDS,
+	DEFAULT_EXPORT_LIMIT,
+	MAX_EXPORT_LIMIT,
 	parseStatus,
 	parseWindow,
 	parseOptionalTimestamp,

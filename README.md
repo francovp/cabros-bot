@@ -146,8 +146,16 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `GET` | `/api/jobs/:jobId` | Poll background job progress and retrieve result | [Jobs API](docs/jobs.md#get-apijobsjobid) |
 | `POST` | `/api/news-monitor` | Trigger symbol news scanning & event detection | [News Monitoring](docs/news-monitor.md) |
 | `POST` | `/api/trading/binance/orders/preview` | Pre-trade Binance Spot cost & slippage preview | [API Reference](docs/api-reference.md#post-apitradingbinanceorderspreview) |
+| `POST` | `/api/trading/binance/orders` | Operator-gated Binance Spot market, limit, contingent, and native `BRACKET_LIMIT` OTOCO orders | [API Reference](docs/api-reference.md#post-apitradingbinanceorders) |
+| `GET`/`DELETE` | `/api/trading/binance/orders` | Read recent orders or reconcile order lists; cancel a single order | [API Reference](docs/api-reference.md#post-apitradingbinanceorders) |
 | `GET` | `/api/trading/binance/account/balances` | Read-only Binance Spot balances for allowed assets | [API Reference](docs/api-reference.md#get-apitradingbinanceaccountbalances) |
+| `GET`/`POST` | `/api/trading/binance/pause` | Read or activate the operator runtime kill-switch for Binance Spot orders | [API Reference](docs/api-reference.md) |
+| `POST` | `/api/trading/binance/resume` | Clear the operator runtime kill-switch and resume Binance Spot order flow | [API Reference](docs/api-reference.md) |
+| `GET` | `/api/trading/binance/reconciliation` | List ambiguous auto-trade reservations requiring reconciliation | [API Reference](docs/api-reference.md#get-apitradingbinancereconciliation) |
+| `GET`/`POST` | `/api/trading/binance/reconciliation/:reservationId` | Read or resolve an ambiguous auto-trade reservation as placed or not_placed | [API Reference](docs/api-reference.md#post-apitradingbinancereconciliationreservationid) |
 | `GET` | `/api/trading/positions` | Query open Binance trading positions with mark prices and unrealized P&L | [API Reference](docs/api-reference.md#get-apitradingpositions) |
+
+`POST /api/webhook/alert` and `POST /api/webhook/symbol-analysis` accept an optional request-level `traderIntent` object. `entry` and `horizon` (`1h`, `4h`, `1D`, or `1W`) are required; `side` (`BUY`/`SELL`) is required when `target` or `invalidation` is present. Complete plans are persisted and evaluated independently from the bot setup, and `/api/outcomes/summary` reports the additive `byTraderPlan` block.
 | `GET` | `/api/trading/pnl/summary` | Realized & unrealized P&L, ROI %, win rate, drawdown, and equity series | [API Reference](docs/api-reference.md#get-apitradingpnlsummary) |
 | `GET` | `/api/trading/trades` | Historical trade fills and closed round trips with pagination | [API Reference](docs/api-reference.md#get-apitradingtrades) |
 | `GET` | `/api/alerts` | Query stored alerts with pagination & filtering | [Stored Alerts](docs/alerts.md#get-apialerts) |
@@ -155,11 +163,15 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `POST` | `/api/alerts/:alertId/replay` | Dry-run or live replay of stored alert | [Stored Alerts](docs/alerts.md#post-apialertsalertidreplay) |
 | `GET` | `/api/outcomes` | Query signal outcomes with multi-window returns | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomes) |
 | `GET` | `/api/outcomes/summary` | Expectancy, win rate, filters, and optional bounded symbol/setup breakdowns | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomessummary) |
+| `GET` | `/api/outcomes/{outcomeId}` | Retrieve one sanitized signal outcome | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomesoutcomeid) |
+| `GET` | `/api/outcomes/export` | Export bounded signal outcomes as JSONL or CSV | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomesexport) |
 | `GET`/`POST` | `/api/alert-subscribers` | Manage outbound alert subscriber webhooks with HMAC and SSRF guards | [OpenAPI Spec](/openapi.json) |
 
 Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`. CI coverage guards (`tests/unit/postman-collection.test.js` and `tests/unit/openapi-contract.test.js`) enforce that every mounted `/api` route appears in both OpenAPI and `CabrosBot.postman_collection.json`, and that every unique endpoint path referenced in README API documentation exists in `src/openapi/openapi.json`.
 
 `dependencies.persistentWriteHealth` is always present on `/api/status` and `/api/capabilities`. It reports process-local success/failure counts for alert storage, signal outcomes, notification redrive, and persistent news dedup. Each domain is `unconfigured` until a write is observed, `degraded` when the latest 100 attempts fail above 5% or a failure occurred in the last five minutes, and otherwise `ok`. Counters reset on process restart; only closed error categories are exposed, never provider messages.
+
+`deliveryHealth` reports per-channel successful and failed alert deliveries observed by the web process's in-memory `NotificationManager`. Each channel includes `lastSuccessAt`, `lastFailureAt`, and `firstObservedAt` timestamps; unused channels are omitted and counters reset on process restart. Worker-process deliveries are not included in this process-local block. `/api/capabilities` returns the same field.
 
 The scanner-preset scheduler enforces a 60-second minimum between runs of the same preset, even when `nextRunAt` is in the past. `/api/status` and `/api/capabilities` expose `dependencies.scannerPresetScheduler.lastRunDeferredByFloorCount` for due presets deferred by this floor.
 
@@ -189,6 +201,7 @@ When the Telegram bot is enabled (`ENABLE_TELEGRAM_BOT=true`), the bot provides 
 | `/jobs` | `[jobId]` | Inspects status or lists active background analysis jobs. |
 | `/noticias` | `[options]` | Trigger news monitoring analysis for specified crypto/equity tickers. |
 | `/reactions`, `/reacciones` | `<symbol>` | Returns top 3 setups by trader reaction approval over the last 7 days. |
+| `/version` | None | Confirms running build SHA, platform environment, and uptime. Sourced from the same `build` object as `GET /api/capabilities`. |
 
 See the [Telegram Commands Reference](docs/commands.md) for aliases, throttling rules, and examples.
 
@@ -371,6 +384,28 @@ If `status` is `unreachable`, roll the web service back to `local` first — in 
 | `JOB_QUEUE_CONNECT_TIMEOUT_MS` | `5000` | positive | Broker connect timeout for the queue connection. |
 | `JOB_QUEUE_PROBE_TIMEOUT_MS` | `5000` | `1`–`120000` | Startup readiness-probe deadline. Environment-only — a safety deadline, excluded from Firebase Remote Config. |
 
+### Scanner Preset Destinations
+
+Scanner presets can save multiple Telegram, WhatsApp, and Discord destinations. A new preset defaults to `mode: "inherit"`, which keeps the existing broadcast behavior. Set `mode: "preset"` with at least one destination to restrict delivery to the saved recipients; each channel accepts up to 20 validated destination values. Older presets without a mode keep their existing legacy routing.
+
+```json
+{
+  "name": "Private BTC Watchlist",
+  "mode": "preset",
+  "destinations": {
+    "telegramChatIds": ["-1001234567890"],
+    "whatsappChatIds": ["56912345678@c.us"],
+    "discordWebhookUrls": ["https://discord.com/api/webhooks/123456789012345678/example-token"]
+  }
+}
+```
+
+Manual runs and scheduled runs share the same routing rules. A manual run can override the saved destination for a channel with the existing `telegramChatId`, `whatsappChatId`, or `discordWebhookUrl` request field; `channels` filters the preset's configured destinations. If the filter matches no configured destination, the route returns `400 INVALID_REQUEST` before scanning or job creation. Set `runAsyncJob: true` on `POST /api/scanner-presets/:id/run` to submit through the existing market-scanner job path and receive `202 Accepted`; runs stay synchronous by default. If `dryRun` is true, the request returns its preview without submitting a job.
+
+Preset API responses include configured Telegram and WhatsApp chat IDs, but omit Discord webhook URLs and tokens. `destinations.discordWebhookCount` reports the number of saved Discord webhooks.
+
+`GET /api/status` and `/api/capabilities` report `featureFlags.presetBoundDestinations` and the non-sensitive `dependencies.presetBoundDestinations` capability. Destination values are not included in those status responses or in the async job acceptance response. The direct `/api/webhook/market-scanner-alert` endpoint continues using its request routing and does not read preset destinations.
+
 ### Signal Outcome Single-Evaluator Guarantee
 
 `ENABLE_SIGNAL_OUTCOME_TRACKING=true` is enabled in production. It gates three things at once — recording signals on the alert path, the evaluation sweep, and the whole `/api/outcomes` surface — so it is pinned in `render.yaml` rather than left to the Render dashboard, where an operator reading the repo could not tell which process was actually enabled.
@@ -505,6 +540,10 @@ Setting the variable is **necessary but not sufficient**, because this layer is 
 **A rejected bearer token is never recorded.** Expired, revoked, wrong-project and random-garbage tokens are indistinguishable to `verifyIdToken()`, so counting them would let any unauthenticated caller flip the dependency to `degraded` with a single request — turning a monitoring surface into a one-request DoS. Only a verifier that cannot be *reached* degrades the block. A verified token **without** an admin role counts as a success, because the token verified and the role decision is an authorization outcome, not a dependency fault.
 
 `getAdminAuthStatus()` is booleans and counters only — the Firebase Web config stays behind `/admin/auth-config` and is never echoed into a status payload, and `/api/public/status` uses an explicit three-dependency allow-list that does not include this block. Counters are process-local and reset on restart, so `unverified` after a deploy is expected. See [API Reference](docs/api-reference.md#get-apistatus).
+
+### Admin Console Localization
+
+The `/admin` console supports both English (`en`, default) and Spanish (`es`) to match the bot's primary user language. Operators can switch language via the `<select id="admin-lang">` control in the brand lockup, the `?lang=es` / `?lang=en` URL parameter, or `localStorage.admin_lang`. Spanish localization covers section titles, action controls, empty/error states, status row labels (`ready`, `degraded`, `unconfigured`, `disabled`, `misconfigured`), and query filter forms, while updating `<html lang>`. See [API Reference](docs/api-reference.md#firebase-hosting-for-admin-console).
 
 ### Durable News-Monitor Analysis Records
 
@@ -643,7 +682,16 @@ Signals without an exchange use `TRADINGVIEW_MCP_DEFAULT_EXCHANGE` (default `BIN
 
 Successful identical MCP calls can be cached per process by enabling `ENABLE_TRADINGVIEW_MCP_CACHE` (default `false`) and tuning `TRADINGVIEW_MCP_CACHE_TTL_MS` (default `90000`, valid range `10000`-`600000`). Both settings are non-secret runtime controls supported by Firebase Remote Config.
 
-**The enrichment budget decides how much of this actually runs.** `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` (default `12000`) is the ceiling for the whole webhook enrichment path. Whenever volume confirmation, confluence, or multi-timeframe enrichment is enabled, the base `coin_analysis` call is reserved 75% of it and the optional calls share what remains — a single split, not a cumulative one. `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` is **not** declared in `render.yaml`, so which slice production actually reserves is not verifiable from the repository. Optional calls run sequentially; if volume or confluence consumes the remaining budget, a later multi-timeframe call is skipped or cut short and the alert is stored as `tradingViewEnrichmentStatus: "partial"`. Raise `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` (Remote Config eligible, max `120000`) when you need more time for optional calls — but note the webhook request deadline (`REQUEST_TIMEOUT_MS`, default `30000`) bounds the whole request, so the budget cannot usefully exceed it.
+**The enrichment budget decides how much of this actually runs.** `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` (default `12000`) is the ceiling for the whole webhook enrichment path. Whenever volume confirmation, confluence, or multi-timeframe enrichment is enabled, the base `coin_analysis` call is reserved up to 75% of it and the optional calls share what remains — a single split, not a cumulative one. Unspent time from a fast base call rolls over into the remaining budget envelope (`budgetDeadlineAt`). `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` is **not** declared in `render.yaml`, so which slice production actually reserves is not verifiable from the repository.
+
+**Optional calls use a decoupled per-call deadline model rather than sharing a single timer.** Optional calls run sequentially:
+1. Volume confirmation (if enabled) calculates `remainingBudgetMs = budgetDeadlineAt - Date.now()` and bounds its attempt by `min(TRADINGVIEW_MCP_TIMEOUT_MS, remainingBudgetMs)`.
+2. Confluence enrichment (`combined_analysis`, if enabled) derives a dedicated deadline: `min(8000, remaining budget)`. Its timer is promptly cleared in `finally` upon completion or failure.
+3. Multi-timeframe analysis (`multi_timeframe_analysis`, if enabled) derives its own fresh per-call deadline from whatever budget remains at that moment: `min(8000, remaining budget)`. Its timer is also isolated and cleared in `finally`.
+
+Both confluence calls combine their per-call timeout with the overall budget signal via `AbortSignal.any`, so an exhausted total budget aborts in-flight work immediately. If the remaining budget is already exhausted (`<= 0`) before a call starts, the call is skipped without issuing network requests, recording `{ budgetExhausted: true }` and storing the alert with `tradingViewEnrichmentStatus: "partial"`.
+
+**Tuning guidance for operators:** With the default `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS = 12000`, the base reservation leaves a minimum guaranteed optional envelope of 3,000ms (25%). If base analysis completes quickly (e.g. 2,000ms), up to 10,000ms rolls over to optional calls. However, if base analysis takes its full 9,000ms allocation, the remaining 3,000ms is shared across all enabled optional calls. Because both `combined_analysis` and `multi_timeframe_analysis` can each use up to 8,000ms, running both with a 3,000ms remaining envelope commonly starves or cuts short the second call. If you enable both confluence and multi-timeframe analysis, scale `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` toward `20000`-`24000ms` (Remote Config eligible, max `120000`) so both calls have sufficient budget even when base analysis is slow. Note that `REQUEST_TIMEOUT_MS` (default `30000`) bounds the entire webhook request, so the enrichment budget should remain comfortably below the request timeout.
 
 **The primary base attempt gets the whole base sub-budget, and retries only run while the remainder can still fund one.** `callCoinAnalysis` is three sequential HTTP hops (`initialize`, `notifications/initialized`, `tools/call`), each bounded by `TRADINGVIEW_MCP_TIMEOUT_MS`, so attempt 1 is sized at `min(TRADINGVIEW_MCP_TIMEOUT_MS, remaining base budget)` rather than a slice of it. A retry is issued only while the residual can still afford a window that completes the tool call — `min(25% of TRADINGVIEW_MCP_TIMEOUT_MS, half the base sub-budget)`. When it cannot, the last real failure is returned immediately: no backoff is paid, and **the declined retry is never charged to the circuit breaker**. That last part matters more than the latency it saves — a client-side deadline is not provider evidence, and counting these as failures opened the breaker against a healthy host and suppressed enrichment for the full `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` (issue #948). A primary attempt that burns its whole viable window is still charged, so a genuinely slow or hung provider still trips the breaker and pages.
 
@@ -761,11 +809,11 @@ Every protected `/api` response (success and throttled) carries the standard `X-
 
 | Header | Value |
 |---|---|
-| `X-RateLimit-Limit` | Max requests per window for the active bucket (`RATE_LIMIT_MAX` or `1000` for `/api/webhook/alert` and `/api/webhook/message`). |
+| `X-RateLimit-Limit` | Max requests per window for the active bucket: heavy 5, trading 10, standard 30, light 100 per 60 seconds; otherwise `RATE_LIMIT_MAX` or the 1,000-request webhook-ingest bucket. |
 | `X-RateLimit-Remaining` | Requests remaining in the current window. Zero on a throttled response. |
 | `X-RateLimit-Reset` | Unix timestamp (seconds) when the current window resets. |
 
-Throttled (`429`) responses additionally include the existing `Retry-After` header (seconds) and the `retryAfterSeconds` field in the JSON body. `/healthcheck`, `/ready`, and static asset routes are exempt — the global rate limiter is mounted after them in `app.js`.
+Dedicated limits use independent per-endpoint buckets keyed by the existing API-key hash and trusted client IP. Heavy routes are expanded analysis, market scanner, symbol analysis, and news monitor; trading covers Binance order reads, writes, and previews; standard covers volume-confirmation; light covers `/api/status` and `/api/capabilities`. All webhook and news-monitor ingest requests also share an aggregate 1,000-request bucket per `RATE_LIMIT_WINDOW_MS`; mapped webhook tiers enforce both limits. Alert and message ingest use the aggregate bucket without an additional tier. Other routes use `RATE_LIMIT_WINDOW_MS` and `RATE_LIMIT_MAX`. Throttled (`429`) responses include the `Retry-After` header and the positive `retryAfterSeconds` field in the standard retryable `RATE_LIMITED` error envelope. `/healthcheck`, `/ready`, `/openapi.json`, `/docs`, and static assets are mounted before the rate limiter in `app.js` and are exempt.
 
 ## Architecture Overview
 

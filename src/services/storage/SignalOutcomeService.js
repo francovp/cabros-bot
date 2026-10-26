@@ -17,6 +17,7 @@ const {
 	getEntryPriceSourceChains: buildEntryPriceSourceChains,
 } = require('../../lib/signalOutcomeEntryPriceSources');
 const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
+const { validateTraderIntent, isCompleteTraderIntent } = require('../../lib/traderIntent');
 
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 
@@ -48,6 +49,18 @@ const CALIBRATION_SOURCE_RECOVERY_QUERIES = [
 ];
 const CALIBRATION_RECOVERY_TOTAL_SCAN_LIMIT = CALIBRATION_SOURCE_RECOVERY_QUERIES
 	.reduce((total, query) => total + query.maxScannedDocs, 0);
+const CALIBRATION_SCAN_BATCH_SIZE_FLOOR = 50;
+const CALIBRATION_SCAN_BATCH_SIZE_CEILING = 100;
+
+function computeCalibrationBatchSize(targetLimit) {
+	const numericLimit = Number(targetLimit);
+	const parsedLimit = Number.isFinite(numericLimit) && numericLimit > 0 ? numericLimit : CALIBRATION_SCAN_BATCH_SIZE_CEILING;
+	return Math.min(
+		Math.max(parsedLimit, CALIBRATION_SCAN_BATCH_SIZE_FLOOR),
+		CALIBRATION_SCAN_BATCH_SIZE_CEILING
+	);
+}
+
 const DEFAULT_LEASE_MS = 120000;
 const MIN_LEASE_MS = 10000;
 const MAX_LEASE_MS = 600000;
@@ -68,6 +81,10 @@ const MAX_TIMER_DELAY_MS = 2147483647;
 const MAX_CONFIGURED_INTERVAL_MS = 3600000;
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
+const DEFAULT_EXPORT_LIMIT = 100;
+const MAX_EXPORT_LIMIT = 1000;
+const MAX_EXPORT_WINDOW_DAYS = 31;
+const MAX_EXPORT_SCAN_DOCS = 10000;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
 const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
@@ -874,6 +891,36 @@ const WINDOW_CONFIGS = {
 	'1M': { durationMs: 30 * DAY_MS, interval: '1D' },
 };
 
+function evaluateTraderPlan(sortedKlines, intent) {
+	let exitPrice = parseFloat(sortedKlines[sortedKlines.length - 1][4]);
+	let firstHit = null;
+	let firstHitTime = null;
+	for (const kline of sortedKlines) {
+		const timestamp = Number(kline[0]);
+		const high = parseFloat(kline[2]);
+		const low = parseFloat(kline[3]);
+		const stopHit = intent.side === 'BUY' ? low <= intent.invalidation : high >= intent.invalidation;
+		const targetHit = intent.side === 'BUY' ? high >= intent.target : low <= intent.target;
+		if (stopHit || targetHit) {
+			firstHit = stopHit ? 'stop' : 'target';
+			exitPrice = stopHit ? intent.invalidation : intent.target;
+			firstHitTime = Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+			break;
+		}
+	}
+	const realizedGain = intent.side === 'BUY' ? exitPrice - intent.entry : intent.entry - exitPrice;
+	const initialRisk = Math.abs(intent.entry - intent.invalidation);
+	return {
+		price: exitPrice,
+		return: parseFloat(((realizedGain / intent.entry) * 100).toFixed(4)),
+		firstHit,
+		targetHit: firstHit === 'target',
+		stopHit: firstHit === 'stop',
+		firstHitTime,
+		rMultiple: parseFloat((realizedGain / initialRisk).toFixed(4)),
+	};
+}
+
 function normalizeConfidenceScore(val) {
 	if (typeof val !== 'number' || !Number.isFinite(val)) return null;
 	if (val >= 0 && val <= 1) return val;
@@ -901,6 +948,7 @@ async function recordSignalInternal({
 	priceSource,
 	stop,
 	target,
+	barriers,
 	invalidationLevel,
 	invalidation_level,
 	targetLevel,
@@ -912,6 +960,7 @@ async function recordSignalInternal({
 	processingTimeMs,
 	assetClass,
 	session,
+	traderIntent,
 } = {}) {
 	if (!isEnabled()) {
 		return null;
@@ -1092,6 +1141,7 @@ async function recordSignalInternal({
 		}
 
 		const rawSetupType = setupType !== undefined ? setupType : setup_type;
+		const cleanTraderIntent = traderIntent === undefined ? undefined : validateTraderIntent(traderIntent);
 		const cleanSetupType = typeof rawSetupType === 'string' && rawSetupType.trim()
 			? rawSetupType.trim().toLowerCase()
 			: null;
@@ -1123,6 +1173,29 @@ async function recordSignalInternal({
 			const num = Number(cleaned);
 			if (Number.isFinite(num) && num > 0) {
 				cleanRrr = num;
+			}
+		}
+
+		let cleanBarriers = null;
+		if (barriers && typeof barriers === 'object' && typeof barriers.source === 'string' && barriers.source.trim()) {
+			cleanBarriers = { source: barriers.source.trim() };
+			if (typeof barriers.stop === 'number' && Number.isFinite(barriers.stop)) {
+				cleanBarriers.stop = barriers.stop;
+			}
+			if (typeof barriers.target === 'number' && Number.isFinite(barriers.target)) {
+				cleanBarriers.target = barriers.target;
+			}
+			if (typeof barriers.side === 'string' && barriers.side.trim()) {
+				cleanBarriers.side = barriers.side.trim();
+			}
+			if (typeof barriers.stopPct === 'number' && Number.isFinite(barriers.stopPct)) {
+				cleanBarriers.stopPct = barriers.stopPct;
+			}
+			if (typeof barriers.rewardMultiplier === 'number' && Number.isFinite(barriers.rewardMultiplier)) {
+				cleanBarriers.rewardMultiplier = barriers.rewardMultiplier;
+			}
+			if (typeof barriers.timeHorizon === 'string' && barriers.timeHorizon.trim()) {
+				cleanBarriers.timeHorizon = barriers.timeHorizon.trim();
 			}
 		}
 
@@ -1172,9 +1245,11 @@ async function recordSignalInternal({
 			invalidationLevel: cleanInvalidation,
 			targetLevel: cleanTarget,
 			riskRewardRatio: cleanRrr,
+			barriers: cleanBarriers,
 			sources: Array.isArray(sources) ? sources : [],
 			tokenUsage: tokenUsage || null,
 			processingTimeMs: typeof processingTimeMs === 'number' && Number.isFinite(processingTimeMs) ? processingTimeMs : null,
+			...(cleanTraderIntent ? { traderIntent: cleanTraderIntent } : {}),
 			marketDataProvider: normSymbolInfo.exchange === 'BINANCE' ? 'binance' : (equityProviderName || null),
 			outcomeWindows,
 			outcomeWindowLabels,
@@ -1758,6 +1833,9 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 					if (rMultiple !== null) {
 						outcome.rMultiple = rMultiple;
 					}
+					if (isCompleteTraderIntent(data.traderIntent) && data.traderIntent.horizon === winKey) {
+						outcome.traderPlanOutcome = evaluateTraderPlan(sortedKlines, data.traderIntent);
+					}
 					docUpdated = true;
 				} catch (error) {
 					if (abortController) {
@@ -2157,12 +2235,18 @@ function createEmptyMetricsSummary(breakdownTypes = []) {
 		targetHitRatePercent: 0,
 		stopHitRatePercent: 0,
 		expectancyR: null,
+		byTraderPlan: { samples: 0, hitRatePercent: 0, averageRMultiple: null },
 		populationNote: 'No outcome measurements found for the requested criteria.',
 		exchangeBreakdown: {},
 		providerBreakdown: {},
 		entryPriceSourceBreakdown: {},
 		eligibilityBreakdown: {},
 		bySession: {},
+		barrierSourceBreakdown: {
+			derived: { received: 0, eligible: 0, targetEligible: 0, stopEligible: 0, targetHits: 0, stopHits: 0, targetHitRatePercent: 0, stopHitRatePercent: 0 },
+			marketContext: { received: 0, eligible: 0, targetEligible: 0, stopEligible: 0, targetHits: 0, stopHits: 0, targetHitRatePercent: 0, stopHitRatePercent: 0 },
+			none: { received: 0, eligible: 0, targetEligible: 0, stopEligible: 0, targetHits: 0, stopHits: 0, targetHitRatePercent: 0, stopHitRatePercent: 0 },
+		},
 		windows: {},
 		drawdownProxy: {
 			averageMaxAdverseExcursionPercent: 0,
@@ -2568,6 +2652,17 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 	const setupBreakdownBuckets = new Map();
 	const breakdownState = { truncated: false };
 
+	// Barrier provenance breakdown (issue #809 / CB-???). Mirrors the
+	// entryPriceSourceBreakdown shape so operators can see whether
+	// target/stop outcomes came from a provider (marketContext) or the
+	// NewsAnalyzer.deriveBarriers() heuristic, and how many signals had
+	// no barrier provenance recorded at all.
+	const barrierSourceBreakdown = {
+		derived: { received: 0, eligible: 0, targetHits: 0, stopHits: 0, targetEligible: 0, stopEligible: 0 },
+		marketContext: { received: 0, eligible: 0, targetHits: 0, stopHits: 0, targetEligible: 0, stopEligible: 0 },
+		none: { received: 0, eligible: 0, targetHits: 0, stopHits: 0, targetEligible: 0, stopEligible: 0 },
+	};
+
 	const evaluatedSignals = [];
 
 	for (const doc of docs) {
@@ -2602,6 +2697,13 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 				bySession[docSymbol][docSession]++;
 			}
 			bySession[docSymbol].total++;
+		}
+
+		const barrierSource = (doc.barriers && typeof doc.barriers.source === 'string')
+			? doc.barriers.source
+			: 'none';
+		if (!barrierSourceBreakdown[barrierSource]) {
+			barrierSourceBreakdown[barrierSource] = { received: 0, eligible: 0, targetHits: 0, stopHits: 0, targetEligible: 0, stopEligible: 0 };
 		}
 
 		let eligibilityState = doc.eligibilityState;
@@ -2639,6 +2741,10 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 
 		eligibilityBreakdown[eligibilityState] = (eligibilityBreakdown[eligibilityState] || 0) + 1;
 		entryPriceSourceBreakdown[entryPriceSource] = (entryPriceSourceBreakdown[entryPriceSource] || 0) + 1;
+		barrierSourceBreakdown[barrierSource].received++;
+		if (isEligible) {
+			barrierSourceBreakdown[barrierSource].eligible++;
+		}
 
 		if (!exchangeBreakdown[docExchange]) {
 			exchangeBreakdown[docExchange] = createCoverageBucket();
@@ -2711,6 +2817,37 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 						: null;
 					if (setupKey) {
 						accumulateWindowBucket(accumulator, signal, outcome, setupKey);
+					}
+					// Barrier provenance (issue #809 / CB-???). Aggregate
+					// target/stop hits and eligible-window counts per source so
+					// summarizeOutcomes() can compare derived vs supplied
+					// barriers without flattening the populations.
+					const sourceForSignal = (signal.barriers && typeof signal.barriers.source === 'string')
+						? signal.barriers.source
+						: 'none';
+					if (!barrierSourceBreakdown[sourceForSignal]) {
+						barrierSourceBreakdown[sourceForSignal] = {
+							received: 0,
+							eligible: 0,
+							targetHits: 0,
+							stopHits: 0,
+							targetEligible: 0,
+							stopEligible: 0,
+						};
+					}
+					const hasTargetBarrier = typeof signal.target === 'number' && Number.isFinite(signal.target) && signal.target > 0;
+					const hasStopBarrier = typeof signal.stop === 'number' && Number.isFinite(signal.stop) && signal.stop > 0;
+					if (hasTargetBarrier) {
+						barrierSourceBreakdown[sourceForSignal].targetEligible++;
+						if (outcome.targetHit === true || outcome.firstHit === 'target') {
+							barrierSourceBreakdown[sourceForSignal].targetHits++;
+						}
+					}
+					if (hasStopBarrier) {
+						barrierSourceBreakdown[sourceForSignal].stopEligible++;
+						if (outcome.stopHit === true || outcome.firstHit === 'stop') {
+							barrierSourceBreakdown[sourceForSignal].stopHits++;
+						}
 					}
 				}
 			}
@@ -2829,6 +2966,26 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 
 	const averageWorstMae = maeCount > 0 ? parseFloat((totalAllMae / maeCount).toFixed(4)) : 0;
 	const averageProcessingTimeMs = processingTimeCount > 0 ? Math.round(totalProcessingTime / processingTimeCount) : null;
+	let traderPlanSamples = 0;
+	let traderPlanHits = 0;
+	let traderPlanTotalR = 0;
+	let traderPlanRCount = 0;
+	for (const signal of evaluatedSignals) {
+		if (!isCompleteTraderIntent(signal.traderIntent)) continue;
+		const traderOutcome = signal.outcomes?.[signal.traderIntent.horizon]?.traderPlanOutcome;
+		if (!traderOutcome) continue;
+		traderPlanSamples++;
+		if (traderOutcome.targetHit === true) traderPlanHits++;
+		if (typeof traderOutcome.rMultiple === 'number' && Number.isFinite(traderOutcome.rMultiple)) {
+			traderPlanTotalR += traderOutcome.rMultiple;
+			traderPlanRCount++;
+		}
+	}
+	const byTraderPlan = {
+		samples: traderPlanSamples,
+		hitRatePercent: traderPlanSamples > 0 ? parseFloat(((traderPlanHits / traderPlanSamples) * 100).toFixed(2)) : 0,
+		averageRMultiple: traderPlanRCount > 0 ? parseFloat((traderPlanTotalR / traderPlanRCount).toFixed(4)) : null,
+	};
 	const coveragePercent = totalSignalsReceived > 0 ? parseFloat(((totalSignalsEvaluated / totalSignalsReceived) * 100).toFixed(2)) : 0;
 	const isCoverageComplete = totalSignalsEvaluated === totalSignalsReceived;
 
@@ -2924,6 +3081,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 		targetHitRatePercent: overallTargetHitRatePercent,
 		stopHitRatePercent: overallStopHitRatePercent,
 		expectancyR: overallExpectancyR,
+		byTraderPlan,
 		populationNote: !isCoverageComplete
 			? `Metrics represent ${totalSignalsEvaluated} evaluated signals out of ${totalSignalsReceived} total received signals (${coveragePercent}% coverage).`
 			: 'Metrics represent 100% of received signals.',
@@ -2932,6 +3090,25 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType,
 		entryPriceSourceBreakdown,
 		eligibilityBreakdown,
 		bySession,
+		barrierSourceBreakdown: Object.fromEntries(
+			Object.entries(barrierSourceBreakdown).map(([key, val]) => [
+				key,
+				{
+					received: val.received,
+					eligible: val.eligible,
+					targetEligible: val.targetEligible || 0,
+					stopEligible: val.stopEligible || 0,
+					targetHits: val.targetHits || 0,
+					stopHits: val.stopHits || 0,
+					targetHitRatePercent: (val.targetEligible || 0) > 0
+						? parseFloat(((val.targetHits / val.targetEligible) * 100).toFixed(2))
+						: 0,
+					stopHitRatePercent: (val.stopEligible || 0) > 0
+						? parseFloat(((val.stopHits / val.stopEligible) * 100).toFixed(2))
+						: 0,
+				},
+			]),
+		),
 		windows: windowStats,
 		drawdownProxy: {
 			averageMaxAdverseExcursionPercent: averageWorstMae,
@@ -2993,6 +3170,13 @@ function createStorageUnavailableError(cause) {
 	if (cause) {
 		error.cause = cause;
 	}
+	return error;
+}
+
+function createExportAbortedError() {
+	const error = new Error('Signal outcome export query was aborted');
+	error.name = 'AbortError';
+	error.code = 'ABORTED';
 	return error;
 }
 
@@ -3113,6 +3297,7 @@ function formatOutcomeDocument(doc) {
 		sources: Array.isArray(data.sources) ? data.sources : [],
 		tokenUsage: summarizeTokenUsage(data.tokenUsage),
 		processingTimeMs: typeof data.processingTimeMs === 'number' && Number.isFinite(data.processingTimeMs) ? data.processingTimeMs : null,
+		...(data.traderIntent && typeof data.traderIntent === 'object' ? { traderIntent: data.traderIntent } : {}),
 	};
 
 	if (Object.prototype.hasOwnProperty.call(data, 'sessionContext')) {
@@ -3319,6 +3504,166 @@ async function listOutcomes({
 			? encodeAlertPaginationCursor(outcomes[outcomes.length - 1])
 			: null,
 	};
+}
+
+async function getOutcomeById(outcomeId) {
+	if (!isEnabled() || typeof outcomeId !== 'string' || !outcomeId.trim()) {
+		return null;
+	}
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+	let snapshot;
+	try {
+		snapshot = await firestore.collection(COLLECTION_NAME).doc(outcomeId.trim()).get();
+	} catch (error) {
+		console.warn('[SignalOutcomeService] Failed to read signal outcome from Firestore:', error.message);
+		throw createStorageUnavailableError(error);
+	}
+	if (!snapshot || !snapshot.exists || isRetentionExpired(snapshot.data() || {})) {
+		return null;
+	}
+	return formatOutcomeDocument(snapshot);
+}
+
+function buildOutcomeExportWindow({ from, to, limit } = {}) {
+	if (!from || !to) {
+		const error = new Error('Export requests require bounded from and to ISO-8601 timestamps.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+	const parsedFrom = new Date(from);
+	const parsedTo = new Date(to);
+	if (Number.isNaN(parsedFrom.getTime()) || Number.isNaN(parsedTo.getTime())) {
+		const error = new Error('Invalid export window. Use ISO-8601 timestamps.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+	if (parsedFrom.getTime() > parsedTo.getTime()) {
+		const error = new Error('Invalid export window. from must be before or equal to to.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+	if (parsedTo.getTime() - parsedFrom.getTime() > MAX_EXPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000) {
+		const error = new Error(`Invalid export window. Maximum export window is ${MAX_EXPORT_WINDOW_DAYS} days.`);
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+	const normalizedLimit = Number.isInteger(limit) && limit >= 1
+		? Math.min(limit, MAX_EXPORT_LIMIT)
+		: DEFAULT_EXPORT_LIMIT;
+	return {
+		from: parsedFrom.toISOString(),
+		to: parsedTo.toISOString(),
+		limit: normalizedLimit,
+		maxDays: MAX_EXPORT_WINDOW_DAYS,
+	};
+}
+
+function formatOutcomeExportRecord(doc) {
+	const outcome = formatOutcomeDocument(doc);
+	return {
+		id: outcome.id,
+		receivedAt: outcome.receivedAt,
+		source: outcome.source,
+		symbol: outcome.symbol,
+		exchange: outcome.exchange,
+		side: outcome.side,
+		price: outcome.price,
+		setupType: outcome.setupType,
+		score: outcome.score,
+		traderIntent: outcome.traderIntent,
+		outcomes: outcome.outcomes,
+	};
+}
+
+async function exportOutcomes({ from, to, limit, symbol, exchange, setupType, signal, maxScanDocs } = {}) {
+	if (!isEnabled()) {
+		return null;
+	}
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+	const window = buildOutcomeExportWindow({ from, to, limit });
+	const scanLimit = Math.max(window.limit, MAX_LIMIT);
+	const scanBudget = Number.isSafeInteger(maxScanDocs) && maxScanDocs > 0
+		? Math.min(maxScanDocs, MAX_EXPORT_SCAN_DOCS)
+		: MAX_EXPORT_SCAN_DOCS;
+	const outcomes = [];
+	let totalScanned = 0;
+	let pageCursor = null;
+	while (outcomes.length < window.limit) {
+		if (signal && signal.aborted) {
+			throw createExportAbortedError();
+		}
+		const remainingScanBudget = scanBudget - totalScanned;
+		const queryLimit = Math.min(scanLimit, remainingScanBudget);
+		let query = firestore
+			.collection(COLLECTION_NAME)
+			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
+			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
+			.orderBy('receivedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
+		if (pageCursor) {
+			query = query.startAfter(buildParsedCursorTimestamp(pageCursor), pageCursor.documentId);
+		}
+		let snapshot;
+		try {
+			snapshot = await query.limit(queryLimit).get();
+		} catch (error) {
+			if (signal && signal.aborted) {
+				throw createExportAbortedError();
+			}
+			console.warn('[SignalOutcomeService] Failed to export signal outcomes from Firestore:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+		if (signal && signal.aborted) {
+			throw createExportAbortedError();
+		}
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			break;
+		}
+		totalScanned += snapshot.docs.length;
+		for (const doc of snapshot.docs) {
+			if (isRetentionExpired(doc.data() || {})) {
+				continue;
+			}
+			const outcome = formatOutcomeExportRecord(doc);
+			if (!matchesOutcomeFilters(outcome, {
+				symbol,
+				exchange,
+				setupType,
+				from: window.from,
+				to: window.to,
+			})) {
+				continue;
+			}
+			outcomes.push(outcome);
+			if (outcomes.length >= window.limit) {
+				break;
+			}
+		}
+		if (outcomes.length >= window.limit) {
+			break;
+		}
+		if (snapshot.docs.length < queryLimit) {
+			break;
+		}
+		if (totalScanned >= scanBudget) {
+			const error = new Error(`Outcome export could not complete within the ${scanBudget}-document scan limit. Narrow the time range or add a filter and retry.`);
+			error.code = 'INVALID_REQUEST';
+			throw error;
+		}
+		pageCursor = getDocCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!pageCursor) {
+			const error = new Error(`Outcome export could not complete within the ${scanBudget}-document scan limit. Narrow the time range or add a filter and retry.`);
+			error.code = 'INVALID_REQUEST';
+			throw error;
+		}
+	}
+	return { window, outcomes };
 }
 
 const CALIBRATION_DEFAULT_BUCKETS = [
@@ -3550,7 +3895,7 @@ async function getOutcomesCalibration({
 	const targetWindowKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === targetWindow) || targetWindow;
 
 	const targetLimit = limit || 1000;
-	const batchSize = 100;
+	const batchSize = CALIBRATION_SCAN_BATCH_SIZE_CEILING;
 	const hasFilters = Boolean(symbol || exchange);
 	const maxScannedDocs = Math.max(targetLimit * 5, 2000);
 	const scanCalibrationQuery = async (applySourceFilters, scanLimit = maxScannedDocs) => {
@@ -3576,11 +3921,11 @@ async function getOutcomesCalibration({
 				query = applySourceFilters(query);
 			}
 			// Bound the first request and any pages after eligible rows have been
-			// found by the remaining result count. Before the first eligible row,
-			// retain bounded scan batches so sparse samples do not require one
-			// sequential Firestore RPC per rejected document.
+			// found by the remaining result count, while ensuring a minimum floor of
+			// CALIBRATION_SCAN_BATCH_SIZE_FLOOR (50) via computeCalibrationBatchSize
+			// so small limit queries do not trigger one-by-one sequential Firestore RPCs.
 			const pageSize = totalScanned === 0 || docs.length > 0
-				? Math.min(batchSize, targetLimit - docs.length)
+				? computeCalibrationBatchSize(targetLimit - docs.length)
 				: batchSize;
 			const pageLimit = Math.min(pageSize, scanLimit - totalScanned);
 			query = query.orderBy('receivedAt', 'desc').limit(pageLimit);
@@ -3745,8 +4090,13 @@ module.exports = {
 	getMetricsSummary,
 	summarizeOutcomes,
 	listOutcomes,
+	getOutcomeById,
+	exportOutcomes,
 	computeCalibration,
 	getOutcomesCalibration,
+	computeCalibrationBatchSize,
+	CALIBRATION_SCAN_BATCH_SIZE_FLOOR,
+	CALIBRATION_SCAN_BATCH_SIZE_CEILING,
 	normalizeSide,
 	normalizeSymbolAndExchange,
 	startWorker,

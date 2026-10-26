@@ -291,6 +291,12 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			windowStartedAt: null,
+			windowDurationMs: 60000,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			lastExhaustedAt: null,
+			quotaStatus: 'healthy',
 			cooldownActive: false,
 			remainingCooldownMs: 0,
 			lastTriggeredAt: null,
@@ -387,6 +393,43 @@ describe('Status endpoints', () => {
 		}));
 	});
 
+	it('reports preset destination routing support without exposing destination data', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.presetBoundDestinations).toBe(true);
+		expect(response.body.dependencies.presetBoundDestinations).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			channels: ['telegram', 'whatsapp', 'discord'],
+			maxDestinationsPerChannel: 20,
+		});
+		expect(response.text).not.toMatch(/telegramChatIds|whatsappChatIds|discordWebhookUrls/);
+	});
+
+	it('publishes supported Binance Spot order types without changing the feature flag shape', async () => {
+		const supportedOrderTypes = [
+			'MARKET',
+			'LIMIT',
+			'LIMIT_MAKER',
+			'STOP_LOSS',
+			'STOP_LOSS_LIMIT',
+			'TAKE_PROFIT',
+			'TAKE_PROFIT_LIMIT',
+			'BRACKET_LIMIT',
+		];
+		for (const path of ['/api/status', '/api/capabilities']) {
+			const response = await request(app).get(path).set('x-api-key', 'status-key');
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.binanceTrading).toEqual(expect.any(Boolean));
+			expect(response.body.dependencies.binanceTrading.supportedOrderTypes).toEqual(supportedOrderTypes);
+		}
+	});
+
 	it('exposes only numeric background timer counts on both status aliases', async () => {
 		const status = await request(app)
 			.get('/api/status')
@@ -449,6 +492,16 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.tradingViewConfluenceEnrichment).toBe(true);
+	});
+
+	it('exposes deliveryHealth as an empty object when NotificationManager is not initialized', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body).toHaveProperty('deliveryHealth');
+		expect(response.body.deliveryHealth).toEqual({});
 	});
 
 	it('reports scanner presets as ephemeral when no Firestore gate is enabled', async () => {
@@ -2283,6 +2336,12 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: false,
 			status: 'degraded',
+			windowStartedAt: expect.any(String),
+			windowDurationMs: 60000,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 1,
+			lastExhaustedAt: expect.any(String),
+			quotaStatus: 'exhausted',
 			cooldownActive: true,
 			remainingCooldownMs: expect.any(Number),
 			lastTriggeredAt: expect.any(String),
@@ -2316,6 +2375,12 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: false,
 			status: 'disabled',
+			windowStartedAt: null,
+			windowDurationMs: 60000,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			lastExhaustedAt: null,
+			quotaStatus: 'healthy',
 			cooldownActive: false,
 			remainingCooldownMs: 0,
 			lastTriggeredAt: null,

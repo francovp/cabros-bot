@@ -123,6 +123,34 @@ describe('Self-test diagnostic endpoint (GH-801)', () => {
 		expect(res.body.checks[0].message).toMatch(/unknown checks/);
 	});
 
+	it('includes a fail entry for unknown check ids alongside valid ids in mixed scoped runs', async () => {
+		const res = await request(app)
+			.post('/api/selftest/run?only=auth.api_key,nope.nope')
+			.set('x-api-key', 'test-key')
+			.send();
+		expect(res.status).toBe(200);
+		expect(res.body.status).toBe('fail');
+		const authCheck = res.body.checks.find((c) => c.id === 'auth.api_key');
+		const unknownCheck = res.body.checks.find((c) => c.id === 'unknown');
+		expect(authCheck).toBeDefined();
+		expect(authCheck.status).toBe('pass');
+		expect(unknownCheck).toBeDefined();
+		expect(unknownCheck.status).toBe('fail');
+		expect(unknownCheck.message).toMatch(/unknown checks: nope\.nope/);
+	});
+
+	it('applies default rate limiter settings when RATE_LIMIT_MAX and RATE_LIMIT_WINDOW_MS are omitted', async () => {
+		delete process.env.RATE_LIMIT_MAX;
+		delete process.env.RATE_LIMIT_WINDOW_MS;
+		const res = await request(app)
+			.post('/api/selftest/run?only=rate_limiter.config')
+			.set('x-api-key', 'test-key')
+			.send();
+		expect(res.status).toBe(200);
+		expect(res.body.status).toBe('pass');
+		expect(res.body.checks[0].evidence).toEqual({ max: 100, windowMs: 900000 });
+	});
+
 	it('requires API key auth', async () => {
 		const res = await request(app)
 			.get('/api/selftest');
@@ -153,8 +181,24 @@ describe('Self-test diagnostic endpoint (GH-801)', () => {
 			.set('x-api-key', 'test-key')
 			.send();
 		expect(res.status).toBe(200);
-		// The check exposes the endpoint value; ensure no redaction happens on
-		// env-style values that are not keys. The redactor is for object keys.
-		expect(res.body.checks[0].evidence).toEqual({ endpoint: 'https://example.com/mcp?api-key=should-redact' });
+		// The check exposes the endpoint value with query credentials stripped
+		expect(res.body.checks[0].evidence).toEqual({ endpoint: 'https://example.com/mcp' });
+	});
+
+	it('redacts basic auth and query credentials from TRADINGVIEW_MCP_URL in POST /api/selftest/run and cached GET', async () => {
+		process.env.TRADINGVIEW_MCP_URL = 'https://operator:secretpass@mcp.internal:9000/mcp?token=xyz123';
+		const runRes = await request(app)
+			.post('/api/selftest/run?only=tradingview_mcp.endpoint')
+			.set('x-api-key', 'test-key')
+			.send();
+		expect(runRes.status).toBe(200);
+		expect(runRes.body.checks[0].evidence).toEqual({ endpoint: 'https://mcp.internal:9000/mcp' });
+
+		const getRes = await request(app)
+			.get('/api/selftest')
+			.set('x-api-key', 'test-key');
+		expect(getRes.status).toBe(200);
+		const check = getRes.body.checks.find((c) => c.id === 'tradingview_mcp.endpoint');
+		expect(check.evidence).toEqual({ endpoint: 'https://mcp.internal:9000/mcp' });
 	});
 });

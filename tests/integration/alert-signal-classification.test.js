@@ -26,6 +26,7 @@ const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const { signalClassMetrics } = require('../../src/services/alerts/signalClassifier');
 
 /**
@@ -62,6 +63,8 @@ describe('Alert signal classification (issue #858)', () => {
 		alertStorageService.isEnabled.mockReturnValue(true);
 		alertStorageService.saveAlert.mockResolvedValue('stored-alert-id');
 		alertStorageService.extractSymbolAndExchange.mockReturnValue({ symbol: 'BTCUSDT', exchange: 'BINANCE' });
+		signalOutcomeService.isEnabled.mockReturnValue(false);
+		signalOutcomeService.recordSignal.mockResolvedValue('outcome-id');
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'test-msg-id' });
 		mockBot = {
@@ -187,5 +190,32 @@ describe('Alert signal classification (issue #858)', () => {
 		expect(snapshot.totalAlerts).toBe(1);
 		expect(snapshot.classifiedAlerts).toBe(1);
 		expect(snapshot.populationRate).toBe(1);
+	});
+
+	it('passes sanitized trader intent to alert and outcome persistence', async () => {
+		signalOutcomeService.isEnabled.mockReturnValue(true);
+
+		await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-key')
+			.send({
+				text: 'BINANCE:BTCUSDT (4h) COMPRA',
+				traderIntent: {
+					side: 'BUY', entry: 60500, invalidation: 59000, target: 62000,
+					horizon: '4h', notes: '  scaled plan  ',
+				},
+			})
+			.expect(200);
+
+		const expectedIntent = {
+			side: 'BUY', entry: 60500, invalidation: 59000, target: 62000,
+			horizon: '4h', notes: 'scaled plan',
+		};
+		expect(alertStorageService.saveAlert).toHaveBeenCalledWith(expect.objectContaining({
+			traderIntent: expectedIntent,
+		}));
+		expect(signalOutcomeService.recordSignal).toHaveBeenCalledWith(expect.objectContaining({
+			traderIntent: expectedIntent,
+		}));
 	});
 });

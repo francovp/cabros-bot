@@ -355,6 +355,25 @@ describe('AlertStorageService', () => {
 			}));
 		});
 
+		it('persists a sanitized request-level trader intent', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockAdd.mockResolvedValueOnce({ id: 'doc-trader-intent' });
+
+			await AlertStorageService.saveAlert(buildParams({
+				traderIntent: {
+					side: 'BUY', entry: 100, invalidation: 90, target: 120,
+					horizon: '4h', notes: 'manual plan',
+				},
+			}));
+
+			expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({
+				traderIntent: {
+					side: 'BUY', entry: 100, invalidation: 90, target: 120,
+					horizon: '4h', notes: 'manual plan',
+				},
+			}));
+		});
+
 		it('persists session tag when explicitly provided or derived from equity exchange', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockAdd.mockResolvedValueOnce({ id: 'doc-session-equity' });

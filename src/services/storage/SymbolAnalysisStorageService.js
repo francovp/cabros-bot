@@ -6,6 +6,7 @@ const { isFirestoreConfigured } = require('./firestoreConfig');
 const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
 const { classifyFirestoreError, describeFirestoreErrorCategory } = require('./firestoreErrorCategories');
 const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
+const { validateTraderIntent } = require('../../lib/traderIntent');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETENTION_DAYS = 7;
@@ -406,6 +407,7 @@ async function recordAnalysis(record = {}) {
 		const multiTimeframe = Boolean(record.multiTimeframe);
 		const analysisStatus = String(record.analysisStatus || 'complete').trim();
 		const processingTimeMs = record.processingTimeMs !== undefined ? numberOrNull(record.processingTimeMs) : undefined;
+		const traderIntent = validateTraderIntent(record.traderIntent);
 
 		const dataToSave = stripUndefinedFieldsDeep({
 			id,
@@ -428,6 +430,7 @@ async function recordAnalysis(record = {}) {
 			multiTimeframe,
 			analysisStatus,
 			processingTimeMs,
+			traderIntent,
 			analysis: record.analysis || '',
 			alertText: record.alertText || '',
 			receivedAt: admin.firestore.FieldValue.serverTimestamp(),

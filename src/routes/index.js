@@ -38,7 +38,13 @@ const {
 	postResolveSymbol,
 	getAliases,
 } = require('../controllers/webhooks/handlers/symbols/symbols');
-const { listOutcomes, summarizeOutcomes, getOutcomesCalibration } = require('../controllers/outcomes/outcomes');
+const {
+	listOutcomes,
+	summarizeOutcomes,
+	getOutcomesCalibration,
+	getOutcomeById,
+	exportOutcomes,
+} = require('../controllers/outcomes/outcomes');
 const { listSymbolAnalyses, summarizeSymbolAnalyses } = require('../controllers/symbolAnalyses/symbolAnalyses');
 const { getPreferencesHandler, putPreferencesHandler, deletePreferencesHandler } = require('../controllers/preferences/preferences');
 const {
@@ -60,10 +66,20 @@ const {
 	getBinanceAccountBalances,
 } = require('../controllers/trading/binanceOrders');
 const {
+	postBinancePause,
+	postBinanceResume,
+	getBinancePause,
+} = require('../controllers/trading/binanceTradingControl');
+const {
 	getPositions,
 	getPnlSummary,
 	getTrades,
 } = require('../controllers/trading/tradeLedger');
+const {
+	getBinanceReconciliation,
+	getBinanceReconciliationById,
+	postResolveAmbiguousReservation,
+} = require('../controllers/trading/binanceReconciliation');
 const { postTestAlert } = require('../controllers/admin/testAlert');
 const { handleSseStream } = require('../controllers/admin/sseEvents');
 const { idempotencyMiddleware } = require('../lib/idempotency');
@@ -90,9 +106,8 @@ function getRoutes(botOrGetter) {
 	router.post('/webhook/message', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postMessage(botOrGetter));
 	router.post('/webhook/expanded-analysis-alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
 	router.post('/webhook/market-scanner-alert', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
-	// Rate limited by the app-wide src/lib/rateLimiter (app.use). These two webhook
-	// ingest paths additionally have their own dedicated 1,000-request bucket via
-	// WEBHOOK_INGEST_PATHS, so they are more restricted than the global default.
+	// Rate limited by the app-wide src/lib/rateLimiter (app.use): volume confirmation
+	// uses the standard tier (30/minute), and symbol analysis uses the heavy tier (5/minute).
 	// CodeQL's js/missing-rate-limiting cannot see the app-level middleware.
 	/* codeql[js/missing-rate-limiting] */
 	router.post('/webhook/volume-confirmation', validateApiKey, maintenanceModeMiddleware, idempotencyMiddleware, postVolumeConfirmation());
@@ -114,6 +129,8 @@ function getRoutes(botOrGetter) {
 	router.get('/outcomes', ...adminRead, listOutcomes);
 	router.get('/outcomes/summary', ...adminRead, summarizeOutcomes);
 	router.get('/outcomes/calibration', ...adminRead, getOutcomesCalibration);
+	router.get('/outcomes/export', ...adminRead, exportOutcomes);
+	router.get('/outcomes/:outcomeId', ...adminRead, getOutcomeById);
 	router.get('/symbol-analyses', ...adminRead, listSymbolAnalyses);
 	router.get('/symbol-analyses/summary', ...adminRead, summarizeSymbolAnalyses);
 	router.post('/scanner-presets', ...adminWrite, postPreset);
@@ -154,6 +171,12 @@ function getRoutes(botOrGetter) {
 	router.get('/trading/binance/account/balances', ...binanceOrderRead, getBinanceAccountBalances);
 	router.post('/trading/binance/orders', ...binanceOrderWrite, idempotencyMiddleware, postBinanceOrder);
 	router.delete('/trading/binance/orders', ...binanceOrderWrite, deleteBinanceOrder);
+	router.get('/trading/binance/pause', ...binanceOrderRead, getBinancePause);
+	router.post('/trading/binance/pause', ...binanceOrderWrite, idempotencyMiddleware, postBinancePause);
+	router.post('/trading/binance/resume', ...binanceOrderWrite, idempotencyMiddleware, postBinanceResume);
+	router.get('/trading/binance/reconciliation', ...binanceOrderRead, getBinanceReconciliation);
+	router.get('/trading/binance/reconciliation/:reservationId', ...binanceOrderRead, getBinanceReconciliationById);
+	router.post('/trading/binance/reconciliation/:reservationId', ...binanceOrderWrite, idempotencyMiddleware, postResolveAmbiguousReservation);
 	router.get('/trading/positions', ...adminRead, getPositions);
 	router.get('/trading/pnl/summary', ...adminRead, getPnlSummary);
 	router.get('/trading/trades', ...adminRead, getTrades);

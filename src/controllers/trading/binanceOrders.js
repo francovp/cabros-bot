@@ -12,6 +12,7 @@ const { getIdempotencyKey } = require('../../lib/idempotency');
 const { binanceOrderAuditService } = require('../../services/trading/BinanceOrderAuditService');
 const { tradeLedgerService } = require('../../services/trading/TradeLedgerService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const autoTradeReservationService = require('../../services/trading/AutoTradeReservationService');
 
 async function postBinanceOrder(req, res) {
 	const startTime = Date.now();
@@ -21,11 +22,13 @@ async function postBinanceOrder(req, res) {
 			idempotencyKey,
 		});
 		const processingMs = Date.now() - startTime;
+		const resultOrder = result.order || null;
+		const resultOrderList = result.orderList || null;
 		try {
 			console.log('[BinanceOrdersController] order processed', {
-				symbol: result.order?.symbol,
-				side: result.order?.side,
-				type: result.order?.type,
+				symbol: resultOrder?.symbol || resultOrderList?.symbol || req.body?.symbol,
+				side: resultOrder?.side || req.body?.side,
+				type: resultOrder?.type || req.body?.type,
 				dryRun: result.dryRun,
 				environment: result.environment,
 			});
@@ -37,18 +40,18 @@ async function postBinanceOrder(req, res) {
 			req,
 			request: req.body,
 			action: 'PLACE',
-			symbol: result.order?.symbol || req.body?.symbol,
-			side: result.order?.side || req.body?.side || null,
-			type: result.order?.type || req.body?.type || null,
-			quantity: result.order?.origQty ?? result.order?.quantity ?? req.body?.quantity ?? null,
-			quoteOrderQty: result.order?.quoteOrderQty ?? req.body?.quoteOrderQty ?? null,
-			price: result.order?.price ?? req.body?.price ?? null,
-			timeInForce: result.order?.timeInForce ?? req.body?.timeInForce ?? null,
-			status: result.dryRun ? 'dry_run' : (result.order?.status || 'SUBMITTED'),
+			symbol: resultOrder?.symbol || resultOrderList?.symbol || req.body?.symbol,
+			side: resultOrder?.side || req.body?.side || null,
+			type: resultOrder?.type || req.body?.type || null,
+			quantity: resultOrder?.origQty ?? resultOrder?.quantity ?? req.body?.quantity ?? null,
+			quoteOrderQty: resultOrder?.quoteOrderQty ?? req.body?.quoteOrderQty ?? null,
+			price: resultOrder?.price ?? req.body?.price ?? null,
+			timeInForce: resultOrder?.timeInForce ?? req.body?.timeInForce ?? null,
+			status: result.dryRun ? 'dry_run' : (resultOrder?.status || resultOrderList?.listOrderStatus || 'SUBMITTED'),
 			dryRun: Boolean(result.dryRun),
 			environment: result.environment,
-			binanceOrderId: result.order?.orderId ?? null,
-			clientOrderId: result.order?.clientOrderId ?? null,
+			binanceOrderId: resultOrder?.orderId ?? resultOrderList?.orderListId ?? null,
+			clientOrderId: resultOrder?.clientOrderId ?? resultOrderList?.listClientOrderId ?? null,
 			origin: result.origin ?? req.body?.origin ?? 'manual',
 			alertId: result.alertId ?? req.body?.alertId ?? null,
 			setupType: result.setupType ?? req.body?.setupType ?? null,
@@ -58,11 +61,11 @@ async function postBinanceOrder(req, res) {
 			console.warn('[BinanceOrdersController] audit logging failed:', err?.message || err);
 		});
 
-		if (!result.dryRun && result.order) {
+		if (!result.dryRun && resultOrder) {
 			trackBackgroundTask(
 				tradeLedgerService.recordOrderFills({
 					environment: result.environment,
-					order: result.order,
+					order: resultOrder,
 					origin: result.origin,
 					alertId: result.alertId,
 					setupType: result.setupType,
@@ -71,13 +74,30 @@ async function postBinanceOrder(req, res) {
 				}),
 			);
 		}
+		if (!result.dryRun && Array.isArray(resultOrderList?.orderReports)) {
+			for (const order of resultOrderList.orderReports) {
+				if (!Array.isArray(order?.fills) || order.fills.length === 0) continue;
+				trackBackgroundTask(
+					tradeLedgerService.recordOrderFills({
+						environment: result.environment,
+						order,
+						origin: result.origin,
+						alertId: result.alertId,
+						setupType: result.setupType,
+					}).catch((err) => {
+						console.warn('[BinanceOrdersController] bracket fill recording failed:', err?.message || err);
+					}),
+				);
+			}
+		}
 
 		return res.status(result.dryRun ? 200 : 201).json(result);
 	} catch (error) {
 		const processingMs = Date.now() - startTime;
 		const clientOrderId = error.clientOrderId
+			|| error.listClientOrderId
 			|| req.body?.clientOrderId
-			|| (idempotencyKey ? deriveClientOrderId(idempotencyKey, req.body) : null);
+			|| (req.body?.type !== 'BRACKET_LIMIT' && idempotencyKey ? deriveClientOrderId(idempotencyKey, req.body) : null);
 
 		if (error instanceof BinanceOrderRequestError || error instanceof BinanceOrderServiceError) {
 			console.warn('[BinanceOrdersController] order rejected', { code: error.code });
@@ -158,30 +178,87 @@ async function postBinanceOrder(req, res) {
 }
 
 async function getBinanceOrders(req, res) {
+	if (req.query?.reconciliation === 'ambiguous') {
+		let limit = 50;
+		if (req.query.limit !== undefined && req.query.limit !== null && req.query.limit !== '') {
+			const str = String(req.query.limit).trim();
+			if (!/^\d+$/.test(str)) {
+				return sendErrorFrom(res, 400, {
+					error: 'limit must be an integer between 1 and 100',
+					code: 'INVALID_REQUEST',
+				}, { req });
+			}
+			const parsed = parseInt(str, 10);
+			if (parsed < 1 || parsed > 100) {
+				return sendErrorFrom(res, 400, {
+					error: 'limit must be an integer between 1 and 100',
+					code: 'INVALID_REQUEST',
+				}, { req });
+			}
+			limit = parsed;
+		}
+		try {
+			const result = await autoTradeReservationService.listAmbiguousReservations({
+				limit,
+				symbol: req.query.symbol,
+				status: 'ambiguous',
+			});
+			if (!result || !result.success) {
+				return sendErrorFrom(res, 503, {
+					error: result?.error || 'Storage unavailable',
+					code: result?.code || 'STORAGE_UNAVAILABLE',
+					retryable: true,
+				}, { req });
+			}
+			return res.status(200).json({
+				success: true,
+				reconciliation: true,
+				reservations: result.reservations,
+				count: result.count,
+				ambiguousCount: result.ambiguousCount,
+			});
+		} catch (error) {
+			console.error('[BinanceOrdersController] ambiguous reconciliation query failed:', error);
+			return sendErrorFrom(res, error.statusCode || 500, {
+				error: error.message || 'Failed to retrieve ambiguous reservations',
+				code: error.code || 'INTERNAL_ERROR',
+				retryable: error.statusCode === 503,
+			}, { req });
+		}
+	}
 	const startTime = Date.now();
 	try {
 		const result = await binanceOrderService.getOrders(req.query);
 		const processingMs = Date.now() - startTime;
+		const resultOrderList = result.orderList || null;
 		binanceOrderAuditService.recordMutation({
 			req,
 			request: req.query,
 			action: 'RECONCILE',
 			symbol: req.query?.symbol,
-			status: result.order ? 'confirmed' : 'queried',
+			status: result.order || resultOrderList ? 'confirmed' : 'queried',
 			environment: result.environment,
-			binanceOrderId: result.order?.orderId ?? req.query?.orderId ?? null,
-			clientOrderId: result.order?.clientOrderId ?? req.query?.origClientOrderId ?? null,
+			binanceOrderId: result.order?.orderId ?? resultOrderList?.orderListId ?? req.query?.orderId ?? req.query?.orderListId ?? null,
+			clientOrderId: result.order?.clientOrderId ?? resultOrderList?.listClientOrderId ?? req.query?.origClientOrderId ?? req.query?.listClientOrderId ?? null,
 			response: result,
 			processingMs,
 		}).catch((err) => {
 			console.warn('[BinanceOrdersController] audit logging failed:', err?.message || err);
 		});
 
-		if (result.order && Array.isArray(result.order.fills) && result.order.fills.length > 0) {
+		const orderOrigin = result.origin ?? resultOrderList?.origin;
+		const orderAlertId = result.alertId ?? resultOrderList?.alertId;
+		const orderSetupType = result.setupType ?? resultOrderList?.setupType;
+		const reconciledOrders = [result.order, ...(Array.isArray(resultOrderList?.orderReports) ? resultOrderList.orderReports : [])];
+		for (const order of reconciledOrders) {
+			if (!Array.isArray(order?.fills) || order.fills.length === 0) continue;
 			trackBackgroundTask(
 				tradeLedgerService.recordOrderFills({
 					environment: result.environment,
-					order: result.order,
+					order,
+					...(orderOrigin ? { origin: orderOrigin } : {}),
+					...(orderAlertId ? { alertId: orderAlertId } : {}),
+					...(orderSetupType ? { setupType: orderSetupType } : {}),
 				}).catch((err) => {
 					console.warn('[BinanceOrdersController] trade ledger fill recording failed on reconcile:', err?.message || err);
 				}),
@@ -201,8 +278,8 @@ async function getBinanceOrders(req, res) {
 				status: 'rejected',
 				errorCode: error.code,
 				environment: error.environment,
-				binanceOrderId: req.query?.orderId ?? null,
-				clientOrderId: req.query?.origClientOrderId ?? null,
+				binanceOrderId: req.query?.orderId ?? req.query?.orderListId ?? null,
+				clientOrderId: req.query?.origClientOrderId ?? req.query?.listClientOrderId ?? null,
 				response: { error: error.message, code: error.code },
 				processingMs,
 			}).catch((err) => {

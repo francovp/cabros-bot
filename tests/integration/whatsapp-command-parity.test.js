@@ -120,7 +120,7 @@ describe('WhatsApp bridge → real Telegram handlers (#886)', () => {
 		expect(sends[0].text).toBe('Job job-88 creado para market-scanner. Estado: queued.');
 	});
 
-	test('an invalid !analisis request replies with the shared validation error and creates no job', async () => {
+	test('an invalid !analisis request replies with a field-specific validation error and creates no job', async () => {
 		const { service, sends } = buildService();
 		mockValidateJobRequest.mockImplementation(() => {
 			const error = new Error('timeoutMs must be a positive integer');
@@ -131,7 +131,7 @@ describe('WhatsApp bridge → real Telegram handlers (#886)', () => {
 		await service.handleNotification(notification('!analisis BINANCE:BTCUSDT timeoutMs=abc'));
 
 		expect(mockCreateJob).not.toHaveBeenCalled();
-		expect(sends[0].text).toContain('timeoutMs must be a positive integer');
+		expect(sends[0].text).toContain('timeoutMs debe ser un número entero');
 		expect(sends[0].whatsappChatId).toBe('120363422033474991@g.us');
 	});
 
