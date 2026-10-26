@@ -478,6 +478,16 @@ pnpm test:firebase
 
 - `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID` - Chat ID for deployment alerts and fail-open notification-channel failure pages
 
+#### Admin Server-Sent Events (SSE)
+
+Real-time administrative events (job progress, scanner results, alert delivery events, and delivery failures) are streamed to operator consoles via `GET /api/admin/events`.
+
+- `ENABLE_ADMIN_SSE` - Enable real-time SSE events streaming endpoint (`true` or `false`, default: `true`). Classified as **environment-only** (process-startup and route-enablement gate; excluded from Firebase Remote Config).
+- `ADMIN_SSE_MAX_CLIENT_CONNECTIONS` - Maximum concurrent SSE event streams per client key (IP, API key, or Firebase UID) (`1`-`20`, integer, default: `5`, Remote Config supported). Older streams from the same client key are gracefully evicted when exceeded.
+- `ADMIN_SSE_MAX_TOTAL_CONNECTIONS` - Maximum total active SSE event streams allowed across all clients (`10`-`1000`, integer, default: `100`, Remote Config supported). New connections are rejected with `503 Service Unavailable` when exceeded.
+- `ADMIN_SSE_HEARTBEAT_MS` - Heartbeat interval in milliseconds for SSE comment keepalive frames (`5000`-`120000`, integer, default: `30000`, Remote Config supported). Prevents intermediate proxies from closing idle event streams.
+- `ADMIN_SSE_DRAIN_TIMEOUT_MS` - Timeout in milliseconds to wait for a backpressured SSE client stream socket to drain before evicting the slow consumer (`1000`-`60000`, integer, default: `15000`, Remote Config supported).
+
 #### Server Configuration
 
 - `PORT` - HTTP server port (default: `80`)
