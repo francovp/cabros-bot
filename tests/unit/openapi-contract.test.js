@@ -163,6 +163,7 @@ describe('OpenAPI contract', () => {
 			'GET /api/symbol-analyses', 'GET /api/symbol-analyses/summary',
 			'GET /api/trading/binance/orders', 'GET /api/trading/binance/orders/audit', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders',
 			'GET /api/trading/binance/pause', 'POST /api/trading/binance/pause', 'POST /api/trading/binance/resume',
+			'GET /api/trading/binance/reconciliation', 'GET /api/trading/binance/reconciliation/{reservationId}', 'POST /api/trading/binance/reconciliation/{reservationId}',
 			'GET /api/status', 'GET /api/capabilities',
 			'POST /api/symbols/resolve', 'GET /api/symbols/aliases',
 			'POST /api/trading/binance/orders/preview', 'GET /api/trading/binance/account/balances',
@@ -187,6 +188,9 @@ describe('OpenAPI contract', () => {
 			'GET /api/trading/binance/pause',
 			'POST /api/trading/binance/pause',
 			'POST /api/trading/binance/resume',
+			'GET /api/trading/binance/reconciliation',
+			'GET /api/trading/binance/reconciliation/{reservationId}',
+			'POST /api/trading/binance/reconciliation/{reservationId}',
 		]);
 
 		for (const operation of operations) {

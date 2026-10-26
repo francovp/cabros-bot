@@ -20,6 +20,7 @@ const remoteConfigService = require('../services/remoteConfig/RemoteConfigServic
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
 const { binanceOrderAuditService } = require('../services/trading/BinanceOrderAuditService');
+const autoTradeReservationService = require('../services/trading/AutoTradeReservationService');
 const { tradeLedgerService } = require('../services/trading/TradeLedgerService');
 const symbolAnalysisStorageService = require('../services/storage/SymbolAnalysisStorageService');
 const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
@@ -864,6 +865,8 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				controlStorage: binanceTradingStatus.controlStorage,
 				unavailable: binanceTradingStatus.unavailable,
 				blocked: binanceTradingStatus.blocked,
+				ambiguousCount: autoTradeReservationService.getAmbiguousCount(),
+				ambiguousReservationsCount: autoTradeReservationService.getAmbiguousCount(),
 			},
 			startupJitter: (() => {
 				const global = resolveStartupJitterMs({

@@ -151,6 +151,8 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `GET` | `/api/trading/binance/account/balances` | Read-only Binance Spot balances for allowed assets | [API Reference](docs/api-reference.md#get-apitradingbinanceaccountbalances) |
 | `GET`/`POST` | `/api/trading/binance/pause` | Read or activate the operator runtime kill-switch for Binance Spot orders | [API Reference](docs/api-reference.md) |
 | `POST` | `/api/trading/binance/resume` | Clear the operator runtime kill-switch and resume Binance Spot order flow | [API Reference](docs/api-reference.md) |
+| `GET` | `/api/trading/binance/reconciliation` | List ambiguous auto-trade reservations requiring reconciliation | [API Reference](docs/api-reference.md#get-apitradingbinancereconciliation) |
+| `GET`/`POST` | `/api/trading/binance/reconciliation/:reservationId` | Read or resolve an ambiguous auto-trade reservation as placed or not_placed | [API Reference](docs/api-reference.md#post-apitradingbinancereconciliationreservationid) |
 | `GET` | `/api/trading/positions` | Query open Binance trading positions with mark prices and unrealized P&L | [API Reference](docs/api-reference.md#get-apitradingpositions) |
 
 `POST /api/webhook/alert` and `POST /api/webhook/symbol-analysis` accept an optional request-level `traderIntent` object. `entry` and `horizon` (`1h`, `4h`, `1D`, or `1W`) are required; `side` (`BUY`/`SELL`) is required when `target` or `invalidation` is present. Complete plans are persisted and evaluated independently from the bot setup, and `/api/outcomes/summary` reports the additive `byTraderPlan` block.

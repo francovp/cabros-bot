@@ -435,3 +435,29 @@ Query parameters are all optional:
 An `asset` or `symbol` outside the configured allow-list is rejected with `400 INVALID_ORDER_REQUEST` *before* any provider call, so the endpoint cannot be used to probe arbitrary balances. `ENABLE_BINANCE_TRADING=false` returns `403 FEATURE_DISABLED`; missing credentials return `503 BINANCE_TRADING_UNAVAILABLE`; a Binance timeout, network error or unclassified provider failure returns `502 BINANCE_BALANCE_QUERY_FAILED`. The 502 body and the structured log line carry only the sanitized message — no API key, signature, or raw Binance payload.
 
 Responses are cached in-process for a few seconds so an operator console polling the endpoint cannot spike Binance request weight. See [`BINANCE_BALANCE_CACHE_MS`](environment-configuration.md#binance-spot-order-execution) for the bound and its Remote Config parity.
+
+### GET /api/trading/binance/reconciliation
+
+`GET /api/trading/binance/reconciliation` lists indeterminate auto-trade reservations requiring manual operator reconciliation. Mounted behind `admin.viewer`/`admin.operator` access (API-key or Firebase bearer).
+
+Query parameters:
+- `symbol` — restrict to a single trading symbol (e.g. `BTCUSDT`).
+- `status` — filter by reservation status (default: `ambiguous`).
+- `limit` — integer limit (default: 50, maximum: 100).
+
+Returns `{ success: true, reservations: [...], count, ambiguousCount }`.
+
+### POST /api/trading/binance/reconciliation/:reservationId
+
+`POST /api/trading/binance/reconciliation/:reservationId` resolves an ambiguous auto-trade reservation as `placed` or `not_placed`. Mounted behind `admin.operator` access with idempotency middleware.
+
+Request body:
+- `resolvedAs` (`placed` | `not_placed`, required)
+- `orderId` (integer, optional)
+- `notes` (string, optional)
+
+Behavior:
+- When resolved as `not_placed`: marks status as `failed`, clears both Firestore and in-memory repeat suppression cooldowns so subsequent valid signals are not blocked, pages admin chat if configured, and audits the mutation.
+- When resolved as `placed`: marks status as `submitted`, updates `orderId`, retains repeat suppression cooldown, and audits the mutation.
+- Fully idempotent: repeat calls with identical determinations return `{ success: true, idempotent: true, action: 'already_resolved', reservation }`. Conflicting determinations fail closed with `409 CONFLICT`.
+

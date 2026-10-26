@@ -32282,6 +32282,503 @@
           ]
         },
         {
+          "name": "GET Binance Reconciliation",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Lists ambiguous auto-trade reservations requiring manual operator reconciliation.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/reconciliation?status=ambiguous&limit=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "reconciliation"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "ambiguous",
+                  "description": "Filter by status"
+                },
+                {
+                  "key": "limit",
+                  "value": "50",
+                  "description": "Limit results"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"reservations\": [\n    {\n      \"id\": \"c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0\",\n      \"signalId\": \"bar-123\",\n      \"status\": \"unknown\",\n      \"ambiguous\": true,\n      \"ambiguousReason\": \"BINANCE_ORDER_STATUS_UNKNOWN\",\n      \"signalContext\": {\n        \"symbol\": \"BTCUSDT\",\n        \"side\": \"BUY\",\n        \"timeframe\": \"1h\"\n      },\n      \"lastAttempt\": {\n        \"errorCode\": \"BINANCE_ORDER_STATUS_UNKNOWN\"\n      }\n    }\n  ],\n  \"count\": 1,\n  \"ambiguousCount\": 1\n}"
+            },
+            {
+              "name": "Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized\",\n  \"code\": \"ADMIN_AUTH_REQUIRED\"\n}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "60"
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "10"
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0"
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1726214460"
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429"
+                }
+              ]
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"X-Request-Id response header is populated\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\").length).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Reconciliation (request ID echo)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh1272-test-001",
+                "type": "text",
+                "description": "Optional client-supplied correlation ID (1-128 printable ASCII). Returned in the X-Request-Id response header on every non-exempt route."
+              }
+            ],
+            "description": "Lists ambiguous auto-trade reservations requiring manual operator reconciliation with echo correlation ID.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/reconciliation",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "reconciliation"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"reservations\": [],\n  \"count\": 0,\n  \"ambiguousCount\": 0\n}",
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "gh1272-test-001"
+                }
+              ]
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"X-Request-Id response header matches request\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.equal(\"gh1272-test-001\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Reconciliation by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Retrieves a single ambiguous auto-trade reservation by reservation ID or signal ID.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/reconciliation/c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "reconciliation",
+                "c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"reservation\": {\n    \"id\": \"c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0\",\n    \"signalId\": \"bar-123\",\n    \"status\": \"unknown\",\n    \"ambiguous\": true,\n    \"ambiguousReason\": \"BINANCE_ORDER_STATUS_UNKNOWN\",\n    \"signalContext\": {\n      \"symbol\": \"BTCUSDT\",\n      \"side\": \"BUY\",\n      \"timeframe\": \"1h\"\n    }\n  }\n}"
+            },
+            {
+              "name": "Not Found",
+              "status": "Not Found",
+              "code": 404,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Ambiguous reservation not found\",\n  \"code\": \"RESERVATION_NOT_FOUND\"\n}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "60"
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "10"
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0"
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1726214460"
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429"
+                }
+              ]
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"X-Request-Id response header is populated\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\").length).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Reconciliation by ID (request ID echo)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh1272-test-001",
+                "type": "text",
+                "description": "Optional client-supplied correlation ID (1-128 printable ASCII). Returned in the X-Request-Id response header on every non-exempt route."
+              }
+            ],
+            "description": "Retrieves a single ambiguous auto-trade reservation by reservation ID with echo correlation ID.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/reconciliation/c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "reconciliation",
+                "c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"reservation\": {\n    \"id\": \"c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0\",\n    \"signalId\": \"bar-123\",\n    \"status\": \"unknown\",\n    \"ambiguous\": true\n  }\n}",
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "gh1272-test-001"
+                }
+              ]
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"X-Request-Id response header matches request\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.equal(\"gh1272-test-001\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Resolve Binance Ambiguous Reservation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "recon-resolve-bar-123",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resolvedAs\": \"placed\",\n  \"orderId\": 4242,\n  \"notes\": \"Confirmed on Binance exchange terminal\"\n}"
+            },
+            "description": "Settles an ambiguous auto-trade reservation as placed or not_placed, handling shared cooldowns and recording an audit trail.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/reconciliation/c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "reconciliation",
+                "c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"action\": \"reconcile_resolve\",\n  \"resolvedAs\": \"placed\",\n  \"idempotent\": false,\n  \"reservation\": {\n    \"id\": \"c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0\",\n    \"status\": \"submitted\",\n    \"ambiguous\": false,\n    \"resolvedAs\": \"placed\",\n    \"orderId\": 4242\n  }\n}"
+            },
+            {
+              "name": "Invalid Request",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"error\": \"resolvedAs must be 'placed' or 'not_placed'\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "429 Rate limit exceeded",
+              "status": "Too Many Requests",
+              "code": 429,
+              "body": "{\n  \"success\": false,\n  \"error\": \"Too many requests, please try again later.\",\n  \"code\": \"RATE_LIMITED\",\n  \"retryable\": true,\n  \"retryAfterSeconds\": 60\n}",
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json"
+                },
+                {
+                  "key": "Retry-After",
+                  "value": "60"
+                },
+                {
+                  "key": "X-RateLimit-Limit",
+                  "value": "10"
+                },
+                {
+                  "key": "X-RateLimit-Remaining",
+                  "value": "0"
+                },
+                {
+                  "key": "X-RateLimit-Reset",
+                  "value": "1726214460"
+                },
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-rate-limit-429"
+                }
+              ]
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"X-Request-Id response header is populated\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\").length).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Resolve Binance Ambiguous Reservation (request ID echo)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "recon-resolve-bar-123-echo",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh1272-test-001",
+                "type": "text",
+                "description": "Optional client-supplied correlation ID (1-128 printable ASCII). Returned in the X-Request-Id response header on every non-exempt route."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resolvedAs\": \"not_placed\",\n  \"notes\": \"Never reached exchange\"\n}"
+            },
+            "description": "Settles an ambiguous auto-trade reservation with echo correlation ID.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/reconciliation/c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "reconciliation",
+                "c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"action\": \"reconcile_resolve\",\n  \"resolvedAs\": \"not_placed\",\n  \"idempotent\": false,\n  \"reservation\": {\n    \"id\": \"c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0\",\n    \"status\": \"failed\",\n    \"ambiguous\": false,\n    \"resolvedAs\": \"not_placed\"\n  }\n}",
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "gh1272-test-001"
+                }
+              ]
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"status is 200\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"X-Request-Id response header matches request\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.equal(\"gh1272-test-001\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "GET Trading Positions",
           "event": [
             {
@@ -33873,6 +34370,204 @@
               "status": "Bad Request",
               "code": 400,
               "body": "{\n  \"success\": false,\n  \"error\": \"order queries may include only one order or order-list identifier\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "GET Binance Reconciliation (invalid limit - 400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"error code is INVALID_REQUEST\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "A limit outside 1..100 or non-integer is rejected with 400 INVALID_REQUEST.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/reconciliation?limit=invalid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "reconciliation"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "invalid"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Invalid Limit",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"limit must be an integer between 1 and 100\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Resolve Binance Ambiguous Reservation (invalid resolvedAs - 400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"error code is INVALID_REQUEST\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resolvedAs\": \"invalid_outcome\"\n}"
+            },
+            "description": "An invalid resolvedAs outcome value is rejected with 400 INVALID_REQUEST.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/reconciliation/c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "reconciliation",
+                "c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Invalid Resolution Request",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"resolvedAs must be 'placed' or 'not_placed'\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Resolve Binance Ambiguous Reservation (conflict - 409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 409\", function () {",
+                  "    pm.response.to.have.status(409);",
+                  "});",
+                  "pm.test(\"error code is RESERVATION_ALREADY_RESOLVED\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.code).to.eql(\"RESERVATION_ALREADY_RESOLVED\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resolvedAs\": \"not_placed\"\n}"
+            },
+            "description": "Attempting to resolve an already resolved reservation with a conflicting determination is rejected with 409 RESERVATION_ALREADY_RESOLVED.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/reconciliation/c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "reconciliation",
+                "c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Resolution Conflict",
+              "status": "Conflict",
+              "code": 409,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Reservation already resolved as placed\",\n  \"code\": \"RESERVATION_ALREADY_RESOLVED\"\n}"
             }
           ]
         }
