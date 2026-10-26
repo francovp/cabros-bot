@@ -37,6 +37,8 @@ jobs:
         node-version-file: .node-version
         cache: pnpm
     - run: pnpm install --frozen-lockfile
+    - name: Verify admin hosting assets are in sync with source
+      run: pnpm run check:admin-drift
     - name: Setup Java for Firebase Firestore emulator
       uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
       with:
