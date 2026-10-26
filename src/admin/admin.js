@@ -219,6 +219,70 @@ const readConsoleParams = () => {
 	}
 };
 
+const safeDecodeURIComponent = (value) => {
+	if (typeof value !== 'string') return '';
+	try {
+		return decodeURIComponent(value);
+	} catch (_) {
+		return value;
+	}
+};
+
+const readConsoleHash = () => {
+	try {
+		const location = getWindowLocation();
+		return location && typeof location.hash === 'string' ? location.hash : '';
+	} catch (_) {
+		return '';
+	}
+};
+
+const parseConsoleHash = (rawHash) => {
+	if (!rawHash || typeof rawHash !== 'string') return null;
+	const trimmed = rawHash.replace(/^#\/?/, '').replace(/\/+$/, '').trim();
+	if (!trimmed) return null;
+
+	const alertTradeMatch = trimmed.match(/^alerts\/([^/]+)(?:\/trade)?$/i);
+	if (alertTradeMatch) {
+		return {
+			view: 'alerts',
+			alertId: safeDecodeURIComponent(alertTradeMatch[1]),
+			raw: rawHash,
+		};
+	}
+
+	const tradeMatch = trimmed.match(/^trade(?:\/([^/]+))?$/i);
+	if (tradeMatch) {
+		if (tradeMatch[1]) {
+			return {
+				view: 'alerts',
+				alertId: safeDecodeURIComponent(tradeMatch[1]),
+				raw: rawHash,
+			};
+		}
+		return {
+			view: 'trading',
+			raw: rawHash,
+		};
+	}
+
+	const normalizedView = CONSOLE_VIEW_NAMES.find(
+		(v) => v.toLowerCase() === trimmed.toLowerCase().replace(/[-_]/g, ''),
+	);
+	if (normalizedView) {
+		return {
+			view: normalizedView,
+			raw: rawHash,
+		};
+	}
+
+	return {
+		view: trimmed,
+		unrecognised: true,
+		raw: rawHash,
+	};
+};
+
 const resolveConsoleView = (value) => {
 	const name = typeof value === 'string' ? value.trim() : '';
 	return CONSOLE_VIEW_NAMES.includes(name) ? name : DEFAULT_CONSOLE_VIEW;
@@ -226,13 +290,29 @@ const resolveConsoleView = (value) => {
 
 const readConsoleUrlState = () => {
 	const params = readConsoleParams();
+	const hashState = parseConsoleHash(readConsoleHash());
+
+	if (hashState) {
+		const view = resolveConsoleView(hashState.view);
+		return {
+			view,
+			viewRequested: true,
+			viewRecognised: !hashState.unrecognised && CONSOLE_VIEW_NAMES.includes(view),
+			alertId: hashState.alertId || null,
+			params,
+			hash: hashState.raw,
+		};
+	}
+
 	const requested = params.get('view');
 	const view = resolveConsoleView(requested);
 	return {
 		view,
 		viewRequested: requested !== null,
 		viewRecognised: view === requested,
+		alertId: null,
 		params,
+		hash: '',
 	};
 };
 
@@ -249,7 +329,7 @@ const filterParamsForView = (view, params) => {
 	return carried;
 };
 
-const buildConsoleUrl = (view, filterParams = {}) => {
+const buildConsoleUrl = (view, filterParams = {}, explicitHash = null) => {
 	const location = getWindowLocation();
 	let pathname = '';
 	try {
@@ -277,7 +357,12 @@ const buildConsoleUrl = (view, filterParams = {}) => {
 		if (value !== undefined && value !== null && value !== '') params.set(key, value);
 	});
 	const search = params.toString();
-	return `${pathname}${search ? `?${search}` : ''}`;
+	const base = `${pathname}${search ? `?${search}` : ''}`;
+	if (explicitHash) {
+		const formattedHash = explicitHash.startsWith('#') ? explicitHash : `#${explicitHash}`;
+		return `${base}${formattedHash}`;
+	}
+	return base;
 };
 
 const writeConsoleUrl = (url, { replace = false } = {}) => {
@@ -714,7 +799,7 @@ const setupFirebaseAuth = async (config) => {
 				const requested = readConsoleUrlState();
 				navigateToView(
 					requested.viewRequested ? requested.view : FIREBASE_SIGN_IN_LANDING_VIEW,
-					{ history: 'replace' },
+					{ history: 'replace', alertId: requested.alertId, hash: requested.hash },
 				);
 			} catch (error) {
 				disconnectSse();
@@ -1845,6 +1930,21 @@ const appendRiskRows = (dl, data) => [
 	dl.append(element('dt', { text: label }), element('dd', { text: String(value) }));
 });
 
+const buildTradeUrl = (alertId) => {
+	const tradeHash = `#/alerts/${encodeURIComponent(String(alertId))}/trade`;
+	const loc = getWindowLocation();
+	const origin = (loc && loc.origin) ? loc.origin : '';
+	const pathname = (loc && loc.pathname) ? loc.pathname : '/admin';
+	const search = (loc && loc.search) ? loc.search : '';
+	return `${origin}${pathname}${search}${tradeHash}`;
+};
+
+const appendTradeLinkCopyButton = (container, alertId) => {
+	if (!container || !alertId) return;
+	const tradeUrl = buildTradeUrl(alertId);
+	container.append(createCopyButton(tradeUrl, 'Copy trade link'));
+};
+
 const createAlertDetailPanel = (alert) => {
 	const panel = element('article', { className: 'operation-card alert-detail' });
 	const headCopy = element('div');
@@ -1852,6 +1952,7 @@ const createAlertDetailPanel = (alert) => {
 	if (alert && alert.id) {
 		const idLine = element('p', { className: 'mono-line', text: String(alert.id) });
 		idLine.append(createCopyButton(String(alert.id), 'Copy ID'));
+		appendTradeLinkCopyButton(idLine, alert.id);
 		headCopy.append(idLine);
 	}
 	const badges = element('div', { className: 'badge-row' });
@@ -1964,6 +2065,7 @@ const createAlertCard = (alert, { onSelect, isSelected = false, registerCheckbox
 	if (alert && alert.id) {
 		const idLine = element('p', { className: 'mono-line', text: String(alert.id) });
 		idLine.append(createCopyButton(String(alert.id), 'Copy ID'));
+		appendTradeLinkCopyButton(idLine, alert.id);
 		headCopy.append(idLine);
 	}
 	const badges = element('div', { className: 'badge-row' });
@@ -8806,7 +8908,35 @@ const renderView = async (name) => {
 	}
 };
 
-const navigateToView = (name, { history: historyMode = 'push' } = {}) => {
+const handleAlertDeepLink = (alertId) => {
+	if (!alertId || typeof document === 'undefined' || !document) return;
+	const viewNode = document.getElementById('view');
+	if (!viewNode) return;
+	const alertInput = (typeof viewNode.querySelector === 'function')
+		? (viewNode.querySelector('input[name="path-alertId"]') || viewNode.querySelector('input[name=path-alertId]'))
+		: null;
+	if (alertInput) {
+		alertInput.value = alertId;
+		let form = alertInput.parentNode;
+		while (form && form.tagName !== 'FORM') {
+			form = form.parentNode;
+		}
+		if (form) {
+			if (typeof form.dispatch === 'function') {
+				form.dispatch('submit');
+			} else if (typeof form.requestSubmit === 'function') {
+				form.requestSubmit();
+			} else if (typeof form.dispatchEvent === 'function') {
+				const event = (typeof Event === 'function')
+					? new Event('submit', { cancelable: true, bubbles: true })
+					: { type: 'submit' };
+				form.dispatchEvent(event);
+			}
+		}
+	}
+};
+
+const navigateToView = (name, { history: historyMode = 'push', alertId = null, hash = null } = {}) => {
 	if (authState.enabled && !authState.user) return showSignedOutState();
 	const target = resolveConsoleView(name);
 	currentConsoleView = target;
@@ -8814,17 +8944,34 @@ const navigateToView = (name, { history: historyMode = 'push' } = {}) => {
 	setViewTitle(target);
 	if (historyMode !== 'none') {
 		const carried = historyMode === 'push' ? {} : filterParamsForView(target, readConsoleParams());
-		writeConsoleUrl(buildConsoleUrl(target, carried), { replace: historyMode === 'replace' });
+		let targetHash = hash;
+		if (!targetHash) {
+			if (target === 'alerts' && alertId) {
+				targetHash = `#/alerts/${encodeURIComponent(String(alertId))}/trade`;
+			} else if (historyMode === 'replace') {
+				const currentHashState = parseConsoleHash(readConsoleHash());
+				if (currentHashState && !currentHashState.unrecognised && currentHashState.view === target) {
+					targetHash = currentHashState.raw;
+				}
+			}
+		}
+		writeConsoleUrl(buildConsoleUrl(target, carried, targetHash), { replace: historyMode === 'replace' });
 	}
 	return renderView(target).then(() => {
 		applyFilterParams(readConsoleParams());
 		bindFilterScopeListeners();
 		moveFocusToView(target);
+		const activeUrlState = readConsoleUrlState();
+		const targetAlertId = alertId || (activeUrlState.view === 'alerts' ? activeUrlState.alertId : null);
+		if (target === 'alerts' && targetAlertId) {
+			handleAlertDeepLink(targetAlertId);
+		}
 	});
 };
 
 const handleConsolePopState = () => {
-	navigateToView(readConsoleUrlState().view, { history: 'none' });
+	const state = readConsoleUrlState();
+	navigateToView(state.view, { history: 'none', alertId: state.alertId });
 };
 
 const canonicaliseConsoleUrl = () => {
@@ -9067,7 +9214,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 			}
 			updateShellTranslations();
 			if (typeof currentConsoleView === 'string') {
-				navigateToView(currentConsoleView, { history: 'replace' });
+				const state = readConsoleUrlState();
+				navigateToView(currentConsoleView, { history: 'replace', alertId: state.alertId });
 			}
 		});
 	}
@@ -9079,6 +9227,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 	setupSidebarToggle();
 	if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
 		window.addEventListener('popstate', handleConsolePopState);
+		window.addEventListener('hashchange', handleConsolePopState);
 	}
 	canonicaliseConsoleUrl();
 
@@ -9104,6 +9253,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 	setHidden('legacy-connection', false);
 	setupLegacyConsole();
 	if (getElement('api-key')?.value) setupSseStream();
-	navigateToView(readConsoleUrlState().view, { history: 'none' });
+	const initialRequested = readConsoleUrlState();
+	navigateToView(initialRequested.view, { history: 'none', alertId: initialRequested.alertId });
 
 });

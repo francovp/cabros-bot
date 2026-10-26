@@ -434,6 +434,12 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		await flush();
 	};
 
+	const dispatchHashChange = async (newHash) => {
+		if (newHash !== undefined) windowLocation.hash = newHash;
+		for (const listener of windowListeners.hashchange || []) await listener({ type: 'hashchange' });
+		await flush();
+	};
+
 	return {
 		body,
 		context,
@@ -448,6 +454,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		historyCalls,
 		location: windowLocation,
 		dispatchPopState,
+		dispatchHashChange,
 	};
 }
 
@@ -8608,6 +8615,247 @@ describe('structured analysis forms', () => {
 			expect(requests.some((url) => url.startsWith('https://cabros-bot-production.up.railway.app/'))).toBe(true);
 			expect(browser.location.search).toContain('backend=https%3A%2F%2Fcabros-bot-production.up.railway.app');
 			expect(browser.location.search).toContain('view=outcomes');
+		});
+
+		it('navigates directly to views via hash routes (#/trading, #/status, #jobs)', async () => {
+			const browserTrading = createBrowser({
+				location: { hash: '#/trading' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserTrading.titleHistory.at(-1)).toMatch(/Trading/);
+			expect(find(browserTrading.body, (node) => node.dataset.view === 'trading').attributes['aria-current']).toBe('page');
+
+			const browserStatus = createBrowser({
+				location: { hash: '#/status' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserStatus.titleHistory.at(-1)).toMatch(/Status/);
+			expect(find(browserStatus.body, (node) => node.dataset.view === 'status').attributes['aria-current']).toBe('page');
+
+			const browserJobs = createBrowser({
+				location: { hash: '#jobs' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserJobs.titleHistory.at(-1)).toMatch(/Jobs/);
+			expect(find(browserJobs.body, (node) => node.dataset.view === 'jobs').attributes['aria-current']).toBe('page');
+		});
+
+		it('supports hashchange navigation between views', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
+
+			await browser.dispatchHashChange('#/trading');
+			expect(browser.titleHistory.at(-1)).toMatch(/Trading/);
+			expect(find(browser.body, (node) => node.dataset.view === 'trading').attributes['aria-current']).toBe('page');
+
+			await browser.dispatchHashChange('#/diagnostics');
+			expect(browser.titleHistory.at(-1)).toMatch(/Diagnostics/);
+			expect(find(browser.body, (node) => node.dataset.view === 'diagnostics').attributes['aria-current']).toBe('page');
+		});
+
+		it('deep-links to alert trade prefill via #/alerts/:alertId/trade', async () => {
+			const browser = createBrowser({
+				location: { hash: '#/alerts/alert-deep-99/trade' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					if (url === '/api/alerts/alert-deep-99') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-deep-99',
+								text: 'BINANCE:ETHUSDT(1H) COMPRA precio: 3200',
+								symbol: 'BINANCE:ETHUSDT',
+								price: '3200',
+								signal: 'COMPRA',
+								enriched: false,
+							},
+						});
+					}
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+
+			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
+			expect(find(browser.body, (node) => node.dataset.view === 'alerts').attributes['aria-current']).toBe('page');
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			expect(detailForm).toBeDefined();
+			expect(detailForm.elements['path-alertId'].value).toBe('alert-deep-99');
+
+			const ticket = find(detailForm, (node) => node.className && node.className.includes('trade-ticket'));
+			expect(ticket).toBeDefined();
+			expect(ticket.textContent).toContain('Trade this alert');
+			expect(ticket.textContent).toContain('Linked alert: alert-deep-99');
+		});
+
+		it('falls back to overview on unrecognised hash and canonicalises URL', async () => {
+			const browser = createBrowser({
+				location: { hash: '#/non-existent-view' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+
+			expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
+			expect(find(browser.body, (node) => node.dataset.view === 'overview').attributes['aria-current']).toBe('page');
+			expect(browser.historyCalls.some((call) => call.mode === 'replace' && call.url.includes('view=overview'))).toBe(true);
+		});
+
+		it('supports alternative hash routes (#/trade, #/trade/:alertId, #/alerts/:alertId, and trailing slashes)', async () => {
+			// #/trade/ with trailing slash -> trading view
+			const browserTrade = createBrowser({
+				location: { hash: '#/trade/' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserTrade.titleHistory.at(-1)).toMatch(/Trading/);
+			expect(find(browserTrade.body, (node) => node.dataset.view === 'trading').attributes['aria-current']).toBe('page');
+
+			// #/status/ with trailing slash -> status view
+			const browserStatusSlash = createBrowser({
+				location: { hash: '#/status/' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserStatusSlash.titleHistory.at(-1)).toMatch(/Status/);
+			expect(find(browserStatusSlash.body, (node) => node.dataset.view === 'status').attributes['aria-current']).toBe('page');
+
+			// #/trade/:alertId -> alerts view with prefill
+			const browserTradeAlert = createBrowser({
+				location: { hash: '#/trade/alert-trade-123' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					if (url === '/api/alerts/alert-trade-123') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-trade-123',
+								text: 'BINANCE:BTCUSDT(4H) COMPRA precio: 65000',
+								symbol: 'BINANCE:BTCUSDT',
+								price: '65000',
+								signal: 'COMPRA',
+								enriched: false,
+							},
+						});
+					}
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserTradeAlert.titleHistory.at(-1)).toMatch(/Alerts/);
+			const detailFormTrade = findForm(browserTradeAlert.elementsById.view, 'GET /api/alerts/{alertId}');
+			expect(detailFormTrade).toBeDefined();
+			expect(detailFormTrade.elements['path-alertId'].value).toBe('alert-trade-123');
+
+			// #/alerts/:alertId (without /trade suffix) -> alerts view with prefill
+			const browserAlertNoSuffix = createBrowser({
+				location: { hash: '#/alerts/alert-plain-456' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					if (url === '/api/alerts/alert-plain-456') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-plain-456',
+								text: 'BINANCE:SOLUSDT(1D) VENTA precio: 150',
+								symbol: 'BINANCE:SOLUSDT',
+								price: '150',
+								signal: 'VENTA',
+								enriched: false,
+							},
+						});
+					}
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserAlertNoSuffix.titleHistory.at(-1)).toMatch(/Alerts/);
+			const detailFormPlain = findForm(browserAlertNoSuffix.elementsById.view, 'GET /api/alerts/{alertId}');
+			expect(detailFormPlain).toBeDefined();
+			expect(detailFormPlain.elements['path-alertId'].value).toBe('alert-plain-456');
+		});
+
+		it('safely handles malformed percent-encoded hash without throwing URIError', async () => {
+			const browser = createBrowser({
+				location: { hash: '#/alerts/%/trade' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
+		});
+
+		it('renders Copy trade link button and preserves search parameters in copied URL', async () => {
+			const browser = createBrowser({
+				location: {
+					pathname: '/admin',
+					search: '?backend=https%3A%2F%2Fcabros-bot-production.up.railway.app&lang=es',
+					hash: '#/alerts/alert-copy-1',
+				},
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					if (url.endsWith('/api/alerts/alert-copy-1')) {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-copy-1',
+								text: 'BINANCE:BTCUSDT COMPRA',
+								symbol: 'BINANCE:BTCUSDT',
+								price: '60000',
+								signal: 'COMPRA',
+								enriched: false,
+							},
+						});
+					}
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			expect(detailForm).toBeDefined();
+
+			const copyButton = find(detailForm, (node) => node.tagName === 'BUTTON' && node.textContent === 'Copy trade link');
+			expect(copyButton).toBeDefined();
+
+			let copiedPayload = null;
+			browser.context.navigator = {
+				clipboard: {
+					writeText: async (text) => { copiedPayload = text; },
+				},
+			};
+			await copyButton.dispatch('click');
+			await flush();
+			expect(copiedPayload).toContain('/admin?backend=https%3A%2F%2Fcabros-bot-production.up.railway.app&lang=es#/alerts/alert-copy-1/trade');
 		});
 	});
 
