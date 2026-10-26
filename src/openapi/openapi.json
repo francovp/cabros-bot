@@ -4444,7 +4444,7 @@
           "Trading"
         ],
         "summary": "Read Binance Spot order status or recent order history",
-        "description": "Reads a single order status by orderId or origClientOrderId, or lists recent orders for an allowed symbol when no specific order identifier is provided. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
+        "description": "Reads a single order status by orderId or origClientOrderId, an order list by orderListId or listClientOrderId, or recent orders for an allowed symbol when no specific order identifier is provided. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
         "operationId": "getBinanceSpotOrders",
         "parameters": [
           {
@@ -4475,6 +4475,28 @@
             }
           },
           {
+            "name": "orderListId",
+            "in": "query",
+            "required": false,
+            "description": "Binance Spot order-list ID. Mutually exclusive with other order identifiers.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "listClientOrderId",
+            "in": "query",
+            "required": false,
+            "description": "Stable client order-list ID. Mutually exclusive with other order identifiers.",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 36,
+              "pattern": "^[A-Za-z0-9._:-]{1,36}$"
+            }
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -4495,7 +4517,28 @@
             "$ref": "#/components/responses/BinanceOrdersQueryResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "description": "Malformed symbol, identifier, or order-list query.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "multipleIdentifiers": {
+                    "value": {
+                      "success": false,
+                      "error": "order queries may include only one order or order-list identifier",
+                      "code": "INVALID_ORDER_REQUEST"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -4564,7 +4607,7 @@
           "Trading"
         ],
         "summary": "Validate or submit a Binance Spot order",
-        "description": "Live requests require an idempotency key or clientOrderId. Decimal quantities, prices, and quote amounts may be strings to preserve precision. MARKET orders must omit timeInForce. Binance PERCENT_PRICE, PERCENT_PRICE_BY_SIDE, and account-dependent filters such as MAX_POSITION or MAX_NUM_ORDERS use Binance order-test validation before acceptance. Definitive pre-execution or exchange rejections return 400 BINANCE_ORDER_REJECTED; a reconciled order mismatch returns 409 BINANCE_ORDER_CONFLICT; transient order-test failures return retryable 502 BINANCE_VALIDATION_FAILED. Binance execution-unknown code -1006 remains BINANCE_ORDER_STATUS_UNKNOWN. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
+        "description": "Supports Spot MARKET, LIMIT, LIMIT_MAKER, STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT, and TAKE_PROFIT_LIMIT orders plus BRACKET_LIMIT through one native OTOCO order-list submission. trailingDelta is in BIPS and must pass the symbol and side/type-specific TRAILING_DELTA filter. BRACKET_LIMIT requires a LIMIT entry, stop trigger, stop-limit execution price, take-profit price, quantity, and timeInForce; BUY entries use a pending-above LIMIT_MAKER take-profit, while SELL entries use a pending-below TAKE_PROFIT_LIMIT with the target as trigger and limit. Pending OCO exits arm after the entry fills. Live brackets require a durable idempotency reservation and never automatically resubmit an ambiguous result. Live requests require an idempotency key or clientOrderId. Decimal quantities, prices, and quote amounts may be strings to preserve precision. MARKET orders must omit timeInForce. Binance PERCENT_PRICE, PERCENT_PRICE_BY_SIDE, and account-dependent filters such as MAX_POSITION or MAX_NUM_ORDERS use Binance order-test validation before acceptance. Definitive pre-execution or exchange rejections return 400 BINANCE_ORDER_REJECTED; a reconciled order mismatch returns 409 BINANCE_ORDER_CONFLICT; transient order-test failures return retryable 502 BINANCE_VALIDATION_FAILED. Binance execution-unknown code -1006 remains BINANCE_ORDER_STATUS_UNKNOWN. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
         "operationId": "postBinanceSpotOrder",
         "parameters": [
           {
@@ -4588,7 +4631,49 @@
             "$ref": "#/components/responses/BinanceOrderResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "description": "Invalid order fields, unsupported Futures-only type, malformed trailingDelta, an unbounded contingent market BUY, or exchange filter rejection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "invalidOrder": {
+                    "value": {
+                      "success": false,
+                      "error": "type must be one of: MARKET, LIMIT, LIMIT_MAKER, STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT, BRACKET_LIMIT",
+                      "code": "INVALID_ORDER_REQUEST"
+                    }
+                  },
+                  "invalidBracket": {
+                    "value": {
+                      "success": false,
+                      "error": "BRACKET_LIMIT requires stopPrice, stopLimitPrice, and takeProfitPrice",
+                      "code": "INVALID_ORDER_REQUEST"
+                    }
+                  },
+                  "invalidTrailingDelta": {
+                    "value": {
+                      "success": false,
+                      "error": "trailingDelta must be a positive integer number of BIPS",
+                      "code": "INVALID_ORDER_REQUEST"
+                    }
+                  },
+                  "unboundedContingentBuy": {
+                    "value": {
+                      "success": false,
+                      "error": "contingent market BUY orders require stopPrice to enforce the configured notional maximum",
+                      "code": "INVALID_ORDER_REQUEST"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -7414,6 +7499,147 @@
                   "price": 60000,
                   "dryRun": true
                 }
+              },
+              "dryRunLimitMaker": {
+                "summary": "Safe LIMIT_MAKER validation",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "BUY",
+                  "type": "LIMIT_MAKER",
+                  "quantity": "0.001",
+                  "price": "60000",
+                  "dryRun": true
+                }
+              },
+              "dryRunStopLoss": {
+                "summary": "Safe STOP_LOSS validation",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "SELL",
+                  "type": "STOP_LOSS",
+                  "quantity": "0.001",
+                  "stopPrice": "58000",
+                  "dryRun": true
+                }
+              },
+              "dryRunStopLossLimit": {
+                "summary": "Safe STOP_LOSS_LIMIT validation",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "SELL",
+                  "type": "STOP_LOSS_LIMIT",
+                  "quantity": "0.001",
+                  "price": "57900",
+                  "stopPrice": "58000",
+                  "timeInForce": "GTC",
+                  "dryRun": true
+                }
+              },
+              "dryRunTakeProfit": {
+                "summary": "Safe TAKE_PROFIT validation",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "SELL",
+                  "type": "TAKE_PROFIT",
+                  "quantity": "0.001",
+                  "stopPrice": "68000",
+                  "dryRun": true
+                }
+              },
+              "dryRunTakeProfitLimit": {
+                "summary": "Safe TAKE_PROFIT_LIMIT validation",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "SELL",
+                  "type": "TAKE_PROFIT_LIMIT",
+                  "quantity": "0.001",
+                  "price": "68100",
+                  "stopPrice": "68000",
+                  "timeInForce": "GTC",
+                  "dryRun": true
+                }
+              },
+              "dryRunTrailingDelta": {
+                "summary": "Safe STOP_LOSS_LIMIT trailing validation (BIPS)",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "SELL",
+                  "type": "STOP_LOSS_LIMIT",
+                  "quantity": "0.001",
+                  "price": "57900",
+                  "stopPrice": "58000",
+                  "trailingDelta": 100,
+                  "timeInForce": "GTC",
+                  "dryRun": true
+                }
+              },
+              "dryRunBracketLimit": {
+                "summary": "Safe native OTOCO bracket validation (BUY entry)",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "BUY",
+                  "type": "BRACKET_LIMIT",
+                  "quantity": "0.001",
+                  "price": "65000",
+                  "stopPrice": "62000",
+                  "stopLimitPrice": "61900",
+                  "takeProfitPrice": "70000",
+                  "timeInForce": "GTC",
+                  "dryRun": true
+                }
+              },
+              "dryRunSellBracketLimit": {
+                "summary": "Safe native OTOCO bracket validation (SELL entry)",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "SELL",
+                  "type": "BRACKET_LIMIT",
+                  "quantity": "0.001",
+                  "price": "65000",
+                  "stopPrice": "68000",
+                  "stopLimitPrice": "68100",
+                  "takeProfitPrice": "62000",
+                  "timeInForce": "GTC",
+                  "dryRun": true
+                }
+              },
+              "invalidFuturesOrderType": {
+                "summary": "Rejected Futures-only order type",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "SELL",
+                  "type": "TRAILING_STOP_MARKET",
+                  "quantity": "0.001",
+                  "stopPrice": "58000",
+                  "dryRun": true
+                }
+              },
+              "invalidBracketMissingStopLimit": {
+                "summary": "Rejected bracket missing required stopLimitPrice",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "BUY",
+                  "type": "BRACKET_LIMIT",
+                  "quantity": "0.001",
+                  "price": "65000",
+                  "stopPrice": "62000",
+                  "takeProfitPrice": "70000",
+                  "timeInForce": "GTC",
+                  "dryRun": true
+                }
+              },
+              "invalidTrailingDelta": {
+                "summary": "Rejected malformed trailingDelta",
+                "value": {
+                  "symbol": "BTCUSDT",
+                  "side": "SELL",
+                  "type": "STOP_LOSS_LIMIT",
+                  "quantity": "0.001",
+                  "price": "57900",
+                  "trailingDelta": "1.5",
+                  "timeInForce": "GTC",
+                  "dryRun": true
+                }
               }
             }
           }
@@ -7590,6 +7816,64 @@
                   ],
                   "count": 1
                 }
+              },
+              "orderList": {
+                "value": {
+                  "success": true,
+                  "environment": "testnet",
+                  "orderList": {
+                    "orderListId": 77,
+                    "contingencyType": "OTOCO",
+                    "listStatusType": "EXEC_STARTED",
+                    "listOrderStatus": "EXECUTING",
+                    "listClientOrderId": "cb-list-77",
+                    "symbol": "BTCUSDT",
+                    "orders": [
+                      {
+                        "symbol": "BTCUSDT",
+                        "orderId": 101,
+                        "clientOrderId": "cb-work-77"
+                      },
+                      {
+                        "symbol": "BTCUSDT",
+                        "orderId": 102,
+                        "clientOrderId": "cb-tp-77"
+                      },
+                      {
+                        "symbol": "BTCUSDT",
+                        "orderId": 103,
+                        "clientOrderId": "cb-stop-77"
+                      }
+                    ],
+                    "orderReports": [
+                      {
+                        "symbol": "BTCUSDT",
+                        "orderId": 101,
+                        "status": "FILLED",
+                        "type": "LIMIT",
+                        "side": "BUY",
+                        "executedQty": "0.00100000"
+                      },
+                      {
+                        "symbol": "BTCUSDT",
+                        "orderId": 102,
+                        "status": "NEW",
+                        "type": "LIMIT_MAKER",
+                        "side": "SELL",
+                        "price": "70000.00000000"
+                      },
+                      {
+                        "symbol": "BTCUSDT",
+                        "orderId": 103,
+                        "status": "NEW",
+                        "type": "STOP_LOSS_LIMIT",
+                        "side": "SELL",
+                        "stopPrice": "62000.00000000",
+                        "price": "61900.00000000"
+                      }
+                    ]
+                  }
+                }
               }
             }
           }
@@ -7651,6 +7935,56 @@
                     "status": "FILLED",
                     "type": "MARKET",
                     "side": "BUY"
+                  }
+                }
+              },
+              "bracketDryRun": {
+                "value": {
+                  "success": true,
+                  "dryRun": true,
+                  "environment": "testnet",
+                  "orderList": {
+                    "symbol": "BTCUSDT",
+                    "workingType": "LIMIT",
+                    "workingSide": "BUY",
+                    "workingPrice": "65000",
+                    "workingQuantity": "0.001",
+                    "workingTimeInForce": "GTC",
+                    "pendingSide": "SELL",
+                    "pendingQuantity": "0.001",
+                    "pendingAboveType": "LIMIT_MAKER",
+                    "pendingAbovePrice": "70000",
+                    "pendingBelowType": "STOP_LOSS_LIMIT",
+                    "pendingBelowStopPrice": "62000",
+                    "pendingBelowPrice": "61900",
+                    "pendingBelowTimeInForce": "GTC",
+                    "newOrderRespType": "FULL"
+                  }
+                }
+              },
+              "sellBracketDryRun": {
+                "value": {
+                  "success": true,
+                  "dryRun": true,
+                  "environment": "testnet",
+                  "orderList": {
+                    "symbol": "BTCUSDT",
+                    "workingType": "LIMIT",
+                    "workingSide": "SELL",
+                    "workingPrice": "65000",
+                    "workingQuantity": "0.001",
+                    "workingTimeInForce": "GTC",
+                    "pendingSide": "BUY",
+                    "pendingQuantity": "0.001",
+                    "pendingAboveType": "STOP_LOSS_LIMIT",
+                    "pendingAboveStopPrice": "68000",
+                    "pendingAbovePrice": "68100",
+                    "pendingAboveTimeInForce": "GTC",
+                    "pendingBelowType": "TAKE_PROFIT_LIMIT",
+                    "pendingBelowStopPrice": "62000",
+                    "pendingBelowPrice": "62000",
+                    "pendingBelowTimeInForce": "GTC",
+                    "newOrderRespType": "FULL"
                   }
                 }
               }
@@ -11937,11 +12271,27 @@
           },
           "byTraderPlan": {
             "type": "object",
-            "required": ["samples", "hitRatePercent", "averageRMultiple"],
+            "required": [
+              "samples",
+              "hitRatePercent",
+              "averageRMultiple"
+            ],
             "properties": {
-              "samples": { "type": "integer", "minimum": 0 },
-              "hitRatePercent": { "type": "number", "minimum": 0, "maximum": 100 },
-              "averageRMultiple": { "type": ["number", "null"] }
+              "samples": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "hitRatePercent": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "averageRMultiple": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
             },
             "description": "Metrics for complete request-level trader plans, evaluated only at the selected horizon and kept separate from bot metrics."
           },
@@ -13949,15 +14299,46 @@
       },
       "TraderIntent": {
         "type": "object",
-        "required": ["entry", "horizon"],
+        "required": [
+          "entry",
+          "horizon"
+        ],
         "additionalProperties": false,
         "properties": {
-          "side": { "type": "string", "enum": ["BUY", "SELL"], "description": "Required when target or invalidation is supplied." },
-          "entry": { "type": "number", "exclusiveMinimum": 0 },
-          "invalidation": { "type": "number", "exclusiveMinimum": 0 },
-          "target": { "type": "number", "exclusiveMinimum": 0 },
-          "horizon": { "type": "string", "enum": ["1h", "4h", "1D", "1W"] },
-          "notes": { "type": "string", "minLength": 1, "maxLength": 500 }
+          "side": {
+            "type": "string",
+            "enum": [
+              "BUY",
+              "SELL"
+            ],
+            "description": "Required when target or invalidation is supplied."
+          },
+          "entry": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "invalidation": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "target": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "horizon": {
+            "type": "string",
+            "enum": [
+              "1h",
+              "4h",
+              "1D",
+              "1W"
+            ]
+          },
+          "notes": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
         },
         "description": "Optional request-level trader plan. Barrier ordering is validated against side and entry. Complete plans are evaluated independently from bot metrics."
       },
@@ -16805,15 +17186,22 @@
             "type": "string",
             "enum": [
               "MARKET",
-              "LIMIT"
-            ]
+              "LIMIT",
+              "LIMIT_MAKER",
+              "STOP_LOSS",
+              "STOP_LOSS_LIMIT",
+              "TAKE_PROFIT",
+              "TAKE_PROFIT_LIMIT",
+              "BRACKET_LIMIT"
+            ],
+            "description": "Supported Binance Spot order type. Futures-only order types are rejected."
           },
           "quantity": {
             "type": [
               "number",
               "string"
             ],
-            "description": "Base-asset quantity. Required for LIMIT. Optional for MARKET (evaluated using average price against the notional cap; MARKET BUYs are converted to an exchange-enforced quoteOrderQty at the estimated average price). Send as a string when exact decimal precision matters."
+            "description": "Base-asset quantity. Required for all contingent orders and BRACKET_LIMIT. Optional for MARKET (evaluated against the notional cap); send as a string when exact decimal precision matters."
           },
           "quoteOrderQty": {
             "type": [
@@ -16827,7 +17215,7 @@
               "number",
               "string"
             ],
-            "description": "Required for LIMIT orders. Send as a string when exact decimal precision matters."
+            "description": "Required for LIMIT, LIMIT_MAKER, STOP_LOSS_LIMIT, TAKE_PROFIT_LIMIT, and BRACKET_LIMIT. STOP_LOSS and TAKE_PROFIT use stopPrice. Send as a string when exact decimal precision matters."
           },
           "timeInForce": {
             "type": "string",
@@ -16837,7 +17225,7 @@
               "FOK"
             ],
             "default": "GTC",
-            "description": "LIMIT-only. MARKET orders must omit this field."
+            "description": "Required for LIMIT, STOP_LOSS_LIMIT, TAKE_PROFIT_LIMIT, and BRACKET_LIMIT; MARKET, LIMIT_MAKER, STOP_LOSS, and TAKE_PROFIT requests omit it."
           },
           "clientOrderId": {
             "type": "string",
@@ -16876,6 +17264,32 @@
           "setupType": {
             "type": "string",
             "description": "Optional trading setup category for trade ledger grouping (e.g. breakout, pullback)."
+          },
+          "stopPrice": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Required for STOP_LOSS, STOP_LOSS_LIMIT, TAKE_PROFIT, TAKE_PROFIT_LIMIT, and BRACKET_LIMIT; optional when trailingDelta is used. Decimal string recommended."
+          },
+          "stopLimitPrice": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Required for STOP_LOSS_LIMIT and BRACKET_LIMIT; execution limit price for the protective stop leg."
+          },
+          "takeProfitPrice": {
+            "type": [
+              "number",
+              "string"
+            ],
+            "description": "Required for BRACKET_LIMIT; price of the pending take-profit leg (LIMIT_MAKER for BUY entries, TAKE_PROFIT_LIMIT for SELL entries). For SELL entries it is both the take-profit trigger and limit price."
+          },
+          "trailingDelta": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional trailing offset in BIPS. Must be allowed by the symbol TRAILING_DELTA filter for this side and order type."
           }
         },
         "oneOf": [
@@ -17108,6 +17522,9 @@
           },
           "count": {
             "type": "integer"
+          },
+          "orderList": {
+            "$ref": "#/components/schemas/JsonObject"
           }
         }
       },
@@ -17116,8 +17533,7 @@
         "required": [
           "success",
           "dryRun",
-          "environment",
-          "order"
+          "environment"
         ],
         "properties": {
           "success": {
@@ -17139,8 +17555,24 @@
           },
           "order": {
             "$ref": "#/components/schemas/JsonObject"
+          },
+          "orderList": {
+            "$ref": "#/components/schemas/JsonObject"
           }
-        }
+        },
+        "description": "Validated dry-run or confirmed Binance Spot order or native OTOCO order list. A replay includes idempotencyReplayed=true.",
+        "oneOf": [
+          {
+            "required": [
+              "order"
+            ]
+          },
+          {
+            "required": [
+              "orderList"
+            ]
+          }
+        ]
       },
       "BinanceAssetBalance": {
         "type": "object",
@@ -18154,6 +18586,9 @@
               },
               "geminiQuota": {
                 "$ref": "#/components/schemas/GeminiQuotaDependency"
+              },
+              "binanceTrading": {
+                "$ref": "#/components/schemas/BinanceTradingDependency"
               }
             }
           }
@@ -21494,6 +21929,29 @@
             "description": "Backing store that produced this snapshot"
           }
         }
+      },
+      "BinanceTradingDependency": {
+        "type": "object",
+        "properties": {
+          "supportedOrderTypes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "MARKET",
+                "LIMIT",
+                "LIMIT_MAKER",
+                "STOP_LOSS",
+                "STOP_LOSS_LIMIT",
+                "TAKE_PROFIT",
+                "TAKE_PROFIT_LIMIT",
+                "BRACKET_LIMIT"
+              ]
+            },
+            "description": "Static supported Binance Spot order types."
+          }
+        },
+        "additionalProperties": true
       }
     },
     "headers": {

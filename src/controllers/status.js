@@ -842,6 +842,7 @@ function getStatus({ skipTelemetrySync = false } = {}) {
 				status: binanceTradingStatus.status,
 				environment: binanceTradingStatus.environment,
 				allowedSymbols: binanceTradingStatus.allowedSymbols,
+				supportedOrderTypes: binanceTradingStatus.supportedOrderTypes,
 				maxNotionalConfigured: binanceTradingStatus.maxNotionalConfigured,
 				paused: binanceTradingStatus.paused,
 				pausedBy: binanceTradingStatus.pausedBy,

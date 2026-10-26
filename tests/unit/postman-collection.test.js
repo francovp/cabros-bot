@@ -2352,6 +2352,83 @@ describe('scoped API key Postman examples', () => {
 	});
 });
 
+describe('Binance Spot contingent order contracts (issue #805)', () => {
+	it('publishes dry-run examples for each new Spot order shape and validates order-list lookup', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const contract = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+		const examples = [
+			['POST Binance order (dry-run LIMIT_MAKER)', 'LIMIT_MAKER'],
+			['POST Binance order (dry-run STOP_LOSS)', 'STOP_LOSS'],
+			['POST Binance order (dry-run STOP_LOSS_LIMIT)', 'STOP_LOSS_LIMIT'],
+			['POST Binance order (dry-run TAKE_PROFIT)', 'TAKE_PROFIT'],
+			['POST Binance order (dry-run TAKE_PROFIT_LIMIT)', 'TAKE_PROFIT_LIMIT'],
+			['POST Binance order (dry-run BRACKET_LIMIT OTOCO)', 'BRACKET_LIMIT'],
+			['POST Binance order (dry-run BRACKET_LIMIT OTOCO SELL entry)', 'BRACKET_LIMIT'],
+		];
+		for (const [name, type] of examples) {
+			const item = findItem(collection.item, name);
+			expect(item).toBeDefined();
+			const request = JSON.parse(item.request.body.raw);
+			const response = JSON.parse(item.response[0].body);
+			expect(request).toMatchObject({ type, dryRun: true });
+			expect(response).toMatchObject({ success: true, dryRun: true, environment: 'testnet' });
+		}
+
+		const trailing = findItem(collection.item, 'POST Binance order (dry-run STOP_LOSS_LIMIT trailingDelta)');
+		expect(JSON.parse(trailing.request.body.raw)).toMatchObject({ type: 'STOP_LOSS_LIMIT', trailingDelta: 100 });
+		const invalidFutures = findItem(collection.item, 'POST Binance order (invalid Futures-only type)');
+		expect(invalidFutures.response[0].code).toBe(400);
+		expect(JSON.parse(invalidFutures.response[0].body).code).toBe('INVALID_ORDER_REQUEST');
+		const invalidDelta = findItem(collection.item, 'POST Binance order (invalid trailingDelta format)');
+		expect(JSON.parse(invalidDelta.request.body.raw).trailingDelta).toBe('1.5');
+		expect(JSON.parse(invalidDelta.response[0].body).error).toBe('trailingDelta must be a positive integer number of BIPS');
+		expect(findItem(collection.item, 'GET Binance Orders (by orderListId)')).toBeDefined();
+		expect(findItem(collection.item, 'GET Binance Orders (by listClientOrderId)')).toBeDefined();
+		const sellBracket = JSON.parse(findItem(collection.item, 'POST Binance order (dry-run BRACKET_LIMIT OTOCO SELL entry)').response[0].body);
+		expect(sellBracket.orderList).toMatchObject({
+			pendingAboveType: 'STOP_LOSS_LIMIT',
+			pendingBelowType: 'TAKE_PROFIT_LIMIT',
+			pendingBelowStopPrice: '62000',
+			pendingBelowPrice: '62000',
+		});
+
+		const getOperation = contract.paths['/api/trading/binance/orders'].get;
+		const queryNames = getOperation.parameters.map((parameter) => parameter.name);
+		expect(queryNames).toEqual(expect.arrayContaining(['orderListId', 'listClientOrderId']));
+		const orderTypes = contract.components.schemas.BinanceOrderRequest.properties.type.enum;
+		expect(orderTypes).toEqual(expect.arrayContaining(examples.map(([, type]) => type)));
+		expect(contract.components.schemas.BinanceOrderRequest.properties).toEqual(expect.objectContaining({
+			stopPrice: expect.any(Object),
+			stopLimitPrice: expect.any(Object),
+			takeProfitPrice: expect.any(Object),
+			trailingDelta: expect.any(Object),
+		}));
+		expect(contract.components.schemas.BinanceOrderResult.properties.orderList).toBeDefined();
+		expect(contract.components.schemas.BinanceOrdersQueryResult.properties.orderList).toBeDefined();
+		expect(contract.components.schemas.Status.properties.dependencies.properties.binanceTrading.$ref)
+			.toBe('#/components/schemas/BinanceTradingDependency');
+		const orderRequestExamples = contract.components.requestBodies.BinanceOrder.content['application/json'].examples;
+		expect(orderRequestExamples).toEqual(expect.objectContaining({
+			dryRunBracketLimit: expect.any(Object),
+			dryRunSellBracketLimit: expect.any(Object),
+			dryRunTrailingDelta: expect.any(Object),
+			invalidFuturesOrderType: expect.any(Object),
+			invalidBracketMissingStopLimit: expect.any(Object),
+		}));
+		const successExamples = contract.components.responses.BinanceOrderResult.content['application/json'].examples;
+		expect(successExamples.sellBracketDryRun.value.orderList).toMatchObject({
+			pendingAboveType: 'STOP_LOSS_LIMIT',
+			pendingBelowType: 'TAKE_PROFIT_LIMIT',
+		});
+		const firestore = JSON.parse(fs.readFileSync(path.join(__dirname, '../../firestore.indexes.json'), 'utf8'));
+		expect(firestore.fieldOverrides).toContainEqual(expect.objectContaining({
+			collectionGroup: 'binanceBracketOrders',
+			fieldPath: 'expiresAt',
+			ttl: true,
+		}));
+	});
+});
+
 // `success` was added to both news-monitor read envelopes but the saved 200 examples kept
 // omitting it, so the examples contradicted the runtime and the schema sitting beside them
 // — and nothing enforced it. These assert each example against the schema that declares the

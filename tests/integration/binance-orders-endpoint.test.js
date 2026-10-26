@@ -81,6 +81,8 @@ const { MainClient } = require('binance');
 const { getRoutes } = require('../../src/routes');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 const { binanceOrderAuditService } = require('../../src/services/trading/BinanceOrderAuditService');
+const { tradeLedgerService } = require('../../src/services/trading/TradeLedgerService');
+const { bracketOrderStorageService } = require('../../src/services/trading/BinanceOrderService');
 const AlertStorageService = require('../../src/services/storage/AlertStorageService');
 
 function exchangeInfo() {
@@ -846,6 +848,96 @@ describe('Binance orders API', () => {
 					side: 'BUY',
 				},
 			});
+		});
+
+		it('audits and records fills when reconciling an OTOCO order list', async () => {
+			client.getOCO = jest.fn().mockResolvedValue({
+				orderListId: 77,
+				symbol: 'BTCUSDT',
+				listClientOrderId: 'cb-list-77',
+				listStatusType: 'EXEC_STARTED',
+				listOrderStatus: 'EXECUTING',
+				orders: [{ symbol: 'BTCUSDT', orderId: 78, clientOrderId: 'cb-working-77' }],
+				orderReports: [{
+					symbol: 'BTCUSDT',
+					orderId: 78,
+					clientOrderId: 'cb-working-77',
+					status: 'FILLED',
+					type: 'LIMIT',
+					side: 'BUY',
+					origQty: '0.001',
+					price: '60000',
+					fills: [{ tradeId: 1, price: '60000', qty: '0.001', commission: '0.000001', commissionAsset: 'BTC' }],
+				}],
+			});
+			const auditSpy = jest.spyOn(binanceOrderAuditService, 'recordMutation').mockResolvedValue({});
+			const ledgerSpy = jest.spyOn(tradeLedgerService, 'recordOrderFills').mockResolvedValue({});
+			const bracketStorageSpy = jest.spyOn(bracketOrderStorageService, 'recordOrderList').mockResolvedValue({
+				orderListId: 77,
+				terminal: false,
+				request: { origin: 'admin_alert', alertId: 'alert-77', setupType: 'breakout' },
+			});
+
+			const response = await request(app)
+				.get('/api/trading/binance/orders?symbol=BTCUSDT&listClientOrderId=cb-list-77')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(client.getOCO).toHaveBeenCalledWith({ origClientOrderId: 'cb-list-77' });
+			expect(response.body.orderList).toMatchObject({ orderListId: 77, listClientOrderId: 'cb-list-77' });
+			expect(auditSpy).toHaveBeenCalledWith(expect.objectContaining({
+				status: 'confirmed',
+				binanceOrderId: 77,
+				clientOrderId: 'cb-list-77',
+			}));
+			expect(ledgerSpy).toHaveBeenCalledWith(expect.objectContaining({
+				environment: 'testnet',
+				order: expect.objectContaining({ orderId: 78, fills: expect.any(Array) }),
+				origin: 'admin_alert',
+				alertId: 'alert-77',
+				setupType: 'breakout',
+			}));
+			auditSpy.mockRestore();
+			ledgerSpy.mockRestore();
+			bracketStorageSpy.mockRestore();
+		});
+
+		it('reconciles an OTOCO order list by exchange orderListId', async () => {
+			client.getOCO = jest.fn().mockResolvedValue({
+				orderListId: 77,
+				symbol: 'BTCUSDT',
+				listClientOrderId: 'cb-list-77',
+				listOrderStatus: 'EXECUTING',
+				orders: [],
+				orderReports: [],
+			});
+
+			const response = await request(app)
+				.get('/api/trading/binance/orders?symbol=BTCUSDT&orderListId=77')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(client.getOCO).toHaveBeenCalledWith({ orderListId: 77 });
+			expect(response.body.orderList).toMatchObject({ orderListId: 77, listClientOrderId: 'cb-list-77' });
+		});
+
+		it('does not return an order list when Binance resolves the ID to another symbol', async () => {
+			client.getOCO = jest.fn().mockResolvedValue({
+				orderListId: 77,
+				symbol: 'ETHUSDT',
+				listClientOrderId: 'cb-list-77',
+				listOrderStatus: 'EXECUTING',
+				orders: [],
+				orderReports: [],
+			});
+
+			const response = await request(app)
+				.get('/api/trading/binance/orders?symbol=BTCUSDT&orderListId=77')
+				.set('x-api-key', 'test-key')
+				.expect(404);
+
+			expect(client.getOCO).toHaveBeenCalledWith({ orderListId: 77 });
+			expect(response.body).toMatchObject({ success: false, code: 'ORDER_LIST_NOT_FOUND' });
 		});
 
 		it('returns 404 when order is not found on Binance', async () => {

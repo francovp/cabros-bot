@@ -5540,6 +5540,190 @@ describe('admin browser client', () => {
 		expect(last[1].headers['x-api-key']).toBe('session-secret');
 	});
 
+	it('prefills and dry-runs a Spot bracket from the latest same-symbol alert', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				if (url.startsWith('/api/alerts?')) {
+					return response({
+						success: true,
+						alerts: [{
+							id: 'alert-latest-btc',
+							symbol: 'BTCUSDT',
+							receivedAt: '2026-10-25T20:00:00.000Z',
+							text: 'BUY BTCUSDT at 60000',
+							enrichmentData: {
+								current_price: '60000',
+								invalidation_level: '58000',
+								target_level: '64000',
+								setup_type: 'breakout',
+							},
+						}],
+					});
+				}
+				if (url === '/api/trading/binance/orders') {
+					return response({ success: true, dryRun: true, environment: 'testnet', orderList: {} });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const form = findForm(browser.elementsById.view, 'Place Spot bracket');
+		form.elements['bracket-symbol'].value = 'BTCUSDT';
+		await findButton(form, 'Load latest alert levels').dispatch('click');
+		await flush();
+
+		expect(requests[0][0]).toBe('/api/alerts?symbol=BTCUSDT&limit=1');
+		expect(form.elements['bracket-side'].value).toBe('BUY');
+		expect(form.elements['bracket-entry-price'].value).toBe('60000');
+		expect(form.elements['bracket-stop-price'].value).toBe('58000');
+		expect(form.elements['bracket-take-profit-price'].value).toBe('64000');
+		form.elements['bracket-quantity'].value = '0.001';
+		form.elements['bracket-stop-limit-price'].value = '57900';
+
+		await findButton(form, 'Validate bracket (Dry Run)').dispatch('click');
+		await flush();
+		const dryRun = requests.at(-1);
+		expect(dryRun[0]).toBe('/api/trading/binance/orders');
+		expect(JSON.parse(dryRun[1].body)).toMatchObject({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'BRACKET_LIMIT',
+			quantity: '0.001',
+			price: '60000',
+			stopPrice: '58000',
+			stopLimitPrice: '57900',
+			takeProfitPrice: '64000',
+			timeInForce: 'GTC',
+			dryRun: true,
+			alertId: 'alert-latest-btc',
+			origin: 'admin_alert',
+			setupType: 'breakout',
+		});
+	});
+
+	it('discards pending alert prefills when symbol changes before alert lookup completes', async () => {
+		let releaseAlert;
+		const pendingAlert = new Promise((resolve) => { releaseAlert = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) return pendingAlert;
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const form = findForm(browser.elementsById.view, 'Place Spot bracket');
+		form.elements['bracket-symbol'].value = 'BTCUSDT';
+		const loadingAlert = findButton(form, 'Load latest alert levels').dispatch('click');
+		await flush();
+
+		form.elements['bracket-symbol'].value = 'ETHUSDT';
+		await form.elements['bracket-symbol'].dispatch('input');
+
+		releaseAlert(response({
+			success: true,
+			alerts: [{
+				id: 'alert-latest-btc',
+				symbol: 'BTCUSDT',
+				enrichmentData: { symbol: 'BTCUSDT', invalidation_level: '58000', target_level: '64000' },
+				traderIntent: { side: 'BUY', entryPrice: '60000', invalidation: '58000', target: '64000' },
+			}],
+		}));
+		await loadingAlert;
+		await flush();
+
+		expect(form.elements['bracket-symbol'].value).toBe('ETHUSDT');
+		expect(form.elements['bracket-entry-price'].value).toBe('');
+		expect(form.elements['bracket-stop-price'].value).toBe('');
+		expect(form.elements['bracket-take-profit-price'].value).toBe('');
+	});
+
+	it('does not enable live submission when a bracket changes during dry-run validation', async () => {
+		let releaseValidation;
+		const pendingValidation = new Promise((resolve) => { releaseValidation = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/trading/binance/orders') return pendingValidation;
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const form = findForm(browser.elementsById.view, 'Place Spot bracket');
+		form.elements['bracket-symbol'].value = 'BTCUSDT';
+		form.elements['bracket-quantity'].value = '0.001';
+		form.elements['bracket-entry-price'].value = '60000';
+		form.elements['bracket-stop-price'].value = '58000';
+		form.elements['bracket-stop-limit-price'].value = '57900';
+		form.elements['bracket-take-profit-price'].value = '64000';
+		const validation = findButton(form, 'Validate bracket (Dry Run)').dispatch('click');
+		await flush();
+
+		form.elements['bracket-stop-price'].value = '57000';
+		await form.elements['bracket-stop-price'].dispatch('input');
+		releaseValidation(response({ success: true, dryRun: true, environment: 'testnet', orderList: {} }));
+		await validation;
+		await flush();
+
+		expect(form.elements['bracket-confirm'].disabled).toBe(true);
+		expect(findButton(form, 'Submit live bracket').disabled).toBe(true);
+		expect(find(form, (node) => node.className.includes('ticket-validation-notice')).textContent).toBe('');
+	});
+
+	it('reuses the same bracket idempotency key after an ambiguous submission response', async () => {
+		const liveRequests = [];
+		let liveAttempts = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/trading/binance/orders') {
+					const body = JSON.parse(options.body);
+					if (body.dryRun) return response({ success: true, dryRun: true, environment: 'testnet', orderList: {} });
+					liveRequests.push([url, options]);
+					liveAttempts += 1;
+					return liveAttempts === 1
+						? response({ success: false, code: 'BINANCE_ORDER_STATUS_UNKNOWN' }, 503)
+						: response({ success: true, dryRun: false, environment: 'testnet', orderList: { orderListId: 77 } }, 201);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const form = findForm(browser.elementsById.view, 'Place Spot bracket');
+		form.elements['bracket-symbol'].value = 'BTCUSDT';
+		form.elements['bracket-quantity'].value = '0.001';
+		form.elements['bracket-entry-price'].value = '60000';
+		form.elements['bracket-stop-price'].value = '58000';
+		form.elements['bracket-stop-limit-price'].value = '57900';
+		form.elements['bracket-take-profit-price'].value = '64000';
+		await findButton(form, 'Validate bracket (Dry Run)').dispatch('click');
+		await flush();
+		form.elements['bracket-confirm'].value = 'CONFIRM';
+		await form.elements['bracket-confirm'].dispatch('input');
+		const submit = findButton(form, 'Submit live bracket');
+		await submit.dispatch('click');
+		await flush();
+		await submit.dispatch('click');
+		await flush();
+
+		expect(liveRequests).toHaveLength(2);
+		const firstBody = JSON.parse(liveRequests[0][1].body);
+		const secondBody = JSON.parse(liveRequests[1][1].body);
+		expect(secondBody.idempotencyKey).toBe(firstBody.idempotencyKey);
+		expect(liveRequests[1][1].headers['idempotency-key']).toBe(liveRequests[0][1].headers['idempotency-key']);
+	});
+
 	it('rejects exponent notation and canonicalizes integer order limits', async () => {
 		const requests = [];
 		const browser = createBrowser({

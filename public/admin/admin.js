@@ -4477,6 +4477,233 @@ function createTradeTicket({ alert, position, defaultOrigin = 'manual', onOrderS
 	return panel;
 }
 
+const createSpotBracketForm = () => {
+	const form = element('form', { className: 'operation-card trade-ticket' });
+	form.append(
+		element('h3', { text: 'Place Spot bracket' }),
+		element('code', { text: 'POST /api/trading/binance/orders · BRACKET_LIMIT' }),
+		element('p', {
+			className: 'hint',
+			text: 'A LIMIT entry arms a Spot OTOCO take-profit and stop-limit pair after it fills. Review every level before submitting.',
+		}),
+	);
+	const symbol = addField(form, 'Symbol', 'bracket-symbol', { placeholder: 'BTCUSDT', required: true });
+	const side = addField(form, 'Entry side', 'bracket-side', { tag: 'select' });
+	['BUY', 'SELL'].forEach((value) => {
+		const option = element('option', { text: value });
+		option.value = value;
+		side.append(option);
+	});
+	const quantity = addField(form, 'Quantity', 'bracket-quantity', { placeholder: 'e.g. 0.001', required: true });
+	const entryPrice = addField(form, 'Entry limit price', 'bracket-entry-price', { placeholder: 'e.g. 60000.00', required: true });
+	const stopPrice = addField(form, 'Stop trigger price', 'bracket-stop-price', { placeholder: 'From alert invalidation level', required: true });
+	const stopLimitPrice = addField(form, 'Stop limit price', 'bracket-stop-limit-price', { placeholder: 'Set the limit price for the stop exit', required: true });
+	const takeProfitPrice = addField(form, 'Take-profit price', 'bracket-take-profit-price', { placeholder: 'From alert target level', required: true });
+	const timeInForce = addField(form, 'Time in force', 'bracket-time-in-force', { tag: 'select' });
+	['GTC', 'IOC', 'FOK'].forEach((value) => {
+		const option = element('option', { text: value });
+		option.value = value;
+		timeInForce.append(option);
+	});
+	timeInForce.value = 'GTC';
+
+	const loadLatestButton = element('button', { text: 'Load latest alert levels' });
+	loadLatestButton.type = 'button';
+	const latestAlertStatus = element('p', { className: 'request-state', text: 'No alert levels loaded.' });
+	form.append(loadLatestButton, latestAlertStatus);
+	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: testnet' });
+	const dryRunButton = element('button', { text: 'Validate bracket (Dry Run)' });
+	dryRunButton.type = 'button';
+	const confirmInput = addField(form, 'Type CONFIRM to enable live submission', 'bracket-confirm', {
+		placeholder: 'CONFIRM',
+	});
+	confirmInput.disabled = true;
+	const submitButton = element('button', { text: 'Submit live bracket' });
+	submitButton.type = 'button';
+	submitButton.disabled = true;
+	const validationNotice = element('div', { className: 'ticket-validation-notice' });
+	const output = element('div', { className: 'response-block ticket-output', text: 'No validation run yet.' });
+	form.append(environmentBadge, dryRunButton, submitButton, validationNotice, output);
+
+	let currentEnvironment = 'testnet';
+	let formVersion = 0;
+	let dryRunSuccessful = false;
+	let liveIdempotencyKey = null;
+	let latestAlert = null;
+	let latestCandidate = null;
+	const updateEnvironment = (value) => {
+		currentEnvironment = value || currentEnvironment;
+		environmentBadge.replaceChildren(formatOrderEnvironment(currentEnvironment));
+		checkSubmitReadiness();
+	};
+	const checkSubmitReadiness = () => {
+		const isOperator = typeof canPerformMutation === 'function' ? canPerformMutation() : true;
+		if (!isOperator || currentEnvironment === 'live' || !dryRunSuccessful || confirmInput.value.trim() !== 'CONFIRM') {
+			submitButton.disabled = true;
+			submitButton.title = currentEnvironment === 'live'
+				? 'Live submissions are disabled in the admin ticket'
+				: 'Validate the bracket, then type CONFIRM to enable submission';
+			return;
+		}
+		submitButton.disabled = false;
+		submitButton.title = 'Submit the validated Spot bracket';
+	};
+	const invalidateValidation = () => {
+		formVersion += 1;
+		dryRunSuccessful = false;
+		liveIdempotencyKey = null;
+		confirmInput.value = '';
+		confirmInput.disabled = true;
+		submitButton.disabled = true;
+		validationNotice.replaceChildren();
+		output.className = 'response-block request-state';
+		output.textContent = 'Inputs changed. Validate the bracket again before submitting.';
+	};
+	[symbol, side, quantity, entryPrice, stopPrice, stopLimitPrice, takeProfitPrice, timeInForce].forEach((field) => {
+		field.addEventListener(field === side || field === timeInForce ? 'change' : 'input', invalidateValidation);
+	});
+	confirmInput.addEventListener('input', checkSubmitReadiness);
+	symbol.addEventListener('input', () => {
+		latestAlert = null;
+		latestCandidate = null;
+		entryPrice.value = '';
+		stopPrice.value = '';
+		stopLimitPrice.value = '';
+		takeProfitPrice.value = '';
+		latestAlertStatus.textContent = 'Symbol changed. Load alert levels again if needed.';
+	});
+	form.addEventListener('submit', (event) => event.preventDefault());
+
+	const buildPayload = (dryRun) => {
+		const payload = {
+			symbol: trimFormValue(symbol.value).toUpperCase(),
+			side: side.value,
+			type: 'BRACKET_LIMIT',
+			quantity: trimFormValue(quantity.value),
+			price: trimFormValue(entryPrice.value),
+			stopPrice: trimFormValue(stopPrice.value),
+			stopLimitPrice: trimFormValue(stopLimitPrice.value),
+			takeProfitPrice: trimFormValue(takeProfitPrice.value),
+			timeInForce: timeInForce.value,
+			dryRun,
+		};
+		const alertSymbol = latestAlert && (
+			(latestCandidate && latestCandidate.symbol)
+			|| trimFormValue(latestAlert.symbol || (latestAlert.enrichmentData && latestAlert.enrichmentData.symbol)).toUpperCase()
+		);
+		if (latestAlert && latestAlert.id && alertSymbol === payload.symbol) {
+			payload.alertId = String(latestAlert.id).trim();
+			payload.origin = 'admin_alert';
+			if (latestCandidate && latestCandidate.setupType) payload.setupType = latestCandidate.setupType;
+		}
+		return payload;
+	};
+
+	loadLatestButton.addEventListener('click', async () => {
+		const requestedVersion = formVersion;
+		const symbolValue = trimFormValue(symbol.value).toUpperCase();
+		if (!ORDER_LIST_QUERY_VALIDATION.symbol(symbolValue)) {
+			showError(latestAlertStatus, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
+			return;
+		}
+		const data = await sendRequest({
+			definition: { method: 'GET', path: '/api/alerts', label: 'Load latest alert levels', requiredRole: 'admin.viewer' },
+			path: '/api/alerts',
+			query: { symbol: symbolValue, limit: '1' },
+			button: loadLatestButton,
+			output: latestAlertStatus,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+		if (requestedVersion !== formVersion || trimFormValue(symbol.value).toUpperCase() !== symbolValue) {
+			return;
+		}
+		const alert = data && Array.isArray(data.alerts) ? data.alerts[0] : null;
+		if (!alert) {
+			latestAlert = null;
+			latestCandidate = null;
+			latestAlertStatus.textContent = `No stored alert found for ${symbolValue}.`;
+			return;
+		}
+		const candidate = parseAlertTradeCandidate(alert);
+		if (candidate.symbol && candidate.symbol !== symbolValue) {
+			latestAlertStatus.textContent = 'The latest alert did not match the requested symbol.';
+			return;
+		}
+		const enrichment = asObject(alert.enrichmentData);
+		const traderIntent = asObject(alert.traderIntent);
+		const validPrice = (...values) => values.map(trimFormValue).find((value) => (
+			/^\d+(?:\.\d+)?$/.test(value) && Number.isFinite(Number(value)) && Number(value) > 0
+		)) || '';
+		const invalidation = validPrice(traderIntent.invalidation, enrichment.invalidation_level, enrichment.invalidationLevel);
+		const target = validPrice(traderIntent.target, enrichment.target_level, enrichment.targetLevel);
+		latestAlert = alert;
+		latestCandidate = candidate;
+		if (candidate.side) side.value = candidate.side;
+		if (candidate.price) entryPrice.value = candidate.price;
+		if (invalidation) stopPrice.value = invalidation;
+		if (target) takeProfitPrice.value = target;
+		invalidateValidation();
+		latestAlertStatus.textContent = invalidation && target
+			? `Loaded ${alert.id || 'latest alert'}; set the stop-limit price and review all levels.`
+			: `Loaded ${alert.id || 'latest alert'}, but it has no complete invalidation/target pair.`;
+	});
+
+	dryRunButton.addEventListener('click', async () => {
+		invalidateValidation();
+		const currentVersion = formVersion;
+		const payload = buildPayload(true);
+		if (!ORDER_LIST_QUERY_VALIDATION.symbol(payload.symbol)) {
+			showError(output, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
+			return;
+		}
+		const data = await sendRequest({
+			definition: { method: 'POST', path: '/api/trading/binance/orders', label: 'Validate Spot bracket', requiredRole: 'admin.operator' },
+			path: '/api/trading/binance/orders',
+			body: payload,
+			button: dryRunButton,
+			output,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+		if (data && data.success && currentVersion === formVersion) {
+			dryRunSuccessful = true;
+			updateEnvironment(data.environment);
+			validationNotice.replaceChildren(element('p', {
+				className: 'status-badge status-ready',
+				text: `Bracket validated (${data.environment || currentEnvironment}); the pending OCO exits arm after the LIMIT entry fills.`,
+			}));
+			confirmInput.disabled = false;
+			checkSubmitReadiness();
+		}
+	});
+
+	submitButton.addEventListener('click', async () => {
+		if (submitButton.disabled) return;
+		const payload = buildPayload(false);
+		if (!liveIdempotencyKey) {
+			liveIdempotencyKey = `bracket-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+		}
+		payload.idempotencyKey = liveIdempotencyKey;
+		const data = await sendRequest({
+			definition: { method: 'POST', path: '/api/trading/binance/orders', label: 'Submit live bracket', requiredRole: 'admin.operator' },
+			path: '/api/trading/binance/orders',
+			body: payload,
+		headers: { 'idempotency-key': liveIdempotencyKey },
+			button: submitButton,
+			output,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+		if (data && data.success) {
+			submitButton.disabled = true;
+			validationNotice.replaceChildren(element('p', {
+				className: 'status-badge status-ready',
+				text: `Bracket submitted: #${data.orderList?.orderListId || 'submitted'}`,
+			}));
+		}
+	});
+
+	return form;
+};
+
 const createOrderListForm = () => {
 	const definition = { method: 'GET', path: '/api/trading/binance/orders', label: 'Load recent orders' };
 	const form = element('form', { className: 'operation-card' });
@@ -8441,6 +8668,7 @@ const renderView = async (name) => {
 			return;
 		}
 		if (name === 'orders') {
+			view.append(createSpotBracketForm());
 			view.append(createOrderListForm());
 			view.append(createOrderLookupForm());
 			return;
