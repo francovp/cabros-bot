@@ -51,6 +51,8 @@ function parseArgs(argv = process.argv.slice(2)) {
 		logFile: DEFAULT_LOG_FILE,
 		checkDrift: false,
 		checkWorkerParity: false,
+		exitOnDrift: false,
+		strict: false,
 		json: false,
 		help: false,
 	};
@@ -70,6 +72,11 @@ function parseArgs(argv = process.argv.slice(2)) {
 			i++;
 		} else if (arg === '--check-worker-parity') {
 			args.checkWorkerParity = true;
+			i++;
+		} else if (arg === '--exit-on-drift' || arg === '--strict') {
+			args.checkDrift = true;
+			args.exitOnDrift = true;
+			args.strict = true;
 			i++;
 		} else if (arg === '--apply' || arg === '--record-log') {
 			args.apply = true;
@@ -461,12 +468,19 @@ Options:
   --log-file <path>      Path to local sync log (default: .env-sync.log)
   --check-drift, --diff  Diff .env.example against platform deployment definitions
   --check-worker-parity  Validate job worker environment mirrors against web service
+  --exit-on-drift       When used with --check-drift, exit non-zero (2) if any unmanaged keys are found. Implies --check-drift.
+  --strict              Synonym for --exit-on-drift
   --json                 Output results as JSON
   --help, -h             Show this help message
 
 Security Rules:
   - NEVER pass variable values on argv (e.g. --key FOO=bar is strictly rejected).
   - Secrets must be entered interactively or through platform dashboard/CLI secret prompts.
+
+Exit codes:
+  0  Plan generated, drift inspection clean, or audit record written
+  1  CLI validation failure (unknown flag, missing value, etc.)
+  2  Drift inspection failed under --exit-on-drift / --strict
 `);
 			process.exit(0);
 		}
@@ -505,6 +519,12 @@ Security Rules:
 					console.log('Unmanaged in blueprint:');
 					drift.unmanagedKeys.forEach((k) => console.log(`  - ${k}`));
 				}
+			}
+			if (args.exitOnDrift && drift.unmanagedKeys.length > 0) {
+				console.error(
+					`\n✗ Drift detected: ${drift.unmanagedKeys.length} unmanaged key(s) in .env.example. Failing because --exit-on-drift / --strict was set.`
+				);
+				process.exit(2);
 			}
 			process.exit(0);
 		}
