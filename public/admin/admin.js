@@ -2171,7 +2171,7 @@ const renderStatusCards = (container, entries, emptyText, { detailed = false } =
 	});
 };
 
-const renderSystemIssuesWarning = (container, { dependencies, deliverySummary, jobsData }) => {
+const renderSystemIssuesWarning = (container, { dependencies, deliverySummary, jobsData, outcomesData, status }) => {
 	container.replaceChildren();
 	const issues = [];
 
@@ -2196,6 +2196,13 @@ const renderSystemIssuesWarning = (container, { dependencies, deliverySummary, j
 		issues.push({
 			label: 'Job metrics unavailable',
 			detail: 'The jobs request did not return a list.',
+			tone: 'unknown',
+		});
+	}
+	if (status?.featureFlags?.signalOutcomeTracking && !Array.isArray(outcomesData?.outcomes)) {
+		issues.push({
+			label: 'Outcome metrics unavailable',
+			detail: 'The outcome request did not return a list.',
 			tone: 'unknown',
 		});
 	}
@@ -2304,12 +2311,14 @@ const renderDeliveryHealthDashboard = (container, deliverySummary) => {
 
 const renderActiveWorkDashboard = (container, { jobsData, outcomesData, status }) => {
 	container.replaceChildren();
-	const jobs = Array.isArray(jobsData?.jobs) ? jobsData.jobs : [];
+	const jobsAvailable = Array.isArray(jobsData?.jobs);
+	const outcomesAvailable = Array.isArray(outcomesData?.outcomes);
+	const jobs = jobsAvailable ? jobsData.jobs : [];
 	const inFlightJobs = jobs.filter((j) => ['pending', 'processing'].includes(j.status));
 	const completedJobs = jobs.filter((j) => j.status === 'completed');
 	const failedJobs = jobs.filter((j) => j.status === 'failed');
 
-	const outcomes = Array.isArray(outcomesData?.outcomes) ? outcomesData.outcomes : [];
+	const outcomes = outcomesAvailable ? outcomesData.outcomes : [];
 	const pendingOutcomes = outcomes.filter((o) => o.outcomeEvaluated === false
 		&& Object.values(asObject(o.outcomes)).some((window) => window?.status === 'pending'));
 	const evaluatedOutcomes = outcomes.filter((o) => Object.values(asObject(o.outcomes))
@@ -2318,13 +2327,16 @@ const renderActiveWorkDashboard = (container, { jobsData, outcomesData, status }
 	const metricsGrid = element('div', { className: 'metric-grid' });
 	metricsGrid.append(
 		createMetricCard('In-flight jobs', inFlightJobs.length, `${completedJobs.length} completed · ${failedJobs.length} failed`),
-		createMetricCard('Pending outcomes', pendingOutcomes.length, `${evaluatedOutcomes.length} evaluated signals`),
+		createMetricCard('Pending outcomes', outcomesAvailable ? pendingOutcomes.length : '—',
+			outcomesAvailable ? `${evaluatedOutcomes.length} evaluated signals` : 'Outcome metrics unavailable'),
 		createMetricCard('Outcome tracking', status?.featureFlags?.signalOutcomeTracking ? 'Active' : 'Disabled', 'Signal evaluation'),
 		createMetricCard('Worker health', displayStatus(status?.dependencies?.signalOutcomeWorker?.status || 'disabled'), 'Background worker'),
 	);
 
 	const workList = element('div', { className: 'form-fields' });
-	if (!inFlightJobs.length && !pendingOutcomes.length) {
+	if (!jobsAvailable || !outcomesAvailable) {
+		workList.append(createEmptyState('Some work metrics unavailable; retry after dependencies recover.'));
+	} else if (!inFlightJobs.length && !pendingOutcomes.length) {
 		workList.append(createEmptyState('No in-flight background jobs or pending outcome evaluations.'));
 	} else {
 		if (inFlightJobs.length > 0) {
@@ -2717,6 +2729,9 @@ const createOverviewDashboard = () => {
 	let pollIntervalMs = 30000;
 	let dashboardVersion = 0;
 	let inFlight = false;
+	let lastSupplementaryAt = -Infinity;
+	let supplementaryBackoffUntil = 0;
+	let supplementaryData = [undefined, undefined, undefined, undefined];
 
 	const stopPoll = () => {
 		if (pollTimer) {
@@ -2756,11 +2771,18 @@ const createOverviewDashboard = () => {
 			button: dummyButton,
 			output: dummyOutput,
 			isCurrent: () => dashboardEpoch === dashboardVersion,
+			captureResponseData: (_data, response) => {
+				if (response.status !== 429) return;
+				const retryAfterSeconds = Number(response.headers?.get('retry-after'));
+				const delayMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+					? Math.ceil(retryAfterSeconds * 1000) : 15 * 60 * 1000;
+				supplementaryBackoffUntil = Math.max(supplementaryBackoffUntil, Date.now() + delayMs);
+			},
 		}).catch(() => null);
 	};
 
 	let dashboardEpoch = 0;
-	const loadDashboard = async () => {
+	const loadDashboard = async ({ forceSupplementary = false } = {}) => {
 		dashboardEpoch = ++dashboardVersion;
 		stopPoll();
 		inFlight = true;
@@ -2782,21 +2804,30 @@ const createOverviewDashboard = () => {
 			captureOutcome: (outcome) => { statusOutcome = outcome; },
 		});
 
-		const summaryPromise = fetchSilent({ method: 'GET', path: '/api/alerts/summary' });
-		const jobsPromise = fetchSilent({ method: 'GET', path: '/api/jobs' }, { limit: '20' });
-		const outcomesPromise = fetchSilent({ method: 'GET', path: '/api/outcomes' }, { limit: '20' });
-		const alertsPromise = fetchSilent({ method: 'GET', path: '/api/alerts' }, { limit: '10' });
+		// These four routes share the default 100 requests per 15 minutes bucket.
+		// Poll them at most once a minute, leaving headroom for other admin actions.
+		const now = Date.now();
+		const supplementaryDue = now >= supplementaryBackoffUntil
+			&& (forceSupplementary || now - lastSupplementaryAt >= 60000);
+		if (supplementaryDue) lastSupplementaryAt = now;
+		const supplementaryPromise = supplementaryDue
+			? Promise.all([
+				fetchSilent({ method: 'GET', path: '/api/alerts/summary' }),
+				fetchSilent({ method: 'GET', path: '/api/jobs' }, { limit: '20' }),
+				fetchSilent({ method: 'GET', path: '/api/outcomes' }, { limit: '20' }),
+				fetchSilent({ method: 'GET', path: '/api/alerts' }, { limit: '10' }),
+			])
+			: Promise.resolve(supplementaryData);
 
-		const [status, deliverySummary, jobsData, outcomesData, alertsData] = await Promise.all([
+		const [status, latestSupplementary] = await Promise.all([
 			statusPromise,
-			summaryPromise,
-			jobsPromise,
-			outcomesPromise,
-			alertsPromise,
+			supplementaryPromise,
 		]);
 
 		inFlight = false;
 		if (!isCurrentEpoch()) return;
+		if (supplementaryDue) supplementaryData = latestSupplementary;
+		const [deliverySummary, jobsData, outcomesData, alertsData] = supplementaryData;
 
 		if (status && typeof status === 'object' && status.service) {
 			lastRawStatus = JSON.stringify(status);
@@ -2805,7 +2836,7 @@ const createOverviewDashboard = () => {
 			const channels = statusEntries(status.deliveryChannels);
 
 			renderStatusDashboard({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status);
-			renderSystemIssuesWarning(issuesContainer, { dependencies, channels, deliverySummary, jobsData, status });
+			renderSystemIssuesWarning(issuesContainer, { dependencies, deliverySummary, jobsData, outcomesData, status });
 			renderDeliveryHealthDashboard(deliveryHealthContainer, deliverySummary);
 			renderActiveWorkDashboard(activeWorkContainer, { jobsData, outcomesData, status });
 			renderRecentAlertsDashboard(recentAlertsContainer, alertsData);
@@ -2823,7 +2854,7 @@ const createOverviewDashboard = () => {
 			schedulePoll();
 		}
 	};
-	refreshButton.addEventListener('click', () => { loadDashboard(); });
+	refreshButton.addEventListener('click', () => { loadDashboard({ forceSupplementary: true }); });
 	if (getElement('api-key')?.value || (authState.enabled && authState.user)) {
 		loadDashboard();
 	} else {

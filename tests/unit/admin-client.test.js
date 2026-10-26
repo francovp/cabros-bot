@@ -207,9 +207,10 @@ class FakeAbortController {
 	}
 }
 
-const response = (body, status = 200) => ({
+const response = (body, status = 200, headers = {}) => ({
 	ok: status >= 200 && status < 300,
 	status,
+	headers: { get: (name) => headers[name.toLowerCase()] ?? null },
 	json: async () => body,
 	text: async () => JSON.stringify(body),
 });
@@ -10193,6 +10194,66 @@ describe('structured analysis forms', () => {
 		expect(statusCalls).toBe(3);
 	});
 
+	it('budgets supplementary dashboard polling and backs off after a 429', async () => {
+		let now = 1000000;
+		const calls = [];
+		let summaryStatus = 200;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				calls.push(url);
+				if (url === '/api/status') return response({ service: { name: 'cabros-bot' } });
+				if (url.startsWith('/api/alerts/summary')) return response({ summary: { delivery: {} } }, summaryStatus, { 'retry-after': '120' });
+				if (url.startsWith('/api/jobs')) return response({ jobs: [] });
+				if (url.startsWith('/api/outcomes')) return response({ outcomes: [] });
+				return response({ alerts: [] });
+			},
+		});
+		browser.context.Date = class extends Date { static now() { return now; } };
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+		for (let i = 0; i < 3; i++) {
+			now += 30000;
+			for (const fireTimer of [...browser.timers.values()]) fireTimer();
+			await flush();
+		}
+		expect(calls.filter((url) => url.startsWith('/api/alerts/summary'))).toHaveLength(2);
+		summaryStatus = 429;
+		now += 30000;
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(calls.filter((url) => url.startsWith('/api/alerts/summary'))).toHaveLength(3);
+		for (let i = 0; i < 3; i++) {
+			now += 30000;
+			for (const fireTimer of [...browser.timers.values()]) fireTimer();
+			await flush();
+		}
+		expect(calls.filter((url) => url.startsWith('/api/alerts/summary'))).toHaveLength(3);
+	});
+
+	it('marks outcome metrics unavailable instead of claiming an empty queue', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response({ service: { name: 'cabros-bot' }, featureFlags: { signalOutcomeTracking: true } });
+				if (url.startsWith('/api/alerts/summary')) return response({ summary: { delivery: { totalFailure: 0 } } });
+				if (url.startsWith('/api/jobs')) return response({ jobs: [] });
+				if (url.startsWith('/api/outcomes')) return response({ error: 'unavailable' }, 503);
+				return response({ alerts: [] });
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('Outcome metrics unavailable');
+		expect(viewText).not.toContain('No in-flight background jobs or pending outcome evaluations');
+		expect(viewText).not.toContain('All configured services and delivery channels operating normally');
+	});
+
 	it('renders healthy state when all dependencies are ready and 0 failures occur', async () => {
 		const status = {
 			service: { name: 'cabros-bot', version: '0.1.0' },
@@ -10255,7 +10316,7 @@ describe('structured analysis forms', () => {
 		expect(viewText).toContain('No recent delivery metrics reported or alert storage disabled');
 		expect(viewText).toContain('Delivery metrics unavailable');
 		expect(viewText).not.toContain('All configured services and delivery channels operating normally');
-		expect(viewText).toContain('No in-flight background jobs or pending outcome evaluations');
+		expect(viewText).toContain('Some work metrics unavailable');
 		expect(viewText).toContain('No recent alerts stored or alert storage disabled');
 	});
 });
