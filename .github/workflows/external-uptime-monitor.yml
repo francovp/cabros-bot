@@ -71,7 +71,7 @@ jobs:
       # MANDATORY: ops/external-uptime-monitor.js lives in the repository. Without
       # this step the job dies at 127 before any request is made, which is the
       # silent failure mode behind issue #971.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
