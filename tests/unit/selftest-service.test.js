@@ -1,6 +1,9 @@
 'use strict';
 
 const { generateKeyPairSync } = require('crypto');
+const { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('fs');
+const { tmpdir } = require('os');
+const { join } = require('path');
 const mockRemoteOverrides = {};
 const firestoreGateKeys = [
 	'ENABLE_FIRESTORE_ALERT_STORAGE',
@@ -14,6 +17,7 @@ const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).priva
 	format: 'pem',
 });
 const validFirestoreServiceAccountJson = JSON.stringify({
+	type: 'service_account',
 	project_id: 'selftest-test',
 	client_email: 'firebase-adminsdk@test-project.iam.gserviceaccount.com',
 	private_key: testPrivateKey,
@@ -75,10 +79,35 @@ function resetEnv() {
 }
 
 describe('SelfTestService', () => {
+	let tempHomeDir;
+	let origHome;
+	let origAppData;
+
 	beforeEach(() => {
+		origHome = process.env.HOME;
+		origAppData = process.env.APPDATA;
+		tempHomeDir = mkdtempSync(join(tmpdir(), 'selftest-home-'));
+		process.env.HOME = tempHomeDir;
+		delete process.env.APPDATA;
 		resetEnv();
 		for (const key of Object.keys(mockRemoteOverrides)) {
 			delete mockRemoteOverrides[key];
+		}
+	});
+
+	afterEach(() => {
+		if (tempHomeDir && existsSync(tempHomeDir)) {
+			rmSync(tempHomeDir, { recursive: true, force: true });
+		}
+		if (origHome !== undefined) {
+			process.env.HOME = origHome;
+		} else {
+			delete process.env.HOME;
+		}
+		if (origAppData !== undefined) {
+			process.env.APPDATA = origAppData;
+		} else {
+			delete process.env.APPDATA;
 		}
 	});
 
@@ -219,6 +248,25 @@ describe('SelfTestService', () => {
 			id: 'firestore.collections',
 			status: 'fail',
 			message: 'Firestore enabled but credentials are missing',
+		});
+	});
+
+	it('passes the Firestore diagnostic when credentials are in well-known gcloud path', async () => {
+		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+		process.env.FIREBASE_PROJECT_ID = 'well-known-project';
+		const wellKnownDir = join(tempHomeDir, '.config', 'gcloud');
+		mkdirSync(wellKnownDir, { recursive: true });
+		writeFileSync(join(wellKnownDir, 'application_default_credentials.json'), validFirestoreServiceAccountJson);
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'firestore.collections' });
+
+		expect(result.checks[0]).toMatchObject({
+			id: 'firestore.collections',
+			status: 'pass',
+			message: 'Firestore credentials are configured',
 		});
 	});
 
