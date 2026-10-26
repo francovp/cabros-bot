@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const { getFirestore } = require('../storage/AlertStorageService');
-const { smartEscapeMarkdownV2 } = require('../notification/formatters/MarkdownV2Formatter');
+const ambiguousReservationNotifier = require('../notification/ambiguousReservationNotifier');
 
 const COLLECTION = 'autoTradeReservations';
 const COOLDOWN_COLLECTION = 'autoTradeCooldowns';
@@ -11,20 +11,31 @@ const activeAmbiguousIds = new Set();
 let cachedDurableCount = null;
 let lastCountRefreshedAt = 0;
 
-let botGetter = null;
-
-function setBotGetter(getter) {
-	botGetter = getter;
-}
-
 function digest(value) {
 	return crypto.createHash('sha256').update(String(value)).digest('hex');
 }
 
-function escapeV2(text) {
-	return typeof smartEscapeMarkdownV2 === 'function'
-		? smartEscapeMarkdownV2(String(text || ''))
-		: String(text || '');
+function toIsoString(val) {
+	if (!val) return null;
+	if (typeof val.toDate === 'function') return val.toDate().toISOString();
+	if (typeof val.toISOString === 'function') return val.toISOString();
+	const d = new Date(val);
+	return isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+function serializeReservation(data) {
+	if (!data || typeof data !== 'object') return data;
+	const res = { ...data };
+	if (res.createdAt !== undefined) res.createdAt = toIsoString(res.createdAt);
+	if (res.updatedAt !== undefined) res.updatedAt = toIsoString(res.updatedAt);
+	if (res.resolvedAt !== undefined) res.resolvedAt = toIsoString(res.resolvedAt);
+	if (res.lastAttempt && typeof res.lastAttempt === 'object') {
+		res.lastAttempt = {
+			...res.lastAttempt,
+			attemptedAt: toIsoString(res.lastAttempt.attemptedAt),
+		};
+	}
+	return res;
 }
 
 function trackAmbiguous(id) {
@@ -159,10 +170,8 @@ async function reserveAutoTrade(signalId, intentFingerprint, options = {}) {
 	}
 }
 
-async function notifyAdminOfAmbiguousReservation({ reservationId, signalId, signalContext, reason, details = {} } = {}) {
-	const adminChatId = process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
-	if (!adminChatId) return false;
-	const resId = String(reservationId || signalId || '');
+async function notifyAdminOfAmbiguousReservation(payload = {}) {
+	const resId = String(payload.reservationId || payload.signalId || '');
 	if (!resId) return false;
 
 	// #827 Dedup pattern: page only on first report of a new ambiguous row
@@ -175,59 +184,7 @@ async function notifyAdminOfAmbiguousReservation({ reservationId, signalId, sign
 	}
 	pagedReservations.add(resId);
 
-	const symbol = signalContext?.symbol || details?.symbol || 'UNKNOWN';
-	const side = signalContext?.side || details?.side || 'BUY';
-	const reasonStr = reason || details?.errorCode || 'BINANCE_ORDER_STATUS_UNKNOWN';
-
-	const message = [
-		'⚠️ *Auto\\-Trade Ambiguous Reservation*',
-		`*Signal ID:* \`${escapeV2(String(signalId || resId))}\``,
-		`*Symbol:* \`${escapeV2(symbol)}\` \\| *Side:* \`${escapeV2(side)}\``,
-		`*Reason:* \`${escapeV2(String(reasonStr))}\``,
-		`*Reservation ID:* \`${escapeV2(resId)}\``,
-		'Manual reconciliation required via `POST /api/trading/binance/reconciliation/:id`',
-	].join('\n');
-
-	try {
-		let dispatched = false;
-		if (typeof botGetter === 'function') {
-			try {
-				const bot = botGetter();
-				if (bot && bot.telegram && typeof bot.telegram.sendMessage === 'function') {
-					await bot.telegram.sendMessage(adminChatId, message, { parse_mode: 'MarkdownV2' });
-					dispatched = true;
-				}
-			} catch {
-				// ignore bot lookup failure
-			}
-		}
-
-		if (!dispatched) {
-			const botToken = process.env.BOT_TOKEN;
-			if (botToken) {
-				const controller = new AbortController();
-				const timeoutId = setTimeout(() => controller.abort(), 5000);
-				try {
-					await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({
-							chat_id: adminChatId,
-							text: message,
-							parse_mode: 'MarkdownV2',
-						}),
-						signal: controller.signal,
-					});
-				} finally {
-					clearTimeout(timeoutId);
-				}
-			}
-		}
-		return true;
-	} catch (error) {
-		console.warn('[AutoTradeReservationService] failed to notify admin Telegram chat (fail-open):', error?.message || error);
-		return false;
-	}
+	return ambiguousReservationNotifier.notifyAdminOfAmbiguousReservation(payload);
 }
 
 /**
@@ -355,7 +312,7 @@ async function listAmbiguousReservations({ limit = 50, symbol, status = 'ambiguo
 			lastCountRefreshedAt = Date.now();
 		}
 
-		const sliced = reservations.slice(0, boundedLimit);
+		const sliced = reservations.slice(0, boundedLimit).map(serializeReservation);
 		return {
 			success: true,
 			reservations: sliced,
@@ -382,7 +339,8 @@ async function getAmbiguousReservation(reservationId) {
 	try {
 		const doc = await firestore.collection(COLLECTION).doc(docId).get();
 		if (!doc || !doc.exists) return null;
-		return { id: doc.id, ...(typeof doc.data === 'function' ? doc.data() : doc) };
+		const raw = { id: doc.id, ...(typeof doc.data === 'function' ? doc.data() : doc) };
+		return serializeReservation(raw);
 	} catch (error) {
 		console.warn('[AutoTradeReservationService] getAmbiguousReservation failed:', error?.message || error);
 		const err = new Error(error.message || 'Storage unavailable');
@@ -399,6 +357,20 @@ async function resolveAmbiguousReservation(reservationId, { resolvedAs, orderId,
 		error.statusCode = 400;
 		throw error;
 	}
+	const isPlaced = resolvedAs === 'placed';
+	let validatedOrderId = null;
+	if (isPlaced && orderId !== undefined && orderId !== null) {
+		const isInteger = (typeof orderId === 'number' && Number.isSafeInteger(orderId) && orderId > 0)
+			|| (typeof orderId === 'string' && /^\d+$/.test(orderId.trim()) && Number.isSafeInteger(Number(orderId.trim())) && Number(orderId.trim()) > 0);
+		if (!isInteger) {
+			const error = new Error('orderId must be a positive integer');
+			error.code = 'INVALID_REQUEST';
+			error.statusCode = 400;
+			throw error;
+		}
+		validatedOrderId = typeof orderId === 'number' ? orderId : parseInt(orderId.trim(), 10);
+	}
+
 	const firestore = getFirestore();
 	if (!firestore || typeof firestore.runTransaction !== 'function') {
 		const error = new Error('Storage unavailable');
@@ -421,7 +393,7 @@ async function resolveAmbiguousReservation(reservationId, { resolvedAs, orderId,
 		const data = typeof doc.data === 'function' ? doc.data() : doc;
 		if (!data.ambiguous && data.status !== 'unknown') {
 			if (data.resolvedAs === resolvedAs) {
-				return { idempotent: true, reservation: { id: doc.id, ...data } };
+				return { idempotent: true, reservation: serializeReservation({ id: doc.id, ...data }) };
 			}
 			if (data.resolvedAs && data.resolvedAs !== resolvedAs) {
 				const error = new Error(`Reservation already resolved as ${data.resolvedAs}`);
@@ -436,7 +408,6 @@ async function resolveAmbiguousReservation(reservationId, { resolvedAs, orderId,
 		}
 
 		const now = new Date();
-		const isPlaced = resolvedAs === 'placed';
 		const updateData = {
 			status: isPlaced ? 'submitted' : 'failed',
 			ambiguous: false,
@@ -447,7 +418,7 @@ async function resolveAmbiguousReservation(reservationId, { resolvedAs, orderId,
 		};
 		if (notes !== undefined && notes !== null) updateData.notes = String(notes);
 		if (isPlaced) {
-			if (orderId !== undefined && orderId !== null) updateData.orderId = Number(orderId);
+			if (validatedOrderId !== null) updateData.orderId = validatedOrderId;
 		} else {
 			// not_placed: settle cooldown with ownership verification
 			const cooldownDocId = data.cooldownDocId || (data.cooldownKey ? digest(data.cooldownKey) : null);
@@ -466,7 +437,7 @@ async function resolveAmbiguousReservation(reservationId, { resolvedAs, orderId,
 			}
 		}
 		transaction.update(docRef, updateData);
-		return { idempotent: false, reservation: { id: doc.id, ...data, ...updateData } };
+		return { idempotent: false, reservation: serializeReservation({ id: doc.id, ...data, ...updateData }) };
 	});
 
 	if (resolvedAs === 'not_placed' && outcome?.reservation?.cooldownKey) {
@@ -498,7 +469,7 @@ module.exports = {
 	refreshAmbiguousCount,
 	trackAmbiguous,
 	untrackAmbiguous,
-	setBotGetter,
+	serializeReservation,
 	digest,
 	__resetForTesting: () => {
 		activeAmbiguousIds.clear();

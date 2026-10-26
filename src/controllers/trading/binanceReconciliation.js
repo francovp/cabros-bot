@@ -127,6 +127,17 @@ async function postResolveAmbiguousReservation(req, res) {
 		}, { req });
 	}
 
+	if (resolvedAs === 'placed' && orderId !== undefined && orderId !== null) {
+		const isInteger = (typeof orderId === 'number' && Number.isSafeInteger(orderId) && orderId > 0)
+			|| (typeof orderId === 'string' && /^\d+$/.test(orderId.trim()) && Number.isSafeInteger(Number(orderId.trim())) && Number(orderId.trim()) > 0);
+		if (!isInteger) {
+			return sendErrorFrom(res, 400, {
+				error: 'orderId must be a positive integer',
+				code: 'INVALID_REQUEST',
+			}, { req });
+		}
+	}
+
 	try {
 		const actor = readActor(req);
 		const outcome = await autoTradeReservationService.resolveAmbiguousReservation(reservationId, {

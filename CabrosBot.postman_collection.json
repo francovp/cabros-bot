@@ -33924,6 +33924,204 @@
               "body": "{\n  \"success\": false,\n  \"error\": \"order queries may include only one order or order-list identifier\",\n  \"code\": \"INVALID_ORDER_REQUEST\"\n}"
             }
           ]
+        },
+        {
+          "name": "GET Binance Reconciliation (invalid limit - 400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"error code is INVALID_REQUEST\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "A limit outside 1..100 or non-integer is rejected with 400 INVALID_REQUEST.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/reconciliation?limit=invalid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "reconciliation"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "invalid"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Invalid Limit",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"limit must be an integer between 1 and 100\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Resolve Binance Ambiguous Reservation (invalid resolvedAs - 400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"error code is INVALID_REQUEST\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resolvedAs\": \"invalid_outcome\"\n}"
+            },
+            "description": "An invalid resolvedAs outcome value is rejected with 400 INVALID_REQUEST.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/reconciliation/c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "reconciliation",
+                "c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Invalid Resolution Request",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"resolvedAs must be 'placed' or 'not_placed'\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Resolve Binance Ambiguous Reservation (conflict - 409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"status is 409\", function () {",
+                  "    pm.response.to.have.status(409);",
+                  "});",
+                  "pm.test(\"error code is RESERVATION_ALREADY_RESOLVED\", function () {",
+                  "    var json = pm.response.json();",
+                  "    pm.expect(json.success).to.be.false;",
+                  "    pm.expect(json.code).to.eql(\"RESERVATION_ALREADY_RESOLVED\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{binanceTradingApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"resolvedAs\": \"not_placed\"\n}"
+            },
+            "description": "Attempting to resolve an already resolved reservation with a conflicting determination is rejected with 409 RESERVATION_ALREADY_RESOLVED.",
+            "url": {
+              "raw": "{{baseUrl}}/api/trading/binance/reconciliation/c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "trading",
+                "binance",
+                "reconciliation",
+                "c6a0b9e8d7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a1b0"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Resolution Conflict",
+              "status": "Conflict",
+              "code": 409,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"Reservation already resolved as placed\",\n  \"code\": \"RESERVATION_ALREADY_RESOLVED\"\n}"
+            }
+          ]
         }
       ]
     },
