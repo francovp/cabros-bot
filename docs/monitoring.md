@@ -48,7 +48,7 @@ SENTRY_SEND_ALERT_CONTENT=false
 # Optional: Error sampling (default: 1.0 = 100%)
 SENTRY_SAMPLE_RATE_ERRORS=1.0
 
-# Optional: Trace sampling (leave unset to disable tracing)
+# Optional: Trace sampling (unset disables tracing; 0 sends no traces)
 SENTRY_TRACES_SAMPLE_RATE=0.1
 
 # Optional: Console log levels captured as Sentry Logs (default: warn,error)
