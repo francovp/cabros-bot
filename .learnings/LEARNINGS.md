@@ -1,3 +1,32 @@
+## [LRN-20261026-154500-0001] correction
+
+**Logged**: 2026-10-26T15:45:00.000000Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+@gigachad-senior-dev correction on PR #1467 (fix(selftest): correct Binance status evaluation, rate limiter defaults, and unknown check reporting): The "unknown" check entry surfaces *which* check IDs were not recognized (e.g., `nope.nope`), but does **not** surface *why* they're unknown (typo, deprecated, not registered, scope mismatch). The implementation at `src/services/diagnostics/SelfTestService.js:399-401` pushes a single generic entry with only the raw IDs from the `only=` parameter — no classification (typo vs. removed vs. private), no suggestion logic, and no link to the registry of valid check IDs.
+
+### Details
+```js
+ran.push({ id: 'unknown', status: 'fail', message: `unknown checks: ${unknownIds.join(', ')}`, durationMs: 0 });
+```
+
+The message only lists the raw IDs. To surface "why", a lookup against `Object.keys(checks)` and categorization of the mismatch would be needed — currently out of scope for this fix.
+
+### Suggested Action
+When implementing unknown check reporting, classify the mismatch (typo, deprecated, not registered, scope mismatch) and link to the registry of valid check IDs.
+
+### Metadata
+- Source: github_review
+- Related Files: src/services/diagnostics/SelfTestService.js
+- Tags: correction, feedback, self-test
+- See Also: https://github.com/francovp/cabros-bot/pull/1467
+- Pattern-Key: harden.feedback_response
+
+---
+
 ## [LRN-20261026-054842-6298] correction
 
 **Logged**: 2026-10-26T05:48:42.772377Z
