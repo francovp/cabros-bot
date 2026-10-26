@@ -275,4 +275,41 @@ describe('Binance Reconciliation Endpoints (#1466)', () => {
 		expect(status.dependencies.binanceTrading.ambiguousCount).toBe(2);
 		expect(status.dependencies.binanceTrading.ambiguousReservationsCount).toBe(2);
 	});
+
+	it('rejects invalid limit query parameters with 400 on reconciliation and orders', async () => {
+		const res1 = await request(app)
+			.get('/api/trading/binance/reconciliation?limit=invalid')
+			.set('x-api-key', 'test-admin-key');
+		expect(res1.status).toBe(400);
+		expect(res1.body.code).toBe('INVALID_REQUEST');
+
+		const res2 = await request(app)
+			.get('/api/trading/binance/orders?reconciliation=ambiguous&limit=0')
+			.set('x-api-key', 'test-admin-key');
+		expect(res2.status).toBe(400);
+		expect(res2.body.code).toBe('INVALID_REQUEST');
+
+		const res3 = await request(app)
+			.get('/api/trading/binance/reconciliation?limit=101')
+			.set('x-api-key', 'test-admin-key');
+		expect(res3.status).toBe(400);
+		expect(res3.body.code).toBe('INVALID_REQUEST');
+	});
+
+	it('propagates storage failure as 503 instead of false 200', async () => {
+		jest.spyOn(autoTradeReservationService, 'listAmbiguousReservations').mockResolvedValueOnce({
+			success: false,
+			error: 'Firestore unavailable',
+			code: 'STORAGE_UNAVAILABLE',
+			reservations: [],
+			count: 0,
+			ambiguousCount: 0,
+		});
+
+		const res = await request(app)
+			.get('/api/trading/binance/reconciliation')
+			.set('x-api-key', 'test-admin-key');
+		expect(res.status).toBe(503);
+		expect(res.body.code).toBe('STORAGE_UNAVAILABLE');
+	});
 });

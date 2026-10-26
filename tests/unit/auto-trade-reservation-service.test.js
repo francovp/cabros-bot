@@ -93,6 +93,7 @@ const {
 	resolveAmbiguousReservation,
 	getAmbiguousCount,
 	notifyAdminOfAmbiguousReservation,
+	digest,
 	__resetForTesting,
 } = require('../../src/services/trading/AutoTradeReservationService');
 
@@ -301,5 +302,63 @@ describe('ambiguous reservations and reconciliation (#1466)', () => {
 		} finally {
 			process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID = savedChat;
 		}
+	});
+
+	it('validates limit strictly and rejects non-integer or out-of-range limits', async () => {
+		await expect(listAmbiguousReservations({ limit: 'abc' })).rejects.toMatchObject({
+			code: 'INVALID_REQUEST',
+			statusCode: 400,
+		});
+		await expect(listAmbiguousReservations({ limit: -5 })).rejects.toMatchObject({
+			code: 'INVALID_REQUEST',
+			statusCode: 400,
+		});
+		await expect(listAmbiguousReservations({ limit: '1.5' })).rejects.toMatchObject({
+			code: 'INVALID_REQUEST',
+			statusCode: 400,
+		});
+		await expect(listAmbiguousReservations({ limit: 101 })).rejects.toMatchObject({
+			code: 'INVALID_REQUEST',
+			statusCode: 400,
+		});
+	});
+
+	it('includes legacy status: unknown reservations in ambiguous listing', async () => {
+		const legacyDocId = digest('legacy-sig-1');
+		mockRecords.set('autoTradeReservations/' + legacyDocId, {
+			fingerprint: 'legacy-fp',
+			signalId: 'legacy-sig-1',
+			status: 'unknown',
+			createdAt: new Date(),
+			updatedAt: new Date(),
+		});
+
+		const list = await listAmbiguousReservations({ limit: 50 });
+		const found = list.reservations.find((r) => r.signalId === 'legacy-sig-1');
+		expect(found).toBeDefined();
+		expect(found.status).toBe('unknown');
+	});
+
+	it('verifies cooldown ownership before clearing shared cooldown slot', async () => {
+		const resA = await reserveAutoTrade('bar-owner-A', 'intent-A', { cooldownKey: 'owner-cd-slot', cooldownMs: 60000 });
+		await finishAutoTrade(resA, 'unknown', { errorCode: 'BINANCE_ORDER_STATUS_UNKNOWN' });
+
+		// Simulate another reservation B later claiming the same cooldown slot
+		const cooldownDocId = digest('owner-cd-slot');
+		mockRecords.set('autoTradeCooldowns/' + cooldownDocId, {
+			firedAtMs: Date.now(),
+			reservationId: 'different-reservation-B',
+			signalId: 'signal-B',
+		});
+
+		// Now resolve A as not_placed
+		await resolveAmbiguousReservation('bar-owner-A', {
+			resolvedAs: 'not_placed',
+		});
+
+		// Cooldown slot should STILL exist and belong to B!
+		const cdDoc = mockRecords.get('autoTradeCooldowns/' + cooldownDocId);
+		expect(cdDoc).toBeDefined();
+		expect(cdDoc.reservationId).toBe('different-reservation-B');
 	});
 });

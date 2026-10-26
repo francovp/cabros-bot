@@ -87,12 +87,12 @@ function isInCooldown(key, bars) {
 	return Date.now() - entry.firedAt < bars * barMs;
 }
 
-function recordAutoTradeFire(key, timeframe) {
+function recordAutoTradeFire(key, timeframe, { reservationId, signalId } = {}) {
 	if (autoTradeCooldown.size >= MAX_TRACKED_ENTRIES) {
 		const oldest = autoTradeCooldown.keys().next();
 		if (!oldest.done) autoTradeCooldown.delete(oldest.value);
 	}
-	autoTradeCooldown.set(key, { firedAt: Date.now(), timeframe });
+	autoTradeCooldown.set(key, { firedAt: Date.now(), timeframe, reservationId, signalId });
 }
 
 function toPositiveNumber(value) {
@@ -305,10 +305,15 @@ async function routeAlertToOrder({ alert, parsed, requestId, signalId }) {
 	}
 }
 
-function clearAutoTradeCooldown(key) {
-	if (key && autoTradeCooldown.has(key)) {
-		autoTradeCooldown.delete(key);
+function clearAutoTradeCooldown(key, { reservationId, signalId } = {}) {
+	if (!key || !autoTradeCooldown.has(key)) return false;
+	const entry = autoTradeCooldown.get(key);
+	if (entry) {
+		if (reservationId && entry.reservationId && entry.reservationId !== reservationId) return false;
+		if (signalId && entry.signalId && entry.signalId !== signalId) return false;
 	}
+	autoTradeCooldown.delete(key);
+	return true;
 }
 
 module.exports = {

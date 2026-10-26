@@ -12,9 +12,49 @@ function readActor(req) {
 	return 'unknown';
 }
 
+function parseAndValidateLimit(rawLimit) {
+	if (rawLimit === undefined || rawLimit === null || rawLimit === '') return 50;
+	const str = String(rawLimit).trim();
+	if (!/^\d+$/.test(str)) {
+		const error = new Error('limit must be an integer between 1 and 100');
+		error.code = 'INVALID_REQUEST';
+		error.statusCode = 400;
+		throw error;
+	}
+	const val = parseInt(str, 10);
+	if (val < 1 || val > 100) {
+		const error = new Error('limit must be an integer between 1 and 100');
+		error.code = 'INVALID_REQUEST';
+		error.statusCode = 400;
+		throw error;
+	}
+	return val;
+}
+
 async function getBinanceReconciliation(req, res) {
+	let limit;
 	try {
-		const result = await autoTradeReservationService.listAmbiguousReservations(req.query);
+		limit = parseAndValidateLimit(req.query.limit);
+	} catch (err) {
+		return sendErrorFrom(res, err.statusCode || 400, {
+			error: err.message,
+			code: err.code || 'INVALID_REQUEST',
+		}, { req });
+	}
+
+	try {
+		const result = await autoTradeReservationService.listAmbiguousReservations({
+			limit,
+			symbol: req.query.symbol,
+			status: req.query.status || 'ambiguous',
+		});
+		if (!result || !result.success) {
+			return sendErrorFrom(res, 503, {
+				error: result?.error || 'Storage unavailable',
+				code: result?.code || 'STORAGE_UNAVAILABLE',
+				retryable: true,
+			}, { req });
+		}
 		return res.status(200).json({
 			success: true,
 			reservations: result.reservations,
@@ -29,48 +69,49 @@ async function getBinanceReconciliation(req, res) {
 			http: {
 				endpoint: '/api/trading/binance/reconciliation',
 				method: 'GET',
-				statusCode: 500,
+				statusCode: error.statusCode || 500,
 			},
 		});
-		return sendErrorFrom(res, 500, {
-			success: false,
-			error: 'Failed to retrieve ambiguous reservations',
-			code: 'INTERNAL_ERROR',
-		});
+		return sendErrorFrom(res, error.statusCode || 500, {
+			error: error.message || 'Failed to retrieve ambiguous reservations',
+			code: error.code || 'INTERNAL_ERROR',
+		}, { req });
 	}
 }
 
 async function getBinanceReconciliationById(req, res) {
+	const reservationId = req.params.reservationId;
 	try {
-		const reservationId = req.params.reservationId;
 		const reservation = await autoTradeReservationService.getAmbiguousReservation(reservationId);
 		if (!reservation) {
 			return sendErrorFrom(res, 404, {
-				success: false,
 				error: 'Ambiguous reservation not found',
 				code: 'RESERVATION_NOT_FOUND',
-			});
+			}, { req });
 		}
 		return res.status(200).json({
 			success: true,
 			reservation,
 		});
 	} catch (error) {
-		console.error('[BinanceReconciliationController] getById failed:', error);
-		sentryService.captureRuntimeError({
-			channel: 'binance-reconciliation-controller',
-			error,
-			http: {
-				endpoint: `/api/trading/binance/reconciliation/${req.params.reservationId}`,
-				method: 'GET',
-				statusCode: 500,
-			},
-		});
-		return sendErrorFrom(res, 500, {
-			success: false,
-			error: 'Failed to retrieve ambiguous reservation',
-			code: 'INTERNAL_ERROR',
-		});
+		const isStorage = error.code === 'STORAGE_UNAVAILABLE' || error.statusCode === 503;
+		if (!isStorage) {
+			console.error('[BinanceReconciliationController] getById failed:', error);
+			sentryService.captureRuntimeError({
+				channel: 'binance-reconciliation-controller',
+				error,
+				http: {
+					endpoint: `/api/trading/binance/reconciliation/${reservationId}`,
+					method: 'GET',
+					statusCode: error.statusCode || 500,
+				},
+			});
+		}
+		return sendErrorFrom(res, error.statusCode || 500, {
+			error: error.message || 'Failed to retrieve ambiguous reservation',
+			code: error.code || 'INTERNAL_ERROR',
+			retryable: isStorage,
+		}, { req });
 	}
 }
 
@@ -81,10 +122,9 @@ async function postResolveAmbiguousReservation(req, res) {
 
 	if (!['placed', 'not_placed'].includes(resolvedAs)) {
 		return sendErrorFrom(res, 400, {
-			success: false,
 			error: "resolvedAs must be 'placed' or 'not_placed'",
 			code: 'INVALID_REQUEST',
-		});
+		}, { req });
 	}
 
 	try {
@@ -98,52 +138,45 @@ async function postResolveAmbiguousReservation(req, res) {
 
 		const processingMs = Date.now() - startTime;
 		binanceOrderAuditService.recordMutation({
-			req,
-			request: req.body,
-			action: 'RECONCILE_RESOLVE',
-			symbol: outcome.reservation?.signalContext?.symbol || null,
-			status: `resolved_${resolvedAs}`,
-			binanceOrderId: orderId || outcome.reservation?.orderId || null,
-			clientOrderId: outcome.reservation?.clientOrderId || null,
-			response: outcome,
+			operation: 'reconcile_auto_trade_reservation',
+			reservationId,
+			resolvedAs,
+			orderId: orderId || null,
+			actor,
+			idempotent: Boolean(outcome.idempotent),
 			processingMs,
-		}).catch((err) => {
-			console.warn('[BinanceReconciliationController] audit logging failed:', err?.message || err);
+			success: true,
 		});
 
 		return res.status(200).json({
 			success: true,
-			action: 'reconcile_resolve',
+			action: outcome.idempotent ? 'already_resolved' : 'reconcile_resolve',
 			resolvedAs,
 			idempotent: Boolean(outcome.idempotent),
 			reservation: outcome.reservation,
 		});
 	} catch (error) {
 		const statusCode = error.statusCode || 500;
-		if (statusCode < 500) {
-			console.warn('[BinanceReconciliationController] resolve rejected:', { code: error.code, message: error.message });
-			return sendErrorFrom(res, statusCode, {
-				success: false,
-				error: error.message,
-				code: error.code || 'INVALID_REQUEST',
+		const errorCode = error.code || 'RECONCILIATION_FAILED';
+
+		if (statusCode >= 500) {
+			console.error('[BinanceReconciliationController] resolve failed:', error);
+			sentryService.captureRuntimeError({
+				channel: 'binance-reconciliation-controller',
+				error,
+				http: {
+					endpoint: `/api/trading/binance/reconciliation/${reservationId}`,
+					method: 'POST',
+					statusCode,
+				},
 			});
 		}
 
-		console.error('[BinanceReconciliationController] resolve failed:', error);
-		sentryService.captureRuntimeError({
-			channel: 'binance-reconciliation-controller',
-			error,
-			http: {
-				endpoint: `/api/trading/binance/reconciliation/${reservationId}`,
-				method: 'POST',
-				statusCode: 500,
-			},
-		});
-		return sendErrorFrom(res, 500, {
-			success: false,
-			error: 'Failed to resolve ambiguous reservation',
-			code: error.code || 'INTERNAL_ERROR',
-		});
+		return sendErrorFrom(res, statusCode, {
+			error: error.message || 'Failed to resolve ambiguous reservation',
+			code: errorCode,
+			retryable: statusCode === 503,
+		}, { req });
 	}
 }
 
@@ -151,4 +184,5 @@ module.exports = {
 	getBinanceReconciliation,
 	getBinanceReconciliationById,
 	postResolveAmbiguousReservation,
+	parseAndValidateLimit,
 };
