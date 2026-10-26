@@ -429,6 +429,40 @@ describe('Signal Outcome Confidence Calibration', () => {
 		});
 	});
 
+	describe('computeCalibrationBatchSize()', () => {
+		it('enforces a minimum chunk size floor of 50 for small limits', () => {
+			expect(SignalOutcomeService.computeCalibrationBatchSize(1)).toBe(50);
+			expect(SignalOutcomeService.computeCalibrationBatchSize(5)).toBe(50);
+			expect(SignalOutcomeService.computeCalibrationBatchSize(20)).toBe(50);
+			expect(SignalOutcomeService.computeCalibrationBatchSize(49)).toBe(50);
+			expect(SignalOutcomeService.computeCalibrationBatchSize(50)).toBe(50);
+		});
+
+		it('scales proportionally between the floor (50) and ceiling (100)', () => {
+			expect(SignalOutcomeService.computeCalibrationBatchSize(51)).toBe(51);
+			expect(SignalOutcomeService.computeCalibrationBatchSize(75)).toBe(75);
+			expect(SignalOutcomeService.computeCalibrationBatchSize(99)).toBe(99);
+			expect(SignalOutcomeService.computeCalibrationBatchSize(100)).toBe(100);
+		});
+
+		it('caps at the maximum batch ceiling of 100 for large limits', () => {
+			expect(SignalOutcomeService.computeCalibrationBatchSize(101)).toBe(100);
+			expect(SignalOutcomeService.computeCalibrationBatchSize(500)).toBe(100);
+			expect(SignalOutcomeService.computeCalibrationBatchSize(1000)).toBe(100);
+			expect(SignalOutcomeService.computeCalibrationBatchSize(5000)).toBe(100);
+		});
+
+		it('falls back to default batch ceiling (100) for missing, null, or invalid limit inputs', () => {
+			expect(SignalOutcomeService.computeCalibrationBatchSize()).toBe(100);
+			expect(SignalOutcomeService.computeCalibrationBatchSize(null)).toBe(100);
+			expect(SignalOutcomeService.computeCalibrationBatchSize(undefined)).toBe(100);
+			expect(SignalOutcomeService.computeCalibrationBatchSize(0)).toBe(100);
+			expect(SignalOutcomeService.computeCalibrationBatchSize(-10)).toBe(100);
+			expect(SignalOutcomeService.computeCalibrationBatchSize('invalid')).toBe(100);
+			expect(SignalOutcomeService.computeCalibrationBatchSize(NaN)).toBe(100);
+		});
+	});
+
 	describe('getOutcomesCalibration()', () => {
 		const originalEnv = process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 
@@ -457,22 +491,35 @@ describe('Signal Outcome Confidence Calibration', () => {
 			expect(Array.isArray(result.buckets)).toBe(true);
 		});
 
-		it('limits the first Firestore page to the requested calibration sample', async () => {
+		it('limits the first Firestore page to the batch size floor (50) when limit is 1, completing in 1 round trip even with sparse non-eligible documents', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			const AlertStorageService = require('../../src/services/storage/AlertStorageService');
-			const docs = Array.from({ length: 100 }, (_, index) => ({
-				id: `eligible-${index}`,
-				data: () => ({
-					receivedAt: new Date(Date.now() - index * 1000),
-					source: 'news-monitor',
-					confidenceScore: 0.72,
-					outcomes: { '4h': { status: 'evaluated', return: 1.0, targetHit: true } },
-				}),
-			}));
+			// First 20 docs are pending (ineligible), 21st doc is eligible
+			const docs = [
+				...Array.from({ length: 20 }, (_, index) => ({
+					id: `pending-${index}`,
+					data: () => ({
+						receivedAt: new Date(Date.now() - index * 1000),
+						source: 'news-monitor',
+						confidenceScore: 0.85,
+						outcomes: { '4h': { status: 'pending' } },
+					}),
+				})),
+				...Array.from({ length: 80 }, (_, index) => ({
+					id: `eligible-${index}`,
+					data: () => ({
+						receivedAt: new Date(Date.now() - (index + 20) * 1000),
+						source: 'news-monitor',
+						confidenceScore: 0.72,
+						outcomes: { '4h': { status: 'evaluated', return: 1.0, targetHit: true } },
+					}),
+				})),
+			];
 			let requestedPageLimit = 0;
 			const mockQuery = {
 				where: jest.fn().mockReturnThis(),
 				orderBy: jest.fn().mockReturnThis(),
+				startAfter: jest.fn().mockReturnThis(),
 				limit: jest.fn(function(limit) {
 					requestedPageLimit = limit;
 					return this;
@@ -490,9 +537,51 @@ describe('Signal Outcome Confidence Calibration', () => {
 
 			try {
 				const result = await SignalOutcomeService.getOutcomesCalibration({ window: '4h', limit: 1 });
-				expect(requestedPageLimit).toBe(1);
+				expect(requestedPageLimit).toBe(50);
 				expect(mockQuery.get).toHaveBeenCalledTimes(1);
 				expect(result.totalScoredAlerts).toBe(1);
+			} finally {
+				AlertStorageService.getFirestore.mockRestore();
+			}
+		});
+
+		it('scales the first Firestore page with the requested calibration sample between 50 and 100 (e.g. limit=75)', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const AlertStorageService = require('../../src/services/storage/AlertStorageService');
+			const docs = Array.from({ length: 100 }, (_, index) => ({
+				id: `eligible-${index}`,
+				data: () => ({
+					receivedAt: new Date(Date.now() - index * 1000),
+					source: 'news-monitor',
+					confidenceScore: 0.72,
+					outcomes: { '4h': { status: 'evaluated', return: 1.0, targetHit: true } },
+				}),
+			}));
+			let requestedPageLimit = 0;
+			const mockQuery = {
+				where: jest.fn().mockReturnThis(),
+				orderBy: jest.fn().mockReturnThis(),
+				startAfter: jest.fn().mockReturnThis(),
+				limit: jest.fn(function(limit) {
+					requestedPageLimit = limit;
+					return this;
+				}),
+				get: jest.fn(async () => ({
+					empty: false,
+					docs: docs.slice(0, requestedPageLimit),
+				})),
+			};
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue(mockQuery),
+			};
+
+			jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue(mockFirestore);
+
+			try {
+				const result = await SignalOutcomeService.getOutcomesCalibration({ window: '4h', limit: 75 });
+				expect(requestedPageLimit).toBe(75);
+				expect(mockQuery.get).toHaveBeenCalledTimes(1);
+				expect(result.totalScoredAlerts).toBe(75);
 			} finally {
 				AlertStorageService.getFirestore.mockRestore();
 			}

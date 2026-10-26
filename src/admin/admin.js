@@ -219,6 +219,70 @@ const readConsoleParams = () => {
 	}
 };
 
+const safeDecodeURIComponent = (value) => {
+	if (typeof value !== 'string') return '';
+	try {
+		return decodeURIComponent(value);
+	} catch (_) {
+		return value;
+	}
+};
+
+const readConsoleHash = () => {
+	try {
+		const location = getWindowLocation();
+		return location && typeof location.hash === 'string' ? location.hash : '';
+	} catch (_) {
+		return '';
+	}
+};
+
+const parseConsoleHash = (rawHash) => {
+	if (!rawHash || typeof rawHash !== 'string') return null;
+	const trimmed = rawHash.replace(/^#\/?/, '').replace(/\/+$/, '').trim();
+	if (!trimmed) return null;
+
+	const alertTradeMatch = trimmed.match(/^alerts\/([^/]+)(?:\/trade)?$/i);
+	if (alertTradeMatch) {
+		return {
+			view: 'alerts',
+			alertId: safeDecodeURIComponent(alertTradeMatch[1]),
+			raw: rawHash,
+		};
+	}
+
+	const tradeMatch = trimmed.match(/^trade(?:\/([^/]+))?$/i);
+	if (tradeMatch) {
+		if (tradeMatch[1]) {
+			return {
+				view: 'alerts',
+				alertId: safeDecodeURIComponent(tradeMatch[1]),
+				raw: rawHash,
+			};
+		}
+		return {
+			view: 'trading',
+			raw: rawHash,
+		};
+	}
+
+	const normalizedView = CONSOLE_VIEW_NAMES.find(
+		(v) => v.toLowerCase() === trimmed.toLowerCase().replace(/[-_]/g, ''),
+	);
+	if (normalizedView) {
+		return {
+			view: normalizedView,
+			raw: rawHash,
+		};
+	}
+
+	return {
+		view: trimmed,
+		unrecognised: true,
+		raw: rawHash,
+	};
+};
+
 const resolveConsoleView = (value) => {
 	const name = typeof value === 'string' ? value.trim() : '';
 	return CONSOLE_VIEW_NAMES.includes(name) ? name : DEFAULT_CONSOLE_VIEW;
@@ -226,13 +290,29 @@ const resolveConsoleView = (value) => {
 
 const readConsoleUrlState = () => {
 	const params = readConsoleParams();
+	const hashState = parseConsoleHash(readConsoleHash());
+
+	if (hashState) {
+		const view = resolveConsoleView(hashState.view);
+		return {
+			view,
+			viewRequested: true,
+			viewRecognised: !hashState.unrecognised && CONSOLE_VIEW_NAMES.includes(view),
+			alertId: hashState.alertId || null,
+			params,
+			hash: hashState.raw,
+		};
+	}
+
 	const requested = params.get('view');
 	const view = resolveConsoleView(requested);
 	return {
 		view,
 		viewRequested: requested !== null,
 		viewRecognised: view === requested,
+		alertId: null,
 		params,
+		hash: '',
 	};
 };
 
@@ -249,7 +329,7 @@ const filterParamsForView = (view, params) => {
 	return carried;
 };
 
-const buildConsoleUrl = (view, filterParams = {}) => {
+const buildConsoleUrl = (view, filterParams = {}, explicitHash = null) => {
 	const location = getWindowLocation();
 	let pathname = '';
 	try {
@@ -277,7 +357,12 @@ const buildConsoleUrl = (view, filterParams = {}) => {
 		if (value !== undefined && value !== null && value !== '') params.set(key, value);
 	});
 	const search = params.toString();
-	return `${pathname}${search ? `?${search}` : ''}`;
+	const base = `${pathname}${search ? `?${search}` : ''}`;
+	if (explicitHash) {
+		const formattedHash = explicitHash.startsWith('#') ? explicitHash : `#${explicitHash}`;
+		return `${base}${formattedHash}`;
+	}
+	return base;
 };
 
 const writeConsoleUrl = (url, { replace = false } = {}) => {
@@ -714,7 +799,7 @@ const setupFirebaseAuth = async (config) => {
 				const requested = readConsoleUrlState();
 				navigateToView(
 					requested.viewRequested ? requested.view : FIREBASE_SIGN_IN_LANDING_VIEW,
-					{ history: 'replace' },
+					{ history: 'replace', alertId: requested.alertId, hash: requested.hash },
 				);
 			} catch (error) {
 				disconnectSse();
@@ -1845,6 +1930,21 @@ const appendRiskRows = (dl, data) => [
 	dl.append(element('dt', { text: label }), element('dd', { text: String(value) }));
 });
 
+const buildTradeUrl = (alertId) => {
+	const tradeHash = `#/alerts/${encodeURIComponent(String(alertId))}/trade`;
+	const loc = getWindowLocation();
+	const origin = (loc && loc.origin) ? loc.origin : '';
+	const pathname = (loc && loc.pathname) ? loc.pathname : '/admin';
+	const search = (loc && loc.search) ? loc.search : '';
+	return `${origin}${pathname}${search}${tradeHash}`;
+};
+
+const appendTradeLinkCopyButton = (container, alertId) => {
+	if (!container || !alertId) return;
+	const tradeUrl = buildTradeUrl(alertId);
+	container.append(createCopyButton(tradeUrl, 'Copy trade link'));
+};
+
 const createAlertDetailPanel = (alert) => {
 	const panel = element('article', { className: 'operation-card alert-detail' });
 	const headCopy = element('div');
@@ -1852,6 +1952,7 @@ const createAlertDetailPanel = (alert) => {
 	if (alert && alert.id) {
 		const idLine = element('p', { className: 'mono-line', text: String(alert.id) });
 		idLine.append(createCopyButton(String(alert.id), 'Copy ID'));
+		appendTradeLinkCopyButton(idLine, alert.id);
 		headCopy.append(idLine);
 	}
 	const badges = element('div', { className: 'badge-row' });
@@ -1964,6 +2065,7 @@ const createAlertCard = (alert, { onSelect, isSelected = false, registerCheckbox
 	if (alert && alert.id) {
 		const idLine = element('p', { className: 'mono-line', text: String(alert.id) });
 		idLine.append(createCopyButton(String(alert.id), 'Copy ID'));
+		appendTradeLinkCopyButton(idLine, alert.id);
 		headCopy.append(idLine);
 	}
 	const badges = element('div', { className: 'badge-row' });
@@ -4476,6 +4578,233 @@ function createTradeTicket({ alert, position, defaultOrigin = 'manual', onOrderS
 
 	return panel;
 }
+
+const createSpotBracketForm = () => {
+	const form = element('form', { className: 'operation-card trade-ticket' });
+	form.append(
+		element('h3', { text: 'Place Spot bracket' }),
+		element('code', { text: 'POST /api/trading/binance/orders · BRACKET_LIMIT' }),
+		element('p', {
+			className: 'hint',
+			text: 'A LIMIT entry arms a Spot OTOCO take-profit and stop-limit pair after it fills. Review every level before submitting.',
+		}),
+	);
+	const symbol = addField(form, 'Symbol', 'bracket-symbol', { placeholder: 'BTCUSDT', required: true });
+	const side = addField(form, 'Entry side', 'bracket-side', { tag: 'select' });
+	['BUY', 'SELL'].forEach((value) => {
+		const option = element('option', { text: value });
+		option.value = value;
+		side.append(option);
+	});
+	const quantity = addField(form, 'Quantity', 'bracket-quantity', { placeholder: 'e.g. 0.001', required: true });
+	const entryPrice = addField(form, 'Entry limit price', 'bracket-entry-price', { placeholder: 'e.g. 60000.00', required: true });
+	const stopPrice = addField(form, 'Stop trigger price', 'bracket-stop-price', { placeholder: 'From alert invalidation level', required: true });
+	const stopLimitPrice = addField(form, 'Stop limit price', 'bracket-stop-limit-price', { placeholder: 'Set the limit price for the stop exit', required: true });
+	const takeProfitPrice = addField(form, 'Take-profit price', 'bracket-take-profit-price', { placeholder: 'From alert target level', required: true });
+	const timeInForce = addField(form, 'Time in force', 'bracket-time-in-force', { tag: 'select' });
+	['GTC', 'IOC', 'FOK'].forEach((value) => {
+		const option = element('option', { text: value });
+		option.value = value;
+		timeInForce.append(option);
+	});
+	timeInForce.value = 'GTC';
+
+	const loadLatestButton = element('button', { text: 'Load latest alert levels' });
+	loadLatestButton.type = 'button';
+	const latestAlertStatus = element('p', { className: 'request-state', text: 'No alert levels loaded.' });
+	form.append(loadLatestButton, latestAlertStatus);
+	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: testnet' });
+	const dryRunButton = element('button', { text: 'Validate bracket (Dry Run)' });
+	dryRunButton.type = 'button';
+	const confirmInput = addField(form, 'Type CONFIRM to enable live submission', 'bracket-confirm', {
+		placeholder: 'CONFIRM',
+	});
+	confirmInput.disabled = true;
+	const submitButton = element('button', { text: 'Submit live bracket' });
+	submitButton.type = 'button';
+	submitButton.disabled = true;
+	const validationNotice = element('div', { className: 'ticket-validation-notice' });
+	const output = element('div', { className: 'response-block ticket-output', text: 'No validation run yet.' });
+	form.append(environmentBadge, dryRunButton, submitButton, validationNotice, output);
+
+	let currentEnvironment = 'testnet';
+	let formVersion = 0;
+	let dryRunSuccessful = false;
+	let liveIdempotencyKey = null;
+	let latestAlert = null;
+	let latestCandidate = null;
+	const updateEnvironment = (value) => {
+		currentEnvironment = value || currentEnvironment;
+		environmentBadge.replaceChildren(formatOrderEnvironment(currentEnvironment));
+		checkSubmitReadiness();
+	};
+	const checkSubmitReadiness = () => {
+		const isOperator = typeof canPerformMutation === 'function' ? canPerformMutation() : true;
+		if (!isOperator || currentEnvironment === 'live' || !dryRunSuccessful || confirmInput.value.trim() !== 'CONFIRM') {
+			submitButton.disabled = true;
+			submitButton.title = currentEnvironment === 'live'
+				? 'Live submissions are disabled in the admin ticket'
+				: 'Validate the bracket, then type CONFIRM to enable submission';
+			return;
+		}
+		submitButton.disabled = false;
+		submitButton.title = 'Submit the validated Spot bracket';
+	};
+	const invalidateValidation = () => {
+		formVersion += 1;
+		dryRunSuccessful = false;
+		liveIdempotencyKey = null;
+		confirmInput.value = '';
+		confirmInput.disabled = true;
+		submitButton.disabled = true;
+		validationNotice.replaceChildren();
+		output.className = 'response-block request-state';
+		output.textContent = 'Inputs changed. Validate the bracket again before submitting.';
+	};
+	[symbol, side, quantity, entryPrice, stopPrice, stopLimitPrice, takeProfitPrice, timeInForce].forEach((field) => {
+		field.addEventListener(field === side || field === timeInForce ? 'change' : 'input', invalidateValidation);
+	});
+	confirmInput.addEventListener('input', checkSubmitReadiness);
+	symbol.addEventListener('input', () => {
+		latestAlert = null;
+		latestCandidate = null;
+		entryPrice.value = '';
+		stopPrice.value = '';
+		stopLimitPrice.value = '';
+		takeProfitPrice.value = '';
+		latestAlertStatus.textContent = 'Symbol changed. Load alert levels again if needed.';
+	});
+	form.addEventListener('submit', (event) => event.preventDefault());
+
+	const buildPayload = (dryRun) => {
+		const payload = {
+			symbol: trimFormValue(symbol.value).toUpperCase(),
+			side: side.value,
+			type: 'BRACKET_LIMIT',
+			quantity: trimFormValue(quantity.value),
+			price: trimFormValue(entryPrice.value),
+			stopPrice: trimFormValue(stopPrice.value),
+			stopLimitPrice: trimFormValue(stopLimitPrice.value),
+			takeProfitPrice: trimFormValue(takeProfitPrice.value),
+			timeInForce: timeInForce.value,
+			dryRun,
+		};
+		const alertSymbol = latestAlert && (
+			(latestCandidate && latestCandidate.symbol)
+			|| trimFormValue(latestAlert.symbol || (latestAlert.enrichmentData && latestAlert.enrichmentData.symbol)).toUpperCase()
+		);
+		if (latestAlert && latestAlert.id && alertSymbol === payload.symbol) {
+			payload.alertId = String(latestAlert.id).trim();
+			payload.origin = 'admin_alert';
+			if (latestCandidate && latestCandidate.setupType) payload.setupType = latestCandidate.setupType;
+		}
+		return payload;
+	};
+
+	loadLatestButton.addEventListener('click', async () => {
+		const requestedVersion = formVersion;
+		const symbolValue = trimFormValue(symbol.value).toUpperCase();
+		if (!ORDER_LIST_QUERY_VALIDATION.symbol(symbolValue)) {
+			showError(latestAlertStatus, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
+			return;
+		}
+		const data = await sendRequest({
+			definition: { method: 'GET', path: '/api/alerts', label: 'Load latest alert levels', requiredRole: 'admin.viewer' },
+			path: '/api/alerts',
+			query: { symbol: symbolValue, limit: '1' },
+			button: loadLatestButton,
+			output: latestAlertStatus,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+		if (requestedVersion !== formVersion || trimFormValue(symbol.value).toUpperCase() !== symbolValue) {
+			return;
+		}
+		const alert = data && Array.isArray(data.alerts) ? data.alerts[0] : null;
+		if (!alert) {
+			latestAlert = null;
+			latestCandidate = null;
+			latestAlertStatus.textContent = `No stored alert found for ${symbolValue}.`;
+			return;
+		}
+		const candidate = parseAlertTradeCandidate(alert);
+		if (candidate.symbol && candidate.symbol !== symbolValue) {
+			latestAlertStatus.textContent = 'The latest alert did not match the requested symbol.';
+			return;
+		}
+		const enrichment = asObject(alert.enrichmentData);
+		const traderIntent = asObject(alert.traderIntent);
+		const validPrice = (...values) => values.map(trimFormValue).find((value) => (
+			/^\d+(?:\.\d+)?$/.test(value) && Number.isFinite(Number(value)) && Number(value) > 0
+		)) || '';
+		const invalidation = validPrice(traderIntent.invalidation, enrichment.invalidation_level, enrichment.invalidationLevel);
+		const target = validPrice(traderIntent.target, enrichment.target_level, enrichment.targetLevel);
+		latestAlert = alert;
+		latestCandidate = candidate;
+		if (candidate.side) side.value = candidate.side;
+		if (candidate.price) entryPrice.value = candidate.price;
+		if (invalidation) stopPrice.value = invalidation;
+		if (target) takeProfitPrice.value = target;
+		invalidateValidation();
+		latestAlertStatus.textContent = invalidation && target
+			? `Loaded ${alert.id || 'latest alert'}; set the stop-limit price and review all levels.`
+			: `Loaded ${alert.id || 'latest alert'}, but it has no complete invalidation/target pair.`;
+	});
+
+	dryRunButton.addEventListener('click', async () => {
+		invalidateValidation();
+		const currentVersion = formVersion;
+		const payload = buildPayload(true);
+		if (!ORDER_LIST_QUERY_VALIDATION.symbol(payload.symbol)) {
+			showError(output, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
+			return;
+		}
+		const data = await sendRequest({
+			definition: { method: 'POST', path: '/api/trading/binance/orders', label: 'Validate Spot bracket', requiredRole: 'admin.operator' },
+			path: '/api/trading/binance/orders',
+			body: payload,
+			button: dryRunButton,
+			output,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+		if (data && data.success && currentVersion === formVersion) {
+			dryRunSuccessful = true;
+			updateEnvironment(data.environment);
+			validationNotice.replaceChildren(element('p', {
+				className: 'status-badge status-ready',
+				text: `Bracket validated (${data.environment || currentEnvironment}); the pending OCO exits arm after the LIMIT entry fills.`,
+			}));
+			confirmInput.disabled = false;
+			checkSubmitReadiness();
+		}
+	});
+
+	submitButton.addEventListener('click', async () => {
+		if (submitButton.disabled) return;
+		const payload = buildPayload(false);
+		if (!liveIdempotencyKey) {
+			liveIdempotencyKey = `bracket-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+		}
+		payload.idempotencyKey = liveIdempotencyKey;
+		const data = await sendRequest({
+			definition: { method: 'POST', path: '/api/trading/binance/orders', label: 'Submit live bracket', requiredRole: 'admin.operator' },
+			path: '/api/trading/binance/orders',
+			body: payload,
+		headers: { 'idempotency-key': liveIdempotencyKey },
+			button: submitButton,
+			output,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+		if (data && data.success) {
+			submitButton.disabled = true;
+			validationNotice.replaceChildren(element('p', {
+				className: 'status-badge status-ready',
+				text: `Bracket submitted: #${data.orderList?.orderListId || 'submitted'}`,
+			}));
+		}
+	});
+
+	return form;
+};
 
 const createOrderListForm = () => {
 	const definition = { method: 'GET', path: '/api/trading/binance/orders', label: 'Load recent orders' };
@@ -8441,6 +8770,7 @@ const renderView = async (name) => {
 			return;
 		}
 		if (name === 'orders') {
+			view.append(createSpotBracketForm());
 			view.append(createOrderListForm());
 			view.append(createOrderLookupForm());
 			return;
@@ -8578,7 +8908,35 @@ const renderView = async (name) => {
 	}
 };
 
-const navigateToView = (name, { history: historyMode = 'push' } = {}) => {
+const handleAlertDeepLink = (alertId) => {
+	if (!alertId || typeof document === 'undefined' || !document) return;
+	const viewNode = document.getElementById('view');
+	if (!viewNode) return;
+	const alertInput = (typeof viewNode.querySelector === 'function')
+		? (viewNode.querySelector('input[name="path-alertId"]') || viewNode.querySelector('input[name=path-alertId]'))
+		: null;
+	if (alertInput) {
+		alertInput.value = alertId;
+		let form = alertInput.parentNode;
+		while (form && form.tagName !== 'FORM') {
+			form = form.parentNode;
+		}
+		if (form) {
+			if (typeof form.dispatch === 'function') {
+				form.dispatch('submit');
+			} else if (typeof form.requestSubmit === 'function') {
+				form.requestSubmit();
+			} else if (typeof form.dispatchEvent === 'function') {
+				const event = (typeof Event === 'function')
+					? new Event('submit', { cancelable: true, bubbles: true })
+					: { type: 'submit' };
+				form.dispatchEvent(event);
+			}
+		}
+	}
+};
+
+const navigateToView = (name, { history: historyMode = 'push', alertId = null, hash = null } = {}) => {
 	if (authState.enabled && !authState.user) return showSignedOutState();
 	const target = resolveConsoleView(name);
 	currentConsoleView = target;
@@ -8586,17 +8944,34 @@ const navigateToView = (name, { history: historyMode = 'push' } = {}) => {
 	setViewTitle(target);
 	if (historyMode !== 'none') {
 		const carried = historyMode === 'push' ? {} : filterParamsForView(target, readConsoleParams());
-		writeConsoleUrl(buildConsoleUrl(target, carried), { replace: historyMode === 'replace' });
+		let targetHash = hash;
+		if (!targetHash) {
+			if (target === 'alerts' && alertId) {
+				targetHash = `#/alerts/${encodeURIComponent(String(alertId))}/trade`;
+			} else if (historyMode === 'replace') {
+				const currentHashState = parseConsoleHash(readConsoleHash());
+				if (currentHashState && !currentHashState.unrecognised && currentHashState.view === target) {
+					targetHash = currentHashState.raw;
+				}
+			}
+		}
+		writeConsoleUrl(buildConsoleUrl(target, carried, targetHash), { replace: historyMode === 'replace' });
 	}
 	return renderView(target).then(() => {
 		applyFilterParams(readConsoleParams());
 		bindFilterScopeListeners();
 		moveFocusToView(target);
+		const activeUrlState = readConsoleUrlState();
+		const targetAlertId = alertId || (activeUrlState.view === 'alerts' ? activeUrlState.alertId : null);
+		if (target === 'alerts' && targetAlertId) {
+			handleAlertDeepLink(targetAlertId);
+		}
 	});
 };
 
 const handleConsolePopState = () => {
-	navigateToView(readConsoleUrlState().view, { history: 'none' });
+	const state = readConsoleUrlState();
+	navigateToView(state.view, { history: 'none', alertId: state.alertId });
 };
 
 const canonicaliseConsoleUrl = () => {
@@ -8839,7 +9214,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 			}
 			updateShellTranslations();
 			if (typeof currentConsoleView === 'string') {
-				navigateToView(currentConsoleView, { history: 'replace' });
+				const state = readConsoleUrlState();
+				navigateToView(currentConsoleView, { history: 'replace', alertId: state.alertId });
 			}
 		});
 	}
@@ -8851,6 +9227,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 	setupSidebarToggle();
 	if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
 		window.addEventListener('popstate', handleConsolePopState);
+		window.addEventListener('hashchange', handleConsolePopState);
 	}
 	canonicaliseConsoleUrl();
 
@@ -8876,6 +9253,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 	setHidden('legacy-connection', false);
 	setupLegacyConsole();
 	if (getElement('api-key')?.value) setupSseStream();
-	navigateToView(readConsoleUrlState().view, { history: 'none' });
+	const initialRequested = readConsoleUrlState();
+	navigateToView(initialRequested.view, { history: 'none', alertId: initialRequested.alertId });
 
 });

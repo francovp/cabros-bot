@@ -434,6 +434,12 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		await flush();
 	};
 
+	const dispatchHashChange = async (newHash) => {
+		if (newHash !== undefined) windowLocation.hash = newHash;
+		for (const listener of windowListeners.hashchange || []) await listener({ type: 'hashchange' });
+		await flush();
+	};
+
 	return {
 		body,
 		context,
@@ -448,6 +454,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		historyCalls,
 		location: windowLocation,
 		dispatchPopState,
+		dispatchHashChange,
 	};
 }
 
@@ -5540,6 +5547,190 @@ describe('admin browser client', () => {
 		expect(last[1].headers['x-api-key']).toBe('session-secret');
 	});
 
+	it('prefills and dry-runs a Spot bracket from the latest same-symbol alert', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				if (url.startsWith('/api/alerts?')) {
+					return response({
+						success: true,
+						alerts: [{
+							id: 'alert-latest-btc',
+							symbol: 'BTCUSDT',
+							receivedAt: '2026-10-25T20:00:00.000Z',
+							text: 'BUY BTCUSDT at 60000',
+							enrichmentData: {
+								current_price: '60000',
+								invalidation_level: '58000',
+								target_level: '64000',
+								setup_type: 'breakout',
+							},
+						}],
+					});
+				}
+				if (url === '/api/trading/binance/orders') {
+					return response({ success: true, dryRun: true, environment: 'testnet', orderList: {} });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const form = findForm(browser.elementsById.view, 'Place Spot bracket');
+		form.elements['bracket-symbol'].value = 'BTCUSDT';
+		await findButton(form, 'Load latest alert levels').dispatch('click');
+		await flush();
+
+		expect(requests[0][0]).toBe('/api/alerts?symbol=BTCUSDT&limit=1');
+		expect(form.elements['bracket-side'].value).toBe('BUY');
+		expect(form.elements['bracket-entry-price'].value).toBe('60000');
+		expect(form.elements['bracket-stop-price'].value).toBe('58000');
+		expect(form.elements['bracket-take-profit-price'].value).toBe('64000');
+		form.elements['bracket-quantity'].value = '0.001';
+		form.elements['bracket-stop-limit-price'].value = '57900';
+
+		await findButton(form, 'Validate bracket (Dry Run)').dispatch('click');
+		await flush();
+		const dryRun = requests.at(-1);
+		expect(dryRun[0]).toBe('/api/trading/binance/orders');
+		expect(JSON.parse(dryRun[1].body)).toMatchObject({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'BRACKET_LIMIT',
+			quantity: '0.001',
+			price: '60000',
+			stopPrice: '58000',
+			stopLimitPrice: '57900',
+			takeProfitPrice: '64000',
+			timeInForce: 'GTC',
+			dryRun: true,
+			alertId: 'alert-latest-btc',
+			origin: 'admin_alert',
+			setupType: 'breakout',
+		});
+	});
+
+	it('discards pending alert prefills when symbol changes before alert lookup completes', async () => {
+		let releaseAlert;
+		const pendingAlert = new Promise((resolve) => { releaseAlert = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) return pendingAlert;
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const form = findForm(browser.elementsById.view, 'Place Spot bracket');
+		form.elements['bracket-symbol'].value = 'BTCUSDT';
+		const loadingAlert = findButton(form, 'Load latest alert levels').dispatch('click');
+		await flush();
+
+		form.elements['bracket-symbol'].value = 'ETHUSDT';
+		await form.elements['bracket-symbol'].dispatch('input');
+
+		releaseAlert(response({
+			success: true,
+			alerts: [{
+				id: 'alert-latest-btc',
+				symbol: 'BTCUSDT',
+				enrichmentData: { symbol: 'BTCUSDT', invalidation_level: '58000', target_level: '64000' },
+				traderIntent: { side: 'BUY', entryPrice: '60000', invalidation: '58000', target: '64000' },
+			}],
+		}));
+		await loadingAlert;
+		await flush();
+
+		expect(form.elements['bracket-symbol'].value).toBe('ETHUSDT');
+		expect(form.elements['bracket-entry-price'].value).toBe('');
+		expect(form.elements['bracket-stop-price'].value).toBe('');
+		expect(form.elements['bracket-take-profit-price'].value).toBe('');
+	});
+
+	it('does not enable live submission when a bracket changes during dry-run validation', async () => {
+		let releaseValidation;
+		const pendingValidation = new Promise((resolve) => { releaseValidation = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/trading/binance/orders') return pendingValidation;
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const form = findForm(browser.elementsById.view, 'Place Spot bracket');
+		form.elements['bracket-symbol'].value = 'BTCUSDT';
+		form.elements['bracket-quantity'].value = '0.001';
+		form.elements['bracket-entry-price'].value = '60000';
+		form.elements['bracket-stop-price'].value = '58000';
+		form.elements['bracket-stop-limit-price'].value = '57900';
+		form.elements['bracket-take-profit-price'].value = '64000';
+		const validation = findButton(form, 'Validate bracket (Dry Run)').dispatch('click');
+		await flush();
+
+		form.elements['bracket-stop-price'].value = '57000';
+		await form.elements['bracket-stop-price'].dispatch('input');
+		releaseValidation(response({ success: true, dryRun: true, environment: 'testnet', orderList: {} }));
+		await validation;
+		await flush();
+
+		expect(form.elements['bracket-confirm'].disabled).toBe(true);
+		expect(findButton(form, 'Submit live bracket').disabled).toBe(true);
+		expect(find(form, (node) => node.className.includes('ticket-validation-notice')).textContent).toBe('');
+	});
+
+	it('reuses the same bracket idempotency key after an ambiguous submission response', async () => {
+		const liveRequests = [];
+		let liveAttempts = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/trading/binance/orders') {
+					const body = JSON.parse(options.body);
+					if (body.dryRun) return response({ success: true, dryRun: true, environment: 'testnet', orderList: {} });
+					liveRequests.push([url, options]);
+					liveAttempts += 1;
+					return liveAttempts === 1
+						? response({ success: false, code: 'BINANCE_ORDER_STATUS_UNKNOWN' }, 503)
+						: response({ success: true, dryRun: false, environment: 'testnet', orderList: { orderListId: 77 } }, 201);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const form = findForm(browser.elementsById.view, 'Place Spot bracket');
+		form.elements['bracket-symbol'].value = 'BTCUSDT';
+		form.elements['bracket-quantity'].value = '0.001';
+		form.elements['bracket-entry-price'].value = '60000';
+		form.elements['bracket-stop-price'].value = '58000';
+		form.elements['bracket-stop-limit-price'].value = '57900';
+		form.elements['bracket-take-profit-price'].value = '64000';
+		await findButton(form, 'Validate bracket (Dry Run)').dispatch('click');
+		await flush();
+		form.elements['bracket-confirm'].value = 'CONFIRM';
+		await form.elements['bracket-confirm'].dispatch('input');
+		const submit = findButton(form, 'Submit live bracket');
+		await submit.dispatch('click');
+		await flush();
+		await submit.dispatch('click');
+		await flush();
+
+		expect(liveRequests).toHaveLength(2);
+		const firstBody = JSON.parse(liveRequests[0][1].body);
+		const secondBody = JSON.parse(liveRequests[1][1].body);
+		expect(secondBody.idempotencyKey).toBe(firstBody.idempotencyKey);
+		expect(liveRequests[1][1].headers['idempotency-key']).toBe(liveRequests[0][1].headers['idempotency-key']);
+	});
+
 	it('rejects exponent notation and canonicalizes integer order limits', async () => {
 		const requests = [];
 		const browser = createBrowser({
@@ -8424,6 +8615,247 @@ describe('structured analysis forms', () => {
 			expect(requests.some((url) => url.startsWith('https://cabros-bot-production.up.railway.app/'))).toBe(true);
 			expect(browser.location.search).toContain('backend=https%3A%2F%2Fcabros-bot-production.up.railway.app');
 			expect(browser.location.search).toContain('view=outcomes');
+		});
+
+		it('navigates directly to views via hash routes (#/trading, #/status, #jobs)', async () => {
+			const browserTrading = createBrowser({
+				location: { hash: '#/trading' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserTrading.titleHistory.at(-1)).toMatch(/Trading/);
+			expect(find(browserTrading.body, (node) => node.dataset.view === 'trading').attributes['aria-current']).toBe('page');
+
+			const browserStatus = createBrowser({
+				location: { hash: '#/status' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserStatus.titleHistory.at(-1)).toMatch(/Status/);
+			expect(find(browserStatus.body, (node) => node.dataset.view === 'status').attributes['aria-current']).toBe('page');
+
+			const browserJobs = createBrowser({
+				location: { hash: '#jobs' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserJobs.titleHistory.at(-1)).toMatch(/Jobs/);
+			expect(find(browserJobs.body, (node) => node.dataset.view === 'jobs').attributes['aria-current']).toBe('page');
+		});
+
+		it('supports hashchange navigation between views', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
+
+			await browser.dispatchHashChange('#/trading');
+			expect(browser.titleHistory.at(-1)).toMatch(/Trading/);
+			expect(find(browser.body, (node) => node.dataset.view === 'trading').attributes['aria-current']).toBe('page');
+
+			await browser.dispatchHashChange('#/diagnostics');
+			expect(browser.titleHistory.at(-1)).toMatch(/Diagnostics/);
+			expect(find(browser.body, (node) => node.dataset.view === 'diagnostics').attributes['aria-current']).toBe('page');
+		});
+
+		it('deep-links to alert trade prefill via #/alerts/:alertId/trade', async () => {
+			const browser = createBrowser({
+				location: { hash: '#/alerts/alert-deep-99/trade' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					if (url === '/api/alerts/alert-deep-99') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-deep-99',
+								text: 'BINANCE:ETHUSDT(1H) COMPRA precio: 3200',
+								symbol: 'BINANCE:ETHUSDT',
+								price: '3200',
+								signal: 'COMPRA',
+								enriched: false,
+							},
+						});
+					}
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+
+			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
+			expect(find(browser.body, (node) => node.dataset.view === 'alerts').attributes['aria-current']).toBe('page');
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			expect(detailForm).toBeDefined();
+			expect(detailForm.elements['path-alertId'].value).toBe('alert-deep-99');
+
+			const ticket = find(detailForm, (node) => node.className && node.className.includes('trade-ticket'));
+			expect(ticket).toBeDefined();
+			expect(ticket.textContent).toContain('Trade this alert');
+			expect(ticket.textContent).toContain('Linked alert: alert-deep-99');
+		});
+
+		it('falls back to overview on unrecognised hash and canonicalises URL', async () => {
+			const browser = createBrowser({
+				location: { hash: '#/non-existent-view' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+
+			expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
+			expect(find(browser.body, (node) => node.dataset.view === 'overview').attributes['aria-current']).toBe('page');
+			expect(browser.historyCalls.some((call) => call.mode === 'replace' && call.url.includes('view=overview'))).toBe(true);
+		});
+
+		it('supports alternative hash routes (#/trade, #/trade/:alertId, #/alerts/:alertId, and trailing slashes)', async () => {
+			// #/trade/ with trailing slash -> trading view
+			const browserTrade = createBrowser({
+				location: { hash: '#/trade/' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserTrade.titleHistory.at(-1)).toMatch(/Trading/);
+			expect(find(browserTrade.body, (node) => node.dataset.view === 'trading').attributes['aria-current']).toBe('page');
+
+			// #/status/ with trailing slash -> status view
+			const browserStatusSlash = createBrowser({
+				location: { hash: '#/status/' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserStatusSlash.titleHistory.at(-1)).toMatch(/Status/);
+			expect(find(browserStatusSlash.body, (node) => node.dataset.view === 'status').attributes['aria-current']).toBe('page');
+
+			// #/trade/:alertId -> alerts view with prefill
+			const browserTradeAlert = createBrowser({
+				location: { hash: '#/trade/alert-trade-123' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					if (url === '/api/alerts/alert-trade-123') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-trade-123',
+								text: 'BINANCE:BTCUSDT(4H) COMPRA precio: 65000',
+								symbol: 'BINANCE:BTCUSDT',
+								price: '65000',
+								signal: 'COMPRA',
+								enriched: false,
+							},
+						});
+					}
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserTradeAlert.titleHistory.at(-1)).toMatch(/Alerts/);
+			const detailFormTrade = findForm(browserTradeAlert.elementsById.view, 'GET /api/alerts/{alertId}');
+			expect(detailFormTrade).toBeDefined();
+			expect(detailFormTrade.elements['path-alertId'].value).toBe('alert-trade-123');
+
+			// #/alerts/:alertId (without /trade suffix) -> alerts view with prefill
+			const browserAlertNoSuffix = createBrowser({
+				location: { hash: '#/alerts/alert-plain-456' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					if (url === '/api/alerts/alert-plain-456') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-plain-456',
+								text: 'BINANCE:SOLUSDT(1D) VENTA precio: 150',
+								symbol: 'BINANCE:SOLUSDT',
+								price: '150',
+								signal: 'VENTA',
+								enriched: false,
+							},
+						});
+					}
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserAlertNoSuffix.titleHistory.at(-1)).toMatch(/Alerts/);
+			const detailFormPlain = findForm(browserAlertNoSuffix.elementsById.view, 'GET /api/alerts/{alertId}');
+			expect(detailFormPlain).toBeDefined();
+			expect(detailFormPlain.elements['path-alertId'].value).toBe('alert-plain-456');
+		});
+
+		it('safely handles malformed percent-encoded hash without throwing URIError', async () => {
+			const browser = createBrowser({
+				location: { hash: '#/alerts/%/trade' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
+		});
+
+		it('renders Copy trade link button and preserves search parameters in copied URL', async () => {
+			const browser = createBrowser({
+				location: {
+					pathname: '/admin',
+					search: '?backend=https%3A%2F%2Fcabros-bot-production.up.railway.app&lang=es',
+					hash: '#/alerts/alert-copy-1',
+				},
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					if (url.endsWith('/api/alerts/alert-copy-1')) {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-copy-1',
+								text: 'BINANCE:BTCUSDT COMPRA',
+								symbol: 'BINANCE:BTCUSDT',
+								price: '60000',
+								signal: 'COMPRA',
+								enriched: false,
+							},
+						});
+					}
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			expect(detailForm).toBeDefined();
+
+			const copyButton = find(detailForm, (node) => node.tagName === 'BUTTON' && node.textContent === 'Copy trade link');
+			expect(copyButton).toBeDefined();
+
+			let copiedPayload = null;
+			browser.context.navigator = {
+				clipboard: {
+					writeText: async (text) => { copiedPayload = text; },
+				},
+			};
+			await copyButton.dispatch('click');
+			await flush();
+			expect(copiedPayload).toContain('/admin?backend=https%3A%2F%2Fcabros-bot-production.up.railway.app&lang=es#/alerts/alert-copy-1/trade');
 		});
 	});
 

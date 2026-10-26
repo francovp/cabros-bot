@@ -863,12 +863,36 @@ class NewsAnalyzer {
 
 		// Try cache first
 		if (!dryRun) {
+			const allowedCategories = options.categories && Array.isArray(options.categories)
+				? options.categories
+				: null;
 			for (const category of Object.values(EventCategory)) {
 				const cached = await this.cache.get(symbol, category);
 				if (cached) {
 					if (category === EventCategory.NONE && classifierDevEnabled && cached.classifierDevChecked !== true) {
 						console.debug('[Analyzer] Skipping cached no-event result without classifier.dev check:', symbol);
 						continue;
+					}
+					if (allowedCategories && cached.alert && !allowedCategories.includes(category)) {
+						console.debug('[Analyzer] Cached event category filtered out:', symbol, category, 'not in', allowedCategories);
+						return {
+							symbol,
+							status: AnalysisStatus.CACHED,
+							alert: null,
+							deliveryResults: [],
+							cached: true,
+							analysisRecord: {
+								symbol,
+								eventCategory: category,
+								sentiment: cached.alert?.sentimentScore ?? 0,
+								confidence: cached.alert?.confidence ?? 0,
+								headline: cached.alert?.headline || '',
+								alertSent: false,
+								promptVersion: cached.alert?.promptVersion,
+								tokens: null,
+							},
+							originalPersistedState: cached.originalPersistedState,
+						};
 					}
 					console.debug('[Analyzer] Returning cached result:', symbol, category);
 					let deliveryResults = cached.deliveryResults;
@@ -1203,6 +1227,43 @@ class NewsAnalyzer {
 		// Build alert object
 		const tokenUsageSummary = tokenUsage ? tokenUsage.toJSON() : null;
 		const alert = this.buildAlert(symbol, geminiAnalysis, marketContext, enrichmentMetadata, tokenUsageSummary);
+
+		const allowedCategories = options.categories && Array.isArray(options.categories)
+			? options.categories
+			: null;
+
+		if (allowedCategories && !allowedCategories.includes(alert.eventCategory)) {
+			console.debug('[Analyzer] Event category filtered out:', symbol, alert.eventCategory, 'not in', allowedCategories);
+			if (!dryRun) {
+				await this.cache.set(symbol, alert.eventCategory, {
+					alert,
+					analysisResult: {
+						symbol,
+						status: AnalysisStatus.ANALYZED,
+						cached: false,
+						requestId,
+					},
+					deliveryResults: [],
+				});
+			}
+			return {
+				symbol,
+				status: AnalysisStatus.ANALYZED,
+				alert: null,
+				deliveryResults: [],
+				cached: false,
+				analysisRecord: {
+					symbol,
+					eventCategory: alert.eventCategory,
+					sentiment: alert.sentimentScore ?? 0,
+					confidence: alert.confidence,
+					headline: alert.headline || geminiAnalysis.headline || '',
+					alertSent: false,
+					promptVersion: alert.promptVersion || geminiAnalysis.promptVersion,
+					tokens: tokenUsage ? tokenUsage.toJSON().totalTokens : null,
+				},
+			};
+		}
 
 		if (dryRun) {
 			console.debug('[Analyzer] Dry-run mode: skipping delivery, signal outcome, and cache persistence');
