@@ -331,4 +331,93 @@ describe('SelfTestService', () => {
 		expect(updatedResult.checks[0].status).toBe('pass');
 		expect(updatedResult.checks[0].message).toContain('updated_bot');
 	});
+
+	it('passes Binance trading diagnostic when service returns string environment and ready status', async () => {
+		process.env.BOT_TOKEN = 'token';
+		process.env.TELEGRAM_CHAT_ID = '123';
+		process.env.WEBHOOK_API_KEY = 'k';
+		process.env.RATE_LIMIT_MAX = '100';
+		process.env.RATE_LIMIT_WINDOW_MS = '60000';
+		process.env.ENABLE_BINANCE_TRADING = 'true';
+		process.env.BINANCE_API_KEY = 'binance-key';
+		process.env.BINANCE_API_SECRET = 'binance-secret';
+
+		const fakeBinanceService = {
+			getStatus: () => ({
+				enabled: true,
+				configured: true,
+				ready: true,
+				status: 'ready',
+				environment: 'testnet',
+			}),
+		};
+		const svc = createSelfTestService({
+			botOrGetter: () => null,
+			getBinanceOrderService: () => fakeBinanceService,
+		});
+
+		const result = await svc.run({ only: 'binance.trading' });
+		expect(result.checks[0]).toMatchObject({
+			id: 'binance.trading',
+			status: 'pass',
+			message: 'Binance trading credentials are configured',
+		});
+	});
+
+	it('fails Binance trading diagnostic when service status reports misconfigured', async () => {
+		process.env.ENABLE_BINANCE_TRADING = 'true';
+		process.env.BINANCE_API_KEY = 'binance-key';
+		process.env.BINANCE_API_SECRET = 'binance-secret';
+
+		const fakeBinanceService = {
+			getStatus: () => ({
+				enabled: true,
+				configured: false,
+				ready: false,
+				status: 'misconfigured',
+				environment: 'testnet',
+				reason: 'Missing credentials',
+			}),
+		};
+		const svc = createSelfTestService({
+			botOrGetter: () => null,
+			getBinanceOrderService: () => fakeBinanceService,
+		});
+
+		const result = await svc.run({ only: 'binance.trading' });
+		expect(result.checks[0]).toMatchObject({
+			id: 'binance.trading',
+			status: 'fail',
+		});
+		expect(result.checks[0].message).toContain('misconfigured');
+	});
+
+	it('applies defaults and passes rate limiter check when optional variables are omitted', async () => {
+		delete process.env.RATE_LIMIT_MAX;
+		delete process.env.RATE_LIMIT_WINDOW_MS;
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'rate_limiter.config' });
+		expect(result.checks[0]).toMatchObject({
+			id: 'rate_limiter.config',
+			status: 'pass',
+			evidence: { max: 100, windowMs: 900000 },
+		});
+	});
+
+	it('includes a fail entry for unknown check IDs in mixed scoped runs', async () => {
+		process.env.WEBHOOK_API_KEY = 'k';
+		const svc = createSelfTestService({ botOrGetter: () => null });
+
+		const result = await svc.run({ only: 'auth.api_key,nope.nope' });
+
+		expect(result.status).toBe('fail');
+		const authCheck = result.checks.find((c) => c.id === 'auth.api_key');
+		const unknownCheck = result.checks.find((c) => c.id === 'unknown');
+		expect(authCheck).toBeDefined();
+		expect(authCheck.status).toBe('pass');
+		expect(unknownCheck).toBeDefined();
+		expect(unknownCheck.status).toBe('fail');
+		expect(unknownCheck.message).toMatch(/unknown checks: nope\.nope/);
+	});
 });

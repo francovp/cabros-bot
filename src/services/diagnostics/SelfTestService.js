@@ -280,8 +280,19 @@ function buildChecks({ botOrGetter, getBinanceOrderService }) {
 			const service = typeof getBinanceOrderService === 'function' ? getBinanceOrderService() : null;
 			if (service && typeof service.getStatus === 'function') {
 				const status = service.getStatus();
-				if (status && status.environment && !status.environment.ok) {
-					return makeResult('fail', `Binance trading is misconfigured: ${status.environment.reason || 'unknown'}`, null);
+				if (status) {
+					if (typeof status.environment === 'object' && status.environment !== null && !status.environment.ok) {
+						return makeResult('fail', `Binance trading is misconfigured: ${status.environment.reason || 'unknown'}`, null);
+					}
+					if (status.status === 'misconfigured' || status.configured === false) {
+						return makeResult('fail', `Binance trading is misconfigured: ${status.reason || 'unknown'}`, null);
+					}
+					if (status.ready === false && status.status !== 'paused') {
+						return makeResult('fail', `Binance trading is not ready: ${status.status || 'unknown'}`, null);
+					}
+					if (status.status === 'paused') {
+						return makeResult('warn', `Binance trading is paused: ${status.pausedReason || 'runtime pause'}`, null);
+					}
 				}
 			}
 			return makeResult('pass', 'Binance trading credentials are configured');
@@ -305,8 +316,10 @@ function buildChecks({ botOrGetter, getBinanceOrderService }) {
 	checks.push({
 		id: 'rate_limiter.config',
 		run: () => {
-			const max = Number(process.env.RATE_LIMIT_MAX);
-			const window = Number(process.env.RATE_LIMIT_WINDOW_MS);
+			const rawMax = process.env.RATE_LIMIT_MAX;
+			const rawWindow = process.env.RATE_LIMIT_WINDOW_MS;
+			const max = rawMax !== undefined && rawMax !== '' ? Number(rawMax) : 100;
+			const window = rawWindow !== undefined && rawWindow !== '' ? Number(rawWindow) : 900000;
 			if (!Number.isFinite(max) || max <= 0) return makeResult('fail', 'RATE_LIMIT_MAX is invalid', null);
 			if (!Number.isFinite(window) || window <= 0) return makeResult('fail', 'RATE_LIMIT_WINDOW_MS is invalid', null);
 			return makeResult('pass', 'Rate limiter is configured', { max, windowMs: window });
@@ -384,6 +397,9 @@ function createSelfTestService({ botOrGetter, getBinanceOrderService } = {}) {
 		}
 
 		const ran = await Promise.all(selected.map((check) => runCheck(check, { perCheckTimeoutMs: DEFAULT_PER_CHECK_TIMEOUT_MS })));
+		if (unknownIds.length > 0) {
+			ran.push({ id: 'unknown', status: 'fail', message: `unknown checks: ${unknownIds.join(', ')}`, durationMs: 0 });
+		}
 		const finishedAt = nowIso();
 		const result = buildResult({ checks: ran, startedAt, finishedAt });
 		lastResult = result;
