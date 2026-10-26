@@ -303,7 +303,7 @@ async function listAmbiguousReservations({ limit = 50, symbol, status = 'ambiguo
 			return timeB - timeA;
 		});
 
-		if (status === 'ambiguous') {
+		if (status === 'ambiguous' && !symbol) {
 			activeAmbiguousIds.clear();
 			for (const r of reservations) {
 				activeAmbiguousIds.add(r.id);
@@ -335,10 +335,16 @@ async function getAmbiguousReservation(reservationId) {
 		throw error;
 	}
 	const trimmed = reservationId.trim();
-	const docId = trimmed.length === 64 ? trimmed : digest(trimmed);
 	try {
-		const doc = await firestore.collection(COLLECTION).doc(docId).get();
-		if (!doc || !doc.exists) return null;
+		let doc = await firestore.collection(COLLECTION).doc(trimmed).get();
+		if (!doc || !doc.exists) {
+			const hashedDoc = await firestore.collection(COLLECTION).doc(digest(trimmed)).get();
+			if (hashedDoc && hashedDoc.exists) {
+				doc = hashedDoc;
+			} else {
+				return null;
+			}
+		}
 		const raw = { id: doc.id, ...(typeof doc.data === 'function' ? doc.data() : doc) };
 		return serializeReservation(raw);
 	} catch (error) {
@@ -379,16 +385,26 @@ async function resolveAmbiguousReservation(reservationId, { resolvedAs, orderId,
 		throw error;
 	}
 	const trimmed = String(reservationId || '').trim();
-	const docId = trimmed.length === 64 ? trimmed : digest(trimmed);
-	const docRef = firestore.collection(COLLECTION).doc(docId);
+	let docId = trimmed;
+	let docRef = firestore.collection(COLLECTION).doc(docId);
 
 	const outcome = await firestore.runTransaction(async (transaction) => {
-		const doc = await transaction.get(docRef);
+		let doc = await transaction.get(docRef);
 		if (!doc || !doc.exists) {
-			const error = new Error('Reservation not found');
-			error.code = 'RESERVATION_NOT_FOUND';
-			error.statusCode = 404;
-			throw error;
+			const hashedDocRef = firestore.collection(COLLECTION).doc(digest(trimmed));
+			const hashedDoc = await transaction.get(hashedDocRef);
+			if (hashedDoc && hashedDoc.exists) {
+				doc = hashedDoc;
+				docRef = hashedDocRef;
+				docId = doc.id;
+			} else {
+				const error = new Error('Reservation not found');
+				error.code = 'RESERVATION_NOT_FOUND';
+				error.statusCode = 404;
+				throw error;
+			}
+		} else {
+			docId = doc.id;
 		}
 		const data = typeof doc.data === 'function' ? doc.data() : doc;
 		if (!data.ambiguous && data.status !== 'unknown') {

@@ -149,14 +149,22 @@ async function postResolveAmbiguousReservation(req, res) {
 
 		const processingMs = Date.now() - startTime;
 		binanceOrderAuditService.recordMutation({
-			operation: 'reconcile_auto_trade_reservation',
-			reservationId,
-			resolvedAs,
-			orderId: orderId || null,
-			actor,
-			idempotent: Boolean(outcome.idempotent),
+			req,
+			action: 'RECONCILE',
+			status: resolvedAs === 'placed' ? 'PLACED' : 'NOT_PLACED',
+			symbol: outcome.reservation?.symbol || 'UNKNOWN',
+			orderId: outcome.reservation?.orderId || outcome.reservation?.clientOrderId || reservationId,
+			binanceOrderId: outcome.reservation?.orderId || null,
+			clientOrderId: outcome.reservation?.clientOrderId || null,
+			origin: 'reconciliation',
+			alertId: outcome.reservation?.alertId || null,
 			processingMs,
-			success: true,
+			response: {
+				reservationId,
+				resolvedAs,
+				idempotent: Boolean(outcome.idempotent),
+				orderId: outcome.reservation?.orderId || null,
+			},
 		});
 
 		return res.status(200).json({

@@ -23,39 +23,57 @@ const mockFirestore = {
 			update: async (data) => mockRecords.set(`${name}/${id}`, { ...mockRecords.get(`${name}/${id}`), ...data }),
 			delete: async () => mockRecords.delete(`${name}/${id}`),
 		}),
-		where: (field, op, value) => ({
-			limit: (lim) => ({
+		where: (field, op, value) => {
+			const filters = [{ field, op, value }];
+			const createQuery = () => ({
+				where: (nextField, nextOp, nextValue) => {
+					filters.push({ field: nextField, op: nextOp, value: nextValue });
+					return createQuery();
+				},
+				limit: (lim) => ({
+					get: async () => {
+						const docs = [];
+						for (const [key, data] of mockRecords.entries()) {
+							if (!key.startsWith(`${name}/`)) continue;
+							const match = filters.every((f) => {
+								if (f.field.includes('.')) {
+									const parts = f.field.split('.');
+									let val = data;
+									for (const part of parts) {
+										val = val?.[part];
+									}
+									return f.op === '==' ? val === f.value : false;
+								}
+								return f.op === '==' ? data[f.field] === f.value : false;
+							});
+							if (match) docs.push({ id: key.replace(`${name}/`, ''), data: () => data });
+							if (docs.length >= lim) break;
+						}
+						return { docs };
+					},
+				}),
 				get: async () => {
 					const docs = [];
 					for (const [key, data] of mockRecords.entries()) {
 						if (!key.startsWith(`${name}/`)) continue;
-						let match = false;
-						if (field.includes('.')) {
-							const parts = field.split('.');
-							let val = data;
-							for (const part of parts) {
-								val = val?.[part];
+						const match = filters.every((f) => {
+							if (f.field.includes('.')) {
+								const parts = f.field.split('.');
+								let val = data;
+								for (const part of parts) {
+									val = val?.[part];
+								}
+								return f.op === '==' ? val === f.value : false;
 							}
-							match = op === '==' ? val === value : false;
-						} else {
-							match = op === '==' ? data[field] === value : false;
-						}
+							return f.op === '==' ? data[f.field] === f.value : false;
+						});
 						if (match) docs.push({ id: key.replace(`${name}/`, ''), data: () => data });
-						if (docs.length >= lim) break;
 					}
 					return { docs };
 				},
-			}),
-			get: async () => {
-				const docs = [];
-				for (const [key, data] of mockRecords.entries()) {
-					if (!key.startsWith(`${name}/`)) continue;
-					const match = op === '==' ? data[field] === value : false;
-					if (match) docs.push({ id: key.replace(`${name}/`, ''), data: () => data });
-				}
-				return { docs };
-			},
-		}),
+			});
+			return createQuery();
+		},
 		limit: (lim) => ({
 			get: async () => {
 				const docs = [];
@@ -191,6 +209,8 @@ describe('Binance Reconciliation Endpoints (#1466)', () => {
 			errorCode: 'BINANCE_ORDER_STATUS_UNKNOWN',
 		});
 
+		const auditSpy = jest.spyOn(binanceOrderAuditService, 'recordMutation');
+
 		const res = await request(app)
 			.post(`/api/trading/binance/reconciliation/${reservation.id}`)
 			.set('x-api-key', 'test-admin-key')
@@ -210,6 +230,11 @@ describe('Binance Reconciliation Endpoints (#1466)', () => {
 			orderId: 554433,
 			notes: 'Matched with Binance order 554433',
 		});
+		expect(auditSpy).toHaveBeenCalledWith(expect.objectContaining({
+			action: 'RECONCILE',
+			status: 'PLACED',
+		}));
+		auditSpy.mockRestore();
 	});
 
 	it('resolves an ambiguous reservation as not_placed and settles cooldown', async () => {
