@@ -127,6 +127,34 @@ describe('requestRouting - destination arrays', () => {
 		]);
 	});
 
+	it('assigns a stable redrive identity to each bound recipient', async () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram']),
+			sendToChannels: jest.fn().mockResolvedValue([{ success: false, channel: 'telegram' }]),
+			sendToAll: jest.fn(),
+		};
+		const alert = { text: 'Preset report', requestId: 'delivery-1' };
+		const routing = {
+			channels: ['telegram'],
+			destinations: { telegramChatIds: ['-1001234567890', '-1009876543210'] },
+		};
+
+		await sendWithNotificationRouting(notificationManager, alert, routing);
+		const firstKeys = notificationManager.sendToChannels.mock.calls
+			.map(([, , options]) => options.redriveRecipientKey);
+
+		expect(firstKeys).toEqual([
+			expect.stringMatching(/^[a-f0-9]{64}$/),
+			expect.stringMatching(/^[a-f0-9]{64}$/),
+		]);
+		expect(new Set(firstKeys).size).toBe(2);
+
+		notificationManager.sendToChannels.mockClear();
+		await sendWithNotificationRouting(notificationManager, alert, routing);
+		expect(notificationManager.sendToChannels.mock.calls.map(([, , options]) => options.redriveRecipientKey))
+			.toEqual(firstKeys);
+	});
+
 	it('does not broadcast when preset mode has no resolved destinations', async () => {
 		const notificationManager = {
 			getEnabledChannels: jest.fn().mockReturnValue(['telegram', 'whatsapp']),

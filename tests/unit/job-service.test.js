@@ -852,6 +852,31 @@ describe('JobService Unit Tests', () => {
 			expect(job.deliveryResults).toBeDefined();
 		});
 
+		it('preserves scanner-preset source for async preset jobs', async () => {
+			const notificationManager = require('../../src/controllers/webhooks/handlers/alert/alert').getNotificationManager();
+			tradingViewMcpService.callScanTool.mockResolvedValue([
+				{ symbol: 'BINANCE:ETHUSDT', changePercent: 5.0, indicators: { close: 3200, RSI: 55 } },
+			]);
+
+			await jobService.createJob('market-scanner', { scans: ['top_gainers'] });
+			await jobService.waitForActiveJobs();
+			expect(notificationManager.sendToAll).toHaveBeenCalledWith(
+				expect.objectContaining({ source: 'tradingview-analysis', category: 'scanner' }),
+				expect.any(Object),
+			);
+
+			notificationManager.sendToAll.mockClear();
+			await jobService.createJob('market-scanner', { scans: ['top_gainers'] }, undefined, {
+				scannerPresetId: 'preset-1',
+			});
+			await jobService.waitForActiveJobs();
+
+			expect(notificationManager.sendToAll).toHaveBeenCalledWith(
+				expect.objectContaining({ source: 'scanner-preset', category: 'scanner' }),
+				expect.any(Object),
+			);
+		});
+
 		it('preserves market-scanner enrichment options for background execution', async () => {
 			tradingViewMcpService.callScanTool.mockResolvedValueOnce([
 				{

@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('node:crypto');
+
 const VALID_CHANNELS = ['telegram', 'whatsapp', 'discord'];
 
 // Strict format patterns for chat IDs. These run only when strictChatIds is
@@ -443,7 +445,10 @@ async function sendWithNotificationRouting(notificationManager, alert, routing =
 			return recipients.map((recipient) => notificationManager.sendToChannels({
 				...alertPayload,
 				[destinationField]: recipient,
-			}, [channel], options));
+			}, [channel], {
+				...options,
+				redriveRecipientKey: crypto.createHash('sha256').update(String(recipient)).digest('hex'),
+			}));
 		}));
 		return results.flat();
 	}

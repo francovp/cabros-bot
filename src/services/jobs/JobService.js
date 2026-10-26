@@ -1390,7 +1390,11 @@ class JobService {
 		const deliveryResults = await this._sendQueuedNotification(
 			job,
 			notificationManager,
-			{ text: alertText, source: 'tradingview-analysis', category: 'scanner' },
+			{
+				text: alertText,
+				source: job.requestMetadata?.scannerPresetId ? 'scanner-preset' : 'tradingview-analysis',
+				category: 'scanner',
+			},
 			routing,
 		);
 		if (this._isClaimLost(signal)) {
