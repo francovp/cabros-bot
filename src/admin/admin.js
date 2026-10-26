@@ -2310,8 +2310,10 @@ const renderActiveWorkDashboard = (container, { jobsData, outcomesData, status }
 	const failedJobs = jobs.filter((j) => j.status === 'failed');
 
 	const outcomes = Array.isArray(outcomesData?.outcomes) ? outcomesData.outcomes : [];
-	const pendingOutcomes = outcomes.filter((o) => ['pending', 'evaluating'].includes(o.status));
-	const evaluatedOutcomes = outcomes.filter((o) => o.status === 'evaluated');
+	const pendingOutcomes = outcomes.filter((o) => o.outcomeEvaluated === false
+		&& Object.values(asObject(o.outcomes)).some((window) => window?.status === 'pending'));
+	const evaluatedOutcomes = outcomes.filter((o) => Object.values(asObject(o.outcomes))
+		.some((window) => window?.status === 'evaluated'));
 
 	const metricsGrid = element('div', { className: 'metric-grid' });
 	metricsGrid.append(
@@ -2344,7 +2346,7 @@ const renderActiveWorkDashboard = (container, { jobsData, outcomesData, status }
 			pendingOutcomes.slice(0, 5).forEach((outcome) => {
 				const item = element('div', { className: 'mono-line' });
 				item.append(
-					element('span', { className: 'status-badge status-active', text: outcome.status }),
+						element('span', { className: 'status-badge status-active', text: 'pending' }),
 					element('span', { text: `${outcome.symbol || outcome.id} · waiting evaluation` }),
 				);
 				outcomeGroup.append(item);

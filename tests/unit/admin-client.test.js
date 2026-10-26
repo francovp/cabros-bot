@@ -10073,8 +10073,8 @@ describe('structured analysis forms', () => {
 		const outcomes = {
 			success: true,
 			outcomes: [
-				{ id: 'out-1', symbol: 'BINANCE:BTCUSDT', status: 'pending' },
-				{ id: 'out-2', symbol: 'BINANCE:ETHUSDT', status: 'evaluated' },
+				{ id: 'out-1', symbol: 'BINANCE:BTCUSDT', outcomeEvaluated: false, outcomes: { '1h': { status: 'pending' } } },
+				{ id: 'out-2', symbol: 'BINANCE:ETHUSDT', outcomeEvaluated: true, outcomes: { '1h': { status: 'evaluated' } } },
 			],
 		};
 		const alerts = {
@@ -10123,7 +10123,10 @@ describe('structured analysis forms', () => {
 		expect(viewText).toContain('Active work');
 		expect(viewText).toContain('Counts reflect the latest 20 jobs and outcomes');
 		expect(viewText).toContain('In-flight jobs1');
+		expect(viewText).toContain('Pending outcomes1');
+		expect(viewText).toContain('1 evaluated signals');
 		expect(viewText).toContain('job-101 · analysis');
+		expect(viewText).toContain('pendingBINANCE:BTCUSDT');
 		expect(viewText).toContain('BINANCE:BTCUSDT');
 		// Recent Alerts Panel
 		expect(viewText).toContain('Recent alerts');
