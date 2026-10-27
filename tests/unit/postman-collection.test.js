@@ -2712,4 +2712,47 @@ describe('CI coverage guards (Postman collection and README endpoints)', () => {
 		expect(findMissingPostmanOperations([], new Set())).toEqual([]);
 		expect(findMissingReadmePaths('', {})).toEqual([]);
 	});
+
+	describe('runtime webhook request validation examples (issue #739)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const webhooks = findItem(collection.item, 'Webhooks');
+		const examplesFolder = webhooks && findItem(webhooks.item, 'Runtime OpenAPI Request Validation');
+		const cases = [
+			{ name: 'POST Alert (invalid body)', route: '/api/webhook/alert', path: '/text', keyword: 'required' },
+			{ name: 'POST Message (invalid body)', route: '/api/webhook/message', path: '/message', keyword: 'minLength' },
+			{ name: 'POST Expanded Analysis (invalid body)', route: '/api/webhook/expanded-analysis-alert', path: '/symbols/0', keyword: 'pattern' },
+			{ name: 'POST Market Scanner (invalid body)', route: '/api/webhook/market-scanner-alert', path: '/scans/0', keyword: 'enum' },
+			{ name: 'POST Volume Confirmation (invalid body)', route: '/api/webhook/volume-confirmation', path: '/symbol', keyword: 'pattern' },
+			{ name: 'POST Symbol Analysis (invalid body)', route: '/api/webhook/symbol-analysis', path: '/timeframe', keyword: 'enum' },
+			{ name: 'POST Alert (invalid query)', route: '/api/webhook/alert', query: '?autoTrade=invalid', location: 'query', path: '/autoTrade', keyword: 'type' },
+		];
+
+		it('publishes invalid response examples and retains valid requests for all six operations', () => {
+			expect(examplesFolder).toBeDefined();
+			const invalidItems = collectRequestItems(examplesFolder?.item || []);
+			const allItems = collectRequestItems(collection.item);
+			expect(invalidItems).toHaveLength(cases.length);
+
+			for (const example of cases) {
+				const item = invalidItems.find((candidate) => candidate.name === example.name);
+				expect(item).toBeDefined();
+				expect(item.request.url.raw).toContain(`${example.route}${example.query || ''}`);
+				expect(() => JSON.parse(item.request.body.raw)).not.toThrow();
+				const response = item.response.find((candidate) => candidate.code === 400);
+				expect(response).toBeDefined();
+				const body = JSON.parse(response.body);
+				expect(body).toMatchObject({
+					success: false,
+					code: 'VALIDATION_ERROR',
+					retryable: false,
+					details: { errors: [{ location: example.location || 'body', path: example.path, keyword: example.keyword }] },
+				});
+				expect(Object.keys(body.details.errors[0]).sort()).toEqual(['keyword', 'location', 'path']);
+				expect(allItems.some((candidate) => (
+					candidate.request.url.raw.includes(example.route)
+					&& (candidate.response || []).some((saved) => saved.code >= 200 && saved.code < 300)
+				))).toBe(true);
+			}
+		});
+	});
 });

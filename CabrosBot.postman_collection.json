@@ -9376,6 +9376,681 @@
               "cookie": []
             }
           ]
+        },
+        {
+          "name": "Runtime OpenAPI Request Validation",
+          "item": [
+            {
+              "name": "POST Alert (invalid body)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"channels\": [\n    \"telegram\"\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "alert"
+                  ]
+                },
+                "description": "Authenticated invalid request demonstrating the sanitized OpenAPI 3.1 validation response. Existing valid examples for this operation remain in the Webhooks folder."
+              },
+              "response": [
+                {
+                  "name": "400 VALIDATION_ERROR (invalid body)",
+                  "originalRequest": {
+                    "method": "POST",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json",
+                        "type": "text"
+                      },
+                      {
+                        "key": "x-api-key",
+                        "value": "{{apiKey}}",
+                        "type": "text"
+                      }
+                    ],
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"channels\": [\n    \"telegram\"\n  ]\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    },
+                    "url": {
+                      "raw": "{{baseUrl}}/api/webhook/alert",
+                      "host": [
+                        "{{baseUrl}}"
+                      ],
+                      "path": [
+                        "api",
+                        "webhook",
+                        "alert"
+                      ]
+                    },
+                    "description": "Authenticated invalid request demonstrating the sanitized OpenAPI 3.1 validation response. Existing valid examples for this operation remain in the Webhooks folder."
+                  },
+                  "status": "Bad Request",
+                  "code": 400,
+                  "header": [
+                    {
+                      "key": "Content-Type",
+                      "value": "application/json"
+                    },
+                    {
+                      "key": "X-Request-Id",
+                      "value": "req-validation-1"
+                    }
+                  ],
+                  "_postman_previewlanguage": "json",
+                  "body": "{\n  \"success\": false,\n  \"error\": \"Request validation failed\",\n  \"code\": \"VALIDATION_ERROR\",\n  \"requestId\": \"req-validation-1\",\n  \"retryable\": false,\n  \"details\": {\n    \"errors\": [\n      {\n        \"location\": \"body\",\n        \"path\": \"/text\",\n        \"keyword\": \"required\"\n      }\n    ]\n  }\n}"
+                }
+              ]
+            },
+            {
+              "name": "POST Message (invalid body)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"message\": \"\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/message",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "message"
+                  ]
+                },
+                "description": "Authenticated invalid request demonstrating the sanitized OpenAPI 3.1 validation response. Existing valid examples for this operation remain in the Webhooks folder."
+              },
+              "response": [
+                {
+                  "name": "400 VALIDATION_ERROR (invalid body)",
+                  "originalRequest": {
+                    "method": "POST",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json",
+                        "type": "text"
+                      },
+                      {
+                        "key": "x-api-key",
+                        "value": "{{apiKey}}",
+                        "type": "text"
+                      }
+                    ],
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"message\": \"\"\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    },
+                    "url": {
+                      "raw": "{{baseUrl}}/api/webhook/message",
+                      "host": [
+                        "{{baseUrl}}"
+                      ],
+                      "path": [
+                        "api",
+                        "webhook",
+                        "message"
+                      ]
+                    },
+                    "description": "Authenticated invalid request demonstrating the sanitized OpenAPI 3.1 validation response. Existing valid examples for this operation remain in the Webhooks folder."
+                  },
+                  "status": "Bad Request",
+                  "code": 400,
+                  "header": [
+                    {
+                      "key": "Content-Type",
+                      "value": "application/json"
+                    },
+                    {
+                      "key": "X-Request-Id",
+                      "value": "req-validation-2"
+                    }
+                  ],
+                  "_postman_previewlanguage": "json",
+                  "body": "{\n  \"success\": false,\n  \"error\": \"Request validation failed\",\n  \"code\": \"VALIDATION_ERROR\",\n  \"requestId\": \"req-validation-2\",\n  \"retryable\": false,\n  \"details\": {\n    \"errors\": [\n      {\n        \"location\": \"body\",\n        \"path\": \"/message\",\n        \"keyword\": \"minLength\"\n      }\n    ]\n  }\n}"
+                }
+              ]
+            },
+            {
+              "name": "POST Expanded Analysis (invalid body)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"symbols\": [\n    \"NVDA\"\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/expanded-analysis-alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "expanded-analysis-alert"
+                  ]
+                },
+                "description": "Authenticated invalid request demonstrating the sanitized OpenAPI 3.1 validation response. Existing valid examples for this operation remain in the Webhooks folder."
+              },
+              "response": [
+                {
+                  "name": "400 VALIDATION_ERROR (invalid body)",
+                  "originalRequest": {
+                    "method": "POST",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json",
+                        "type": "text"
+                      },
+                      {
+                        "key": "x-api-key",
+                        "value": "{{apiKey}}",
+                        "type": "text"
+                      }
+                    ],
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"symbols\": [\n    \"NVDA\"\n  ]\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    },
+                    "url": {
+                      "raw": "{{baseUrl}}/api/webhook/expanded-analysis-alert",
+                      "host": [
+                        "{{baseUrl}}"
+                      ],
+                      "path": [
+                        "api",
+                        "webhook",
+                        "expanded-analysis-alert"
+                      ]
+                    },
+                    "description": "Authenticated invalid request demonstrating the sanitized OpenAPI 3.1 validation response. Existing valid examples for this operation remain in the Webhooks folder."
+                  },
+                  "status": "Bad Request",
+                  "code": 400,
+                  "header": [
+                    {
+                      "key": "Content-Type",
+                      "value": "application/json"
+                    },
+                    {
+                      "key": "X-Request-Id",
+                      "value": "req-validation-3"
+                    }
+                  ],
+                  "_postman_previewlanguage": "json",
+                  "body": "{\n  \"success\": false,\n  \"error\": \"Request validation failed\",\n  \"code\": \"VALIDATION_ERROR\",\n  \"requestId\": \"req-validation-3\",\n  \"retryable\": false,\n  \"details\": {\n    \"errors\": [\n      {\n        \"location\": \"body\",\n        \"path\": \"/symbols/0\",\n        \"keyword\": \"pattern\"\n      }\n    ]\n  }\n}"
+                }
+              ]
+            },
+            {
+              "name": "POST Market Scanner (invalid body)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"scans\": [\n    \"invalid_scan\"\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/market-scanner-alert",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "market-scanner-alert"
+                  ]
+                },
+                "description": "Authenticated invalid request demonstrating the sanitized OpenAPI 3.1 validation response. Existing valid examples for this operation remain in the Webhooks folder."
+              },
+              "response": [
+                {
+                  "name": "400 VALIDATION_ERROR (invalid body)",
+                  "originalRequest": {
+                    "method": "POST",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json",
+                        "type": "text"
+                      },
+                      {
+                        "key": "x-api-key",
+                        "value": "{{apiKey}}",
+                        "type": "text"
+                      }
+                    ],
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"scans\": [\n    \"invalid_scan\"\n  ]\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    },
+                    "url": {
+                      "raw": "{{baseUrl}}/api/webhook/market-scanner-alert",
+                      "host": [
+                        "{{baseUrl}}"
+                      ],
+                      "path": [
+                        "api",
+                        "webhook",
+                        "market-scanner-alert"
+                      ]
+                    },
+                    "description": "Authenticated invalid request demonstrating the sanitized OpenAPI 3.1 validation response. Existing valid examples for this operation remain in the Webhooks folder."
+                  },
+                  "status": "Bad Request",
+                  "code": 400,
+                  "header": [
+                    {
+                      "key": "Content-Type",
+                      "value": "application/json"
+                    },
+                    {
+                      "key": "X-Request-Id",
+                      "value": "req-validation-4"
+                    }
+                  ],
+                  "_postman_previewlanguage": "json",
+                  "body": "{\n  \"success\": false,\n  \"error\": \"Request validation failed\",\n  \"code\": \"VALIDATION_ERROR\",\n  \"requestId\": \"req-validation-4\",\n  \"retryable\": false,\n  \"details\": {\n    \"errors\": [\n      {\n        \"location\": \"body\",\n        \"path\": \"/scans/0\",\n        \"keyword\": \"enum\"\n      }\n    ]\n  }\n}"
+                }
+              ]
+            },
+            {
+              "name": "POST Volume Confirmation (invalid body)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"symbol\": \"BTCUSDT\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/volume-confirmation",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "volume-confirmation"
+                  ]
+                },
+                "description": "Authenticated invalid request demonstrating the sanitized OpenAPI 3.1 validation response. Existing valid examples for this operation remain in the Webhooks folder."
+              },
+              "response": [
+                {
+                  "name": "400 VALIDATION_ERROR (invalid body)",
+                  "originalRequest": {
+                    "method": "POST",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json",
+                        "type": "text"
+                      },
+                      {
+                        "key": "x-api-key",
+                        "value": "{{apiKey}}",
+                        "type": "text"
+                      }
+                    ],
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"symbol\": \"BTCUSDT\"\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    },
+                    "url": {
+                      "raw": "{{baseUrl}}/api/webhook/volume-confirmation",
+                      "host": [
+                        "{{baseUrl}}"
+                      ],
+                      "path": [
+                        "api",
+                        "webhook",
+                        "volume-confirmation"
+                      ]
+                    },
+                    "description": "Authenticated invalid request demonstrating the sanitized OpenAPI 3.1 validation response. Existing valid examples for this operation remain in the Webhooks folder."
+                  },
+                  "status": "Bad Request",
+                  "code": 400,
+                  "header": [
+                    {
+                      "key": "Content-Type",
+                      "value": "application/json"
+                    },
+                    {
+                      "key": "X-Request-Id",
+                      "value": "req-validation-5"
+                    }
+                  ],
+                  "_postman_previewlanguage": "json",
+                  "body": "{\n  \"success\": false,\n  \"error\": \"Request validation failed\",\n  \"code\": \"VALIDATION_ERROR\",\n  \"requestId\": \"req-validation-5\",\n  \"retryable\": false,\n  \"details\": {\n    \"errors\": [\n      {\n        \"location\": \"body\",\n        \"path\": \"/symbol\",\n        \"keyword\": \"pattern\"\n      }\n    ]\n  }\n}"
+                }
+              ]
+            },
+            {
+              "name": "POST Symbol Analysis (invalid body)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"timeframe\": \"999d\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/symbol-analysis",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "symbol-analysis"
+                  ]
+                },
+                "description": "Authenticated invalid request demonstrating the sanitized OpenAPI 3.1 validation response. Existing valid examples for this operation remain in the Webhooks folder."
+              },
+              "response": [
+                {
+                  "name": "400 VALIDATION_ERROR (invalid body)",
+                  "originalRequest": {
+                    "method": "POST",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json",
+                        "type": "text"
+                      },
+                      {
+                        "key": "x-api-key",
+                        "value": "{{apiKey}}",
+                        "type": "text"
+                      }
+                    ],
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"symbol\": \"BINANCE:BTCUSDT\",\n  \"timeframe\": \"999d\"\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    },
+                    "url": {
+                      "raw": "{{baseUrl}}/api/webhook/symbol-analysis",
+                      "host": [
+                        "{{baseUrl}}"
+                      ],
+                      "path": [
+                        "api",
+                        "webhook",
+                        "symbol-analysis"
+                      ]
+                    },
+                    "description": "Authenticated invalid request demonstrating the sanitized OpenAPI 3.1 validation response. Existing valid examples for this operation remain in the Webhooks folder."
+                  },
+                  "status": "Bad Request",
+                  "code": 400,
+                  "header": [
+                    {
+                      "key": "Content-Type",
+                      "value": "application/json"
+                    },
+                    {
+                      "key": "X-Request-Id",
+                      "value": "req-validation-6"
+                    }
+                  ],
+                  "_postman_previewlanguage": "json",
+                  "body": "{\n  \"success\": false,\n  \"error\": \"Request validation failed\",\n  \"code\": \"VALIDATION_ERROR\",\n  \"requestId\": \"req-validation-6\",\n  \"retryable\": false,\n  \"details\": {\n    \"errors\": [\n      {\n        \"location\": \"body\",\n        \"path\": \"/timeframe\",\n        \"keyword\": \"enum\"\n      }\n    ]\n  }\n}"
+                }
+              ]
+            },
+            {
+              "name": "POST Alert (invalid query)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json",
+                    "type": "text"
+                  },
+                  {
+                    "key": "x-api-key",
+                    "value": "{{apiKey}}",
+                    "type": "text"
+                  }
+                ],
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"text\": \"Valid alert\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "url": {
+                  "raw": "{{baseUrl}}/api/webhook/alert?autoTrade=invalid",
+                  "host": [
+                    "{{baseUrl}}"
+                  ],
+                  "path": [
+                    "api",
+                    "webhook",
+                    "alert"
+                  ],
+                  "query": [
+                    {
+                      "key": "autoTrade",
+                      "value": "invalid"
+                    }
+                  ]
+                },
+                "description": "Authenticated valid JSON body with an invalid boolean query parameter. The sanitized response identifies only the query location, JSON Pointer, and failed schema keyword."
+              },
+              "response": [
+                {
+                  "name": "400 VALIDATION_ERROR (invalid query)",
+                  "originalRequest": {
+                    "method": "POST",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json",
+                        "type": "text"
+                      },
+                      {
+                        "key": "x-api-key",
+                        "value": "{{apiKey}}",
+                        "type": "text"
+                      }
+                    ],
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"text\": \"Valid alert\"\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    },
+                    "url": {
+                      "raw": "{{baseUrl}}/api/webhook/alert?autoTrade=invalid",
+                      "host": [
+                        "{{baseUrl}}"
+                      ],
+                      "path": [
+                        "api",
+                        "webhook",
+                        "alert"
+                      ],
+                      "query": [
+                        {
+                          "key": "autoTrade",
+                          "value": "invalid"
+                        }
+                      ]
+                    },
+                    "description": "Authenticated valid JSON body with an invalid boolean query parameter. The sanitized response identifies only the query location, JSON Pointer, and failed schema keyword."
+                  },
+                  "status": "Bad Request",
+                  "code": 400,
+                  "header": [
+                    {
+                      "key": "Content-Type",
+                      "value": "application/json"
+                    },
+                    {
+                      "key": "X-Request-Id",
+                      "value": "req-validation-query-1"
+                    }
+                  ],
+                  "_postman_previewlanguage": "json",
+                  "body": "{\n  \"success\": false,\n  \"error\": \"Request validation failed\",\n  \"code\": \"VALIDATION_ERROR\",\n  \"requestId\": \"req-validation-query-1\",\n  \"retryable\": false,\n  \"details\": {\n    \"errors\": [\n      {\n        \"location\": \"query\",\n        \"path\": \"/autoTrade\",\n        \"keyword\": \"type\"\n      }\n    ]\n  }\n}"
+                }
+              ]
+            }
+          ]
         }
       ]
     },

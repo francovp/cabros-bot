@@ -574,7 +574,7 @@
             "$ref": "#/components/responses/WebhookAlertDeliveryResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/WebhookRequestValidationError"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -646,7 +646,7 @@
             "$ref": "#/components/responses/MessageDeliveryResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/WebhookRequestValidationError"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -712,7 +712,7 @@
             "$ref": "#/components/responses/AnalysisResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/WebhookRequestValidationError"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -784,7 +784,7 @@
             "$ref": "#/components/responses/AnalysisResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/WebhookRequestValidationError"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -842,7 +842,7 @@
             "$ref": "#/components/responses/VolumeConfirmationResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/WebhookRequestValidationError"
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
@@ -900,7 +900,7 @@
             "$ref": "#/components/responses/SymbolAnalysisResult"
           },
           "400": {
-            "$ref": "#/components/responses/Error"
+            "$ref": "#/components/responses/WebhookRequestValidationError"
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
@@ -7299,7 +7299,8 @@
           },
           "text/plain": {
             "schema": {
-              "type": "string"
+              "type": "string",
+              "pattern": "\\S"
             },
             "example": "BTCUSDT broke resistance"
           }
@@ -10524,6 +10525,66 @@
               "retryable": true,
               "retryAfterSeconds": 60
             }
+          }
+        }
+      },
+      "WebhookRequestValidationError": {
+        "description": "Webhook request error. Handler-level INVALID_REQUEST responses and runtime schema failures use the standard envelope; schema failures return sanitized location, JSON Pointer, and keyword details.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "oneOf": [
+                {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "not": {
+                        "type": "object",
+                        "required": [
+                          "code"
+                        ],
+                        "properties": {
+                          "code": {
+                            "const": "VALIDATION_ERROR"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                {
+                  "$ref": "#/components/schemas/RequestValidationError"
+                }
+              ]
+            },
+            "examples": {
+              "validationError": {
+                "summary": "400 VALIDATION_ERROR with sanitized field details",
+                "value": {
+                  "success": false,
+                  "error": "Request validation failed",
+                  "code": "VALIDATION_ERROR",
+                  "requestId": "6f1c9a2e-3f2b-4a51-9c8b-1d2e3f4a5b6c",
+                  "retryable": false,
+                  "details": {
+                    "errors": [
+                      {
+                        "location": "body",
+                        "path": "/text",
+                        "keyword": "required"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
           }
         }
       }
@@ -22780,6 +22841,79 @@
             }
           }
         ]
+      },
+      "RequestValidationIssue": {
+        "type": "object",
+        "required": [
+          "location",
+          "path",
+          "keyword"
+        ],
+        "properties": {
+          "location": {
+            "type": "string",
+            "enum": [
+              "body",
+              "query",
+              "path"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "description": "JSON Pointer to the invalid value; \"/\" denotes the whole value."
+          },
+          "keyword": {
+            "type": "string",
+            "description": "The OpenAPI JSON Schema keyword that failed, or contentType when the request media type is unsupported."
+          }
+        },
+        "additionalProperties": false
+      },
+      "RequestValidationError": {
+        "type": "object",
+        "required": [
+          "success",
+          "error",
+          "code",
+          "requestId",
+          "retryable",
+          "details"
+        ],
+        "properties": {
+          "success": {
+            "const": false
+          },
+          "error": {
+            "const": "Request validation failed"
+          },
+          "code": {
+            "const": "VALIDATION_ERROR"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "retryable": {
+            "const": false
+          },
+          "details": {
+            "type": "object",
+            "required": [
+              "errors"
+            ],
+            "properties": {
+              "errors": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "$ref": "#/components/schemas/RequestValidationIssue"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
       }
     },
     "headers": {

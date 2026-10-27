@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const SwaggerParser = require('@apidevtools/swagger-parser');
+const Ajv2020 = require('ajv/dist/2020');
 const MarkdownV2Formatter = require('../../src/services/notification/formatters/markdownV2Formatter');
 const { getMountedApiOperations } = require('../helpers/api-operations');
 
@@ -16,6 +17,51 @@ function getDocumentedApiOperations(contract) {
 }
 
 describe('OpenAPI contract', () => {
+	it('documents sanitized runtime validation errors for the six webhook routes', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const paths = [
+			'/api/webhook/alert',
+			'/api/webhook/message',
+			'/api/webhook/expanded-analysis-alert',
+			'/api/webhook/market-scanner-alert',
+			'/api/webhook/volume-confirmation',
+			'/api/webhook/symbol-analysis',
+		];
+		const issueSchema = contract.components.schemas.RequestValidationIssue;
+		const errorSchema = contract.components.schemas.RequestValidationError;
+		const response = contract.components.responses.WebhookRequestValidationError;
+
+		expect(issueSchema.required).toEqual(['location', 'path', 'keyword']);
+		expect(issueSchema.additionalProperties).toBe(false);
+		expect(issueSchema.properties.location.enum).toEqual(['body', 'query', 'path']);
+		expect(issueSchema.properties.keyword.description).toContain('contentType');
+		expect(errorSchema.properties.code.const).toBe('VALIDATION_ERROR');
+		const ajv = new Ajv2020({ strict: false });
+		for (const [name, schema] of Object.entries(contract.components.schemas)) {
+			ajv.addSchema(schema, `#/components/schemas/${name}`);
+		}
+		const validateError = ajv.compile(response.content['application/json'].schema);
+		const safeExample = response.content['application/json'].examples.validationError.value;
+		expect(validateError(safeExample)).toBe(true);
+		expect(validateError({
+			...safeExample,
+			details: { ...safeExample.details, rawInput: 'sensitive-value' },
+		})).toBe(false);
+		expect(validateError({
+			...safeExample,
+			details: {
+				errors: [{ ...safeExample.details.errors[0], message: 'sensitive-value' }],
+			},
+		})).toBe(false);
+		expect(response.content['application/json'].examples.validationError.value.details.errors[0])
+			.toEqual({ location: 'body', path: '/text', keyword: 'required' });
+
+		for (const path of paths) {
+			expect(contract.paths[path].post.responses['400'].$ref)
+				.toBe('#/components/responses/WebhookRequestValidationError');
+		}
+	});
+
 	it('documents body-only auto-trade and the live occurrence identity', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const properties = contract.components.schemas.AlertRequest.properties;
@@ -1050,7 +1096,7 @@ describe('status dependency contract drift', () => {
 		const alertResponses = spec.paths['/api/webhook/alert'].post.responses;
 		const schema = spec.components.schemas.ExpressErrorEnvelope;
 
-		expect(alertResponses['400'].$ref).toBe('#/components/responses/Error');
+		expect(alertResponses['400'].$ref).toBe('#/components/responses/WebhookRequestValidationError');
 		expect(alertResponses['500'].$ref).toBe('#/components/responses/ExpressFallthroughError');
 		expect(schema.required).toEqual(expect.arrayContaining([
 			'success',

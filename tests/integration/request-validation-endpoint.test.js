@@ -5,6 +5,7 @@ const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 const requestDeadline = require('../../src/lib/requestDeadline');
+const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 
 describe('Runtime OpenAPI request validation integration', () => {
 	const originalEnv = process.env;
@@ -42,9 +43,10 @@ describe('Runtime OpenAPI request validation integration', () => {
 		expect(Array.isArray(body.details.errors)).toBe(true);
 		expect(body.details.errors.length).toBeGreaterThanOrEqual(1);
 		for (const err of body.details.errors) {
+			expect(['body', 'query', 'path']).toContain(err.location);
 			expect(typeof err.path).toBe('string');
 			expect(typeof err.keyword).toBe('string');
-			expect(typeof err.message).toBe('string');
+			expect(Object.keys(err).sort()).toEqual(['keyword', 'location', 'path']);
 		}
 	}
 
@@ -68,6 +70,37 @@ describe('Runtime OpenAPI request validation integration', () => {
 
 		assertErrorEnvelope(res.body);
 		expect(res.body.details.errors.some((e) => e.path === '/text')).toBe(true);
+	});
+
+	it('rejects whitespace-only text/plain alerts before the handler runs', async () => {
+		const res = await request(app)
+			.post('/api/webhook/alert')
+			.set(AUTH)
+			.set('content-type', 'text/plain')
+			.send(' \t\n ')
+			.expect(400);
+
+		expect(res.body.code).toBe('VALIDATION_ERROR');
+		expect(res.body.details.errors).toEqual([
+			{ location: 'body', path: '/', keyword: 'pattern' },
+		]);
+	});
+
+	it('rejects malformed query parameters before idempotency reservation', async () => {
+		const reserveSpy = jest.spyOn(idempotencyService, 'reserve');
+		const res = await request(app)
+			.post('/api/webhook/alert?autoTrade=private-query-value')
+			.set(AUTH)
+			.set('x-idempotency-key', 'validation-query-1')
+			.send({ text: 'Valid alert' })
+			.expect(400);
+
+		expect(res.body.code).toBe('VALIDATION_ERROR');
+		expect(res.body.details.errors).toEqual([
+			{ location: 'query', path: '/autoTrade', keyword: 'type' },
+		]);
+		expect(JSON.stringify(res.body)).not.toContain('private-query-value');
+		expect(reserveSpy).not.toHaveBeenCalled();
 	});
 
 	it('rejects POST /api/webhook/alert with invalid autoTrade type as 400 VALIDATION_ERROR', async () => {
@@ -156,6 +189,24 @@ describe('Runtime OpenAPI request validation integration', () => {
 
 		assertErrorEnvelope(res.body);
 		expect(res.body.details.errors.some((e) => e.keyword === 'type')).toBe(true);
+	});
+
+	it('rejects non-empty unparsed bodies on optional-body routes before provider work', async () => {
+		const analyzeSpy = jest.spyOn(tradingViewMcpService, 'analyzeSymbolIdentifier').mockResolvedValue({
+			status: 'failed',
+		});
+		const res = await request(app)
+			.post('/api/webhook/expanded-analysis-alert')
+			.set(AUTH)
+			.set('content-type', 'application/octet-stream')
+			.send(Buffer.from('unparsed payload'))
+			.expect(400);
+
+		expect(res.body.code).toBe('VALIDATION_ERROR');
+		expect(res.body.details.errors).toEqual([
+			{ location: 'body', path: '/', keyword: 'contentType' },
+		]);
+		expect(analyzeSpy).not.toHaveBeenCalled();
 	});
 
 	it('bypasses validation when ENABLE_REQUEST_VALIDATION=false and reaches handler ad-hoc check', async () => {

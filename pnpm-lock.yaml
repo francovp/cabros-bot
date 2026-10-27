@@ -23,6 +23,9 @@ importers:
       ajv:
         specifier: ^8.17.1
         version: 8.17.1
+      ajv-formats:
+        specifier: ^3.0.1
+        version: 3.0.1(ajv@8.17.1)
       binance:
         specifier: ^2.10.2
         version: 2.15.22(typescript@5.9.3)
