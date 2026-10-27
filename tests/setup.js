@@ -4,6 +4,8 @@
 process.env = {
 	...process.env,
 	NODE_ENV: 'test',
+	// Legacy suites opt out explicitly; request-validation suites set true.
+	ENABLE_REQUEST_VALIDATION: 'false',
 	ENABLE_GEMINI_GROUNDING: 'true',
 	SEARCH_API_KEY: 'test-search-key',
 	SEARCH_CX: 'test-search-cx',
