@@ -57,8 +57,8 @@ const telegramCommandAuth = require('../lib/telegramCommandAuth');
 const { getAdminAuthStatus } = require('../lib/adminAuth');
 const { getNotificationManager } = require('./webhooks/handlers/alert/alert');
 const {
+	getDeploymentCommit,
 	getBuildInfo,
-	getDeploymentIdentity,
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
 } = require('../lib/deploymentEnvironment');
