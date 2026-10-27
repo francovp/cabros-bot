@@ -132,6 +132,24 @@ describe('POST /api/admin/test-alert Integration', () => {
 		expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
 	});
 
+	it('requires an explicit destination for authenticated test-mode sends', async () => {
+		const rejected = await request(app)
+			.post('/api/admin/test-alert')
+			.set('x-api-key', 'secret-operator-key')
+			.send({ text: 'Test message', channels: ['telegram'], testMode: true });
+		expect(rejected.status).toBe(400);
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+
+		const accepted = await request(app)
+			.post('/api/admin/test-alert')
+			.set('x-api-key', 'secret-operator-key')
+			.send({ text: 'Test message', channels: ['telegram'], telegramChatId: '123456789', testMode: true });
+		expect(accepted.status).toBe(200);
+		expect(accepted.body).toEqual(expect.objectContaining({ testMode: true, persisted: false }));
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalled();
+		expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
+	});
+
 	it('shortens citation URLs in dry-run previews using configured URL shortener', async () => {
 		const mockShortener = {
 			shortenUrlsParallel: jest.fn().mockResolvedValue({

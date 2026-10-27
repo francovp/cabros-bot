@@ -3022,6 +3022,130 @@ const sendRequest = async ({
 	}
 };
 
+const createAlertPreviewForm = () => {
+	const definition = { method: 'POST', path: '/api/admin/test-alert', requiredRole: 'admin.operator' };
+	const form = element('form', { className: 'operation-card alert-preview-form' });
+	form.append(element('h3', { text: 'Alert preview' }));
+	const message = addField(form, 'Message text', 'text', { tag: 'textarea', required: true, maxLength: 20000 });
+	const channels = element('fieldset');
+	channels.append(element('legend', { text: 'Channels' }));
+	const checks = ['telegram', 'whatsapp', 'discord'].map((channel) => {
+		const label = element('label', { text: channel });
+		const input = element('input');
+		input.type = 'checkbox';
+		input.name = channel;
+		input.checked = channel === 'telegram';
+		label.prepend(input);
+		channels.append(label);
+		return input;
+	});
+	form.append(channels);
+	const telegramChatId = addField(form, 'Telegram test chat ID', 'telegramChatId', { type: 'text' });
+	const whatsappChatId = addField(form, 'WhatsApp test chat ID', 'whatsappChatId', { type: 'text' });
+	const discordWebhookUrl = addField(form, 'Discord test webhook URL', 'discordWebhookUrl', { type: 'password', autocomplete: 'off' });
+	const previewButton = element('button', { text: 'Render preview' });
+	previewButton.type = 'submit';
+	const sendButton = element('button', { text: 'Send test' });
+	sendButton.type = 'button';
+	const output = element('p', { className: 'response-block', text: 'Compose a message to preview it.' });
+	output.setAttribute('aria-live', 'polite');
+	const panels = element('div', { className: 'alert-preview-panels' });
+	const panelText = new Map();
+	['telegram', 'whatsapp', 'discord'].forEach((channel) => {
+		const panel = element('section', { className: 'alert-preview-panel' });
+		panel.append(element('h4', { text: channel }));
+		const body = element('pre', { text: 'No preview yet.' });
+		panel.append(body);
+		panels.append(panel);
+		panelText.set(channel, body);
+	});
+	const warnings = element('p', { className: 'request-state' });
+	form.append(previewButton, sendButton, output, warnings, panels);
+
+	const historyKey = authState.enabled && authState.user?.uid
+		? `cabros-alert-previews:${authState.user.uid}` : null;
+	const history = element('div', { className: 'alert-preview-history' });
+	form.append(history);
+	const readHistory = () => {
+		try {
+			if (!historyKey || !window.localStorage) return [];
+			const saved = JSON.parse(window.localStorage.getItem(historyKey) || '[]');
+			return Array.isArray(saved) ? saved.filter((entry) => typeof entry === 'string').slice(0, 5) : [];
+		} catch { return []; }
+	};
+	const renderHistory = () => {
+		history.replaceChildren(element('h4', { text: 'Recent previews' }));
+		readHistory().forEach((entry) => {
+			const button = element('button', { text: entry.slice(0, 80) });
+			button.type = 'button';
+			button.addEventListener('click', () => { message.value = entry; });
+			history.append(button);
+		});
+	};
+	const saveHistory = () => {
+		try {
+			if (!historyKey || !window.localStorage) return;
+			window.localStorage.setItem(historyKey, JSON.stringify([message.value, ...readHistory().filter((entry) => entry !== message.value)].slice(0, 5)));
+			renderHistory();
+		} catch { /* Browser storage may be disabled. */ }
+	};
+	renderHistory();
+
+	const buildBody = (dryRun) => {
+		const selected = checks.filter((input) => input.checked).map((input) => input.name);
+		if (!selected.length) throw new Error('Select at least one channel.');
+		if (!dryRun) {
+			if (selected.includes('telegram') && !telegramChatId.value.trim()) throw new Error('Telegram test chat ID is required.');
+			if (selected.includes('whatsapp') && !whatsappChatId.value.trim()) throw new Error('WhatsApp test chat ID is required.');
+			if (selected.includes('discord') && !discordWebhookUrl.value.trim()) throw new Error('Discord test webhook URL is required.');
+		}
+		const body = { text: message.value.trim(), channels: selected, dryRun, testMode: true };
+		if (telegramChatId.value.trim()) body.telegramChatId = telegramChatId.value.trim();
+		if (whatsappChatId.value.trim()) body.whatsappChatId = whatsappChatId.value.trim();
+		if (!dryRun && discordWebhookUrl.value.trim()) body.discordWebhookUrl = discordWebhookUrl.value.trim();
+		return body;
+	};
+	const submit = async (dryRun) => {
+		if (!message.value.trim()) {
+			showError(output, 'Enter message text.');
+			return;
+		}
+		let body;
+		try {
+			body = buildBody(dryRun);
+		} catch (error) {
+			showError(output, error.message);
+			return;
+		}
+		if (!dryRun && !window.confirm('Send this [TEST] alert to the specified test destinations?')) return;
+		const data = await sendRequest({
+			definition, path: definition.path, body,
+			button: dryRun ? previewButton : sendButton, output,
+			formatResponse: ({ data: result }) => dryRun
+				? 'Preview rendered; no alert sent.'
+				: (result?.ok
+					? 'Test alert dispatched.'
+					: `Test alert delivery failed.\n${JSON.stringify(result?.results || [], null, 2)}`),
+			captureResponseData: (result) => {
+				if (!result?.ok || !dryRun) return;
+				panelText.forEach((node, channel) => {
+					node.textContent = channel === 'discord' && result.formatted?.discord?.payloads
+						? JSON.stringify(result.formatted.discord.payloads, null, 2)
+						: (result.formatted?.[channel]?.text || 'Not selected.');
+				});
+				warnings.textContent = (result.markdownWarnings || []).map((line) => `Telegram line ${line}: check MarkdownV2 markup`).join(' · ');
+			},
+		});
+		if (data?.ok && dryRun) saveHistory();
+	};
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		return submit(true);
+	});
+	sendButton.addEventListener('click', () => submit(false));
+	return form;
+};
+
 const createAlertListForm = () => {
 	const definition = { method: 'GET', path: '/api/alerts', label: 'Load alerts' };
 	const form = element('form', { className: 'operation-card' });
@@ -9138,6 +9262,7 @@ const renderView = async (name) => {
 			return;
 		}
 		if (name === 'alerts') {
+			view.append(createAlertPreviewForm());
 			view.append(createAlertListForm());
 			view.append(createAlertSummaryForm(), createAlertExportForm());
 			VIEW_ACTIONS.alerts.forEach((definition) => view.append(createOperationForm(contract, definition)));

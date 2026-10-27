@@ -8,6 +8,7 @@ const alertStorageService = require('../../services/storage/AlertStorageService'
 const MarkdownV2Formatter = require('../../services/notification/formatters/markdownV2Formatter');
 const WhatsAppMarkdownFormatter = require('../../services/notification/formatters/whatsappMarkdownFormatter');
 const { parseTradingViewSignal } = require('../../services/tradingview/parseTradingViewSignal');
+const { splitMessageIntoChunks } = require('../../lib/messageHelper');
 const sentryService = require('../../services/monitoring/SentryService');
 const {
 	parseNotificationRouting,
@@ -105,29 +106,6 @@ function postTestAlert(botOrGetter, deps = {}) {
 			});
 		}
 
-		const now = Date.now();
-		const adminKey = getAdminKey(req);
-		const lastCallTime = adminRateLimits.get(adminKey);
-		if (lastCallTime && now - lastCallTime < RATE_LIMIT_WINDOW_MS) {
-			const remainingMs = RATE_LIMIT_WINDOW_MS - (now - lastCallTime);
-			const retryAfterSeconds = Math.ceil(remainingMs / 1000);
-			res.set('Retry-After', String(retryAfterSeconds));
-			return sendErrorFrom(res, 429, {
-				error: 'Rate limit exceeded. Test alert can only be called once per minute.',
-				code: 'RATE_LIMITED',
-				retryAfterSeconds,
-			});
-		}
-
-		if (!checkAndIncrementDailyLimit()) {
-			return sendErrorFrom(res, 429, {
-				error: `Daily test alert limit reached (${getDailyLimit()}).`,
-				code: 'RATE_LIMITED',
-			});
-		}
-
-		adminRateLimits.set(adminKey, now);
-
 		const body = req.body && typeof req.body === 'object' ? req.body : {};
 
 		if (body.dryRun !== undefined && typeof body.dryRun !== 'boolean') {
@@ -140,6 +118,18 @@ function postTestAlert(botOrGetter, deps = {}) {
 		if (body.includeEnrichment !== undefined && typeof body.includeEnrichment !== 'boolean') {
 			return sendErrorFrom(res, 400, {
 				error: 'includeEnrichment must be a boolean',
+				code: 'INVALID_REQUEST',
+			});
+		}
+		if (body.testMode !== undefined && typeof body.testMode !== 'boolean') {
+			return sendErrorFrom(res, 400, {
+				error: 'testMode must be a boolean',
+				code: 'INVALID_REQUEST',
+			});
+		}
+		if (body.testMode === true && body.includeEnrichment === true) {
+			return sendErrorFrom(res, 400, {
+				error: 'testMode cannot be combined with includeEnrichment',
 				code: 'INVALID_REQUEST',
 			});
 		}
@@ -156,6 +146,43 @@ function postTestAlert(botOrGetter, deps = {}) {
 					code: 'INVALID_REQUEST',
 				});
 			}
+		}
+		if (body.testMode === true && !dryRun) {
+			if (!Array.isArray(body.channels) || body.channels.length === 0) {
+				return sendErrorFrom(res, 400, {
+					error: 'testMode requires explicit channels and test destinations',
+					code: 'INVALID_REQUEST',
+				});
+			}
+			const destinationFields = { telegram: 'telegramChatId', whatsapp: 'whatsappChatId', discord: 'discordWebhookUrl' };
+			const missingChannel = body.channels.find((channel) => destinationFields[channel] && (!body[destinationFields[channel]] || !String(body[destinationFields[channel]]).trim()));
+			if (missingChannel) {
+				return sendErrorFrom(res, 400, {
+					error: `testMode requires ${destinationFields[missingChannel]} for ${missingChannel}`,
+					code: 'INVALID_REQUEST',
+				});
+			}
+		}
+		if (!dryRun || body.includeEnrichment === true) {
+			const now = Date.now();
+			const adminKey = getAdminKey(req);
+			const lastCallTime = adminRateLimits.get(adminKey);
+			if (lastCallTime && now - lastCallTime < RATE_LIMIT_WINDOW_MS) {
+				const retryAfterSeconds = Math.ceil((RATE_LIMIT_WINDOW_MS - (now - lastCallTime)) / 1000);
+				res.set('Retry-After', String(retryAfterSeconds));
+				return sendErrorFrom(res, 429, {
+					error: 'Rate limit exceeded. Test alert can only be called once per minute.',
+					code: 'RATE_LIMITED',
+					retryAfterSeconds,
+				});
+			}
+			if (!checkAndIncrementDailyLimit()) {
+				return sendErrorFrom(res, 429, {
+					error: `Daily test alert limit reached (${getDailyLimit()}).`,
+					code: 'RATE_LIMITED',
+				});
+			}
+			adminRateLimits.set(adminKey, now);
 		}
 
 		const includeEnrichment = body.includeEnrichment === true;
@@ -211,7 +238,8 @@ function postTestAlert(botOrGetter, deps = {}) {
 			channelsToUse = enabledChannels;
 		}
 
-		const alert = { text: alertText, source: 'test-alert' };
+		const testMode = body.testMode === true;
+		const alert = { text: testMode ? `[TEST] ${alertText}` : alertText, source: 'test-alert' };
 		let enrichmentApplied = false;
 		let tokenUsageJSON = null;
 
@@ -250,10 +278,12 @@ function postTestAlert(botOrGetter, deps = {}) {
 			: telegramFormatter.format(alert.text);
 		const whatsappText = alert.enriched && typeof alert.enriched === 'object'
 			? await whatsappFormatter.formatEnriched(alert.enriched)
-			: (typeof alert.text === 'string' ? alert.text : '');
-		const discordText = alert.enriched && typeof alert.enriched === 'object'
-			? await whatsappFormatter.formatEnriched(alert.enriched)
-			: alert.text;
+			: whatsappFormatter.format(alert.text);
+		const discordText = dryRun
+			? (typeof liveDiscordService?.formatAlert === 'function'
+				? await liveDiscordService.formatAlert(alert)
+				: whatsappText)
+			: null;
 
 		if (dryRun) {
 			const formatted = {};
@@ -266,6 +296,7 @@ function postTestAlert(botOrGetter, deps = {}) {
 					length: preview.length,
 					preview,
 					text: preview,
+					...(ch === 'discord' ? { payloads: splitMessageIntoChunks(preview, 2000).map((content) => ({ content })) } : {}),
 				};
 			}
 
@@ -281,6 +312,7 @@ function postTestAlert(botOrGetter, deps = {}) {
 				enrichmentApplied,
 				dryRun: true,
 				formatted,
+				markdownWarnings: MarkdownV2Formatter.findPotentialInvalidLines(telegramText),
 			});
 		}
 
@@ -321,7 +353,7 @@ function postTestAlert(botOrGetter, deps = {}) {
 		let persisted = false;
 		let alertId = uuidv4();
 
-		if (alertStorageService.isEnabled()) {
+		if (!testMode && alertStorageService.isEnabled()) {
 			const extracted = parseTradingViewSignal(alert.text) || { symbol: 'unknown', exchange: null };
 			try {
 				const storageTimeoutMs = 2000;
@@ -370,6 +402,7 @@ function postTestAlert(botOrGetter, deps = {}) {
 			ok,
 			alertId,
 			persisted,
+			testMode,
 			results,
 			tokenUsage: tokenUsageJSON,
 			enrichmentApplied,

@@ -952,7 +952,7 @@
           "Alerts"
         ],
         "summary": "Send a verification probe test alert",
-        "description": "Dispatches a synthetic test alert through enabled notification channels and persists to Firestore with source: test-alert. Supports dryRun=true to preview formatted text and validate channel readiness without dispatching or persisting. Rate-limited to 1 call per 60 seconds per admin caller and TEST_ALERT_DAILY_LIMIT.",
+        "description": "Dispatches a synthetic test alert through enabled notification channels. dryRun=true previews formatted text without dispatching or persisting; previews without enrichment do not consume the live-send quota. Live testMode=true requires explicit channels and a destination override for each selected channel, prefixes [TEST], and dispatches without alert-store persistence. Ordinary live probes persist with source: test-alert. Live sends and enriched previews are limited to 1 per 60 seconds per admin caller and TEST_ALERT_DAILY_LIMIT.",
         "operationId": "postTestAlert",
         "requestBody": {
           "$ref": "#/components/requestBodies/TestAlert"
@@ -11005,7 +11005,12 @@
           "dryRun": {
             "type": "boolean",
             "default": false,
-            "description": "If true, simulates formatting and channel routing without dispatching or persisting."
+            "description": "If true, simulates formatting and channel routing without dispatching or persisting. Only previews without enrichment bypass the live-send quota."
+          },
+          "testMode": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true on a live send, prefixes [TEST] and skips alert-store persistence. Requires explicit channels and the matching telegramChatId, whatsappChatId, or discordWebhookUrl override for every selected channel. Cannot be combined with includeEnrichment because enriched formatters replace the text marker."
           },
           "includeEnrichment": {
             "type": "boolean",
@@ -11047,6 +11052,15 @@
             "type": "boolean",
             "description": "True when executed as dry-run probe."
           },
+          "testMode": {
+            "type": "boolean",
+            "description": "True when the live send used the [TEST] marker and skipped alert-store persistence. Live testMode requires explicit channels and per-channel destination overrides."
+          },
+          "markdownWarnings": {
+            "type": "array",
+            "items": { "type": "integer", "minimum": 1 },
+            "description": "One-based Telegram preview lines with potentially invalid unescaped MarkdownV2 markup. Present on dry runs."
+          },
           "enrichmentApplied": {
             "type": "boolean",
             "description": "Whether enrichment was applied."
@@ -11059,7 +11073,7 @@
           "formatted": {
             "type": "object",
             "nullable": true,
-            "description": "Formatted text previews per channel when dryRun is true."
+            "description": "Formatted text previews per channel when dryRun is true. Discord also includes the ordered JSON content payloads after 2,000-character chunking."
           }
         }
       },

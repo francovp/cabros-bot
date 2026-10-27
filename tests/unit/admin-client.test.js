@@ -465,6 +465,67 @@ async function selectView(browser, name) {
 }
 
 describe('admin browser client', () => {
+	it('renders an alert preview without dispatching a live test send', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {
+				ok: true, dryRun: true, persisted: false,
+				formatted: { telegram: { text: 'BTC\\.USDT' } },
+			}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+		const form = findForm(browser.elementsById.view, 'Alert preview');
+		expect(form).toBeDefined();
+		expect(findAll(form, (node) => node.name === 'telegram')[0].type).toBe('checkbox');
+		form.elements.text.value = 'BTC.USDT';
+		await form.dispatch('submit');
+		await flush();
+		const calls = browser.context.fetch.mock.calls.filter(([url]) => url === '/api/admin/test-alert');
+		expect(calls).toHaveLength(1);
+		expect(JSON.parse(calls[0][1].body)).toEqual(expect.objectContaining({ text: 'BTC.USDT', dryRun: true, testMode: true }));
+		expect(form.textContent).toContain('BTC\\.USDT');
+	});
+
+	it('reports a failed test send even when the endpoint returns HTTP 200', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {
+				ok: false, dryRun: false, results: [{ channel: 'telegram', success: false, error: { code: 'DELIVERY_FAILED' } }],
+			}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+		const form = findForm(browser.elementsById.view, 'Alert preview');
+		form.elements.text.value = 'Test message';
+		form.elements.telegramChatId.value = '123456789';
+		await findButton(form, 'Send test').dispatch('click');
+		await flush();
+		expect(form.textContent).toContain('Test alert delivery failed');
+		expect(form.textContent).toContain('DELIVERY_FAILED');
+		expect(form.textContent).not.toContain('Test alert dispatched');
+	});
+
+	it('requires an explicit test destination before sending', async () => {
+		const browser = createBrowser({ storedKey: 'test-key', fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}) });
+		await flush();
+		await selectView(browser, 'alerts');
+		const form = findForm(browser.elementsById.view, 'Alert preview');
+		form.elements.text.value = 'Test message';
+		await findButton(form, 'Send test').dispatch('click');
+		await flush();
+		expect(form.textContent).toContain('Telegram test chat ID is required');
+		expect(browser.context.fetch.mock.calls.filter(([url]) => url === '/api/admin/test-alert')).toHaveLength(0);
+	});
+
+	it('renders the Alerts view when browser storage is blocked', async () => {
+		const browser = createBrowser({ fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}) });
+		Object.defineProperty(browser.context.window, 'localStorage', { get() { throw new Error('Storage blocked'); } });
+		await flush();
+		await selectView(browser, 'alerts');
+		expect(findForm(browser.elementsById.view, 'Alert preview')).toBeDefined();
+	});
+
 	it('uses visual controls instead of editable JSON throughout the console', async () => {
 		const browser = createBrowser({ fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}) });
 		await flush();
