@@ -10,6 +10,7 @@
 
 const Sentry = require('@sentry/node');
 const { SentryService, FEATURE_NAMES, shouldSendAlertContent } = require('../../src/services/monitoring/SentryService');
+const { getDeploymentIdentity } = require('../../src/lib/deploymentEnvironment');
 
 describe('SentryService', () => {
 	let service;
@@ -128,12 +129,16 @@ describe('SentryService', () => {
 				expect(release).toBe('cabros-bot@abc123d');
 			});
 
-			it('should return undefined when no release info available', () => {
+			it('should derive a release from the local git identity when deployment metadata is absent', () => {
 				delete process.env.SENTRY_RELEASE;
 				delete process.env.RENDER_GIT_COMMIT;
+				delete process.env.RENDER_GIT_REPO_SLUG;
+
+				const localGitSha = getDeploymentIdentity().gitSha;
+				expect(localGitSha).toMatch(/^[0-9a-f]{7,40}$/i);
 
 				const release = service._deriveRelease();
-				expect(release).toBeUndefined();
+				expect(release).toBe(`cabros-bot@${localGitSha.substring(0, 7)}`);
 			});
 		});
 
@@ -267,6 +272,54 @@ describe('SentryService', () => {
 			});
 		});
 
+		describe('runtime diagnostics', () => {
+			it('should expose effective routing and sampling without exposing DSN credentials', () => {
+				process.env.ENABLE_SENTRY = 'true';
+				process.env.SENTRY_DSN = 'https://public-key:private-secret@sentry.example:9000/prefix/4510434640330752?token=query-secret';
+				process.env.SENTRY_ENVIRONMENT = 'production';
+				process.env.SENTRY_RELEASE = 'cabros-bot@abc1234';
+				process.env.SENTRY_TRACES_SAMPLE_RATE = '0.25';
+
+				service.init();
+
+				const diagnostics = service.getRuntimeDiagnostics();
+				expect(diagnostics).toEqual({
+					initialized: true,
+					environment: 'production',
+					release: 'cabros-bot@abc1234',
+					tracesSampleRate: 0.25,
+					tracingEnabled: true,
+					dsnRouting: {
+						configured: true,
+						host: 'sentry.example:9000',
+						projectId: '4510434640330752',
+					},
+				});
+				expect(JSON.stringify(diagnostics)).not.toContain('public-key');
+				expect(JSON.stringify(diagnostics)).not.toContain('private-secret');
+				expect(JSON.stringify(diagnostics)).not.toContain('query-secret');
+			});
+
+			it('should report tracing disabled when the sample rate is missing or zero', () => {
+				process.env.ENABLE_SENTRY = 'true';
+				process.env.SENTRY_DSN = 'https://key@sentry.example/123';
+				delete process.env.SENTRY_TRACES_SAMPLE_RATE;
+				service.init();
+
+				expect(service.getRuntimeDiagnostics()).toMatchObject({
+					tracesSampleRate: null,
+					tracingEnabled: false,
+				});
+
+				process.env.SENTRY_TRACES_SAMPLE_RATE = '0';
+				service.init();
+				expect(service.getRuntimeDiagnostics()).toMatchObject({
+					tracesSampleRate: 0,
+					tracingEnabled: false,
+				});
+			});
+		});
+
 		describe('console log levels', () => {
 			it('should default to warn and error', () => {
 				delete process.env.SENTRY_CONSOLE_LOG_LEVELS;
@@ -325,6 +378,22 @@ describe('SentryService', () => {
 			const initOptions = Sentry.init.mock.calls[0][0];
 			expect(initOptions.tracesSampleRate).toBe(0.2);
 			expect(service.isTracingEnabled()).toBe(true);
+		});
+
+		it('should log profiling as disabled when its sample rate is zero', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '0.2';
+			process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE = '0';
+
+			const consoleInfo = jest.spyOn(console, 'info').mockImplementation(() => {});
+			try {
+				service.init();
+				expect(consoleInfo).toHaveBeenCalledWith(expect.stringContaining('profiling=disabled'));
+				expect(Sentry.init.mock.calls[0][0].profileSessionSampleRate).toBeUndefined();
+			} finally {
+				consoleInfo.mockRestore();
+			}
 		});
 
 		it('should enable Sentry logs for console warn and error', () => {
@@ -762,6 +831,17 @@ describe('SentryService', () => {
 			expect(Sentry.startInactiveSpan).not.toHaveBeenCalled();
 		});
 
+		it('should treat a zero trace sample rate as disabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '0';
+			service.init();
+
+			expect(service.isTracingEnabled()).toBe(false);
+			expect(service.startInactiveSpan({ name: 'test-span' })).toBeNull();
+			expect(Sentry.startInactiveSpan).not.toHaveBeenCalled();
+		});
+
 		it('should start inactive span when tracing is enabled', () => {
 			process.env.ENABLE_SENTRY = 'true';
 			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
@@ -891,6 +971,23 @@ describe('profiling configuration', () => {
 
 		expect(service.isProfilingEnabled()).toBe(false);
 	});
+
+		it('treats a zero profile sample rate as disabled', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			process.env.SENTRY_TRACES_SAMPLE_RATE = '1';
+			process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE = '0';
+			service.init();
+
+			expect(service.isProfilingEnabled()).toBe(false);
+			const initCall = Sentry.init.mock.calls[0][0];
+			expect(initCall.profileSessionSampleRate).toBeUndefined();
+			expect(initCall.profileLifecycle).toBeUndefined();
+			expect(initCall.integrations(['default-integration'])).toEqual([
+				'default-integration',
+				'console-logging-integration',
+			]);
+		});
 
 	it('isProfilingEnabled() should return false when tracing is disabled', () => {
 		process.env.ENABLE_SENTRY = 'true';

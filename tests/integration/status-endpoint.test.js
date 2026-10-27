@@ -35,6 +35,7 @@ const idempotencyStorageService = require('../../src/services/storage/Idempotenc
 const newsAnalysisStorageService = require('../../src/services/storage/NewsAnalysisStorageService');
 const promptReadiness = require('../../src/services/prompts/promptReadiness');
 const symbolAnalysisStorageService = require('../../src/services/storage/SymbolAnalysisStorageService');
+const sentryService = require('../../src/services/monitoring/SentryService');
 const { getRoutes } = require('../../src/routes');
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
@@ -245,6 +246,51 @@ describe('Status endpoints', () => {
 		expect(health.lastFailureAt).toBeNull();
 		expect(health.lastFailureCategory).toBeNull();
 		expectNullHealthFieldsAllowedBySchema(health);
+	});
+
+	it('exposes non-secret effective Sentry runtime diagnostics on protected status', async () => {
+		const runtimeDiagnostics = {
+			initialized: true,
+			environment: 'production',
+			release: 'cabros-bot@abc1234',
+			tracesSampleRate: 0.1,
+			tracingEnabled: true,
+			dsnRouting: {
+				configured: true,
+				host: 'o123.ingest.sentry.io',
+				projectId: '4510434640330752',
+			},
+		};
+		const spy = jest.spyOn(sentryService, 'getRuntimeDiagnostics').mockReturnValue(runtimeDiagnostics);
+		promptStatusSpies.push(spy);
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.sentry.runtime).toEqual(runtimeDiagnostics);
+		expect(response.text).not.toContain('dsn-secret');
+	});
+
+	it('reports profiling disabled when the effective trace sample rate is zero', async () => {
+		process.env.SENTRY_TRACES_SAMPLE_RATE = '0';
+		process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE = '0.5';
+		const profilingEnabledSpy = jest.spyOn(sentryService, 'isProfilingEnabled').mockReturnValue(false);
+		promptStatusSpies.push(profilingEnabledSpy);
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(sentryService.isProfilingEnabled).toHaveBeenCalled();
+		expect(response.body.dependencies.sentry.profiling).toEqual({
+			enabled: false,
+			configured: true,
+			ready: false,
+			status: 'disabled',
+		});
 	});
 
 	it('returns machine-readable status on /api/status', async () => {

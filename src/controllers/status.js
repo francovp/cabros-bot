@@ -486,14 +486,13 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 		enabled: firestoreJobStorageEnabled,
 		configured: firestore.configured,
 	});
-	const sentryProfilingEnabled = sentryEnabled
-		&& hasValue(process.env.SENTRY_DSN)
-		&& hasValue(process.env.SENTRY_TRACES_SAMPLE_RATE);
+	const sentryProfilingEnabled = sentryService.isProfilingEnabled();
 	const sentry = {
 		...dependencyStatus({
 			enabled: sentryEnabled,
 			configured: hasValue(process.env.SENTRY_DSN),
 		}),
+		runtime: sentryService.getRuntimeDiagnostics(),
 		profiling: dependencyStatus({
 			enabled: sentryProfilingEnabled,
 			configured: hasValue(process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE),
