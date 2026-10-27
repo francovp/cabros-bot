@@ -302,6 +302,18 @@ describe('Admin Test Alert Controller Unit Tests', () => {
 		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
 	});
 
+	it('rejects symbol routes that could bypass explicit test destinations', async () => {
+		req.body = {
+			text: 'BTCUSDT breakout', channels: ['telegram'], telegramChatId: '123456789', testMode: true,
+			symbolRoutes: { BTCUSDT: { channels: ['whatsapp'] } },
+		};
+		await postTestAlert()(req, res);
+		expect(res.statusCode).toBe(400);
+		expect(res.data.code).toBe('INVALID_REQUEST');
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(getRateLimitState().dailyRunsToday).toBe(0);
+	});
+
 	it('rejects enriched test mode when formatter output could lose the marker', async () => {
 		req.body = { text: 'BTCUSDT breakout', channels: ['telegram'], telegramChatId: '123456789', testMode: true, includeEnrichment: true };
 		await postTestAlert()(req, res);
@@ -441,6 +453,16 @@ describe('Admin Test Alert Controller Unit Tests', () => {
 		expect(res.data.formatted.discord.payloads).toEqual([
 			{ content: 'a'.repeat(2000) }, { content: 'a' },
 		]);
+	});
+
+	it('does not call an unselected Discord formatter during Telegram previews', async () => {
+		const formatAlert = jest.fn().mockRejectedValue(new Error('Discord formatter unavailable'));
+		mockNotificationManager.channels = new Map([['discord', { formatAlert }]]);
+		req.body = { text: 'Test message', dryRun: true, channels: ['telegram'] };
+		await postTestAlert()(req, res);
+		expect(res.statusCode).toBe(200);
+		expect(res.data.formatted).toHaveProperty('telegram');
+		expect(formatAlert).not.toHaveBeenCalled();
 	});
 
 	it('does not let Discord preview formatting block a live test send', async () => {

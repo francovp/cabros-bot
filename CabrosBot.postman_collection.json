@@ -22565,6 +22565,24 @@
               ],
               "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
             }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Invalid live test alert is rejected before delivery\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "  const data = pm.response.json();",
+                  "  pm.expect(data.code).to.eql(\"INVALID_REQUEST\");",
+                  "  pm.expect(data.success).to.eql(false);",
+                  "  pm.expect(data.requestId).to.be.a(\"string\");",
+                  "  pm.expect(data.retryable).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
           ]
         },
         {
@@ -22624,6 +22642,102 @@
                 }
               ],
               "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Invalid live test alert is rejected before delivery\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "  const data = pm.response.json();",
+                  "  pm.expect(data.code).to.eql(\"INVALID_REQUEST\");",
+                  "  pm.expect(data.success).to.eql(false);",
+                  "  pm.expect(data.requestId).to.be.a(\"string\");",
+                  "  pm.expect(data.retryable).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Test Alert (Symbol Routes In Test Mode - 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BTCUSDT breakout\",\n  \"channels\": [\n    \"telegram\"\n  ],\n  \"telegramChatId\": \"{{telegramSandboxChatId}}\",\n  \"testMode\": true,\n  \"symbolRoutes\": {\n    \"BTCUSDT\": {\n      \"channels\": [\n        \"whatsapp\"\n      ]\n    }\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/test-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "test-alert"
+              ]
+            },
+            "description": "Live testMode rejects symbolRoutes before quota or dispatch because symbol-level channels can bypass explicit test destinations."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Symbol Routes In Test Mode",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"error\": \"testMode does not support symbolRoutes\",\n  \"code\": \"INVALID_REQUEST\",\n  \"success\": false,\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Invalid live test alert is rejected before delivery\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "  const data = pm.response.json();",
+                  "  pm.expect(data.code).to.eql(\"INVALID_REQUEST\");",
+                  "  pm.expect(data.success).to.eql(false);",
+                  "  pm.expect(data.requestId).to.be.a(\"string\");",
+                  "  pm.expect(data.retryable).to.eql(false);",
+                  "});"
+                ]
+              }
             }
           ]
         },

@@ -150,6 +150,20 @@ describe('POST /api/admin/test-alert Integration', () => {
 		expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
 	});
 
+	it('rejects symbol routes on authenticated live test-mode sends', async () => {
+		const res = await request(app)
+			.post('/api/admin/test-alert')
+			.set('x-api-key', 'secret-operator-key')
+			.send({
+				text: 'BTCUSDT breakout', channels: ['telegram'], telegramChatId: '123456789', testMode: true,
+				symbolRoutes: { BTCUSDT: { channels: ['whatsapp'] } },
+			});
+		expect(res.status).toBe(400);
+		expect(res.body.code).toBe('INVALID_REQUEST');
+		expect(mockNotificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(alertStorageService.saveAlert).not.toHaveBeenCalled();
+	});
+
 	it('shortens citation URLs in dry-run previews using configured URL shortener', async () => {
 		const mockShortener = {
 			shortenUrlsParallel: jest.fn().mockResolvedValue({

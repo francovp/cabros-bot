@@ -952,7 +952,7 @@
           "Alerts"
         ],
         "summary": "Send a verification probe test alert",
-        "description": "Dispatches a synthetic test alert through enabled notification channels. dryRun=true previews formatted text without dispatching or persisting; previews without enrichment do not consume the live-send quota. Live testMode=true requires explicit channels and a destination override for each selected channel, prefixes [TEST], and dispatches without alert-store persistence. Ordinary live probes persist with source: test-alert. Live sends and enriched previews are limited to 1 per 60 seconds per admin caller and TEST_ALERT_DAILY_LIMIT.",
+        "description": "Dispatches a synthetic test alert through enabled notification channels. dryRun=true previews formatted text without dispatching or persisting; previews without enrichment do not consume the live-send quota. Live testMode=true requires explicit channels and a destination override for each selected channel, rejects symbolRoutes before dispatch, prefixes [TEST], and dispatches without alert-store persistence. Ordinary live probes persist with source: test-alert. Live sends and enriched previews are limited to 1 per 60 seconds per admin caller and TEST_ALERT_DAILY_LIMIT.",
         "operationId": "postTestAlert",
         "requestBody": {
           "$ref": "#/components/requestBodies/TestAlert"

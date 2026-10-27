@@ -148,6 +148,12 @@ function postTestAlert(botOrGetter, deps = {}) {
 			}
 		}
 		if (body.testMode === true && !dryRun) {
+			if (body.symbolRoutes !== undefined) {
+				return sendErrorFrom(res, 400, {
+					error: 'testMode does not support symbolRoutes',
+					code: 'INVALID_REQUEST',
+				});
+			}
 			if (!Array.isArray(body.channels) || body.channels.length === 0) {
 				return sendErrorFrom(res, 400, {
 					error: 'testMode requires explicit channels and test destinations',
@@ -279,7 +285,7 @@ function postTestAlert(botOrGetter, deps = {}) {
 		const whatsappText = alert.enriched && typeof alert.enriched === 'object'
 			? await whatsappFormatter.formatEnriched(alert.enriched)
 			: whatsappFormatter.format(alert.text);
-		const discordText = dryRun
+		const discordText = dryRun && channelsToUse.includes('discord')
 			? (typeof liveDiscordService?.formatAlert === 'function'
 				? await liveDiscordService.formatAlert(alert)
 				: whatsappText)
