@@ -346,7 +346,7 @@
             "status"
           ]
         },
-        "description": "Protected runtime status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. dependencies.newsMonitorDedup.cacheSize reports bounded in-memory cache and URL shortener entries, limits, and eviction counts. When ENABLE_FIREBASE_REMOTE_CONFIG=true, dependencies.firebaseRemoteConfig contains safe loader metadata only; disabled, stale, invalid, or unavailable remote values fall back to environment/default settings. TradingView MCP exposes sanitized lastErrorCategory and lastHttpStatusCode telemetry; terminal provider outages use provider_unavailable and do not consume same-operation retries."
+        "description": "Protected runtime status. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. dependencies.newsMonitorDedup.cacheSize reports bounded in-memory cache and URL shortener entries, limits, and eviction counts. When ENABLE_FIREBASE_REMOTE_CONFIG=true, dependencies.firebaseRemoteConfig contains safe loader metadata only; disabled, stale, invalid, or unavailable remote values fall back to environment/default settings. TradingView MCP exposes sanitized lastErrorCategory and lastHttpStatusCode telemetry; terminal provider outages use provider_unavailable and do not consume same-operation retries. dependencies.sentry.runtime reports effective environment/release/sample rate and sanitized DSN host/project routing; the DSN secret, path prefixes, and query parameters are omitted."
       },
       "response": [
         {
