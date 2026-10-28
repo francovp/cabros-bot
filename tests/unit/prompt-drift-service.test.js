@@ -12,7 +12,7 @@ describe('PromptDriftService', () => {
 					documents.set(id, data);
 				} }),
 				where: () => ({ orderBy: () => ({ limit: () => ({
-					get: async () => ({ docs: [...documents.values()].map(data => ({ data: () => data })) }),
+					get: async () => ({ docs: [...documents].map(([id, data]) => ({ id, data: () => data })) }),
 				}) }) }),
 			})),
 		};
@@ -31,6 +31,44 @@ describe('PromptDriftService', () => {
 			lastDriftDetectedAt: '2026-10-28T08:00:00.000Z',
 		});
 		expect([...documents.values()][0].expiresAt).toEqual(new Date('2026-11-27T08:00:00.000Z'));
+	});
+
+	it('deduplicates a status refresh that overlaps a drift write acknowledgement', async () => {
+		const documents = new Map();
+		let acknowledgeWrite;
+		const db = { collection: () => ({
+			doc: id => ({ create: data => {
+				documents.set(id, data);
+				return new Promise(resolve => { acknowledgeWrite = resolve; });
+			} }),
+			where: () => ({ orderBy: () => ({ limit: () => ({
+				get: async () => ({ docs: [...documents].map(([id, data]) => ({ id, data: () => data })) }),
+			}) }) }),
+		}) };
+		const service = new PromptDriftService({ getFirestore: () => db, now: () => new Date('2026-10-28T08:00:00.000Z') });
+		const write = service.record('alert-enrichment', 7);
+		await service.refresh();
+		acknowledgeWrite();
+		await write;
+		expect(service.getStatus()).toMatchObject({ durableReadReady: true, driftCount24h: 1 });
+	});
+
+	it('preserves a confirmed write when an older status refresh finishes afterward', async () => {
+		const documents = new Map();
+		let finishRead;
+		const db = { collection: () => ({
+			doc: id => ({ create: async data => { documents.set(id, data); } }),
+			where: () => ({ orderBy: () => ({ limit: () => ({ get: () => {
+				const docs = [...documents].map(([id, data]) => ({ id, data: () => data }));
+				return new Promise(resolve => { finishRead = () => resolve({ docs }); });
+			} }) }) }),
+		}) };
+		const service = new PromptDriftService({ getFirestore: () => db, now: () => new Date('2026-10-28T08:00:00.000Z') });
+		const read = service.refresh();
+		await service.record('alert-enrichment', 7);
+		finishRead();
+		await read;
+		expect(service.getStatus()).toMatchObject({ durableReadReady: true, driftCount24h: 1 });
 	});
 
 	it('keeps drift telemetry fail open when Firestore is unavailable', async () => {

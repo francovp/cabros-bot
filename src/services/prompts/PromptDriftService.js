@@ -32,6 +32,7 @@ class PromptDriftService {
 		this.readTimeoutMs = readTimeoutMs;
 		this.writeTimeoutMs = writeTimeoutMs;
 		this.events = new Map();
+		this.writeGeneration = 0;
 		this.lastRefreshAttemptMs = 0;
 		this.durableReadReady = false;
 	}
@@ -51,6 +52,7 @@ class PromptDriftService {
 			try {
 				await withinTimeout(firestore.collection(COLLECTION).doc(id).create(event), this.writeTimeoutMs);
 				this.events.set(id, event);
+				this.writeGeneration += 1;
 				return true;
 			} catch (error) {
 				if (error.code === 6 || error.code === 'already-exists') return true;
@@ -73,16 +75,21 @@ class PromptDriftService {
 				return false;
 			}
 			const since = new Date(nowMs - DAY_MS).toISOString();
+			const writeGenerationAtReadStart = this.writeGeneration;
 			const read = firestore.collection(COLLECTION)
 				.where('detectedAt', '>=', since)
 				.orderBy('detectedAt', 'desc')
 				.limit(MAX_RECENT_EVENTS)
 				.get();
 			const snapshot = await withinTimeout(read, this.readTimeoutMs);
-			this.events = new Map(snapshot.docs.map(doc => {
+			const refreshedEvents = new Map(snapshot.docs.map(doc => {
 				const event = doc.data();
-				return [`${event.promptName}:${event.version ?? 'unknown'}`, event];
+				return [doc.id, event];
 			}));
+			if (this.writeGeneration !== writeGenerationAtReadStart) {
+				for (const [id, event] of this.events) refreshedEvents.set(id, event);
+			}
+			this.events = refreshedEvents;
 			this.durableReadReady = snapshot.docs.length < MAX_RECENT_EVENTS;
 			return true;
 		} catch (error) {
