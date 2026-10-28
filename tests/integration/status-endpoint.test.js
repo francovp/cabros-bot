@@ -1324,6 +1324,28 @@ describe('Status endpoints', () => {
 		expect(JSON.stringify(response.body.dependencies.langfusePrompts)).not.toContain('pk-lf-status-public');
 	});
 
+	it('exposes sanitized durable prompt drift status on /api/status', async () => {
+		const { promptDriftService } = require('../../src/services/prompts/PromptDriftService');
+		promptStatusSpies.push(jest.spyOn(promptDriftService, 'refresh').mockResolvedValue(true));
+		promptStatusSpies.push(jest.spyOn(promptDriftService, 'getStatus').mockReturnValue({
+			durableReadReady: true,
+			driftCount24h: 2,
+			lastDriftDetectedAt: '2026-10-28T08:00:00.000Z',
+			lastDriftPromptName: 'alert-enrichment',
+		}));
+
+		const response = await request(app).get('/api/status').set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(promptDriftService.refresh).toHaveBeenCalled();
+		expect(response.body.dependencies.promptLifecycle).toEqual({
+			durableReadReady: true,
+			driftCount24h: 2,
+			lastDriftDetectedAt: '2026-10-28T08:00:00.000Z',
+			lastDriftPromptName: 'alert-enrichment',
+		});
+	});
+
 	it('exposes prompt-resolution telemetry on /api/capabilities with per-prompt resolved source', async () => {
 		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
 		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';

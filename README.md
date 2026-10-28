@@ -509,6 +509,8 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
 
 **`schemaDrift` is a rollout signal, not a failure.** A Langfuse `alert-enrichment` prompt that has not been republished after a local-fallback contract change (for example the #1031 reference anchors or the #1254 setup evidence and omission rubric) is reported under `dependencies.langfuse.schemaDrift` with the missing markers listed. Use the [`langfuse-prompt-sync`](.agents/skills/langfuse-prompt-sync/SKILL.md) skill to publish. `promptProvenance` on each stored enriched alert carries the same signal per record.
 
+Issue #750 adds `dependencies.promptLifecycle`: the last 24 hours of distinct drifted prompt-name/version transitions, loaded from Firestore across restarts. Drift emits a `prompt-drift` Sentry event and never supplies risk fields to signal-outcome analytics. `PROMPT_FALLBACK_ON_DRIFT=true` serves the local alert-enrichment prompt when drift is detected (default `false`; Firebase Remote Config eligible). The Firestore `promptDriftEvents.expiresAt` TTL is 30 days; deploy `firestore.indexes.json` to enable cleanup. Moving the Langfuse production label to a known-good version rolls back a remote prompt.
+
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
 | `ENABLE_LANGFUSE_PROMPTS` | `false` (`render.yaml`: `true` on web + jobs worker) | Master gate for Langfuse prompt resolution. Environment-only — a process-startup gate. |

@@ -250,6 +250,142 @@ describe('PromptService', () => {
 		}));
 	});
 
+	it('falls back to the local alert prompt when drift fallback is enabled', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.PROMPT_FALLBACK_ON_DRIFT = 'true';
+		const service = new PromptService({
+			logger,
+			clientProvider: jest.fn().mockResolvedValue({
+				prompt: { get: jest.fn().mockResolvedValue({
+					version: 42,
+					compile: jest.fn().mockReturnValue([{ role: 'user', content: 'Drifted remote prompt' }]),
+				}) },
+			}),
+		});
+
+		const prompt = await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'BTC signal' });
+
+		expect(prompt.source).toBe('local');
+		expect(prompt.schemaDriftDetected).toBe(false);
+		expect(service.getSchemaDriftStatus()['alert-enrichment:42']).toBeDefined();
+	});
+
+	it('honors a published Remote Config drift fallback over the environment', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.PROMPT_FALLBACK_ON_DRIFT = 'false';
+		const remoteConfig = require('../../src/services/remoteConfig/RemoteConfigService');
+		remoteConfig._setRemoteOverridesForTesting({ PROMPT_FALLBACK_ON_DRIFT: true });
+		try {
+			const service = new PromptService({
+				logger,
+				clientProvider: jest.fn().mockResolvedValue({ prompt: { get: jest.fn().mockResolvedValue({
+					version: 45,
+					compile: jest.fn().mockReturnValue([{ role: 'user', content: 'Drifted remote prompt' }]),
+				}) } }),
+			});
+			const prompt = await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'BTC signal' });
+			expect(prompt.source).toBe('local');
+		} finally {
+			remoteConfig._resetForTesting();
+		}
+	});
+
+	it('records one durable drift transition and Sentry signal without delaying prompt resolution', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		const record = jest.fn().mockResolvedValue(true);
+		const captureInfo = jest.fn();
+		const service = new PromptService({
+			logger,
+			driftService: { record },
+			sentry: { captureInfo },
+			clientProvider: jest.fn().mockResolvedValue({
+				prompt: { get: jest.fn().mockResolvedValue({
+					version: 43,
+					compile: jest.fn().mockReturnValue([{ role: 'user', content: 'Drifted remote prompt' }]),
+				}) },
+			}),
+		});
+
+		await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'BTC signal' });
+		await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'ETH signal' });
+
+		expect(record).toHaveBeenCalledTimes(1);
+		expect(record).toHaveBeenCalledWith('alert-enrichment', 43);
+		expect(captureInfo).toHaveBeenCalledWith(expect.objectContaining({ feature: 'prompt-drift' }));
+	});
+
+	it('still records durable drift when Sentry is unavailable', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		const record = jest.fn().mockResolvedValue(true);
+		const service = new PromptService({
+			logger,
+			driftService: { record },
+			sentry: { captureInfo: () => { throw new Error('Sentry offline'); } },
+			clientProvider: jest.fn().mockResolvedValue({ prompt: { get: jest.fn().mockResolvedValue({
+				version: 44,
+				compile: jest.fn().mockReturnValue([{ role: 'user', content: 'Drifted remote prompt' }]),
+			}) } }),
+		});
+
+		await expect(service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'BTC signal' }))
+			.resolves.toMatchObject({ source: 'langfuse', schemaDriftDetected: true });
+		expect(record).toHaveBeenCalledWith('alert-enrichment', 44);
+	});
+
+	it('retries failed drift signals after backoff until both channels succeed', async () => {
+		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
+		let clockMs = 1000;
+		const record = jest.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+		const captureInfo = jest.fn()
+			.mockReturnValueOnce({ captured: false })
+			.mockReturnValueOnce({ captured: true });
+		const service = new PromptService({
+			logger,
+			now: () => clockMs,
+			driftRetryMs: 60000,
+			driftService: { record },
+			sentry: { captureInfo },
+			clientProvider: jest.fn().mockResolvedValue({ prompt: { get: jest.fn().mockResolvedValue({
+				version: 46,
+				compile: jest.fn().mockReturnValue([{ role: 'user', content: 'Drifted remote prompt' }]),
+			}) } }),
+		});
+
+		await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'BTC signal' });
+		await require('../../src/lib/backgroundTaskTracker').waitForBackgroundTasks();
+		clockMs += 1000;
+		await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'ETH signal' });
+		expect(record).toHaveBeenCalledTimes(1);
+		expect(captureInfo).toHaveBeenCalledTimes(1);
+
+		clockMs += 60000;
+		await service.getChatPrompt(PromptKeys.ALERT_ENRICHMENT, { alertContext: 'SOL signal' });
+		await require('../../src/lib/backgroundTaskTracker').waitForBackgroundTasks();
+		expect(record).toHaveBeenCalledTimes(2);
+		expect(captureInfo).toHaveBeenCalledTimes(2);
+	});
+
+	it('retries failed drift telemetry even when no more prompts resolve', async () => {
+		jest.useFakeTimers();
+		try {
+			const record = jest.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+			const captureInfo = jest.fn().mockReturnValueOnce({ captured: false }).mockReturnValueOnce({ captured: true });
+			const service = new PromptService({
+				logger, driftRetryMs: 1000, driftService: { record }, sentry: { captureInfo },
+			});
+			service._recordDriftSignals('alert-enrichment', 47);
+			await require('../../src/lib/backgroundTaskTracker').waitForBackgroundTasks();
+			await jest.advanceTimersByTimeAsync(1000);
+			await require('../../src/lib/backgroundTaskTracker').waitForBackgroundTasks();
+			expect(record).toHaveBeenCalledTimes(2);
+			expect(captureInfo).toHaveBeenCalledTimes(2);
+			expect(jest.getTimerCount()).toBe(0);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
 	it('should detect missing evidence calibration guidance in remote prompts', async () => {
 		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
 

@@ -313,6 +313,12 @@
   ],
   "fieldOverrides": [
     {
+      "collectionGroup": "promptDriftEvents",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
       "collectionGroup": "binanceBracketOrders",
       "fieldPath": "expiresAt",
       "ttl": true,

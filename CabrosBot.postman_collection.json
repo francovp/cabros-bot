@@ -721,6 +721,44 @@
       ]
     },
     {
+      "name": "Get Status - prompt lifecycle drift",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{adminApiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/status",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "status"
+          ]
+        },
+        "description": "Protected status variant for distinct alert-enrichment prompt-name/version drift transitions. The 24-hour count persists in Firestore across restarts; the response contains no prompt text or credentials. The same dependency appears on /api/capabilities. durableReadReady=false means the count may be incomplete because the Firestore read has not succeeded."
+      },
+      "response": [
+        {
+          "name": "200 OK - no drift",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"dependencies\": {\n    \"promptLifecycle\": {\n      \"driftCount24h\": 0,\n      \"lastDriftDetectedAt\": null,\n      \"lastDriftPromptName\": null,\n      \"durableReadReady\": true\n    }\n  }\n}"
+        },
+        {
+          "name": "200 OK - drift detected",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"dependencies\": {\n    \"promptLifecycle\": {\n      \"driftCount24h\": 1,\n      \"lastDriftDetectedAt\": \"2026-10-28T08:00:00.000Z\",\n      \"lastDriftPromptName\": \"alert-enrichment\",\n      \"durableReadReady\": true\n    }\n  }\n}"
+        }
+      ]
+    },
+    {
       "name": "Get Status - signal classification population",
       "request": {
         "method": "GET",

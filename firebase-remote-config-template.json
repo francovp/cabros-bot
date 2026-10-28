@@ -1,5 +1,12 @@
 {
   "parameters": {
+    "PROMPT_FALLBACK_ON_DRIFT": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Use the local alert-enrichment prompt when the Langfuse version fails schema checks",
+      "valueType": "BOOLEAN"
+    },
     "NEWS_ALERT_THRESHOLD": {
       "defaultValue": {
         "value": "0.7"

@@ -1184,12 +1184,13 @@ function postAlert(botOrGetter) {
 							? alert.enriched.price_data.current_price
 							: null;
 
-					const riskMetadata = alert.enriched && typeof alert.enriched === 'object' ? {
-						invalidation_level: alert.enriched.invalidation_level !== undefined ? alert.enriched.invalidation_level : alert.enriched.invalidationLevel,
-						target_level: alert.enriched.target_level !== undefined ? alert.enriched.target_level : alert.enriched.targetLevel,
-						setup_type: alert.enriched.setup_type !== undefined ? alert.enriched.setup_type : alert.enriched.setupType,
-						risk_reward_ratio: alert.enriched.risk_reward_ratio !== undefined ? alert.enriched.risk_reward_ratio : alert.enriched.riskRewardRatio,
-					} : null;
+					const riskMetadata = alert.enriched && typeof alert.enriched === 'object'
+						&& alert.enriched.promptProvenance?.schemaDriftDetected !== true ? {
+							invalidation_level: alert.enriched.invalidation_level !== undefined ? alert.enriched.invalidation_level : alert.enriched.invalidationLevel,
+							target_level: alert.enriched.target_level !== undefined ? alert.enriched.target_level : alert.enriched.targetLevel,
+							setup_type: alert.enriched.setup_type !== undefined ? alert.enriched.setup_type : alert.enriched.setupType,
+							risk_reward_ratio: alert.enriched.risk_reward_ratio !== undefined ? alert.enriched.risk_reward_ratio : alert.enriched.riskRewardRatio,
+						} : null;
 
 					const stopLevel = riskMetadata && typeof riskMetadata.invalidation_level === 'number' && Number.isFinite(riskMetadata.invalidation_level) && riskMetadata.invalidation_level > 0
 						? riskMetadata.invalidation_level

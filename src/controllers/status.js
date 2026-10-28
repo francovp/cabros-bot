@@ -30,6 +30,7 @@ const { getAdminPagingStatus } = require('../services/notification/adminPagingSt
 const { deliveryMetricsService } = require('../services/notification/DeliveryMetricsService');
 const { firestoreWriteMetricsService, READ_HEALTH } = require('../services/storage/FirestoreWriteMetricsService');
 const { getPromptService } = require('../services/prompts');
+const { promptDriftService } = require('../services/prompts/PromptDriftService');
 const { signalClassMetrics } = require('../services/alerts/signalClassifier');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
 const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsAppService');
@@ -758,6 +759,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			backgroundTimers: getBackgroundTimerStats(),
 			sentry,
 			langfuse,
+			promptLifecycle: promptDriftService.getStatus(),
 			...(langfusePrompts ? { langfusePrompts } : {}),
 			braveSearch,
 			newsMonitor: {
@@ -920,6 +922,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 
 async function getApiStatus(req, res) {
 	try {
+		await promptDriftService.refresh();
 		if (
 			notificationRedriveService.isEnabled()
 			&& notificationRedriveService.getWorkerRole() !== 'disabled'
