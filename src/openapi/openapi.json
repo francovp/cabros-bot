@@ -7290,11 +7290,12 @@
               "$ref": "#/components/schemas/AlertRequest"
             },
             "example": {
-              "text": "BTCUSDT broke resistance with strong volume",
+              "text": "BINANCE:BTCUSDT broke resistance with strong volume",
               "channels": [
                 "telegram"
               ],
-              "telegramChatId": "-1001234567890"
+              "telegramChatId": "-1001234567890",
+              "requireWatchlistMatch": true
             }
           },
           "text/plain": {
@@ -7479,6 +7480,14 @@
                   "telegramChatId": "-1001234567890",
                   "telegramThreadId": 101,
                   "dryRun": true
+                }
+              },
+              "watchlist": {
+                "value": {
+                  "message": "BINANCE:BTCUSDT buy",
+                  "channels": ["telegram", "whatsapp"],
+                  "telegramChatId": "-1001234567890",
+                  "requireWatchlistMatch": true
                 }
               }
             },
@@ -9718,6 +9727,8 @@
             },
             "example": {
               "featureFlags": {
+                "watchlist": true,
+                "firestoreWatchlist": false,
                 "alertScheduler": false,
                 "alertHtfRender": true,
                 "binanceOrderAudit": false,
@@ -9733,6 +9744,12 @@
                 "telegramCommandRateLimiting": true
               },
               "dependencies": {
+                "watchlist": {
+                  "enabled": true,
+                  "mode": "memory",
+                  "readFailures": 0,
+                  "writeFailures": 0
+                },
                 "persistentWriteHealth": {
                   "window": {
                     "startedAt": "2026-10-12T00:00:00.000Z",
@@ -14775,6 +14792,11 @@
           "text"
         ],
         "properties": {
+          "requireWatchlistMatch": {
+            "type": "boolean",
+            "default": false,
+            "description": "Opt-in Telegram-only filtering for the resolved chat and known alert symbol. Missing watchlist, unknown symbol, or storage read failure allows delivery. WhatsApp and Discord are unchanged."
+          },
           "text": {
             "type": "string",
             "minLength": 1
@@ -14879,6 +14901,11 @@
           "message"
         ],
         "properties": {
+          "requireWatchlistMatch": {
+            "type": "boolean",
+            "default": false,
+            "description": "Opt-in Telegram-only filtering for the resolved chat and known message symbol. Missing watchlist, unknown symbol, or storage read failure allows delivery. WhatsApp and Discord are unchanged."
+          },
           "message": {
             "type": "string",
             "minLength": 1
@@ -19136,6 +19163,9 @@
               "backgroundTimers"
             ],
             "properties": {
+              "watchlist": {
+                "$ref": "#/components/schemas/WatchlistDependency"
+              },
               "tradingViewMcp": {
                 "$ref": "#/components/schemas/TradingViewMcpRuntimeStatus"
               },
@@ -22848,6 +22878,14 @@
           {
             "type": "object",
             "properties": {
+              "watchlist": {
+                "type": "boolean",
+                "description": "Per-chat Telegram watchlist commands and opt-in webhook filtering are available."
+              },
+              "firestoreWatchlist": {
+                "type": "boolean",
+                "description": "ENABLE_FIRESTORE_WATCHLIST is enabled."
+              },
               "presetBoundDestinations": {
                 "type": "boolean",
                 "description": "Preset routing supports bounded saved Telegram, WhatsApp, and Discord destinations."
@@ -22855,6 +22893,18 @@
             }
           }
         ]
+      },
+      "WatchlistDependency": {
+        "type": "object",
+        "description": "Process-local watchlist storage mode and failure counters. No chat IDs or symbols are exposed.",
+        "required": ["enabled", "mode", "readFailures", "writeFailures"],
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "mode": { "type": "string", "enum": ["memory", "firestore"] },
+          "readFailures": { "type": "integer", "minimum": 0 },
+          "writeFailures": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
       },
       "RequestValidationIssue": {
         "type": "object",

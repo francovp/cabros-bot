@@ -266,7 +266,7 @@ function escapeRegExp(value) {
  * @param {Object} symbolRoutes - Normalized `symbolRoutes` map from parseNotificationRouting.
  * @returns {Array<{symbol: string, channels: string[]|undefined}>} Ordered, deduplicated matches.
  */
-function resolveSymbolRouteDispatches(text, symbolRoutes, routing = {}) {
+function resolveSymbolRouteDispatches(text, symbolRoutes, routing = {}, includeRouteKeys = false) {
 	if (!symbolRoutes) {
 		return null;
 	}
@@ -330,6 +330,7 @@ function resolveSymbolRouteDispatches(text, symbolRoutes, routing = {}) {
 		}
 		seen.add(referenceKey);
 		dispatches.push({
+			...(includeRouteKeys ? { routeKey: referenceKey } : {}),
 			// Report the bare symbol (`NVDA`) even for an exchange-qualified route key
 			// (`NASDAQ:NVDA`) so delivery results stay readable and stable.
 			symbol: referenceKey.includes(':') ? referenceKey.split(':').pop() : referenceKey,

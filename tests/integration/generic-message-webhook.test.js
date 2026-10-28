@@ -6,9 +6,11 @@ const { getRoutes } = require('../../src/routes');
 const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+const { watchlistService } = require('../../src/services/watchlist/WatchlistService');
 
 jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	saveAlert: jest.fn().mockResolvedValue('stored-message-id'),
+	extractSymbolAndExchange: jest.requireActual('../../src/services/storage/AlertStorageService').extractSymbolAndExchange,
 }));
 
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
@@ -38,6 +40,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		jest.clearAllMocks();
 		resetNotificationManagerForTesting();
 		idempotencyService.clear();
+		watchlistService.lists.clear();
 
 		mockBot = {
 			telegram: {
@@ -120,6 +123,39 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			channels: ['telegram'],
 			deliveryResults: res.body.results,
 		}));
+	});
+
+	it('skips only Telegram when an opted-in known symbol misses the chat watchlist', async () => {
+		await watchlistService.add('123456789', ['BTCUSDT']);
+		const res = await request(app)
+			.post('/api/webhook/message').set('x-api-key', 'test-key')
+			.send({ message: 'BINANCE:ETHUSDT buy', requireWatchlistMatch: true })
+			.expect(200);
+		expect(res.body.results).toEqual(expect.arrayContaining([
+			expect.objectContaining({ channel: 'telegram', skipped: 'watchlist' }),
+			expect.objectContaining({ channel: 'whatsapp', success: true }),
+		]));
+		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+		expect(global.fetch).toHaveBeenCalledTimes(1);
+	});
+
+	it('rejects a non-boolean watchlist flag', async () => {
+		await request(app).post('/api/webhook/message').set('x-api-key', 'test-key')
+			.send({ message: 'BINANCE:ETHUSDT buy', requireWatchlistMatch: 'true' }).expect(400);
+		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+	});
+
+	it('applies the same Telegram-only watchlist gate to alert webhook', async () => {
+		await watchlistService.add('123456789', ['BTCUSDT']);
+		const res = await request(app)
+			.post('/api/webhook/alert').set('x-api-key', 'test-key')
+			.send({ text: 'BINANCE:ETHUSDT buy', requireWatchlistMatch: true })
+			.expect(200);
+		expect(res.body.results).toEqual(expect.arrayContaining([
+			expect.objectContaining({ channel: 'telegram', skipped: 'watchlist' }),
+			expect.objectContaining({ channel: 'whatsapp', success: true }),
+		]));
+		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
 	});
 
 	it('sends a message to whatsapp only', async () => {

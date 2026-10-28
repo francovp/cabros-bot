@@ -14,11 +14,11 @@ const {
 	parseNotificationRouting,
 	validateNotificationRouting,
 	assertChannelsAvailable,
-	sendWithNotificationRouting,
 	getRequestedChannels,
 	getDeliveredChannels,
 	resolveSymbolRouteDispatches,
 } = require('../../../../services/notification/requestRouting');
+const { validateWatchlistFlag, sendWithWatchlistRouting } = require('../../../../services/watchlist/watchlistRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { resolveDryRun } = require('../../../../lib/dryRunRequest');
@@ -613,6 +613,7 @@ function postAlert(botOrGetter) {
 		try {
 			const requestSpan = sentryService.getActiveSpan();
 			const routing = parseNotificationRouting(typeof body === 'object' ? body : undefined);
+			routing.requireWatchlistMatch = validateWatchlistFlag(body && body.requireWatchlistMatch);
 			const traderIntent = validateTraderIntent(
 				typeof body === 'object' && body ? body.traderIntent : undefined,
 			);
@@ -931,7 +932,7 @@ function postAlert(botOrGetter) {
 						parsedSignal,
 						alert,
 						routing: deliveryRouting,
-						deliver: async (overrides = {}) => sendWithNotificationRouting(
+						deliver: async (overrides = {}) => sendWithWatchlistRouting(
 							notificationManager,
 							overrides.alert || alert,
 							deliveryRouting,
@@ -964,7 +965,7 @@ function postAlert(botOrGetter) {
 			const keepFailedForRedrive = notificationRedriveService.isEnabled()
 			&& notificationRedriveService.getWorkerRole() !== 'disabled'
 			&& (notificationRedriveService.getWorkerRole() === 'web' || notificationRedriveService.hasDurableStore())
-			&& (results.some((result) => result && !result.success) || zeroChannelRedriveExpected);
+				&& (results.some((result) => result && !result.success && !result.skipped) || zeroChannelRedriveExpected);
 			// A reservation that notified nobody must not swallow the next real signal
 			// on another timeframe, unless the redrive queue owns the retry.
 			if (crossReservation && !keepFailedForRedrive) {
@@ -977,7 +978,7 @@ function postAlert(botOrGetter) {
 			}
 			if (reservation) {
 				const failedChannelNames = new Set(
-					results.filter((result) => result && !result.success).map((result) => result.channel),
+					results.filter((result) => result && !result.success && !result.skipped).map((result) => result.channel),
 				);
 				const supersededReservationChannels = new Set();
 				if (notificationRedriveService.isEnabled() && failedChannelNames.size > 0) {
