@@ -31,6 +31,7 @@ const SPECIAL_CHARS = [
 ];
 
 const { formatHtfAlignment } = require('./htfAlignmentFormatter');
+const { formatSignalClassMarker } = require('./signalClassMarker');
 
 /**
  * Normalize backslashes to avoid double-escaping
@@ -59,6 +60,30 @@ function smartEscapeMarkdownV2(text) {
 	// Escape only characters that are true markdown syntax elements
 	SPECIAL_CHARS.forEach(char => (text = text.replaceAll(char, `\\${char}`)));
 	return text;
+}
+
+function findPotentialInvalidLines(text = '') {
+	const reserved = new Set(SPECIAL_CHARS.filter((char) => char !== '\\'));
+	return String(text).split('\n').flatMap((line, index) => {
+		let escaped = false;
+		let punctuation = false;
+		let underscores = 0;
+		let asterisks = 0;
+		for (const char of line) {
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			if (char === '\\') {
+				escaped = true;
+				continue;
+			}
+			if (reserved.has(char)) punctuation = true;
+			if (char === '_') underscores += 1;
+			if (char === '*') asterisks += 1;
+		}
+		return punctuation || underscores % 2 || asterisks % 2 ? [index + 1] : [];
+	});
 }
 
 function formatTokenUsageMarkdown(tokenUsage) {
@@ -110,9 +135,11 @@ class MarkdownV2Formatter {
 	/**
    * Format text for Telegram MarkdownV2
    * @param {string} text - Raw or enriched alert text
+   * @param {Object} [options] - Additional formatting options
+   * @param {string} [options.signalClass] - Signal classification enum value
    * @returns {string} Formatted text with MarkdownV2 escaping
    */
-	format(text) {
+	format(text, options = {}) {
 		if (!text || typeof text !== 'string') {
 			return '';
 		}
@@ -121,30 +148,48 @@ class MarkdownV2Formatter {
 		const normalized = normalizeBackslashes(text);
 
 		// Escape MarkdownV2 special characters
-		return smartEscapeMarkdownV2(normalized);
+		const formatted = smartEscapeMarkdownV2(normalized);
+		const signalClass = options.signalClass;
+		const marker = formatSignalClassMarker(signalClass, { markdownV2: true });
+		let result = marker ? `${marker}\n\n${formatted}` : formatted;
+
+		const sessionVal = options.session;
+		if (sessionVal) {
+			const { formatSessionLine } = require('../../storage/EquitySessionService');
+			const sessionLine = formatSessionLine(sessionVal, { markdownV2: true });
+			if (sessionLine) {
+				result += `\n${sessionLine}`;
+			}
+		}
+
+		return result;
 	}
 
 	/**
    * Format an enriched alert with sentiment, insights, technical levels, and sources
    * Dispatches to specific formatter based on enriched data structure
    * @param {Object} enriched - Enriched alert object
+   * @param {Object} [options] - Additional formatting options
+   * @param {string} [options.signalClass] - Signal classification enum value
    * @returns {string} Formatted message with MarkdownV2 escaping
    */
-	formatEnriched(enriched = {}) {
+	formatEnriched(enriched = {}, options = {}) {
 		// Check for Feature 004 EnrichedAlert structure (has original_text or insights array)
 		if (enriched.original_text || (enriched.insights && Array.isArray(enriched.insights))) {
-			return this.formatWebhookAlert(enriched);
+			return this.formatWebhookAlert(enriched, options);
 		}
 		// Fallback to Feature 003 NewsAlert structure
-		return this.formatNewsAlert(enriched);
+		return this.formatNewsAlert(enriched, options);
 	}
 
 	/**
    * Format Feature 004 EnrichedAlert (Webhook)
    * @param {Object} enriched - EnrichedAlert object
+   * @param {Object} [options] - Additional formatting options
+   * @param {string} [options.signalClass] - Signal classification enum value
    * @returns {string} Formatted message
    */
-	formatWebhookAlert(enriched = {}) {
+	formatWebhookAlert(enriched = {}, options = {}) {
 		const {
 			original_text = '',
 			sentiment = 'NEUTRAL',
@@ -169,6 +214,12 @@ class MarkdownV2Formatter {
 		// Build the message
 		let message = `*${escapedText}*`;
 
+		const signalClass = options.signalClass || enriched.signalClass;
+		const marker = formatSignalClassMarker(signalClass, { markdownV2: true });
+		if (marker) {
+			message = `${marker}\n\n${message}`;
+		}
+
 		if (truncated) {
 			message += '\n\n_\\(Message was truncated due to length\\)_';
 		}
@@ -190,6 +241,15 @@ class MarkdownV2Formatter {
 		const htfLine = formatHtfAlignment(enriched);
 		if (htfLine) {
 			message += `\n${smartEscapeMarkdownV2(htfLine)}`;
+		}
+
+		const sessionVal = options.session || enriched.session;
+		if (sessionVal) {
+			const { formatSessionLine } = require('../../storage/EquitySessionService');
+			const sessionLine = formatSessionLine(sessionVal, { markdownV2: true });
+			if (sessionLine) {
+				message += `\n${sessionLine}`;
+			}
 		}
 
 		// Technical Levels
@@ -255,9 +315,11 @@ class MarkdownV2Formatter {
 	/**
    * Format Feature 003 NewsAlert (News Monitor)
    * @param {Object} enriched - NewsAlert enriched object
+   * @param {Object} [options] - Additional formatting options
+   * @param {string} [options.signalClass] - Signal classification enum value
    * @returns {string} Formatted message
    */
-	formatNewsAlert(enriched = {}) {
+	formatNewsAlert(enriched = {}, options = {}) {
 		const {
 			originalText = '',
 			summary = '',
@@ -268,11 +330,18 @@ class MarkdownV2Formatter {
 			timeHorizon,
 			invalidation_hint,
 			invalidationHint,
+			barriers,
 		} = enriched;
 
 		// Escape title
 		const escapedTitle = smartEscapeMarkdownV2(normalizeBackslashes(originalText));
 		let message = `*${escapedTitle}*`;
+
+		const signalClass = options.signalClass || enriched.signalClass;
+		const marker = formatSignalClassMarker(signalClass, { markdownV2: true });
+		if (marker) {
+			message = `${marker}\n\n${message}`;
+		}
 
 		// Summary - assume it contains some markdown (*Sentiment:*) but also dynamic text.
 		// We append it as is to preserve NewsAnalyzer formatting.
@@ -281,13 +350,13 @@ class MarkdownV2Formatter {
 		}
 
 		const horizonVal = time_horizon || timeHorizon;
+		const horizonLabels = {
+			very_short_term: 'Muy corto plazo',
+			short_term: 'Corto plazo',
+			medium_term: 'Medio plazo',
+			long_term: 'Largo plazo',
+		};
 		if (horizonVal && typeof horizonVal === 'string' && horizonVal.trim() && (!summary || !summary.includes('Horizonte:'))) {
-			const horizonLabels = {
-				very_short_term: 'Muy corto plazo',
-				short_term: 'Corto plazo',
-				medium_term: 'Medio plazo',
-				long_term: 'Largo plazo',
-			};
 			const horizonLabel = horizonLabels[horizonVal.toLowerCase()] || horizonVal;
 			message += `\n\n*Horizonte:* ${smartEscapeMarkdownV2(normalizeBackslashes(horizonLabel))}`;
 		}
@@ -295,6 +364,32 @@ class MarkdownV2Formatter {
 		const invalidationVal = invalidation_hint || invalidationHint;
 		if (invalidationVal && typeof invalidationVal === 'string' && invalidationVal.trim() && (!summary || !summary.includes('Invalidación:'))) {
 			message += `\n\n*Invalidación:* ${smartEscapeMarkdownV2(normalizeBackslashes(invalidationVal.trim()))}`;
+		}
+
+		// Surface derived-barrier provenance so traders know they are acting
+		// on a heuristic stop/target rather than provider-supplied levels.
+		// See issue #809 / CB-???.
+		if (barriers && barriers.source === 'derived') {
+			const horizonLabelForBarrier = horizonLabels[(barriers.timeHorizon || '').toLowerCase()]
+				|| barriers.timeHorizon
+				|| 'Corto plazo';
+			// Format the stop percentage without trailing decimals when the
+			// value is an integer (e.g. "2%" rather than "2.0%" so MarkdownV2
+			// escape does not produce "2\.0%"). Use one decimal otherwise.
+			let stopPctPercent = '?';
+			if (typeof barriers.stopPct === 'number') {
+				const pctValue = barriers.stopPct * 100;
+				if (Number.isInteger(pctValue)) {
+					stopPctPercent = String(pctValue);
+				} else {
+					stopPctPercent = pctValue.toFixed(1);
+				}
+			}
+			const rr = typeof barriers.rewardMultiplier === 'number'
+				? barriers.rewardMultiplier.toFixed(1)
+				: '?';
+			const escapedHorizon = smartEscapeMarkdownV2(normalizeBackslashes(String(horizonLabelForBarrier))).replaceAll('_', '\\_');
+			message += `\n\n_Niveles derivados \\(${escapedHorizon}, ${smartEscapeMarkdownV2(stopPctPercent)}% stop, R\\:R ${smartEscapeMarkdownV2(rr)}\\)_`;
 		}
 
 		// Citations
@@ -322,5 +417,12 @@ class MarkdownV2Formatter {
 	}
 }
 
+MarkdownV2Formatter.smartEscapeMarkdownV2 = smartEscapeMarkdownV2;
+MarkdownV2Formatter.formatSignalClassMarker = (signalClass, options = {}) => formatSignalClassMarker(signalClass, { markdownV2: true, ...options });
+
 module.exports = MarkdownV2Formatter;
+module.exports.smartEscapeMarkdownV2 = smartEscapeMarkdownV2;
+module.exports.findPotentialInvalidLines = findPotentialInvalidLines;
+module.exports.escapeRiskFieldValue = escapeRiskFieldValue;
+module.exports.formatSignalClassMarker = (signalClass, options = {}) => formatSignalClassMarker(signalClass, { markdownV2: true, ...options });
 

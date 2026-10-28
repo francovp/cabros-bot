@@ -354,6 +354,129 @@ describe('News Monitor Analyzer - Volume & RSI Filtering', () => {
 			expect(alert.stop).toBeUndefined();
 			expect(alert.target).toBeUndefined();
 		});
+
+		it('should MarkdownV2-escape reserved punctuation inside invalidation_hint', () => {
+			const geminiAnalysis = {
+				headline: 'Major breaking news',
+				event_category: 'price_surge',
+				sentiment_score: 0.8,
+				confidence: 0.9,
+				invalidation_hint: 'Reversal below (80,000).',
+			};
+
+			const alert = analyzer.buildAlert('BTCUSDT', geminiAnalysis, null);
+			const summary = alert.enriched.summary;
+			// Label markup must be preserved verbatim
+			expect(summary).toContain('*Invalidación:*');
+			// Reserved punctuation must be escaped so Telegram MarkdownV2 stays valid
+			expect(summary).toContain('\\(');
+			expect(summary).toContain('\\)');
+			expect(summary).toContain('\\.');
+			// The raw, unescaped hint remains available for downstream channels
+			expect(alert.enriched.invalidation_hint).toBe('Reversal below (80,000).');
+		});
+
+		it('should escape multiple reserved characters in invalidation_hint', () => {
+			const geminiAnalysis = {
+				headline: 'Major breaking news',
+				event_category: 'price_surge',
+				sentiment_score: 0.8,
+				confidence: 0.9,
+				invalidation_hint: 'Drop below 80,000! [confirmed]',
+			};
+
+			const alert = analyzer.buildAlert('BTCUSDT', geminiAnalysis, null);
+			const summary = alert.enriched.summary;
+			expect(summary).toContain('\\!');
+			expect(summary).toContain('\\[');
+			expect(summary).toContain('\\]');
+		});
+	});
+
+	describe('barriers provenance (issue #809 / CB-???)', () => {
+		const analyzer = new NewsAnalyzer();
+
+		it('preserves the full derived-barrier payload on the alert and enriched object', () => {
+			const geminiAnalysis = {
+				headline: 'Bullish breakout',
+				event_category: 'price_surge',
+				sentiment_score: 0.8,
+				confidence: 0.9,
+				time_horizon: 'short_term',
+			};
+			const marketContext = { price: 100, source: 'binance' };
+
+			const alert = analyzer.buildAlert('BTCUSDT', geminiAnalysis, marketContext);
+
+			expect(alert.barriers).toEqual({
+				stop: 98,
+				target: 103,
+				side: 'BUY',
+				stopPct: 0.02,
+				rewardMultiplier: 1.5,
+				source: 'derived',
+				timeHorizon: 'short_term',
+			});
+			expect(alert.enriched.barriers).toEqual(alert.barriers);
+		});
+
+		it('records SELL-derived barriers with stop>price, target<price, side=SELL', () => {
+			const geminiAnalysis = {
+				headline: 'Bearish drop',
+				event_category: 'price_decline',
+				sentiment_score: -0.8,
+				confidence: 0.9,
+				time_horizon: 'short_term',
+			};
+			const marketContext = { price: 100, source: 'binance' };
+
+			const alert = analyzer.buildAlert('BTCUSDT', geminiAnalysis, marketContext);
+
+			expect(alert.barriers.side).toBe('SELL');
+			expect(alert.barriers.stop).toBeGreaterThan(100);
+			expect(alert.barriers.target).toBeLessThan(100);
+			expect(alert.barriers.stopPct).toBeCloseTo(0.02, 5);
+			expect(alert.barriers.rewardMultiplier).toBe(1.5);
+			expect(alert.barriers.source).toBe('derived');
+		});
+
+		it('uses marketContext provenance when marketContext supplies stop/target even if deriveBarriers is non-null', () => {
+			const geminiAnalysis = {
+				headline: 'Major news',
+				event_category: 'public_figure',
+				sentiment_score: 0.8,
+				confidence: 0.9,
+				time_horizon: 'short_term',
+			};
+			const marketContext = {
+				price: 100,
+				source: 'binance',
+				stop: 95,
+				target: 110,
+			};
+
+			const alert = analyzer.buildAlert('BTCUSDT', geminiAnalysis, marketContext);
+
+			expect(alert.barriers).toEqual({ source: 'marketContext' });
+			expect(alert.stop).toBe(95);
+			expect(alert.target).toBe(110);
+		});
+
+		it('returns barriers=null when no price, no derived, no marketContext levels', () => {
+			const geminiAnalysis = {
+				headline: 'Low conviction event',
+				event_category: 'public_figure',
+				sentiment_score: 0.05,
+				confidence: 0.6,
+				time_horizon: 'short_term',
+			};
+
+			const alert = analyzer.buildAlert('BTCUSDT', geminiAnalysis, null);
+
+			expect(alert.barriers).toBeNull();
+			expect(alert.stop).toBeUndefined();
+			expect(alert.target).toBeUndefined();
+		});
 	});
 });
 

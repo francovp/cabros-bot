@@ -1,7 +1,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices, getNotificationManager } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, getNotificationManager, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { getCacheInstance } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 
@@ -37,12 +37,13 @@ describe('News Monitor dry-run mode', () => {
 			WHATSAPP_API_URL: 'https://api.greenapi.com/waInstance123/',
 			WHATSAPP_API_KEY: 'test-whatsapp-key',
 			WHATSAPP_CHAT_ID: '120363000000000000@g.us',
-			DISCORD_WEBHOOK_URL: 'https://discord.example/webhook',
+			DISCORD_WEBHOOK_URL: 'https://discord.com/api/webhooks/123456789012345678/token',
 			NEWS_ALERT_THRESHOLD: '0.7',
 			ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: 'false',
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 		signalOutcomeService.isEnabled.mockReturnValue(true);
 		signalOutcomeService.recordSignal.mockResolvedValue('outcome-id');
 
@@ -77,6 +78,7 @@ describe('News Monitor dry-run mode', () => {
 		};
 
 		await initializeNotificationServices(mockBot);
+		mockFetch.mockClear();
 		app.use('/api', getRoutes(mockBot));
 		originalDiscordEnabled = getNotificationManager().channels.get('discord').enabled;
 

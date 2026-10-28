@@ -33,6 +33,86 @@ describe('GeminiQuotaManager', () => {
 		expect(geminiQuotaManager.extractRetryDelayMs({}, 3, 1000)).toBe(4000);
 	});
 
+	it('clamps upstream retry delay to max cooldown ceiling across all delay sources', () => {
+		const defaultCeilingMs = 1800000; // 30 minutes default ceiling
+		// Source 1: error.retryDelay
+		expect(geminiQuotaManager.extractRetryDelayMs({ retryDelay: 86400000 })).toBe(defaultCeilingMs);
+		// Source 2: error.retryAfter
+		expect(geminiQuotaManager.extractRetryDelayMs({ retryAfter: 76680000 })).toBe(defaultCeilingMs);
+		// Source 3: regex retryDelay in error message (seconds)
+		expect(geminiQuotaManager.extractRetryDelayMs({ message: 'Resource exhausted: "retryDelay": "80000s"' })).toBe(defaultCeilingMs);
+		// Source 4: regex retry-after in error message
+		expect(geminiQuotaManager.extractRetryDelayMs({ message: 'Resource exhausted: "retry-after": "90000s"' })).toBe(defaultCeilingMs);
+	});
+
+	it('honours upstream retry delay when below max cooldown ceiling', () => {
+		expect(geminiQuotaManager.extractRetryDelayMs({ retryDelay: 15000 })).toBe(15000);
+		expect(geminiQuotaManager.extractRetryDelayMs({ retryAfter: 45000 })).toBe(45000);
+		expect(geminiQuotaManager.extractRetryDelayMs({ message: 'Resource exhausted: "retryDelay": "12s"' })).toBe(12000);
+	});
+
+	it('supports operator tunable max cooldown via setter and environment', () => {
+		geminiQuotaManager.setMaxCooldownMs(300000); // 5 minutes
+		expect(geminiQuotaManager.getMaxCooldownMs()).toBe(300000);
+
+		// An upstream delay of 10 minutes should be clamped to 5 minutes
+		expect(geminiQuotaManager.extractRetryDelayMs({ retryDelay: 600000 })).toBe(300000);
+		// An upstream delay of 2 minutes should be preserved
+		expect(geminiQuotaManager.extractRetryDelayMs({ retryDelay: 120000 })).toBe(120000);
+	});
+
+	it('preserves idempotent re-anchor when handling downstream rethrown error with remainingCooldownMs', () => {
+		jest.useFakeTimers();
+		const t0 = 1000000000000;
+		jest.setSystemTime(t0);
+
+		// Trigger initial 429 with 60s delay
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 60000 });
+		const initialUntil = geminiQuotaManager.quotaCooldownUntil;
+		expect(initialUntil).toBe(t0 + 60000);
+
+		// Advance time by 20s
+		jest.advanceTimersByTime(20000);
+		const remaining = geminiQuotaManager.getRemainingCooldownMs();
+		expect(remaining).toBe(40000);
+
+		// Downstream caller catches rethrown 429 with retryDelay = remainingCooldownMs and triggers again
+		geminiQuotaManager.extendQuotaCooldown({ status: 429, retryDelay: remaining });
+		expect(geminiQuotaManager.quotaCooldownUntil).toBe(initialUntil);
+
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: remaining });
+		expect(geminiQuotaManager.quotaCooldownUntil).toBe(initialUntil);
+		jest.useRealTimers();
+	});
+
+	it('shortens active cooldown duration immediately when maxCooldownMs is lowered', () => {
+		jest.useFakeTimers();
+		const t0 = 1000000000000;
+		jest.setSystemTime(t0);
+
+		// Trigger initial cooldown with 30-minute delay
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 1800000 });
+		expect(geminiQuotaManager.isCooldownActive()).toBe(true);
+
+		// Advance by 60s
+		jest.advanceTimersByTime(60000);
+		expect(geminiQuotaManager.getRemainingCooldownMs()).toBe(1740000);
+
+		// Operator lowers max cooldown to 120s (2 minutes)
+		geminiQuotaManager.setMaxCooldownMs(120000);
+
+		// Remaining cooldown should now reflect the lowered ceiling (120s - 60s elapsed = 60s remaining)
+		expect(geminiQuotaManager.getRemainingCooldownMs()).toBe(60000);
+		expect(geminiQuotaManager.isCooldownActive()).toBe(true);
+
+		// Advance past the lowered ceiling
+		jest.advanceTimersByTime(60001);
+		expect(geminiQuotaManager.isCooldownActive()).toBe(false);
+		expect(geminiQuotaManager.getRemainingCooldownMs()).toBe(0);
+		jest.useRealTimers();
+	});
+
+
 	it('activates and extends quota cooldown on 429 error', () => {
 		expect(geminiQuotaManager.isCooldownActive()).toBe(false);
 
@@ -63,7 +143,7 @@ describe('GeminiQuotaManager', () => {
 		expect(result).toBe(false);
 
 		await expect(
-			geminiQuotaManager.waitForCooldownIfNeeded({ maxWaitMs: 2000, throwOnExceeded: true })
+			geminiQuotaManager.waitForCooldownIfNeeded({ maxWaitMs: 2000, throwOnExceeded: true }),
 		).rejects.toThrow('Gemini quota cooldown');
 	});
 
@@ -121,6 +201,12 @@ describe('GeminiQuotaManager', () => {
 	it('returns initial snapshot when no cooldowns have occurred', () => {
 		const snapshot = geminiQuotaManager.getSnapshot();
 		expect(snapshot).toEqual({
+			windowStartedAt: null,
+			windowDurationMs: 60000,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			lastExhaustedAt: null,
+			quotaStatus: 'healthy',
 			cooldownActive: false,
 			remainingCooldownMs: 0,
 			lastTriggeredAt: null,
@@ -188,6 +274,12 @@ describe('GeminiQuotaManager', () => {
 		geminiQuotaManager.resetForTesting();
 
 		expect(geminiQuotaManager.getSnapshot()).toEqual({
+			windowStartedAt: null,
+			windowDurationMs: 60000,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			lastExhaustedAt: null,
+			quotaStatus: 'healthy',
 			cooldownActive: false,
 			remainingCooldownMs: 0,
 			lastTriggeredAt: null,
@@ -196,5 +288,88 @@ describe('GeminiQuotaManager', () => {
 			lastBraveFallbackAt: null,
 		});
 	});
-});
 
+	it('tracks Gemini requests and quota exhaustion in a bounded window', () => {
+		jest.useFakeTimers().setSystemTime(new Date('2026-08-25T10:00:00.000Z'));
+
+		geminiQuotaManager.recordRequest();
+		geminiQuotaManager.recordRequest();
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 0 });
+
+		expect(geminiQuotaManager.getSnapshot()).toEqual(expect.objectContaining({
+			windowStartedAt: '2026-08-25T10:00:00.000Z',
+			windowDurationMs: 60000,
+			requestsInWindow: 2,
+			exhaustedEventsInWindow: 1,
+			lastExhaustedAt: '2026-08-25T10:00:00.000Z',
+			quotaStatus: 'exhausted',
+		}));
+
+		jest.advanceTimersByTime(60001);
+
+		expect(geminiQuotaManager.getSnapshot()).toEqual(expect.objectContaining({
+			windowStartedAt: null,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			lastExhaustedAt: null,
+			quotaStatus: 'healthy',
+		}));
+	});
+
+	it('expires counters from the window start after a later quota exhaustion', () => {
+		jest.useFakeTimers().setSystemTime(new Date('2026-08-25T10:00:00.000Z'));
+
+		geminiQuotaManager.recordRequest();
+		jest.advanceTimersByTime(50000);
+		geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 0 });
+		jest.advanceTimersByTime(10001);
+
+		expect(geminiQuotaManager.getSnapshot()).toEqual(expect.objectContaining({
+			windowStartedAt: null,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			lastExhaustedAt: null,
+			quotaStatus: 'healthy',
+		}));
+	});
+
+	it('counts one quota exhaustion event once when the same error is retriggered', () => {
+		const error = { status: 429, retryDelay: 1000 };
+
+		geminiQuotaManager.triggerQuotaCooldown(error);
+		geminiQuotaManager.triggerQuotaCooldown(error);
+
+		expect(geminiQuotaManager.getSnapshot()).toEqual(expect.objectContaining({
+			exhaustedEventsInWindow: 1,
+			triggersTotal: 2,
+		}));
+	});
+
+	it('does not count a wrapped provider rejection twice', () => {
+		const providerError = { status: 429, retryDelay: 1000 };
+		const wrappedError = new Error('LLM call failed: RESOURCE_EXHAUSTED');
+
+		geminiQuotaManager.triggerQuotaCooldown(providerError);
+		geminiQuotaManager.markQuotaErrorCounted(wrappedError);
+		geminiQuotaManager.triggerQuotaCooldown(wrappedError);
+
+		expect(geminiQuotaManager.getSnapshot()).toEqual(expect.objectContaining({
+			exhaustedEventsInWindow: 1,
+			triggersTotal: 2,
+		}));
+	});
+
+	it('does not count synthetic cooldown errors as provider exhaustion events', () => {
+		const cooldownError = new Error('Gemini quota cooldown active (1000ms remaining)');
+		cooldownError.code = 'GEMINI_QUOTA_EXHAUSTED';
+		cooldownError.status = 429;
+		cooldownError.retryDelay = 1000;
+
+		geminiQuotaManager.triggerQuotaCooldown(cooldownError);
+
+		expect(geminiQuotaManager.getSnapshot()).toEqual(expect.objectContaining({
+			exhaustedEventsInWindow: 0,
+			quotaStatus: 'healthy',
+		}));
+	});
+});

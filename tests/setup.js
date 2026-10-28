@@ -4,6 +4,8 @@
 process.env = {
 	...process.env,
 	NODE_ENV: 'test',
+	// Legacy suites opt out explicitly; request-validation suites set true.
+	ENABLE_REQUEST_VALIDATION: 'false',
 	ENABLE_GEMINI_GROUNDING: 'true',
 	SEARCH_API_KEY: 'test-search-key',
 	SEARCH_CX: 'test-search-cx',
@@ -63,6 +65,7 @@ const createMockSpan = () => ({
 
 jest.mock('@sentry/node', () => ({
 	init: jest.fn(),
+	isEnabled: jest.fn(() => false),
 	consoleIntegration: jest.fn(() => 'console-breadcrumb-integration'),
 	consoleLoggingIntegration: jest.fn(() => 'console-logging-integration'),
 	startSpan: jest.fn((_options, callback) => callback(createMockSpan())),
@@ -81,6 +84,12 @@ jest.mock('@sentry/node', () => ({
 	setTag: jest.fn(),
 	setContext: jest.fn(),
 	setExtra: jest.fn(),
+	metrics: {
+		count: jest.fn(),
+		distribution: jest.fn(),
+		gauge: jest.fn(),
+		set: jest.fn(),
+	},
 }), { virtual: true });
 
 // Mock @sentry/profiling-node to prevent loading native binary in tests
@@ -93,8 +102,10 @@ jest.setTimeout(15000);
 
 const rateLimiter = require('../src/lib/rateLimiter');
 const geminiQuotaManager = require('../src/services/grounding/geminiQuotaManager');
+const { resetVolumeTrackerForTesting } = require('../src/controllers/webhooks/handlers/newsMonitor/volumeTracker');
 afterEach(() => {
 	rateLimiter.disableTestMode();
 	rateLimiter.reset();
 	geminiQuotaManager.resetForTesting();
+	resetVolumeTrackerForTesting();
 });
