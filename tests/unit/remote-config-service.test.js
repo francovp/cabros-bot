@@ -21,6 +21,18 @@ jest.mock('../../src/services/storage/firestoreConfig', () => ({
 describe('RemoteConfigService', () => {
 	let savedEnv;
 
+	it('bounds scanner sizing settings and publishes both template defaults', () => {
+		const template = JSON.parse(fs.readFileSync(path.join(__dirname, '../../firebase-remote-config-template.json'), 'utf8'));
+		for (const [key, value] of Object.entries({ SCANNER_ATR_MULTIPLIER: 2, SCANNER_ACCOUNT_RISK_PCT: 1 })) {
+			expect(remoteConfigService.PARAMETER_SCHEMA[key].defaultValue).toBe(value);
+			expect(template.parameters[key].defaultValue.value).toBe(String(value));
+		}
+		process.env.SCANNER_ATR_MULTIPLIER = 'Infinity';
+		process.env.SCANNER_ACCOUNT_RISK_PCT = '200';
+		expect(remoteConfigService.getRuntimeConfig().SCANNER_ATR_MULTIPLIER).toBe(2);
+		expect(remoteConfigService.getRuntimeConfig().SCANNER_ACCOUNT_RISK_PCT).toBe(1);
+	});
+
 	beforeEach(() => {
 		savedEnv = { ...process.env };
 		Object.keys(process.env).forEach((key) => delete process.env[key]);

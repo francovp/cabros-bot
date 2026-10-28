@@ -17,6 +17,7 @@ const {
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
+	resolvePositionSizingOptions,
 	recordMarketScannerOutcomes,
 } = require('../tradingview/marketScannerReport');
 const { enrichScannerItemsWithTrendConfluence } = require('../tradingview/marketScannerConfluence');
@@ -330,6 +331,7 @@ class JobService {
 			formatted.scanResults = this._compactScanResults(
 				job.fullScanResults,
 				job.requestMetadata?.ranked === true,
+				job.positionSizingOptions,
 			);
 		}
 
@@ -1373,11 +1375,13 @@ class JobService {
 			return;
 		}
 
+		job.positionSizingOptions = resolvePositionSizingOptions();
 		const alertText = buildMarketScannerReport(job.fullScanResults, {
 			exchange,
 			timeframe,
 			now: new Date(),
 			ranked: parsed.ranked === true,
+			...job.positionSizingOptions,
 		});
 		job.alertText = alertText;
 
@@ -1631,7 +1635,7 @@ class JobService {
 		});
 	}
 
-	_compactScanResults(results, includeScores = false) {
+	_compactScanResults(results, includeScores = false, positionSizingOptions = null) {
 		return results.map((result) => {
 			if (result.status === 'error' || result.status === 'timeout') {
 				return {
@@ -1648,11 +1652,12 @@ class JobService {
 			};
 
 			if (includeScores && Array.isArray(result.items) && result.items.length > 0) {
-				compact.scores = prepareMarketScannerItems(result, true).map((item) => ({
+				compact.scores = prepareMarketScannerItems(result, true, positionSizingOptions || resolvePositionSizingOptions()).map((item) => ({
 					symbol: item.symbol,
 					score: item._score,
 					reason: item._scoreReason,
 					...(item._trendConfluence ? { trendConfluence: item._trendConfluence } : {}),
+					...(item._positionSizing ? { positionSizing: item._positionSizing } : {}),
 				}));
 			}
 

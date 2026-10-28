@@ -702,6 +702,38 @@ describe('Market Scanner Alert endpoint', () => {
 		);
 	});
 
+	it('returns risk-targeted ATR sizing in ranked API and report', async () => {
+		tradingViewMcpService.callScanTool.mockResolvedValueOnce([{
+			symbol: 'BINANCE:BTCUSDT', changePercent: 4,
+			indicators: { close: 50000, RSI: 62, ATR: 1500 },
+		}]);
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.query({ dryRun: 'true' })
+			.send({ scans: ['top_gainers'], ranked: true })
+			.expect(200);
+		expect(res.body.scanResults[0].scores[0].positionSizing.suggestedPositionPct).toBe(16.67);
+		expect(res.body.payload.alertText).toContain('Pos: 16.67% @ 1.00% risk');
+	});
+
+	it('uses custom bounded scanner sizing settings consistently', async () => {
+		process.env.SCANNER_ATR_MULTIPLIER = '3';
+		process.env.SCANNER_ACCOUNT_RISK_PCT = '0.5';
+		tradingViewMcpService.callScanTool.mockResolvedValueOnce([{
+			symbol: 'BINANCE:BTCUSDT', changePercent: 4,
+			indicators: { close: 100, RSI: 62, ATR: 2 },
+		}]);
+		const res = await request(app)
+			.post('/api/webhook/market-scanner-alert')
+			.set('x-api-key', 'test-key')
+			.query({ dryRun: 'true' })
+			.send({ scans: ['top_gainers'], ranked: true })
+			.expect(200);
+		expect(res.body.scanResults[0].scores[0].positionSizing.suggestedPositionPct).toBe(8.33);
+		expect(res.body.payload.alertText).toContain('Pos: 8.33% @ 0.50% risk');
+	});
+
 	it('triggers consecutive_candles_scan with pattern_type, candle_count, and min_growth', async () => {
 		tradingViewMcpService.callScanTool.mockResolvedValueOnce([
 			{

@@ -427,6 +427,16 @@
       "description": "Rate limit ceiling in requests per minute for equity market data provider requests",
       "valueType": "NUMBER"
     },
+    "SCANNER_ATR_MULTIPLIER": {
+      "defaultValue": { "value": "2" },
+      "description": "ATR multiple for ranked scanner sizing stop distance (0.1-10)",
+      "valueType": "NUMBER"
+    },
+    "SCANNER_ACCOUNT_RISK_PCT": {
+      "defaultValue": { "value": "1" },
+      "description": "Target percent of capital at risk for ranked scanner hints (0.01-5)",
+      "valueType": "NUMBER"
+    },
     "NOTIFICATION_REDRIVE_INTERVAL_MS": {
       "defaultValue": {
         "value": "60000"

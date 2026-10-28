@@ -2,8 +2,15 @@ const {
 	normalizeTradingViewTimeframe,
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('./parseTradingViewSignal');
-const { rankScannerItems, resolveTrendConfluence, numberOrNull } = require('./marketScannerScoring');
+const {
+	rankScannerItems,
+	resolveTrendConfluence,
+	numberOrNull,
+	DEFAULT_ATR_MULTIPLIER,
+	DEFAULT_ACCOUNT_RISK_PCT,
+} = require('./marketScannerScoring');
 const { SCANNER_ERROR_CATEGORY_DISPLAY, isScannerErrorCategory } = require('./marketScannerErrorCategories');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const SUPPORTED_SCAN_TYPES = new Set([
 	'top_gainers',
@@ -310,6 +317,7 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 	const exchange = options.exchange || DEFAULT_EXCHANGE;
 	const timeframe = options.timeframe || '4h';
 	const ranked = options.ranked === true;
+	const positionSizingOptions = resolvePositionSizingOptions(options);
 
 	const lines = [
 		`📡 *SCANNER DE MERCADO — ${formatReportDate(now)}*`,
@@ -331,7 +339,7 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 			return;
 		}
 
-		const itemsToRender = prepareMarketScannerItems(scanResult, ranked);
+		const itemsToRender = prepareMarketScannerItems(scanResult, ranked, positionSizingOptions);
 
 		if (itemsToRender.length === 0) {
 			lines.push('No hay.');
@@ -339,14 +347,30 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 		}
 
 		itemsToRender.forEach((item, index) => {
-			lines.push(formatScanItem(item, index + 1, scanResult.scan, ranked));
+			lines.push(formatScanItem(item, index + 1, scanResult.scan, ranked, positionSizingOptions));
 		});
 	});
 
+	if (lines.some((line) => line.includes('Position Sizing'))) {
+		lines.push('');
+		lines.push('_Tamaño orientativo; verifica liquidez, comisiones y riesgo antes de operar._');
+	}
 	return lines.join('\n');
 }
 
-function prepareMarketScannerItems(scanResult = {}, ranked = false) {
+function resolvePositionSizingOptions(options = {}) {
+	const positiveOrDefault = (value, fallback) => {
+		const parsed = numberOrNull(value);
+		return parsed !== null && parsed > 0 ? parsed : fallback;
+	};
+	const config = getRuntimeConfig();
+	return {
+		atrMultiplier: positiveOrDefault(options.atrMultiplier ?? config.SCANNER_ATR_MULTIPLIER, DEFAULT_ATR_MULTIPLIER),
+		accountRiskPct: positiveOrDefault(options.accountRiskPct ?? config.SCANNER_ACCOUNT_RISK_PCT, DEFAULT_ACCOUNT_RISK_PCT),
+	};
+}
+
+function prepareMarketScannerItems(scanResult = {}, ranked = false, positionSizingOptions = {}) {
 	let itemsToRender = scanResult.items || [];
 	if (scanResult.scan === 'top_gainers') {
 		itemsToRender = itemsToRender.filter((item) => typeof item.changePercent === 'number' && item.changePercent > 0);
@@ -361,7 +385,7 @@ function prepareMarketScannerItems(scanResult = {}, ranked = false) {
 	}
 
 	if (ranked) {
-		itemsToRender = rankScannerItems(itemsToRender, scanResult.scan);
+		itemsToRender = rankScannerItems(itemsToRender, scanResult.scan, positionSizingOptions);
 	}
 
 	return itemsToRender;
@@ -401,7 +425,7 @@ function classifyRiskReward(ratio) {
 	return 'poor';
 }
 
-function formatScanItem(item, rank, scanType, ranked = false) {
+function formatScanItem(item, rank, scanType, ranked = false, positionSizingOptions = {}) {
 	const symbol = stripExchange(item.symbol);
 	const priceVal = numberOrNull(item.indicators?.close ?? null);
 	const price = formatCurrency(priceVal);
@@ -510,7 +534,21 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 		}
 	}
 
+	if (ranked && item._positionSizing) {
+		const sizingLine = formatPositionSizing(item._positionSizing, positionSizingOptions);
+		if (sizingLine) itemLine += `\n  - ${sizingLine}`;
+	}
 	return itemLine;
+}
+
+function formatPositionSizing(sizing, options = {}) {
+	const stop = numberOrNull(sizing?.suggestedStopPct);
+	const position = numberOrNull(sizing?.suggestedPositionPct);
+	if (stop === null || position === null) return null;
+	const multiplier = numberOrNull(options.atrMultiplier) || DEFAULT_ATR_MULTIPLIER;
+	const risk = numberOrNull(options.accountRiskPct) || DEFAULT_ACCOUNT_RISK_PCT;
+	const capped = position === 100 && stop < risk;
+	return `📏 *Position Sizing — ATR scenario:* ${formatNumber(multiplier, 1)}×ATR stop: ${formatNumber(stop, 2)}% | Pos: ${formatNumber(position, 2)}% @ ${capped ? '≤' : ''}${formatNumber(risk, 2)}% risk | Stop Loss anterior puede diferir`;
 }
 
 function formatTrendConfluence(trendConfluence = {}) {
@@ -895,6 +933,7 @@ module.exports = {
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
+	resolvePositionSizingOptions,
 	getRiskLevelsForSide,
 	getScanItemSide,
 	pickLevel,

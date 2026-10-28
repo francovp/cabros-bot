@@ -1863,6 +1863,24 @@ The market scanner accepts optional `includeMultiTimeframe` enrichment. When ena
 - `src/services/tradingview/marketScannerReport.js` — Request parsing and Telegram/WhatsApp report markers.
 - `tests/unit/market-scanner-scoring.test.js`, `tests/unit/market-scanner-report.test.js`, `tests/unit/market-scanner.test.js`, and `tests/integration/market-scanner-endpoint.test.js` — Scoring, rendering, fail-open, and endpoint coverage.
 
+## Volatility-Adjusted Position Sizing Hints (Issue #833)
+
+The market scanner ranked output exposes ATR-based position sizing hints. `suggestedPositionPct = min(100, accountRiskPct / suggestedStopPct * 100)` because all values use percentage units; the 100% cap avoids implying leverage. At a 6% stop and 1% risk target, the hint is 16.67% of capital. The hints are emitted only when `ranked=true`, the item carries a finite positive ATR and price, and the model stop is below 100% of entry; otherwise `positionSizing` is omitted without breaking the score or report. Async jobs snapshot effective sizing settings when the report is built so later Remote Config changes cannot alter the saved job's structured result. These are decision-support estimates and the report says to verify liquidity, fees, and risk before trading.
+
+**Core Components**:
+- `src/services/tradingview/marketScannerScoring.js` — New `computePositionSizing()` returns `{ atr, atrPercent, suggestedStopPct, suggestedPositionPct, minRiskRewardRatio }` and is attached to the score result. Exports `DEFAULT_ATR_MULTIPLIER` (2.0) and `DEFAULT_ACCOUNT_RISK_PCT` (1.0) as the documented defaults; both are overridable per call.
+- `src/services/tradingview/marketScannerReport.js` — Reads effective `SCANNER_ATR_MULTIPLIER` and `SCANNER_ACCOUNT_RISK_PCT` runtime settings, surfaces a `Position Sizing` line in ranked reports, and propagates the options through `prepareMarketScannerItems()` so scoring and rendering share the same inputs.
+- `src/controllers/webhooks/handlers/marketScanner/marketScanner.js` — `compactScanResults()` includes `positionSizing` in each `scores[]` entry when available, so the API response stays consistent with the rendered report.
+- `tests/unit/market-scanner-scoring.test.js`, `tests/unit/market-scanner-report.test.js`, and `tests/unit/job-service.test.js` — Cover risk math, input precedence, the unlevered cap, report wording, and async job projection.
+- `tests/integration/market-scanner-endpoint.test.js` — Verifies `positionSizing` and the configured settings flow through the endpoint contract.
+- `README.md`, `.env.example`, `src/openapi/openapi.json`, and `CabrosBot.postman_collection.json` — Document the new fields and env vars with default + valid-value guidance.
+
+**Configuration**:
+- `SCANNER_ATR_MULTIPLIER` — Stop distance in multiples of ATR (default: `2.0`, valid `0.1`–`10`). Firebase Remote Config supported.
+- `SCANNER_ACCOUNT_RISK_PCT` — Target account risk percentage per trade (default: `1.0`, valid `0.01`–`5`). Firebase Remote Config supported.
+
+No new endpoint, OpenAPI path, or Postman request was added. Ranked scan responses and notifications gain the sizing hint.
+
 ## Durable Scanner Preset Storage (CB-88 / Issue #219)
 
 Scanner presets support an independent `ENABLE_FIRESTORE_SCANNER_PRESETS=true` gate. `ScannerPresetService` reuses the lazy Firestore singleton, persists across service instances when available, and falls back to the in-memory `Map` on disabled, initialization, or write failure. Every scanner-preset CRUD success response exposes a non-sensitive `storage` object; `/api/status` and `/api/capabilities` expose the same effective state under `dependencies.scannerPresetStorage`, with `mode: durable|ephemeral` and `backend: firestore|memory`.
