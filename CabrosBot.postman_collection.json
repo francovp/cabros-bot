@@ -23047,7 +23047,7 @@
                 "test-alert"
               ]
             },
-            "description": "Preview formatting and validate channel readiness without dispatching messages or persisting to Firestore."
+            "description": "Preview Telegram, WhatsApp, and Discord formatting without dispatch, persistence, or live-send quota usage. Requires admin.operator."
           },
           "response": [
             {
@@ -23060,7 +23060,7 @@
                   "value": "application/json; charset=utf-8"
                 }
               ],
-              "body": "{\n  \"ok\": true,\n  \"alertId\": \"dryrun-test-alert-1700000000000-abcd1234\",\n  \"persisted\": false,\n  \"results\": [],\n  \"tokenUsage\": null,\n  \"enrichmentApplied\": false,\n  \"dryRun\": true,\n  \"formatted\": {\n    \"telegram\": {\n      \"length\": 26,\n      \"preview\": \"Dry run verification probe\",\n      \"text\": \"Dry run verification probe\"\n    }\n  }\n}",
+              "body": "{\n  \"ok\": true,\n  \"alertId\": \"dryrun-test-alert-1700000000000-abcd1234\",\n  \"persisted\": false,\n  \"results\": [],\n  \"tokenUsage\": null,\n  \"enrichmentApplied\": false,\n  \"dryRun\": true,\n  \"formatted\": {\n    \"telegram\": {\n      \"length\": 26,\n      \"preview\": \"Dry run verification probe\",\n      \"text\": \"Dry run verification probe\"\n    }\n  },\n  \"markdownWarnings\": []\n}",
               "originalRequest": {
                 "method": "POST",
                 "header": [
@@ -23103,6 +23103,390 @@
                 }
               ],
               "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Test Alert (Explicit Test Mode)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BTCUSDT breakout\",\n  \"channels\": [\n    \"telegram\"\n  ],\n  \"telegramChatId\": \"{{telegramSandboxChatId}}\",\n  \"testMode\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/test-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "test-alert"
+              ]
+            },
+            "description": "Send one [TEST] marked alert to the selected sandbox chat. The live-send rate limits apply; the alert is not saved to Firestore. Requires admin.operator."
+          },
+          "response": [
+            {
+              "name": "200 OK - Test Message Delivered",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"ok\": true,\n  \"alertId\": \"test-alert-uuid\",\n  \"persisted\": false,\n  \"testMode\": true,\n  \"results\": [\n    {\n      \"channel\": \"telegram\",\n      \"success\": true,\n      \"messageId\": \"msg-999\"\n    }\n  ],\n  \"dryRun\": false,\n  \"enrichmentApplied\": false,\n  \"tokenUsage\": null\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Explicit test send is not persisted\", function () {",
+                  "  pm.response.to.have.status(200);",
+                  "  const data = pm.response.json();",
+                  "  pm.expect(data.testMode).to.eql(true);",
+                  "  pm.expect(data.persisted).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Test Alert (Missing Test Destination - 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BTCUSDT breakout\",\n  \"channels\": [\n    \"telegram\"\n  ],\n  \"testMode\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/test-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "test-alert"
+              ]
+            },
+            "description": "A live testMode send needs an explicit destination for each selected channel. The server rejects this request before it consumes the live-send quota."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Missing Test Destination",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"error\": \"testMode requires telegramChatId for telegram\",\n  \"code\": \"INVALID_REQUEST\",\n  \"success\": false,\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Invalid live test alert is rejected before delivery\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "  const data = pm.response.json();",
+                  "  pm.expect(data.code).to.eql(\"INVALID_REQUEST\");",
+                  "  pm.expect(data.success).to.eql(false);",
+                  "  pm.expect(data.requestId).to.be.a(\"string\");",
+                  "  pm.expect(data.retryable).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Test Alert (Test Mode With Enrichment - 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BTCUSDT breakout\",\n  \"channels\": [\n    \"telegram\"\n  ],\n  \"telegramChatId\": \"{{telegramSandboxChatId}}\",\n  \"testMode\": true,\n  \"includeEnrichment\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/test-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "test-alert"
+              ]
+            },
+            "description": "Enrichment formatters replace the text marker, so testMode cannot be combined with includeEnrichment."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Incompatible Enrichment",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"error\": \"testMode cannot be combined with includeEnrichment\",\n  \"code\": \"INVALID_REQUEST\",\n  \"success\": false,\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Invalid live test alert is rejected before delivery\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "  const data = pm.response.json();",
+                  "  pm.expect(data.code).to.eql(\"INVALID_REQUEST\");",
+                  "  pm.expect(data.success).to.eql(false);",
+                  "  pm.expect(data.requestId).to.be.a(\"string\");",
+                  "  pm.expect(data.retryable).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Test Alert (Symbol Routes In Test Mode - 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BTCUSDT breakout\",\n  \"channels\": [\n    \"telegram\"\n  ],\n  \"telegramChatId\": \"{{telegramSandboxChatId}}\",\n  \"testMode\": true,\n  \"symbolRoutes\": {\n    \"BTCUSDT\": {\n      \"channels\": [\n        \"whatsapp\"\n      ]\n    }\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/test-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "test-alert"
+              ]
+            },
+            "description": "Live testMode rejects symbolRoutes before quota or dispatch because symbol-level channels can bypass explicit test destinations."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Symbol Routes In Test Mode",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"error\": \"testMode does not support symbolRoutes\",\n  \"code\": \"INVALID_REQUEST\",\n  \"success\": false,\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"retryable\": false\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Invalid live test alert is rejected before delivery\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "  const data = pm.response.json();",
+                  "  pm.expect(data.code).to.eql(\"INVALID_REQUEST\");",
+                  "  pm.expect(data.success).to.eql(false);",
+                  "  pm.expect(data.requestId).to.be.a(\"string\");",
+                  "  pm.expect(data.retryable).to.eql(false);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "POST Test Alert (Invalid Test Mode - 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BTCUSDT breakout\",\n  \"channels\": [\n    \"telegram\"\n  ],\n  \"testMode\": \"true\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/admin/test-alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "admin",
+                "test-alert"
+              ]
+            },
+            "description": "Reject a non-boolean testMode without dispatching. Requires admin.operator."
+          },
+          "response": [
+            {
+              "name": "400 Bad Request - Invalid Test Mode",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                {
+                  "key": "Content-Type",
+                  "value": "application/json; charset=utf-8"
+                }
+              ],
+              "body": "{\n  \"success\": false,\n  \"error\": \"testMode must be a boolean\",\n  \"code\": \"INVALID_REQUEST\",\n  \"retryable\": false,\n  \"requestId\": \"req-example\"\n}"
+            },
+            {
+              "name": "Request Timeout (408)",
+              "status": "Request Timeout",
+              "code": 408,
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ],
+              "body": "{\n  \"error\": \"Request Timeout\",\n  \"code\": \"REQUEST_TIMEOUT\",\n  \"requestId\": \"req-1726214400000-abcdef\",\n  \"deadlineMs\": 30000,\n  \"durationMs\": 30005\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Non-boolean testMode is rejected\", function () {",
+                  "  pm.response.to.have.status(400);",
+                  "  pm.expect(pm.response.json().code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ]
+              }
             }
           ]
         },

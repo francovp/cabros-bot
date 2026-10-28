@@ -200,6 +200,13 @@ textarea { resize: vertical; font-family: inherit; }
 .progress-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, var(--accent-strong), var(--accent)); transition: width var(--speed) ease; }
 .report-text { white-space: pre-wrap; overflow-wrap: anywhere; padding: 1rem; border-radius: var(--radius-md); background: #f8fafb; border: 1px solid var(--border); font-family: var(--font-mono); font-size: .82rem; line-height: 1.5; }
 .alert-card .alert-preview { margin: 0; color: #3e4f60; font-size: .88rem; line-height: 1.5; }
+.alert-preview-panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: 1rem; }
+.alert-preview-form fieldset { display: flex; flex-wrap: wrap; gap: .75rem; }
+.alert-preview-form fieldset label { display: inline-flex; align-items: center; gap: .35rem; }
+.alert-preview-panel { min-width: 0; padding: 1rem; border: 1px solid var(--border-color, #c8d2dd); border-radius: .5rem; }
+.alert-preview-panel pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.alert-preview-history { display: flex; flex-wrap: wrap; gap: .5rem; }
+.alert-preview-history h4 { flex-basis: 100%; }
 .active-filters { margin: 0; padding: .55rem .8rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--panel-soft); color: var(--muted); font-size: .82rem; font-family: var(--font-mono); }
 .badge-row { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; }
 .mono-line { display: flex; align-items: center; gap: .45rem; margin: .2rem 0 0; font-family: var(--font-mono); font-size: .78rem; color: #196c63; overflow-wrap: anywhere; }
