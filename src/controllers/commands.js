@@ -67,6 +67,7 @@ const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
 	scanner: { max: 3, windowMs: 3_600_000 },
 	noticias: { max: 3, windowMs: 3_600_000 },
 	preferencias: { max: 20, windowMs: 60_000 },
+	watchlist: { max: 20, windowMs: 60_000 },
 	filtro: { max: 20, windowMs: 60_000 },
 	silencio: { max: 20, windowMs: 60_000 },
 	umbral: { max: 20, windowMs: 60_000 },
