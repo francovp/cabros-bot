@@ -1,3 +1,32 @@
+## [LRN-20261029-234500-0001] correction
+
+**Logged**: 2026-10-29T23:45:00.000000Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+@gigachad-senior-dev correction on PR #1479 (fix(precio): preserve 2-decimal precision for crypto prices >= 1): The precision rule is intended for **all crypto symbols**, not a subset. The implementation uses `.toFixed(2)` for prices >= 1, but there is no test for the 0.9999 boundary (threshold is inclusive `>= 1`, so 0.9999 stays raw). Additionally, for sub-dollar prices (< 1), there is **no minimum decimal threshold implemented** — PEPE at 0.000000123 would render all 9 decimals with no cap or scientific notation guard.
+
+### Details
+```js
+// Current implementation at src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js
+// Line ~158: price < 1 passes data.price untouched, no decimal cap
+// No test for boundary 0.9999 -> 1.0000 transition
+```
+
+### Suggested Action
+Add a test for the 0.9999 boundary case. Consider adding a `toFixed(maxDecimals)` or `round10` with negative exponent for sub-dollar prices to prevent excessive decimal rendering.
+
+### Metadata
+- Source: github_review
+- Related Files: src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js
+- Tags: correction, feedback, price-precision, testing
+- See Also: https://github.com/francovp/cabros-bot/pull/1479
+- Pattern-Key: harden.feedback_response
+
+---
+
 ## [LRN-20261026-154500-0001] correction
 
 **Logged**: 2026-10-26T15:45:00.000000Z
