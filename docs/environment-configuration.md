@@ -126,7 +126,10 @@ Enabled in production (`render.yaml`: `value: true`, `previewValue: false` on th
 - `LANGFUSE_BASE_URL` - Langfuse base URL (default: `https://cloud.langfuse.com`). Must be an HTTP(S) URL; only its host is reported by `/api/status`. Environment-only: an external destination.
 - `LANGFUSE_PROMPT_LABEL` - Prompt label to fetch (default: `latest` in local/dev/test, `production` in production-like environments; `render.yaml` pins `production`). Environment-only.
 - `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` - Prompt cache TTL in seconds (default: `0` for `latest`, `60` for `production`; `render.yaml` pins `300`). Must be a non-negative integer. Environment-only.
+- `PROMPT_FALLBACK_ON_DRIFT` - When `true`, use the local `alert-enrichment` prompt if its Langfuse version lacks required schema or calibration markers. Default `false` keeps the existing remote-prompt behavior. Firebase Remote Config eligible: a non-secret runtime safety setting; the published template defaults to `false` and overrides the environment until changed and republished.
 - Optional local prompt overrides: `SEARCH_QUERY_PROMPT`, `GEMINI_SYSTEM_PROMPT`, `ALERT_ENRICHMENT_SYSTEM_PROMPT`, `NEWS_ANALYSIS_SYSTEM_PROMPT`, and `CONFIDENCE_ENRICHMENT_SYSTEM_PROMPT`. Unset values use the versioned local fallback files.
+
+`dependencies.promptLifecycle` on authenticated `/api/status` and `/api/capabilities` reports the distinct drifted prompt-name/version transitions detected in the last 24 hours, the latest timestamp, and the prompt name. `durableReadReady=false` means the bounded Firestore read has not succeeded, so the count may be incomplete. Each transition is stored once in Firestore `promptDriftEvents` with an `expiresAt` timestamp 30 days later; deploy `firestore.indexes.json` to enable native TTL. The count measures new drifted versions, not alert volume. Drift writes and Sentry reporting are fail open. Roll back a bad remote version by moving the Langfuse production label to a known-good version; enabling `PROMPT_FALLBACK_ON_DRIFT` is an additional local-file fallback.
 
 ##### Verifying Langfuse prompts are actually resolving
 

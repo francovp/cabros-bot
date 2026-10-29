@@ -15999,6 +15999,18 @@
           }
         }
       },
+      "PromptLifecycleDependency": {
+        "type": "object",
+        "description": "Durable distinct prompt-name/version drift transitions observed in the previous 24 hours. No prompt content or credentials are exposed.",
+        "required": ["durableReadReady", "driftCount24h", "lastDriftDetectedAt", "lastDriftPromptName"],
+        "properties": {
+          "durableReadReady": { "type": "boolean", "description": "True only after a successful bounded Firestore read in this process. False means the count may be incomplete." },
+          "driftCount24h": { "type": "integer", "minimum": 0 },
+          "lastDriftDetectedAt": { "type": ["string", "null"], "format": "date-time" },
+          "lastDriftPromptName": { "type": ["string", "null"] }
+        },
+        "additionalProperties": false
+      },
       "LangfusePromptDependency": {
         "type": "object",
         "description": "Langfuse dynamic prompt management. `configured` is credential shape only: a typo'd, revoked or wrong-project key satisfies it and can still resolve zero prompts. `PromptService` fails open to the local file on any remote failure, so before this contract a deployment that fell back on every alert reported the same `ready` verdict as a working one and the enablement was unverifiable. `ready` is therefore proven from observed resolutions. This is the fifth instance of the repository's 'shape is not readiness' rule, after `firebaseRemoteConfig.ready` (#598), Firestore `readHealth` (#1285), `equityMarketData.ready` (#1116) and `idempotencyStorage.ready` (#1111).",
@@ -19219,6 +19231,9 @@
               },
               "langfuse": {
                 "$ref": "#/components/schemas/LangfusePromptDependency"
+              },
+              "promptLifecycle": {
+                "$ref": "#/components/schemas/PromptLifecycleDependency"
               },
               "signalOutcomeWorker": {
                 "$ref": "#/components/schemas/SignalOutcomeWorker"

@@ -9,6 +9,7 @@ const sentryService = require('../../../../services/monitoring/SentryService');
 const { TokenUsageTracker, tokenCostBudgetService } = require('../../../../lib/tokenUsage');
 const { trackBackgroundTask } = require('../../../../lib/backgroundTaskTracker');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const { getCalibratedRiskMetadata } = require('../../../../services/prompts/promptRiskMetadata');
 const {
 	NotificationRoutingValidationError,
 	parseNotificationRouting,
@@ -1185,11 +1186,12 @@ function postAlert(botOrGetter) {
 							? alert.enriched.price_data.current_price
 							: null;
 
-					const riskMetadata = alert.enriched && typeof alert.enriched === 'object' ? {
-						invalidation_level: alert.enriched.invalidation_level !== undefined ? alert.enriched.invalidation_level : alert.enriched.invalidationLevel,
-						target_level: alert.enriched.target_level !== undefined ? alert.enriched.target_level : alert.enriched.targetLevel,
-						setup_type: alert.enriched.setup_type !== undefined ? alert.enriched.setup_type : alert.enriched.setupType,
-						risk_reward_ratio: alert.enriched.risk_reward_ratio !== undefined ? alert.enriched.risk_reward_ratio : alert.enriched.riskRewardRatio,
+					const safeRiskMetadata = getCalibratedRiskMetadata(alert.enriched);
+					const riskMetadata = safeRiskMetadata ? {
+						invalidation_level: safeRiskMetadata.invalidation_level !== undefined ? safeRiskMetadata.invalidation_level : safeRiskMetadata.invalidationLevel,
+						target_level: safeRiskMetadata.target_level !== undefined ? safeRiskMetadata.target_level : safeRiskMetadata.targetLevel,
+						setup_type: safeRiskMetadata.setup_type !== undefined ? safeRiskMetadata.setup_type : safeRiskMetadata.setupType,
+						risk_reward_ratio: safeRiskMetadata.risk_reward_ratio !== undefined ? safeRiskMetadata.risk_reward_ratio : safeRiskMetadata.riskRewardRatio,
 					} : null;
 
 					const stopLevel = riskMetadata && typeof riskMetadata.invalidation_level === 'number' && Number.isFinite(riskMetadata.invalidation_level) && riskMetadata.invalidation_level > 0

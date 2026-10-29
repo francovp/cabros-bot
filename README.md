@@ -511,15 +511,18 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
 
 **`schemaDrift` is a rollout signal, not a failure.** A Langfuse `alert-enrichment` prompt that has not been republished after a local-fallback contract change (for example the #1031 reference anchors or the #1254 setup evidence and omission rubric) is reported under `dependencies.langfuse.schemaDrift` with the missing markers listed. Use the [`langfuse-prompt-sync`](.agents/skills/langfuse-prompt-sync/SKILL.md) skill to publish. `promptProvenance` on each stored enriched alert carries the same signal per record.
 
+Issue #750 adds `dependencies.promptLifecycle`: the last 24 hours of distinct drifted prompt-name/version transitions, loaded from Firestore across restarts. Drift emits a `prompt-drift` Sentry event and never supplies risk fields to signal-outcome analytics. `PROMPT_FALLBACK_ON_DRIFT=true` serves the local alert-enrichment prompt when drift is detected (default `false`; Firebase Remote Config eligible). The Firestore `promptDriftEvents.expiresAt` TTL is 30 days; deploy `firestore.indexes.json` to enable cleanup. Moving the Langfuse production label to a known-good version rolls back a remote prompt.
+
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
 | `ENABLE_LANGFUSE_PROMPTS` | `false` (`render.yaml`: `true` on web + jobs worker) | Master gate for Langfuse prompt resolution. Environment-only — a process-startup gate. |
+| `PROMPT_FALLBACK_ON_DRIFT` | `false` | Boolean. Serve the local alert-enrichment prompt when Langfuse schema drift is detected; an active Firebase Remote Config value overrides the environment value. |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | — | Project credentials. **Secrets**: Render dashboard only, never a checked-in file. |
 | `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` | Region or self-hosted host. Environment-only — an external destination. |
 | `LANGFUSE_PROMPT_LABEL` | `production` in prod-like envs, `latest` elsewhere | Which label to fetch. Environment-only. |
 | `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` | `0` for `latest`, `60` otherwise (`render.yaml` pins `300`) | Langfuse SDK prompt cache TTL. Environment-only. |
 
-All five are **environment-only** for Remote Config parity: credentials are secrets, `LANGFUSE_BASE_URL` is an external destination, and the gate and label are resolved once at startup.
+The five Langfuse connection settings are **environment-only** for Remote Config parity: credentials are secrets, `LANGFUSE_BASE_URL` is an external destination, and the gate and label are resolved once at startup. `PROMPT_FALLBACK_ON_DRIFT` is a separate, non-secret runtime setting eligible for Remote Config.
 
 ### Equity Market Data Readiness
 

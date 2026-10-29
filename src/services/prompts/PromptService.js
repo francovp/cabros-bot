@@ -2,6 +2,7 @@ const {
 	isLangfusePromptManagementEnabled,
 	getLangfusePromptLabel,
 	getLangfusePromptCacheTtlSeconds,
+	shouldFallbackOnPromptDrift,
 } = require('./config');
 const {
 	getLangfuseClient,
@@ -18,6 +19,9 @@ const {
 	getPromptReadiness,
 	recordPromptReadinessSafely,
 } = require('./promptReadiness');
+const { promptDriftService } = require('./PromptDriftService');
+const sentryService = require('../monitoring/SentryService');
+const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 
 const REQUIRED_ALERT_ENRICHMENT_RISK_FIELDS = Object.freeze([
 	'invalidation_level',
@@ -222,9 +226,14 @@ async function fetchPromptFromClient(client, promptName, options) {
 }
 
 class PromptService {
-	constructor({ clientProvider = getLangfuseClient, logger = console } = {}) {
+	constructor({ clientProvider = getLangfuseClient, logger = console, driftService = promptDriftService, sentry = sentryService, now = Date.now, driftRetryMs = 60000 } = {}) {
 		this.clientProvider = clientProvider;
 		this.logger = logger;
+		this.driftService = driftService;
+		this.sentry = sentry;
+		this.now = now;
+		this.driftRetryMs = driftRetryMs;
+		this.driftSignals = new Map();
 		this.warningCache = new Set();
 		this.schemaDriftStatus = new Map();
 		this.telemetry = createEmptyTelemetry();
@@ -413,6 +422,39 @@ class PromptService {
 		this.logger.warn(message);
 	}
 
+	_recordDriftSignals(promptName, version) {
+		const key = `${promptName}:${version ?? 'unknown'}`;
+		let state = this.driftSignals.get(key);
+		if (!state) {
+			state = { sentryCaptured: false, sentryDisabled: false, persisted: false, storeUnconfigured: false, writePending: false, nextAttemptAt: 0 };
+			this.driftSignals.set(key, state);
+		}
+		if (((state.sentryCaptured || state.sentryDisabled) && (state.persisted || state.storeUnconfigured)) || this.now() < state.nextAttemptAt) return;
+		state.nextAttemptAt = this.now() + this.driftRetryMs;
+
+		if (!state.sentryCaptured && !state.sentryDisabled) {
+			try {
+				state.sentryDisabled = this.sentry.isEnabled?.() === false;
+				if (!state.sentryDisabled) state.sentryCaptured = this.sentry.captureInfo({
+					message: 'Langfuse prompt schema drift detected',
+					feature: 'prompt-drift',
+					extra: { promptName, version: version ?? null },
+				})?.captured === true;
+			} catch (error) {
+				this.logger.warn?.('[PromptService] Sentry drift signal unavailable');
+			}
+		}
+		if (!state.persisted && !state.storeUnconfigured && !state.writePending) {
+			state.writePending = true;
+			const task = Promise.resolve().then(() => this.driftService.record(promptName, version ?? null))
+				.then(result => { state.persisted = result === true; state.storeUnconfigured = result === null; }, () => {
+					this.logger.warn?.('[PromptService] Durable drift telemetry unavailable');
+				})
+				.finally(() => { state.writePending = false; });
+			trackBackgroundTask(task);
+		}
+	}
+
 	async resolvePrompt(promptKey, variables = {}, options = {}) {
 		const definition = getPromptDefinition(promptKey);
 
@@ -561,6 +603,10 @@ class PromptService {
 					`schema-drift:${driftKey}`,
 					`[PromptService] Langfuse prompt "${definition.name}" (version ${prompt.version}) missing required risk fields: ${riskSchemaCheck.missingRiskFields.join(', ') || 'none'}; missing calibration guidance: ${riskSchemaCheck.missingCalibrationGuidance.join(', ') || 'none'}. Downstream risk coverage may be degraded.`,
 				);
+				this._recordDriftSignals(definition.name, prompt.version ?? null);
+				if (shouldFallbackOnPromptDrift()) {
+					return null;
+				}
 			}
 
 			const metadata = {
