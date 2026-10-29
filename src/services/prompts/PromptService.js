@@ -426,29 +426,16 @@ class PromptService {
 		const key = `${promptName}:${version ?? 'unknown'}`;
 		let state = this.driftSignals.get(key);
 		if (!state) {
-			state = { sentryCaptured: false, persisted: false, writePending: false, nextAttemptAt: 0, retriesScheduled: 0, retryTimer: null };
+			state = { sentryCaptured: false, sentryDisabled: false, persisted: false, storeUnconfigured: false, writePending: false, nextAttemptAt: 0 };
 			this.driftSignals.set(key, state);
 		}
-		const scheduleRetry = () => {
-			if (state.sentryCaptured && state.persisted) {
-				if (state.retryTimer) clearTimeout(state.retryTimer);
-				state.retryTimer = null;
-				return;
-			}
-			if (state.retryTimer || state.retriesScheduled >= 2) return;
-			state.retriesScheduled += 1;
-			state.retryTimer = setTimeout(() => {
-				state.retryTimer = null;
-				this._recordDriftSignals(promptName, version);
-			}, Math.max(0, state.nextAttemptAt - this.now()));
-			state.retryTimer.unref?.();
-		};
-		if ((state.sentryCaptured && state.persisted) || this.now() < state.nextAttemptAt) return;
+		if (((state.sentryCaptured || state.sentryDisabled) && (state.persisted || state.storeUnconfigured)) || this.now() < state.nextAttemptAt) return;
 		state.nextAttemptAt = this.now() + this.driftRetryMs;
 
-		if (!state.sentryCaptured) {
+		if (!state.sentryCaptured && !state.sentryDisabled) {
 			try {
-				state.sentryCaptured = this.sentry.captureInfo({
+				state.sentryDisabled = this.sentry.isEnabled?.() === false;
+				if (!state.sentryDisabled) state.sentryCaptured = this.sentry.captureInfo({
 					message: 'Langfuse prompt schema drift detected',
 					feature: 'prompt-drift',
 					extra: { promptName, version: version ?? null },
@@ -457,16 +444,14 @@ class PromptService {
 				this.logger.warn?.('[PromptService] Sentry drift signal unavailable');
 			}
 		}
-		if (!state.persisted && !state.writePending) {
+		if (!state.persisted && !state.storeUnconfigured && !state.writePending) {
 			state.writePending = true;
 			const task = Promise.resolve().then(() => this.driftService.record(promptName, version ?? null))
-				.then(result => { state.persisted = result === true; }, () => {
+				.then(result => { state.persisted = result === true; state.storeUnconfigured = result === null; }, () => {
 					this.logger.warn?.('[PromptService] Durable drift telemetry unavailable');
 				})
-				.finally(() => { state.writePending = false; scheduleRetry(); });
+				.finally(() => { state.writePending = false; });
 			trackBackgroundTask(task);
-		} else {
-			scheduleRetry();
 		}
 	}
 

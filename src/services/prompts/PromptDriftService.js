@@ -40,7 +40,7 @@ class PromptDriftService {
 	async record(promptName, version) {
 		try {
 			const firestore = this.getFirestore();
-			if (!firestore) return false;
+			if (!firestore) return null;
 			const detectedAt = this.now();
 			const id = crypto.createHash('sha256').update(JSON.stringify([promptName, version ?? null])).digest('hex');
 			const event = {

@@ -366,20 +366,38 @@ describe('PromptService', () => {
 		expect(captureInfo).toHaveBeenCalledTimes(2);
 	});
 
-	it('retries failed drift telemetry even when no more prompts resolve', async () => {
+	it('does not leave delayed drift work after prompt resolution', async () => {
 		jest.useFakeTimers();
 		try {
-			const record = jest.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
-			const captureInfo = jest.fn().mockReturnValueOnce({ captured: false }).mockReturnValueOnce({ captured: true });
+			const record = jest.fn().mockResolvedValue(false);
+			const captureInfo = jest.fn().mockReturnValue({ captured: false });
 			const service = new PromptService({
 				logger, driftRetryMs: 1000, driftService: { record }, sentry: { captureInfo },
 			});
 			service._recordDriftSignals('alert-enrichment', 47);
 			await require('../../src/lib/backgroundTaskTracker').waitForBackgroundTasks();
 			await jest.advanceTimersByTimeAsync(1000);
+			expect(record).toHaveBeenCalledTimes(1);
+			expect(captureInfo).toHaveBeenCalledTimes(1);
+			expect(jest.getTimerCount()).toBe(0);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	it('does not schedule retries when drift telemetry providers are not configured', async () => {
+		jest.useFakeTimers();
+		try {
+			const record = jest.fn().mockResolvedValue(null);
+			const captureInfo = jest.fn();
+			const service = new PromptService({
+				logger, driftRetryMs: 1000, driftService: { record },
+				sentry: { isEnabled: () => false, captureInfo },
+			});
+			service._recordDriftSignals('alert-enrichment', 48);
 			await require('../../src/lib/backgroundTaskTracker').waitForBackgroundTasks();
-			expect(record).toHaveBeenCalledTimes(2);
-			expect(captureInfo).toHaveBeenCalledTimes(2);
+			expect(record).toHaveBeenCalledTimes(1);
+			expect(captureInfo).not.toHaveBeenCalled();
 			expect(jest.getTimerCount()).toBe(0);
 		} finally {
 			jest.useRealTimers();

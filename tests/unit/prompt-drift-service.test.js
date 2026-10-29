@@ -78,6 +78,11 @@ describe('PromptDriftService', () => {
 		expect(service.getStatus().durableReadReady).toBe(false);
 	});
 
+	it('distinguishes unconfigured Firestore from a transient write failure', async () => {
+		const service = new PromptDriftService({ getFirestore: () => null });
+		await expect(service.record('alert-enrichment', 3)).resolves.toBe(null);
+	});
+
 	it('bounds a stalled Firestore status read', async () => {
 		const db = { collection: () => ({
 			where: () => ({ orderBy: () => ({ limit: () => ({ get: () => new Promise(() => {}) }) }) }),
