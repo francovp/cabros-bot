@@ -24,6 +24,13 @@ describe('watchlist webhook routing', () => {
 		expect(manager.sendToAll).not.toHaveBeenCalled();
 	});
 
+	it('suppresses an unmatched recognized slash pair', async () => {
+		const results = await sendWithWatchlistRouting(manager, { text: 'ETH/USDT breakout' },
+			{ requireWatchlistMatch: true, telegramChatId: '12345' }, {}, service);
+		expect(results).toEqual([{ channel: 'whatsapp', success: true },
+			{ channel: 'telegram', success: false, skipped: 'watchlist' }]);
+	});
+
 	it('retains broadcast for an unknown symbol or disabled flag', async () => {
 		await sendWithWatchlistRouting(manager, { text: 'market update' },
 			{ requireWatchlistMatch: true, telegramChatId: '12345' }, {}, service);

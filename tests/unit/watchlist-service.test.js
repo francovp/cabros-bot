@@ -82,6 +82,46 @@ describe('WatchlistService', () => {
 		expect(get).toHaveBeenCalledTimes(2);
 	});
 
+	it('matches a recognized slash pair against its compact watchlist symbol', async () => {
+		await service.add('12345', ['BTCUSDT']);
+		expect(await service.matches('12345', 'BTC/USDT')).toBe(true);
+		expect(await service.matches('12345', 'ETH/USDT')).toBe(false);
+		expect(await service.matches('12345', 'BINANCE:BTC/USDT')).toBe(true);
+	});
+
+	it('lets clear supersede an outage addition that exceeds the persisted limit', async () => {
+		let stored = Array.from({ length: 50 }, (_, index) => `COIN${index}`);
+		const firestore = { collection: () => ({ doc: () => ({}) }),
+			runTransaction: jest.fn().mockRejectedValueOnce(new Error('unavailable')).mockImplementation(async (callback) => callback({
+				get: async () => ({ exists: true, data: () => ({ symbols: stored }) }),
+				set: (_doc, data) => { stored = data.symbols; },
+				delete: () => { stored = []; },
+			})),
+		};
+		service = new WatchlistService({ firestoreEnabled: true, getFirestore: () => firestore });
+		await service.add('12345', ['NEWCOIN']);
+		await expect(service.clear('12345')).resolves.toEqual([]);
+		expect(stored).toEqual([]);
+		expect(service.dirty.has('12345')).toBe(false);
+	});
+
+	it('lets removal repair an outage addition that exceeds the persisted limit', async () => {
+		let stored = Array.from({ length: 50 }, (_, index) => `COIN${index}`);
+		const firestore = { collection: () => ({ doc: () => ({}) }),
+			runTransaction: jest.fn().mockRejectedValueOnce(new Error('unavailable')).mockImplementation(async (callback) => callback({
+				get: async () => ({ exists: true, data: () => ({ symbols: stored }) }),
+				set: (_doc, data) => { stored = data.symbols; },
+				delete: () => { stored = []; },
+			})),
+		};
+		service = new WatchlistService({ firestoreEnabled: true, getFirestore: () => firestore });
+		await service.add('12345', ['NEWCOIN']);
+		await expect(service.remove('12345', ['COIN0'])).resolves.toContain('NEWCOIN');
+		expect(stored).toHaveLength(50);
+		expect(stored).not.toContain('COIN0');
+		expect(service.dirty.has('12345')).toBe(false);
+	});
+
 	it('replays failed mutations transactionally after another replica writes', async () => {
 		let stored = [];
 		const doc = { get: async () => ({ exists: true, data: () => ({ symbols: stored }) }) };

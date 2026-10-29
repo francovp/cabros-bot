@@ -11,6 +11,12 @@ function normalizeSymbol(value) {
 	return symbol;
 }
 
+function normalizeAlertReference(value) {
+	const reference = typeof value === 'string' ? value.trim().toUpperCase() : '';
+	const slashPair = /^(?:[A-Z0-9_]+:)?[A-Z0-9][A-Z0-9._-]+\/[A-Z0-9][A-Z0-9._-]+$/;
+	return normalizeSymbol(slashPair.test(reference) ? reference.replace('/', '') : reference);
+}
+
 function normalizeChatId(value) {
 	const chatId = String(value ?? '').trim();
 	if (!/^-?\d{1,20}$/.test(chatId)) {
@@ -116,7 +122,9 @@ class WatchlistService {
 					const remoteWork = firestore.runTransaction(async (transaction) => {
 						const snapshot = await transaction.get(doc);
 						const current = snapshot.exists && Array.isArray(snapshot.data()?.symbols) ? snapshot.data().symbols : [];
-						symbols = transform(pendingOps.reduce((list, operation) => operation(list), current));
+						// Queued outage additions may exceed the limit until a later removal or clear is applied.
+						symbols = transform(pendingOps.reduce((list, operation) => operation(list, false), current), false);
+						if (symbols.length > MAX_SYMBOLS) throw new RangeError(`Watchlist cannot exceed ${MAX_SYMBOLS} symbols`);
 						if (symbols.length === 0) transaction.delete(doc);
 						else transaction.set(doc, { symbols, updatedAt: new Date().toISOString() });
 					});
@@ -168,9 +176,9 @@ class WatchlistService {
 	async add(chatIdValue, values) {
 		const chatId = normalizeChatId(chatIdValue);
 		const additions = values.map(normalizeSymbol);
-		return this._mutate(chatId, (current) => {
+		return this._mutate(chatId, (current, enforceLimit = true) => {
 			const symbols = [...new Set([...current, ...additions])];
-			if (symbols.length > MAX_SYMBOLS) throw new RangeError(`Watchlist cannot exceed ${MAX_SYMBOLS} symbols`);
+			if (enforceLimit && symbols.length > MAX_SYMBOLS) throw new RangeError(`Watchlist cannot exceed ${MAX_SYMBOLS} symbols`);
 			return symbols;
 		});
 	}
@@ -196,7 +204,7 @@ class WatchlistService {
 	async matchesAny(chatIdValue, values) {
 		if (!Array.isArray(values) || values.length === 0) return true;
 		try {
-			const references = values.map(normalizeSymbol);
+			const references = values.map(normalizeAlertReference);
 			const { symbols, failed } = await this._read(normalizeChatId(chatIdValue));
 			if (failed || symbols.length === 0) return true;
 			return references.some((reference) => matchesEntries(symbols, reference));
