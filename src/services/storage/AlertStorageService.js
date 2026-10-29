@@ -295,6 +295,7 @@ function canInitializeFirestore() {
 	return isEnabled()
 		|| process.env.ENABLE_AUTO_TRADE === 'true'
 		|| process.env.ENABLE_FIRESTORE_SCANNER_PRESETS === 'true'
+		|| process.env.ENABLE_FIRESTORE_WATCHLIST === 'true'
 		|| process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true'
 		|| process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
 		|| process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true'
@@ -1560,7 +1561,7 @@ function addDeliverySummary(summary, deliveryResults) {
 	}
 
 	for (const result of deliveryResults) {
-		if (!result || typeof result !== 'object') {
+		if (!result || typeof result !== 'object' || result.skipped) {
 			continue;
 		}
 
@@ -1588,7 +1589,7 @@ function addBucketDeliverySummary(bucket, deliveryResults) {
 	}
 
 	for (const result of deliveryResults) {
-		if (!result || typeof result !== 'object') {
+		if (!result || typeof result !== 'object' || result.skipped) {
 			continue;
 		}
 
@@ -1615,7 +1616,7 @@ function summarizeDeliveryResults(deliveryResults) {
 		return [];
 	}
 
-	return deliveryResults.map((result) => ({
+	return deliveryResults.filter((result) => result && !result.skipped).map((result) => ({
 		channel: typeof result.channel === 'string' ? result.channel : null,
 		success: Boolean(result.success),
 		messageId: typeof result.messageId === 'string' ? result.messageId : null,
@@ -2189,8 +2190,8 @@ function emitAlertDeliveryEvents(params, alertId = null) {
 	if (!params) return;
 	try {
 		const deliveryResults = params.deliveryResults || [];
-		const successful = deliveryResults.filter((r) => r && r.success);
-		const failed = deliveryResults.filter((r) => r && !r.success);
+		const successful = deliveryResults.filter((r) => r && r.success && !r.skipped);
+		const failed = deliveryResults.filter((r) => r && !r.success && !r.skipped);
 
 		if (successful.length > 0) {
 			adminSseService.broadcast('alert-delivered', {

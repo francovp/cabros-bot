@@ -353,7 +353,7 @@
           "name": "Success",
           "status": "OK",
           "code": 200,
-          "body": "{\n  \"service\": {\n    \"name\": \"cabros-bot\",\n    \"version\": \"0.1.0\"\n  },\n  \"build\": {\n    \"name\": \"cabros-bot\",\n    \"version\": \"0.1.0\",\n    \"commit\": \"abcdef1\",\n    \"full\": \"abcdef1234567890abcdef1234567890abcdef12\",\n    \"repo\": \"francovp/cabros-bot\",\n    \"platform\": \"render\",\n    \"environment\": \"production\",\n    \"startedAt\": \"2026-10-26T00:00:00.000Z\",\n    \"uptimeSeconds\": 3600\n  },\n  \"featureFlags\": {\n    \"telegramBot\": true,\n    \"telegramCommandAuth\": true,\n    \"whatsappAlerts\": false,\n    \"geminiGrounding\": false,\n    \"newsMonitor\": false,\n    \"newsMonitorTestMode\": false,\n    \"tradingViewVolumeConfirmation\": false,\n    \"firestoreJobStorage\": false,\n    \"messageFooterMetadata\": true,\n    \"firestoreIdempotency\": false,\n    \"equityMarketData\": false,\n    \"firebaseRemoteConfig\": false,\n    \"jobExecutionWorker\": false,\n    \"alertScheduler\": false,\n    \"notificationRedrive\": false,\n    \"firestoreChatPreferences\": false,\n    \"tokenCostBudget\": false,\n    \"signalClassMarker\": true,\n    \"newsMonitorClassifier\": false,\n    \"symbolAnalysisMultiAgent\": false,\n    \"apiOnlyMode\": false,\n    \"firebaseAdminAuth\": false,\n    \"telegramCommandRateLimiting\": true,\n    \"binanceOrderAudit\": false,\n    \"binanceTrading\": false,\n    \"presetBoundDestinations\": true\n  },\n  \"dependencies\": {\n    \"geminiQuota\": {\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"cooldownActive\": false,\n      \"remainingCooldownMs\": 0,\n      \"lastTriggeredAt\": null,\n      \"triggersTotal\": 0,\n      \"braveFallbacksDuringCooldown\": 0,\n      \"lastBraveFallbackAt\": null,\n      \"metrics\": {\n        \"totalRequests\": 0,\n        \"successRequests\": 0,\n        \"failureRequests\": 0,\n        \"timeoutRequests\": 0\n      },\n      \"windowStartedAt\": null,\n      \"windowDurationMs\": 60000,\n      \"requestsInWindow\": 0,\n      \"exhaustedEventsInWindow\": 0,\n      \"lastExhaustedAt\": null,\n      \"quotaStatus\": \"healthy\"\n    },\n    \"groundingCoalescing\": {\n      \"enabled\": false,\n      \"windowMs\": 0,\n      \"activeEntries\": 0,\n      \"hits\": 0,\n      \"misses\": 0,\n      \"failures\": 0\n    },\n    \"jobExecutionQueue\": {\n      \"mode\": \"local\",\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"queueName\": \"tradingview-jobs\",\n      \"brokerReachable\": null,\n      \"lastBrokerProbeAt\": null,\n      \"lastBrokerProbeErrorCode\": null,\n      \"enqueued\": 0,\n      \"claimed\": 0,\n      \"completed\": 0,\n      \"failed\": 0,\n      \"lastErrorCode\": null,\n      \"lastEnqueuedAt\": null,\n      \"waitingCount\": 0,\n      \"delayedCount\": 0,\n      \"failedCount\": 0,\n      \"activeCount\": 0,\n      \"durableQueuedCount\": 0,\n      \"durableQueuedTruncated\": false,\n      \"durableScanRotated\": false,\n      \"durableProbeSucceeded\": null,\n      \"durableCycleComplete\": false,\n      \"oldestQueuedAgeMs\": null,\n      \"backlogAlert\": {\n        \"active\": false,\n        \"thresholdMs\": 900000,\n        \"pagedAt\": null,\n        \"lastRecoveryAt\": null\n      },\n      \"backlogMonitorEnabled\": true,\n      \"backlogMonitorRunning\": false\n    },\n    \"tradingViewMcp\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"lastCheckedAt\": null,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorCategory\": null,\n      \"successCount\": 0,\n      \"failureCount\": 0,\n      \"circuitBreaker\": {\n        \"state\": \"closed\",\n        \"consecutiveFailures\": 0,\n        \"openedAt\": null,\n        \"lastStateChangeAt\": null,\n        \"failureThreshold\": 5,\n        \"cooldownMs\": 600000\n      }\n    },\n    \"tradingViewVolumeConfirmation\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"lastCheckedAt\": null,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorCategory\": null,\n      \"successCount\": 0,\n      \"failureCount\": 0,\n      \"circuitBreaker\": {\n        \"state\": \"closed\",\n        \"consecutiveFailures\": 0,\n        \"openedAt\": null,\n        \"lastStateChangeAt\": null,\n        \"failureThreshold\": 5,\n        \"cooldownMs\": 600000\n      }\n    },\n    \"firestoreJobStorage\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\"\n    },\n    \"signalOutcomeWorker\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"role\": \"web\",\n      \"running\": false,\n      \"shutdownRequested\": false,\n      \"lastRunScannedCount\": 0,\n      \"lastRunPendingCount\": 0,\n      \"lastRunEvaluatedCount\": 0,\n      \"lastRunErrorCount\": 0,\n      \"entryPriceSources\": {\n        \"configured\": false,\n        \"crypto\": [\n          \"mcp\",\n          \"binance\",\n          \"gemini\"\n        ],\n        \"equity\": [\n          \"twelve-data\"\n        ]\n      }\n    },\n    \"equityMarketData\": {\n      \"provider\": null,\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"supportedExchanges\": [\n        \"BATS\",\n        \"NASDAQ\",\n        \"NYSE\",\n        \"AMEX\",\n        \"NYSE ARCA\",\n        \"FX_IDC\",\n        \"SPCFD\"\n      ],\n      \"timeoutMs\": 5000\n    },\n    \"idempotencyStorage\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"mode\": \"ephemeral\",\n      \"backend\": \"memory\"\n    },\n    \"firebaseRemoteConfig\": {\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"source\": \"disabled\",\n      \"templateVersion\": null,\n      \"lastSuccessfulLoad\": null,\n      \"lastErrorCategory\": null,\n      \"consecutiveFailures\": 0,\n      \"refreshIntervalMs\": 900000,\n      \"maxAgeMs\": 3600000\n    },\n    \"alertScheduler\": {\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"role\": \"web\",\n      \"running\": false,\n      \"intervalMs\": 60000,\n      \"batchLimit\": 10,\n      \"scheduleCount\": 0,\n      \"activeCount\": 0,\n      \"lastRunAt\": null,\n      \"lastRunDurationMs\": null,\n      \"lastRunExecutedCount\": 0,\n      \"lastRunErrorCount\": 0,\n      \"lastError\": null,\n      \"schedules\": []\n    },\n    \"notificationRedrive\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"role\": \"web\",\n      \"workerRole\": \"web\",\n      \"running\": false,\n      \"intervalMs\": 60000,\n      \"batchLimit\": 50,\n      \"maxAttempts\": 5,\n      \"maxAgeMs\": 3600000,\n      \"pendingCount\": 0,\n      \"deliveredCount\": 0,\n      \"exhaustedCount\": 0,\n      \"zeroChannelBroadcasts\": 0,\n      \"lastRunAt\": null,\n      \"lastSweepAt\": null,\n      \"lastRunDurationMs\": null,\n      \"lastRunScannedCount\": 0,\n      \"lastRunRedrivenCount\": 0,\n      \"lastRunErrorCount\": 0,\n      \"lastRunExhaustedCount\": 0,\n      \"lastSweepResult\": null\n    },\n    \"telegramCommandAuth\": {\n      \"enabled\": true,\n      \"allowlistSource\": \"TELEGRAM_ALLOWED_CHAT_IDS\",\n      \"allowlistSize\": 1,\n      \"deniedSinceStart\": 0,\n      \"trackedDeniedSenders\": 0,\n      \"deniedSenderCacheLimit\": 1000\n    },\n    \"selfTest\": {\n      \"lastRunAt\": null,\n      \"lastStatus\": \"unknown\",\n      \"ttlSec\": 3600,\n      \"ageMs\": null\n    },\n    \"newsMonitorDedup\": {\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"mode\": \"in-memory\",\n      \"backend\": null,\n      \"cacheSize\": {\n        \"entries\": 0,\n        \"maxEntries\": 5000,\n        \"evictionCount\": 0,\n        \"deliveryLocks\": 0,\n        \"deliveryLockMaxEntries\": 1000,\n        \"deliveryLockEvictionCount\": 0,\n        \"urlShortenerCache\": {\n          \"size\": 0,\n          \"maxEntries\": 1000,\n          \"evictionCount\": 0\n        },\n        \"urlShortenerServiceFailures\": {\n          \"size\": 0,\n          \"maxEntries\": 32,\n          \"evictionCount\": 0\n        }\n      }\n    },\n    \"chatPreferences\": {\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"cachedCount\": 0,\n      \"cacheTtlMs\": 60000,\n      \"retentionDays\": 90\n    },\n    \"alertBurstAggregation\": {\n      \"enabled\": false,\n      \"windowMs\": 3000,\n      \"minSignals\": 3,\n      \"openWindows\": 0,\n      \"aggregatedBurstCount\": 0,\n      \"aggregatedSignalCount\": 0,\n      \"aggregatedFailoverCount\": 0,\n      \"releasedSignalCount\": 0,\n      \"lastAggregatedAt\": null,\n      \"lastWindowClosedAt\": null\n    },\n    \"tokenCostBudget\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"dailySpendUsd\": 0,\n      \"budgetUsd\": 5,\n      \"utilizationPct\": 0,\n      \"alertsSent\": 0,\n      \"lastResetAt\": \"2026-03-29T00:00:00.000Z\"\n    },\n    \"startupJitter\": {\n      \"global\": 5000,\n      \"signalOutcome\": 5000,\n      \"redrive\": 5000,\n      \"scannerPreset\": 5000,\n      \"remoteConfig\": 5000\n    },\n    \"adminAuth\": {\n      \"enabled\": false,\n      \"provider\": null,\n      \"signIn\": null,\n      \"browserConfigConfigured\": false,\n      \"verifierConfigured\": false,\n      \"apiKeyFallbackConfigured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"verificationSuccessCount\": 0,\n      \"verifierUnavailableCount\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastUnavailableAt\": null\n    },\n    \"binanceOrderAudit\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"collection\": \"binanceOrderAudit\",\n      \"retentionDays\": 30\n    },\n    \"backgroundTimers\": {\n      \"registered\": 0,\n      \"drained\": 0,\n      \"failed\": 0\n    },\n    \"scannerPresetScheduler\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"role\": \"web\",\n      \"running\": false,\n      \"intervalMs\": 60000,\n      \"batchLimit\": 50,\n      \"lastRunAt\": null,\n      \"lastRunDurationMs\": null,\n      \"lastRunScannedCount\": 0,\n      \"lastRunExecutedCount\": 0,\n      \"lastRunErrorCount\": 0,\n      \"lastRunDeferredByFloorCount\": 0\n    },\n    \"binanceTrading\": {\n      \"supportedOrderTypes\": [\n        \"MARKET\",\n        \"LIMIT\",\n        \"LIMIT_MAKER\",\n        \"STOP_LOSS\",\n        \"STOP_LOSS_LIMIT\",\n        \"TAKE_PROFIT\",\n        \"TAKE_PROFIT_LIMIT\",\n        \"BRACKET_LIMIT\"\n      ]\n    },\n    \"presetBoundDestinations\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"channels\": [\n        \"telegram\",\n        \"whatsapp\",\n        \"discord\"\n      ],\n      \"maxDestinationsPerChannel\": 20\n    }\n  }\n}"
+          "body": "{\n  \"service\": {\n    \"name\": \"cabros-bot\",\n    \"version\": \"0.1.0\"\n  },\n  \"build\": {\n    \"name\": \"cabros-bot\",\n    \"version\": \"0.1.0\",\n    \"commit\": \"abcdef1\",\n    \"full\": \"abcdef1234567890abcdef1234567890abcdef12\",\n    \"repo\": \"francovp/cabros-bot\",\n    \"platform\": \"render\",\n    \"environment\": \"production\",\n    \"startedAt\": \"2026-10-26T00:00:00.000Z\",\n    \"uptimeSeconds\": 3600\n  },\n  \"featureFlags\": {\n    \"telegramBot\": true,\n    \"telegramCommandAuth\": true,\n    \"whatsappAlerts\": false,\n    \"geminiGrounding\": false,\n    \"newsMonitor\": false,\n    \"newsMonitorTestMode\": false,\n    \"tradingViewVolumeConfirmation\": false,\n    \"firestoreJobStorage\": false,\n    \"messageFooterMetadata\": true,\n    \"firestoreIdempotency\": false,\n    \"equityMarketData\": false,\n    \"firebaseRemoteConfig\": false,\n    \"jobExecutionWorker\": false,\n    \"alertScheduler\": false,\n    \"notificationRedrive\": false,\n    \"firestoreChatPreferences\": false,\n    \"tokenCostBudget\": false,\n    \"signalClassMarker\": true,\n    \"newsMonitorClassifier\": false,\n    \"symbolAnalysisMultiAgent\": false,\n    \"apiOnlyMode\": false,\n    \"firebaseAdminAuth\": false,\n    \"telegramCommandRateLimiting\": true,\n    \"binanceOrderAudit\": false,\n    \"binanceTrading\": false,\n    \"presetBoundDestinations\": true,\n    \"watchlist\": true,\n    \"firestoreWatchlist\": false\n  },\n  \"dependencies\": {\n    \"geminiQuota\": {\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"cooldownActive\": false,\n      \"remainingCooldownMs\": 0,\n      \"lastTriggeredAt\": null,\n      \"triggersTotal\": 0,\n      \"braveFallbacksDuringCooldown\": 0,\n      \"lastBraveFallbackAt\": null,\n      \"metrics\": {\n        \"totalRequests\": 0,\n        \"successRequests\": 0,\n        \"failureRequests\": 0,\n        \"timeoutRequests\": 0\n      },\n      \"windowStartedAt\": null,\n      \"windowDurationMs\": 60000,\n      \"requestsInWindow\": 0,\n      \"exhaustedEventsInWindow\": 0,\n      \"lastExhaustedAt\": null,\n      \"quotaStatus\": \"healthy\"\n    },\n    \"groundingCoalescing\": {\n      \"enabled\": false,\n      \"windowMs\": 0,\n      \"activeEntries\": 0,\n      \"hits\": 0,\n      \"misses\": 0,\n      \"failures\": 0\n    },\n    \"jobExecutionQueue\": {\n      \"mode\": \"local\",\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"queueName\": \"tradingview-jobs\",\n      \"brokerReachable\": null,\n      \"lastBrokerProbeAt\": null,\n      \"lastBrokerProbeErrorCode\": null,\n      \"enqueued\": 0,\n      \"claimed\": 0,\n      \"completed\": 0,\n      \"failed\": 0,\n      \"lastErrorCode\": null,\n      \"lastEnqueuedAt\": null,\n      \"waitingCount\": 0,\n      \"delayedCount\": 0,\n      \"failedCount\": 0,\n      \"activeCount\": 0,\n      \"durableQueuedCount\": 0,\n      \"durableQueuedTruncated\": false,\n      \"durableScanRotated\": false,\n      \"durableProbeSucceeded\": null,\n      \"durableCycleComplete\": false,\n      \"oldestQueuedAgeMs\": null,\n      \"backlogAlert\": {\n        \"active\": false,\n        \"thresholdMs\": 900000,\n        \"pagedAt\": null,\n        \"lastRecoveryAt\": null\n      },\n      \"backlogMonitorEnabled\": true,\n      \"backlogMonitorRunning\": false\n    },\n    \"tradingViewMcp\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"lastCheckedAt\": null,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorCategory\": null,\n      \"successCount\": 0,\n      \"failureCount\": 0,\n      \"circuitBreaker\": {\n        \"state\": \"closed\",\n        \"consecutiveFailures\": 0,\n        \"openedAt\": null,\n        \"lastStateChangeAt\": null,\n        \"failureThreshold\": 5,\n        \"cooldownMs\": 600000\n      }\n    },\n    \"tradingViewVolumeConfirmation\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"lastCheckedAt\": null,\n      \"lastSuccessAt\": null,\n      \"lastFailureAt\": null,\n      \"lastErrorCategory\": null,\n      \"successCount\": 0,\n      \"failureCount\": 0,\n      \"circuitBreaker\": {\n        \"state\": \"closed\",\n        \"consecutiveFailures\": 0,\n        \"openedAt\": null,\n        \"lastStateChangeAt\": null,\n        \"failureThreshold\": 5,\n        \"cooldownMs\": 600000\n      }\n    },\n    \"firestoreJobStorage\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\"\n    },\n    \"signalOutcomeWorker\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"role\": \"web\",\n      \"running\": false,\n      \"shutdownRequested\": false,\n      \"lastRunScannedCount\": 0,\n      \"lastRunPendingCount\": 0,\n      \"lastRunEvaluatedCount\": 0,\n      \"lastRunErrorCount\": 0,\n      \"entryPriceSources\": {\n        \"configured\": false,\n        \"crypto\": [\n          \"mcp\",\n          \"binance\",\n          \"gemini\"\n        ],\n        \"equity\": [\n          \"twelve-data\"\n        ]\n      }\n    },\n    \"equityMarketData\": {\n      \"provider\": null,\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"supportedExchanges\": [\n        \"BATS\",\n        \"NASDAQ\",\n        \"NYSE\",\n        \"AMEX\",\n        \"NYSE ARCA\",\n        \"FX_IDC\",\n        \"SPCFD\"\n      ],\n      \"timeoutMs\": 5000\n    },\n    \"idempotencyStorage\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"mode\": \"ephemeral\",\n      \"backend\": \"memory\"\n    },\n    \"firebaseRemoteConfig\": {\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"source\": \"disabled\",\n      \"templateVersion\": null,\n      \"lastSuccessfulLoad\": null,\n      \"lastErrorCategory\": null,\n      \"consecutiveFailures\": 0,\n      \"refreshIntervalMs\": 900000,\n      \"maxAgeMs\": 3600000\n    },\n    \"alertScheduler\": {\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"role\": \"web\",\n      \"running\": false,\n      \"intervalMs\": 60000,\n      \"batchLimit\": 10,\n      \"scheduleCount\": 0,\n      \"activeCount\": 0,\n      \"lastRunAt\": null,\n      \"lastRunDurationMs\": null,\n      \"lastRunExecutedCount\": 0,\n      \"lastRunErrorCount\": 0,\n      \"lastError\": null,\n      \"schedules\": []\n    },\n    \"notificationRedrive\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"role\": \"web\",\n      \"workerRole\": \"web\",\n      \"running\": false,\n      \"intervalMs\": 60000,\n      \"batchLimit\": 50,\n      \"maxAttempts\": 5,\n      \"maxAgeMs\": 3600000,\n      \"pendingCount\": 0,\n      \"deliveredCount\": 0,\n      \"exhaustedCount\": 0,\n      \"zeroChannelBroadcasts\": 0,\n      \"lastRunAt\": null,\n      \"lastSweepAt\": null,\n      \"lastRunDurationMs\": null,\n      \"lastRunScannedCount\": 0,\n      \"lastRunRedrivenCount\": 0,\n      \"lastRunErrorCount\": 0,\n      \"lastRunExhaustedCount\": 0,\n      \"lastSweepResult\": null\n    },\n    \"telegramCommandAuth\": {\n      \"enabled\": true,\n      \"allowlistSource\": \"TELEGRAM_ALLOWED_CHAT_IDS\",\n      \"allowlistSize\": 1,\n      \"deniedSinceStart\": 0,\n      \"trackedDeniedSenders\": 0,\n      \"deniedSenderCacheLimit\": 1000\n    },\n    \"selfTest\": {\n      \"lastRunAt\": null,\n      \"lastStatus\": \"unknown\",\n      \"ttlSec\": 3600,\n      \"ageMs\": null\n    },\n    \"newsMonitorDedup\": {\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"mode\": \"in-memory\",\n      \"backend\": null,\n      \"cacheSize\": {\n        \"entries\": 0,\n        \"maxEntries\": 5000,\n        \"evictionCount\": 0,\n        \"deliveryLocks\": 0,\n        \"deliveryLockMaxEntries\": 1000,\n        \"deliveryLockEvictionCount\": 0,\n        \"urlShortenerCache\": {\n          \"size\": 0,\n          \"maxEntries\": 1000,\n          \"evictionCount\": 0\n        },\n        \"urlShortenerServiceFailures\": {\n          \"size\": 0,\n          \"maxEntries\": 32,\n          \"evictionCount\": 0\n        }\n      }\n    },\n    \"chatPreferences\": {\n      \"enabled\": false,\n      \"configured\": false,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"cachedCount\": 0,\n      \"cacheTtlMs\": 60000,\n      \"retentionDays\": 90\n    },\n    \"alertBurstAggregation\": {\n      \"enabled\": false,\n      \"windowMs\": 3000,\n      \"minSignals\": 3,\n      \"openWindows\": 0,\n      \"aggregatedBurstCount\": 0,\n      \"aggregatedSignalCount\": 0,\n      \"aggregatedFailoverCount\": 0,\n      \"releasedSignalCount\": 0,\n      \"lastAggregatedAt\": null,\n      \"lastWindowClosedAt\": null\n    },\n    \"tokenCostBudget\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"dailySpendUsd\": 0,\n      \"budgetUsd\": 5,\n      \"utilizationPct\": 0,\n      \"alertsSent\": 0,\n      \"lastResetAt\": \"2026-03-29T00:00:00.000Z\"\n    },\n    \"startupJitter\": {\n      \"global\": 5000,\n      \"signalOutcome\": 5000,\n      \"redrive\": 5000,\n      \"scannerPreset\": 5000,\n      \"remoteConfig\": 5000\n    },\n    \"adminAuth\": {\n      \"enabled\": false,\n      \"provider\": null,\n      \"signIn\": null,\n      \"browserConfigConfigured\": false,\n      \"verifierConfigured\": false,\n      \"apiKeyFallbackConfigured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"verificationSuccessCount\": 0,\n      \"verifierUnavailableCount\": 0,\n      \"consecutiveFailures\": 0,\n      \"lastSuccessAt\": null,\n      \"lastUnavailableAt\": null\n    },\n    \"binanceOrderAudit\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"collection\": \"binanceOrderAudit\",\n      \"retentionDays\": 30\n    },\n    \"backgroundTimers\": {\n      \"registered\": 0,\n      \"drained\": 0,\n      \"failed\": 0\n    },\n    \"scannerPresetScheduler\": {\n      \"enabled\": false,\n      \"configured\": true,\n      \"ready\": false,\n      \"status\": \"disabled\",\n      \"role\": \"web\",\n      \"running\": false,\n      \"intervalMs\": 60000,\n      \"batchLimit\": 50,\n      \"lastRunAt\": null,\n      \"lastRunDurationMs\": null,\n      \"lastRunScannedCount\": 0,\n      \"lastRunExecutedCount\": 0,\n      \"lastRunErrorCount\": 0,\n      \"lastRunDeferredByFloorCount\": 0\n    },\n    \"binanceTrading\": {\n      \"supportedOrderTypes\": [\n        \"MARKET\",\n        \"LIMIT\",\n        \"LIMIT_MAKER\",\n        \"STOP_LOSS\",\n        \"STOP_LOSS_LIMIT\",\n        \"TAKE_PROFIT\",\n        \"TAKE_PROFIT_LIMIT\",\n        \"BRACKET_LIMIT\"\n      ]\n    },\n    \"presetBoundDestinations\": {\n      \"enabled\": true,\n      \"configured\": true,\n      \"ready\": true,\n      \"status\": \"ready\",\n      \"channels\": [\n        \"telegram\",\n        \"whatsapp\",\n        \"discord\"\n      ],\n      \"maxDestinationsPerChannel\": 20\n    },\n    \"watchlist\": {\n      \"enabled\": true,\n      \"mode\": \"memory\",\n      \"readFailures\": 0,\n      \"writeFailures\": 0\n    }\n  }\n}"
         },
         {
           "name": "Success - empty delivery health",
@@ -10087,6 +10087,252 @@
                   "body": "{\n  \"success\": false,\n  \"error\": \"Request validation failed\",\n  \"code\": \"VALIDATION_ERROR\",\n  \"requestId\": \"req-validation-query-1\",\n  \"retryable\": false,\n  \"details\": {\n    \"errors\": [\n      {\n        \"location\": \"query\",\n        \"path\": \"/autoTrade\",\n        \"keyword\": \"type\"\n      }\n    ]\n  }\n}"
                 }
               ]
+            }
+          ]
+        },
+        {
+          "name": "POST Send Alert (watchlist match)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "alert-key-1",
+                "type": "text",
+                "description": "Canonical idempotency header",
+                "disabled": true
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "alert-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
+              },
+              {
+                "key": "x-request-id",
+                "value": "req-12345",
+                "type": "text",
+                "description": "Optional request correlation ID",
+                "disabled": true
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BINANCE:ETHUSDT buy\",\n  \"channels\": [\n    \"telegram\",\n    \"whatsapp\"\n  ],\n  \"telegramChatId\": \"-1001234567890\",\n  \"requireWatchlistMatch\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            },
+            "description": "Telegram-only opt-in watchlist filter; WhatsApp and Discord are unchanged. An absent list, unknown symbol, or read failure allows delivery."
+          },
+          "response": [
+            {
+              "name": "Telegram skipped, WhatsApp delivered",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true\n    },\n    {\n      \"channel\": \"telegram\",\n      \"success\": false,\n      \"skipped\": \"watchlist\"\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Send Alert (watchlist invalid flag)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "alert-key-1",
+                "type": "text",
+                "description": "Canonical idempotency header",
+                "disabled": true
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "alert-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
+              },
+              {
+                "key": "x-request-id",
+                "value": "req-12345",
+                "type": "text",
+                "description": "Optional request correlation ID",
+                "disabled": true
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"BINANCE:ETHUSDT buy\",\n  \"channels\": [\n    \"telegram\",\n    \"whatsapp\"\n  ],\n  \"telegramChatId\": \"-1001234567890\",\n  \"requireWatchlistMatch\": \"true\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            },
+            "description": "Telegram-only opt-in watchlist filter; WhatsApp and Discord are unchanged. An absent list, unknown symbol, or read failure allows delivery."
+          },
+          "response": [
+            {
+              "name": "Invalid watchlist flag",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"code\": \"INVALID_REQUEST\",\n  \"error\": \"\\\"requireWatchlistMatch\\\" must be a boolean if provided\",\n  \"details\": {\n    \"field\": \"requireWatchlistMatch\"\n  }\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Send Message (watchlist match)",
+          "request": {
+            "method": "POST",
+            "description": "Telegram-only opt-in watchlist filter; WhatsApp and Discord are unchanged. An absent list, unknown symbol, or read failure allows delivery.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "x-request-id",
+                "value": "msg-correlation-001",
+                "type": "text",
+                "description": "Optional correlation ID echoed in the response and propagated to Sentry."
+              },
+              {
+                "key": "idempotency-key",
+                "value": "generic-message-demo-1",
+                "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "generic-message-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"BINANCE:ETHUSDT buy\",\n  \"channels\": [\n    \"telegram\",\n    \"whatsapp\"\n  ],\n  \"telegramChatId\": \"-1001234567890\",\n  \"requireWatchlistMatch\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/message",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "message"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Telegram skipped, WhatsApp delivered",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"results\": [\n    {\n      \"channel\": \"whatsapp\",\n      \"success\": true\n    },\n    {\n      \"channel\": \"telegram\",\n      \"success\": false,\n      \"skipped\": \"watchlist\"\n    }\n  ]\n}"
+            }
+          ]
+        },
+        {
+          "name": "POST Send Message (watchlist invalid flag)",
+          "request": {
+            "method": "POST",
+            "description": "Telegram-only opt-in watchlist filter; WhatsApp and Discord are unchanged. An absent list, unknown symbol, or read failure allows delivery.",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "x-request-id",
+                "value": "msg-correlation-001",
+                "type": "text",
+                "description": "Optional correlation ID echoed in the response and propagated to Sentry."
+              },
+              {
+                "key": "idempotency-key",
+                "value": "generic-message-demo-1",
+                "type": "text"
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "generic-message-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"BINANCE:ETHUSDT buy\",\n  \"channels\": [\n    \"telegram\",\n    \"whatsapp\"\n  ],\n  \"telegramChatId\": \"-1001234567890\",\n  \"requireWatchlistMatch\": \"true\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/message",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "message"
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "Invalid watchlist flag",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"success\": false,\n  \"code\": \"INVALID_REQUEST\",\n  \"error\": \"\\\"requireWatchlistMatch\\\" must be a boolean if provided\",\n  \"details\": {\n    \"field\": \"requireWatchlistMatch\"\n  }\n}"
             }
           ]
         }

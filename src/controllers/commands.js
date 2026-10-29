@@ -1,4 +1,5 @@
 const { fetchSymbolPrice } = require('./commands/handlers/core/fetchPriceCryptoSymbol');
+const { watchlistCommand } = require('./commands/handlers/watchlist');
 const { userPriceAlertCmd } = require('./commands/handlers/core/userPriceAlertHandler');
 const { reactionsSymbol } = require('./commands/handlers/reactionsSymbol');
 const { jobService } = require('../services/jobs/JobService');
@@ -66,6 +67,7 @@ const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
 	scanner: { max: 3, windowMs: 3_600_000 },
 	noticias: { max: 3, windowMs: 3_600_000 },
 	preferencias: { max: 20, windowMs: 60_000 },
+	watchlist: { max: 20, windowMs: 60_000 },
 	filtro: { max: 20, windowMs: 60_000 },
 	silencio: { max: 20, windowMs: 60_000 },
 	umbral: { max: 20, windowMs: 60_000 },
@@ -1153,6 +1155,7 @@ function buildHelpMessage() {
 		'• `/outcomes <simbolo>` — Rendimiento reciente de señales evaluadas \\(alias: `/rendimiento`\\)',
 		'  _Ej: `/outcomes BINANCE:BTCUSDT`_',
 		'• `/preferencias` — Preferencias de alertas para este chat \\(símbolos, silencio, umbral, categorías\\)',
+		'• `/watchlist` — Gestiona símbolos de interés para este chat',
 		'  _Comandos rápidos: `/filtro`, `/silencio`, `/umbral`, `/categorias`_',
 		'• `/jobs [jobId]` — Lista jobs recientes o muestra su estado \\(alias: `/trabajos`\\)',
 		'• `/history [simbolo] [limit]` — Consulta alertas recientes \\(alias: `/alertas`; admite `status=failed|partial|delivered`\\)',
@@ -1423,6 +1426,7 @@ const versionCmd = async (context, env = process.env) => {
 };
 
 module.exports = {
+	watchlistCommand,
 	getPrice,
 	userPriceAlertCmd,
 	cryptoBotCmd,

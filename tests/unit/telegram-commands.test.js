@@ -123,6 +123,14 @@ describe('Telegram TradingView commands', () => {
 		expect(contexts[10].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes para /history'));
 	});
 
+	it('limits watchlist commands per chat before they reach storage', async () => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 21 }, () => buildContext('/watchlist add BTCUSDT'));
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+		expect(next).toHaveBeenCalledTimes(20);
+		expect(contexts[20].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes para /watchlist'));
+	});
+
 	it.each(['/preferences', '/filter', '/quiet', '/threshold', '/categories'])('applies canonical limits to the %s preference alias', async (command) => {
 		const next = jest.fn();
 		const contexts = Array.from({ length: 21 }, () => buildContext(command));
@@ -869,6 +877,7 @@ describe('Telegram TradingView commands', () => {
 				{ command: 'outcomes', description: 'Rendimiento reciente de señales evaluadas' },
 				{ command: 'history', description: 'Consulta alertas recientes' },
 				{ command: 'preferencias', description: 'Preferencias de alertas para este chat' },
+				{ command: 'watchlist', description: 'Gestiona símbolos de interés para este chat' },
 				{ command: 'version', description: 'Confirma la versión, commit y uptime del bot' },
 				{ command: 'help', description: 'Muestra este mensaje de ayuda' },
 				{ command: 'start', description: 'Muestra este mensaje de ayuda' },

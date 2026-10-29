@@ -24,6 +24,7 @@ const autoTradeReservationService = require('../services/trading/AutoTradeReserv
 const { tradeLedgerService } = require('../services/trading/TradeLedgerService');
 const symbolAnalysisStorageService = require('../services/storage/SymbolAnalysisStorageService');
 const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
+const { watchlistService } = require('../services/watchlist/WatchlistService');
 const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const { getAdminPagingStatus } = require('../services/notification/adminPagingStatus');
@@ -614,6 +615,8 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 		},
 		build: getBuildInfo(env),
 		featureFlags: {
+			watchlist: true,
+			firestoreWatchlist: watchlistService.isEnabled(),
 			telegramBot: telegramFlagEnabled,
 			whatsappAlerts: whatsappEnabled,
 			discordAlerts: discordEnabled,
@@ -724,6 +727,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			? { adminPaging: getAdminPagingStatus() }
 			: {}),
 		dependencies: {
+			watchlist: watchlistService.getStatus(),
 			telegram,
 			whatsapp,
 			discord,
