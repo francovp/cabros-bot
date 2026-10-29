@@ -25,6 +25,7 @@ const {
 	umbralCmd,
 	categoriasCmd,
 	telegramCommandRateLimiter,
+	watchlistCommand,
 } = require('./src/controllers/commands');
 const { telegramReactionService } = require('./src/services/telegram/telegramReactionService');
 const app = require('./app.js');
@@ -217,6 +218,7 @@ async function bootstrapApplication() {
 		bot.command(['reactions', 'reacciones'], reactionsCommand);
 		bot.command(['version'], versionCmd);
 		bot.command(['preferencias', 'preferences'], preferenciasCmd);
+		bot.command(['watchlist'], watchlistCommand);
 
 		if (process.env.ENABLE_TELEGRAM_REACTION_AGGREGATION === 'true') {
 			bot.on('message_reaction', async (ctx) => {

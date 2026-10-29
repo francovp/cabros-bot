@@ -29,6 +29,7 @@ const scannerPresetModule = require('../../src/services/scannerPresets/ScannerPr
 const { JobRepository } = jobRepositoryModule;
 const { ScannerPresetService } = scannerPresetModule;
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+const { WatchlistService } = require('../../src/services/watchlist/WatchlistService');
 
 describe('Firestore emulator integration', () => {
 	let testEnvironment;
@@ -98,6 +99,17 @@ describe('Firestore emulator integration', () => {
 		});
 		expect((await alertStorageService.listAlerts({ limit: 1 })).alerts.map((alert) => alert.id)).toContain(alertId);
 		expect((await firestore.collection('alerts').doc(alertId).get()).exists).toBe(true);
+	});
+
+	it('persists a Telegram chat watchlist through the shared Admin client', async () => {
+		const service = new WatchlistService({ firestoreEnabled: true });
+		await service.add('-1001234567890', ['BTCUSDT', 'NASDAQ:NVDA']);
+		expect((await firestore.collection('watchlists').doc('-1001234567890').get()).data().symbols)
+			.toEqual(['BTCUSDT', 'NASDAQ:NVDA']);
+		const fresh = new WatchlistService({ firestoreEnabled: true });
+		expect(await fresh.get('-1001234567890')).toEqual(['BTCUSDT', 'NASDAQ:NVDA']);
+		await fresh.clear('-1001234567890');
+		expect((await firestore.collection('watchlists').doc('-1001234567890').get()).exists).toBe(false);
 	});
 
 	it('keeps idempotency reservations transactional and persists completed responses', async () => {
