@@ -155,7 +155,7 @@ async function fetchCryptoPrice(symbol, options = {}) {
 
 	try {
 		const data = await client.getAvgPrice({ symbol });
-		const price = data.price >= 1 ? round10(data.price, 0) : data.price;
+		const price = data.price >= 1 ? round10(data.price, -2) : data.price;
 		let ticker;
 		const tickerSpan = sentryService.startInactiveSpan({
 			name: 'binance.get_24hr_change_statistics',

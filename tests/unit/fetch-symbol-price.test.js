@@ -209,7 +209,7 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 
 			const result = await fetchSymbolPrice(context);
 
-			expect(result.message).toBe('Precio de BTCUSDT es 65432\n24h: ▲ +2.40% | Rango: 64000 – 66000\nVol: 1.2B USDT');
+			expect(result.message).toBe('Precio de BTCUSDT es 65432.1\n24h: ▲ +2.40% | Rango: 64000 – 66000\nVol: 1.2B USDT');
 			expect(mockGet24hrChangeStatistics).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
 		});
 
@@ -298,7 +298,7 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 
 			const result = await fetchSymbolPrice(buildContext('/precio BTCUSDT'));
 
-			expect(result.message).toBe('Precio de BTCUSDT es 65432');
+			expect(result.message).toBe('Precio de BTCUSDT es 65432.1');
 			expect(warn).toHaveBeenCalledWith('Unable to enrich Binance price with 24h ticker:', 'Binance unavailable');
 			warn.mockRestore();
 		});
@@ -310,7 +310,7 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 
 			const result = await fetchSymbolPrice(buildContext('/precio BTCUSDT'));
 
-			expect(result.message).toBe('Precio de BTCUSDT es 65432');
+			expect(result.message).toBe('Precio de BTCUSDT es 65432.1');
 			expect(warn).toHaveBeenCalledWith('Unable to enrich Binance price with 24h ticker:', 'Invalid 24h ticker payload');
 			warn.mockRestore();
 		});
@@ -327,7 +327,7 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 
 			const result = await fetchSymbolPrice(buildContext('/precio BTCUSDT'));
 
-			expect(result.message).toBe('Precio de BTCUSDT es 65432');
+			expect(result.message).toBe('Precio de BTCUSDT es 65432.1');
 			expect(warn).toHaveBeenCalledWith('Unable to enrich Binance price with 24h ticker:', 'Invalid 24h ticker payload');
 			warn.mockRestore();
 		});
@@ -344,7 +344,7 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 
 			const result = await fetchSymbolPrice(buildContext('/precio BTCUSDT'));
 
-			expect(result.message).toBe('Precio de BTCUSDT es 65432');
+			expect(result.message).toBe('Precio de BTCUSDT es 65432.1');
 			expect(warn).toHaveBeenCalledWith('Unable to enrich Binance price with 24h ticker:', 'Invalid 24h ticker payload');
 			warn.mockRestore();
 		});
@@ -356,11 +356,45 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 			const result = await fetchSymbolPrice(context);
 			expect(result).toEqual({
 				symbol: 'BTCUSDT',
-				price: 65432,
+				price: 65432.1,
 				assetClass: 'crypto',
-				message: 'Precio de BTCUSDT es 65432',
+				message: 'Precio de BTCUSDT es 65432.1',
 			});
 			expect(mockGetAvgPrice).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
+		});
+
+		it('formats crypto price preserving two decimals for values >= 1 (GH-1200)', async () => {
+			mockGetAvgPrice.mockResolvedValueOnce({ price: 104523.47 });
+			const btcResult = await fetchSymbolPrice(buildContext('/precio BTCUSDT'));
+			expect(btcResult.price).toBe(104523.47);
+			expect(btcResult.message).toBe('Precio de BTCUSDT es 104523.47');
+
+			mockGetAvgPrice.mockResolvedValueOnce({ price: 178.44 });
+			const solResult = await fetchSymbolPrice(buildContext('/precio SOLUSDT'));
+			expect(solResult.price).toBe(178.44);
+			expect(solResult.message).toBe('Precio de SOLUSDT es 178.44');
+
+			mockGetAvgPrice.mockResolvedValueOnce({ price: 1 });
+			const stableResult = await fetchSymbolPrice(buildContext('/precio USDTDAI'));
+			expect(stableResult.price).toBe(1);
+			expect(stableResult.message).toBe('Precio de USDTDAI es 1');
+		});
+
+		it('enriches crypto price with 24h ticker without truncating spot price to whole dollars (GH-1200)', async () => {
+			mockGetAvgPrice.mockResolvedValueOnce({ price: 104523.47 });
+			mockGet24hrChangeStatistics.mockResolvedValueOnce({
+				priceChangePercent: '1.85',
+				highPrice: '105000.50',
+				lowPrice: '103000.25',
+				quoteVolume: '5000000000',
+			});
+			const result = await fetchSymbolPrice(buildContext('/precio BTCUSDT'));
+			expect(result.price).toBe(104523.47);
+			expect(result.highPrice24h).toBe(105000.5);
+			expect(result.lowPrice24h).toBe(103000.25);
+			expect(result.message).toBe(
+				'Precio de BTCUSDT es 104523.47\n24h: ▲ +1.85% | Rango: 103000.25 – 105000.5\nVol: 5B USDT',
+			);
 		});
 
 		it('preserves small decimal prices for crypto under 1', async () => {
