@@ -316,7 +316,8 @@ function resolveSymbolRouteDispatches(text, symbolRoutes, routing = {}, includeR
 	);
 
 	const dispatches = [];
-	const seen = new Set();
+	const dispatchByKey = new Map();
+	const referenceSets = new Map();
 	let match;
 	while ((match = combined.exec(text)) !== null) {
 		const referenceKey = match.groups?.qualified || match.groups?.bare;
@@ -325,17 +326,28 @@ function resolveSymbolRouteDispatches(text, symbolRoutes, routing = {}, includeR
 			combined.lastIndex += 1;
 			continue;
 		}
-		if (seen.has(referenceKey)) {
+		const bareExchange = match.groups?.bare
+			? text.slice(Math.max(0, match.index - 17), match.index).match(/([A-Za-z][A-Za-z0-9_]{1,15}):$/)?.[1]
+			: null;
+		const matchedReference = bareExchange ? `${bareExchange}:${referenceKey}` : referenceKey;
+		const existing = dispatchByKey.get(referenceKey);
+		if (existing) {
+			if (includeRouteKeys && !referenceSets.get(referenceKey).has(matchedReference)) {
+				referenceSets.get(referenceKey).add(matchedReference);
+				existing.references.push(matchedReference);
+			}
 			continue;
 		}
-		seen.add(referenceKey);
-		dispatches.push({
-			...(includeRouteKeys ? { routeKey: referenceKey } : {}),
+		const dispatch = {
+			...(includeRouteKeys ? { routeKey: referenceKey, references: [matchedReference] } : {}),
 			// Report the bare symbol (`NVDA`) even for an exchange-qualified route key
 			// (`NASDAQ:NVDA`) so delivery results stay readable and stable.
 			symbol: referenceKey.includes(':') ? referenceKey.split(':').pop() : referenceKey,
 			channels: symbolRoutes[referenceKey].channels || routing.channels,
-		});
+		};
+		dispatchByKey.set(referenceKey, dispatch);
+		if (includeRouteKeys) referenceSets.set(referenceKey, new Set([matchedReference]));
+		dispatches.push(dispatch);
 	}
 
 	return dispatches.length > 0 ? dispatches : null;

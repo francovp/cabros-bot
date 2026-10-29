@@ -190,13 +190,16 @@ class WatchlistService {
 	}
 
 	async matches(chatIdValue, value) {
-		if (!value) return true;
-		let symbol;
+		return this.matchesAny(chatIdValue, [value]);
+	}
+
+	async matchesAny(chatIdValue, values) {
+		if (!Array.isArray(values) || values.length === 0) return true;
 		try {
-			symbol = normalizeSymbol(value);
+			const references = values.map(normalizeSymbol);
 			const { symbols, failed } = await this._read(normalizeChatId(chatIdValue));
 			if (failed || symbols.length === 0) return true;
-			return matchesEntries(symbols, symbol);
+			return references.some((reference) => matchesEntries(symbols, reference));
 		} catch {
 			return true;
 		}

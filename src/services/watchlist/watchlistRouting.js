@@ -31,11 +31,14 @@ async function sendWithWatchlistRouting(manager, alert, routing = {}, options = 
 		const dispatches = resolveSymbolRouteDispatches(alert.text, routing.symbolRoutes, routing, true);
 		if (dispatches) {
 			const entries = Object.entries(routing.symbolRoutes);
-			const activeSymbols = new Set(dispatches.map(({ routeKey }) => routeKey));
+			const activeReferences = new Map(dispatches.map(({ routeKey, references }) => [routeKey, references]));
 			const matches = await Promise.all(entries.map(async ([symbol, route]) => {
-				if (!activeSymbols.has(symbol)) return true;
+				const references = activeReferences.get(symbol);
+				if (!references) return true;
 				if (!(route.channels || routing.channels || manager.getEnabledChannels()).includes('telegram')) return true;
-				return service.matches(chatId, symbol);
+				const qualified = references.filter((reference) => reference.includes(':'));
+				const candidates = qualified.length > 0 ? qualified : references;
+				return service.matchesAny(chatId, candidates);
 			}));
 			const skipped = entries.filter(([, route], index) => !matches[index]
 				&& (route.channels || routing.channels || manager.getEnabledChannels()).includes('telegram'));

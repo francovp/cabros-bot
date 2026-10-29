@@ -58,4 +58,34 @@ describe('watchlist webhook routing', () => {
 			} }, {}, service);
 		expect(results.filter((result) => result.skipped)).toHaveLength(1);
 	});
+
+	it('keeps the matched exchange when a bare symbol route is used', async () => {
+		await service.add('12345', ['NASDAQ:NVDA']);
+		manager.sendToChannels.mockImplementation(async (_alert, channels) => channels.map((channel) => ({ channel, success: true })));
+		const routing = { requireWatchlistMatch: true, telegramChatId: '12345',
+			symbolRoutes: { NVDA: { channels: ['telegram'] } } };
+		const results = await sendWithWatchlistRouting(manager, { text: 'NYSE:NVDA earnings' }, routing, {}, service);
+		expect(results).toEqual([{ channel: 'telegram', symbol: 'NVDA', success: false, skipped: 'watchlist' }]);
+		expect(manager.sendToChannels).toHaveBeenCalledWith(expect.any(Object), [], {});
+	});
+
+	it('allows a bare route when any matching exchange appears in the alert', async () => {
+		await service.add('12345', ['NASDAQ:NVDA']);
+		const routing = { requireWatchlistMatch: true, telegramChatId: '12345',
+			symbolRoutes: { NVDA: { channels: ['telegram'] } } };
+		const results = await sendWithWatchlistRouting(manager,
+			{ text: 'NYSE:NVDA and NASDAQ:NVDA earnings' }, routing, {}, service);
+		expect(results.some((result) => result.skipped === 'watchlist')).toBe(false);
+	});
+
+	it('does not let a bare repetition override a known exchange mismatch', async () => {
+		await service.add('12345', ['NASDAQ:NVDA']);
+		manager.sendToChannels.mockImplementation(async (_alert, channels) => channels.map((channel) => ({ channel, success: true })));
+		const results = await sendWithWatchlistRouting(manager,
+			{ text: 'NYSE:NVDA earnings for NVDA' },
+			{ requireWatchlistMatch: true, telegramChatId: '12345', symbolRoutes: {
+				NVDA: { channels: ['telegram'] },
+			} }, {}, service);
+		expect(results).toEqual([{ channel: 'telegram', symbol: 'NVDA', success: false, skipped: 'watchlist' }]);
+	});
 });

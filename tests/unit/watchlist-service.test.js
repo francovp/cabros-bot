@@ -71,6 +71,17 @@ describe('WatchlistService', () => {
 		await expect(service.matches('12345', 'ETHUSDT')).resolves.toBe(true);
 	});
 
+	it('matches many alert references with one Firestore read', async () => {
+		const get = jest.fn().mockResolvedValue({ exists: true,
+			data: () => ({ symbols: ['NASDAQ:NVDA'] }) });
+		const firestore = { collection: () => ({ doc: () => ({ get }) }) };
+		service = new WatchlistService({ firestoreEnabled: true, getFirestore: () => firestore });
+		const references = Array.from({ length: 100 }, (_, index) => `NYSE:COIN${index}`);
+		await expect(service.matchesAny('12345', [...references, 'NYSE:NVDA'])).resolves.toBe(false);
+		await expect(service.matchesAny('12345', ['NYSE:NVDA', 'NASDAQ:NVDA'])).resolves.toBe(true);
+		expect(get).toHaveBeenCalledTimes(2);
+	});
+
 	it('replays failed mutations transactionally after another replica writes', async () => {
 		let stored = [];
 		const doc = { get: async () => ({ exists: true, data: () => ({ symbols: stored }) }) };
