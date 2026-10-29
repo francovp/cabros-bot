@@ -516,12 +516,13 @@ Issue #750 adds `dependencies.promptLifecycle`: the last 24 hours of distinct dr
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
 | `ENABLE_LANGFUSE_PROMPTS` | `false` (`render.yaml`: `true` on web + jobs worker) | Master gate for Langfuse prompt resolution. Environment-only — a process-startup gate. |
+| `PROMPT_FALLBACK_ON_DRIFT` | `false` | Boolean. Serve the local alert-enrichment prompt when Langfuse schema drift is detected; an active Firebase Remote Config value overrides the environment value. |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | — | Project credentials. **Secrets**: Render dashboard only, never a checked-in file. |
 | `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` | Region or self-hosted host. Environment-only — an external destination. |
 | `LANGFUSE_PROMPT_LABEL` | `production` in prod-like envs, `latest` elsewhere | Which label to fetch. Environment-only. |
 | `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` | `0` for `latest`, `60` otherwise (`render.yaml` pins `300`) | Langfuse SDK prompt cache TTL. Environment-only. |
 
-All five are **environment-only** for Remote Config parity: credentials are secrets, `LANGFUSE_BASE_URL` is an external destination, and the gate and label are resolved once at startup.
+The five Langfuse connection settings are **environment-only** for Remote Config parity: credentials are secrets, `LANGFUSE_BASE_URL` is an external destination, and the gate and label are resolved once at startup. `PROMPT_FALLBACK_ON_DRIFT` is a separate, non-secret runtime setting eligible for Remote Config.
 
 ### Equity Market Data Readiness
 

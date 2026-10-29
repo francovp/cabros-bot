@@ -164,6 +164,28 @@ describe('alert request ID resolution and echo', () => {
 			}));
 		});
 
+		it('keeps independent MCP levels when the Gemini prompt drifts', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			enrichAlert.mockResolvedValue({
+				current_price: 65000,
+				invalidation_level: 63000,
+				target_level: 68000,
+				setup_type: 'breakout',
+				risk_reward_ratio: 1.5,
+				levelsSource: 'tradingview-mcp',
+				promptProvenance: { name: 'alert-enrichment', source: 'langfuse', version: 43, schemaDriftDetected: true },
+			});
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.recordSignal.mockResolvedValue(null);
+			await postAlert({})({ headers: {}, body: { text: 'BINANCE:BTCUSDT (1h) BUY' }, query: { useTradingViewData: 'true' } }, buildResponse());
+			expect(signalOutcomeService.recordSignal).toHaveBeenCalledWith(expect.objectContaining({
+				stop: 63000,
+				target: 68000,
+				riskRewardRatio: 1.5,
+				setupType: 'tradingview-enrichment',
+			}));
+		});
+
 		it('normalizes derived quote provenance for Binance fallback prices', async () => {
 			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
 			enrichAlert.mockResolvedValue({

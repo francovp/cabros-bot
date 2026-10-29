@@ -1,4 +1,6 @@
 const crypto = require('node:crypto');
+const { firestoreWriteMetricsService } = require('../storage/FirestoreWriteMetricsService');
+const { classifyFirestoreError, FIRESTORE_ERROR_CATEGORIES } = require('../storage/firestoreErrorCategories');
 
 const COLLECTION = 'promptDriftEvents';
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -72,6 +74,7 @@ class PromptDriftService {
 			const firestore = this.getFirestore();
 			if (!firestore) {
 				this.durableReadReady = false;
+				firestoreWriteMetricsService.recordReadFailure('promptDrift', FIRESTORE_ERROR_CATEGORIES.UNINITIALIZED);
 				return false;
 			}
 			const since = new Date(nowMs - DAY_MS).toISOString();
@@ -91,9 +94,11 @@ class PromptDriftService {
 			}
 			this.events = refreshedEvents;
 			this.durableReadReady = snapshot.docs.length < MAX_RECENT_EVENTS;
+			firestoreWriteMetricsService.recordReadSuccess('promptDrift');
 			return true;
 		} catch (error) {
 			this.durableReadReady = false;
+			firestoreWriteMetricsService.recordReadFailure('promptDrift', classifyFirestoreError(error));
 			console.warn('[PromptDriftService] Durable drift read unavailable:', error.code || 'unknown');
 			return false;
 		}

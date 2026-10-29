@@ -1,6 +1,7 @@
 /* global describe, it, expect, jest */
 
 const { PromptDriftService } = require('../../src/services/prompts/PromptDriftService');
+const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 
 describe('PromptDriftService', () => {
 	it('counts each drifted prompt version once and reloads the 24-hour count after restart', async () => {
@@ -91,6 +92,23 @@ describe('PromptDriftService', () => {
 		const started = Date.now();
 		await expect(service.refresh()).resolves.toBe(false);
 		expect(Date.now() - started).toBeLessThan(200);
+	});
+
+	it('records successful and failed drift queries in shared Firestore read health', async () => {
+		const success = jest.spyOn(firestoreWriteMetricsService, 'recordReadSuccess').mockImplementation(() => {});
+		const failure = jest.spyOn(firestoreWriteMetricsService, 'recordReadFailure').mockImplementation(() => {});
+		try {
+			const now = () => new Date('2026-10-28T08:00:00.000Z');
+			const healthy = new PromptDriftService({ getFirestore: () => ({ collection: () => ({ where: () => ({ orderBy: () => ({ limit: () => ({ get: async () => ({ docs: [] }) }) }) }) }) }), now });
+			await healthy.refresh();
+			expect(success).toHaveBeenCalledWith('promptDrift');
+			const broken = new PromptDriftService({ getFirestore: () => ({ collection: () => ({ where: () => ({ orderBy: () => ({ limit: () => ({ get: async () => { throw Object.assign(new Error('private details'), { code: 7 }); } }) }) }) }) }), now });
+			await broken.refresh();
+			expect(failure).toHaveBeenCalledWith('promptDrift', 'permission_denied');
+		} finally {
+			success.mockRestore();
+			failure.mockRestore();
+		}
 	});
 
 	it('bounds a stalled Firestore drift write', async () => {

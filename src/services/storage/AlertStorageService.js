@@ -34,6 +34,7 @@ const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { fireAndForget } = require('../../lib/fireAndForget');
 const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
+const { getCalibratedRiskMetadata } = require('../prompts/promptRiskMetadata');
 const {
 	classifyFirestoreError,
 	describeFirestoreErrorCategory,
@@ -860,7 +861,7 @@ function getPromptProvenanceGroup(coverage, provenance) {
 
 function recordRiskMetadataCoverageByProvenance(coverage, enrichmentData, side) {
 	const provenance = normalizePromptProvenance(enrichmentData && enrichmentData.promptProvenance);
-	const calibratedData = provenance?.schemaDriftDetected ? null : enrichmentData;
+	const calibratedData = getCalibratedRiskMetadata(enrichmentData);
 	recordRiskMetadataCoverage(coverage, calibratedData, side);
 	const group = getPromptProvenanceGroup(coverage, provenance);
 	recordRiskMetadataCoverage(group, calibratedData, side);
