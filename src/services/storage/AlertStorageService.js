@@ -859,10 +859,11 @@ function getPromptProvenanceGroup(coverage, provenance) {
 }
 
 function recordRiskMetadataCoverageByProvenance(coverage, enrichmentData, side) {
-	recordRiskMetadataCoverage(coverage, enrichmentData, side);
 	const provenance = normalizePromptProvenance(enrichmentData && enrichmentData.promptProvenance);
+	const calibratedData = provenance?.schemaDriftDetected ? null : enrichmentData;
+	recordRiskMetadataCoverage(coverage, calibratedData, side);
 	const group = getPromptProvenanceGroup(coverage, provenance);
-	recordRiskMetadataCoverage(group, enrichmentData, side);
+	recordRiskMetadataCoverage(group, calibratedData, side);
 }
 
 function finalizeRiskMetadataCoverageByProvenance(coverage) {

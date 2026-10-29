@@ -3786,6 +3786,34 @@ describe('AlertStorageService', () => {
 			expect(result.bySymbol).toEqual({ BTCUSDT: 1, ETHUSDT: 1 });
 		});
 
+		it('does not count drifted prompt risk fields as calibrated coverage', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [buildQueryDoc('drifted-alert', {
+					receivedAt: buildTimestamp('2026-06-06T12:00:00.000Z'),
+					enriched: true,
+					enrichmentData: {
+						promptProvenance: { name: 'alert-enrichment', source: 'langfuse', version: 12, schemaDriftDetected: true },
+						invalidation_level: 80000,
+						target_level: 90000,
+						setup_type: 'breakout',
+						risk_reward_ratio: 2,
+					},
+					source: 'webhook',
+				})],
+			});
+
+			const result = await AlertStorageService.summarizeAlerts({
+				from: '2026-06-06T00:00:00.000Z', to: '2026-06-07T00:00:00.000Z', limit: 200,
+			});
+			const coverage = result.enrichment.riskMetadataCoverage;
+			expect(coverage.denominator).toBe(1);
+			expect(Object.values(coverage.fields).map(field => field.populated)).toEqual([0, 0, 0, 0]);
+			expect(coverage.byPromptProvenance[0].provenance.schemaDriftDetected).toBe(true);
+			expect(Object.values(coverage.byPromptProvenance[0].fields).map(field => field.populated)).toEqual([0, 0, 0, 0]);
+		});
+
 		it('measures risk metadata coverage by safe prompt provenance and ignores invalid values', async () => {
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 			mockGet.mockResolvedValueOnce({
