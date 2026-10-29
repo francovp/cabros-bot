@@ -1,6 +1,6 @@
 const { watchlistService, matchesEntries } = require('../../../services/watchlist/WatchlistService');
 const alertStorageService = require('../../../services/storage/AlertStorageService');
-const { escapeRiskFieldValue } = require('../../../services/notification/formatters/MarkdownV2Formatter');
+const { escapeRiskFieldValue } = require('../../../services/notification/formatters/markdownV2Formatter');
 
 function createWatchlistCommand(service = watchlistService, { listRecentAlerts = alertStorageService.listAlerts } = {}) {
 	return async function watchlistCommand(context) {

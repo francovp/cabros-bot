@@ -89,6 +89,20 @@ describe('WatchlistService', () => {
 		expect(stored).toEqual(['ETHUSDT', 'BTCUSDT', 'SOLUSDT']);
 	});
 
+	it('rejects a persisted list above the symbol limit without creating a dirty local operation', async () => {
+		const stored = Array.from({ length: 50 }, (_, index) => `COIN${index}`);
+		const transaction = { get: async () => ({ exists: true, data: () => ({ symbols: stored }) }),
+			set: jest.fn(), delete: jest.fn() };
+		const firestore = { collection: () => ({ doc: () => ({}) }),
+			runTransaction: (callback) => callback(transaction) };
+		service = new WatchlistService({ firestoreEnabled: true, getFirestore: () => firestore });
+		await expect(service.add('12345', ['NEWCOIN'])).rejects.toThrow('Watchlist cannot exceed 50 symbols');
+		expect(service.dirty.has('12345')).toBe(false);
+		expect(service.dirtyOps.has('12345')).toBe(false);
+		expect(service.lists.has('12345')).toBe(false);
+		expect(transaction.set).not.toHaveBeenCalled();
+	});
+
 	it('reconciles a failed write when the next read finds Firestore healthy', async () => {
 		let stored = [];
 		const doc = { get: async () => ({ exists: true, data: () => ({ symbols: stored }) }) };

@@ -144,6 +144,7 @@ class WatchlistService {
 					}
 				}
 			} catch (error) {
+				if (error instanceof RangeError) throw error;
 				this.writeFailures += 1;
 				console.warn('[WatchlistService] Firestore write failed; using memory:', error.message);
 				if (!symbols) symbols = transform(this.lists.get(chatId) || []);
