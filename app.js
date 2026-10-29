@@ -80,8 +80,10 @@ const { handleDependencyReadiness } = require('./src/controllers/readiness');
 // `?depth=dependencies` on /healthcheck and `?depth=readiness` on /ready both
 // fall through to the master contract instead of cross-hijacking.
 const deepHealthcheckHandler = getDeepHealthcheckHandler();
-// HTTP response compression for payloads exceeding 1KB (skips streaming responses)
-app.use(createCompressionMiddleware());
+// Compression is enabled unless explicitly disabled at process startup.
+if (process.env.ENABLE_RESPONSE_COMPRESSION !== 'false') {
+	app.use(createCompressionMiddleware());
+}
 
 app.use('/healthcheck', (req, res, next) => {
 	if (req.query.depth === 'readiness') {
