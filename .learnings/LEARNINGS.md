@@ -1,3 +1,33 @@
+## [LRN-20261030-054500-0001] correction
+
+**Logged**: 2026-10-30T05:45:00.000000Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+@francovp correction on PR #969 (feat(notification): thread deterministic idempotency keys through redrive dispatches (GH-785)): The PR threads idempotency keys through the redrive pipeline but **nothing consumes the key**, so duplicate sends are not prevented. The implementation makes the key *observable* (attached to payload, echoed in responses) but not *enforcing* — no deduplication logic exists at the notification manager or channel level to actually reject a duplicate send when the same key is presented twice.
+
+### Details
+```js
+// src/services/notification/requestRouting.js:148-167 validates and caps the key at 256 chars
+// src/services/notification/requestRouting.js:224-225 sets alertPayload.idempotencyKey
+// NotificationManager resolves effective key per dispatch but no deduplication store/check exists
+// Channel senders (Telegram, WhatsApp, Discord) do not accept or check idempotency keys
+```
+
+### Suggested Action
+Implement a deduplication store (in-memory with TTL or Firestore-backed) at the NotificationManager level that tracks recently seen idempotency keys per channel/destination and short-circuits duplicate sends before they reach channel senders.
+
+### Metadata
+- Source: github_review
+- Related Files: src/services/notification/requestRouting.js, src/services/notification/NotificationManager.js
+- Tags: correction, feedback, idempotency, notifications
+- See Also: https://github.com/francovp/cabros-bot/pull/969
+- Pattern-Key: harden.feedback_response
+
+---
+
 ## [LRN-20261029-234500-0001] correction
 
 **Logged**: 2026-10-29T23:45:00.000000Z
