@@ -1,3 +1,32 @@
+## [LRN-20261031-094500-0001] correction
+
+**Logged**: 2026-10-31T09:45:00.000000Z
+**Priority**: medium
+**Status**: pending
+**Area**: ci/cd
+
+### Summary
+@gigachad-senior-dev correction on PR #1445 (fix: prevent documentation-only PRs from skipping secret scanning): The `paths-ignore` patterns in `.github/workflows/node.js.yml` miss `CHANGELOG*`, `*.rst`, `*.adoc`, and docs in non-standard locations (e.g., `packages/*/docs/`). The ignore list is also duplicated for `push` and `pull_request` — a YAML anchor should be used to avoid drift. Additionally, no test validates the workflow behavior; an `act`-based test matrix should cover: (a) `*.md` only → Node.js CI skipped + secret scanning runs, (b) `*.md` + `*.ts` → both run, (c) `*.md` with fake secret → secret scanning detects it. The massive `.learnings/LEARNINGS.md` churn (+1195/-215 lines) inflates scope evaluation for automation and should be filtered out.
+
+### Details
+```yaml
+# .github/workflows/node.js.yml:10-26
+# Current paths-ignore misses CHANGELOG*, *.rst, *.adoc, packages/*/docs/**
+# Duplicate ignore lists for push/pull_request should use a YAML anchor
+```
+
+### Suggested Action
+Add missing documentation patterns to `paths-ignore`, consolidate with YAML anchor, and add workflow tests using `act` or GitHub Actions API to validate secret scanning runs on doc-only PRs while Node.js CI is skipped.
+
+### Metadata
+- Source: github_review
+- Related Files: .github/workflows/node.js.yml, .github/workflows/secret-scanning.yml
+- Tags: correction, feedback, ci, secret-scanning, workflow
+- See Also: https://github.com/francovp/cabros-bot/pull/1445
+- Pattern-Key: harden.feedback_response
+
+---
+
 ## [LRN-20261030-054500-0001] correction
 
 **Logged**: 2026-10-30T05:45:00.000000Z
