@@ -22,6 +22,8 @@ const {
 	DEFAULT_LANGUAGE,
 } = require('./startPayload');
 const chatEnrollmentsService = require('../../../../services/enrollments/ChatEnrollmentsService');
+const { watchlistService } = require('../../../../services/watchlist/WatchlistService');
+const { escapeRiskFieldValue } = require('../../../../services/notification/formatters/markdownV2Formatter');
 
 const MAX_INLINE_BUTTONS = 8;
 
@@ -40,6 +42,20 @@ function buildInlineKeyboard(botUsername) {
 		{ text: '/outcomes', callback_data: 'cmd:outcomes' },
 	]);
 	return { inline_keyboard: buttons.slice(0, MAX_INLINE_BUTTONS) };
+}
+
+function registerStartActions(bot) {
+	if (!bot || typeof bot.action !== 'function') return false;
+	for (const [action, message] of [
+		['cmd:precio', 'Para consultar un precio, escribe /precio BTCUSDT.'],
+		['cmd:outcomes', 'Para ver resultados, escribe /outcomes.'],
+	]) {
+		bot.action(action, async (context) => {
+			await context.answerCbQuery().catch(() => {});
+			await context.reply(escapeRiskFieldValue(message), { parse_mode: 'MarkdownV2' });
+		});
+	}
+	return true;
 }
 
 function resolveChatId(context) {
@@ -87,7 +103,7 @@ async function replyWithWelcome(context, payload, preferredLanguage) {
 	const botUsername = resolveBotUsername(context);
 	const replyMarkup = buildInlineKeyboard(botUsername);
 
-	await context.reply(welcome.message, {
+	await context.reply(escapeRiskFieldValue(welcome.message), {
 		parse_mode: 'MarkdownV2',
 		reply_markup: replyMarkup,
 	});
@@ -106,47 +122,44 @@ function createStartCommand(options = {}) {
 	const captureRuntimeError = options.captureRuntimeError;
 
 	return async function startCommand(context) {
-		const payload = context && typeof context.startPayload === 'string'
-			? context.startPayload
-			: null;
+		const payload = context && typeof context.payload === 'string'
+			? context.payload
+			: (context && typeof context.startPayload === 'string' ? context.startPayload : null);
 
 		const parsedResult = parseStartPayload(payload);
 		const chatId = resolveChatId(context);
 		const chatType = resolveChatType(context);
 
-		const welcome = await replyWithWelcome(context, payload, DEFAULT_LANGUAGE);
-
-		if (chatId === null || chatId === undefined) {
+		const hasTokens = Array.isArray(parsedResult.tokens) && parsedResult.tokens.length > 0;
+		if (chatId === null || chatId === undefined || !chatEnrollmentsService.isEnabled()
+			|| !hasTokens || parsedResult.invalid) {
+			await replyWithWelcome(context, null, DEFAULT_LANGUAGE);
 			return;
 		}
 
-		if (!chatEnrollmentsService.isEnabled()) {
-			return;
-		}
-
+		let welcomePayload = null;
+		let preferredLanguage = DEFAULT_LANGUAGE;
 		try {
 			const existing = await chatEnrollmentsService.getByChatId(chatId);
-			const hasTokens = Array.isArray(parsedResult.tokens) && parsedResult.tokens.length > 0;
-			const payloadIsValid = !parsedResult.invalid;
-
-			// Per spec, invalid/malformed payloads are ignored. We only
-			// persist when the deep link contained at least one recognized
-			// token — that is the explicit signal that the user opted in.
-			if (!hasTokens || !payloadIsValid) {
-				return;
-			}
 
 			const merged = {
 				chatId,
 				chatType: chatType || (existing && existing.chatType) || 'private',
 				language: parsedResult.language || (existing && existing.language) || null,
-				watchlist: parsedResult.watchlist
-					|| (existing && Array.isArray(existing.watchlist) ? existing.watchlist : []),
+				watchlist: parsedResult.watchlist.length > 0
+					? parsedResult.watchlist
+					: (existing && Array.isArray(existing.watchlist) ? existing.watchlist : []),
 				refSource: parsedResult.refSource
 				|| (existing && existing.refSource) || null,
 			};
 
-			await chatEnrollmentsService.enroll(merged);
+			if (parsedResult.watchlist.length > 0) {
+				merged.watchlist = await watchlistService.add(chatId, parsedResult.watchlist);
+			}
+			const enrolled = await chatEnrollmentsService.enroll(merged);
+			if (!enrolled) throw new Error('Enrollment unavailable');
+			welcomePayload = payload;
+			preferredLanguage = parsedResult.language || existing?.language || DEFAULT_LANGUAGE;
 		} catch (error) {
 			console.warn('[startCommand] failed to persist enrollment:', error.message);
 			if (typeof captureRuntimeError === 'function') {
@@ -160,8 +173,7 @@ function createStartCommand(options = {}) {
 				});
 			}
 		}
-
-		void welcome;
+		await replyWithWelcome(context, welcomePayload, preferredLanguage);
 	};
 }
 
@@ -171,4 +183,5 @@ module.exports = {
 	resolveChatType,
 	resolveBotUsername,
 	buildInlineKeyboard,
+	registerStartActions,
 };

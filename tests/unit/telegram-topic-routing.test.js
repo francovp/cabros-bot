@@ -80,6 +80,7 @@ describe('telegramTopicRouting', () => {
 			'market-scanner': 202,
 			'news-monitor': 303,
 			'expanded-analysis': 404,
+			'generic-message': 606,
 			default: 505,
 		};
 
@@ -125,6 +126,7 @@ describe('telegramTopicRouting', () => {
 			expect(resolveTelegramThreadId({ source: 'market-scanner' }, topicRoutes)).toBe(202);
 			expect(resolveTelegramThreadId({ source: 'news-monitor' }, topicRoutes)).toBe(303);
 			expect(resolveTelegramThreadId({ source: 'expanded-analysis' }, topicRoutes)).toBe(404);
+			expect(resolveTelegramThreadId({ source: 'generic-message' }, topicRoutes)).toBe(606);
 		});
 
 		it('resolves match across alias groups', () => {
@@ -133,6 +135,9 @@ describe('telegramTopicRouting', () => {
 			expect(resolveTelegramThreadId({ source: 'scanner' }, topicRoutes)).toBe(202);
 			expect(resolveTelegramThreadId({ source: 'news' }, topicRoutes)).toBe(303);
 			expect(resolveTelegramThreadId({ source: 'analysis' }, topicRoutes)).toBe(404);
+			expect(resolveTelegramThreadId({ source: 'webhook-message' }, topicRoutes)).toBe(606);
+			expect(resolveTelegramThreadId({ source: 'message' }, topicRoutes)).toBe(606);
+			expect(resolveTelegramThreadId({ source: 'custom-message' }, topicRoutes)).toBe(606);
 		});
 
 		it('resolves match on alert.category, alert.type, alert.setupType, alert.eventCategory', () => {

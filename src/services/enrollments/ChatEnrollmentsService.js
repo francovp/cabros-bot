@@ -23,6 +23,7 @@
 const admin = require('firebase-admin');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { isFirestoreConfigured } = require('../storage/firestoreConfig');
+const { initializeFirebaseAdminApp } = require('../storage/firebaseAdminCredentials');
 
 const COLLECTION_NAME = 'chatEnrollments';
 const DEFAULT_RETENTION_DAYS = 90;
@@ -30,7 +31,8 @@ const MAX_RETENTION_DAYS = 365;
 const MIN_RETENTION_DAYS = 1;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SUPPORTED_LANGUAGES = new Set(['es', 'en']);
-const MAX_WATCHLIST_LENGTH = 20;
+const MAX_WATCHLIST_LENGTH = 50;
+const MAX_MEMORY_ENROLLMENTS = 1000;
 const MAX_REF_SOURCE_LENGTH = 64;
 const MAX_CHAT_ID = Number.MAX_SAFE_INTEGER;
 const MIN_CHAT_ID = -Number.MAX_SAFE_INTEGER;
@@ -39,6 +41,18 @@ const SUPPORTED_CHAT_TYPES = new Set(['private', 'group', 'supergroup', 'channel
 let firestore = null;
 let firestoreAttempted = false;
 let memoryStore = new Map();
+let unpersistedChatIds = new Set();
+let firestoreHealth = 'unverified';
+const READ_TIMEOUT_MS = 500;
+const WRITE_TIMEOUT_MS = 1000;
+
+function withTimeout(work, timeoutMs) {
+	let timer;
+	return Promise.race([work, new Promise((_, reject) => {
+		timer = setTimeout(() => reject(new Error('Firestore deadline exceeded')), timeoutMs);
+		timer.unref?.();
+	})]).finally(() => clearTimeout(timer));
+}
 
 function isEnabled() {
 	return process.env.ENABLE_CHAT_ENROLLMENTS === 'true';
@@ -57,34 +71,16 @@ function getRetentionDays() {
 	return parsed;
 }
 
-function canInitializeFirestore() {
-	return isEnabled()
-		|| process.env.ENABLE_FIRESTORE_ALERT_STORAGE === 'true'
-		|| process.env.ENABLE_FIRESTORE_SCANNER_PRESETS === 'true'
-		|| process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true'
-		|| process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
-		|| process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true'
-		|| process.env.ENABLE_NOTIFICATION_REDRIVE === 'true'
-		|| process.env.ENABLE_NEWS_MONITOR_SCHEDULER === 'true';
-}
-
 function getFirestore() {
 	if (firestore) return firestore;
-	if (!isEnabled() || !canInitializeFirestore()) return null;
+	if (!isEnabled()) return null;
 	if (!isFirestoreConfigured()) return null;
 	if (firestoreAttempted) return null;
 
 	firestoreAttempted = true;
 	try {
-		let credential;
-		if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-			const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-			credential = admin.credential.cert(serviceAccount);
-		}
-		const appOptions = {};
-		if (credential) appOptions.credential = credential;
-		if (process.env.FIREBASE_PROJECT_ID) appOptions.projectId = process.env.FIREBASE_PROJECT_ID;
-		if (!admin.apps.length) admin.initializeApp(appOptions);
+		const initialization = initializeFirebaseAdminApp({ admin });
+		if (!initialization.ok) return null;
 		firestore = admin.firestore();
 		console.debug('[ChatEnrollmentsService] Firestore client initialized');
 	} catch (error) {
@@ -188,15 +184,25 @@ function computeExpiresAtMillis() {
 }
 
 function readMemory(chatId) {
-	return memoryStore.get(chatId) || null;
+	const record = memoryStore.get(chatId) || null;
+	if (record && Number.isFinite(record.expiresAt) && record.expiresAt <= Date.now()) {
+		memoryStore.delete(chatId);
+		unpersistedChatIds.delete(chatId);
+		return null;
+	}
+	return record;
 }
 
 function writeMemory(chatId, record) {
-	memoryStore.set(chatId, { ...record });
-}
-
-function deleteMemory(chatId) {
+	const cached = { ...record };
 	memoryStore.delete(chatId);
+	memoryStore.set(chatId, cached);
+	while (memoryStore.size > MAX_MEMORY_ENROLLMENTS) {
+		const oldestChatId = memoryStore.keys().next().value;
+		memoryStore.delete(oldestChatId);
+		unpersistedChatIds.delete(oldestChatId);
+	}
+	return cached;
 }
 
 async function readFirestore(chatId) {
@@ -204,7 +210,8 @@ async function readFirestore(chatId) {
 	if (!db) return null;
 	try {
 		const docRef = db.collection(COLLECTION_NAME).doc(chatId);
-		const snapshot = await docRef.get();
+		const snapshot = await withTimeout(docRef.get(), READ_TIMEOUT_MS);
+		firestoreHealth = 'ready';
 		if (!snapshot.exists) return null;
 		const data = snapshot.data();
 		if (!data || !data.enrolledAt) return null;
@@ -221,11 +228,13 @@ async function readFirestore(chatId) {
 			language: data.language || null,
 			watchlist: Array.isArray(data.watchlist) ? data.watchlist : [],
 			refSource: data.refSource || null,
+			expiresAt: expiresAtMs,
 			enrolledAt: data.enrolledAt && typeof data.enrolledAt.toMillis === 'function'
 				? data.enrolledAt.toMillis()
 				: null,
 		};
 	} catch (error) {
+		firestoreHealth = 'degraded';
 		console.warn('[ChatEnrollmentsService] readFirestore error (fail-open):', error.message);
 		return null;
 	}
@@ -238,7 +247,7 @@ async function writeFirestore(chatId, record) {
 		const expiresAtMillis = computeExpiresAtMillis();
 		const expiresAt = admin.firestore.Timestamp.fromMillis(expiresAtMillis);
 		const docRef = db.collection(COLLECTION_NAME).doc(chatId);
-		await docRef.set({
+		const payload = {
 			chatId,
 			chatType: record.chatType || null,
 			language: record.language || null,
@@ -246,9 +255,18 @@ async function writeFirestore(chatId, record) {
 			refSource: record.refSource || null,
 			enrolledAt: admin.firestore.Timestamp.fromMillis(record.enrolledAt || Date.now()),
 			expiresAt,
-		});
+		};
+		await withTimeout(db.runTransaction(async (transaction) => {
+			const snapshot = await transaction.get(docRef);
+			const prior = snapshot.exists && snapshot.data();
+			const priorTime = prior?.enrolledAt?.toMillis?.();
+			if (Number.isFinite(priorTime) && priorTime > record.enrolledAt) return;
+			transaction.set(docRef, payload);
+		}), WRITE_TIMEOUT_MS);
+		firestoreHealth = 'ready';
 		return true;
 	} catch (error) {
+		firestoreHealth = 'degraded';
 		console.warn('[ChatEnrollmentsService] writeFirestore error (fail-open):', error.message);
 		return false;
 	}
@@ -258,10 +276,13 @@ async function listFirestore(limit) {
 	const db = getFirestore();
 	if (!db) return null;
 	try {
-		const snapshot = await db.collection(COLLECTION_NAME).limit(limit).get();
+		const snapshot = await withTimeout(db.collection(COLLECTION_NAME).limit(limit).get(), READ_TIMEOUT_MS);
 		const records = [];
 		snapshot.forEach((doc) => {
 			const data = doc.data();
+			const expiresAt = data.expiresAt && typeof data.expiresAt.toMillis === 'function'
+				? data.expiresAt.toMillis() : null;
+			if (expiresAt !== null && expiresAt <= Date.now()) return;
 			records.push({
 				chatId: doc.id,
 				chatType: data.chatType || null,
@@ -271,10 +292,13 @@ async function listFirestore(limit) {
 				enrolledAt: data.enrolledAt && typeof data.enrolledAt.toMillis === 'function'
 					? data.enrolledAt.toMillis()
 					: null,
+				expiresAt,
 			});
 		});
-		return records;
+		firestoreHealth = 'ready';
+		return { records, partial: snapshot.size >= limit };
 	} catch (error) {
+		firestoreHealth = 'degraded';
 		console.warn('[ChatEnrollmentsService] listFirestore error (fail-open):', error.message);
 		return null;
 	}
@@ -295,19 +319,22 @@ async function enroll(input) {
 	if (!isEnabled()) return null;
 	const chatId = normalizeChatId(input && input.chatId);
 	if (!chatId) return null;
+	const prior = readMemory(chatId);
 	const record = {
 		chatId,
 		chatType: normalizeChatType(input && input.chatType) || 'private',
 		language: normalizeLanguage(input && input.language),
 		watchlist: normalizeWatchlist(input && input.watchlist) || [],
 		refSource: normalizeRefSource(input && input.refSource),
-		enrolledAt: Date.now(),
+		enrolledAt: Math.max(Date.now(), (prior?.enrolledAt || 0) + 1),
+		expiresAt: computeExpiresAtMillis(),
 	};
 
-	writeMemory(chatId, record);
+	const cached = writeMemory(chatId, record);
 	const written = await writeFirestore(chatId, record);
-	if (!written && getFirestore()) {
-		// Firestore write failed but the in-memory cache remains authoritative.
+	if (memoryStore.get(chatId) === cached) {
+		if (written) unpersistedChatIds.delete(chatId);
+		else unpersistedChatIds.add(chatId);
 	}
 	return sanitizeRecord(record, { includeChatId: true });
 }
@@ -356,13 +383,16 @@ async function getSummary({ includeChatIds = false, limit = 1000 } = {}) {
 			mode: 'ephemeral',
 			backend: 'memory',
 			count: 0,
+			partial: false,
 			languages: [],
 			watchlist: [],
 			...(includeChatIds ? { records: [] } : {}),
 		};
 	}
 
-	let records = Array.from(memoryStore.values());
+	const cached = Array.from(memoryStore.keys()).map(readMemory).filter(Boolean);
+	let records = cached.slice(0, boundedLimit);
+	let partial = cached.length > boundedLimit;
 	let backend = 'memory';
 	let mode = 'ephemeral';
 
@@ -370,13 +400,20 @@ async function getSummary({ includeChatIds = false, limit = 1000 } = {}) {
 	if (persisted) {
 		backend = 'firestore';
 		mode = 'durable';
-		const memoryIds = new Set(memoryStore.keys());
-		for (const persistedRecord of persisted) {
-			if (!memoryIds.has(persistedRecord.chatId)) {
-				writeMemory(persistedRecord.chatId, persistedRecord);
-			}
+		const byChatId = new Map();
+		for (const chatId of unpersistedChatIds) {
+			const pending = readMemory(chatId);
+			if (pending) byChatId.set(chatId, pending);
 		}
-		records = Array.from(memoryStore.values());
+		for (const record of persisted.records) {
+			if (!byChatId.has(record.chatId)) byChatId.set(record.chatId, record);
+		}
+		if (unpersistedChatIds.size > 0) {
+			backend = 'memory';
+			mode = 'ephemeral';
+		}
+		records = Array.from(byChatId.values()).slice(0, boundedLimit);
+		partial = persisted.partial || byChatId.size > boundedLimit;
 	}
 
 	const summary = buildSummary(records);
@@ -384,6 +421,7 @@ async function getSummary({ includeChatIds = false, limit = 1000 } = {}) {
 		mode,
 		backend,
 		count: summary.count,
+		partial,
 		languages: summary.languages,
 		watchlist: summary.watchlist,
 	};
@@ -397,8 +435,15 @@ async function getSummary({ includeChatIds = false, limit = 1000 } = {}) {
 
 function _resetForTesting() {
 	memoryStore = new Map();
+	unpersistedChatIds = new Set();
+	firestoreHealth = 'unverified';
 	firestore = null;
 	firestoreAttempted = false;
+}
+
+function _setFirestoreForTesting(db) {
+	firestore = db;
+	firestoreAttempted = true;
 }
 
 /**
@@ -413,11 +458,11 @@ function getStorageStatus() {
 	return {
 		enabled,
 		configured,
-		ready: configured,
-		status: enabled ? (configured ? 'ready' : 'misconfigured') : 'disabled',
-		mode: configured ? 'durable' : 'ephemeral',
-		backend: configured ? 'firestore' : 'memory',
-		count: memoryStore.size,
+		ready: configured && firestoreHealth === 'ready' && unpersistedChatIds.size === 0,
+		status: enabled ? (configured ? (unpersistedChatIds.size > 0 ? 'degraded' : firestoreHealth) : 'misconfigured') : 'disabled',
+		mode: configured && firestoreHealth === 'ready' && unpersistedChatIds.size === 0 ? 'durable' : 'ephemeral',
+		backend: configured && firestoreHealth === 'ready' && unpersistedChatIds.size === 0 ? 'firestore' : 'memory',
+		count: Array.from(memoryStore.keys()).map(readMemory).filter(Boolean).length,
 	};
 }
 
@@ -442,4 +487,5 @@ module.exports = {
 	getSummary,
 	getStorageStatus,
 	_resetForTesting,
+	_setFirestoreForTesting,
 };

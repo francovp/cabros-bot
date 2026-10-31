@@ -2,6 +2,7 @@
 
 const {
 	parseStartPayload,
+	encodeStartPayload,
 	buildWelcomeMessage,
 	buildStartMessage,
 	ALLOWED_LANGUAGES,
@@ -10,6 +11,15 @@ const {
 } = require('../../src/controllers/commands/handlers/start/startPayload');
 
 describe('parseStartPayload', () => {
+	it('round-trips a Telegram-safe deep-link parameter', () => {
+		const encoded = encodeStartPayload('lang=en&watch=BTCUSDT,ETHUSDT');
+		expect(encoded).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+		expect(parseStartPayload(encoded)).toMatchObject({ language: 'en', watchlist: ['BTCUSDT', 'ETHUSDT'], invalid: false });
+	});
+
+	it('rejects malformed encoded deep-link parameters', () => {
+		expect(parseStartPayload('v1_not-valid-encoding_')).toMatchObject({ invalid: true, tokens: [] });
+	});
 	it('returns empty result for empty/null payloads without marking them invalid', () => {
 		expect(parseStartPayload()).toEqual({
 			tokens: [],
@@ -103,6 +113,17 @@ describe('parseStartPayload', () => {
 			refSource: 'launch',
 			invalid: false,
 		});
+	});
+
+	it('uses generic copy for a payload mixing valid and invalid tokens', () => {
+		const result = buildStartMessage('enroll&unknown=private', null);
+		expect(result.message).toContain('¡Hola!');
+		expect(result.message).not.toContain('registré');
+	});
+
+	it('never includes an untrusted referral value in the welcome', () => {
+		const result = buildStartMessage('ref=secretCampaign', null);
+		expect(result.message).not.toContain('secretCampaign');
 	});
 });
 

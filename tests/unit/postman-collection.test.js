@@ -1,7 +1,11 @@
 const fs = require('fs');
 const path = require('path');
+const { getMountedApiOperations } = require('../helpers/api-operations');
+const MarkdownV2Formatter = require('../../src/services/notification/formatters/markdownV2Formatter');
 
 const collectionPath = path.join(__dirname, '../../CabrosBot.postman_collection.json');
+const readmePath = path.join(__dirname, '../../README.md');
+const openapiPath = path.join(__dirname, '../../src/openapi/openapi.json');
 
 function findItem(items, name) {
 	for (const item of items) {
@@ -18,7 +22,335 @@ function findHeader(item, key) {
 	return item.request.header.find((header) => header.key === key);
 }
 
+function collectRequestItems(items, result = []) {
+	for (const item of items) {
+		if (item.request) result.push(item);
+		if (Array.isArray(item.item)) collectRequestItems(item.item, result);
+	}
+	return result;
+}
+
+function normalizeParamPath(routePath) {
+	if (typeof routePath !== 'string') return '';
+	return routePath
+		.replace(/\{\{[^}]+\}\}/g, '{param}')
+		.replace(/:([A-Za-z0-9_]+)/g, '{param}')
+		.replace(/\{([A-Za-z0-9_]+)\}/g, '{param}');
+}
+
+function extractPostmanApiOperations(items, operations = new Set()) {
+	if (!Array.isArray(items)) return operations;
+	for (const item of items) {
+		if (item && item.request) {
+			const method = (item.request.method || 'GET').toUpperCase();
+			let pathname = '';
+			if (item.request.url) {
+				if (Array.isArray(item.request.url.path)) {
+					pathname = `/${item.request.url.path.join('/')}`;
+				} else {
+					const raw = typeof item.request.url === 'string' ? item.request.url : (item.request.url.raw || '');
+					pathname = raw.replace(/^(?:https?:\/\/[^/]+|\{\{[^}]+\}\})/, '').split('?')[0].split('#')[0];
+				}
+			}
+			pathname = pathname.replace(/\/+$/, '');
+			const normalizedPath = normalizeParamPath(pathname);
+			if (normalizedPath.startsWith('/api/')) operations.add(`${method} ${normalizedPath}`);
+		}
+		if (item && Array.isArray(item.item)) extractPostmanApiOperations(item.item, operations);
+	}
+	return operations;
+}
+
+function findMissingPostmanOperations(mountedOperations, postmanOperations) {
+	const postmanSet = postmanOperations instanceof Set ? postmanOperations : new Set(postmanOperations);
+	const parsedPostmanOperations = Array.from(postmanSet, (operation) => {
+		if (typeof operation !== 'string') return null;
+		const separator = operation.indexOf(' ');
+		return separator < 0 ? null : {
+			method: operation.slice(0, separator),
+			path: operation.slice(separator + 1).split('/'),
+		};
+	}).filter(Boolean);
+
+	return mountedOperations.filter((mountedOperation) => {
+		if (postmanSet.has(mountedOperation)) return false;
+		if (typeof mountedOperation !== 'string') return true;
+		const separator = mountedOperation.indexOf(' ');
+		if (separator < 0) return true;
+		const method = mountedOperation.slice(0, separator);
+		const routePath = mountedOperation.slice(separator + 1).split('/');
+
+		return !parsedPostmanOperations.some((postmanOperation) => (
+			postmanOperation.method === method
+			&& postmanOperation.path.length === routePath.length
+			&& routePath.every((segment, index) => (
+				/^\{[^/]+\}$/.test(segment) || segment === postmanOperation.path[index]
+			))
+		));
+	});
+}
+
+function extractReadmeApiPaths(readmeContent) {
+	if (typeof readmeContent !== 'string') return [];
+	const regex = /(?:https?:\/\/([^/\s`"\)]+))?(\/api\/[a-zA-Z0-9_\-\/\{\}:]+)/g;
+	const paths = new Set();
+	let match;
+	while ((match = regex.exec(readmeContent)) !== null) {
+		const host = match[1];
+		let routePath = match[2];
+		if (host && (host.includes('discord') || host.includes('binance'))) continue;
+		routePath = routePath.replace(/[\.,\):]+$/, '').replace(/\/+$/, '');
+		if (routePath.startsWith('/api/')) paths.add(routePath.replace(/:([A-Za-z0-9_]+)/g, '{$1}'));
+	}
+	return Array.from(paths).sort();
+}
+
+function findMissingReadmePaths(readmeContent, contract = {}) {
+	const readmePaths = extractReadmeApiPaths(readmeContent);
+	const openapiPaths = new Set(Object.keys(contract.paths || {}));
+	return readmePaths.filter((routePath) => !openapiPaths.has(routePath));
+}
+
+// Minimal `pm` harness that actually EXECUTES a Postman item's test script, so a
+// self-defeating assertion cannot ship. `pm.expect(raw).to.not.include('apiKey')`
+// reads as a no-credential-leak guard, but every /api/status body carries the
+// documented field name `apiKeyFallbackConfigured`, so it always fails in
+// Postman. The contract assertions in this file check `/authDomain/i` instead,
+// which is why nothing in CI can see that defect class. An unsupported matcher
+// throws rather than silently passing, so widening the subset is deliberate.
+function createPmHarness(response, onResult) {
+	const buildChain = (actual, negated) => {
+		const check = (passed, description) => {
+			if (passed === negated) {
+				throw new Error(`expected ${description} to ${negated ? 'NOT ' : ''}hold`);
+			}
+		};
+		const chain = {
+			get to() { return chain; },
+			get be() { return chain; },
+			get been() { return chain; },
+			get that() { return chain; },
+			get which() { return chain; },
+			get and() { return chain; },
+			get has() { return chain; },
+			get have() { return chain; },
+			get is() { return chain; },
+			get deep() { return chain; },
+			get not() { return buildChain(actual, !negated); },
+			eql(expected) {
+				check(
+					JSON.stringify(actual) === JSON.stringify(expected),
+					`${JSON.stringify(actual)} to eql ${JSON.stringify(expected)}`,
+				);
+				return chain;
+			},
+			equal(expected) { return chain.eql(expected); },
+			include(expected) {
+				const passed = typeof actual === 'string'
+					? actual.includes(expected)
+					: Array.isArray(actual) && actual.includes(expected);
+				check(passed, `${JSON.stringify(actual)} to include ${JSON.stringify(expected)}`);
+				return chain;
+			},
+			property(key) {
+				check(
+					actual !== null && actual !== undefined
+						&& Object.prototype.hasOwnProperty.call(actual, key),
+					`${JSON.stringify(actual)} to have property "${key}"`,
+				);
+				return chain;
+			},
+			an(type) {
+				const observed = Array.isArray(actual) ? 'array' : typeof actual;
+				check(observed === type, `${JSON.stringify(actual)} to be an ${type} (got ${observed})`);
+				return chain;
+			},
+			a(type) { return chain.an(type); },
+			above(limit) {
+				check(typeof actual === 'number' && actual > limit, `${actual} to be above ${limit}`);
+				return chain;
+			},
+			least(limit) {
+				check(typeof actual === 'number' && actual >= limit, `${actual} to be at least ${limit}`);
+				return chain;
+			},
+			below(limit) {
+				check(typeof actual === 'number' && actual < limit, `${actual} to be below ${limit}`);
+				return chain;
+			},
+		};
+		return chain;
+	};
+
+	return {
+		test(name, fn) {
+			try {
+				fn();
+				onResult({ name, passed: true, error: null });
+			} catch (error) {
+				onResult({ name, passed: false, error: error.message });
+			}
+		},
+		expect(actual) { return buildChain(actual, false); },
+		response: {
+			code: response.code,
+			text: () => response.body,
+			json: () => JSON.parse(response.body),
+		},
+	};
+}
+
+function runItemTestScript(item, response) {
+	const script = (item.event || []).find((event) => event.listen === 'test');
+	if (!script) throw new Error(`item "${item.name}" has no test script`);
+	const results = [];
+
+	const run = new Function('pm', script.script.exec.join('\n'));
+	run(createPmHarness(response, (result) => results.push(result)));
+	return results;
+}
+
+function collectRequestsAndSavedExamples(items, result = []) {
+	for (const item of items) {
+		if (item.request) result.push(item.request);
+		for (const response of item.response || []) {
+			if (response.originalRequest) result.push(response.originalRequest);
+		}
+		if (Array.isArray(item.item)) collectRequestsAndSavedExamples(item.item, result);
+	}
+	return result;
+}
+
 describe('Postman collection contract', () => {
+	it('documents preset-bound destinations, invalid routes, async runs, and status readiness', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const create = findItem(collection.item, 'POST Create Scanner Preset (bound destinations)');
+		const invalid = findItem(collection.item, 'POST Create Scanner Preset (invalid destinations - 400)');
+		const update = findItem(collection.item, 'PUT Update Scanner Preset (bound destinations)');
+		const asyncRun = findItem(collection.item, 'POST Run Scanner Preset (async job)');
+		const unboundChannelRun = findItem(collection.item, 'POST Run Scanner Preset (unbound channel - 400)');
+		const openapi = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+
+		expect(JSON.parse(create.request.body.raw)).toMatchObject({
+			mode: 'preset',
+			destinations: { telegramChatIds: ['-1001234567890'] },
+		});
+		expect(create.response.find((response) => response.code === 201)).toBeDefined();
+		const redactedExample = create.response.find((response) => response.name === 'Created with Discord destination (webhook redacted)');
+		expect(redactedExample).toBeDefined();
+		const redactedResponse = JSON.parse(redactedExample.body);
+		expect(redactedResponse.preset.destinations).toEqual(expect.objectContaining({ discordWebhookCount: 1 }));
+		expect(JSON.stringify(redactedResponse)).not.toMatch(/discordWebhookUrls|discordWebhookUrl/);
+		expect(invalid.response.find((response) => response.code === 400).body).toContain('INVALID_DESTINATIONS');
+		expect(JSON.parse(update.request.body.raw)).toMatchObject({
+			mode: 'preset',
+			destinations: { whatsappChatIds: ['56912345678@c.us'] },
+		});
+		expect(asyncRun.request.body.raw).toContain('"runAsyncJob": true');
+		expect(asyncRun.response.find((response) => response.code === 202)).toBeDefined();
+		expect(JSON.parse(unboundChannelRun.request.body.raw)).toEqual({ channels: ['whatsapp'] });
+		expect(JSON.parse(unboundChannelRun.response.find((response) => response.code === 400).body))
+			.toMatchObject({ code: 'INVALID_REQUEST' });
+
+		const destinationSchema = openapi.components.schemas.ScannerPresetDestinations;
+		expect(destinationSchema.properties.telegramChatIds.maxItems).toBe(20);
+		const responsePresetSchema = openapi.components.schemas.ScannerPreset;
+		expect(responsePresetSchema.properties.destinations.$ref)
+			.toBe('#/components/schemas/ScannerPresetResponseDestinations');
+		expect(responsePresetSchema.properties).not.toHaveProperty('discordWebhookUrl');
+		expect(openapi.components.schemas.ScannerPresetResponseDestinations.properties)
+			.toHaveProperty('discordWebhookCount');
+		expect(openapi.components.schemas.ScannerPresetResponseDestinations.properties)
+			.not.toHaveProperty('discordWebhookUrls');
+		expect(openapi.components.schemas.ScannerPresetRunRequest.properties.runAsyncJob.type).toBe('boolean');
+		expect(openapi.paths['/api/webhook/alert'].post.responses['400'].description).toBeUndefined();
+		expect(openapi.paths['/api/scanner-presets'].post.responses['400'].description).toContain('INVALID_DESTINATIONS');
+		expect(openapi.paths['/api/scanner-presets/{id}'].put.responses['400'].description).toContain('INVALID_DESTINATIONS');
+		expect(openapi.paths['/api/scanner-presets/{id}/run'].post.responses['400'].description).toContain('no configured destination for its selected channels');
+		expect(openapi.components.schemas.ScannerPresetRunRequest.properties.channels.description)
+			.toContain('400 INVALID_REQUEST');
+		expect(openapi.paths['/api/scanner-presets/{id}/run'].post.responses['202']).toBeDefined();
+		expect(openapi.components.schemas.Status.properties.dependencies.properties.presetBoundDestinations)
+			.toBeDefined();
+		expect(openapi.components.schemas.Status.properties.featureFlags.$ref)
+			.toBe('#/components/schemas/StatusFeatureFlags');
+	});
+
+	it('covers valid and invalid body-only auto-trade requests', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const valid = findItem(collection.item, 'POST Send Alert (autoTrade body only)');
+		const invalid = findItem(collection.item, 'POST Send Alert (invalid autoTrade body - 400)');
+		const invalidQuery = findItem(collection.item, 'POST Send Alert (invalid autoTrade query - 400)');
+		expect(valid.request.url.raw).toBe('{{baseUrl}}/api/webhook/alert');
+		expect(JSON.parse(valid.request.body.raw)).toMatchObject({ autoTrade: true, signalId: 'bar-123' });
+		expect(valid.response[0].code).toBe(200);
+		expect(invalid.request.url.raw).toBe('{{baseUrl}}/api/webhook/alert');
+		expect(JSON.parse(invalid.request.body.raw).autoTrade).toBe('yes');
+		expect(invalid.response[0].code).toBe(400);
+		expect(JSON.parse(invalid.response[0].body)).toMatchObject({ code: 'INVALID_REQUEST', retryable: false });
+		expect(invalidQuery.request.url.raw).toContain('?autoTrade=tru');
+		expect(JSON.parse(invalidQuery.response[0].body)).toMatchObject({ code: 'INVALID_REQUEST', retryable: false });
+	});
+	it('documents webhook-message alert filtering with a matching response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'GET List Alerts (webhook-message)');
+		const customSource = findItem(collection.item, 'GET List Alerts (custom source)');
+		const invalid = findItem(collection.item, 'GET List Alerts (invalid include - 400 Bad Request)');
+
+		expect(item).toBeDefined();
+		expect(item.request.url.raw).toBe('{{baseUrl}}/api/alerts?limit=10&source=webhook-message');
+		expect(item.request.body).toBeUndefined();
+		const response = item.response.find((example) => example.code === 200);
+		expect(JSON.parse(response.body).alerts[0].source).toBe('webhook-message');
+
+		expect(customSource).toBeDefined();
+		expect(customSource.request.url.raw).toBe('{{baseUrl}}/api/alerts?limit=10&source=webhook-signal');
+		expect(JSON.parse(customSource.response.find((example) => example.code === 200).body).alerts[0].source)
+			.toBe('webhook-signal');
+		expect(invalid.response[0].code).toBe(400);
+	});
+
+	it('adds executable response assertions to each alert decision rollup and export variant', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const names = [
+			'GET Alert Analytics Summary (decision rollup)',
+			'GET Alert Analytics Summary (invalid includeDecisionRollup)',
+			'GET Export Alerts (JSONL - decision audit)',
+			'GET Export Alerts (CSV - decision audit opt-in)',
+			'GET Export Alerts (invalid includeDecision)',
+		];
+
+		for (const name of names) {
+			const item = findItem(collection.item, name);
+			const testScript = item?.event?.find((event) => event.listen === 'test')?.script?.exec?.join('\n') || '';
+			expect(testScript).toContain('pm.test(');
+			expect(testScript).toContain('pm.response.to.have.status(');
+		}
+
+		const summaryScript = findItem(collection.item, names[0]).event.find((event) => event.listen === 'test').script.exec.join('\n');
+		expect(summaryScript).toContain('pm.response.to.have.status(200)');
+		expect(summaryScript).toContain('success');
+		expect(summaryScript).toContain('if (body.summary.decision)');
+		const jsonlScript = findItem(collection.item, names[2]).event.find((event) => event.listen === 'test').script.exec.join('\n');
+		expect(jsonlScript).toContain('pm.response.to.have.status(200)');
+		expect(jsonlScript).toContain('if (row.decision)');
+		expect(jsonlScript).toContain('row.decision.enrichment.providers');
+		const jsonlExample = JSON.parse(findItem(collection.item, names[2]).response.find((response) => response.code === 200).body);
+		expect(jsonlExample.useTradingViewData).toBe(true);
+		expect(jsonlExample.tradingViewEnrichmentApplied).toBe(true);
+		expect(jsonlExample.tradingViewEnrichmentStatus).toBe('full');
+		expect(jsonlExample.decision.enrichment.providers.tradingViewMcp.status).toBe('full');
+		const csvScript = findItem(collection.item, names[3]).event.find((event) => event.listen === 'test').script.exec.join('\n');
+		expect(csvScript).toContain('pm.response.to.have.status(200)');
+		expect(csvScript).toContain('decision');
+		for (const name of [names[1], names[4]]) {
+			const item = findItem(collection.item, name);
+			const testScript = item.event.find((event) => event.listen === 'test').script.exec.join('\n');
+			expect(testScript).toContain('pm.response.to.have.status(400)');
+			expect(testScript).toContain('INVALID_REQUEST');
+		}
+	});
+
 	it('documents Firebase admin configuration and bearer-auth status access', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const config = findItem(collection.item, 'GET Firebase Admin Auth Config');
@@ -37,6 +369,21 @@ describe('Postman collection contract', () => {
 		]));
 	});
 
+	it('documents build metadata in Get Status response example (issue #753)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		expect(status).toBeDefined();
+		const responseBody = JSON.parse(status.response[0].body);
+		expect(responseBody.build).toMatchObject({
+			commit: expect.any(String),
+			full: expect.any(String),
+			repo: expect.any(String),
+			environment: expect.any(String),
+			startedAt: expect.any(String),
+			uptimeSeconds: expect.any(Number),
+		});
+	});
+
 	it('documents groundingCoalescing dependency in the Get Status response example', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');
@@ -53,6 +400,106 @@ describe('Postman collection contract', () => {
 		});
 	});
 
+	it('documents bounded Gemini quota telemetry and only reachable quota states', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const statusBody = JSON.parse(findItem(collection.item, 'Get Status').response[0].body);
+		const contract = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+		const statusSchema = contract.components.schemas.Status;
+		const quotaSchema = contract.components.schemas.GeminiQuotaDependency;
+		const statusExample = contract.components.responses.StatusResult.content['application/json'].example;
+
+		expect(statusBody.dependencies.geminiQuota).toEqual(expect.objectContaining({
+			windowDurationMs: 60000,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			quotaStatus: 'healthy',
+		}));
+		expect(statusSchema.properties.dependencies.properties.geminiQuota).toEqual({
+			$ref: '#/components/schemas/GeminiQuotaDependency',
+		});
+		expect(quotaSchema.properties.quotaStatus.enum).toEqual(['healthy', 'exhausted']);
+		expect(statusExample.dependencies.geminiQuota).toEqual(expect.objectContaining({
+			windowDurationMs: 60000,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			quotaStatus: 'healthy',
+		}));
+	});
+
+	it('documents bounded startup jitter in the Get Status response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const jitterExample = findItem(collection.item, 'Get Status - startup jitter');
+
+		expect(JSON.parse(status.response.find((response) => response.code === 200).body).dependencies.startupJitter).toEqual({
+			global: 5000,
+			signalOutcome: 5000,
+			redrive: 5000,
+			scannerPreset: 5000,
+			remoteConfig: 5000,
+		});
+		expect(jitterExample.request.url.raw).toBe('{{baseUrl}}/api/status');
+		expect(JSON.parse(jitterExample.response[0].body).dependencies.startupJitter).toEqual({
+			global: 5000,
+			signalOutcome: 5000,
+			redrive: 5000,
+			scannerPreset: 5000,
+			remoteConfig: 5000,
+		});
+	});
+
+	it('documents the scanner preset scheduler floor in the primary status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const expectedFields = [
+			'enabled', 'configured', 'ready', 'status', 'role', 'running', 'intervalMs', 'batchLimit',
+			'lastRunAt', 'lastRunDurationMs', 'lastRunScannedCount', 'lastRunExecutedCount',
+			'lastRunErrorCount', 'lastRunDeferredByFloorCount',
+		].sort();
+
+		for (const name of ['Get Status', 'Get Capabilities']) {
+			const item = findItem(collection.item, name);
+			const response = item?.response?.find((example) => example.code === 200);
+			const scheduler = JSON.parse(response.body).dependencies.scannerPresetScheduler;
+
+			expect(Object.keys(scheduler).sort()).toEqual(expectedFields);
+			expect(scheduler.lastRunDeferredByFloorCount).toBe(0);
+		}
+	});
+
+	it('documents alertScheduler feature flag and dependency in the Get Status response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+
+		expect(status).toBeDefined();
+		const responseBody = JSON.parse(status.response[0].body);
+		expect(responseBody.featureFlags.alertScheduler).toBe(false);
+		expect(responseBody.dependencies.alertScheduler).toEqual(expect.objectContaining({
+			enabled: false,
+			configured: false,
+			ready: false,
+			status: 'disabled',
+			role: 'web',
+			running: false,
+		}));
+	});
+
+	it('documents entry price source chains in status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		expect(JSON.parse(status.response[0].body).dependencies.signalOutcomeWorker.entryPriceSources).toEqual({
+			configured: false,
+			crypto: ['mcp', 'binance', 'gemini'],
+			equity: ['twelve-data'],
+		});
+		expect(JSON.parse(capabilities.response[0].body).dependencies.signalOutcomeWorker.entryPriceSources).toEqual({
+			configured: true,
+			crypto: ['mcp', 'binance', 'gemini'],
+			equity: ['mcp', 'binance', 'gemini'],
+		});
+	});
+
 	it('documents x-idempotency-key on the alert webhook request', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const sendAlert = findItem(collection.item, 'POST Send Alert');
@@ -64,6 +511,123 @@ describe('Postman collection contract', () => {
 				disabled: true,
 			}),
 		]));
+	});
+
+	it('documents cross-timeframe duplicate collapse with the delivered baseline leg', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const collapsed = findItem(collection.item, 'POST Send Alert (cross-timeframe duplicate suppressed)');
+		expect(collapsed).toBeDefined();
+		expect(collapsed.request.method).toBe('POST');
+		expect(collapsed.request.url.raw).toBe('{{baseUrl}}/api/webhook/alert');
+		expect(findHeader(collapsed, 'x-api-key').value).toBe('{{apiKey}}');
+		expect(collapsed.request.body.raw).toContain('BINANCE:BTCUSDT(240)');
+
+		const suppressed = collapsed.response.find((response) => response.code === 200);
+		const suppressedBody = JSON.parse(suppressed.body);
+		expect(suppressedBody.success).toBe(true);
+		expect(suppressedBody.suppressedRepeat).toBe(true);
+		expect(suppressedBody.suppressionReason).toBe('cross_timeframe_duplicate');
+		expect(suppressedBody.results).toEqual([]);
+		expect(suppressedBody.deliveredChannels).toEqual([]);
+		expect(suppressed.originalRequest.body.raw).toContain('BINANCE:BTCUSDT(240)');
+
+		const unauthorized = collapsed.response.find((response) => response.code === 401);
+		expect(JSON.parse(unauthorized.body)).toMatchObject({ success: false, retryable: false });
+
+		const baseline = findItem(collection.item, 'POST Send Alert (daily signal - cross-timeframe baseline)');
+		expect(baseline).toBeDefined();
+		expect(baseline.request.body.raw).toContain('BINANCE:BTCUSDT(D)');
+		const delivered = baseline.response.find((response) => response.code === 200);
+		const deliveredBody = JSON.parse(delivered.body);
+		expect(deliveredBody.suppressedRepeat).toBeUndefined();
+		expect(deliveredBody.deliveredChannels).toEqual(['telegram']);
+	});
+
+	it('leaves the same-timeframe repeat suppression example without a suppression reason', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const sameTimeframe = findItem(collection.item, 'POST Send Alert (repeat suppressed)');
+		const suppressed = sameTimeframe.response.find((response) => response.code === 200);
+		expect(JSON.parse(suppressed.body).suppressionReason).toBeUndefined();
+	});
+
+	it('documents valid and invalid per-symbol alert routing variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const valid = findItem(collection.item, 'POST Send Alert (per-symbol routing)');
+		const invalid = findItem(collection.item, 'POST Send Alert (invalid symbol route)');
+
+		expect(valid).toBeDefined();
+		expect(JSON.parse(valid.request.body.raw).symbolRoutes).toEqual({
+			BTCUSDT: { channels: ['telegram'] },
+			NVDA: { channels: ['discord'] },
+		});
+		expect(valid.response[0].body).toContain('"symbol":"BTCUSDT"');
+		expect(invalid).toBeDefined();
+		expect(JSON.parse(invalid.request.body.raw).symbolRoutes.BTCUSDT.channels).toEqual(['slack']);
+		expect(invalid.response[0].code).toBe(400);
+		// The nested channel validation reports `field: "channels"` (plus the unknown
+		// channel list), not the outer `symbolRoutes` field. This mirrors the real
+		// NotificationRoutingValidationError raised by normalizeChannels.
+		expect(JSON.parse(invalid.response[0].body).details).toEqual({
+			field: 'channels',
+			unknownChannels: ['slack'],
+		});
+	});
+
+	it('makes the oversized webhook example generate padding in Postman', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const oversized = findItem(collection.item, 'POST Send Message (oversized body)');
+
+		expect(oversized).toBeDefined();
+		const preRequest = oversized.event?.find((event) => event.listen === 'prerequest');
+		const script = preRequest?.script?.exec?.join('\n') || '';
+
+		expect(preRequest).toBeDefined();
+		expect(script).toContain('pm.variables.set(\'oversizedWebhookPadding\'');
+		expect(oversized.request.body.raw).toContain('{{oversizedWebhookPadding}}');
+		expect(oversized.request.body.raw).not.toContain('{{$padString}}');
+		expect(oversized.request.header).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'x-request-id', value: 'req-webhook-body-size-001' }),
+		]));
+		expect(oversized.response[0].header).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'X-Request-Id', value: 'req-webhook-body-size-001' }),
+		]));
+		expect(JSON.parse(oversized.response[0].body)).toEqual(expect.objectContaining({
+			code: 'PAYLOAD_TOO_LARGE',
+			requestId: 'req-webhook-body-size-001',
+			retryable: false,
+		}));
+
+	});
+
+	it('documents expanded-analysis symbol deduplication as an internally consistent variant (#874)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const variant = findItem(collection.item, 'POST Expanded Analysis Alert (duplicate symbols)');
+
+		expect(variant).toBeDefined();
+
+		const requested = JSON.parse(variant.request.body.raw).symbols;
+		expect(requested.length).toBeGreaterThan(2);
+
+		const [ok, tooMany] = variant.response;
+		expect(ok.code).toBe(200);
+		expect(tooMany.code).toBe(400);
+
+		const okBody = JSON.parse(ok.body);
+		expect(okBody.success).toBe(true);
+		expect(okBody.results.map((result) => result.symbol)).toEqual([
+			'BINANCE:BTCUSDT',
+			'BATS:AAPL',
+			'NASDAQ:NVDA',
+		]);
+		expect(okBody.results).toHaveLength(3);
+		expect(okBody.summary.total).toBe(okBody.results.length);
+
+		// The documented count must equal submitted minus analysed, so the example
+		// cannot drift away from the body it documents.
+		expect(okBody.duplicatesRemoved).toBe(requested.length - okBody.results.length);
+		expect(okBody.duplicatesRemoved).toBeGreaterThan(0);
+
+		expect(JSON.parse(tooMany.body).error).toContain('Too many symbols requested');
 	});
 
 	it('uses distinct demo keys for middleware-backed scanner requests', () => {
@@ -122,6 +686,35 @@ describe('Postman collection contract', () => {
 		}));
 	});
 
+	it('assigns unique idempotency keys to negative replay request variants (issue #1391)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const batchBody = findItem(collection.item, 'POST Batch Replay Alerts (invalid dryRun body)');
+		const batchQuery = findItem(collection.item, 'POST Batch Replay Alerts (invalid dryRun query)');
+		const singleBody = findItem(collection.item, 'POST Replay Alert (invalid dryRun body)');
+		const singleQuery = findItem(collection.item, 'POST Replay Alert (invalid dryRun query)');
+
+		expect(batchBody).toBeDefined();
+		expect(batchQuery).toBeDefined();
+		expect(singleBody).toBeDefined();
+		expect(singleQuery).toBeDefined();
+
+		const batchBodyKey = findHeader(batchBody, 'idempotency-key').value;
+		const batchQueryKey = findHeader(batchQuery, 'idempotency-key').value;
+		const singleBodyKey = findHeader(singleBody, 'idempotency-key').value;
+		const singleQueryKey = findHeader(singleQuery, 'idempotency-key').value;
+
+		expect(batchBodyKey).toBe('replay-key-batch-invalid-dryrun-body');
+		expect(batchQueryKey).toBe('replay-key-batch-invalid-dryrun-query');
+		expect(singleBodyKey).toBe('replay-key-invalid-dryrun-body');
+		expect(singleQueryKey).toBe('replay-key-invalid-dryrun-query');
+
+		const keys = [batchBodyKey, batchQueryKey, singleBodyKey, singleQueryKey];
+		expect(new Set(keys).size).toBe(keys.length);
+		for (const key of keys) {
+			expect(key).not.toBe('{{replayIdempotencyKey}}');
+		}
+	});
+
 	it('documents lastReplay in the stored alert detail response example', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const detail = findItem(collection.item, 'GET Get Alert by ID');
@@ -132,6 +725,79 @@ describe('Postman collection contract', () => {
 				body: expect.stringContaining('"lastReplay"'),
 			}),
 		]));
+	});
+
+	it('stores the rate-limit response example at the Postman item level', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const alertRequest = findItem(collection.item, 'POST Send Alert (with TradingView data)');
+		const response = alertRequest.response.find((item) => item.code === 429);
+
+		expect(collection.info.description).toContain('All webhook/news ingest paths share an aggregate 1,000-request bucket');
+		expect(alertRequest.request.response).toBeUndefined();
+		expect(response).toEqual(expect.objectContaining({
+			name: '429 Rate limit exceeded',
+			status: 'Too Many Requests',
+			code: 429,
+		}));
+		expect(JSON.parse(response.body)).toEqual(expect.objectContaining({
+			success: false,
+			error: 'Too many requests, please try again later.',
+			code: 'RATE_LIMITED',
+			retryable: true,
+			retryAfterSeconds: 60,
+		}));
+		expect(response.header.map(({ key }) => key.toLowerCase())).toEqual(expect.arrayContaining([
+			'x-ratelimit-limit',
+			'x-ratelimit-remaining',
+			'x-ratelimit-reset',
+			'retry-after',
+			'x-request-id',
+		]));
+	});
+
+	it('documents valid 429 examples for every OpenAPI rate-limited operation', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const contract = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+		const requestItems = collectRequestItems(collection.item);
+		const operations = Object.entries(contract.paths).flatMap(([routePath, pathItem]) =>
+			Object.entries(pathItem)
+				.filter(([method, operation]) => ['get', 'post', 'put', 'patch', 'delete'].includes(method)
+					&& operation.responses?.['429']?.$ref === '#/components/responses/RateLimitExceeded')
+				.map(([method]) => ({ routePath, method: method.toUpperCase() })));
+
+		for (const operation of operations) {
+			const matchingItems = requestItems.filter((candidate) => candidate.request.method === operation.method
+				&& `/${candidate.request.url?.path?.join('/')}` === operation.routePath);
+			const responses = matchingItems.flatMap((item) => item.response || [])
+				.filter((response) => response.code === 429);
+
+			expect(responses.length).toBeGreaterThan(0);
+			for (const response of responses) {
+				expect(response.status).toBe('Too Many Requests');
+				expect(JSON.parse(response.body)).toEqual(expect.objectContaining({
+					success: false,
+					error: 'Too many requests, please try again later.',
+					code: 'RATE_LIMITED',
+					retryable: true,
+					retryAfterSeconds: expect.any(Number),
+				}));
+				expect(response.header.map(({ key }) => key.toLowerCase())).toEqual(expect.arrayContaining([
+					'x-ratelimit-limit',
+					'x-ratelimit-remaining',
+					'x-ratelimit-reset',
+					'retry-after',
+					'x-request-id',
+				]));
+			}
+		}
+	});
+
+	it('stores saved examples beside Postman requests, not inside request objects', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const nestedResponseRequests = collectRequestItems(collection.item)
+			.filter((item) => item.request.response !== undefined);
+
+		expect(nestedResponseRequests).toEqual([]);
 	});
 
 	it('includes runnable replay cursor and invalid-input variants', () => {
@@ -175,6 +841,14 @@ describe('Postman collection contract', () => {
 
 		expect(enrichedData.current_price).toBe(64863.03);
 		expect(enrichedData.price_data).toEqual({ current_price: 64863.03, high: 65000, low: 64000 });
+	});
+
+	it('does not claim deterministic R:R in the alert dry-run example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const sendAlert = findItem(collection.item, 'POST Send Alert Dry Run (risk metadata)');
+		const enrichedData = JSON.parse(sendAlert.response[0].body).payload.enrichedData;
+
+		expect(enrichedData).not.toHaveProperty('risk_reward_ratio_source');
 	});
 
 	it('aligns Binance MARKET quantity dry-run example with request and runtime response', () => {
@@ -223,5 +897,1862 @@ describe('Postman collection contract', () => {
 		expect(marketBuyResp.order.quoteOrderQty).toBe('50');
 		expect(marketBuyResp.order.newOrderRespType).toBe('FULL');
 		expect(marketBuyResp.order.newClientOrderId).toBeUndefined();
+	});
+
+	it('documents the generic-message dry-run preview variants (issue #876)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const queryItem = findItem(collection.item, 'POST Send Message (dry-run, query flag)');
+		const bodyItem = findItem(collection.item, 'POST Send Message (dry-run, body field)');
+
+		expect(queryItem).toBeDefined();
+		expect(bodyItem).toBeDefined();
+		expect(queryItem.request.url.raw).toContain('{{baseUrl}}/api/webhook/message?dryRun=true');
+		expect(bodyItem.request.url.raw).toBe('{{baseUrl}}/api/webhook/message');
+		expect(JSON.parse(bodyItem.request.body.raw).dryRun).toBe(true);
+		expect(findHeader(queryItem, 'idempotency-key')).toBeDefined();
+
+		for (const item of [queryItem, bodyItem]) {
+			const tests = (item.event || []).filter((event) => event.listen === 'test');
+			expect(tests.length).toBeGreaterThan(0);
+			const script = tests[0].script.exec.join('\n');
+			expect(script).toContain('pm.test');
+			expect(script).toContain('dryRun');
+			expect(script).toContain('deliveredChannels');
+
+			for (const example of item.response) {
+				if (example.code !== 200) continue;
+				const body = JSON.parse(example.body);
+				expect(body.success).toBe(true);
+				expect(body.dryRun).toBe(true);
+				expect(body.deliveredChannels).toEqual([]);
+				expect(body.requestId).toEqual(expect.any(String));
+				expect(body.payload.text).toEqual(expect.any(String));
+				expect(body.estimatedChunks).toEqual(expect.objectContaining({
+					telegram: expect.any(Number),
+					whatsapp: expect.any(Number),
+					discord: expect.any(Number),
+				}));
+				expect(body.results).toBeUndefined();
+				// The saved example must not leak the webhook credential it documents.
+				expect(example.body).not.toContain('abc-xyz-token');
+				expect(body.routing).not.toHaveProperty('discordWebhookUrl');
+			}
+		}
+
+		// Broadcast shape: an omitted channel subset is reported as a broadcast.
+		const broadcastExample = JSON.parse(bodyItem.response[0].body);
+		expect(broadcastExample.broadcast).toBe(true);
+
+		const invalidValue = queryItem.response.find((res) => res.code === 400 && res.name.includes('invalid dryRun'));
+		expect(invalidValue).toBeDefined();
+		expect(JSON.parse(invalidValue.body)).toMatchObject({
+			success: false,
+			details: { field: 'dryRun' },
+		});
+
+		const invalidRouting = queryItem.response.find((res) => res.code === 400 && res.name.includes('routing override'));
+		expect(invalidRouting).toBeDefined();
+		expect(JSON.parse(invalidRouting.body)).toMatchObject({
+			success: false,
+			details: { field: 'discordWebhookUrl' },
+		});
+	});
+
+	it('documents Request Timeout (408) response examples with required fields', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const endpointsWithTimeout = [
+			'POST Send Alert',
+			'POST Send Message',
+			'POST Create TradingView Analysis Job',
+		];
+
+		for (const name of endpointsWithTimeout) {
+			const item = findItem(collection.item, name);
+			expect(item).toBeDefined();
+			const timeoutExample = item.response.find((res) => res.code === 408);
+			expect(timeoutExample).toBeDefined();
+			expect(timeoutExample.name).toBe('Request Timeout (408)');
+			expect(timeoutExample.status).toBe('Request Timeout');
+			expect(timeoutExample.header).toEqual(expect.arrayContaining([
+				expect.objectContaining({ key: 'X-Request-Id' }),
+			]));
+
+			const parsed = JSON.parse(timeoutExample.body);
+			expect(parsed).toEqual(expect.objectContaining({
+				error: 'Request Timeout',
+				code: 'REQUEST_TIMEOUT',
+				requestId: expect.any(String),
+				deadlineMs: expect.any(Number),
+				durationMs: expect.any(Number),
+			}));
+		}
+	});
+
+	it('documents the empty test-alert text 400 that mirrors the OpenAPI minLength', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'POST Test Alert (Invalid Input - 400 Bad Request)');
+		const example = item.response.find((response) => response.name === '400 Bad Request - Empty Text');
+
+		expect(example).toBeDefined();
+		expect(example.code).toBe(400);
+		expect(JSON.parse(example.body)).toEqual({
+			error: 'Alert text is required and must be a string',
+			code: 'INVALID_REQUEST',
+		});
+		expect(JSON.parse(example.originalRequest.body.raw)).toEqual({ text: '', channels: ['telegram'] });
+
+		const contract = JSON.parse(fs.readFileSync(
+			path.join(__dirname, '../../src/openapi/openapi.json'),
+			'utf8',
+		));
+		expect(contract.components.schemas.TestAlertRequest.properties.text.minLength).toBe(1);
+	});
+
+	it('documents the test-alert dry-run preview the formatter actually returns (GH-1158)', () => {
+		// postTestAlert() sets `text` to the same string as `preview` and
+		// `length` to preview.length, so asserting preview === text looks redundant
+		// until you know it: it is the property the stale GH-1158 example broke by
+		// hand-writing an ellipsis preview. Regenerated from the documented request so
+		// the example can still detect formatter or contract drift.
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'POST Test Alert (Dry Run)');
+		const example = item.response.find((response) => response.name === '200 OK - Dry Run Preview');
+
+		expect(example).toBeDefined();
+		const requestBody = JSON.parse(item.request.body.raw);
+		expect(JSON.parse(example.originalRequest.body.raw)).toEqual(requestBody);
+		expect(requestBody.dryRun).toBe(true);
+		expect(requestBody.channels).toEqual(['telegram']);
+
+		const body = JSON.parse(example.body);
+		expect(body.ok).toBe(true);
+		expect(body.dryRun).toBe(true);
+		expect(body.persisted).toBe(false);
+		expect(body.results).toEqual([]);
+
+		const expectedPreview = new MarkdownV2Formatter().format(requestBody.text);
+		expect(body.formatted.telegram.preview).toBe(expectedPreview);
+		expect(body.formatted.telegram.text).toBe(expectedPreview);
+		expect(body.formatted.telegram.length).toBe(expectedPreview.length);
+	});
+
+	it('documents Request Timeout (408) on every affected admin request variant', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const affectedPaths = [
+			'/api/admin/test-alert',
+			'/api/alerts/batch/delete',
+			'/api/alerts/batch/export',
+			'/api/alerts/batch/replay',
+			'/api/news-monitor/pause',
+			'/api/news-monitor/resume',
+			'/api/news-monitor/status',
+			'/api/news-monitor/summary',
+			'/api/news-monitor/analyses',
+			'/api/symbol-analyses',
+			'/api/symbol-analyses/summary',
+		];
+		const requestItems = collectRequestItems(collection.item);
+
+		for (const routePath of affectedPaths) {
+			const variants = requestItems.filter((item) => {
+				const rawUrl = item.request.url && item.request.url.raw;
+				return typeof rawUrl === 'string' && rawUrl.split('?')[0] === `{{baseUrl}}${routePath}`;
+			});
+			expect(variants.length).toBeGreaterThan(0);
+			for (const item of variants) {
+				expect(item.response.some((response) => response.code === 408)).toBe(true);
+			}
+		}
+	});
+
+	it('documents include=enrichment_summary success and invalid 400 response in GET List Alerts', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const includeItem = findItem(collection.item, 'GET List Alerts (include=enrichment_summary)');
+		const invalidIncludeItem = findItem(collection.item, 'GET List Alerts (invalid include - 400 Bad Request)');
+
+		expect(includeItem).toBeDefined();
+		expect(includeItem.request.url.raw).toContain('include=enrichment_summary');
+		const successBody = JSON.parse(includeItem.response[0].body);
+		expect(successBody.success).toBe(true);
+		expect(successBody.alerts[0].enrichmentSummary).toBeDefined();
+		expect(successBody.alerts[0].enrichmentSummary.sentiment).toBe('BULLISH');
+		expect(successBody.alerts[0].enrichmentSummary.promptProvenance).toBeDefined();
+
+		expect(invalidIncludeItem).toBeDefined();
+		expect(invalidIncludeItem.request.url.raw).toContain('include=invalid_field');
+		expect(invalidIncludeItem.response[0].code).toBe(400);
+		const errorBody = JSON.parse(invalidIncludeItem.response[0].body);
+		expect(errorBody.code).toBe('INVALID_REQUEST');
+		expect(errorBody.error).toContain('enrichment_summary');
+	});
+
+	it('documents chat preferences endpoints with request and response examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const getItem = findItem(collection.item, 'GET Get Chat Preferences');
+		const putItem = findItem(collection.item, 'PUT Update Chat Preferences');
+		const deleteItem = findItem(collection.item, 'DELETE Reset Chat Preferences');
+
+		expect(getItem).toBeDefined();
+		expect(getItem.request.url.raw).toContain('/api/preferences/telegram/');
+		expect(getItem.response).toEqual(expect.arrayContaining([
+			expect.objectContaining({ code: 200 }),
+			expect.objectContaining({ code: 400 }),
+			expect.objectContaining({ code: 401 }),
+		]));
+
+		expect(putItem).toBeDefined();
+		expect(putItem.request.method).toBe('PUT');
+		const putBody = JSON.parse(putItem.request.body.raw);
+		expect(putBody.symbolFilter).toContain('BTCUSDT');
+		expect(putItem.response).toEqual(expect.arrayContaining([
+			expect.objectContaining({ code: 200 }),
+			expect.objectContaining({ code: 400 }),
+		]));
+
+		expect(deleteItem).toBeDefined();
+		expect(deleteItem.request.method).toBe('DELETE');
+		expect(deleteItem.response[0].code).toBe(200);
+	});
+
+	it('documents symbol, exchange, and eventCategory query filters in GET List Alerts and GET Alert Analytics Summary', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const listFiltered = findItem(collection.item, 'GET List Alerts (symbol, exchange, eventCategory)');
+		const listInvalid = findItem(collection.item, 'GET List Alerts (invalid symbol - 400 Bad Request)');
+		const summaryFiltered = findItem(collection.item, 'GET Alert Analytics Summary (symbol, exchange, eventCategory)');
+		const summaryInvalid = findItem(collection.item, 'GET Alert Analytics Summary (invalid symbol - 400 Bad Request)');
+
+		expect(listFiltered).toBeDefined();
+		expect(listFiltered.request.url.raw).toContain('symbol=BTCUSDT');
+		expect(listFiltered.request.url.raw).toContain('exchange=BINANCE');
+		expect(listFiltered.request.url.raw).toContain('eventCategory=price_surge');
+		expect(listFiltered.response[0].code).toBe(200);
+
+		expect(listInvalid).toBeDefined();
+		expect(listInvalid.response[0].code).toBe(400);
+		expect(JSON.parse(listInvalid.response[0].body).code).toBe('INVALID_REQUEST');
+
+		expect(summaryFiltered).toBeDefined();
+		expect(summaryFiltered.request.url.raw).toContain('symbol=BTCUSDT');
+		expect(summaryFiltered.request.url.raw).toContain('exchange=BINANCE');
+		expect(summaryFiltered.request.url.raw).toContain('eventCategory=price_surge');
+		expect(summaryFiltered.response[0].code).toBe(200);
+
+		expect(summaryInvalid).toBeDefined();
+		expect(summaryInvalid.response[0].code).toBe(400);
+		expect(JSON.parse(summaryInvalid.response[0].body).code).toBe('INVALID_REQUEST');
+	});
+
+	it('documents the optional summary interval series with self-consistent examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const hourly = findItem(collection.item, 'GET Alert Analytics Summary (interval=hour)');
+		const daily = findItem(collection.item, 'GET Alert Analytics Summary (interval=day)');
+		const invalid = findItem(collection.item, 'GET Alert Analytics Summary (invalid interval - 400 Bad Request)');
+		const overCap = findItem(collection.item, 'GET Alert Analytics Summary (interval window over cap - 400 Bad Request)');
+
+		expect(hourly).toBeDefined();
+		expect(hourly.request.url.raw).toContain('interval=hour');
+		expect(daily).toBeDefined();
+		expect(daily.request.url.raw).toContain('interval=day');
+
+		expect(invalid).toBeDefined();
+		expect(invalid.response[0].code).toBe(400);
+		const invalidBody = JSON.parse(invalid.response[0].body);
+		expect(invalidBody).toEqual({
+			success: false,
+			error: 'Invalid interval parameter. Allowed values: hour, day.',
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		});
+
+		expect(overCap).toBeDefined();
+		expect(overCap.response[0].code).toBe(400);
+		const overCapBody = JSON.parse(overCap.response[0].body);
+		expect(overCapBody.error).toContain('interval "hour"');
+		expect(overCapBody.error).toContain('31 days');
+		expect(overCapBody.code).toBe('INVALID_REQUEST');
+
+		// The examples must be internally consistent with the runtime contract,
+		// otherwise they document a shape the server never produces.
+		const hourlyBody = JSON.parse(hourly.response[0].body).summary;
+		expect(hourlyBody.window.interval).toBe('hour');
+		expect(hourlyBody.window.maxDays).toBe(31);
+		expect(hourlyBody.buckets.map(b => b.bucketStart)).toEqual([
+			'2026-06-06T00:00:00.000Z',
+			'2026-06-06T01:00:00.000Z',
+			'2026-06-06T02:00:00.000Z',
+			'2026-06-06T03:00:00.000Z',
+		]);
+
+		const dailyBody = JSON.parse(daily.response[0].body).summary;
+		expect(dailyBody.window.interval).toBe('day');
+		expect(dailyBody.window.maxDays).toBe(366);
+
+		for (const body of [hourlyBody, dailyBody]) {
+			expect(body.buckets.reduce((sum, b) => sum + b.total, 0)).toBe(body.totalAlerts);
+			for (const bucket of body.buckets) {
+				expect(Object.keys(bucket)).toEqual(['bucketStart', 'total', 'success', 'failure', 'byChannel']);
+				const channels = Object.values(bucket.byChannel);
+				expect(bucket.success).toBe(channels.reduce((sum, c) => sum + c.success, 0));
+				expect(bucket.failure).toBe(channels.reduce((sum, c) => sum + c.failure, 0));
+			}
+			const starts = body.buckets.map(b => Date.parse(b.bucketStart));
+			expect(starts).toEqual([...starts].sort((a, b) => a - b));
+		}
+
+		// Gapless series: the empty-window example must still be zero-filled.
+		const emptyBody = JSON.parse(hourly.response[1].body).summary;
+		expect(emptyBody.buckets).toHaveLength(3);
+		for (const bucket of emptyBody.buckets) {
+			expect(bucket).toEqual({
+				bucketStart: expect.any(String),
+				total: 0,
+				success: 0,
+				failure: 0,
+				byChannel: {},
+			});
+		}
+	});
+
+	it('documents signalClass in alert webhook and alert query/summary examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const postAlert = findItem(collection.item, 'POST Send Alert');
+		expect(postAlert).toBeDefined();
+		const body = JSON.parse(postAlert.request.body.raw);
+		expect(body.signalClass).toBe('breakout');
+
+		const dryRunAlert = findItem(collection.item, 'POST Send Alert Dry Run (risk metadata)');
+		expect(dryRunAlert).toBeDefined();
+		const dryRunBody = JSON.parse(dryRunAlert.request.body.raw);
+		expect(dryRunBody.signalClass).toBe('breakout');
+		const dryRunResp = JSON.parse(dryRunAlert.response[0].body);
+		expect(dryRunResp.signalClass).toBeUndefined();
+		expect(dryRunResp.payload.signalClass).toBe('breakout');
+
+		const listFiltered = findItem(collection.item, 'GET List Alerts (symbol, exchange, eventCategory)');
+		const listAlert = JSON.parse(listFiltered.response[0].body).alerts[0];
+		expect(listAlert.signalClass).toBe('breakout');
+
+		const summaryFiltered = findItem(collection.item, 'GET Alert Analytics Summary (symbol, exchange, eventCategory)');
+		const summary = JSON.parse(summaryFiltered.response[0].body).summary;
+		expect(summary.signalClassCounts).toBeDefined();
+		expect(summary.signalClassCounts.breakout).toBe(1);
+
+		const postInvalid = findItem(collection.item, 'POST Send Alert (invalid signalClass - 400 Bad Request)');
+		expect(postInvalid).toBeDefined();
+		expect(postInvalid.response[0].code).toBe(400);
+		expect(JSON.parse(postInvalid.response[0].body).code).toBe('INVALID_REQUEST');
+
+		const malformedJsonAlert = findItem(collection.item, 'POST Send Alert (malformed JSON - 400 Bad Request)');
+		expect(malformedJsonAlert).toBeDefined();
+		expect(malformedJsonAlert.request.url.raw).toBe('{{baseUrl}}/api/webhook/alert');
+		expect(malformedJsonAlert.request.body.raw).toBe('{"text":');
+		expect(malformedJsonAlert.response[0].code).toBe(400);
+		expect(JSON.parse(malformedJsonAlert.response[0].body)).toEqual(expect.objectContaining({
+			code: 'INVALID_REQUEST',
+			error: 'Malformed JSON request body',
+			requestId: expect.any(String),
+		}));
+		const malformedJsonTests = (malformedJsonAlert.event || [])
+			.filter((event) => event.listen === 'test')
+			.flatMap((event) => event.script.exec)
+			.join('\n');
+		expect(malformedJsonTests).toContain('pm.test');
+		expect(malformedJsonTests).toContain('Malformed JSON returns structured 400');
+		expect(malformedJsonTests).toContain('pm.response.to.have.status(400)');
+		expect(malformedJsonTests).toContain('body.code).to.eql(\'INVALID_REQUEST\')');
+
+		const unsupportedCharset = findItem(collection.item, 'POST Send Alert (unsupported JSON charset - 415)');
+		expect(unsupportedCharset).toBeDefined();
+		expect(unsupportedCharset.request.header).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'Content-Type', value: 'application/json; charset=unsupported-charset' }),
+		]));
+		expect(unsupportedCharset.response[0].code).toBe(415);
+		expect(JSON.parse(unsupportedCharset.response[0].body)).toEqual(expect.objectContaining({
+			code: 'INVALID_REQUEST',
+			requestId: expect.any(String),
+			retryable: false,
+		}));
+		const unsupportedCharsetTests = unsupportedCharset.event
+			.filter((event) => event.listen === 'test')
+			.flatMap((event) => event.script.exec)
+			.join('\n');
+		expect(unsupportedCharsetTests).toContain('pm.response.to.have.status(415)');
+		expect(unsupportedCharsetTests).toContain('body.code).to.eql(\'INVALID_REQUEST\')');
+		expect(unsupportedCharsetTests).toContain('X-Request-Id');
+
+		const fallthrough500Examples = findItem(collection.item, 'POST Send Alert').response
+			.filter((response) => response.code === 500);
+		expect(fallthrough500Examples).toHaveLength(1);
+		expect(JSON.parse(fallthrough500Examples[0].body)).toEqual(expect.objectContaining({
+			success: false,
+			code: 'INTERNAL_ERROR',
+			requestId: expect.any(String),
+		}));
+
+		const tooManyParameters = findItem(collection.item, 'POST Send Alert (too many URL-encoded parameters - 413)');
+		expect(tooManyParameters).toBeDefined();
+		expect(tooManyParameters.request.body.raw).toContain('{{tooManyUrlEncodedParameters}}');
+		expect(tooManyParameters.event.find((event) => event.listen === 'prerequest').script.exec.join('\n'))
+			.toContain('Array.from({ length: 1001 }');
+		expect(tooManyParameters.event.find((event) => event.listen === 'test').script.exec.join('\n'))
+			.toContain('body.code).to.eql(\'PAYLOAD_TOO_LARGE\')');
+		expect(JSON.parse(tooManyParameters.response[0].body)).toEqual(expect.objectContaining({
+			code: 'PAYLOAD_TOO_LARGE',
+			error: 'Request contains too many URL-encoded parameters',
+			retryable: false,
+		}));
+
+		const message500 = findItem(collection.item, 'POST Send Message').response
+			.find((response) => response.code === 500);
+		expect(JSON.parse(message500.body)).toEqual(expect.objectContaining({
+			code: 'INTERNAL_ERROR',
+			retryable: true,
+		}));
+		expect(message500.header).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'X-Request-Id', value: expect.any(String) }),
+		]));
+
+		const listClassFiltered = findItem(collection.item, 'GET List Alerts (signalClass filter)');
+		expect(listClassFiltered).toBeDefined();
+		expect(listClassFiltered.request.url.raw).toContain('signalClass=breakout,reversal');
+		expect(listClassFiltered.response[0].code).toBe(200);
+
+		const listClassInvalid = findItem(collection.item, 'GET List Alerts (invalid signalClass - 400 Bad Request)');
+		expect(listClassInvalid).toBeDefined();
+		expect(listClassInvalid.response[0].code).toBe(400);
+
+		const summaryClassFiltered = findItem(collection.item, 'GET Alert Analytics Summary (signalClass filter)');
+		expect(summaryClassFiltered).toBeDefined();
+		expect(summaryClassFiltered.request.url.raw).toContain('signalClass=breakout,reversal');
+		expect(summaryClassFiltered.response[0].code).toBe(200);
+
+		const summaryClassInvalid = findItem(collection.item, 'GET Alert Analytics Summary (invalid signalClass - 400 Bad Request)');
+		expect(summaryClassInvalid).toBeDefined();
+		expect(summaryClassInvalid.response[0].code).toBe(400);
+
+		const exportClassFiltered = findItem(collection.item, 'GET Export Alerts (JSONL - signalClass filter)');
+		expect(exportClassFiltered).toBeDefined();
+		expect(exportClassFiltered.request.url.raw).toContain('signalClass=breakout,reversal');
+		expect(exportClassFiltered.response[0].code).toBe(200);
+
+		const exportClassInvalid = findItem(collection.item, 'GET Export Alerts (invalid signalClass - 400 Bad Request)');
+		expect(exportClassInvalid).toBeDefined();
+		expect(exportClassInvalid.response[0].code).toBe(400);
+	});
+
+	it('documents a runnable 413 example for the explicit 100kb non-webhook limit', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const oversizedJob = findItem(
+			collection.item,
+			'POST Create TradingView Analysis Job (oversized non-webhook body - 413)',
+		);
+		expect(oversizedJob.request.url.raw).toBe('{{baseUrl}}/api/jobs/tradingview-analysis');
+		expect(oversizedJob.request.body.raw).toContain('{{oversizedNonWebhookPadding}}');
+		const oversizedJobResponse = oversizedJob.response.find((response) => (
+			response.name === '413 Payload too large'
+		));
+		expect(oversizedJobResponse).toBeDefined();
+		expect(oversizedJobResponse.originalRequest.url.raw).toBe('{{baseUrl}}/api/jobs/tradingview-analysis');
+		expect(oversizedJobResponse.originalRequest.body.raw).toContain('{{oversizedNonWebhookPadding}}');
+		expect(oversizedJobResponse.code).toBe(413);
+		expect(JSON.parse(oversizedJobResponse.body)).toEqual(expect.objectContaining({
+			success: false,
+			error: 'Request body exceeds maximum size',
+			code: 'PAYLOAD_TOO_LARGE',
+			retryable: false,
+		}));
+		const preRequestScript = oversizedJob.event.find((event) => event.listen === 'prerequest').script.exec.join('\n');
+		expect(preRequestScript).toContain("pm.variables.set('oversizedNonWebhookPadding'");
+		expect(preRequestScript).toContain('100 * 1024 + 1024');
+		const testScript = oversizedJob.event.find((event) => event.listen === 'test').script.exec.join('\n');
+		expect(testScript).toContain('pm.response.to.have.status(413)');
+		expect(testScript).toContain("body.code).to.eql('PAYLOAD_TOO_LARGE')");
+	});
+
+	it('documents symbol analysis multi-agent state in status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		expect(JSON.parse(status.response[0].body).featureFlags.symbolAnalysisMultiAgent).toBe(false);
+		expect(JSON.parse(capabilities.response[0].body).featureFlags.symbolAnalysisMultiAgent).toBe(false);
+	});
+
+	it('documents api-only mode state in status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		expect(JSON.parse(status.response[0].body).featureFlags.apiOnlyMode).toBe(false);
+		expect(JSON.parse(capabilities.response[0].body).featureFlags.apiOnlyMode).toBe(false);
+	});
+
+	it('documents telegram command rate limiting state in status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		expect(JSON.parse(status.response[0].body).featureFlags.telegramCommandRateLimiting).toBe(true);
+		expect(JSON.parse(capabilities.response[0].body).featureFlags.telegramCommandRateLimiting).toBe(true);
+	});
+
+	it('documents notificationRedrive and zeroChannelBroadcasts in status and capabilities examples with workerRole, lastSweepAt, and lastSweepResult', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const capabilities = findItem(collection.item, 'Get Capabilities');
+
+		const statusBody = JSON.parse(status.response[0].body);
+		expect(statusBody.featureFlags.notificationRedrive).toBe(false);
+		expect(statusBody.dependencies.notificationRedrive).toEqual(expect.objectContaining({
+			enabled: false,
+			role: 'web',
+			workerRole: 'web',
+			maxAgeMs: 3600000,
+			zeroChannelBroadcasts: 0,
+			lastSweepAt: null,
+			lastSweepResult: null,
+		}));
+
+		const capabilitiesBody = JSON.parse(capabilities.response[0].body);
+		expect(capabilitiesBody.featureFlags.notificationRedrive).toBe(false);
+		expect(capabilitiesBody.dependencies.notificationRedrive).toEqual(expect.objectContaining({
+			enabled: false,
+			role: 'web',
+			workerRole: 'web',
+			maxAgeMs: 3600000,
+			zeroChannelBroadcasts: 0,
+			lastSweepAt: null,
+			lastSweepResult: null,
+		}));
+	});
+
+	it('documents both JSONL and CSV request variants and response examples for batch alert export', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const jsonlExport = findItem(collection.item, 'POST Batch Export Alerts (JSONL)') || findItem(collection.item, 'POST Batch Export Alerts');
+		const csvExport = findItem(collection.item, 'POST Batch Export Alerts (CSV)');
+
+		expect(jsonlExport).toBeDefined();
+		expect(csvExport).toBeDefined();
+
+		const jsonlBody = JSON.parse(jsonlExport.request.body.raw);
+		expect(jsonlBody.format).toBe('jsonl');
+
+		const csvBody = JSON.parse(csvExport.request.body.raw);
+		expect(csvBody.format).toBe('csv');
+
+		const csvSuccess = csvExport.response.find((r) => r.name.includes('CSV'));
+		expect(csvSuccess).toBeDefined();
+		expect(csvSuccess.code).toBe(200);
+	});
+
+	it('documents populated, omitted, and unauthorized response variants for firestore write metrics', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - firestore write metrics');
+
+		expect(item).toBeDefined();
+		const populated = item.response.find((res) => res.name.includes('populated'));
+		const omitted = item.response.find((res) => res.name.includes('omitted'));
+		const unauthorized = item.response.find((res) => res.code === 401);
+
+		expect(populated).toBeDefined();
+		expect(populated.code).toBe(200);
+		expect(JSON.parse(populated.body).dependencies.firestoreWriteMetrics).toBeDefined();
+
+		expect(omitted).toBeDefined();
+		expect(omitted.code).toBe(200);
+		expect(JSON.parse(omitted.body).dependencies.firestoreWriteMetrics).toBeUndefined();
+
+		expect(unauthorized).toBeDefined();
+		expect(unauthorized.code).toBe(401);
+		expect(JSON.parse(unauthorized.body).error).toContain('Unauthorized');
+	});
+
+	it('documents background timer counts in successful status examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - firestore write metrics');
+		const successResponses = item.response.filter((response) => response.code === 200);
+
+		expect(successResponses.length).toBeGreaterThan(0);
+		for (const response of successResponses) {
+			expect(JSON.parse(response.body).dependencies.backgroundTimers).toEqual({
+				registered: expect.any(Number),
+				drained: expect.any(Number),
+				failed: expect.any(Number),
+			});
+		}
+	});
+
+	it('documents the job queue broker readiness variants for the #1117 cutover', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Capabilities - job queue broker readiness (#1117)');
+
+		expect(item).toBeDefined();
+
+		const queueOf = (res) => JSON.parse(res.body).dependencies.jobExecutionQueue;
+		const ready = item.response.find((res) => res.name.includes('ready -'));
+		const unreachable = item.response.find((res) => res.name.includes('unreachable'));
+		const notStarted = item.response.find((res) => res.name.includes('not_started'));
+		const disabled = item.response.find((res) => res.name.includes('disabled -'));
+
+		// The acceptance step in #1117 is a curl against /api/capabilities, so the
+		// request must hit that exact path.
+		expect(item.request.url.path).toEqual(['api', 'capabilities']);
+		expect(JSON.parse(ready.body).featureFlags.jobExecutionWorker).toBe(true);
+
+		expect(queueOf(ready)).toMatchObject({
+			mode: 'render-worker',
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			brokerReachable: true,
+			lastBrokerProbeAt: '2026-10-04T12:00:00.000Z',
+			lastBrokerProbeErrorCode: null,
+		});
+
+		// configured stays true because REDIS_URL is a non-empty string; only the
+		// probe verdict can distinguish this from the healthy case above.
+		expect(queueOf(unreachable)).toMatchObject({
+			configured: true,
+			ready: false,
+			status: 'unreachable',
+			brokerReachable: false,
+			lastBrokerProbeErrorCode: 'JOB_QUEUE_PROBE_TIMEOUT',
+		});
+
+		expect(queueOf(notStarted)).toMatchObject({
+			ready: false,
+			status: 'not_started',
+			brokerReachable: null,
+		});
+
+		expect(queueOf(disabled)).toMatchObject({
+			mode: 'local',
+			enabled: false,
+			status: 'disabled',
+			brokerReachable: null,
+		});
+
+		const scripts = JSON.stringify(item.event);
+		expect(scripts).toContain('unreachable');
+		expect(scripts).toContain('brokerReachable');
+		expect(scripts).toContain('redis://');
+
+		for (const res of item.response) {
+			expect(res.body).not.toContain('queue.example');
+			expect(res.body).not.toContain('redis://');
+		}
+	});
+
+	it('documents unverified, ready, degraded and disabled idempotency storage variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - idempotency storage readiness (issue #1111)');
+
+		expect(item).toBeDefined();
+
+		const unverified = item.response.find((res) => res.name.includes('unverified'));
+		const ready = item.response.find((res) => res.name.includes('a durable reservation has succeeded'));
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const disabled = item.response.find((res) => res.name.includes('gate off'));
+
+		// Issue #1111 acceptance: credential shape must not be reported as proof that
+		// duplicate suppression works, because every Firestore failure falls open.
+		expect(unverified.code).toBe(200);
+		expect(JSON.parse(unverified.body).dependencies.idempotencyStorage).toEqual({
+			enabled: true,
+			configured: true,
+			ready: false,
+			status: 'unverified',
+			mode: 'durable',
+			backend: 'firestore',
+			failOpen: true,
+			readiness: 'unverified',
+			collection: 'idempotency_keys',
+			operationsAttempted: 0,
+			operationsSucceeded: 0,
+			operationsFailed: 0,
+			consecutiveFailures: 0,
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastErrorReason: null,
+		});
+
+		expect(ready.code).toBe(200);
+		expect(JSON.parse(ready.body).dependencies.idempotencyStorage).toMatchObject({
+			ready: true,
+			status: 'ready',
+			readiness: 'verified',
+			operationsSucceeded: 47,
+			consecutiveFailures: 0,
+		});
+
+		expect(degraded.code).toBe(200);
+		expect(JSON.parse(degraded.body).dependencies.idempotencyStorage).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			readiness: 'degraded',
+			// Intent is unchanged while durability is broken, and the fallback is stated.
+			mode: 'durable',
+			backend: 'firestore',
+			failOpen: true,
+			lastErrorReason: 'firestore_unavailable',
+		});
+
+		expect(disabled.code).toBe(200);
+		expect(JSON.parse(disabled.body).dependencies.idempotencyStorage).toMatchObject({
+			enabled: false,
+			ready: false,
+			status: 'disabled',
+			mode: 'ephemeral',
+			backend: 'memory',
+		});
+
+		// Every documented variant must be free of the provider text that Firestore
+		// embeds in its error messages.
+		for (const response of item.response) {
+			expect(response.body).not.toContain('projects/');
+			expect(response.body).not.toContain('console.firebase.google.com');
+		}
+	});
+
+	it('documents unverified, ready, degraded and disabled symbol analysis storage variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - symbol analysis storage readiness (issue #1179)');
+
+		expect(item).toBeDefined();
+
+		const unverified = item.response.find((res) => res.name.includes('unverified'));
+		const ready = item.response.find((res) => res.name.includes('was persisted'));
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const disabled = item.response.find((res) => res.name.includes('flag off'));
+
+		// Issue #1179 acceptance: enabling the flag must not immediately report `ready`,
+		// because every Firestore failure here drops the record and still answers the
+		// analysis, so credential shape alone proves nothing about persistence.
+		expect(unverified.code).toBe(200);
+		expect(JSON.parse(unverified.body).dependencies.symbolAnalysisStorage).toEqual({
+			enabled: true,
+			configured: true,
+			ready: false,
+			status: 'unverified',
+			readiness: 'unverified',
+			failOpen: true,
+			collection: 'symbolAnalyses',
+			retentionDays: 7,
+			writesAttempted: 0,
+			writesSucceeded: 0,
+			writesFailed: 0,
+			readsAttempted: 0,
+			readsSucceeded: 0,
+			readsFailed: 0,
+			consecutiveFailures: 0,
+			lastWriteAt: null,
+			lastFailureAt: null,
+			lastErrorReason: null,
+		});
+
+		expect(ready.code).toBe(200);
+		expect(JSON.parse(ready.body).dependencies.symbolAnalysisStorage).toMatchObject({
+			ready: true,
+			status: 'ready',
+			readiness: 'verified',
+			// Only a write proves persistence; the reads alongside it do not.
+			writesSucceeded: 31,
+			consecutiveFailures: 0,
+		});
+
+		expect(degraded.code).toBe(200);
+		expect(JSON.parse(degraded.body).dependencies.symbolAnalysisStorage).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			readiness: 'degraded',
+			// Intent is unchanged while storage is broken, and the fallback is stated.
+			enabled: true,
+			configured: true,
+			failOpen: true,
+			lastErrorReason: 'firestore_unavailable',
+		});
+
+		expect(disabled.code).toBe(200);
+		expect(JSON.parse(disabled.body).dependencies.symbolAnalysisStorage).toMatchObject({
+			enabled: false,
+			ready: false,
+			status: 'disabled',
+			writesAttempted: 0,
+		});
+
+		// Every documented variant must be free of the provider text that Firestore
+		// embeds in its error messages.
+		for (const response of item.response) {
+			expect(response.body).not.toContain('projects/');
+			expect(response.body).not.toContain('console.firebase.google.com');
+		}
+	});
+
+	it('documents the signal outcome sweep lease observability (issue #1110)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Capabilities - signal outcome sweep lease (issue #1110)');
+
+		expect(item).toBeDefined();
+		expect(item.request.url.raw).toBe('{{baseUrl}}/api/capabilities');
+
+		const winning = item.response.find((res) => res.name.includes('winning evaluator'));
+		const losing = item.response.find((res) => res.name.includes('losing replica'));
+		const lostMidSweep = item.response.find((res) => res.name.includes('ownership lost mid-sweep'));
+
+		// The three fields the PR's stated purpose depends on: an operator has to be
+		// able to identify the winning evaluator from /api/status alone.
+		expect(winning.code).toBe(200);
+		expect(JSON.parse(winning.body).dependencies.signalOutcomeWorker).toMatchObject({
+			leaseMs: 120000,
+			lastRunLeaseHeld: false,
+			leaseHeldSkipCount: 7,
+			lastRunEvaluatedCount: 9,
+		});
+
+		// A replica that never wins the lease is recognisable: the skip counter
+		// climbs while nothing is evaluated.
+		expect(JSON.parse(losing.body).dependencies.signalOutcomeWorker).toMatchObject({
+			leaseMs: 120000,
+			lastRunLeaseHeld: true,
+			leaseHeldSkipCount: 138,
+			lastRunScannedCount: 0,
+			lastRunEvaluatedCount: 0,
+		});
+
+		// Ownership lost mid-sweep: the sweep stopped acting, but it did evaluate
+		// the documents it finished before the renewal proved the lease was gone.
+		expect(JSON.parse(lostMidSweep.body).dependencies.signalOutcomeWorker).toMatchObject({
+			lastRunLeaseHeld: true,
+			leaseHeldSkipCount: 2,
+			lastRunScannedCount: 5,
+			lastRunEvaluatedCount: 2,
+		});
+
+		// The documented lease window must match the service bounds.
+		for (const response of item.response) {
+			const { leaseMs } = JSON.parse(response.body).dependencies.signalOutcomeWorker;
+			expect(leaseMs).toBeGreaterThanOrEqual(10000);
+			expect(leaseMs).toBeLessThanOrEqual(600000);
+			// Lease ownership identity is an internal lock value, never an operator signal.
+			expect(response.body).not.toContain('lockedBy');
+		}
+
+		// Every documented variant must carry runnable assertions, not just examples.
+		const executed = (item.event || []).flatMap((entry) => entry.script.exec).join('\n');
+		expect(executed).toContain('leaseHeldSkipCount');
+		expect(executed).toContain('lastRunLeaseHeld');
+		expect(executed).toContain('leaseMs');
+	});
+
+	it('documents degraded, healthy, and omitted firestore read-metric variants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - firestore read metrics (degraded read path)');
+
+		expect(item).toBeDefined();
+
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const healthy = item.response.find((res) => res.name.includes('healthy'));
+		const omitted = item.response.find((res) => res.name.includes('omitted'));
+		const unauthorized = item.response.find((res) => res.code === 401);
+
+		// Issue #1285 acceptance: a broken read path must be visible on /api/status
+		// as a non-ready dependency with a sanitized category.
+		expect(degraded.code).toBe(200);
+		expect(JSON.parse(degraded.body).dependencies.firestore).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			readHealth: 'degraded',
+			lastReadErrorCategory: 'failed_precondition',
+		});
+		expect(JSON.parse(degraded.body).dependencies.firestoreReadMetrics.lastErrorCategory)
+			.toBe('failed_precondition');
+
+		expect(healthy.code).toBe(200);
+		expect(JSON.parse(healthy.body).dependencies.firestore).toMatchObject({
+			ready: true,
+			status: 'ready',
+			readHealth: 'healthy',
+		});
+
+		expect(omitted.code).toBe(200);
+		expect(JSON.parse(omitted.body).dependencies.firestoreReadMetrics).toBeUndefined();
+		expect(JSON.parse(omitted.body).dependencies.firestore).not.toHaveProperty('readHealth');
+
+		expect(unauthorized.code).toBe(401);
+	});
+
+	it('documents proven equity market-data readiness states for GET Status', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - equity market data readiness (issue #1116)');
+
+		expect(item).toBeDefined();
+
+		const unverified = item.response.find((res) => res.name.includes('unverified'));
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const ready = item.response.find((res) => res.name.includes('ready'));
+
+		// Issue #1116 acceptance: a shaped-but-unproven credential must never read as
+		// ready, so the pre-call state is documented as unverified rather than ready.
+		expect(unverified.code).toBe(200);
+		expect(JSON.parse(unverified.body).dependencies.equityMarketData).toMatchObject({
+			configured: true,
+			ready: false,
+			status: 'unverified',
+			readiness: 'unverified',
+			requestsSucceeded: 0,
+			lastErrorReason: null,
+		});
+
+		expect(degraded.code).toBe(200);
+		expect(JSON.parse(degraded.body).dependencies.equityMarketData).toMatchObject({
+			configured: true,
+			ready: false,
+			status: 'degraded',
+			readiness: 'degraded',
+			consecutiveFailures: 1,
+			lastErrorReason: 'twelve_data_misconfigured',
+		});
+
+		expect(ready.code).toBe(200);
+		expect(JSON.parse(ready.body).dependencies.equityMarketData).toMatchObject({
+			configured: true,
+			ready: true,
+			status: 'ready',
+			readiness: 'verified',
+			requestsSucceeded: 14,
+		});
+
+		for (const res of [unverified, degraded, ready]) {
+			const raw = res.body;
+			expect(raw).not.toMatch(/apikey/i);
+			expect(raw).not.toMatch(/sk-[a-z0-9]/i);
+		}
+	});
+
+	it('ships executable Postman assertions that actually pass on every documented response', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - Firebase admin auth readiness (issue #1134)');
+
+		// Only the 200 variants: the script asserts on `dependencies.adminAuth`,
+		// which the documented 401 error envelope intentionally does not carry.
+		const successes = item.response.filter((res) => res.code === 200);
+		expect(successes).toHaveLength(5);
+
+		for (const res of successes) {
+			const results = runItemTestScript(item, { code: res.code, body: res.body });
+			const failures = results.filter((result) => !result.passed);
+
+			expect({
+				example: res.name,
+				failures: failures.map((failure) => `${failure.name}: ${failure.error}`),
+			}).toEqual({ example: res.name, failures: [] });
+		}
+	});
+
+	it('documents Firebase admin auth gate and proven readiness states for GET Status', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - Firebase admin auth readiness (issue #1134)');
+
+		expect(item).toBeDefined();
+
+		const disabled = item.response.find((res) => res.name.includes('disabled'));
+		const unverified = item.response.find((res) => res.name.includes('unverified'));
+		const ready = item.response.find((res) => res.name.includes('ready'));
+		const degraded = item.response.find((res) => res.name.includes('degraded'));
+		const misconfigured = item.response.find((res) => res.name.includes('misconfigured'));
+		const unauthorized = item.response.find((res) => res.code === 401);
+
+		// The gate must be mirrored exactly into featureFlags, or a client
+		// cannot reconcile the flag with the dependency it drives.
+		for (const res of [disabled, unverified, ready, degraded, misconfigured]) {
+			const body = JSON.parse(res.body);
+			expect(body.featureFlags.firebaseAdminAuth).toBe(body.dependencies.adminAuth.enabled);
+			expect(body.dependencies.adminAuth).not.toHaveProperty('config');
+		}
+
+		// Shape is not readiness: the pre-verification state documents as
+		// unverified, exactly like equityMarketData in issue #1116.
+		expect(JSON.parse(unverified.body).dependencies.adminAuth).toMatchObject({
+			enabled: true,
+			provider: 'firebase',
+			signIn: 'email-password',
+			verifierConfigured: true,
+			browserConfigConfigured: true,
+			ready: false,
+			status: 'unverified',
+			verificationSuccessCount: 0,
+			consecutiveFailures: 0,
+		});
+
+		expect(JSON.parse(ready.body).dependencies.adminAuth).toMatchObject({
+			ready: true,
+			status: 'ready',
+			verificationSuccessCount: 12,
+		});
+
+		// Only verifier-unavailability degrades the dependency. The degraded
+		// example must therefore carry no verification success, since a
+		// rejected bearer token is never counted as a failure.
+		expect(JSON.parse(degraded.body).dependencies.adminAuth).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			verifierConfigured: true,
+			verificationSuccessCount: 0,
+			verifierUnavailableCount: 3,
+			consecutiveFailures: 3,
+		});
+
+		expect(JSON.parse(misconfigured.body).dependencies.adminAuth).toMatchObject({
+			verifierConfigured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+
+		expect(JSON.parse(disabled.body).dependencies.adminAuth).toMatchObject({
+			enabled: false,
+			provider: null,
+			verifierConfigured: false,
+			ready: false,
+			status: 'disabled',
+		});
+
+		expect(unauthorized.code).toBe(401);
+		expect(JSON.parse(unauthorized.body)).toMatchObject({
+			success: false,
+			code: 'ADMIN_AUTH_REQUIRED',
+		});
+
+		for (const res of [disabled, unverified, ready, degraded, misconfigured]) {
+			expect(res.body).not.toMatch(/private_key/);
+			expect(res.body).not.toMatch(/service_account/);
+			expect(res.body).not.toMatch(/authDomain/i);
+		}
+	});
+
+	it('documents the admin auth gate in the primary status and capabilities examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+
+		for (const name of ['Get Status', 'Get Capabilities']) {
+			const item = findItem(collection.item, name);
+			const body = JSON.parse(item.response[0].body);
+			expect(body.featureFlags.firebaseAdminAuth).toBe(false);
+			expect(body.dependencies.adminAuth).toMatchObject({
+				enabled: false,
+				ready: false,
+				status: 'disabled',
+			});
+		}
+	});
+
+	it('documents cloudflareAig routing states for GET Status', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - cloudflareAig routing (issue #1115)');
+
+		expect(item).toBeDefined();
+
+		const inactive = item.response.find((res) => res.name.includes('inactive'));
+		const routed = item.response.find((res) => res.name.includes('ready - gateway is the routed'));
+		const misconfigured = item.response.find((res) => res.name.includes('misconfigured'));
+
+		// Issue #1115 acceptance: ENABLE_CLOUDFLARE_AIG alone does not route traffic, so
+		// credentials present under another provider must document ready:false/inactive
+		// rather than the ready:true the flag-plus-credentials steps used to produce.
+		expect(inactive.code).toBe(200);
+		expect(JSON.parse(inactive.body).dependencies.cloudflareAig).toMatchObject({
+			enabled: true,
+			configured: true,
+			routed: false,
+			provider: 'gemini',
+			ready: false,
+			status: 'inactive',
+		});
+
+		expect(routed.code).toBe(200);
+		expect(JSON.parse(routed.body).dependencies.cloudflareAig).toMatchObject({
+			enabled: true,
+			configured: true,
+			routed: true,
+			provider: 'cloudflare',
+			ready: true,
+			status: 'ready',
+		});
+
+		expect(misconfigured.code).toBe(200);
+		expect(JSON.parse(misconfigured.body).dependencies.cloudflareAig).toMatchObject({
+			enabled: true,
+			configured: false,
+			routed: true,
+			provider: 'cloudflare',
+			ready: false,
+			status: 'misconfigured',
+		});
+
+		for (const res of [inactive, routed, misconfigured]) {
+			const cf = JSON.parse(res.body).dependencies.cloudflareAig;
+			expect(cf.routed).toBe(cf.provider === 'cloudflare');
+			if (cf.ready) {
+				expect(cf.status).toBe('ready');
+				expect(cf.routed).toBe(true);
+			}
+			expect(res.body).not.toMatch(/CF_AIG_TOKEN/);
+			expect(res.body).not.toMatch(/CF_AIG_BASE_URL/);
+		}
+	});
+
+	it('documents both STORAGE_UNAVAILABLE classifications for GET List Alerts', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'GET List Alerts');
+
+		const missingIndex = item.response.find((res) => res.name.includes('missing composite index'));
+		const uninitialized = item.response.find((res) => res.name.includes('check credentials'));
+
+		// The two variants must be mutually exclusive so an operator can tell a
+		// rejected query from a credential/init failure without log access.
+		expect(missingIndex.code).toBe(503);
+		expect(JSON.parse(missingIndex.body)).toMatchObject({
+			code: 'STORAGE_UNAVAILABLE',
+			category: 'failed_precondition',
+			missingIndex: true,
+		});
+		expect(uninitialized.code).toBe(503);
+		expect(JSON.parse(uninitialized.body)).toMatchObject({
+			code: 'STORAGE_UNAVAILABLE',
+			category: 'uninitialized',
+		});
+
+		for (const res of [missingIndex, uninitialized]) {
+			const body = JSON.parse(res.body);
+			expect(body.error).not.toMatch(/projects\//);
+			expect(body.error).not.toMatch(/console\.firebase\.google\.com/);
+		}
+	});
+
+	it('documents distinct invalid query variants for GET Summarize Signal Outcomes', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const invalidLimit = findItem(collection.item, 'GET Summarize Signal Outcomes (invalid limit)');
+		const invalidStatus = findItem(collection.item, 'GET Summarize Signal Outcomes (invalid status)');
+		const invalidWindow = findItem(collection.item, 'GET Summarize Signal Outcomes (invalid window)');
+		const malformedFrom = findItem(collection.item, 'GET Summarize Signal Outcomes (malformed from timestamp)');
+		const malformedTo = findItem(collection.item, 'GET Summarize Signal Outcomes (malformed to timestamp)');
+		const reversedRange = findItem(collection.item, 'GET Summarize Signal Outcomes (reversed time range)');
+
+		expect(invalidLimit).toBeDefined();
+		expect(invalidLimit.request.url.raw).toContain('limit=200');
+		expect(invalidLimit.response[0].code).toBe(400);
+		expect(JSON.parse(invalidLimit.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid limit. Use an integer between 1 and 100.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(invalidStatus).toBeDefined();
+		expect(invalidStatus.request.url.raw).toContain('status=invalid');
+		expect(invalidStatus.response[0].code).toBe(400);
+		expect(JSON.parse(invalidStatus.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid status filter. Use pending, evaluated, or unavailable.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(invalidWindow).toBeDefined();
+		expect(invalidWindow.request.url.raw).toContain('window=invalid');
+		expect(invalidWindow.response[0].code).toBe(400);
+		expect(JSON.parse(invalidWindow.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(malformedFrom).toBeDefined();
+		expect(malformedFrom.request.url.raw).toContain('from=not-a-date');
+		expect(malformedFrom.response[0].code).toBe(400);
+		expect(JSON.parse(malformedFrom.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(malformedTo).toBeDefined();
+		expect(malformedTo.request.url.raw).toContain('to=not-a-date');
+		expect(malformedTo.response[0].code).toBe(400);
+		expect(JSON.parse(malformedTo.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(reversedRange).toBeDefined();
+		expect(reversedRange.request.url.raw).toContain('from=2026-08-30T00:00:00.000Z&to=2026-08-01T00:00:00.000Z');
+		expect(reversedRange.response[0].code).toBe(400);
+		expect(JSON.parse(reversedRange.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid time window. from must be before or equal to to.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		[invalidLimit, invalidStatus, invalidWindow, malformedFrom, malformedTo, reversedRange].forEach((item) => {
+			expect(item.event).toBeDefined();
+			const testEvent = item.event.find((e) => e.listen === 'test');
+			expect(testEvent).toBeDefined();
+			const scriptText = testEvent.script.exec.join('\n');
+			expect(scriptText).toContain('pm.response.to.have.status(400)');
+			expect(scriptText).toContain('INVALID_REQUEST');
+		});
+	});
+
+	it('documents distinct invalid query variants for GET Signal Outcomes Confidence Calibration (issue #1240)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const invalidLimit = findItem(collection.item, 'GET Signal Outcomes Confidence Calibration (invalid limit)');
+		const invalidWindow = findItem(collection.item, 'GET Signal Outcomes Confidence Calibration (invalid window)');
+		const malformedFrom = findItem(collection.item, 'GET Signal Outcomes Confidence Calibration (malformed from timestamp)');
+		const malformedTo = findItem(collection.item, 'GET Signal Outcomes Confidence Calibration (malformed to timestamp)');
+		const reversedRange = findItem(collection.item, 'GET Signal Outcomes Confidence Calibration (reversed time range)');
+
+		expect(invalidLimit).toBeDefined();
+		expect(invalidLimit.request.url.raw).toContain('limit=2000');
+		expect(invalidLimit.response[0].code).toBe(400);
+		expect(JSON.parse(invalidLimit.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid limit. Use an integer between 1 and 1000.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(invalidWindow).toBeDefined();
+		expect(invalidWindow.request.url.raw).toContain('window=invalid');
+		expect(invalidWindow.response[0].code).toBe(400);
+		expect(JSON.parse(invalidWindow.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(malformedFrom).toBeDefined();
+		expect(malformedFrom.request.url.raw).toContain('from=not-a-date');
+		expect(malformedFrom.response[0].code).toBe(400);
+		expect(JSON.parse(malformedFrom.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid from timestamp. Use an ISO-8601 timestamp.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(malformedTo).toBeDefined();
+		expect(malformedTo.request.url.raw).toContain('to=not-a-date');
+		expect(malformedTo.response[0].code).toBe(400);
+		expect(JSON.parse(malformedTo.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid to timestamp. Use an ISO-8601 timestamp.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		expect(reversedRange).toBeDefined();
+		expect(reversedRange.request.url.raw).toContain('from=2026-08-30T00:00:00.000Z&to=2026-08-01T00:00:00.000Z');
+		expect(reversedRange.response[0].code).toBe(400);
+		expect(JSON.parse(reversedRange.response[0].body)).toEqual(
+			expect.objectContaining({
+				error: 'Invalid time window. from must be before or equal to to.',
+				code: 'INVALID_REQUEST',
+			}),
+		);
+
+		[invalidLimit, invalidWindow, malformedFrom, malformedTo, reversedRange].forEach((item) => {
+			expect(item.event).toBeDefined();
+			const testEvent = item.event.find((e) => e.listen === 'test');
+			expect(testEvent).toBeDefined();
+			const scriptText = testEvent.script.exec.join('\n');
+			expect(scriptText).toContain('pm.response.to.have.status(400)');
+			expect(scriptText).toContain('INVALID_REQUEST');
+		});
+	});
+	it('documents idempotency headers and replay examples for volume confirmation and symbol analysis', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const volumeConfirm = findItem(collection.item, 'POST Volume Confirmation');
+		const symbolAnalysis = findItem(collection.item, 'POST Single Symbol Analysis');
+
+		expect(volumeConfirm).toBeDefined();
+		expect(findHeader(volumeConfirm, 'idempotency-key')).toEqual(expect.objectContaining({
+			value: 'volume-confirm-demo-1',
+		}));
+		expect(findHeader(volumeConfirm, 'x-idempotency-key')).toEqual(expect.objectContaining({
+			value: 'volume-confirm-key-1',
+			disabled: true,
+		}));
+		expect(volumeConfirm.response.map((r) => r.name)).toEqual(expect.arrayContaining([
+			'Success - volume confirmed (idempotent replay)',
+			'409 Idempotency conflict',
+			'400 Invalid idempotency key',
+		]));
+
+		expect(symbolAnalysis).toBeDefined();
+		expect(findHeader(symbolAnalysis, 'idempotency-key')).toEqual(expect.objectContaining({
+			value: 'symbol-analysis-demo-1',
+		}));
+		expect(findHeader(symbolAnalysis, 'x-idempotency-key')).toEqual(expect.objectContaining({
+			value: 'symbol-analysis-key-1',
+			disabled: true,
+		}));
+		expect(symbolAnalysis.response.map((r) => r.name)).toEqual(expect.arrayContaining([
+			'Success - decision-ready analysis (idempotent replay)',
+			'409 Idempotency conflict',
+			'400 Invalid idempotency key',
+		]));
+	});
+});
+
+describe('alert analytics summary examples (issue #731)', () => {
+	it('documents complete schema-conforming outcome breakdown responses', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const contract = JSON.parse(fs.readFileSync(
+			path.join(__dirname, '../../src/openapi/openapi.json'), 'utf8'));
+		const required = contract.components.schemas.OutcomesSummary.required;
+		const direct = findItem(collection.item, 'GET Summarize Signal Outcomes (breakdowns)');
+		const alertSummary = findItem(collection.item, 'GET Alert Analytics Summary (outcome breakdowns)');
+		expect(direct).toBeDefined();
+		expect(alertSummary).toBeDefined();
+		const directExample = direct.response.find((response) => response.name === '200 Success (breakdowns)');
+		const shadowExample = alertSummary.response.find((response) => response.name === '200 OK - Shadow mode breakdowns');
+		expect(directExample).toBeDefined();
+		expect(shadowExample).toBeDefined();
+
+		const directSummary = JSON.parse(directExample.body).summary;
+		const shadowMetrics = JSON.parse(shadowExample.body).summary.shadowModeMetrics;
+		expect(Object.keys(directSummary)).toEqual(expect.arrayContaining([...required, 'available']));
+		expect(directSummary.available).toBe(true);
+		expect(Object.keys(shadowMetrics)).toEqual(expect.arrayContaining(required));
+		expect(shadowMetrics).not.toHaveProperty('available');
+	});
+
+	it('documents deployments array in GET Alert Analytics Summary example (issue #1169)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const alertSummary = findItem(collection.item, 'GET Alert Analytics Summary');
+		expect(alertSummary).toBeDefined();
+
+		const summaryExample = alertSummary.response.find((response) => response.name === '200 OK - Analytics summary');
+		expect(summaryExample).toBeDefined();
+
+		const summary = JSON.parse(summaryExample.body).summary;
+		expect(Array.isArray(summary.deployments)).toBe(true);
+		expect(summary.deployments.length).toBeGreaterThan(0);
+		expect(summary.deployments[0]).toEqual(expect.objectContaining({
+			platform: expect.any(String),
+			gitSha: expect.any(String),
+			service: expect.any(String),
+			runtimeVersion: expect.any(String),
+			count: expect.any(Number),
+			lastSeen: expect.any(String),
+		}));
+	});
+});
+
+describe('news-monitor stop/target example (GH-712)', () => {
+	it('POST News Monitor success example includes a populated stop/target alert', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const postItem = findItem(collection.item, 'POST News Monitor');
+		expect(postItem).toBeDefined();
+
+		const successExample = postItem.response.find(
+			(response) => response.name === '200 OK - Analysis summary',
+		);
+		expect(successExample).toBeDefined();
+
+		const body = JSON.parse(successExample.body);
+		const resultsWithBarriers = body.results.filter(
+			(result) => result.alert && typeof result.alert.stop === 'number' && typeof result.alert.target === 'number',
+		);
+		expect(resultsWithBarriers.length).toBeGreaterThanOrEqual(1);
+
+		resultsWithBarriers.forEach((result) => {
+			expect(result.alert.stop).toBeGreaterThan(0);
+			expect(result.alert.target).toBeGreaterThan(result.alert.stop);
+		});
+
+		const resultsWithoutBarriers = body.results.filter(
+			(result) => result.alert && (result.alert.stop === undefined || result.alert.target === undefined),
+		);
+		expect(resultsWithoutBarriers.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it('POST News Monitor (dry run) example includes a populated stop/target alert', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const dryRunItem = findItem(collection.item, 'POST News Monitor (dry run)');
+		expect(dryRunItem).toBeDefined();
+
+		const body = JSON.parse(dryRunItem.response[0].body);
+		const alert = body.results[0].alert;
+		expect(typeof alert.stop).toBe('number');
+		expect(typeof alert.target).toBe('number');
+		expect(alert.stop).toBeGreaterThan(0);
+		expect(alert.target).toBeGreaterThan(alert.stop);
+	});
+
+	// Issue #1109. Re-validating the examples here keeps them honest against the same
+	// invariants their `pm.test` scripts assert, instead of drifting from them.
+	it('Get Status - confluence enrichment counters examples satisfy the counter invariants', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - confluence enrichment counters');
+		expect(item).toBeDefined();
+
+		const allowedFailureCategories = [
+			null, 'timeout', 'http_5xx', 'http_4xx', 'invalid_response',
+			'provider_unavailable', 'circuit_breaker_open', 'request_failed', 'unknown_error',
+		];
+
+		for (const response of item.response) {
+			const body = JSON.parse(response.body);
+			const confluence = body.dependencies.tradingViewMcp.enrichment.confluence;
+
+			expect(confluence.enabled).toBe(body.featureFlags.tradingViewConfluenceEnrichment);
+			expect(typeof confluence.enabled).toBe('boolean');
+			expect(allowedFailureCategories).toContain(confluence.lastFailureCategory);
+			expect(confluence.appliedCount + confluence.failedCount)
+				.toBeLessThanOrEqual(confluence.attemptedCount);
+			expect(response.body).not.toContain('combined_analysis failed');
+			expect(response.body).not.toContain('projects/');
+		}
+	});
+
+	it('Get Status documents MTF-only telemetry with the confluence gate disabled', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - confluence enrichment counters');
+		const example = item.response.find((response) => /multi-timeframe-only/i.test(response.name));
+		expect(example).toBeDefined();
+
+		const body = JSON.parse(example.body);
+		const confluence = body.dependencies.tradingViewMcp.enrichment.confluence;
+		expect(body.featureFlags.tradingViewConfluenceEnrichment).toBe(false);
+		expect(body.featureFlags.tradingViewConfluenceMultiTimeframe).toBe(true);
+		expect(confluence).toMatchObject({
+			enabled: false,
+			attemptedCount: 1,
+			appliedCount: 1,
+			failedCount: 0,
+			budgetExhaustedCount: 0,
+		});
+	});
+
+	it('Get Status - confluence enrichment counters asserts the block is separate from alertPath', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - confluence enrichment counters');
+		const script = item.event.find((entry) => entry.listen === 'test').script.exec.join('\n');
+
+		expect(script).toContain('enrichment.confluence');
+		expect(script).toContain('enrichment.alertPath');
+		expect(script).toContain('appliedCount + c.failedCount');
+	});
+
+	// GH-637: a saved response alone cannot demonstrate the 4,000-character clip, because
+	// the request that produced it must actually send an oversized body. The example is
+	// only runnable if it generates that body itself.
+	it('provides a runnable oversized-alert example that reproduces the truncation response', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'POST Send Alert (truncation metadata)');
+		expect(item).toBeDefined();
+
+		// The body must be larger than the 4,000-character cap, built at runtime.
+		const prerequest = item.event.find((entry) => entry.listen === 'prerequest');
+		expect(prerequest).toBeDefined();
+		const prerequestScript = prerequest.script.exec.join('\n');
+		expect(prerequestScript).toContain('truncationPadding');
+		expect(prerequestScript).toMatch(/repeat\(\s*\d{4,}\s*\)/);
+		expect(item.request.body.raw).toContain('{{truncationPadding}}');
+
+		// And it must assert the documented response rather than only display it.
+		const test = item.event.find((entry) => entry.listen === 'test');
+		expect(test).toBeDefined();
+		const testScript = test.script.exec.join('\n');
+		for (const field of ['truncated', 'originalLength', 'deliveredLength']) {
+			expect(testScript).toContain(field);
+		}
+
+		const example = item.response.find((response) => /truncated/.test(response.name));
+		expect(example.code).toBe(200);
+		const body = JSON.parse(example.body);
+		expect(body.truncated).toBe(true);
+		expect(body.originalLength).toBeGreaterThan(4000);
+		expect(body.deliveredLength).toBe(4003);
+	});
+
+	// The first version of this example was named for a budget-starved multi-timeframe
+	// call while recording failedCount: 0, so it could not represent the scenario it was
+	// named for and the `pm.test` invariant was never exercised against a failure. These
+	// two assertions pin the example to the case it claims to show.
+	it('exercises the budget-starved multi-timeframe case in the confluence status example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const item = findItem(collection.item, 'Get Status - confluence enrichment counters');
+		const example = item.response.find((response) => /multi-timeframe call budget-starved/.test(response.name));
+		expect(example).toBeDefined();
+
+		const body = JSON.parse(example.body);
+		const enrichment = body.dependencies.tradingViewMcp.enrichment;
+		const confluence = enrichment.confluence;
+
+		expect(body.featureFlags.tradingViewConfluenceMultiTimeframe).toBe(true);
+		expect(confluence.failedCount).toBeGreaterThan(0);
+		expect(confluence.lastFailureCategory).not.toBeNull();
+		// Two calls per alert with multi-timeframe on, so the window cannot be 1:1 with alerts.
+		expect(confluence.attemptedCount).toBeGreaterThan(enrichment.alertPath.totalCount);
+		expect(confluence.appliedCount + confluence.failedCount).toBeLessThanOrEqual(confluence.attemptedCount);
+	});
+});
+
+describe('scoped API key Postman examples', () => {
+	it('documents header-only dedicated keys and uses the scoped variable on each surface', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const alert = findItem(collection.item, 'POST Send Alert');
+		const order = findItem(collection.item, 'POST Binance order (dry-run LIMIT)');
+		const balances = findItem(collection.item, 'GET Binance Account Balances');
+		const invalidAdminQuery = findItem(collection.item, 'GET Status (dedicated key query rejected)');
+		const invalidTradingQuery = findItem(collection.item, 'GET Binance Orders (dedicated key query rejected)');
+
+		expect(findHeader(status, 'x-api-key').value).toBe('{{adminApiKey}}');
+		expect(findHeader(alert, 'x-api-key').value).toBe('{{apiKey}}');
+		expect(findHeader(order, 'x-api-key').value).toBe('{{binanceTradingApiKey}}');
+		expect(findHeader(balances, 'x-api-key').value).toBe('{{binanceTradingApiKey}}');
+
+		for (const example of [invalidAdminQuery, invalidTradingQuery]) {
+			expect(example.request.url.raw).toContain('api-key=not-a-valid-key');
+			expect(example.request.header).not.toEqual(expect.arrayContaining([
+				expect.objectContaining({ key: 'x-api-key' }),
+			]));
+			expect(example.response[0].code).toBe(401);
+		}
+		expect(invalidAdminQuery.response[0].body).toContain('ADMIN_AUTH_REQUIRED');
+	});
+
+	it('uses the matching scoped variable for every API request and saved response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		for (const request of collectRequestsAndSavedExamples(collection.item)) {
+			const rawUrl = request.url?.raw || '';
+			if (!rawUrl.includes('/api/')) continue;
+			const header = (request.header || []).find((entry) => entry.key.toLowerCase() === 'x-api-key');
+			if (!header) continue;
+
+			const pathname = new URL(rawUrl.replace('{{baseUrl}}', 'https://placeholder.invalid')).pathname;
+			const expected = pathname.startsWith('/api/webhook/') || pathname === '/api/news-monitor'
+				? '{{apiKey}}'
+				: pathname.startsWith('/api/trading/binance/')
+					? '{{binanceTradingApiKey}}'
+					: '{{adminApiKey}}';
+			expect(header.value).toBe(expected);
+		}
+	});
+});
+
+describe('Binance Spot contingent order contracts (issue #805)', () => {
+	it('publishes dry-run examples for each new Spot order shape and validates order-list lookup', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const contract = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+		const examples = [
+			['POST Binance order (dry-run LIMIT_MAKER)', 'LIMIT_MAKER'],
+			['POST Binance order (dry-run STOP_LOSS)', 'STOP_LOSS'],
+			['POST Binance order (dry-run STOP_LOSS_LIMIT)', 'STOP_LOSS_LIMIT'],
+			['POST Binance order (dry-run TAKE_PROFIT)', 'TAKE_PROFIT'],
+			['POST Binance order (dry-run TAKE_PROFIT_LIMIT)', 'TAKE_PROFIT_LIMIT'],
+			['POST Binance order (dry-run BRACKET_LIMIT OTOCO)', 'BRACKET_LIMIT'],
+			['POST Binance order (dry-run BRACKET_LIMIT OTOCO SELL entry)', 'BRACKET_LIMIT'],
+		];
+		for (const [name, type] of examples) {
+			const item = findItem(collection.item, name);
+			expect(item).toBeDefined();
+			const request = JSON.parse(item.request.body.raw);
+			const response = JSON.parse(item.response[0].body);
+			expect(request).toMatchObject({ type, dryRun: true });
+			expect(response).toMatchObject({ success: true, dryRun: true, environment: 'testnet' });
+		}
+
+		const trailing = findItem(collection.item, 'POST Binance order (dry-run STOP_LOSS_LIMIT trailingDelta)');
+		expect(JSON.parse(trailing.request.body.raw)).toMatchObject({ type: 'STOP_LOSS_LIMIT', trailingDelta: 100 });
+		const invalidFutures = findItem(collection.item, 'POST Binance order (invalid Futures-only type)');
+		expect(invalidFutures.response[0].code).toBe(400);
+		expect(JSON.parse(invalidFutures.response[0].body).code).toBe('INVALID_ORDER_REQUEST');
+		const invalidDelta = findItem(collection.item, 'POST Binance order (invalid trailingDelta format)');
+		expect(JSON.parse(invalidDelta.request.body.raw).trailingDelta).toBe('1.5');
+		expect(JSON.parse(invalidDelta.response[0].body).error).toBe('trailingDelta must be a positive integer number of BIPS');
+		expect(findItem(collection.item, 'GET Binance Orders (by orderListId)')).toBeDefined();
+		expect(findItem(collection.item, 'GET Binance Orders (by listClientOrderId)')).toBeDefined();
+		const sellBracket = JSON.parse(findItem(collection.item, 'POST Binance order (dry-run BRACKET_LIMIT OTOCO SELL entry)').response[0].body);
+		expect(sellBracket.orderList).toMatchObject({
+			pendingAboveType: 'STOP_LOSS_LIMIT',
+			pendingBelowType: 'TAKE_PROFIT_LIMIT',
+			pendingBelowStopPrice: '62000',
+			pendingBelowPrice: '62000',
+		});
+
+		const getOperation = contract.paths['/api/trading/binance/orders'].get;
+		const queryNames = getOperation.parameters.map((parameter) => parameter.name);
+		expect(queryNames).toEqual(expect.arrayContaining(['orderListId', 'listClientOrderId']));
+		const orderTypes = contract.components.schemas.BinanceOrderRequest.properties.type.enum;
+		expect(orderTypes).toEqual(expect.arrayContaining(examples.map(([, type]) => type)));
+		expect(contract.components.schemas.BinanceOrderRequest.properties).toEqual(expect.objectContaining({
+			stopPrice: expect.any(Object),
+			stopLimitPrice: expect.any(Object),
+			takeProfitPrice: expect.any(Object),
+			trailingDelta: expect.any(Object),
+		}));
+		expect(contract.components.schemas.BinanceOrderResult.properties.orderList).toBeDefined();
+		expect(contract.components.schemas.BinanceOrdersQueryResult.properties.orderList).toBeDefined();
+		expect(contract.components.schemas.Status.properties.dependencies.properties.binanceTrading.$ref)
+			.toBe('#/components/schemas/BinanceTradingDependency');
+		const orderRequestExamples = contract.components.requestBodies.BinanceOrder.content['application/json'].examples;
+		expect(orderRequestExamples).toEqual(expect.objectContaining({
+			dryRunBracketLimit: expect.any(Object),
+			dryRunSellBracketLimit: expect.any(Object),
+			dryRunTrailingDelta: expect.any(Object),
+			invalidFuturesOrderType: expect.any(Object),
+			invalidBracketMissingStopLimit: expect.any(Object),
+		}));
+		const successExamples = contract.components.responses.BinanceOrderResult.content['application/json'].examples;
+		expect(successExamples.sellBracketDryRun.value.orderList).toMatchObject({
+			pendingAboveType: 'STOP_LOSS_LIMIT',
+			pendingBelowType: 'TAKE_PROFIT_LIMIT',
+		});
+		const firestore = JSON.parse(fs.readFileSync(path.join(__dirname, '../../firestore.indexes.json'), 'utf8'));
+		expect(firestore.fieldOverrides).toContainEqual(expect.objectContaining({
+			collectionGroup: 'binanceBracketOrders',
+			fieldPath: 'expiresAt',
+			ttl: true,
+		}));
+	});
+});
+
+// `success` was added to both news-monitor read envelopes but the saved 200 examples kept
+// omitting it, so the examples contradicted the runtime and the schema sitting beside them
+// — and nothing enforced it. These assert each example against the schema that declares the
+// field required, so the drift cannot come back silently.
+describe('news-monitor admin read examples (issue #1290)', () => {
+	const readEndpoints = [
+		{ name: 'GET News Monitor Summary', schema: 'NewsAnalysisSummary' },
+		{ name: 'GET News Monitor Analyses', schema: 'NewsAnalysisList' },
+	];
+
+	readEndpoints.forEach(({ name, schema }) => {
+		it(`${name} saved 200 example carries every field its schema marks required`, () => {
+			const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+			const openapi = JSON.parse(fs.readFileSync(
+				path.join(__dirname, '../../src/openapi/openapi.json'), 'utf8'));
+			const item = findItem(collection.item, name);
+			expect(item).toBeDefined();
+
+			const required = openapi.components.schemas[schema].required || [];
+			expect(required).toContain('success');
+
+			const example = item.response.find((response) => response.code === 200);
+			expect(example).toBeDefined();
+			const body = JSON.parse(example.body);
+
+			// The console reads these bodies directly, so an example that understates the
+			// envelope teaches the next reader the wrong contract.
+			expect(Object.keys(body)).toEqual(expect.arrayContaining(required));
+			expect(body.success).toBe(true);
+		});
+	});
+});
+
+describe('CI coverage guards (Postman collection and README endpoints)', () => {
+	it('covers every mounted /api operation from the router and app in the Postman collection', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		expect(getMountedApiOperations()).toContain('GET /api/public/status');
+		const missing = findMissingPostmanOperations(
+			getMountedApiOperations(),
+			extractPostmanApiOperations(collection.item),
+		);
+		expect(missing).toEqual([]);
+	});
+
+	it('documents valid and invalid query examples for news monitor persistence endpoints', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const summary = findItem(collection.item, 'GET News Monitor Summary');
+		const invalidSummary = findItem(collection.item, 'GET News Monitor Summary (invalid threshold)');
+		const analyses = findItem(collection.item, 'GET News Monitor Analyses');
+		const invalidAnalyses = findItem(collection.item, 'GET News Monitor Analyses (invalid limit)');
+
+		expect(summary.request.url.raw).toContain('/api/news-monitor/summary?limit=500&threshold=0.7');
+		expect(JSON.parse(summary.response.find((response) => response.code === 200).body)).toEqual(expect.objectContaining({
+			success: true,
+			totalAnalyses: expect.any(Number),
+			falsePositiveProxy: expect.objectContaining({ threshold: 0.7 }),
+		}));
+		expect(invalidSummary.request.url.raw).toContain('threshold=1.5');
+		expect(JSON.parse(invalidSummary.response.find((response) => response.code === 400).body).code).toBe('INVALID_REQUEST');
+
+		expect(analyses.request.url.raw).toContain('/api/news-monitor/analyses?limit=50');
+		expect(JSON.parse(analyses.response.find((response) => response.code === 200).body)).toEqual(expect.objectContaining({
+			success: true,
+			analyses: expect.any(Array),
+		}));
+		expect(analyses.request.url.query).toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'before', disabled: true }),
+		]));
+		expect(analyses.request.url.query).not.toEqual(expect.arrayContaining([
+			expect.objectContaining({ key: 'beforeCursor' }),
+		]));
+		expect(invalidAnalyses.request.url.raw).toContain('limit=0');
+		expect(JSON.parse(invalidAnalyses.response.find((response) => response.code === 400).body).code).toBe('INVALID_REQUEST');
+	});
+
+	it('fails when a mounted Postman operation is missing', () => {
+		const missing = findMissingPostmanOperations(
+			['GET /api/status', 'POST /api/uncovered-endpoint'],
+			new Set(['GET /api/status']),
+		);
+		expect(missing).toEqual(['POST /api/uncovered-endpoint']);
+	});
+
+	it('matches concrete Postman values to route parameters and preserves methods and static segments', () => {
+		const mounted = [
+			'GET /api/preferences/{param}/{param}',
+			'PUT /api/preferences/{param}/{param}',
+			'GET /api/preferences/{param}/notifications/{param}',
+		];
+		const postman = new Set([
+			'GET /api/preferences/telegram/123456789',
+			'PUT /api/preferences/telegram/123456789',
+			'GET /api/preferences/telegram/notifications/123456789',
+			'GET /api/preferences/discord/wrong/987654321',
+		]);
+
+		expect(findMissingPostmanOperations(mounted, postman)).toEqual([]);
+		expect(findMissingPostmanOperations(
+			['GET /api/preferences/{param}/notifications/{param}'],
+			new Set(['GET /api/preferences/telegram/unread/123456789']),
+		)).toEqual(['GET /api/preferences/{param}/notifications/{param}']);
+		expect(findMissingPostmanOperations(
+			['PUT /api/preferences/{param}/{param}'],
+			new Set(['GET /api/preferences/telegram/123456789']),
+		)).toEqual(['PUT /api/preferences/{param}/{param}']);
+	});
+
+	it('asserts every README API path exists in openapi.json and detects missing paths', () => {
+		const readme = fs.readFileSync(readmePath, 'utf8');
+		const openapi = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+		expect(findMissingReadmePaths(readme, openapi)).toEqual([]);
+		expect(findMissingReadmePaths('Use POST /api/not-in-openapi.', { paths: { '/api/status': {} } }))
+			.toEqual(['/api/not-in-openapi']);
+	});
+
+	it('documents request-ID echo and omitted variants on every documented non-probe API operation (issue #1272)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const openapi = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
+		const probeRoutes = ['/healthcheck', '/ready'];
+
+		const allItems = collectRequestsAndSavedExamples(collection.item);
+		const requestItems = collectRequestItems(collection.item);
+
+		function normalizeUrl(urlObj) {
+			let url = '';
+			if (typeof urlObj === 'string') url = urlObj;
+			else if (urlObj && urlObj.raw) url = urlObj.raw;
+			else if (urlObj && urlObj.path) url = '/' + urlObj.path.join('/');
+			return url.replace('{{baseUrl}}', '').split('?')[0];
+		}
+
+		const missingEcho = [];
+		const missingOmitted = [];
+
+		for (const [routePath, methods] of Object.entries(openapi.paths || {})) {
+			if (probeRoutes.includes(routePath)) continue;
+			for (const [m, op] of Object.entries(methods)) {
+				if (!op || typeof op !== 'object' || !op.operationId) continue;
+				const method = m.toUpperCase();
+				const regexPath = new RegExp('^' + routePath.replace(/\{([^}]+)\}/g, '[^/]+') + '$');
+
+				const matches = requestItems.filter((item) => {
+					const itemMethod = (item.request?.method || 'GET').toUpperCase();
+					if (itemMethod !== method) return false;
+					const u = normalizeUrl(item.request?.url);
+					return regexPath.test(u);
+				});
+
+				const hasEcho = matches.some((item) => {
+					const headers = item.request?.header || [];
+					const hasHeader = headers.some(
+						(h) => (h.key || '').toLowerCase() === 'x-request-id' && h.value && h.value.length > 0,
+					);
+					const testCode = (item.event || [])
+						.filter((e) => e.listen === 'test')
+						.map((e) => e.script?.exec?.join('\n'))
+						.join('\n');
+					return hasHeader && testCode.includes('X-Request-Id') && testCode.includes('pm.test');
+				});
+
+				const hasOmitted = matches.some((item) => {
+					const headers = item.request?.header || [];
+					const hasHeader = headers.some((h) => (h.key || '').toLowerCase() === 'x-request-id');
+					const testCode = (item.event || [])
+						.filter((e) => e.listen === 'test')
+						.map((e) => e.script?.exec?.join('\n'))
+						.join('\n');
+					return !hasHeader && testCode.includes('X-Request-Id') && testCode.includes('pm.test');
+				});
+
+				if (!hasEcho) missingEcho.push(`${method} ${routePath}`);
+				if (!hasOmitted) missingOmitted.push(`${method} ${routePath}`);
+			}
+		}
+
+		expect(missingEcho).toEqual([]);
+		expect(missingOmitted).toEqual([]);
+	});
+
+	it('handles defensive path inputs', () => {
+		expect(normalizeParamPath(null)).toBe('');
+		expect(normalizeParamPath(undefined)).toBe('');
+		expect(findMissingPostmanOperations([], new Set())).toEqual([]);
+		expect(findMissingReadmePaths('', {})).toEqual([]);
+	});
+
+	describe('runtime webhook request validation examples (issue #739)', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const webhooks = findItem(collection.item, 'Webhooks');
+		const examplesFolder = webhooks && findItem(webhooks.item, 'Runtime OpenAPI Request Validation');
+		const cases = [
+			{ name: 'POST Alert (invalid body)', route: '/api/webhook/alert', path: '/text', keyword: 'required' },
+			{ name: 'POST Message (invalid body)', route: '/api/webhook/message', path: '/message', keyword: 'minLength' },
+			{ name: 'POST Expanded Analysis (invalid body)', route: '/api/webhook/expanded-analysis-alert', path: '/symbols/0', keyword: 'pattern' },
+			{ name: 'POST Market Scanner (invalid body)', route: '/api/webhook/market-scanner-alert', path: '/scans/0', keyword: 'enum' },
+			{ name: 'POST Volume Confirmation (invalid body)', route: '/api/webhook/volume-confirmation', path: '/symbol', keyword: 'pattern' },
+			{ name: 'POST Symbol Analysis (invalid body)', route: '/api/webhook/symbol-analysis', path: '/timeframe', keyword: 'enum' },
+			{ name: 'POST Alert (invalid query)', route: '/api/webhook/alert', query: '?autoTrade=invalid', location: 'query', path: '/autoTrade', keyword: 'type' },
+		];
+
+		it('publishes invalid response examples and retains valid requests for all six operations', () => {
+			expect(examplesFolder).toBeDefined();
+			const invalidItems = collectRequestItems(examplesFolder?.item || []);
+			const allItems = collectRequestItems(collection.item);
+			expect(invalidItems).toHaveLength(cases.length);
+
+			for (const example of cases) {
+				const item = invalidItems.find((candidate) => candidate.name === example.name);
+				expect(item).toBeDefined();
+				expect(item.request.url.raw).toContain(`${example.route}${example.query || ''}`);
+				expect(() => JSON.parse(item.request.body.raw)).not.toThrow();
+				const response = item.response.find((candidate) => candidate.code === 400);
+				expect(response).toBeDefined();
+				const body = JSON.parse(response.body);
+				expect(body).toMatchObject({
+					success: false,
+					code: 'VALIDATION_ERROR',
+					retryable: false,
+					details: { errors: [{ location: example.location || 'body', path: example.path, keyword: example.keyword }] },
+				});
+				expect(Object.keys(body.details.errors[0]).sort()).toEqual(['keyword', 'location', 'path']);
+				expect(allItems.some((candidate) => (
+					candidate.request.url.raw.includes(example.route)
+					&& (candidate.response || []).some((saved) => saved.code >= 200 && saved.code < 300)
+				))).toBe(true);
+			}
+		});
 	});
 });

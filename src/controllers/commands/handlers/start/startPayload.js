@@ -29,19 +29,28 @@ const WELCOME_COPY = {
 		enrolled: '¡Listo! Te registré como nuevo chat de Cabros Bot.',
 		languageUpdated: 'Idioma actualizado a Español.',
 		watchUpdated: 'Tu watchlist quedó con {symbols}.',
-		refRecorded: 'Origen registrado: {ref}.',
+		refRecorded: 'Origen registrado.',
 		generic: '¡Hola! Soy Cabros Bot. Estoy listo para ayudarte con señales y precios.',
 	},
 	en: {
 		enrolled: "All set! You're registered as a new Cabros Bot chat.",
 		languageUpdated: 'Language updated to English.',
 		watchUpdated: 'Your watchlist is now {symbols}.',
-		refRecorded: 'Referral recorded: {ref}.',
+		refRecorded: 'Referral recorded.',
 		generic: "Hi! I'm Cabros Bot. Ready to help with signals and prices.",
 	},
 };
 
 const DEFAULT_LANGUAGE = 'es';
+const DEEP_LINK_PREFIX = 'v1_';
+
+function encodeStartPayload(rawPayload) {
+	const parsed = parseStartPayload(rawPayload);
+	if (parsed.invalid || parsed.tokens.length === 0) throw new TypeError('Invalid start payload');
+	const encoded = DEEP_LINK_PREFIX + Buffer.from(rawPayload, 'utf8').toString('base64url');
+	if (encoded.length > MAX_PAYLOAD_LENGTH) throw new RangeError('Start payload exceeds Telegram limit');
+	return encoded;
+}
 
 function isSupportedLanguage(value) {
 	return typeof value === 'string' && ALLOWED_LANGUAGES.has(value.trim().toLowerCase());
@@ -85,7 +94,7 @@ function parseRefValue(value) {
  * @param {string} [rawPayload]
  * @returns {{tokens: Array<{kind: string, value: string|Array<string>}>, language: string|null, watchlist: string[], refSource: string|null, invalid: boolean}}
  */
-function parseStartPayload(rawPayload) {
+function parseStartPayload(rawPayload, decoded = false) {
 	const emptyResult = {
 		tokens: [],
 		language: null,
@@ -98,6 +107,15 @@ function parseStartPayload(rawPayload) {
 	if (!trimmed) return emptyResult;
 	if (trimmed.length > MAX_PAYLOAD_LENGTH) {
 		return { ...emptyResult, invalid: true };
+	}
+	if (!decoded && trimmed.startsWith(DEEP_LINK_PREFIX)) {
+		const encoded = trimmed.slice(DEEP_LINK_PREFIX.length);
+		if (!/^[A-Za-z0-9_-]+$/.test(encoded)) return { ...emptyResult, invalid: true };
+		const bytes = Buffer.from(encoded, 'base64url');
+		if (bytes.toString('base64url') !== encoded) return { ...emptyResult, invalid: true };
+		const value = bytes.toString('utf8');
+		if (!Buffer.from(value, 'utf8').equals(bytes)) return { ...emptyResult, invalid: true };
+		return parseStartPayload(value, true);
 	}
 
 	const tokens = trimmed.split('&').map((part) => part.trim()).filter(Boolean);
@@ -182,7 +200,7 @@ function buildWelcomeMessage(parsedResult, preferredLanguage) {
 
 	const lines = [];
 	let headline = copy.generic;
-	if (parsedResult && Array.isArray(parsedResult.tokens) && parsedResult.tokens.length > 0) {
+	if (parsedResult && !parsedResult.invalid && Array.isArray(parsedResult.tokens) && parsedResult.tokens.length > 0) {
 		const kinds = new Set(parsedResult.tokens.map((token) => token.kind));
 		if (kinds.has('enroll')) headline = copy.enrolled;
 		else if (kinds.has('lang')) headline = copy.languageUpdated;
@@ -190,7 +208,7 @@ function buildWelcomeMessage(parsedResult, preferredLanguage) {
 			const symbols = (parsedResult.watchlist || []).join(', ');
 			headline = copy.watchUpdated.replace('{symbols}', symbols);
 		} else if (kinds.has('ref')) {
-			headline = copy.refRecorded.replace('{ref}', parsedResult.refSource || '');
+			headline = copy.refRecorded;
 		}
 	}
 	lines.push(headline);
@@ -223,6 +241,7 @@ function buildStartMessage(rawPayload, preferredLanguage) {
 
 module.exports = {
 	parseStartPayload,
+	encodeStartPayload,
 	buildWelcomeMessage,
 	buildStartMessage,
 	MAX_PAYLOAD_LENGTH,

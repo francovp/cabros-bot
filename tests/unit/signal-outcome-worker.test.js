@@ -34,6 +34,8 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT;
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS;
 		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
+		process.env.WORKER_STARTUP_JITTER_MS = '0';
+		process.env.SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS = '0';
 	});
 
 	afterEach(() => {
@@ -48,6 +50,8 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_BATCH_LIMIT;
 		delete process.env.SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS;
 		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
+		delete process.env.WORKER_STARTUP_JITTER_MS;
+		delete process.env.SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS;
 	});
 
 	describe('Disabled Tracking Behavior', () => {

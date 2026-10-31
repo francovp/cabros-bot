@@ -1,8 +1,17 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+
 const chatEnrollmentsService = require('../../src/services/enrollments/ChatEnrollmentsService');
 
 describe('ChatEnrollmentsService', () => {
+	it('ships a Firestore TTL policy for enrollment retention', () => {
+		const indexes = JSON.parse(fs.readFileSync(path.join(__dirname, '../../firestore.indexes.json'), 'utf8'));
+		expect(indexes.fieldOverrides).toContainEqual(expect.objectContaining({
+			collectionGroup: 'chatEnrollments', fieldPath: 'expiresAt', ttl: true,
+		}));
+	});
 	let originalEnv;
 
 	beforeEach(() => {
@@ -93,7 +102,7 @@ describe('ChatEnrollmentsService', () => {
 		});
 
 		it('limits watchlist to MAX_WATCHLIST_LENGTH entries', () => {
-			const many = Array.from({ length: 30 }, (_, i) => `SYM${i}USDT`);
+			const many = Array.from({ length: 60 }, (_, i) => `SYM${i}USDT`);
 			const result = chatEnrollmentsService.normalizeWatchlist(many);
 			expect(result).toHaveLength(chatEnrollmentsService.MAX_WATCHLIST_LENGTH);
 		});
@@ -128,6 +137,18 @@ describe('ChatEnrollmentsService', () => {
 	});
 
 	describe('enroll + getByChatId', () => {
+		it('hides expired in-memory enrollments before Firestore TTL cleanup', async () => {
+			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+			const clock = jest.spyOn(Date, 'now').mockReturnValue(1000);
+			try {
+				await chatEnrollmentsService.enroll({ chatId: 99, language: 'es' });
+				clock.mockReturnValue(1000 + 91 * 24 * 60 * 60 * 1000);
+				expect(await chatEnrollmentsService.getByChatId(99)).toBeNull();
+				expect((await chatEnrollmentsService.getSummary()).count).toBe(0);
+			} finally {
+				clock.mockRestore();
+			}
+		});
 		it('returns null and persists nothing when feature is disabled', async () => {
 			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
 			// disable gate again to verify the disabled branch
@@ -173,9 +194,102 @@ describe('ChatEnrollmentsService', () => {
 			const result = await chatEnrollmentsService.enroll({ chatId: 'not-a-number' });
 			expect(result).toBeNull();
 		});
+
+		it('does not let an older delayed write replace a newer enrollment', async () => {
+			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+			let stored = null;
+			let releaseFirst;
+			let writes = 0;
+			const db = {
+				collection: () => ({ doc: () => ({
+					set: (payload) => {
+						writes += 1;
+						if (writes === 1) return new Promise((resolve) => {
+							releaseFirst = () => { stored = payload; resolve(); };
+						});
+						stored = payload;
+						return Promise.resolve();
+					},
+				}) }),
+				runTransaction: async (work) => {
+					writes += 1;
+					if (writes === 1) await new Promise((resolve) => { releaseFirst = resolve; });
+					await work({
+						get: async () => ({ exists: Boolean(stored), data: () => stored }),
+						set: (_ref, payload) => { stored = payload; },
+					});
+				},
+			};
+			chatEnrollmentsService._setFirestoreForTesting(db);
+			const first = chatEnrollmentsService.enroll({ chatId: 42, language: 'es' });
+			const second = chatEnrollmentsService.enroll({ chatId: 42, language: 'en' });
+			await second;
+			releaseFirst();
+			await first;
+			expect(stored.language).toBe('en');
+		});
 	});
 
 	describe('getSummary', () => {
+		it('includes a failed Firestore write in the bounded memory fallback', async () => {
+			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+			chatEnrollmentsService._setFirestoreForTesting({
+				collection: () => ({
+					doc: () => ({}),
+					limit: () => ({ get: () => Promise.resolve({ size: 0, forEach: () => {} }) }),
+				}),
+				runTransaction: () => Promise.reject(new Error('unavailable')),
+			});
+			await chatEnrollmentsService.enroll({ chatId: 42, language: 'es' });
+			const summary = await chatEnrollmentsService.getSummary({ includeChatIds: true });
+			expect(summary.count).toBe(1);
+			expect(summary.records[0].chatId).toBe('42');
+			expect(summary.mode).toBe('ephemeral');
+			expect(chatEnrollmentsService.getStorageStatus().status).toBe('degraded');
+		});
+
+		it('caps the in-memory enrollment cache', async () => {
+			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+			for (let chatId = 1; chatId <= 1002; chatId += 1) {
+				await chatEnrollmentsService.enroll({ chatId });
+			}
+			expect(chatEnrollmentsService.getStorageStatus().count).toBe(1000);
+			expect(await chatEnrollmentsService.getByChatId(1)).toBeNull();
+		});
+		it('does not retain failed writes for records evicted during concurrent starts', async () => {
+			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+			const failures = new Map();
+			chatEnrollmentsService._setFirestoreForTesting({
+				collection: () => ({
+					doc: (chatId) => ({ id: chatId }),
+					limit: () => ({ get: () => Promise.resolve({ size: 0, forEach: () => {} }) }),
+				}),
+				runTransaction: (work) => work({
+					get: (ref) => Number(ref.id) <= 2
+						? new Promise((_, reject) => failures.set(ref.id, reject))
+						: Promise.resolve({ exists: false }),
+					set: () => {},
+				}),
+			});
+			const pending = Array.from({ length: 1002 }, (_, index) =>
+				chatEnrollmentsService.enroll({ chatId: index + 1 }));
+			failures.get('1')(new Error('unavailable'));
+			failures.get('2')(new Error('unavailable'));
+			await Promise.all(pending);
+			expect(chatEnrollmentsService.getStorageStatus().count).toBe(1000);
+			await chatEnrollmentsService.getSummary();
+			expect(chatEnrollmentsService.getStorageStatus().status).toBe('ready');
+		});
+		it('respects the requested scan limit', async () => {
+			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+			await chatEnrollmentsService.enroll({ chatId: 1 });
+			await chatEnrollmentsService.enroll({ chatId: 2 });
+			await chatEnrollmentsService.enroll({ chatId: 3 });
+			const summary = await chatEnrollmentsService.getSummary({ limit: 2, includeChatIds: true });
+			expect(summary.count).toBe(2);
+			expect(summary.records).toHaveLength(2);
+			expect(summary.partial).toBe(true);
+		});
 		it('returns zero-counts with ephemeral mode when feature is disabled', async () => {
 			const summary = await chatEnrollmentsService.getSummary();
 			expect(summary.mode).toBe('ephemeral');
@@ -209,6 +323,15 @@ describe('ChatEnrollmentsService', () => {
 	});
 
 	describe('getStorageStatus', () => {
+		it('keeps Firestore unverified until a successful operation and degrades after a failed read', async () => {
+			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+			chatEnrollmentsService._setFirestoreForTesting({ collection: () => ({
+				limit: () => ({ get: () => Promise.reject(new Error('unavailable')) }),
+			}) });
+			expect(chatEnrollmentsService.getStorageStatus().status).toBe('unverified');
+			await chatEnrollmentsService.getSummary();
+			expect(chatEnrollmentsService.getStorageStatus().status).toBe('degraded');
+		});
 		it('reports disabled when env gate is false', () => {
 			const status = chatEnrollmentsService.getStorageStatus();
 			expect(status.enabled).toBe(false);

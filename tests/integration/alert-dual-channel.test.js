@@ -172,4 +172,111 @@ describe('Dual-Channel Alert Integration', () => {
 			expect(enabledChannels).not.toContain('whatsapp');
 		});
 	});
+
+	describe('signalClass marker rendering', () => {
+		afterEach(() => {
+			delete process.env.ENABLE_SIGNAL_CLASS_MARKER;
+		});
+
+		it('renders breakout marker on both Telegram and WhatsApp', async () => {
+			await telegramService.validate();
+			await whatsappService.validate();
+
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				json: async () => ({ success: true, idMessage: 'whatsapp-msg-breakout' }),
+			});
+
+			await notificationManager.sendToAll({
+				text: 'BTCUSDT breakout confirmed',
+				signalClass: 'breakout',
+			});
+
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledWith(
+				process.env.TELEGRAM_CHAT_ID,
+				expect.stringMatching(/^🎯 breakout\n\n/),
+				expect.objectContaining({ parse_mode: 'MarkdownV2' }),
+			);
+
+			const waCall = global.fetch.mock.calls[0];
+			const waBody = JSON.parse(waCall[1].body);
+			expect(waBody.message).toMatch(/^🎯 breakout\n\n/);
+		});
+
+		it('renders mean_reversion marker with escaped underscore on Telegram and plain on WhatsApp', async () => {
+			await telegramService.validate();
+			await whatsappService.validate();
+
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				json: async () => ({ success: true, idMessage: 'whatsapp-msg-mr' }),
+			});
+
+			await notificationManager.sendToAll({
+				text: 'ETHUSDT oversold bounce',
+				signalClass: 'mean_reversion',
+			});
+
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledWith(
+				process.env.TELEGRAM_CHAT_ID,
+				expect.stringMatching(/^🔄 mean\\_reversion\n\n/),
+				expect.objectContaining({ parse_mode: 'MarkdownV2' }),
+			);
+
+			const waCall = global.fetch.mock.calls[0];
+			const waBody = JSON.parse(waCall[1].body);
+			expect(waBody.message).toMatch(/^🔄 mean_reversion\n\n/);
+		});
+
+		it('omits marker when signalClass is unknown', async () => {
+			await telegramService.validate();
+			await whatsappService.validate();
+
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				json: async () => ({ success: true, idMessage: 'whatsapp-msg-unknown' }),
+			});
+
+			await notificationManager.sendToAll({
+				text: 'SOLUSDT random signal',
+				signalClass: 'unknown',
+			});
+
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledWith(
+				process.env.TELEGRAM_CHAT_ID,
+				expect.not.stringMatching(/🎯|↩️|🔄|📈|⚡|📰|✍️/),
+				expect.objectContaining({ parse_mode: 'MarkdownV2' }),
+			);
+
+			const waCall = global.fetch.mock.calls[0];
+			const waBody = JSON.parse(waCall[1].body);
+			expect(waBody.message).not.toMatch(/🎯|↩️|🔄|📈|⚡|📰|✍️/);
+		});
+
+		it('omits marker when ENABLE_SIGNAL_CLASS_MARKER is false', async () => {
+			process.env.ENABLE_SIGNAL_CLASS_MARKER = 'false';
+			await telegramService.validate();
+			await whatsappService.validate();
+
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				json: async () => ({ success: true, idMessage: 'whatsapp-msg-disabled' }),
+			});
+
+			await notificationManager.sendToAll({
+				text: 'BTCUSDT breakout confirmed',
+				signalClass: 'breakout',
+			});
+
+			expect(mockBot.telegram.sendMessage).toHaveBeenCalledWith(
+				process.env.TELEGRAM_CHAT_ID,
+				expect.not.stringMatching(/^🎯 breakout/),
+				expect.objectContaining({ parse_mode: 'MarkdownV2' }),
+			);
+
+			const waCall = global.fetch.mock.calls[0];
+			const waBody = JSON.parse(waCall[1].body);
+			expect(waBody.message).not.toMatch(/^🎯 breakout/);
+		});
+	});
 });
