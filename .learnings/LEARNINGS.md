@@ -1,3 +1,63 @@
+## [LRN-20261031-194500-0001] correction
+
+**Logged**: 2026-10-31T19:45:00.000000Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+@gigachad-senior-dev correction on PR #1479 (fix(precio): preserve 2-decimal precision for crypto prices >= 1): Additional feedback beyond LRN-20261029-234500-0001. The sub-dollar price precision cap should use a **fixed module-level constant** (e.g., `SUB_DOLLAR_MAX_DECIMALS = 8`) rather than an env var, since precision is a UX/display concern, not a runtime operational knob. 8 decimals matches Binance's typical tick size for most pairs. Additionally, the 24h ticker high/low enrichment should apply the same rounding policy: `round10(value, -2)` for values >= 1 and the sub-dollar constant for values < 1, centralized in the enrichment block.
+
+### Details
+```js
+// src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js
+// Line ~158: sub-dollar branch passes data.price untouched
+// Add: const SUB_DOLLAR_MAX_DECIMALS = 8;
+// Apply: round10(data.price, -SUB_DOLLAR_MAX_DECIMALS) for < 1
+// Lines 161-180: 24h ticker high/low enrichment should use same rounding
+```
+
+### Suggested Action
+Add boundary test for 0.9999 -> 1.0000 transition. Implement fixed `SUB_DOLLAR_MAX_DECIMALS = 8` constant. Apply consistent rounding to 24h ticker high/low in enrichment block.
+
+### Metadata
+- Source: github_review
+- Related Files: src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js
+- Tags: correction, feedback, price-precision, testing, constants
+- See Also: https://github.com/francovp/cabros-bot/pull/1479
+- Pattern-Key: harden.feedback_response
+
+---
+
+## [LRN-20261031-194500-0002] correction
+
+**Logged**: 2026-10-31T19:45:00.000000Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+@gigachad-senior-dev feedback on PR #1257 (feat(alerts): add opt-in inline chart attachments for notifications): The chart implementation correctly uses **zero native dependencies** - rendering is done via two new files: `pngEncoder.js` (8-bit RGBA PNG writer using Node's built-in `zlib.deflateSync`) and `rasterCanvas.js` (minimal RGBA canvas with Bresenham lines, polylines, dashed lines, and 5x7 bitmap font). The feature flag `ENABLE_CHART_ATTACHMENTS` (default `false`) gates the entire feature at entry point. No preview command or dry-run endpoint exists - a `POST /api/charts/preview` or Telegram `/chart` command would be a follow-up. Issue/PR labels should be retitled from `type/bug` to `type/enhancement` since nothing is broken and acceptance criteria are capability verifications.
+
+### Details
+- `src/services/notification/charts/pngEncoder.js` - dependency-free PNG writer
+- `src/services/notification/charts/rasterCanvas.js` - custom canvas implementation
+- `src/services/notification/charts/chartRenderer.js` - sparkline + candlestick composition
+- Flag: `ENABLE_CHART_ATTACHMENTS` (default `false`)
+- Channels: Telegram (sendPhoto), WhatsApp (sendFileByUpload, single attempt), Discord (skip, log only)
+
+### Suggested Action
+Update issue #799 and PR #1257 labels from `type/bug` to `type/enhancement`. Consider follow-up for chart preview endpoint/command.
+
+### Metadata
+- Source: github_review
+- Related Files: src/services/notification/charts/, PR #1257
+- Tags: correction, feedback, charts, feature-flag, labeling
+- See Also: https://github.com/francovp/cabros-bot/pull/1257
+- Pattern-Key: harden.feedback_response
+
+---
+
 ## [LRN-20261031-094500-0001] correction
 
 **Logged**: 2026-10-31T09:45:00.000000Z
