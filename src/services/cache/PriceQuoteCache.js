@@ -29,10 +29,10 @@
 
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
-const DEFAULT_TTL_MS_CRYPTO = 15000;        // 15 s — chat tolerance for crypto
-const DEFAULT_TTL_MS_EQUITY = 60000;        // 60 s — chat tolerance for equities
-const MAX_ENTRIES_PER_BUCKET = 256;         // mirrors scanner preset precedent
-const MAX_KEY_LENGTH = 128;                  // avoid unbounded keys / DoS
+const DEFAULT_TTL_MS_CRYPTO = 15000; // 15 s — chat tolerance for crypto
+const DEFAULT_TTL_MS_EQUITY = 60000; // 60 s — chat tolerance for equities
+const MAX_ENTRIES_PER_BUCKET = 256; // mirrors scanner preset precedent
+const MAX_KEY_LENGTH = 128; // avoid unbounded keys / DoS
 
 const BUCKET_PROVIDERS = Object.freeze({
 	CRYPTO: 'crypto',
@@ -58,19 +58,24 @@ function clampInt(value, min, max, fallback) {
 }
 
 function resolveBucketConfig(provider) {
-	const rc = getRuntimeConfig?.() || {};
+	let rc = {};
+	try {
+		rc = getRuntimeConfig() || {};
+	} catch (error) {
+		console.warn('[PriceQuoteCache] Runtime configuration unavailable; using defaults.');
+	}
 	if (provider === BUCKET_PROVIDERS.CRYPTO) {
 		const ttl = clampInt(
 			parsePositiveInteger(rc.PRICE_CACHE_TTL_MS_CRYPTO, DEFAULT_TTL_MS_CRYPTO),
 			1000,
 			600000,
-			DEFAULT_TTL_MS_CRYPTO
+			DEFAULT_TTL_MS_CRYPTO,
 		);
 		const max = clampInt(
 			parsePositiveInteger(rc.PRICE_CACHE_MAX_ENTRIES_PER_BUCKET, MAX_ENTRIES_PER_BUCKET),
 			1,
 			10000,
-			MAX_ENTRIES_PER_BUCKET
+			MAX_ENTRIES_PER_BUCKET,
 		);
 		return { ttlMs: ttl, maxEntries: max };
 	}
@@ -79,13 +84,13 @@ function resolveBucketConfig(provider) {
 			parsePositiveInteger(rc.PRICE_CACHE_TTL_MS_EQUITY, DEFAULT_TTL_MS_EQUITY),
 			1000,
 			600000,
-			DEFAULT_TTL_MS_EQUITY
+			DEFAULT_TTL_MS_EQUITY,
 		);
 		const max = clampInt(
 			parsePositiveInteger(rc.PRICE_CACHE_MAX_ENTRIES_PER_BUCKET, MAX_ENTRIES_PER_BUCKET),
 			1,
 			10000,
-			MAX_ENTRIES_PER_BUCKET
+			MAX_ENTRIES_PER_BUCKET,
 		);
 		return { ttlMs: ttl, maxEntries: max };
 	}

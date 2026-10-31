@@ -17,6 +17,13 @@ describe('PriceQuoteCache', () => {
 		priceQuoteCache._resetForTesting();
 	});
 
+	it('keeps cache writes and status fail-open when runtime configuration throws', () => {
+		remoteConfigService.getRuntimeConfig.mockImplementation(() => { throw new Error('config unavailable'); });
+		expect(() => priceQuoteCache.set(priceQuoteCache.PROVIDERS.CRYPTO, 'BTCUSDT', { price: 65000 })).not.toThrow();
+		expect(priceQuoteCache.getStatus().ttlMs.crypto).toBe(priceQuoteCache.DEFAULT_TTL_MS_CRYPTO);
+		expect(priceQuoteCache.get(priceQuoteCache.PROVIDERS.CRYPTO, 'BTCUSDT')).toEqual({ price: 65000 });
+	});
+
 	describe('get / set', () => {
 		it('returns null for missing crypto entries and increments misses', () => {
 			expect(priceQuoteCache.get(priceQuoteCache.PROVIDERS.CRYPTO, 'BTCUSDT')).toBeNull();

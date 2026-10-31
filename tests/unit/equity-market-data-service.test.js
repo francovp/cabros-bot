@@ -8,6 +8,7 @@ describe('EquityMarketDataService', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
 		EquityMarketDataService._resetPacerForTesting();
+		EquityMarketDataService._resetReadinessForTesting();
 		delete process.env.ENABLE_EQUITY_MARKET_DATA;
 		delete process.env.EQUITY_MARKET_DATA_PROVIDER;
 		delete process.env.TWELVE_DATA_API_KEY;
@@ -21,6 +22,7 @@ describe('EquityMarketDataService', () => {
 	afterEach(() => {
 		global.fetch = originalFetch;
 		EquityMarketDataService._resetPacerForTesting();
+		EquityMarketDataService._resetReadinessForTesting();
 		process.env.EQUITY_MARKET_DATA_RPM = '0';
 		delete process.env.TWELVE_DATA_RPM;
 		delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
@@ -411,6 +413,227 @@ describe('EquityMarketDataService', () => {
 			});
 
 			EquityMarketDataService._resetPacerForTesting();
+		});
+	});
+
+	/**
+	 * Issue #1116 — truthful equity market data readiness.
+	 *
+	 * `configured` is derived only from credential *shape*
+	 * (`enabled && provider === 'twelve-data' && apiKey.length > 0`). Reading that
+	 * as "the feature works" is the lying-flag failure this repo has already had to
+	 * fix twice: `firebaseRemoteConfig.ready` (#598) is true only after a proven,
+	 * still-fresh load, and Firestore `readHealth` (#1285) drives
+	 * `dependencies.firestore.ready` to false because shape validation reported
+	 * `ready: true` while 100% of reads were rejected.
+	 *
+	 * A Twelve Data key that is present but typo'd, revoked, quota-exhausted, on a
+	 * plan that does not cover the venue, or simply unreachable from the Render
+	 * region all read as `ready: true` today. Readiness must therefore mean
+	 * "proven by an observed provider call", with `unverified` as a distinct,
+	 * explicitly non-healthy state for the window before any call is made.
+	 */
+	describe('proven provider readiness (issue #1116)', () => {
+		function mockQuoteOk(close = '150.25') {
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: true,
+				status: 200,
+				json: async () => ({ status: 'ok', close }),
+			});
+		}
+
+		function mockAuthFailure() {
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: false,
+				status: 401,
+				headers: new Map(),
+				json: async () => ({ code: 401, message: 'Invalid API key' }),
+			});
+		}
+
+		it('reports unverified, not ready, when credentials are shaped correctly but no call has succeeded', () => {
+			configure();
+
+			// The key has the right shape, so `configured` is true — that is a fact about
+			// configuration, and it stays true. But nothing has proven the key works.
+			expect(EquityMarketDataService.getStatus()).toMatchObject({
+				enabled: true,
+				configured: true,
+				readiness: EquityMarketDataService.READINESS.UNVERIFIED,
+				ready: false,
+				status: 'unverified',
+				requestsAttempted: 0,
+				requestsSucceeded: 0,
+				requestsFailed: 0,
+				lastSuccessAt: null,
+				lastFailureAt: null,
+				lastErrorReason: null,
+			});
+		});
+
+		it('reports ready only after a provider call has actually succeeded', async () => {
+			configure();
+			mockQuoteOk();
+
+			await expect(EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' }))
+				.resolves.toBe(150.25);
+
+			expect(EquityMarketDataService.getStatus()).toMatchObject({
+				configured: true,
+				readiness: EquityMarketDataService.READINESS.VERIFIED,
+				ready: true,
+				status: 'ready',
+				requestsAttempted: 1,
+				requestsSucceeded: 1,
+				requestsFailed: 0,
+				consecutiveFailures: 0,
+			});
+			expect(typeof EquityMarketDataService.getStatus().lastSuccessAt).toBe('string');
+		});
+
+		it('reports degraded, not ready, when a provider call fails for a credential reason', async () => {
+			configure();
+			mockAuthFailure();
+
+			await expect(EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' }))
+				.rejects.toMatchObject({ reason: EquityMarketDataService.REASONS.MISCONFIGURED });
+
+			expect(EquityMarketDataService.getStatus()).toMatchObject({
+				configured: true,
+				readiness: EquityMarketDataService.READINESS.DEGRADED,
+				ready: false,
+				status: 'degraded',
+				requestsAttempted: 1,
+				requestsSucceeded: 0,
+				requestsFailed: 1,
+				consecutiveFailures: 1,
+				lastErrorReason: EquityMarketDataService.REASONS.MISCONFIGURED,
+			});
+		});
+
+		it('recovers to ready on a later success instead of latching degraded forever', async () => {
+			configure();
+			mockAuthFailure();
+			await expect(EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' }))
+				.rejects.toBeDefined();
+
+			mockQuoteOk('151.00');
+			await expect(EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' }))
+				.resolves.toBe(151.00);
+
+			expect(EquityMarketDataService.getStatus()).toMatchObject({
+				readiness: EquityMarketDataService.READINESS.VERIFIED,
+				ready: true,
+				status: 'ready',
+				requestsAttempted: 2,
+				requestsSucceeded: 1,
+				requestsFailed: 1,
+				consecutiveFailures: 0,
+			});
+		});
+
+		it('treats the most recent failure as authoritative even after an earlier success', async () => {
+			configure();
+			mockQuoteOk();
+			await expect(EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' }))
+				.resolves.toBe(150.25);
+
+			mockAuthFailure();
+			await expect(EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' }))
+				.rejects.toBeDefined();
+
+			// A key that worked once and then started failing is exactly the credential
+			// rotation / quota-expiry case this status must not report as ready.
+			expect(EquityMarketDataService.getStatus()).toMatchObject({
+				readiness: EquityMarketDataService.READINESS.DEGRADED,
+				ready: false,
+				status: 'degraded',
+				consecutiveFailures: 1,
+			});
+		});
+
+		it('counts every provider request across the quote and time_series paths', async () => {
+			configure();
+			global.fetch = jest.fn()
+				.mockResolvedValueOnce({
+					ok: true,
+					status: 200,
+					json: async () => ({ status: 'ok', close: '150.25' }),
+				})
+				.mockResolvedValueOnce({
+					ok: true,
+					status: 200,
+					json: async () => ({
+						status: 'ok',
+						values: [{ datetime: '2026-01-02 00:00:00', open: '1', high: '2', low: '0.5', close: '1.5' }],
+					}),
+				});
+
+			await EquityMarketDataService.getQuote({ symbol: 'AAPL', exchange: 'NASDAQ' });
+			await EquityMarketDataService.getHistoricalBars({
+				symbol: 'AAPL',
+				exchange: 'NASDAQ',
+				interval: '1D',
+				startTime: Date.parse('2026-01-01T00:00:00Z'),
+				endTime: Date.parse('2026-01-03T00:00:00Z'),
+			});
+
+			expect(EquityMarketDataService.getStatus()).toMatchObject({
+				requestsAttempted: 2,
+				requestsSucceeded: 2,
+				requestsFailed: 0,
+			});
+		});
+
+		it('keeps disabled and misconfigured distinct from provider health', async () => {
+			// Disabled wins over any readiness state.
+			EquityMarketDataService._recordProviderSuccess();
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'false';
+			process.env.EQUITY_MARKET_DATA_PROVIDER = 'twelve-data';
+			process.env.TWELVE_DATA_API_KEY = 'test-key';
+			expect(EquityMarketDataService.getStatus()).toMatchObject({
+				enabled: false,
+				configured: false,
+				ready: false,
+				status: 'disabled',
+			});
+
+			// Enabled but no key: misconfigured, never "degraded" and never ready, even
+			// though a previous successful call is still in the window.
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
+			delete process.env.TWELVE_DATA_API_KEY;
+			expect(EquityMarketDataService.getStatus()).toMatchObject({
+				enabled: true,
+				configured: false,
+				ready: false,
+				status: 'misconfigured',
+			});
+		});
+
+		it('never exposes the provider API key in the readiness snapshot', async () => {
+			configure();
+			process.env.TWELVE_DATA_API_KEY = 'super-secret-equity-key';
+			mockQuoteOk();
+			await EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' });
+
+			expect(JSON.stringify(EquityMarketDataService.getStatus())).not.toContain('super-secret-equity-key');
+		});
+
+		it('never leaks the provider response body through the sanitized error reason', async () => {
+			configure();
+			global.fetch = jest.fn().mockResolvedValue({
+				ok: false,
+				status: 401,
+				headers: new Map(),
+				json: async () => ({ code: 401, message: 'Invalid API key: sk-live-DO-NOT-LEAK' }),
+			});
+
+			await expect(EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' }))
+				.rejects.toBeDefined();
+
+			const status = EquityMarketDataService.getStatus();
+			expect(status.lastErrorReason).toBe(EquityMarketDataService.REASONS.MISCONFIGURED);
+			expect(JSON.stringify(status)).not.toContain('DO-NOT-LEAK');
 		});
 	});
 });
