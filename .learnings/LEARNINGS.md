@@ -250,3 +250,112 @@ Review the feedback and adjust engagement strategy accordingly. If this is a tec
 - Recurrence-Count: 1
 - First-Seen: 2026-11-01
 - Last-Seen: 2026-11-01
+
+---
+
+## [LRN-20261101-114500-0001] correction
+
+**Logged**: 2026-11-01T11:45:00.000000Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+@francovp correction on PR #1488 (feat(alerts): coalesce exact webhook duplicates): P1 issue prevents merge — duplicate arriving after 5-second window waits for pending original and may hit HTTP deadline. Read-only Node reproduction with arrival=6000ms/window=5000ms returned "still waiting" instead of acquiring immediately.
+
+### Details
+@francovp provided detailed revision handoff:
+
+> The final Codex review has one current unresolved P1: a duplicate arriving after the 5-second window still waits for a pending original and may reach its own HTTP deadline before processing.
+
+> Recommended revision: check the arriving request against expiry before waiting. Out-of-window requests need an independent reservation; preserve cancellation and generation safety, and settle displaced originals/waiters without allowing a stale owner to delete a newer reservation. Add regressions for out-of-window pending originals, in-window waiters, displaced owner completion and deadline cancellation. Keep the feature disabled until that behavior is corrected.
+
+> The configured three-trigger review cap is exhausted. Step 5.4 of issue-automator requires a human revision handoff when the final allowed review still has findings. No fourth request, further source revision or merge was attempted; leave the P1 thread open.
+
+### Suggested Action
+Implement expiry check before waiting for out-of-window requests. Create independent reservations for out-of-window arrivals. Add regression tests for all four scenarios. Keep feature flag disabled until P1 resolved.
+
+### Metadata
+- Source: github_review
+- Related Files: src/controllers/webhooks/handlers/alert/alert.js (alert coalescing logic)
+- Tags: correction, feedback, alert-coalescing, p1, testing
+- See Also: https://github.com/francovp/cabros-bot/pull/1488
+- Pattern-Key: harden.feedback_response
+
+---
+
+## [LRN-20261101-114500-0002] correction
+
+**Logged**: 2026-11-01T11:45:00.000000Z
+**Priority**: medium
+**Status**: pending
+**Area**: ci/cd
+
+### Summary
+@gigachad-senior-dev evaluation on PR #1488 (feat(alerts): coalesce exact webhook duplicates): Automation readiness score 35/100 with `automation/skip` label applied.
+
+### Details
+Automated Senior Dev/TL evaluation:
+
+> **Assessment**
+> - **Priority:** priority/medium
+> - **Type:** type/feature
+> - **Areas:** area/api, area/webhooks
+> - **Size:** size/m
+> - **Status:** status/triage
+> - **Automation Readiness:** automation/skip (Score: 35/100)
+
+> **Labels Applied**: `type/feature`, `priority/medium`, `size/m`, `status/triage`, `automation/skip`, `area/api`, `area/webhooks`
+
+> **Automation Readiness Details**: No special notes
+
+The low automation readiness score despite the feature being well-scoped suggests the P1 issue from @francovp's review is blocking automation eligibility.
+
+### Suggested Action
+Address the P1 issue from @francovp's review before expecting automation readiness to improve. Re-evaluate after fix is implemented and verified.
+
+### Metadata
+- Source: github_review
+- Related Files: PR #1488
+- Tags: correction, feedback, automation-readiness, evaluation
+- See Also: https://github.com/francovp/cabros-bot/pull/1488
+- Pattern-Key: harden.feedback_response
+
+---
+
+## [LRN-20261101-114500-0003] correction
+
+**Logged**: 2026-11-01T11:45:00.000000Z
+**Priority**: medium
+**Status**: pending
+**Area**: ci/cd
+
+### Summary
+@gigachad-senior-dev evaluation on PR #1476 (learnings: log corrections from GitHub activity scan): Automation readiness score 20/100 with `automation/skip` label applied.
+
+### Details
+Automated Senior Dev/TL evaluation:
+
+> **Assessment**
+> - **Priority:** priority/high
+> - **Type:** type/docs
+> - **Areas:** area/observability
+> - **Size:** size/m
+> - **Status:** status/triage
+> - **Automation Readiness:** automation/skip (Score: 20/100)
+
+> **Labels Applied**: `type/docs`, `priority/high`, `size/m`, `status/triage`, `automation/skip`, `area/observability`
+
+> **Automation Readiness Details**: No special notes
+
+Notable: PR typed as `type/docs` but titled as learnings logging. Low automation readiness for a scheduled cron job that writes to .learnings/ — may indicate concern about automated writes to documentation files or cron job reliability.
+
+### Suggested Action
+Review automation evaluation criteria for cron jobs that write to documentation/learnings files. Consider if `automation/skip` is appropriate for scheduled maintenance tasks.
+
+### Metadata
+- Source: github_review
+- Related Files: PR #1476, .github/workflows/ (cron workflow)
+- Tags: correction, feedback, automation-readiness, cron, learnings
+- See Also: https://github.com/francovp/cabros-bot/pull/1476
+- Pattern-Key: harden.feedback_response
