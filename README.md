@@ -908,3 +908,7 @@ Successful `/precio` quotes use a bounded process-local LRU cache. Repeated requ
 | `PRICE_CACHE_MAX_ENTRIES_PER_BUCKET` | `256` | `1`–`10000` | Maximum entries per crypto/equity bucket. |
 
 All three are non-secret runtime tuning settings supported by Firebase Remote Config. Fresh published values override environment values; invalid values retain the environment/default fallback. `/api/status` and `/api/capabilities` expose `featureFlags.priceQuoteCache` and sanitized `dependencies.priceQuoteCache` counters and effective configuration. No credentials, destinations, startup gates, or authentication controls are added.
+
+### GET /api/metrics
+
+Protected Node.js process health endpoint. Requires admin API-key access or a Firebase ID token with the `admin.viewer` role. Reports memory bytes, cumulative CPU microseconds, event-loop lag in milliseconds, uptime in seconds, and Node.js/process metadata. Collection is lazy; no polling or sampling runs between requests.

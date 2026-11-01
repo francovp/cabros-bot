@@ -3029,3 +3029,17 @@ No new environment variable, Remote Config key, or external credential was added
 
 ## Express Body Parser Limits (GH-607)
 Webhook and exact `/api/news-monitor` request parsers use `WEBHOOK_MAX_BODY_SIZE` (default `256kb`). Other JSON, text/plain, and URL-encoded parsers use an explicit `100kb` limit. Oversized bodies return the structured 413 `PAYLOAD_TOO_LARGE` response. OpenAPI documents 413 responses, and Postman includes oversized webhook and non-webhook examples. No new environment variable or Remote Config setting was added.
+
+## Process Health Metrics Endpoint (GH-612 / Issue #612)
+
+`GET /api/metrics` is a new API-key-protected Node.js process health endpoint behind the admin auth middleware. It returns memory (`rss`, `heapUsed`, `heapTotal`, `external`, `arrayBuffers`), CPU usage (`process.cpuUsage()` user/system microseconds), event-loop lag (mean + max of N samples, ms), process metadata (PID, uptime seconds, Node version, platform, active handles/requests), and a top-level `node` mirror of `process.version`. All fields are computed lazily on each request so the endpoint has zero overhead when not called. The handler logs structured errors through `SentryService` and returns `500 INTERNAL_ERROR` when collection fails.
+
+**Core Components**:
+- `src/controllers/observability/metrics.js` — Lazy collectors with bounded `toFiniteNumber`/`toFiniteMillis`/`toFiniteSeconds` sanitizers, event-loop probe (`measureEventLoopLag`), and the `getMetrics` request handler.
+- `src/routes/index.js` — Registers `GET /api/metrics` with the shared admin-read middleware.
+- `src/openapi/openapi.json` — Adds the `/api/metrics` path and the `ProcessMetrics` schema.
+- `CabrosBot.postman_collection.json` — Adds a `Get Process Metrics` request with success and authorization variants.
+- `tests/unit/metrics-controller.test.js` — Covers the sanitizers, collectors, and request-handler success/error paths.
+- `tests/integration/metrics-endpoint.test.js` — Covers 401/403/200 paths and the legacy `api-key` query parameter.
+
+No new environment variable, Remote Config key, or notification channel was added.

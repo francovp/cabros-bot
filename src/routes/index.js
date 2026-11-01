@@ -58,6 +58,7 @@ const {
 const { validateApiKey } = require('../lib/auth');
 const { validateRequest } = require('../lib/requestValidator');
 const { getApiStatus } = require('../controllers/status');
+const { getMetrics } = require('../controllers/observability/metrics');
 const {
 	postBinanceOrder,
 	getBinanceOrders,
@@ -199,6 +200,7 @@ function getRoutes(botOrGetter) {
 
 	router.get('/status', ...adminRead, getApiStatus);
 	router.get('/capabilities', ...adminRead, getApiStatus);
+	router.get('/metrics', ...adminRead, getMetrics);
 
 	const { getSelfTest, postSelfTestRun } = require('../controllers/diagnostics/selftest');
 	router.get('/selftest', ...adminRead, getSelfTest(botOrGetter));

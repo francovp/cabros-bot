@@ -3195,6 +3195,79 @@
       ]
     },
     {
+      "name": "Get Process Metrics",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{adminApiKey}}",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/metrics",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "metrics"
+          ]
+        },
+        "description": "Lazy process-health snapshot using seconds for uptime, bytes for memory, cumulative microseconds for CPU, and milliseconds for five event-loop samples. No background sampling runs. Admin API-key access or Firebase admin.viewer/operator is required; WEBHOOK_API_KEY fallback applies only when ADMIN_API_KEY is unset."
+      },
+      "response": [
+        {
+          "name": "Success",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"success\": true,\n  \"uptime\": 12345.678,\n  \"memory\": {\n    \"rss\": 123456789,\n    \"heapUsed\": 98765432,\n    \"heapTotal\": 150000000,\n    \"external\": 12345678,\n    \"arrayBuffers\": 1024000\n  },\n  \"cpu\": {\n    \"user\": 1234567,\n    \"system\": 234567\n  },\n  \"eventLoop\": {\n    \"lagMs\": 2.345,\n    \"maxLagMs\": 4.567,\n    \"samples\": 5\n  },\n  \"process\": {\n    \"pid\": 42,\n    \"uptime\": 12345.678,\n    \"nodeVersion\": \"v24.18.0\",\n    \"platform\": \"linux\",\n    \"activeHandles\": 12,\n    \"activeRequests\": 1\n  },\n  \"node\": \"v24.18.0\"\n}",
+          "_postman_previewlanguage": "json"
+        },
+        {
+          "name": "429 Rate limit exceeded",
+          "status": "Too Many Requests",
+          "code": 429,
+          "header": [
+            {
+              "key": "X-RateLimit-Limit",
+              "value": "100"
+            },
+            {
+              "key": "X-RateLimit-Remaining",
+              "value": "0"
+            },
+            {
+              "key": "X-RateLimit-Reset",
+              "value": "1756819200"
+            },
+            {
+              "key": "Retry-After",
+              "value": "60"
+            },
+            {
+              "key": "X-Request-Id",
+              "value": "metrics-check"
+            }
+          ],
+          "body": "{\"success\": false, \"error\": \"Too many requests, please try again later.\", \"code\": \"RATE_LIMITED\", \"requestId\": \"metrics-check\", \"retryable\": true, \"retryAfterSeconds\": 60}"
+        }
+      ],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Metrics snapshot', function () { pm.response.to.have.status(200); const b = pm.response.json(); pm.expect(b.success).to.eql(true); pm.expect(b.uptime).to.be.a('number'); pm.expect(b.eventLoop.samples).to.be.within(0, 5); });",
+              "pm.test('Generated X-Request-Id', function () { pm.expect(pm.response.headers.get('X-Request-Id')).to.be.a('string').and.not.empty; });"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "Webhooks",
       "item": [
         {
@@ -38987,6 +39060,142 @@
               "body": "{\"aliases\":[{\"aliases\":[\"GOLD\",\"XAUUSD\",\"XAU/USD\",\"XAU\"],\"exchange\":\"TVC\",\"symbol\":\"GOLD\",\"assetClass\":\"commodity\"}],\"totalEntries\":18}"
             }
           ]
+        }
+      ]
+    },
+    {
+      "name": "Get Process Metrics - Missing auth",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/metrics",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "metrics"
+          ]
+        },
+        "description": "Lazy process-health snapshot using seconds for uptime, bytes for memory, cumulative microseconds for CPU, and milliseconds for five event-loop samples. No background sampling runs. Admin API-key access or Firebase admin.viewer/operator is required; WEBHOOK_API_KEY fallback applies only when ADMIN_API_KEY is unset."
+      },
+      "response": [
+        {
+          "name": "Missing auth",
+          "code": 401,
+          "status": "Missing auth",
+          "body": "{\"success\": false, \"error\": \"Unauthorized\", \"code\": \"UNAUTHORIZED\"}"
+        }
+      ],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Missing auth', function () { pm.response.to.have.status(401); const b = pm.response.json(); pm.expect(b.success).to.eql(false); pm.expect(b.error).to.be.a('string'); pm.expect(b.code).to.be.a('string'); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Get Process Metrics - Invalid auth",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{adminApiKey}}"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/metrics",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "metrics"
+          ]
+        },
+        "description": "Lazy process-health snapshot using seconds for uptime, bytes for memory, cumulative microseconds for CPU, and milliseconds for five event-loop samples. No background sampling runs. Admin API-key access or Firebase admin.viewer/operator is required; WEBHOOK_API_KEY fallback applies only when ADMIN_API_KEY is unset."
+      },
+      "response": [
+        {
+          "name": "Invalid auth",
+          "code": 403,
+          "status": "Invalid auth",
+          "body": "{\"success\": false, \"error\": \"Forbidden\", \"code\": \"FORBIDDEN\"}"
+        }
+      ],
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.request.headers.upsert({ key: 'x-api-key', value: 'not-a-valid-key' });"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Invalid auth', function () { pm.response.to.have.status(403); const b = pm.response.json(); pm.expect(b.success).to.eql(false); pm.expect(b.error).to.be.a('string'); pm.expect(b.code).to.be.a('string'); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Get Process Metrics - request ID echo",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{adminApiKey}}",
+            "type": "text"
+          },
+          {
+            "key": "x-request-id",
+            "value": "metrics-probe-612"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/metrics",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "metrics"
+          ]
+        },
+        "description": "Lazy process-health snapshot using seconds for uptime, bytes for memory, cumulative microseconds for CPU, and milliseconds for five event-loop samples. No background sampling runs. Admin API-key access or Firebase admin.viewer/operator is required; WEBHOOK_API_KEY fallback applies only when ADMIN_API_KEY is unset."
+      },
+      "response": [
+        {
+          "name": "Success",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"success\": true,\n  \"uptime\": 12345.678,\n  \"memory\": {\n    \"rss\": 123456789,\n    \"heapUsed\": 98765432,\n    \"heapTotal\": 150000000,\n    \"external\": 12345678,\n    \"arrayBuffers\": 1024000\n  },\n  \"cpu\": {\n    \"user\": 1234567,\n    \"system\": 234567\n  },\n  \"eventLoop\": {\n    \"lagMs\": 2.345,\n    \"maxLagMs\": 4.567,\n    \"samples\": 5\n  },\n  \"process\": {\n    \"pid\": 42,\n    \"uptime\": 12345.678,\n    \"nodeVersion\": \"v24.18.0\",\n    \"platform\": \"linux\",\n    \"activeHandles\": 12,\n    \"activeRequests\": 1\n  },\n  \"node\": \"v24.18.0\"\n}",
+          "_postman_previewlanguage": "json"
+        }
+      ],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Echoed X-Request-Id', function () { pm.response.to.have.status(200); pm.expect(pm.response.headers.get('X-Request-Id')).to.eql('metrics-probe-612'); });"
+            ]
+          }
         }
       ]
     }
