@@ -1,4 +1,4 @@
-/* global jest, describe, it, expect, beforeEach */
+/* global jest, describe, it, expect, beforeEach, afterEach */
 
 jest.mock('../../src/services/monitoring/SentryService', () => ({
 	captureRuntimeError: jest.fn(),
@@ -7,6 +7,7 @@ jest.mock('../../src/services/monitoring/SentryService', () => ({
 const metrics = require('../../src/controllers/observability/metrics');
 
 describe('MetricsController', () => {
+	afterEach(() => { jest.restoreAllMocks(); });
 	describe('toFiniteNumber', () => {
 		it('returns the value when finite', () => {
 			expect(metrics.toFiniteNumber(42)).toBe(42);
@@ -45,8 +46,8 @@ describe('MetricsController', () => {
 	});
 
 	describe('toFiniteSeconds', () => {
-		it('converts milliseconds to seconds rounded to 3 decimals', () => {
-			expect(metrics.toFiniteSeconds(12345.678)).toBe(12.346);
+		it('preserves uptime seconds rounded to 3 decimals', () => {
+			expect(metrics.toFiniteSeconds(12345.678)).toBe(12345.678);
 			expect(metrics.toFiniteSeconds(0)).toBe(0);
 		});
 
@@ -88,6 +89,39 @@ describe('MetricsController', () => {
 	});
 
 	describe('measureEventLoopLag', () => {
+		it('measures time spent waiting for each callback and clears its deadline', async () => {
+			let now = 0n;
+			const callbacks = [];
+			jest.spyOn(process.hrtime, 'bigint').mockImplementation(() => now);
+			jest.spyOn(global, 'setImmediate').mockImplementation((callback) => {
+				callbacks.push(callback);
+				return {};
+			});
+			const timer = { unref: jest.fn() };
+			jest.spyOn(global, 'setTimeout').mockReturnValue(timer);
+			const clear = jest.spyOn(global, 'clearTimeout');
+			const pending = metrics.measureEventLoopLag();
+			while (callbacks.length) {
+				now += 20_000_000n;
+				callbacks.shift()();
+			}
+			expect(await pending).toEqual({ lagMs: 20, maxLagMs: 20, samples: 5 });
+			expect(clear).toHaveBeenCalledWith(timer);
+		});
+		it('returns neutral samples and cancels queued work at its deadline', async () => {
+			let deadline;
+			const immediate = {};
+			jest.spyOn(global, 'setImmediate').mockReturnValue(immediate);
+			jest.spyOn(global, 'setTimeout').mockImplementation((callback) => {
+				deadline = callback;
+				return { unref: jest.fn() };
+			});
+			const clear = jest.spyOn(global, 'clearImmediate');
+			const pending = metrics.measureEventLoopLag();
+			deadline();
+			expect(await pending).toEqual({ lagMs: null, maxLagMs: null, samples: 0 });
+			expect(clear).toHaveBeenCalledWith(immediate);
+		});
 		it('returns a bounded event-loop probe with non-negative samples', async () => {
 			const result = await metrics.measureEventLoopLag();
 			expect(result.samples).toBeGreaterThan(0);
@@ -137,30 +171,11 @@ describe('MetricsController', () => {
 			expect(payload.node).toBe(process.version);
 		});
 
-		it('returns 500 with INTERNAL_ERROR when metrics collection throws', async () => {
-			// Use jest.isolateModules to load a fresh copy with collectMetrics stubbed.
-			await new Promise((resolve) => {
-				jest.isolateModules(() => {
-					jest.doMock('../../src/controllers/observability/metrics', () => {
-						const actual = jest.requireActual('../../src/controllers/observability/metrics');
-						return {
-							...actual,
-							collectMetrics: jest.fn().mockRejectedValue(new Error('boom')),
-						};
-					});
-					// eslint-disable-next-line global-require
-					const mocked = require('../../src/controllers/observability/metrics');
-					const innerRes = {
-						status: jest.fn().mockReturnValue({
-							json: jest.fn().mockImplementation((body) => {
-								expect(body).toEqual({ error: 'Internal server error', code: 'INTERNAL_ERROR' });
-								resolve();
-							}),
-						}),
-					};
-					mocked.getMetrics({ method: 'GET' }, innerRes);
-				});
-			});
+		it('returns a standard 500 envelope when process collection throws', async () => {
+			jest.spyOn(process, 'uptime').mockImplementation(() => { throw new Error('boom'); });
+			await metrics.getMetrics({ method: 'GET' }, res);
+			expect(statusMock).toHaveBeenCalledWith(500);
+			expect(jsonMock).toHaveBeenCalledWith(expect.objectContaining({ success: false, error: 'Internal server error', code: 'INTERNAL_ERROR', retryable: true, requestId: expect.any(String) }));
 		});
 	});
 });

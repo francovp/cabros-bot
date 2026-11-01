@@ -4,6 +4,8 @@ const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 
+app.use('/api', getRoutes(null));
+
 describe('GET /api/metrics - Process health endpoint', () => {
 	let savedEnv;
 
@@ -14,8 +16,9 @@ describe('GET /api/metrics - Process health endpoint', () => {
 			ENABLE_TELEGRAM_BOT: 'false',
 			ENABLE_FIREBASE_ADMIN_AUTH: 'false',
 		});
+		delete process.env.ADMIN_API_KEY;
+		delete process.env.API_KEY_QUERY_SUNSET;
 		jest.clearAllMocks();
-		app.use('/api', getRoutes(null));
 	});
 
 	afterEach(() => {
@@ -82,4 +85,22 @@ describe('GET /api/metrics - Process health endpoint', () => {
 		expect(res.status).toBe(200);
 		expect(res.body.success).toBe(true);
 	});
+	it('requires the dedicated admin key when configured', async () => {
+		process.env.ADMIN_API_KEY = 'dedicated-admin';
+		const denied = await request(app).get('/api/metrics').set('x-api-key', 'test-key');
+		expect(denied.status).toBe(403);
+		const allowed = await request(app).get('/api/metrics').set('x-api-key', 'dedicated-admin');
+		expect(allowed.status).toBe(200);
+	});
+
+	it('echoes request IDs while returning uptime in seconds', async () => {
+		const before = process.uptime();
+		const res = await request(app).get('/api/metrics')
+			.set('x-api-key', 'test-key').set('x-request-id', 'metrics-check');
+		expect(res.status).toBe(200);
+		expect(res.headers['x-request-id']).toBe('metrics-check');
+		expect(res.body.uptime).toBeGreaterThanOrEqual(before - 0.001);
+		expect(res.body.uptime).toBeLessThanOrEqual(process.uptime() + 0.001);
+	});
+
 });

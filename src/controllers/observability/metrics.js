@@ -1,10 +1,11 @@
 'use strict';
 
 const sentryService = require('../../services/monitoring/SentryService');
+const { sendErrorFrom } = require('../../lib/errorEnvelope');
 
 const EVENT_LOOP_SAMPLE_COUNT = 5;
 const MAX_SAFE_LAG_MS = 60000;
-const MAX_SAFE_UPTIME_MS = 2_592_000_000;
+const MAX_SAFE_UPTIME_SECONDS = 2_592_000_000;
 const EVENT_LOOP_SAMPLE_TIMEOUT_MS = 1000;
 
 function toFiniteNumber(value, fallback) {
@@ -22,8 +23,8 @@ function toFiniteMillis(value) {
 
 function toFiniteSeconds(value) {
 	if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-	if (value < 0 || value > MAX_SAFE_UPTIME_MS) return null;
-	return Number((value / 1000).toFixed(3));
+	if (value < 0 || value > MAX_SAFE_UPTIME_SECONDS) return null;
+	return Number(value.toFixed(3));
 }
 
 function collectMemory() {
@@ -84,52 +85,38 @@ function measureEventLoopLag() {
 	return new Promise((resolve) => {
 		const samples = [];
 		let resolved = false;
-
+		let immediate;
 		const finish = () => {
 			if (resolved) return;
 			resolved = true;
-			if (samples.length === 0) {
-				resolve({ lagMs: null, maxLagMs: null, samples: 0 });
-				return;
-			}
-			const sorted = samples.slice().sort((a, b) => a - b);
-			const sum = sorted.reduce((acc, n) => acc + n, 0);
-			const mean = sum / sorted.length;
-			const max = sorted[sorted.length - 1];
+			clearTimeout(safetyTimer);
+			clearImmediate(immediate);
 			resolve({
-				lagMs: toFiniteMillis(mean),
-				maxLagMs: toFiniteMillis(max),
-				samples: sorted.length,
+				lagMs: samples.length ? toFiniteMillis(samples.reduce((sum, n) => sum + n, 0) / samples.length) : null,
+				maxLagMs: samples.length ? toFiniteMillis(Math.max(...samples)) : null,
+				samples: samples.length,
 			});
 		};
-
-		const safetyTimer = setTimeout(finish, EVENT_LOOP_SAMPLE_TIMEOUT_MS);
-		if (safetyTimer && typeof safetyTimer.unref === 'function') {
-			safetyTimer.unref();
-		}
-
-		const sample = (start) => {
-			let delta = 0;
+		const schedule = () => {
 			try {
-				if (process.hrtime && process.hrtime.bigint) {
-					delta = Number(process.hrtime.bigint() - start) / 1e6;
-				}
+				const start = process.hrtime.bigint();
+				immediate = setImmediate(() => {
+					if (resolved) return;
+					try {
+						samples.push(Number(process.hrtime.bigint() - start) / 1e6);
+						if (samples.length >= EVENT_LOOP_SAMPLE_COUNT) finish();
+						else schedule();
+					} catch (_) {
+						finish();
+					}
+				});
 			} catch (_) {
-				delta = 0;
-			}
-			samples.push(delta);
-			if (samples.length >= EVENT_LOOP_SAMPLE_COUNT) {
 				finish();
-				return;
 			}
-			setImmediate(() => sample(process.hrtime.bigint()));
 		};
-
-		try {
-			setImmediate(() => sample(process.hrtime.bigint()));
-		} catch (_) {
-			finish();
-		}
+		const safetyTimer = setTimeout(finish, EVENT_LOOP_SAMPLE_TIMEOUT_MS);
+		safetyTimer.unref?.();
+		schedule();
 	});
 }
 
@@ -173,10 +160,10 @@ async function getMetrics(req, res) {
 		} catch (_) {
 			// fail-safe
 		}
-		return res.status(500).json({
+		return sendErrorFrom(res, 500, {
 			error: 'Internal server error',
 			code: 'INTERNAL_ERROR',
-		});
+		}, { req });
 	}
 }
 
