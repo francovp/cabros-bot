@@ -30,7 +30,7 @@ describe('environment banner helpers', () => {
 		expect(metadata.shortCommit).toBe('abcdef12');
 		expect(payload.name).toBe('cabros-bot-preview');
 		expect(payload.commit).toBe('abcdef1234567890fedcba0987654321deadbeef');
-		expect(payload.deployedAt).toBe('dep-1');
+		expect(payload.deployedAt).toBe('2026-08-29T12:34:56.000Z');
 		expect(JSON.stringify(payload)).not.toMatch(/secret|key|token|password|api/i);
 	});
 
@@ -103,5 +103,76 @@ describe('environment banner helpers', () => {
 		expect(calls).toContain(banner.BANNER_HEADER_ENVIRONMENT);
 		expect(calls).toContain(banner.BANNER_HEADER_SERVICE);
 		expect(calls).not.toContain(banner.BANNER_HEADER_COMMIT);
+	});
+});
+
+describe('environment banner runtime controls', () => {
+	const remoteConfig = require('../../src/services/remoteConfig/RemoteConfigService');
+	afterEach(() => jest.restoreAllMocks());
+
+	it('rechecks Remote Config for each response without restarting middleware', () => {
+		const config = { ENABLE_ENVIRONMENT_BANNER: true };
+		jest.spyOn(remoteConfig, 'getRuntimeConfig').mockImplementation(() => config);
+		const middleware = banner.buildEnvironmentBannerMiddleware();
+		const enabledResponse = { setHeader: jest.fn() };
+		middleware({}, enabledResponse, jest.fn());
+		expect(enabledResponse.setHeader).toHaveBeenCalled();
+		config.ENABLE_ENVIRONMENT_BANNER = false;
+		const disabledResponse = { setHeader: jest.fn() };
+		middleware({}, disabledResponse, jest.fn());
+		expect(disabledResponse.setHeader).not.toHaveBeenCalled();
+	});
+
+	it('keeps response delivery fail-open if optional Remote Config resolution throws', () => {
+		jest.spyOn(remoteConfig, 'getRuntimeConfig').mockImplementation(() => { throw new Error('config unavailable'); });
+		const next = jest.fn();
+		expect(() => banner.buildEnvironmentBannerMiddleware()({}, { setHeader: jest.fn() }, next)).not.toThrow();
+		expect(next).toHaveBeenCalledTimes(1);
+	});
+
+	it('keeps metadata footers empty when their existing runtime gate is off', () => {
+		jest.spyOn(remoteConfig, 'getRuntimeConfig').mockReturnValue({ ENABLE_MESSAGE_FOOTER_METADATA: false });
+		expect(banner.appendEnvironmentFooter('', { SENTRY_ENVIRONMENT: 'preview', GIT_COMMIT: 'abcdef12' })).toBe('');
+	});
+
+	it('adds one environment footer for custom non-production environments', () => {
+		jest.spyOn(remoteConfig, 'getRuntimeConfig').mockReturnValue({ ENABLE_MESSAGE_FOOTER_METADATA: true });
+		expect(banner.appendEnvironmentFooter('model info', { SENTRY_ENVIRONMENT: 'staging-eu', GIT_COMMIT: 'abcdef1234' }))
+			.toBe('model info\n\\(env: staging\\-eu @ abcdef12\\)');
+		expect(banner.appendEnvironmentFooter('model info', { NODE_ENV: 'production' })).toBe('model info');
+	});
+
+	it('uses only deployment timestamps for deployedAt', () => {
+		expect(banner.getEnvironmentBannerPayload({ RENDER_DEPLOY_ID: 'dep-1', RENDER_GIT_COMMIT_DATE: '2026-08-29T12:34:56Z' }).deployedAt)
+			.toBe('2026-08-29T12:34:56.000Z');
+		expect(banner.getEnvironmentBannerPayload({ RAILWAY_DEPLOYMENT_ID: 'deployment-id' }).deployedAt).toBeNull();
+	});
+
+	it('does not crash response delivery on invalid environment header characters', () => {
+		const { ServerResponse } = require('http');
+		const res = new ServerResponse({ method: 'GET' });
+		const next = jest.fn();
+		expect(() => banner.buildEnvironmentBannerMiddleware({ SERVICE_NAME: 'bot\r\ninvalid', GIT_COMMIT: 'abcdef12' })({}, res, next)).not.toThrow();
+		expect(res.statusCode).toBe(200);
+		expect(next).toHaveBeenCalledTimes(1);
+		expect(res.getHeader('X-Cabros-Service')).toBeUndefined();
+	});
+});
+
+
+describe('environment footer delivery formatting', () => {
+	it('escapes the appended line for Telegram and leaves WhatsApp readable', async () => {
+		const remoteConfig = require('../../src/services/remoteConfig/RemoteConfigService');
+		const spy = jest.spyOn(remoteConfig, 'getRuntimeConfig').mockReturnValue({ ENABLE_MESSAGE_FOOTER_METADATA: true });
+		try {
+			const metadata = banner.appendEnvironmentFooter('', { SENTRY_ENVIRONMENT: 'staging_eu', GIT_COMMIT: 'abcdef12' });
+			const MarkdownV2Formatter = require('../../src/services/notification/formatters/markdownV2Formatter');
+			const WhatsAppMarkdownFormatter = require('../../src/services/notification/formatters/whatsappMarkdownFormatter');
+			const alert = { original_text: 'BTC alert', extraText: metadata };
+			const telegram = new MarkdownV2Formatter().formatEnriched(alert);
+			expect(telegram).toContain('\\(env: staging\\_eu @ abcdef12\\)');
+			expect(telegram).not.toContain('(env: staging_eu');
+			expect(await new WhatsAppMarkdownFormatter().formatEnriched(alert)).toContain('(env: staging_eu @ abcdef12)');
+		} finally { spy.mockRestore(); }
 	});
 });

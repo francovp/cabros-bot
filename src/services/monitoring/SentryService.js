@@ -109,6 +109,7 @@ const { nodeProfilingIntegration } = require('@sentry/profiling-node');
 const FEATURE_NAMES = {
 	'http-alert': 'alerts',
 	'news-monitor': 'news-monitor',
+	'market-scanner': 'market-scanner',
 	'telegram': 'telegram-alerts',
 	'whatsapp': 'whatsapp-alerts',
 	'discord': 'discord-alerts',
@@ -657,12 +658,14 @@ class SentryService {
 						status_code: String(event.http.statusCode),
 						http_category: `${Math.floor(Number(event.http.statusCode) / 100)}xx`,
 					}),
+					...(event.http.requestId && { request_id: String(event.http.requestId) }),
 				}),
 				...(event.external && {
 					provider: event.external.provider,
 					...(event.external.lastErrorCode && { provider_status_code: String(event.external.lastErrorCode) }),
 				}),
 				...(event.extra && event.extra.category && { category: String(event.extra.category) }),
+				...(event.extra && event.extra.requestId && { request_id: String(event.extra.requestId) }),
 				...(spanContext && {
 					trace_id: spanContext.traceId,
 					span_id: spanContext.spanId,
@@ -712,6 +715,44 @@ class SentryService {
 		} catch (error) {
 			// Never throw - monitoring failures should not affect application behavior
 			console.warn(`[SentryService] Failed to capture event: ${error.message}`);
+			return {
+				captured: false,
+				skippedReason: `Capture error: ${error.message}`,
+			};
+		}
+	}
+
+	/**
+	 * Capture a sanitized informational event without treating it as an error.
+	 * @param {{message: string, feature?: string, extra?: Object<string, unknown>}} request
+	 * @returns {MonitoringCaptureResult}
+	 */
+	captureInfo(request = {}) {
+		try {
+			if (!this.state.enabled) {
+				return {
+					captured: false,
+					skippedReason: this.state.lastInitError || 'Monitoring disabled',
+				};
+			}
+
+			const message = this._sanitizeString(String(request.message || 'process.info'));
+			const feature = this._sanitizeString(String(request.feature || 'process.info'));
+			const eventId = Sentry.captureMessage(message, {
+				level: 'info',
+				tags: {
+					channel: 'process',
+					feature,
+					environment: this.config?.environment || 'unknown',
+				},
+				extra: this._sanitizeObject(request.extra || {}),
+			});
+
+			console.debug(`[SentryService] Info captured: ${eventId} (feature=${feature})`);
+			return { captured: true, eventId };
+		} catch (error) {
+			// Monitoring failures must never affect shutdown or other application behavior.
+			console.warn(`[SentryService] Failed to capture info: ${error.message}`);
 			return {
 				captured: false,
 				skippedReason: `Capture error: ${error.message}`,
@@ -889,6 +930,29 @@ class SentryService {
 	}
 
 	/**
+	 * Capture Firestore write metric
+	 * @param {Object} params
+	 * @param {string} params.domain
+	 * @param {'success' | 'failure'} params.status
+	 */
+	captureFirestoreWriteMetric({ domain, status }) {
+		if (!this.state.enabled) return;
+		try {
+			const tags = {
+				domain: domain || 'unknown',
+				status: status === 'success' ? 'success' : 'failure',
+			};
+			if (Sentry.metrics && typeof Sentry.metrics.count === 'function') {
+				Sentry.metrics.count('firestore_writes', 1, { tags });
+			}
+		} catch (error) {
+			// Never throw - monitoring failures should not affect application behavior
+			console.warn(`[SentryService] Failed to capture Firestore write metric: ${error.message}`);
+		}
+	}
+
+
+	/**
 	 * Flush pending events (for graceful shutdown)
 	 * @param {number} [timeout=2000] - Timeout in milliseconds
 	 * @returns {Promise<boolean>}
@@ -926,3 +990,21 @@ const sentryService = new SentryService();
 module.exports = sentryService;
 module.exports.SentryService = SentryService;
 module.exports.FEATURE_NAMES = FEATURE_NAMES;
+
+/**
+ * Single source of truth for the `SENTRY_SEND_ALERT_CONTENT` policy.
+ * Returns `true` when alert/news text should be included in Sentry events,
+ * `false` only when the operator explicitly sets `SENTRY_SEND_ALERT_CONTENT=false`.
+ * All other values (unset, empty, anything else) fall through to the
+ * documented default of `true` and match the README/.env.example contract.
+ * Consumers (e.g. `telegramErrorBoundary`) MUST go through this helper instead
+ * of re-reading `process.env.SENTRY_SEND_ALERT_CONTENT` directly, so the
+ * absent-state semantics stay aligned with the webhook/news SentryService
+ * configuration.
+ * @returns {boolean}
+ */
+function shouldSendAlertContent() {
+	return process.env.SENTRY_SEND_ALERT_CONTENT !== 'false';
+}
+
+module.exports.shouldSendAlertContent = shouldSendAlertContent;

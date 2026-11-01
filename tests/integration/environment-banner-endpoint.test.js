@@ -7,6 +7,9 @@ const {
 
 const ENV_KEYS_FOR_BANNER = [
 	'ENABLE_ENVIRONMENT_BANNER',
+	'WEBHOOK_API_KEY',
+	'RENDER',
+	'IS_PULL_REQUEST',
 	'SERVICE_NAME',
 	'RENDER_GIT_COMMIT',
 	'RENDER_DEPLOY_ID',
@@ -141,6 +144,23 @@ describe('Environment banner middleware and /api/banner endpoint', () => {
 		});
 		const response = await request(app).get('/api/banner');
 		expect(response.status).toBe(200);
-		expect(response.body.deployedAt).toBe('dep-2');
+		expect(response.body.deployedAt).toBe('2026-08-29T12:34:56.000Z');
+	});
+});
+
+describe('environment banner in the mounted application', () => {
+	it('covers health, public API, auth errors and parser errors before terminal middleware', async () => {
+		buildTestApp({ RENDER_GIT_COMMIT: 'abcdef1234567890', WEBHOOK_API_KEY: 'banner-test-key' });
+		const app = require('../../app');
+		app.use('/api', require('../../src/routes').getRoutes(() => null));
+		app.use((err, req, res, next) => res.status(err.status || 500).json({ error: 'test-error' }));
+		for (const [path, expected] of [['/healthcheck', 200], ['/api/banner', 200], ['/api/status', 401]]) {
+			const result = await request(app).get(path);
+			expect(result.status).toBe(expected);
+			expect(result.headers['x-cabros-commit']).toBe('abcdef12');
+		}
+		const malformed = await request(app).post('/api/banner').set('Content-Type', 'application/json').send('{');
+		expect(malformed.status).toBe(400);
+		expect(malformed.headers['x-cabros-commit']).toBe('abcdef12');
 	});
 });

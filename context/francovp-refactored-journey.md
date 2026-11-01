@@ -1,52 +1,35 @@
-# feat: stamp environment banner on every /api response and admin console
+feat(observability): expose deployment identity
 
 ## Summary
 
-Stamps non-secret `X-Cabros-*` deployment headers on every HTTP response, exposes a public unauthenticated `GET /api/banner` snapshot, surfaces a fixed-position environment banner in the `/admin` console for non-production deployments, and appends a one-line `(env: ... @ ...)` footer to webhook alerts — all so operators and external integrators can immediately tell whether a response came from preview/staging or production.
-
-Closes #856.
+Operators can identify preview, staging and production from HTTP responses, the admin console and enriched alert footers. A public deployment snapshot shares the existing status environment resolver.
 
 ## Key Changes
 
-- **Middleware headers** — new `src/lib/environmentBanner.js` exports `buildEnvironmentBannerMiddleware` which sets `X-Cabros-Environment`, `X-Cabros-Commit`, and `X-Cabros-Service` on every response when `ENABLE_ENVIRONMENT_BANNER=true` (default). Mounted in `app.js` between helmet and the healthcheck.
-- **Public banner endpoint** — `GET /api/banner` (no auth) returns `{ environment, commit, name, deployedAt }` for external status pages and badge generators. Exposed in OpenAPI as `EnvironmentBanner` and added to the Postman collection.
-- **Status metadata** — `/api/status` now reports `featureFlags.environmentBanner` (boolean gate) and `dependencies.environmentBanner` (the same payload as `/api/banner`) so operators can verify readiness from the existing capabilities endpoint.
-- **Admin console banner** — `public/admin/index.html` adds an `#environment-banner` slot; `src/admin/admin.js` fetches `/api/banner` (4s AbortController timeout) and renders a yellow/red fixed banner with the build SHA and a "Copy preview URL" clipboard button only when `environment ∈ {preview, development, staging}`. Production deployments render no banner.
-- **Footer metadata for preview alerts** — Telegram/WhatsApp alert footers now append `(env: <env> @ <short-sha>)` when `ENABLE_MESSAGE_FOOTER_METADATA=true` AND the deployment is preview-like. Production alerts are unchanged (no footer noise in real trading groups). Applied in both the Gemini/grounding footer builder and the TradingView MCP-only footer.
-- **Opt-in gate** — new `ENABLE_ENVIRONMENT_BANNER` env var (default `true`). Documented in `.env.example`. Disabling skips the middleware so responses carry no banner headers at all.
+- Add optional runtime-controlled X-Cabros-Environment, short X-Cabros-Commit and X-Cabros-Service headers before CORS, parsers and terminal routes.
+- Expose unauthenticated GET /api/banner with environment, full commit, service name and nullable host commit timestamp.
+- Show a readable sticky warning for non-production admin consoles, with a button copying the selected backend origin.
+- Append escaped non-production environment metadata to Gemini/MCP alert footers under the existing footer flag.
 
 ## Technical Implementation
 
-- The middleware delegates environment/commit resolution to `src/lib/deploymentEnvironment.js` (existing single source of truth — also used by `/api/status`).
-- `resolveEnvironmentBannerEnvironment` mirrors `getEnvironment()` from `src/controllers/status.js` but is exported from the new module to avoid the circular import chain that would otherwise pull every service into the middleware at boot.
-- All functions accept an optional `env` parameter for testability; tests assert without polluting global `process.env`.
-- The admin banner fetch is bounded by `AbortController` (4 s) and gracefully no-ops on failure (the existing `/admin/auth-config` timeout pattern).
-- Footer extension uses the existing `ENABLE_MESSAGE_FOOTER_METADATA` gate so no new contract or env var is introduced for delivery channels.
-- `/api/banner` is auth-free and exposes only `environment/commit/name/deployedAt`. Credentials, webhook secrets, service-account JSON, and provider responses are never returned — verified by the integration test.
+- Reuse one deployment environment resolver with status; do not initialize provider readiness for the public snapshot.
+- ENABLE_ENVIRONMENT_BANNER defaults to true and is a non-secret Remote Config display flag; evaluate it on every request and fall back to environment/default values if Remote Config fails. The checked-in template uses useInAppDefault.
+- Header opt-out leaves the public snapshot and console available. The existing ENABLE_MESSAGE_FOOTER_METADATA controls notification footers independently. Authentication, security controls, credentials, destinations and startup gates stay environment-only.
+- Invalid optional header characters cannot interrupt core delivery. Deployment IDs are never returned as timestamps.
+- Preserve current Firebase authorization/navigation; regenerate both admin asset trees. Synchronize OpenAPI, Postman examples, README and operator guidance. No new dependencies.
 
 ## Testing
 
-- `tests/unit/environment-banner.test.js` — 11 cases covering defaults, opt-out, sanitization, Railway/Vercel/Render detection, Sentry override, NODE_ENV fallback, header stamping, no-op when disabled, and missing-commit header omission.
-- `tests/integration/environment-banner-endpoint.test.js` — 7 supertest cases covering `/healthcheck` header injection, `/api/banner` payload shape, Railway PR preview classification, Sentry override, opt-out, sanitization, and deployedAt propagation.
-- Existing coverage verified:
-  - `tests/integration/status-endpoint.test.js` — 78/78 passing (status contract unchanged, new fields additive).
-  - `tests/integration/alert-grounding.test.js` — 11/11 passing (footer extension is additive).
-  - `tests/unit/alert-handler.test.js` — 34/34 passing (footer logic untouched for production deployments).
-  - `tests/unit/admin-client.test.js` — 87/87 passing (admin console banner is additive).
-  - `tests/unit/tradingview-mcp-service.test.js` — 49/49 passing (MCP-only footer is additive).
-  - `tests/integration/openapi-docs.test.js` — 5/5 passing (OpenAPI + admin asset contract still synchronized).
-
-## Acceptance Criteria
-
-- [x] Every HTTP response from any mounted `/api` route and `/healthcheck` includes `X-Cabros-Environment` and `X-Cabros-Commit` headers when `ENABLE_ENVIRONMENT_BANNER=true`.
-- [x] `/admin` shows a yellow/red banner when `service.environment` is `preview`, `development`, or `staging`, with the commit SHA and a "Copy preview URL" button.
-- [x] Telegram/WhatsApp alert footers include `(env: ... @ ...)` only when `ENABLE_MESSAGE_FOOTER_METADATA=true` and `service.environment` is preview-like.
-- [x] `GET /api/banner` returns JSON `{ environment, commit, name, deployedAt }` without any auth.
-- [x] Banner text never includes secrets, webhook keys, or service-account JSON (asserted in tests).
-- [x] Banner source reuses the existing `getDeploymentCommit` / `isPreviewEnvironment` / `isProductionLikeEnvironment` helpers so the value never drifts from `/api/status`.
+- Red/green regressions: runtime Remote Config toggles, metadata opt-out, custom environments, timestamp shape, invalid header values, Gemini-only footer, final Telegram/WhatsApp formatting, and fail-open config exceptions.
+- Focused validation: 770 tests passed before final footer/config fixes; final footer tests 21/21, final config/generic-message 96/96 and final OpenAPI/Postman 154/154 passed.
+- pnpm run build:hosting passed. Scoped ESLint passed; 17 findings in unchanged admin/MCP lines reproduce on master. Feature diff whitespace check passed.
+- Local start-dev smoke: health/OpenAPI/banner 200; missing status auth 401; dedicated admin auth 200; request-ID echo and status/banner environment+SHA parity confirmed.
+- Playwright desktop/mobile screenshots captured; copy action confirmed and a 390px viewport has no horizontal overflow.
+- Full pnpm test passed: 335/335 suites and 8,080/8,080 tests; no working-tree mutations. Both sequential independent reviews and final fallback re-reviews have no actionable findings. Preview/CI/current-head Codex review pending publication.
+- Exact model variant unavailable; preserve codex and codex-automation attribution without guessing.
 
 ## References
 
-- Closes #856
-- Related: #753 (Expose deployment build SHA, runtime version, and uptime in /api/capabilities) — overlaps with the JSON portion but this PR adds cross-cutting headers, admin banner, and footer.
-- Related: #685 (Refresh /admin console UX) — adjacent admin redesign; this PR is a small targeted addition.
+Closes #856.
+https://github.com/francovp/cabros-bot/issues/856
