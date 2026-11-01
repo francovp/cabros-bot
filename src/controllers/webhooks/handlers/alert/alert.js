@@ -39,6 +39,8 @@ const { classifySignal } = require('../../../../services/alerts/signalClassifier
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
 const { alertSubscriberDeliveryService } = require('../../../../services/subscribers/AlertSubscriberDeliveryService');
+const { alertSubscriberService } = require('../../../../services/subscribers/AlertSubscriberService');
+const { alertCoalescer, fingerprint: coalesceFingerprint } = require('../../../../services/alerts/alertCoalescer');
 const { buildReplyMarkup } = require('../../../../services/alerts/telegramAlertKeyboard');
 const { routeAlertToOrder, isEnabled: isAutoTradeEnabled } = require('../../../../services/trading/AlertSignalRouter');
 const {
@@ -134,6 +136,7 @@ function getNotificationManagerBootstrapStatus() {
  */
 function resetNotificationManagerForTesting() {
 	bootstrapResetForTesting();
+	alertCoalescer.reset();
 }
 
 function resolveBot(botOrGetter) {
@@ -610,6 +613,7 @@ function postAlert(botOrGetter) {
 		let alertText = '';
 		let alert = null;
 		let notificationManager = null;
+		let coalesceReservation = null;
 
 		try {
 			const requestSpan = sentryService.getActiveSpan();
@@ -703,6 +707,32 @@ function postAlert(botOrGetter) {
 				const bot = resolveBot(botOrGetter);
 				notificationManager = bootstrapGetInitialized() || await bootstrapGetOrInitialize(bot);
 				assertChannelsAvailable(notificationManager, routing);
+			}
+
+			// Subscribers complete asynchronously, so channel success cannot prove
+			// their delivery. Alternate routing and order side effects bypass this cache.
+			try {
+				const config = getRuntimeConfig();
+				if (config.ENABLE_ALERT_COALESCE === true && !dryRun && !autoTradeRequested
+					&& !routing.symbolRoutes && !routing.destinations && !routing.requireWatchlistMatch) {
+					const subscribers = alertSubscriberService.getStorageStatus();
+					if (!subscribers.enabled && subscribers.activeCount === 0) {
+						notificationManager = notificationManager || bootstrapGetInitialized()
+							|| await bootstrapGetOrInitialize(resolveBot(botOrGetter));
+						validateNotificationRouting(notificationManager, routing);
+						const channels = getRequestedChannels(notificationManager, routing, alert.text);
+						const destinations = channels.map(channel => getCooldownChannelIdentity(channel, routing));
+						const key = coalesceFingerprint({ body, query: req.query, destinations });
+						coalesceReservation = await alertCoalescer.acquire(key, requestId, config.ALERT_COALESCE_WINDOW_MS, req.requestDeadlineSignal);
+						if (req.requestDeadlineSignal?.aborted) return;
+						if (coalesceReservation?.originalRequestId) {
+							return res.json({ success: true, coalesced: true,
+								originalRequestId: coalesceReservation.originalRequestId, requestId });
+						}
+					}
+				}
+			} catch (_) {
+				// Optional cache failures never block alert delivery.
 			}
 
 			const tokenUsage = new TokenUsageTracker('grounding');
@@ -961,6 +991,11 @@ function postAlert(botOrGetter) {
 				throw error;
 			}
 			const deliveredChannels = suppressedRepeat ? [] : getDeliveredChannels(results);
+			try {
+				alertCoalescer.finish(coalesceReservation, !suppressedRepeat && requestedChannels.length > 0
+					&& requestedChannels.every(channel => deliveredChannels.includes(channel))
+					&& results.length > 0 && results.every(result => result?.success === true && !result.skipped));
+			} catch (_) { /* Cache errors fail open. */ }
 			const zeroChannelRedriveExpected = requestedChannels.length === 0
 			&& !notificationManager.isIntentionalApiOnly();
 			const keepFailedForRedrive = notificationRedriveService.isEnabled()
@@ -1291,6 +1326,10 @@ function postAlert(botOrGetter) {
 				details: (upstreamEnvelope && upstreamEnvelope.details) || undefined,
 			});
 			res.status(status).json(envelope);
+		} finally {
+			try {
+				if (coalesceReservation?.entry?.pending) alertCoalescer.finish(coalesceReservation, false);
+			} catch (_) { /* Cache errors fail open. */ }
 		}
 	};
 }

@@ -19,6 +19,8 @@ const MAX_LOAD_TIMEOUT_MS = 30 * 1000;
 const MAX_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const PARAMETER_SCHEMA = Object.freeze({
+	ENABLE_ALERT_COALESCE: { type: 'boolean', defaultValue: false },
+	ALERT_COALESCE_WINDOW_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
 	PROMPT_FALLBACK_ON_DRIFT: { type: 'boolean', defaultValue: false },
 	NEWS_ALERT_THRESHOLD: { type: 'number', defaultValue: 0.7, min: 0, max: 1 },
 	NEWS_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1000, max: 120000 },

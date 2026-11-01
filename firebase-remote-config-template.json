@@ -987,6 +987,20 @@
       },
       "description": "Maximum number of cached entries per bucket in the /precio price cache (LRU eviction)",
       "valueType": "NUMBER"
+    },
+    "ENABLE_ALERT_COALESCE": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Opt-in process-local exact payload coalescing on POST /api/webhook/alert",
+      "valueType": "BOOLEAN"
+    },
+    "ALERT_COALESCE_WINDOW_MS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Exact alert coalescing window in milliseconds; integer 1-60000",
+      "valueType": "NUMBER"
     }
   },
   "version": {
