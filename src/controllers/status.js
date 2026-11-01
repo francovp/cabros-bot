@@ -25,6 +25,7 @@ const { tradeLedgerService } = require('../services/trading/TradeLedgerService')
 const symbolAnalysisStorageService = require('../services/storage/SymbolAnalysisStorageService');
 const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
 const { watchlistService } = require('../services/watchlist/WatchlistService');
+const chatEnrollmentsService = require('../services/enrollments/ChatEnrollmentsService');
 const bootstrapReadiness = require('../lib/bootstrapReadiness');
 const { notificationRedriveService } = require('../services/notification/NotificationRedriveService');
 const { getAdminPagingStatus } = require('../services/notification/adminPagingStatus');
@@ -679,6 +680,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			maintenanceMode: isMaintenanceModeEnabled(),
 			telegramCommandAuth: telegramCommandAuth.getStatus().enabled,
 			telegramCommandRateLimiting: process.env.ENABLE_TELEGRAM_COMMAND_RATE_LIMITING !== 'false',
+			chatEnrollments: isEnabled(process.env.ENABLE_CHAT_ENROLLMENTS),
 			firebaseAdminAuth: adminAuthStatus.enabled,
 		},
 		deliveryChannels: {
@@ -797,6 +799,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			alertSubscribers: alertSubscriberService.getStorageStatus(),
 			newsAnalysisStorage: newsAnalysisStorageService.getStorageStatus(),
 			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
+			chatEnrollments: chatEnrollmentsService.getStorageStatus(),
 			userPriceAlertWorker: userPriceAlertService.getStatus(),
 			newsMonitorScheduler: newsMonitorSchedulerService.getStatus(),
 			alertScheduler: alertSchedulerService.getStatus(),

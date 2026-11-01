@@ -13,6 +13,9 @@
   ],
   "tags": [
     {
+      "name": "Chat enrollments"
+    },
+    {
       "name": "Webhooks"
     },
     {
@@ -51,6 +54,234 @@
     }
   ],
   "paths": {
+    "/api/enrollments": {
+      "get": {
+        "tags": [
+          "Chat enrollments"
+        ],
+        "summary": "Summarize Telegram chat enrollments collected via /start deep links",
+        "description": "Returns sanitized aggregate counts for a bounded scan of the opt-in chatEnrollments collection. `partial=true` means more documents may exist, so `count` is not a total. Chat IDs are never returned unless the caller is an admin operator AND `includeChatIds=true`. Requires `ENABLE_CHAT_ENROLLMENTS=true`. When the flag is disabled, the endpoint returns 403 FEATURE_DISABLED. Firestore failures fall back to the bounded in-memory cache.",
+        "operationId": "listEnrollments",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Single decimal integer string (digits only, default 200). Values above 1000 are clamped to 1000; malformed, repeated, zero, or unsafe integer values return 400.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 200
+            }
+          },
+          {
+            "name": "includeChatIds",
+            "in": "query",
+            "required": false,
+            "description": "Operator-only flag: when true and the caller is an admin operator, the response includes a `records` array with the sanitized chat IDs. Viewer callers receive the summary without records regardless of the flag.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ],
+              "default": "false"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Sanitized enrollment summary.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentsSummary"
+                },
+                "examples": {
+                  "viewer": {
+                    "summary": "Admin viewer response (no chat IDs)",
+                    "value": {
+                      "mode": "durable",
+                      "backend": "firestore",
+                      "count": 42,
+                      "partial": false,
+                      "languages": [
+                        {
+                          "value": "es",
+                          "total": 30
+                        },
+                        {
+                          "value": "en",
+                          "total": 12
+                        }
+                      ],
+                      "watchlist": [
+                        {
+                          "value": "BTCUSDT",
+                          "total": 18
+                        },
+                        {
+                          "value": "ETHUSDT",
+                          "total": 9
+                        }
+                      ]
+                    }
+                  },
+                  "operator": {
+                    "summary": "Admin operator response (with chat IDs)",
+                    "value": {
+                      "mode": "durable",
+                      "backend": "firestore",
+                      "count": 2,
+                      "partial": false,
+                      "languages": [
+                        {
+                          "value": "es",
+                          "total": 1
+                        },
+                        {
+                          "value": "en",
+                          "total": 1
+                        }
+                      ],
+                      "watchlist": [
+                        {
+                          "value": "BTCUSDT",
+                          "total": 1
+                        }
+                      ],
+                      "records": [
+                        {
+                          "chatId": "555",
+                          "chatType": "group",
+                          "language": "es",
+                          "watchlist": [
+                            "BTCUSDT"
+                          ],
+                          "refSource": "launch"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query limit: use one positive decimal integer string. Exponents, hex, fractions, whitespace and repeated values are rejected.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "Invalid limit. Use an integer between 1 and 1000.",
+                  "code": "INVALID_REQUEST",
+                  "success": false,
+                  "requestId": "enrollments-example-001",
+                  "retryable": false
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "description": "Feature disabled or insufficient admin role.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "featureDisabled": {
+                    "value": {
+                      "error": "Chat enrollments are disabled. Set ENABLE_CHAT_ENROLLMENTS=true to enable.",
+                      "code": "FEATURE_DISABLED",
+                      "success": false,
+                      "requestId": "enrollments-example-001",
+                      "retryable": false
+                    }
+                  },
+                  "forbidden": {
+                    "value": {
+                      "error": "Admin viewer role required for chat enrollment summary.",
+                      "code": "FORBIDDEN",
+                      "success": false,
+                      "requestId": "enrollments-example-001",
+                      "retryable": false
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "503": {
+            "description": "Chat enrollment storage is enabled but unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "Chat enrollment storage is unavailable.",
+                  "code": "STORAGE_UNAVAILABLE",
+                  "success": false,
+                  "requestId": "enrollments-example-001",
+                  "retryable": true
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/ExpressFallthroughError"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/public/status": {
       "get": {
         "tags": [
@@ -1353,7 +1584,7 @@
         "tags": [
           "Alerts"
         ],
-        "summary": "Record a trader verdict (👍 / 👎) for a stored alert",
+        "summary": "Record a trader verdict (\ud83d\udc4d / \ud83d\udc4e) for a stored alert",
         "operationId": "submitAlertFeedback",
         "description": "Persists a single trader verdict per (alertId, chatId) tuple. Re-clicks update the verdict instead of appending a new row. Bounded by ALERT_FEEDBACK_RETENTION_DAYS and a SHA-256 chat hash; raw chat ids are never returned through this surface.",
         "requestBody": {
@@ -7485,7 +7716,10 @@
               "watchlist": {
                 "value": {
                   "message": "BINANCE:BTCUSDT buy",
-                  "channels": ["telegram", "whatsapp"],
+                  "channels": [
+                    "telegram",
+                    "whatsapp"
+                  ],
                   "telegramChatId": "-1001234567890",
                   "requireWatchlistMatch": true
                 }
@@ -10607,6 +10841,133 @@
       }
     },
     "schemas": {
+      "EnrollmentsSummary": {
+        "type": "object",
+        "required": [
+          "mode",
+          "backend",
+          "count",
+          "partial",
+          "languages",
+          "watchlist"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "durable",
+              "ephemeral"
+            ],
+            "description": "Whether enrollments are persisted across process restarts (durable Firestore backend) or kept in memory only (ephemeral)."
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ],
+            "description": "Effective storage backend for chat enrollments."
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Enrolled chats included in this bounded scan; not a total when partial is true."
+          },
+          "partial": {
+            "type": "boolean",
+            "description": "True when the scan limit may have excluded additional enrollment documents."
+          },
+          "languages": {
+            "type": "array",
+            "description": "Aggregated language preferences sorted by count desc.",
+            "items": {
+              "type": "object",
+              "required": [
+                "value",
+                "total"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "total": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "watchlist": {
+            "type": "array",
+            "description": "Aggregated watchlist symbols sorted by count desc.",
+            "items": {
+              "type": "object",
+              "required": [
+                "value",
+                "total"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "total": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "records": {
+            "type": "array",
+            "description": "Operator-only sanitized enrollment records. Present only when the caller is an admin operator and the `includeChatIds=true` query parameter is supplied.",
+            "items": {
+              "type": "object",
+              "required": [
+                "chatId"
+              ],
+              "properties": {
+                "chatId": {
+                  "type": "string",
+                  "description": "Telegram chat id (sanitized string)."
+                },
+                "chatType": {
+                  "type": "string",
+                  "enum": [
+                    "private",
+                    "group",
+                    "supergroup",
+                    "channel"
+                  ]
+                },
+                "language": {
+                  "type": "string",
+                  "nullable": true,
+                  "enum": [
+                    "es",
+                    "en",
+                    null
+                  ]
+                },
+                "watchlist": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "refSource": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "enrolledAt": {
+                  "type": "integer",
+                  "nullable": true,
+                  "description": "Enrollment timestamp in milliseconds since epoch (UTC)."
+                }
+              }
+            }
+          }
+        }
+      },
       "RateLimitHeaders": {
         "type": "object",
         "description": "Standard X-RateLimit-* response headers emitted by the API rate limiter. Dedicated endpoints use independent 60-second per-endpoint buckets. All webhook/news ingest paths share an aggregate 1,000-request bucket per RATE_LIMIT_WINDOW_MS; tiered webhook routes enforce both this aggregate ceiling and their endpoint tier. Other routes use RATE_LIMIT_MAX.",
@@ -11136,7 +11497,10 @@
           },
           "markdownWarnings": {
             "type": "array",
-            "items": { "type": "integer", "minimum": 1 },
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
             "description": "One-based Telegram preview lines with potentially invalid unescaped MarkdownV2 markup. Present on dry runs."
           },
           "enrichmentApplied": {
@@ -16002,12 +16366,34 @@
       "PromptLifecycleDependency": {
         "type": "object",
         "description": "Durable distinct prompt-name/version drift transitions observed in the previous 24 hours. No prompt content or credentials are exposed.",
-        "required": ["durableReadReady", "driftCount24h", "lastDriftDetectedAt", "lastDriftPromptName"],
+        "required": [
+          "durableReadReady",
+          "driftCount24h",
+          "lastDriftDetectedAt",
+          "lastDriftPromptName"
+        ],
         "properties": {
-          "durableReadReady": { "type": "boolean", "description": "True only after a successful bounded Firestore read in this process. False means the count may be incomplete." },
-          "driftCount24h": { "type": "integer", "minimum": 0 },
-          "lastDriftDetectedAt": { "type": ["string", "null"], "format": "date-time" },
-          "lastDriftPromptName": { "type": ["string", "null"] }
+          "durableReadReady": {
+            "type": "boolean",
+            "description": "True only after a successful bounded Firestore read in this process. False means the count may be incomplete."
+          },
+          "driftCount24h": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastDriftDetectedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastDriftPromptName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         },
         "additionalProperties": false
       },
@@ -19267,6 +19653,58 @@
               },
               "presetBoundDestinations": {
                 "$ref": "#/components/schemas/PresetBoundDestinationsDependency"
+              },
+              "chatEnrollments": {
+                "type": "object",
+                "description": "Telegram enrollment storage state and process-local count.",
+                "required": [
+                  "enabled",
+                  "configured",
+                  "ready",
+                  "status",
+                  "mode",
+                  "backend",
+                  "count"
+                ],
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "configured": {
+                    "type": "boolean"
+                  },
+                  "ready": {
+                    "type": "boolean"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "disabled",
+                      "misconfigured",
+                      "unverified",
+                      "degraded",
+                      "ready"
+                    ]
+                  },
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "durable",
+                      "ephemeral"
+                    ]
+                  },
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "firestore",
+                      "memory"
+                    ]
+                  },
+                  "count": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
               }
             }
           }
@@ -22904,6 +23342,10 @@
               "presetBoundDestinations": {
                 "type": "boolean",
                 "description": "Preset routing supports bounded saved Telegram, WhatsApp, and Discord destinations."
+              },
+              "chatEnrollments": {
+                "type": "boolean",
+                "description": "Whether opt-in Telegram chat enrollment is enabled."
               }
             }
           }
@@ -22912,12 +23354,31 @@
       "WatchlistDependency": {
         "type": "object",
         "description": "Process-local watchlist storage mode and failure counters. No chat IDs or symbols are exposed.",
-        "required": ["enabled", "mode", "readFailures", "writeFailures"],
+        "required": [
+          "enabled",
+          "mode",
+          "readFailures",
+          "writeFailures"
+        ],
         "properties": {
-          "enabled": { "type": "boolean" },
-          "mode": { "type": "string", "enum": ["memory", "firestore"] },
-          "readFailures": { "type": "integer", "minimum": 0 },
-          "writeFailures": { "type": "integer", "minimum": 0 }
+          "enabled": {
+            "type": "boolean"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "memory",
+              "firestore"
+            ]
+          },
+          "readFailures": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "writeFailures": {
+            "type": "integer",
+            "minimum": 0
+          }
         },
         "additionalProperties": false
       },

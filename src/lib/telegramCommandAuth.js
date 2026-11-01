@@ -113,6 +113,9 @@ function extractChatId(context) {
 	if (context.message && context.message.chat && context.message.chat.id !== undefined) {
 		return context.message.chat.id;
 	}
+	if (context.update.callback_query?.message?.chat?.id !== undefined) {
+		return context.update.callback_query.message.chat.id;
+	}
 	return undefined;
 }
 

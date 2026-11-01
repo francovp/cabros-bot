@@ -46,6 +46,7 @@ const {
 	exportOutcomes,
 } = require('../controllers/outcomes/outcomes');
 const { listSymbolAnalyses, summarizeSymbolAnalyses } = require('../controllers/symbolAnalyses/symbolAnalyses');
+const { listEnrollments } = require('../controllers/webhooks/handlers/enrollments/enrollments');
 const { getPreferencesHandler, putPreferencesHandler, deletePreferencesHandler } = require('../controllers/preferences/preferences');
 const {
 	listSubscribers,
@@ -129,6 +130,7 @@ function getRoutes(botOrGetter) {
 	router.get('/admin/events', ...sseRead, handleSseStream);
 	router.get('/outcomes', ...adminRead, listOutcomes);
 	router.get('/outcomes/summary', ...adminRead, summarizeOutcomes);
+	router.get('/enrollments', ...adminRead, listEnrollments);
 	router.get('/outcomes/calibration', ...adminRead, getOutcomesCalibration);
 	router.get('/outcomes/export', ...adminRead, exportOutcomes);
 	router.get('/outcomes/:outcomeId', ...adminRead, getOutcomeById);

@@ -225,7 +225,7 @@ describe('OpenAPI contract', () => {
 			'GET /api/trading/binance/orders', 'GET /api/trading/binance/orders/audit', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders',
 			'GET /api/trading/binance/pause', 'POST /api/trading/binance/pause', 'POST /api/trading/binance/resume',
 			'GET /api/trading/binance/reconciliation', 'GET /api/trading/binance/reconciliation/{reservationId}', 'POST /api/trading/binance/reconciliation/{reservationId}',
-			'GET /api/status', 'GET /api/capabilities',
+			'GET /api/status', 'GET /api/capabilities', 'GET /api/enrollments',
 			'POST /api/symbols/resolve', 'GET /api/symbols/aliases',
 			'POST /api/trading/binance/orders/preview', 'GET /api/trading/binance/account/balances',
 			'GET /api/trading/positions', 'GET /api/trading/pnl/summary', 'GET /api/trading/trades',

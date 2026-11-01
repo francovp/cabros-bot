@@ -2756,3 +2756,26 @@ describe('CI coverage guards (Postman collection and README endpoints)', () => {
 		});
 	});
 });
+
+
+describe('enrollment Postman requests', () => {
+	it('executes success and negative status/envelope assertions', () => {
+		const vm = require('vm');
+		const collection = require('../../CabrosBot.postman_collection.json');
+		const folder = collection.item.find((item) => item.name === 'Chat Enrollments');
+		for (const code of [200, 400, 401, 403]) {
+			const item = folder.item.find((entry) => entry.name.endsWith(`[${code}]`));
+			expect(item).toBeDefined();
+			const scripts = item.event.filter((event) => event.listen === 'test').flatMap((event) => event.script.exec).join('\n');
+			const run = (body, status) => vm.runInNewContext(scripts, { pm: {
+				test: (_name, work) => work(),
+				response: { json: () => body, headers: { get: () => 'request-id' }, to: { have: { status: (expected) => expect(status).toBe(expected) } } },
+			} });
+			const body = code === 200 ? { count: 0, languages: [], watchlist: [] }
+				: { success: false, error: 'example', code: code === 400 ? 'INVALID_REQUEST' : code === 401 ? 'UNAUTHORIZED' : 'FEATURE_DISABLED', requestId: 'example', retryable: false };
+			run(body, code);
+			expect(() => run(body, code + 1)).toThrow();
+			if (code !== 200) expect(() => run({ error: 'example' }, code)).toThrow();
+		}
+	});
+});

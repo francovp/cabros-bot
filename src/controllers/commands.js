@@ -1,5 +1,6 @@
 const { fetchSymbolPrice } = require('./commands/handlers/core/fetchPriceCryptoSymbol');
 const { watchlistCommand } = require('./commands/handlers/watchlist');
+const { createStartCommand } = require('./commands/handlers/start/startCommand');
 const { userPriceAlertCmd } = require('./commands/handlers/core/userPriceAlertHandler');
 const { reactionsSymbol } = require('./commands/handlers/reactionsSymbol');
 const { jobService } = require('../services/jobs/JobService');
@@ -62,6 +63,7 @@ async function getTradingViewReadinessWarning() {
 }
 
 const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
+	start: { max: 5, windowMs: 60_000 },
 	precio: { max: 10, windowMs: 60_000 },
 	analisis: { max: 3, windowMs: 3_600_000 },
 	scanner: { max: 3, windowMs: 3_600_000 },
@@ -1283,6 +1285,8 @@ const helpCmd = async (context) => {
 	}
 };
 
+const startCmd = createStartCommand({ captureRuntimeError: sentryService.captureRuntimeError.bind(sentryService) });
+
 function getChatId(context) {
 	return context.update && context.update.message && context.update.message.chat && context.update.message.chat.id;
 }
@@ -1436,6 +1440,7 @@ module.exports = {
 	alertHistoryCommand,
 	newsMonitorCmd,
 	helpCmd,
+	startCmd,
 	outcomesCommand,
 	resolveCmd,
 	reactionsCommand,
