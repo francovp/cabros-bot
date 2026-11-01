@@ -38,6 +38,7 @@ const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsApp
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const priceQuoteCache = require('../services/cache/PriceQuoteCache');
 const { resolveStartupJitterMs } = require('../lib/startupJitter');
 const { getBackgroundTimerStats } = require('../lib/backgroundTimerRegistry');
 const { outcomeAnnotationService } = require('../services/alerts/outcomeAnnotationService');
@@ -659,6 +660,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
+			priceQuoteCache: priceQuoteCache.isEnabled(),
 			outcomeInformedDelivery: outcomeAnnotationService.isEnabled(),
 			alertCrossTimeframeSuppression: crossTimeframeCooldown.isEnabled(),
 			alertBurstAggregation: burstAggregator.isEnabled(),
@@ -830,6 +832,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
 			},
+			priceQuoteCache: priceQuoteCache.getStatus(),
 			symbolAliasResolver: {
 				enabled: aliasResolver.isEnabled(),
 				totalEntries: aliasResolver.listAliases().length,

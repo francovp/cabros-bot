@@ -41,8 +41,11 @@ jest.mock('../../src/services/monitoring/SentryService', () => ({
 const { mockMainClient, mockGetAvgPrice, mockGet24hrChangeStatistics } = require('binance');
 const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
 const sentryService = require('../../src/services/monitoring/SentryService');
+const priceQuoteCache = require('../../src/services/cache/PriceQuoteCache');
 const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 const {
+	fetchCryptoPrice,
+	fetchEquityPrice,
 	classifyPriceQuery,
 	fetchSymbolPrice,
 } = require('../../src/controllers/commands/handlers/core/fetchPriceCryptoSymbol');
@@ -63,8 +66,12 @@ function buildContext(text) {
 describe('fetchPriceCryptoSymbol and /precio command', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		mockGetAvgPrice.mockReset();
+		mockGet24hrChangeStatistics.mockReset();
+		equityMarketDataService.getQuote.mockReset();
+		priceQuoteCache._resetForTesting();
 		equityMarketDataService.isSupportedExchange.mockImplementation((ex) =>
-			['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD'].includes(ex)
+			['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD'].includes(ex),
 		);
 		equityMarketDataService.getStatus.mockReturnValue({
 			enabled: true,
@@ -387,6 +394,102 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 			});
 		});
 
+		it('caches crypto quotes so repeated lookups do not re-call Binance', async () => {
+			mockGetAvgPrice.mockResolvedValue({ price: 65000 });
+			const context1 = buildContext('/precio BTCUSDT');
+			const context2 = buildContext('/precio BTCUSDT');
+
+			const first = await fetchSymbolPrice(context1);
+			const second = await fetchSymbolPrice(context2);
+
+			expect(first).toEqual(second);
+			expect(mockGetAvgPrice).toHaveBeenCalledTimes(1);
+		});
+
+		it('refetches expired crypto quotes with fresh ticker context and spans only on misses', async () => {
+			jest.useFakeTimers();
+			try {
+				mockGetAvgPrice.mockResolvedValueOnce({ price: 65000 }).mockResolvedValueOnce({ price: 66000 });
+				mockGet24hrChangeStatistics.mockResolvedValue({ symbol: 'BTCUSDT', priceChangePercent: '2', highPrice: '67000', lowPrice: '63000', quoteVolume: '1000000' });
+				const first = await fetchSymbolPrice(buildContext('/precio BTCUSDT'));
+				const spans = sentryService.startInactiveSpan.mock.calls.length;
+				expect(await fetchSymbolPrice(buildContext('/precio BTCUSDT'))).toEqual(first);
+				expect(sentryService.startInactiveSpan).toHaveBeenCalledTimes(spans);
+				expect(mockGet24hrChangeStatistics).toHaveBeenCalledTimes(1);
+				jest.advanceTimersByTime(remoteConfigService.getRuntimeConfig().PRICE_CACHE_TTL_MS_CRYPTO);
+				const refreshed = await fetchSymbolPrice(buildContext('/precio BTCUSDT'));
+				expect(refreshed.price).toBe(66000);
+				expect(refreshed.changePercent24h).toBe(2);
+				expect(mockGetAvgPrice).toHaveBeenCalledTimes(2);
+				expect(mockGet24hrChangeStatistics).toHaveBeenCalledTimes(2);
+			} finally {
+				jest.useRealTimers();
+			}
+		});
+
+		it('keeps direct crypto evaluator quotes fresh after a chat lookup', async () => {
+			mockGetAvgPrice.mockResolvedValueOnce({ price: 65000 }).mockResolvedValueOnce({ price: 66000 });
+			await fetchSymbolPrice(buildContext('/precio BTCUSDT'));
+			expect((await fetchCryptoPrice('BTCUSDT')).price).toBe(66000);
+			expect(mockGetAvgPrice).toHaveBeenCalledTimes(2);
+		});
+
+		it('keeps direct equity evaluator quotes fresh after a chat lookup', async () => {
+			equityMarketDataService.getQuote.mockResolvedValueOnce({ symbol: 'NVDA', price: 125, percentChange: 0 })
+				.mockResolvedValueOnce({ symbol: 'NVDA', price: 130, percentChange: 0 });
+			await fetchSymbolPrice(buildContext('/precio NVDA'));
+			expect((await fetchEquityPrice('NVDA', null)).price).toBe(130);
+			expect(equityMarketDataService.getQuote).toHaveBeenCalledTimes(2);
+		});
+
+		it('caches equity quotes so repeated lookups do not re-call Twelve Data', async () => {
+			equityMarketDataService.getQuote.mockResolvedValue({
+				symbol: 'NVDA',
+				price: 125.5,
+				percentChange: 2.32,
+			});
+			const context1 = buildContext('/precio NVDA');
+			const context2 = buildContext('/precio NVDA');
+
+			await fetchSymbolPrice(context1);
+			await fetchSymbolPrice(context2);
+
+			expect(equityMarketDataService.getQuote).toHaveBeenCalledTimes(1);
+		});
+
+		it('never caches failed crypto lookups', async () => {
+			const err = new Error('Network error');
+			mockGetAvgPrice.mockRejectedValueOnce(err);
+			mockGetAvgPrice.mockResolvedValueOnce({ price: 65000 });
+			const context = buildContext('/precio BTCUSDT');
+
+			await expect(fetchSymbolPrice(context)).rejects.toMatchObject({
+				userMessage: 'No se pudo obtener el precio de BTCUSDT en Binance.',
+			});
+
+			const recovered = await fetchSymbolPrice(buildContext('/precio BTCUSDT'));
+			expect(recovered.price).toBe(65000);
+			expect(mockGetAvgPrice).toHaveBeenCalledTimes(2);
+		});
+
+		it('never caches failed equity lookups', async () => {
+			const err = new Error('Network error');
+			equityMarketDataService.getQuote.mockRejectedValueOnce(err);
+			equityMarketDataService.getQuote.mockResolvedValueOnce({
+				symbol: 'NVDA',
+				price: 125.5,
+				percentChange: 2.32,
+			});
+			const context = buildContext('/precio NVDA');
+
+			await expect(fetchSymbolPrice(context)).rejects.toMatchObject({
+				userMessage: 'No se pudo obtener el precio de NVDA en Twelve Data.',
+			});
+
+			await fetchSymbolPrice(buildContext('/precio NVDA'));
+			expect(equityMarketDataService.getQuote).toHaveBeenCalledTimes(2);
+		});
+
 		it('fetches and formats equity price with 24h change from Twelve Data when enabled', async () => {
 			equityMarketDataService.getQuote.mockResolvedValueOnce({
 				symbol: 'NVDA',
@@ -463,7 +566,7 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 						provider: 'twelve-data',
 						lastErrorCode: equityMarketDataService.REASONS.TIMEOUT,
 					}),
-				})
+				}),
 			);
 		});
 
@@ -485,7 +588,7 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 			await getPrice(context);
 
 			expect(context.reply).toHaveBeenCalledWith(
-				'Por favor indica un símbolo. Ejemplo: /precio BTCUSDT o /precio NVDA'
+				'Por favor indica un símbolo. Ejemplo: /precio BTCUSDT o /precio NVDA',
 			);
 		});
 
@@ -527,7 +630,7 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 
 			await getPrice(context);
 			expect(context.reply).toHaveBeenCalledWith(
-				'Exchange UNKNOWN no soportado para consulta de precios.'
+				'Exchange UNKNOWN no soportado para consulta de precios.',
 			);
 			expect(sentryService.captureRuntimeError).not.toHaveBeenCalled();
 		});
@@ -540,7 +643,7 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 
 			await getPrice(context);
 			expect(context.reply).toHaveBeenCalledWith(
-				'No se pudo obtener el precio de NVDA (tiempo de espera agotado).'
+				'No se pudo obtener el precio de NVDA (tiempo de espera agotado).',
 			);
 		});
 
@@ -552,7 +655,7 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 
 			await getPrice(context);
 			expect(context.reply).toHaveBeenCalledWith(
-				'No se encontró el símbolo BADSYMBOL en Binance.'
+				'No se encontró el símbolo BADSYMBOL en Binance.',
 			);
 			expect(sentryService.captureRuntimeError).not.toHaveBeenCalled();
 		});
@@ -564,7 +667,7 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 
 			await getPrice(context);
 			expect(context.reply).toHaveBeenCalledWith(
-				'No se pudo obtener el precio de BTCUSDT en Binance.'
+				'No se pudo obtener el precio de BTCUSDT en Binance.',
 			);
 			expect(sentryService.captureRuntimeError).toHaveBeenCalledWith(
 				expect.objectContaining({
@@ -575,7 +678,7 @@ describe('fetchPriceCryptoSymbol and /precio command', () => {
 						chatId: 987,
 						symbol: 'BTCUSDT',
 					}),
-				})
+				}),
 			);
 		});
 	});

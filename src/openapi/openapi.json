@@ -7485,7 +7485,10 @@
               "watchlist": {
                 "value": {
                   "message": "BINANCE:BTCUSDT buy",
-                  "channels": ["telegram", "whatsapp"],
+                  "channels": [
+                    "telegram",
+                    "whatsapp"
+                  ],
                   "telegramChatId": "-1001234567890",
                   "requireWatchlistMatch": true
                 }
@@ -11136,7 +11139,10 @@
           },
           "markdownWarnings": {
             "type": "array",
-            "items": { "type": "integer", "minimum": 1 },
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
             "description": "One-based Telegram preview lines with potentially invalid unescaped MarkdownV2 markup. Present on dry runs."
           },
           "enrichmentApplied": {
@@ -16002,12 +16008,34 @@
       "PromptLifecycleDependency": {
         "type": "object",
         "description": "Durable distinct prompt-name/version drift transitions observed in the previous 24 hours. No prompt content or credentials are exposed.",
-        "required": ["durableReadReady", "driftCount24h", "lastDriftDetectedAt", "lastDriftPromptName"],
+        "required": [
+          "durableReadReady",
+          "driftCount24h",
+          "lastDriftDetectedAt",
+          "lastDriftPromptName"
+        ],
         "properties": {
-          "durableReadReady": { "type": "boolean", "description": "True only after a successful bounded Firestore read in this process. False means the count may be incomplete." },
-          "driftCount24h": { "type": "integer", "minimum": 0 },
-          "lastDriftDetectedAt": { "type": ["string", "null"], "format": "date-time" },
-          "lastDriftPromptName": { "type": ["string", "null"] }
+          "durableReadReady": {
+            "type": "boolean",
+            "description": "True only after a successful bounded Firestore read in this process. False means the count may be incomplete."
+          },
+          "driftCount24h": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastDriftDetectedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastDriftPromptName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         },
         "additionalProperties": false
       },
@@ -19267,6 +19295,9 @@
               },
               "presetBoundDestinations": {
                 "$ref": "#/components/schemas/PresetBoundDestinationsDependency"
+              },
+              "priceQuoteCache": {
+                "$ref": "#/components/schemas/PriceQuoteCacheDependency"
               }
             }
           }
@@ -22907,17 +22938,42 @@
               }
             }
           }
-        ]
+        ],
+        "properties": {
+          "priceQuoteCache": {
+            "type": "boolean",
+            "description": "Whether the process-local /precio quote cache is enabled."
+          }
+        }
       },
       "WatchlistDependency": {
         "type": "object",
         "description": "Process-local watchlist storage mode and failure counters. No chat IDs or symbols are exposed.",
-        "required": ["enabled", "mode", "readFailures", "writeFailures"],
+        "required": [
+          "enabled",
+          "mode",
+          "readFailures",
+          "writeFailures"
+        ],
         "properties": {
-          "enabled": { "type": "boolean" },
-          "mode": { "type": "string", "enum": ["memory", "firestore"] },
-          "readFailures": { "type": "integer", "minimum": 0 },
-          "writeFailures": { "type": "integer", "minimum": 0 }
+          "enabled": {
+            "type": "boolean"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "memory",
+              "firestore"
+            ]
+          },
+          "readFailures": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "writeFailures": {
+            "type": "integer",
+            "minimum": 0
+          }
         },
         "additionalProperties": false
       },
@@ -22990,6 +23046,143 @@
               }
             },
             "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "PriceQuoteCacheDependency": {
+        "type": "object",
+        "description": "Bounded process-local /precio cache; replicas can differ within the configured TTL. This cache is not used for order execution or outcome pricing.",
+        "required": [
+          "enabled",
+          "disabled",
+          "mode",
+          "storage",
+          "ttlMs",
+          "maxEntriesPerBucket",
+          "buckets"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "disabled": {
+            "type": "boolean"
+          },
+          "mode": {
+            "const": "in-memory"
+          },
+          "storage": {
+            "const": "memory"
+          },
+          "ttlMs": {
+            "type": "object",
+            "required": [
+              "crypto",
+              "equity"
+            ],
+            "properties": {
+              "crypto": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 600000
+              },
+              "equity": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 600000
+              }
+            }
+          },
+          "maxEntriesPerBucket": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "buckets": {
+            "type": "object",
+            "required": [
+              "crypto",
+              "equity"
+            ],
+            "properties": {
+              "crypto": {
+                "type": "object",
+                "required": [
+                  "size",
+                  "hits",
+                  "misses",
+                  "sets",
+                  "evictions",
+                  "errors"
+                ],
+                "properties": {
+                  "size": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "hits": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "misses": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "sets": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "evictions": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "errors": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              },
+              "equity": {
+                "type": "object",
+                "required": [
+                  "size",
+                  "hits",
+                  "misses",
+                  "sets",
+                  "evictions",
+                  "errors"
+                ],
+                "properties": {
+                  "size": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "hits": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "misses": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "sets": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "evictions": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "errors": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
           }
         },
         "additionalProperties": false

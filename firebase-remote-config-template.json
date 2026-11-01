@@ -966,6 +966,27 @@
       "conditionalValues": {},
       "description": "Enable durable Firestore persistence for alert subscriber webhooks. Ships with useInAppDefault so publishing this template yields NO remote override for this key and the deployment value decides. Without it the Admin SDK reports the defaultValue with source 'remote', which would silently override render.yaml.",
       "valueType": "BOOLEAN"
+    },
+    "PRICE_CACHE_TTL_MS_CRYPTO": {
+      "defaultValue": {
+        "value": "15000"
+      },
+      "description": "Process-local TTL in milliseconds for cached /precio crypto (Binance) quotes",
+      "valueType": "NUMBER"
+    },
+    "PRICE_CACHE_TTL_MS_EQUITY": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Process-local TTL in milliseconds for cached /precio equity (Twelve Data) quotes",
+      "valueType": "NUMBER"
+    },
+    "PRICE_CACHE_MAX_ENTRIES_PER_BUCKET": {
+      "defaultValue": {
+        "value": "256"
+      },
+      "description": "Maximum number of cached entries per bucket in the /precio price cache (LRU eviction)",
+      "valueType": "NUMBER"
     }
   },
   "version": {

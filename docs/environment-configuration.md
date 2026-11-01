@@ -539,6 +539,9 @@ The endpoint tiers use separate per-endpoint buckets keyed by the existing API-k
 - `NEWS_MAX_ALERTS_PER_WINDOW_MS` - Sliding volume-window duration (default: `300000` ms / 5 minutes, range: `1000`-`3600000`; Remote Config supported)
 - `ENABLE_BINANCE_PRICE_CHECK` - Enable Binance crypto price fetching (`true` or `false`, default: `false`)
 - `BINANCE_DATA_BASE_URL` - Optional custom Binance market-data host for public data (klines, ticker, avgPrice), e.g. `https://data-api.binance.vision` (default: unset / `https://api.binance.com`)
+- `PRICE_CACHE_TTL_MS_CRYPTO` — `/precio` crypto TTL (default `15000` ms; integer `1000`–`600000`; Remote Config supported).
+- `PRICE_CACHE_TTL_MS_EQUITY` — `/precio` equity TTL (default `60000` ms; integer `1000`–`600000`; Remote Config supported).
+- `PRICE_CACHE_MAX_ENTRIES_PER_BUCKET` — process-local LRU capacity per provider bucket (default `256`; integer `1`–`10000`; Remote Config supported). Each replica caches independently.
 - `BINANCE_FETCH_TIMEOUT_MS` - Binance price request timeout (default: `5000` ms)
 
 #### Binance Spot Order Execution

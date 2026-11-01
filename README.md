@@ -896,3 +896,15 @@ See [Architecture Guide](docs/deployment.md) and [Notifications Guide](docs/noti
 ## License
 
 This project is licensed under the ISC License.
+
+### /precio quote cache
+
+Successful `/precio` quotes use a bounded process-local LRU cache. Repeated requests within the TTL skip provider calls and their Sentry spans; expired entries fetch again, and provider errors are never cached. Equity keys include the exchange. Crypto entries include the existing optional 24-hour ticker context and bare-price fallback. Each replica has its own cache, so replies may differ within the configured TTL; this cache is for chat quotes, not order execution or outcome pricing.
+
+| Remote Config parameter | Environment/default fallback | Bounds | Purpose |
+| --- | --- | --- | --- |
+| `PRICE_CACHE_TTL_MS_CRYPTO` | `15000` | `1000`–`600000` | Crypto quote TTL in milliseconds. |
+| `PRICE_CACHE_TTL_MS_EQUITY` | `60000` | `1000`–`600000` | Equity quote TTL in milliseconds. |
+| `PRICE_CACHE_MAX_ENTRIES_PER_BUCKET` | `256` | `1`–`10000` | Maximum entries per crypto/equity bucket. |
+
+All three are non-secret runtime tuning settings supported by Firebase Remote Config. Fresh published values override environment values; invalid values retain the environment/default fallback. `/api/status` and `/api/capabilities` expose `featureFlags.priceQuoteCache` and sanitized `dependencies.priceQuoteCache` counters and effective configuration. No credentials, destinations, startup gates, or authentication controls are added.

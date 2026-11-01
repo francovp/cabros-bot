@@ -2404,6 +2404,19 @@ No endpoint, OpenAPI, Postman, environment variable, or Remote Config contract c
 
 Disabled by default preserves existing webhook behavior byte-for-byte.
 
+## /precio Price Quote Cache (GH-792)
+
+`/precio` chat lookups through `fetchSymbolPrice` now consult a bounded, process-local TTL cache before contacting Binance (`getAvgPrice`) or Twelve Data (`/quote`). Successful responses are cached; provider errors are never cached so the next call retries the upstream. Two TTL buckets match chat-tolerance vs provider pacing: `PRICE_CACHE_TTL_MS_CRYPTO` (default `15000`) and `PRICE_CACHE_TTL_MS_EQUITY` (default `60000`). Equity keys are exchange-scoped (`<SYMBOL>:<EXCHANGE>`) so a NASDAQ quote does not collide with a NYSE quote. `PRICE_CACHE_MAX_ENTRIES_PER_BUCKET` (default `256`, range `1`-`10000`) bounds LRU eviction per bucket, honoring the `newsMonitor`/`#689` precedent against unbounded growth. Provider quota never crashes the cache — malformed/expired entries are silently dropped on read, and storage errors are logged as warnings without throwing.
+
+**Core Components**:
+- `src/services/cache/PriceQuoteCache.js` — bounded TTL + LRU buckets, fail-open semantics, per-bucket hit/miss/set/eviction/error counters, and a `getStatus()` payload for `/api/status`.
+- `src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js` — Chat calls opt into caching; direct provider exports used by price-alert evaluators stay fresh. Cache write on success only; both `fetchCryptoPrice` and `fetchEquityPrice` use Sentry spans annotated with `cache.hit`.
+- `src/services/remoteConfig/RemoteConfigService.js` and `firebase-remote-config-template.json` — bounded schema entries for `PRICE_CACHE_TTL_MS_CRYPTO`, `PRICE_CACHE_TTL_MS_EQUITY`, and `PRICE_CACHE_MAX_ENTRIES_PER_BUCKET`; environment fallback remains the default.
+- `src/controllers/status.js` — `featureFlags.priceQuoteCache` (enabled state) and `dependencies.priceQuoteCache` (enabled/disabled, mode, TTLs, max entries, per-bucket counters).
+- `scripts/validate-env.js` and `tests/unit/validate-env.test.js` — Bounds validation (no fractional integers, range `1000`-`600000` for TTLs, `1`-`10000` for max entries).
+- `tests/unit/price-quote-cache.test.js`, `tests/unit/fetch-symbol-price.test.js`, `tests/unit/remote-config-service.test.js`, `tests/unit/validate-env.test.js`, `tests/unit/docs-alignment.test.js`, and `tests/integration/status-endpoint.test.js` — Cache hit/miss, TTL expiry, LRU eviction, never-caching-errors, parity, and exposure coverage.
+
+The cache is process-local; cross-replica freshness is out of scope and unchanged from the legacy implementation.
 **A fresh delivery cancels stale redrives on every identity it satisfied, not just the default one (issue #918).** After a successful delivery, the handler cancels pending/in-flight dead letters for the same repeat key under the **unique union** of the concrete delivered channel identities and the synthetic default-destination identities, and repeats the same cancellation for the opposite-side key. The concrete half is what makes the guarantee hold: a redrive recorded against the very chat that just received the alert is a duplicate waiting for its backoff, and passing only `defaultDestinationChannels` left it live. Two invariants must survive future edits:
 
 - **The union is built once and used for both keys.** `deliveredCooldownChannels` is a `Set` union of `deliveredReservationChannels` and `defaultDestinationChannels`; the same-key and opposite-key calls receive the identical array. The opposite-key cancellation already had the union, so widening the same-key one is the entire fix — computing two separately-shaped arrays is how the two drifted apart in the first place.

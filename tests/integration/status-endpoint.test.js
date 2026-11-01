@@ -265,6 +265,11 @@ describe('Status endpoints', () => {
 		});
 		expect(response.body.service).not.toHaveProperty('timestamp');
 		expect(response.body.featureFlags.telegramBot).toBe(true);
+		expect(response.body.featureFlags.priceQuoteCache).toBe(true);
+		expect(response.body.dependencies.priceQuoteCache).toMatchObject({
+			enabled: true, mode: 'in-memory', storage: 'memory',
+			ttlMs: { crypto: 15000, equity: 60000 }, maxEntriesPerBucket: 256,
+		});
 		expect(response.body.readiness).toEqual(expect.objectContaining({
 			status: 'pending',
 			ready: false,
@@ -3296,6 +3301,11 @@ describe('Status endpoints', () => {
 		expect(response.status).toBe(200);
 		expect(response.body.service.environment).toBe('preview');
 		expect(response.body.featureFlags.telegramBot).toBe(true);
+		expect(response.body.featureFlags.priceQuoteCache).toBe(true);
+		expect(response.body.dependencies.priceQuoteCache).toMatchObject({
+			enabled: true, mode: 'in-memory', storage: 'memory',
+			ttlMs: { crypto: 15000, equity: 60000 }, maxEntriesPerBucket: 256,
+		});
 		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: false, status: 'disabled' });
 		expect(response.body.dependencies.telegram.ready).toBe(false);
 	});

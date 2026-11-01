@@ -643,6 +643,9 @@ describe('RemoteConfigService', () => {
 			TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD: 10,
 			TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS: 300000,
 			TRADINGVIEW_MCP_PAGE_COOLDOWN_MS: 1800000,
+			PRICE_CACHE_TTL_MS_CRYPTO: 30000,
+			PRICE_CACHE_TTL_MS_EQUITY: 120000,
+			PRICE_CACHE_MAX_ENTRIES_PER_BUCKET: 512,
 			NEWS_MAX_ALERTS_PER_BATCH: 15,
 			NEWS_MAX_ALERTS_PER_WINDOW: 30,
 			NEWS_MAX_ALERTS_PER_WINDOW_MS: 600000,
@@ -684,6 +687,9 @@ describe('RemoteConfigService', () => {
 		expect(config.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD).toBe(10);
 		expect(config.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS).toBe(300000);
 		expect(config.TRADINGVIEW_MCP_PAGE_COOLDOWN_MS).toBe(1800000);
+		expect(config.PRICE_CACHE_TTL_MS_CRYPTO).toBe(30000);
+		expect(config.PRICE_CACHE_TTL_MS_EQUITY).toBe(120000);
+		expect(config.PRICE_CACHE_MAX_ENTRIES_PER_BUCKET).toBe(512);
 	});
 
 	it('supports configurable signal outcome windows and labels in Remote Config', async () => {
@@ -834,6 +840,9 @@ describe('RemoteConfigService', () => {
 		process.env.SIGNAL_OUTCOME_MAX_RETRY_AGE_MS = '3000000000'; // max 2592000000
 		process.env.SIGNAL_OUTCOME_RETENTION_DAYS = '5000'; // max 3650
 		process.env.EQUITY_MARKET_DATA_RPM = '2000'; // max 1200
+		process.env.PRICE_CACHE_TTL_MS_CRYPTO = '-5'; // min 1000
+		process.env.PRICE_CACHE_TTL_MS_EQUITY = '999999'; // max 600000
+		process.env.PRICE_CACHE_MAX_ENTRIES_PER_BUCKET = '0'; // min 1
 		process.env.URL_SHORTENER_CACHE_MAX_ENTRIES = '500000'; // max 100000
 		process.env.URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES = '2000'; // max 1024
 
@@ -850,6 +859,9 @@ describe('RemoteConfigService', () => {
 		expect(config.SIGNAL_OUTCOME_MAX_RETRY_AGE_MS).toBe(604800000); // fallback to default
 		expect(config.SIGNAL_OUTCOME_RETENTION_DAYS).toBe(365); // fallback to default
 		expect(config.EQUITY_MARKET_DATA_RPM).toBe(8); // fallback to default
+		expect(config.PRICE_CACHE_TTL_MS_CRYPTO).toBe(15000); // fallback to default
+		expect(config.PRICE_CACHE_TTL_MS_EQUITY).toBe(60000); // fallback to default
+		expect(config.PRICE_CACHE_MAX_ENTRIES_PER_BUCKET).toBe(256); // fallback to default
 		expect(config.URL_SHORTENER_CACHE_MAX_ENTRIES).toBe(1000); // fallback to default
 		expect(config.URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES).toBe(32); // fallback to default
 	});
