@@ -137,13 +137,6 @@ function recordSilentDrop(chatId) {
 function buildSilentDropAuthMiddleware() {
 	return async (context, next) => {
 		const chatId = extractChatId(context);
-		const text = context?.update?.message?.text;
-		const callback = context?.update?.callback_query?.data;
-		if (process.env.ENABLE_CHAT_ENROLLMENTS === 'true'
-			&& ((typeof text === 'string' && /^\/start(?:@[A-Za-z0-9_]+)?(?:\s|$)/.test(text))
-				|| callback === 'cmd:precio' || callback === 'cmd:outcomes')) {
-			return next();
-		}
 		if (!isChatAuthorized(chatId)) {
 			recordSilentDrop(chatId);
 			return;

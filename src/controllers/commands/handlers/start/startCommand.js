@@ -159,14 +159,18 @@ function createStartCommand(options = {}) {
 		} catch (error) {
 			console.warn('[startCommand] failed to persist enrollment:', error.message);
 			if (typeof captureRuntimeError === 'function') {
-				captureRuntimeError({
-					channel: 'telegram',
-					error,
-					extra: {
-						command: 'start',
-						chatId,
-					},
-				});
+				try {
+					captureRuntimeError({
+						channel: 'telegram',
+						error,
+						extra: {
+							command: 'start',
+							chatId,
+						},
+					});
+				} catch (monitoringError) {
+					console.warn('[startCommand] monitoring failed:', monitoringError.message);
+				}
 			}
 		}
 		await replyWithWelcome(context, welcomePayload, preferredLanguage);

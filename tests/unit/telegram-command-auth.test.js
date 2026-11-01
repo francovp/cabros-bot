@@ -213,12 +213,15 @@ describe('registerAuthMiddleware', () => {
 		});
 	});
 
-	it('allows only onboarding /start through the allowlist when enrollments are enabled', async () => {
+	it('keeps onboarding mutations behind the allowlist when enrollments are enabled', async () => {
 		await withEnv({ TELEGRAM_ALLOWED_CHAT_IDS: '777', ENABLE_CHAT_ENROLLMENTS: 'true' }, async () => {
 			const bot = buildBotStub();
 			registerAuthMiddleware(bot);
 			const next = jest.fn().mockResolvedValue('ok');
-			await expect(bot.handlers[0]({ update: { message: { chat: { id: 123 }, text: '/start enroll' } } }, next)).resolves.toBe('ok');
+			await bot.handlers[0]({ update: { message: { chat: { id: 123 }, text: '/start enroll' } } }, next);
+			await bot.handlers[0]({ update: { message: { chat: { id: 123 }, text: '/start watch=BTCUSDT' } } }, next);
+			expect(next).not.toHaveBeenCalled();
+			await bot.handlers[0]({ update: { message: { chat: { id: 777 }, text: '/start enroll' } } }, next);
 			expect(next).toHaveBeenCalledTimes(1);
 			const denied = jest.fn();
 			await bot.handlers[0]({ update: { message: { chat: { id: 123 }, text: '/precio BTCUSDT' } } }, denied);

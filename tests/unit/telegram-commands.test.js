@@ -1230,3 +1230,26 @@ describe('Telegram TradingView commands', () => {
 		}, 12000);
 	});
 });
+
+
+describe('registered start command monitoring', () => {
+	it('keeps the Sentry receiver when onboarding fails', async () => {
+		const service = require('../../src/services/enrollments/ChatEnrollmentsService');
+		const sentry = require('../../src/services/monitoring/SentryService');
+		const previous = process.env.ENABLE_CHAT_ENROLLMENTS;
+		process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+		const read = jest.spyOn(service, 'getByChatId').mockRejectedValue(new Error('storage unavailable'));
+		sentry.captureRuntimeError.mockImplementation(function () { expect(this).toBe(sentry); });
+		try {
+			const { startCmd } = require('../../src/controllers/commands');
+			const ctx = { chat: { id: 42, type: 'private' }, payload: 'enroll', reply: jest.fn().mockResolvedValue() };
+			await startCmd(ctx);
+			expect(ctx.reply).toHaveBeenCalledTimes(1);
+		} finally {
+			read.mockRestore();
+			sentry.captureRuntimeError.mockReset();
+			if (previous === undefined) delete process.env.ENABLE_CHAT_ENROLLMENTS;
+			else process.env.ENABLE_CHAT_ENROLLMENTS = previous;
+		}
+	});
+});

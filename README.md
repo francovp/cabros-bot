@@ -895,7 +895,7 @@ See [Architecture Guide](docs/deployment.md) and [Notifications Guide](docs/noti
 
 ## Telegram deep-link enrollment
 
-With `ENABLE_CHAT_ENROLLMENTS=true`, `/start` stores an opt-in chat enrollment in Firestore when configured and falls back to memory during storage outages. The enrollment record expires after `CHAT_ENROLLMENT_RETENTION_DAYS` (default 90). The `watch=` payload also adds symbols to the chat's `/watchlist`.
+With `ENABLE_CHAT_ENROLLMENTS=true`, chats must still be authorized by `TELEGRAM_ALLOWED_CHAT_IDS` (or its existing `TELEGRAM_CHAT_ID` fallback). `/start` stores an opt-in chat enrollment in Firestore when configured and falls back to memory during storage outages. The enrollment record expires after `CHAT_ENROLLMENT_RETENTION_DAYS` (default 90). The `watch=` payload also adds symbols to the chat's `/watchlist`.
 
 Telegram accepts only URL-safe start parameters. Use `encodeStartPayload` from `src/controllers/commands/handlers/start/startPayload.js` to encode `lang=es|en`, `watch=SYMBOL1,SYMBOL2`, `ref=SOURCE`, or combined tokens. Examples:
 

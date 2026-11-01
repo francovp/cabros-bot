@@ -21,7 +21,6 @@
  */
 
 const admin = require('firebase-admin');
-const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 const { initializeFirebaseAdminApp } = require('../storage/firebaseAdminCredentials');
 
@@ -219,7 +218,7 @@ async function readFirestore(chatId) {
 			? data.expiresAt.toMillis()
 			: null;
 		if (expiresAtMs !== null && expiresAtMs <= Date.now()) {
-			trackBackgroundTask(docRef.delete().catch(() => {}));
+			// Native TTL owns deletion; a delayed read-side delete could remove a renewed record.
 			return null;
 		}
 		return {
@@ -374,6 +373,8 @@ async function getByChatId(chatId, options = {}) {
 	}
 
 	const persisted = await readFirestore(normalized);
+	const current = readMemory(normalized);
+	if (current) return sanitizeRecord(current, options);
 	if (persisted) {
 		writeMemory(normalized, persisted);
 		return sanitizeRecord(persisted, options);

@@ -137,6 +137,35 @@ describe('ChatEnrollmentsService', () => {
 	});
 
 	describe('enroll + getByChatId', () => {
+		it.each([false, true])('keeps newer cached preferences when an older read resolves (write fails: %s)', async (failWrite) => {
+			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+			let releaseRead;
+			const old = { language: 'es', enrolledAt: { toMillis: () => 1 } };
+			chatEnrollmentsService._setFirestoreForTesting({
+				collection: () => ({ doc: () => ({ get: () => new Promise((resolve) => { releaseRead = () => resolve({ exists: true, data: () => old }); }) }) }),
+				runTransaction: async (work) => {
+					if (failWrite) throw new Error('unavailable');
+					return work({ get: async () => ({ exists: true, data: () => old }), set: () => {} });
+				},
+			});
+			const reading = chatEnrollmentsService.getByChatId(42);
+			await chatEnrollmentsService.enroll({ chatId: 42, language: 'en' });
+			releaseRead();
+			expect((await reading).language).toBe('en');
+			expect((await chatEnrollmentsService.getByChatId(42)).language).toBe('en');
+		});
+
+		it('leaves expired document deletion to TTL so renewal cannot race a stale delete', async () => {
+			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+			const remove = jest.fn().mockResolvedValue();
+			chatEnrollmentsService._setFirestoreForTesting({ collection: () => ({ doc: () => ({
+				get: async () => ({ exists: true, data: () => ({ enrolledAt: { toMillis: () => 1 }, expiresAt: { toMillis: () => 2 } }) }),
+				delete: remove,
+			}) }) });
+			expect(await chatEnrollmentsService.getByChatId(42)).toBeNull();
+			expect(remove).not.toHaveBeenCalled();
+		});
+
 		it('hides expired in-memory enrollments before Firestore TTL cleanup', async () => {
 			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
 			const clock = jest.spyOn(Date, 'now').mockReturnValue(1000);

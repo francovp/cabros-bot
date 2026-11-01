@@ -108,6 +108,17 @@ describe('/start command with deep-link payload', () => {
 		if (startPayload === 'enroll') expect(ctx.reply.mock.calls[0][0]).toContain('registered');
 	});
 
+	it('still welcomes when monitoring throws during an enrollment failure', async () => {
+		process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+		const read = jest.spyOn(chatEnrollmentsService, 'getByChatId').mockRejectedValue(new Error('storage unavailable'));
+		try {
+			const { createStartCommand } = require('../../src/controllers/commands/handlers/start/startCommand');
+			const ctx = buildContext({ startPayload: 'enroll' });
+			await createStartCommand({ captureRuntimeError: () => { throw new Error('monitoring unavailable'); } })(ctx);
+			expect(ctx.reply).toHaveBeenCalledTimes(1);
+		} finally { read.mockRestore(); }
+	});
+
 	it('reads the current Telegraf context payload', async () => {
 		process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
 		const { createStartCommand } = require('../../src/controllers/commands/handlers/start/startCommand');

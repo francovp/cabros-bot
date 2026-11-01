@@ -1285,7 +1285,7 @@ const helpCmd = async (context) => {
 	}
 };
 
-const startCmd = createStartCommand({ captureRuntimeError: sentryService.captureRuntimeError });
+const startCmd = createStartCommand({ captureRuntimeError: sentryService.captureRuntimeError.bind(sentryService) });
 
 function getChatId(context) {
 	return context.update && context.update.message && context.update.message.chat && context.update.message.chat.id;
