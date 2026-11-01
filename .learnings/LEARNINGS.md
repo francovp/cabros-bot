@@ -359,3 +359,31 @@ Review automation evaluation criteria for cron jobs that write to documentation/
 - Tags: correction, feedback, automation-readiness, cron, learnings
 - See Also: https://github.com/francovp/cabros-bot/pull/1476
 - Pattern-Key: harden.feedback_response
+
+---
+
+## [LRN-20261101-122434-0001] correction
+
+**Logged**: 2026-11-01T12:24:34.000000Z
+**Priority**: medium
+**Status**: pending
+**Area**: ci/cd
+
+### Summary
+@gigachad-senior-dev detailed feedback on PR #1476 (learnings: log corrections from GitHub activity scan): Explained the automation readiness score of 20/100 with `automation/skip`. Key factors: (1) PR correctly typed as `type/docs` since it only touches `.learnings/LEARNINGS.md`, `.trainee-engaged.json`, and `github-last-run.txt` — no code/workflow/config changes. (2) Low score stems from evaluator detecting a "scheduled workflow" reference in PR description but finding no workflow definition in the diff — implied runtime behavior (cron jobs, GitHub API calls, stateful JSON mutation) are automation risk factors the evaluator can't verify. (3) The cron-driven scan workflow (likely in `.github/workflows/` elsewhere) mutates repo state on a timer, authenticates to GitHub API (token scope risk), can race with concurrent runs if not locked, and JSON mutation isn't transactional — a crash mid-write corrupts the engagement index.
+
+### Details
+- The scan is a cron-driven workflow that calls GitHub API, parses comments for correction markers, and writes to `.learnings/` and `.trainee-engaged.json`
+- PR only logs the *output* of that scan, not the scan logic itself
+- Evaluator penalizes: scheduled mutation, external API auth, race conditions, non-transactional JSON writes
+- Senior SRE/AI Engineer/TL feedback: "keep asking the uncomfortable questions"
+
+### Suggested Action
+Consider adding idempotency locking, transactional JSON writes (temp file + atomic replace), and failure handling to the cron workflow. Document the scan workflow location for evaluator verification. Review if `automation/skip` is appropriate for scheduled maintenance tasks vs. feature work.
+
+### Metadata
+- Source: github_review
+- Related Files: PR #1476, .github/workflows/ (cron workflow), .trainee-engaged.json
+- Tags: correction, feedback, automation-readiness, cron, learnings, idempotency
+- See Also: https://github.com/francovp/cabros-bot/pull/1476
+- Pattern-Key: harden.feedback_response
