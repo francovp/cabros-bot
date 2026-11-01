@@ -73,9 +73,8 @@ function appendEnvironmentFooter(extraText, env = process.env) {
 	if (!getRuntimeConfig().ENABLE_MESSAGE_FOOTER_METADATA) return extraText;
 	const metadata = getEnvironmentBannerMetadata(env);
 	if (metadata.environment === 'production') return extraText;
-	const { smartEscapeMarkdownV2 } = require('../services/notification/formatters/markdownV2Formatter');
-	const line = smartEscapeMarkdownV2(`(env: ${metadata.environment} @ ${metadata.shortCommit || 'unknown'})`)
-		.replace(/[_*]/g, '\\$&');
+	const { escapeRiskFieldValue } = require('../services/notification/formatters/markdownV2Formatter');
+	const line = escapeRiskFieldValue(`(env: ${metadata.environment} @ ${metadata.shortCommit || 'unknown'})`);
 	return extraText ? `${extraText}\n${line}` : line;
 }
 
