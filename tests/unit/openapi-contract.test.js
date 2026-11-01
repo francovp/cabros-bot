@@ -254,13 +254,18 @@ describe('OpenAPI contract', () => {
 			'POST /api/trading/binance/reconciliation/{reservationId}',
 		]);
 
+		// Public operations opt out of API-key auth by declaring `security: []`.
+		const publicOperations = new Set([
+			'GET /api/banner',
+		]);
+
 		for (const operation of operations) {
 			const operationKey = `${operation.method || 'UNKNOWN'} ${operation.path || ''}`;
 			if (unauthenticatedOperations.has(operationKey)) {
 				expect(operation.security).toBeUndefined();
 				continue;
 			}
-			const expected = [{ ApiKeyHeader: [] }, { ApiKeyQuery: [] }];
+			const expected = publicOperations.has(operationKey) ? [] : [{ ApiKeyHeader: [] }, { ApiKeyQuery: [] }];
 			if (binanceTradingOperations.has(operationKey)) {
 				expected.unshift({ BinanceTradingApiKeyHeader: [] }, { AdminApiKeyHeader: [] });
 			} else if (firebaseAdminOperations.has(operationKey)) {

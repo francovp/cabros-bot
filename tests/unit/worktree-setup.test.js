@@ -50,12 +50,16 @@ describe('worktree setup helper (scripts/setup-worktree.sh)', () => {
 	});
 
 	test('is safe for primary repository and exits 0 without modifying anything', () => {
+		const primaryRepo = createTempDir('fixture-primary-noop-');
+		execSync('git init -b master', { cwd: primaryRepo, stdio: 'pipe' });
+		const before = fs.readdirSync(primaryRepo);
 		const res = spawnSync('bash', [scriptPath], {
-			cwd: repoRoot,
+			cwd: primaryRepo,
 			encoding: 'utf8',
 		});
 		expect(res.status).toBe(0);
 		expect(res.stdout).toMatch(/primary repository/i);
+		expect(fs.readdirSync(primaryRepo)).toEqual(before);
 	});
 
 	describe('isolated git worktree execution', () => {

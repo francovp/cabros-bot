@@ -9606,6 +9606,62 @@ const setupLegacyConsole = ({ persist = true } = {}) => {
 	});
 };
 
+const BANNER_FETCH_TIMEOUT_MS = 4000;
+
+const fetchEnvironmentBanner = async () => {
+	if (!window.fetch || typeof AbortController === 'undefined') return null;
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), BANNER_FETCH_TIMEOUT_MS);
+	try {
+		const base = getApiBaseUrl();
+		const url = `${base || ''}/api/banner`;
+		const response = await fetch(url, {
+			method: 'GET',
+			signal: controller.signal,
+			headers: { Accept: 'application/json' },
+		});
+		if (!response.ok) return null;
+		return await response.json();
+	} catch (_) {
+		return null;
+	} finally {
+		clearTimeout(timer);
+	}
+};
+
+const renderEnvironmentBanner = (banner) => {
+	const host = getElement('environment-banner');
+	if (!host) return;
+	if (!banner || !banner.environment) {
+		host.hidden = true;
+		host.replaceChildren();
+		return;
+	}
+	const isPreviewLike = String(banner.environment).toLowerCase() !== 'production';
+	if (!isPreviewLike) {
+		host.hidden = true;
+		host.replaceChildren();
+		return;
+	}
+	const tone = String(banner.environment).toLowerCase() === 'development' ? 'danger' : 'warning';
+	host.dataset.tone = tone;
+	const label = element('div');
+	label.append(element('strong', { text: `${banner.environment} deployment` }));
+	if (banner.commit) label.append(element('span', { text: ' · commit ' }), element('code', { text: String(banner.commit).slice(0, 8) }));
+	if (banner.name) label.append(element('span', { text: ` · ${banner.name}` }));
+	const actions = element('div', { className: 'banner-actions' });
+	const copyButton = element('button', { type: 'button', className: 'banner-copy', text: 'Copy preview URL' });
+	copyButton.addEventListener('click', () => copyToClipboard(getApiBaseUrl() || window.location.origin, copyButton));
+	actions.append(copyButton);
+	host.replaceChildren(label, actions);
+	host.hidden = false;
+};
+
+const initializeEnvironmentBanner = async () => {
+	const banner = await fetchEnvironmentBanner();
+	if (banner) renderEnvironmentBanner(banner);
+};
+
 const setupSidebarToggle = () => {
 	const toggle = getElement('toggle-sidebar');
 	const shell = getElement('console-shell');
@@ -9756,6 +9812,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 		disconnectSse();
 	});
 
+	initializeEnvironmentBanner();
 	const config = await loadAuthConfig();
 	if (config.enabled) {
 		await setupFirebaseAuth(config);

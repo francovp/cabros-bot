@@ -61,10 +61,15 @@ const { getAdminAuthStatus } = require('../lib/adminAuth');
 const { getNotificationManager } = require('./webhooks/handlers/alert/alert');
 const {
 	getDeploymentCommit,
+	resolveDeploymentEnvironment,
 	getBuildInfo,
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
 } = require('../lib/deploymentEnvironment');
+const {
+	getEnvironmentBannerPayload,
+	isEnvironmentBannerEnabled,
+} = require('../lib/environmentBanner');
 const { getAggregateStats: getDiscordSourceRoutingAggregateStats } = require('../services/notification/discordSourceRouting');
 const {
 	getLastRunAt: getTestAlertLastRunAt,
@@ -112,19 +117,7 @@ function isPreview(env = process.env) {
 }
 
 function getEnvironment(env = process.env) {
-	if (env.SENTRY_ENVIRONMENT) {
-		return env.SENTRY_ENVIRONMENT;
-	}
-
-	if (isPreview(env)) {
-		return 'preview';
-	}
-
-	if (isProductionLikeEnvironment(env)) {
-		return 'production';
-	}
-
-	return env.NODE_ENV || 'development';
+	return resolveDeploymentEnvironment(env);
 }
 
 function getReadinessStatus({ enabled, configured }) {
@@ -667,6 +660,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			alertHtfRender: runtimeConfig.ENABLE_ALERT_HTF_RENDER,
 			alertModeration: alertModeration.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			environmentBanner: isEnvironmentBannerEnabled(),
 			symbolAliasResolver: aliasResolver.isEnabled(),
 			userPriceAlerts: userPriceAlertService.isEnabled(),
 			alertFeedback: alertFeedbackStorageService.isEnabled(),
@@ -911,6 +905,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 				};
 			})(),
 			binanceOrderAudit: binanceOrderAuditService.getStatus(),
+			environmentBanner: getEnvironmentBannerPayload(env),
 			tradeLedger: tradeLedgerService.getStatus(),
 			symbolAnalysisStorage: symbolAnalysisStorageService.getStatus(),
 			testAlert: {

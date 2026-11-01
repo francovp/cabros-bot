@@ -3043,3 +3043,8 @@ Webhook and exact `/api/news-monitor` request parsers use `WEBHOOK_MAX_BODY_SIZE
 - `tests/integration/metrics-endpoint.test.js` — Covers 401/403/200 paths and the legacy `api-key` query parameter.
 
 No new environment variable, Remote Config key, or notification channel was added.
+
+
+## Deployment banner (issue #856)
+
+`src/lib/environmentBanner.js` shares `resolveDeploymentEnvironment` with status. `ENABLE_ENVIRONMENT_BANNER` is a non-secret, Remote Config eligible display flag (default true), read for each response; it controls headers only. `/api/banner` exposes only environment/commit/name/deployedAt and remains public when headers are disabled. Missing host commit timestamps produce null, never deployment identifiers. Mount metadata before CORS/parsers so errors and healthchecks retain it; invalid optional header characters must not block delivery. Shared notification footer construction must respect `ENABLE_MESSAGE_FOOTER_METADATA`, and production messages stay unchanged. Change the admin source tree and regenerate hosting assets; keep existing Firebase authorization and route navigation intact.

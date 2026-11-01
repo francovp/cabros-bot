@@ -7,6 +7,7 @@ const helmet = require('helmet');
 const { getOpenApiDocsRouter } = require('./src/openapi/docs');
 const { createCompressionMiddleware } = require('./src/lib/compression');
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
+const { buildEnvironmentBannerMiddleware } = require('./src/lib/environmentBanner');
 const { getPublicStatus } = require('./src/controllers/publicStatus');
 const { getStatus: getAdminStatus } = require('./src/controllers/status');
 const requestDeadline = require('./src/lib/requestDeadline');
@@ -25,6 +26,7 @@ setupTrustProxy(app);
 // The logger reuses `req.requestId` when the request deadline already stamped
 // one, so a logged line and the 408 payload always share the same id.
 app.use(requestLogger);
+app.use(buildEnvironmentBannerMiddleware());
 
 // Apply CORS before body parsers so parser errors, including structured 413
 // responses, retain the same browser-visible headers as successful requests.

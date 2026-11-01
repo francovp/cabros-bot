@@ -40,6 +40,7 @@ const PARAMETER_SCHEMA = Object.freeze({
 	TRADINGVIEW_MCP_WARMUP_INTERVAL_MS: { type: 'number', defaultValue: 600000, integer: true, min: 60000, max: 3600000 },
 	TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS: { type: 'number', defaultValue: 60000, integer: true, min: 5000, max: 120000 },
 	ENABLE_MESSAGE_FOOTER_METADATA: { type: 'boolean', defaultValue: true },
+	ENABLE_ENVIRONMENT_BANNER: { type: 'boolean', defaultValue: true },
 	GROUNDING_MAX_SOURCES: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	GROUNDING_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 120000 },
 	GROUNDING_MAX_LENGTH: { type: 'number', defaultValue: 2000, integer: true, min: 1, max: 10000 },

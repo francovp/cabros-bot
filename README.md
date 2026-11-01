@@ -912,3 +912,14 @@ All three are non-secret runtime tuning settings supported by Firebase Remote Co
 ### GET /api/metrics
 
 Protected Node.js process health endpoint. Requires admin API-key access or a Firebase ID token with the `admin.viewer` role. Reports memory bytes, cumulative CPU microseconds, event-loop lag in milliseconds, uptime in seconds, and Node.js/process metadata. Collection is lazy; no polling or sampling runs between requests.
+
+
+### Deployment environment banner
+
+`GET /api/banner` is a public read-only snapshot of `environment`, full `commit`, `name`, and nullable ISO 8601 `deployedAt` (host-provided commit date, never a deployment ID). Its environment resolver is shared with `/api/status`; it does not load provider readiness or credentials. Non-production `/admin` consoles display a sticky warning and a copy button for the selected backend origin.
+
+| Remote Config parameter | Environment/default fallback | Purpose |
+| --- | --- | --- |
+| `ENABLE_ENVIRONMENT_BANNER` | `true` | Emit optional `X-Cabros-Environment`, eight-character `X-Cabros-Commit` (when available), and `X-Cabros-Service` response headers. Rechecked on every request, including errors and healthchecks. |
+
+The template uses `useInAppDefault: true` to preserve deployment fallbacks until an explicit remote value is published. This non-secret display setting controls response headers; the public snapshot and console remain available when headers are disabled. Existing `ENABLE_MESSAGE_FOOTER_METADATA` independently controls alert footer metadata, including `(env: preview @ abcdef12)` in non-production environments. Production messages keep their current footer. Credentials, authentication, security controls, destinations, and startup gates remain environment-only.
