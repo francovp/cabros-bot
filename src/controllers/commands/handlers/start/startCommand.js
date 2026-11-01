@@ -145,12 +145,8 @@ function createStartCommand(options = {}) {
 			const merged = {
 				chatId,
 				chatType: chatType || (existing && existing.chatType) || 'private',
-				language: parsedResult.language || (existing && existing.language) || null,
-				watchlist: parsedResult.watchlist.length > 0
-					? parsedResult.watchlist
-					: (existing && Array.isArray(existing.watchlist) ? existing.watchlist : []),
-				refSource: parsedResult.refSource
-				|| (existing && existing.refSource) || null,
+				...(parsedResult.language ? { language: parsedResult.language } : {}),
+				...(parsedResult.refSource ? { refSource: parsedResult.refSource } : {}),
 			};
 
 			if (parsedResult.watchlist.length > 0) {
@@ -159,7 +155,7 @@ function createStartCommand(options = {}) {
 			const enrolled = await chatEnrollmentsService.enroll(merged);
 			if (!enrolled) throw new Error('Enrollment unavailable');
 			welcomePayload = payload;
-			preferredLanguage = parsedResult.language || existing?.language || DEFAULT_LANGUAGE;
+			preferredLanguage = enrolled.language || DEFAULT_LANGUAGE;
 		} catch (error) {
 			console.warn('[startCommand] failed to persist enrollment:', error.message);
 			if (typeof captureRuntimeError === 'function') {

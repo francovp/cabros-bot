@@ -67,7 +67,7 @@
             "name": "limit",
             "in": "query",
             "required": false,
-            "description": "Bounded document scan window for the in-memory aggregation cache; integer between 1 and 1000 (default: 200).",
+            "description": "Single decimal integer string (digits only, default 200). Values above 1000 are clamped to 1000; malformed, repeated, zero, or unsafe integer values return 400.",
             "schema": {
               "type": "integer",
               "minimum": 1,
@@ -177,7 +177,7 @@
             }
           },
           "400": {
-            "description": "Invalid query parameters (limit out of range or non-integer).",
+            "description": "Invalid query limit: use one positive decimal integer string. Exponents, hex, fractions, whitespace and repeated values are rejected.",
             "content": {
               "application/json": {
                 "schema": {
@@ -185,7 +185,10 @@
                 },
                 "example": {
                   "error": "Invalid limit. Use an integer between 1 and 1000.",
-                  "code": "INVALID_REQUEST"
+                  "code": "INVALID_REQUEST",
+                  "success": false,
+                  "requestId": "enrollments-example-001",
+                  "retryable": false
                 }
               }
             },
@@ -209,13 +212,19 @@
                   "featureDisabled": {
                     "value": {
                       "error": "Chat enrollments are disabled. Set ENABLE_CHAT_ENROLLMENTS=true to enable.",
-                      "code": "FEATURE_DISABLED"
+                      "code": "FEATURE_DISABLED",
+                      "success": false,
+                      "requestId": "enrollments-example-001",
+                      "retryable": false
                     }
                   },
                   "forbidden": {
                     "value": {
                       "error": "Admin viewer role required for chat enrollment summary.",
-                      "code": "FORBIDDEN"
+                      "code": "FORBIDDEN",
+                      "success": false,
+                      "requestId": "enrollments-example-001",
+                      "retryable": false
                     }
                   }
                 }
@@ -236,7 +245,10 @@
                 },
                 "example": {
                   "error": "Chat enrollment storage is unavailable.",
-                  "code": "STORAGE_UNAVAILABLE"
+                  "code": "STORAGE_UNAVAILABLE",
+                  "success": false,
+                  "requestId": "enrollments-example-001",
+                  "retryable": true
                 }
               }
             },
@@ -1572,7 +1584,7 @@
         "tags": [
           "Alerts"
         ],
-        "summary": "Record a trader verdict (👍 / 👎) for a stored alert",
+        "summary": "Record a trader verdict (\ud83d\udc4d / \ud83d\udc4e) for a stored alert",
         "operationId": "submitAlertFeedback",
         "description": "Persists a single trader verdict per (alertId, chatId) tuple. Re-clicks update the verdict instead of appending a new row. Bounded by ALERT_FEEDBACK_RETENTION_DAYS and a SHA-256 chat hash; raw chat ids are never returned through this surface.",
         "requestBody": {

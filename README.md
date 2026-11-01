@@ -906,7 +906,7 @@ https://t.me/<bot>?start=v1_d2F0Y2g9QlRDVVNEVCxFVEhVU0RU
 https://t.me/<bot>?startgroup=enroll
 ```
 
-`GET /api/enrollments` requires admin viewer access for bounded aggregate counts. `partial=true` means more documents may exist beyond the scan limit, so `count` is not a total. An admin operator may add `includeChatIds=true` to view per-chat records. Deep-link enrollment does not grant command authorization. Deploy the `chatEnrollments.expiresAt` Firestore TTL policy from `firestore.indexes.json` before enabling durable storage.
+`GET /api/enrollments` requires admin viewer access for bounded aggregate counts. Its optional `limit` accepts one positive decimal integer string (default 200, clamped to 1000); exponent, hex, fractional, empty, and repeated values return `400 INVALID_REQUEST`. Errors use the standard `success`, `error`, `code`, `requestId`, and `retryable` envelope. Re-enrollment preserves omitted language, watchlist, and referral preferences, including when a preliminary Firestore read fails. `partial=true` means more documents may exist beyond the scan limit, so `count` is not a total. An admin operator may add `includeChatIds=true` to view per-chat records. Deep-link enrollment does not grant command authorization. Deploy the `chatEnrollments.expiresAt` Firestore TTL policy from `firestore.indexes.json` before enabling durable storage.
 
 ## License
 

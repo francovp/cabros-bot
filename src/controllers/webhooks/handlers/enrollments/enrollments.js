@@ -1,6 +1,7 @@
 'use strict';
 
 const chatEnrollmentsService = require('../../../../services/enrollments/ChatEnrollmentsService');
+const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const { ADMIN_OPERATOR } = require('../../../../lib/adminAuth');
 
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
@@ -9,10 +10,11 @@ const MAX_LIMIT = 1000;
 const DEFAULT_LIMIT = 200;
 
 function resolveLimit(rawLimit) {
-	if (rawLimit === undefined || rawLimit === null || rawLimit === '') {
+	if (rawLimit === undefined) {
 		return DEFAULT_LIMIT;
 	}
-	const parsed = Number(String(rawLimit).trim());
+	if (typeof rawLimit !== 'string' || !/^\d+$/.test(rawLimit)) return null;
+	const parsed = Number(rawLimit);
 	if (!Number.isFinite(parsed) || !Number.isSafeInteger(parsed) || parsed < 1) {
 		return null;
 	}
@@ -23,18 +25,18 @@ function resolveLimit(rawLimit) {
 async function listEnrollments(req, res) {
 	try {
 		if (!chatEnrollmentsService.isEnabled()) {
-			return res.status(403).json({
+			return sendErrorFrom(res, 403, {
 				error: 'Chat enrollments are disabled. Set ENABLE_CHAT_ENROLLMENTS=true to enable.',
 				code: FEATURE_DISABLED_CODE,
-			});
+			}, { req });
 		}
 
 		const limit = resolveLimit(req.query && req.query.limit);
 		if (limit === null) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: `Invalid limit. Use an integer between 1 and ${MAX_LIMIT}.`,
 				code: 'INVALID_REQUEST',
-			});
+			}, { req });
 		}
 
 		const adminRole = req && req.adminRole;
@@ -47,25 +49,25 @@ async function listEnrollments(req, res) {
 			payload = await chatEnrollmentsService.getSummary({ includeChatIds, limit });
 		} catch (error) {
 			console.error('[enrollments] getSummary failed:', error.message);
-			return res.status(503).json({
+			return sendErrorFrom(res, 503, {
 				error: 'Chat enrollment storage is unavailable.',
 				code: STORAGE_UNAVAILABLE_CODE,
-			});
+			}, { req });
 		}
 
 		if (!payload) {
-			return res.status(503).json({
+			return sendErrorFrom(res, 503, {
 				error: 'Chat enrollment storage is unavailable.',
 				code: STORAGE_UNAVAILABLE_CODE,
-			});
+			}, { req });
 		}
 		return res.status(200).json(payload);
 	} catch (error) {
 		console.error('[enrollments] listEnrollments failed:', error.message);
-		return res.status(503).json({
+		return sendErrorFrom(res, 503, {
 			error: 'Chat enrollment storage is unavailable.',
 			code: STORAGE_UNAVAILABLE_CODE,
-		});
+		}, { req });
 	}
 }
 

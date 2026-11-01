@@ -195,6 +195,26 @@ describe('ChatEnrollmentsService', () => {
 			expect(result).toBeNull();
 		});
 
+		it('keeps pending local preference changes when storage recovers', async () => {
+			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+			let stored = { language: 'es', refSource: 'before', enrolledAt: { toMillis: () => 1 } };
+			let unavailable = true;
+			chatEnrollmentsService._setFirestoreForTesting({
+				collection: () => ({ doc: () => ({}) }),
+				runTransaction: async (work) => {
+					if (unavailable) throw new Error('unavailable');
+					return work({ get: async () => ({ exists: true, data: () => stored }), set: (_ref, payload) => { stored = payload; } });
+				},
+			});
+			await chatEnrollmentsService.enroll({ chatId: 42, language: 'en' });
+			unavailable = false;
+			stored.refSource = 'changed-on-other-replica';
+			await chatEnrollmentsService.enroll({ chatId: 42 });
+			expect(stored.language).toBe('en');
+			expect(stored.refSource).toBe('changed-on-other-replica');
+			expect((await chatEnrollmentsService.getByChatId(42)).language).toBe('en');
+		});
+
 		it('does not let an older delayed write replace a newer enrollment', async () => {
 			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
 			let stored = null;

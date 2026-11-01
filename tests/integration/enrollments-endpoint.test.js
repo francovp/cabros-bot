@@ -72,6 +72,34 @@ describe('GET /api/enrollments', () => {
 		expect(response.body.code).toBe('INVALID_REQUEST');
 	});
 
+	it.each(['1e2', '0x10', '1.0', '+1', ' 1 ', '', '1&limit=2', '1&limit[]=2'])(
+		'rejects non-decimal or repeated limit %s', async (limit) => {
+			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+			const response = await request(buildApp())
+				.get(`/api/enrollments?limit=${encodeURIComponent(limit).replace(/%26/g, '&').replace(/%3D/g, '=')}`)
+				.set('x-api-key', 'test-key');
+			expect(response.status).toBe(400);
+			expect(response.body).toMatchObject({ success: false, code: 'INVALID_REQUEST', retryable: false });
+			expect(response.body.requestId).toEqual(expect.any(String));
+		},
+	);
+
+	it.each(['disabled', 'rejected', 'empty'])('returns the standard %s error envelope', async (mode) => {
+		let spy;
+		if (mode !== 'disabled') {
+			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+			spy = jest.spyOn(chatEnrollmentsService, 'getSummary');
+			if (mode === 'rejected') spy.mockRejectedValue(new Error('unavailable'));
+			else spy.mockResolvedValue(null);
+		}
+		try {
+			const response = await request(buildApp()).get('/api/enrollments')
+				.set('x-api-key', 'test-key').set('x-request-id', 'enrollment-regression');
+			expect(response.status).toBe(mode === 'disabled' ? 403 : 503);
+			expect(response.body).toMatchObject({ success: false, requestId: 'enrollment-regression', retryable: mode !== 'disabled' });
+		} finally { spy?.mockRestore(); }
+	});
+
 	it('rejects requests without API key', async () => {
 		process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
 

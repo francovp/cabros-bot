@@ -256,15 +256,24 @@ async function writeFirestore(chatId, record) {
 			enrolledAt: admin.firestore.Timestamp.fromMillis(record.enrolledAt || Date.now()),
 			expiresAt,
 		};
+		let persistedRecord = record;
 		await withTimeout(db.runTransaction(async (transaction) => {
 			const snapshot = await transaction.get(docRef);
 			const prior = snapshot.exists && snapshot.data();
 			const priorTime = prior?.enrolledAt?.toMillis?.();
 			if (Number.isFinite(priorTime) && priorTime > record.enrolledAt) return;
-			transaction.set(docRef, payload);
+			const nextPayload = { ...payload };
+			const priorExpiry = prior?.expiresAt?.toMillis?.();
+			if (prior && (!Number.isFinite(priorExpiry) || priorExpiry > Date.now())) {
+				for (const field of ['language', 'watchlist', 'refSource']) {
+					if (!record.pendingFields.includes(field) && prior[field] !== undefined) nextPayload[field] = prior[field];
+				}
+			}
+			transaction.set(docRef, nextPayload);
+			persistedRecord = { ...record, pendingFields: [], language: nextPayload.language, watchlist: nextPayload.watchlist, refSource: nextPayload.refSource };
 		}), WRITE_TIMEOUT_MS);
 		firestoreHealth = 'ready';
-		return true;
+		return persistedRecord;
 	} catch (error) {
 		firestoreHealth = 'degraded';
 		console.warn('[ChatEnrollmentsService] writeFirestore error (fail-open):', error.message);
@@ -322,10 +331,12 @@ async function enroll(input) {
 	const prior = readMemory(chatId);
 	const record = {
 		chatId,
+		pendingFields: [...new Set([...(prior?.pendingFields || []),
+			...['language', 'watchlist', 'refSource'].filter((field) => input[field] !== undefined)])],
 		chatType: normalizeChatType(input && input.chatType) || 'private',
-		language: normalizeLanguage(input && input.language),
-		watchlist: normalizeWatchlist(input && input.watchlist) || [],
-		refSource: normalizeRefSource(input && input.refSource),
+		language: input.language === undefined ? prior?.language || null : normalizeLanguage(input.language),
+		watchlist: input.watchlist === undefined ? prior?.watchlist || [] : normalizeWatchlist(input.watchlist) || [],
+		refSource: input.refSource === undefined ? prior?.refSource || null : normalizeRefSource(input.refSource),
 		enrolledAt: Math.max(Date.now(), (prior?.enrolledAt || 0) + 1),
 		expiresAt: computeExpiresAtMillis(),
 	};
@@ -333,10 +344,14 @@ async function enroll(input) {
 	const cached = writeMemory(chatId, record);
 	const written = await writeFirestore(chatId, record);
 	if (memoryStore.get(chatId) === cached) {
-		if (written) unpersistedChatIds.delete(chatId);
-		else unpersistedChatIds.add(chatId);
+		if (written) {
+			writeMemory(chatId, written);
+			unpersistedChatIds.delete(chatId);
+		} else {
+			unpersistedChatIds.add(chatId);
+		}
 	}
-	return sanitizeRecord(record, { includeChatId: true });
+	return sanitizeRecord(written || record, { includeChatId: true });
 }
 
 /**

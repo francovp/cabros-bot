@@ -88,6 +88,26 @@ describe('/start command with deep-link payload', () => {
 		expect(text).toMatch(/registré/);
 	});
 
+	it.each(['enroll', 'lang=es'])('preserves durable preferences after a read failure for %s', async (startPayload) => {
+		process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+		const timestamp = { toMillis: () => Date.now() - 1000 };
+		let stored = { language: 'en', watchlist: ['BTCUSDT'], refSource: 'original', enrolledAt: timestamp };
+		chatEnrollmentsService._setFirestoreForTesting({
+			collection: () => ({ doc: () => ({ get: () => Promise.reject(new Error('unavailable')) }) }),
+			runTransaction: async (work) => work({
+				get: async () => ({ exists: true, data: () => stored }),
+				set: (_ref, value) => { stored = value; },
+			}),
+		});
+		const { createStartCommand } = require('../../src/controllers/commands/handlers/start/startCommand');
+		const ctx = buildContext({ chatId: 557, startPayload });
+		await createStartCommand()(ctx);
+		const expected = { language: startPayload === 'lang=es' ? 'es' : 'en', watchlist: ['BTCUSDT'], refSource: 'original' };
+		expect(stored).toMatchObject(expected);
+		expect(await chatEnrollmentsService.getByChatId(557)).toMatchObject(expected);
+		if (startPayload === 'enroll') expect(ctx.reply.mock.calls[0][0]).toContain('registered');
+	});
+
 	it('reads the current Telegraf context payload', async () => {
 		process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
 		const { createStartCommand } = require('../../src/controllers/commands/handlers/start/startCommand');
