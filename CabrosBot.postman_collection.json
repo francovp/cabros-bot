@@ -39198,6 +39198,156 @@
           }
         }
       ]
+    },
+    {
+      "name": "Alert — opt-in exact duplicate (send twice)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          },
+          {
+            "key": "idempotency-key",
+            "value": "alert-key-1",
+            "type": "text",
+            "description": "Canonical idempotency header",
+            "disabled": true
+          },
+          {
+            "key": "x-idempotency-key",
+            "value": "alert-key-1",
+            "type": "text",
+            "description": "Alternative x-prefixed idempotency header variant",
+            "disabled": true
+          },
+          {
+            "key": "x-request-id",
+            "value": "req-12345",
+            "type": "text",
+            "description": "Optional request correlation ID",
+            "disabled": true
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"text\": \"Exact duplicate coalescing test\",\n  \"channels\": [\n    \"telegram\"\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/webhook/alert",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "webhook",
+            "alert"
+          ]
+        },
+        "description": "Set ENABLE_ALERT_COALESCE=true on the server and send this request twice inside 5 seconds. First must fully deliver; second returns coalesced=true and originalRequestId. Existing invalid input and missing API-key examples still apply."
+      },
+      "response": [
+        {
+          "name": "Fully delivered exact duplicate",
+          "originalRequest": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              },
+              {
+                "key": "x-api-key",
+                "value": "{{apiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "idempotency-key",
+                "value": "alert-key-1",
+                "type": "text",
+                "description": "Canonical idempotency header",
+                "disabled": true
+              },
+              {
+                "key": "x-idempotency-key",
+                "value": "alert-key-1",
+                "type": "text",
+                "description": "Alternative x-prefixed idempotency header variant",
+                "disabled": true
+              },
+              {
+                "key": "x-request-id",
+                "value": "req-12345",
+                "type": "text",
+                "description": "Optional request correlation ID",
+                "disabled": true
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"Exact duplicate coalescing test\",\n  \"channels\": [\n    \"telegram\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/webhook/alert",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "webhook",
+                "alert"
+              ]
+            },
+            "description": "Set ENABLE_ALERT_COALESCE=true on the server and send this request twice inside 5 seconds. First must fully deliver; second returns coalesced=true and originalRequestId. Existing invalid input and missing API-key examples still apply."
+          },
+          "status": "OK",
+          "code": 200,
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\n  \"success\": true,\n  \"coalesced\": true,\n  \"originalRequestId\": \"first-request\",\n  \"requestId\": \"duplicate-request\"\n}"
+        }
+      ],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test(\"Alert succeeds\", () => pm.response.to.have.status(200));",
+              "const body = pm.response.json();",
+              "if (body.coalesced === true) {",
+              "  pm.test(\"Canonical request correlation\", () => {",
+              "    pm.expect(body.originalRequestId).to.be.a(\"string\").and.not.empty;",
+              "    pm.expect(body.requestId).to.be.a(\"string\").and.not.empty;",
+              "    pm.expect(body.success).to.eql(true);",
+              "  });",
+              "}"
+            ]
+          }
+        }
+      ]
     }
   ]
 }

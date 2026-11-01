@@ -816,3 +816,7 @@ AZURE_LLM_MODEL=openai/gpt-5-mini
 # enriched_confidence = min(gemini_confidence, llm_confidence)
 # Prevents false positives from LLM hallucination
 ```
+
+## Exact alert coalescing
+
+`ENABLE_ALERT_COALESCE=false` and `ALERT_COALESCE_WINDOW_MS=5000` (integer 1–60000) are Remote Config eligible, non-secret runtime tuning settings for POST /api/webhook/alert only. See the README for delivery, bypass and process-local limits. No auth, destination or startup controls are added.

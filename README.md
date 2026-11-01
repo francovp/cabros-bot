@@ -912,3 +912,16 @@ All three are non-secret runtime tuning settings supported by Firebase Remote Co
 ### GET /api/metrics
 
 Protected Node.js process health endpoint. Requires admin API-key access or a Firebase ID token with the `admin.viewer` role. Reports memory bytes, cumulative CPU microseconds, event-loop lag in milliseconds, uptime in seconds, and Node.js/process metadata. Collection is lazy; no polling or sampling runs between requests.
+
+### Exact webhook alert coalescing (#751)
+
+| Remote Config parameter | Environment/default fallback | Bounds | Purpose |
+| --- | --- | --- | --- |
+| `ENABLE_ALERT_COALESCE` | `false` | boolean | Opt-in exact body/query coalescing on `POST /api/webhook/alert` |
+| `ALERT_COALESCE_WINDOW_MS` | `5000` | integer `1`–`60000` | Duplicate window from the original reservation, milliseconds |
+
+Fresh valid Remote Config values override environment/default values. Both settings are non-secret runtime tuning. No credentials, auth controls, destinations or startup gates are added; those remain environment-only.
+
+Identical payloads with identical effective destinations wait for an in-flight original, then receive HTTP 200 `{ "success": true, "coalesced": true, "originalRequestId": "original-id", "requestId": "duplicate-id" }` only after every requested channel succeeds. Distinct routing, metadata or query options are distinct requests. Failed, partial, skipped or empty delivery releases the reservation so a retry can deliver; a partial retry may repeat an already successful channel. Duplicates skip enrichment, persistence and outcome recording. Dry-run, auto-trade, symbol/destination fanout, watchlist routing and asynchronous subscribers bypass coalescing. Expanded analysis and Telegram command limits retain their existing behavior.
+
+The cache retains only SHA-256 fingerprints and request IDs, is bounded to 10000 entries per process and evicts least-recently-used entries. Replicas do not share it; restarts, capacity eviction and 180-second pending expiry can allow duplicate delivery. Waiting requests honor their HTTP deadline or disconnect signal; expired waiters do not resume enrichment or delivery. No cross-replica exactly-once guarantee is provided.
