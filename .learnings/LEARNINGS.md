@@ -1,3 +1,34 @@
+## [LRN-20261102-214740-0001] correction
+
+**Logged**: 2026-11-02T21:47:40.000000Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+@francovp correction on PR #1488 (feat(alerts): coalesce exact webhook duplicates): P1 issue prevents merge — duplicate arriving after 5-second window waits for pending original and may hit HTTP deadline. Read-only Node reproduction with arrival=6000ms/window=5000ms returned "still waiting" instead of acquiring immediately.
+
+### Details
+@francovp provided detailed revision handoff:
+
+> The final Codex review has one current unresolved P1: a duplicate arriving after the 5-second window still waits for a pending original and may reach its own HTTP deadline before processing.
+
+> Recommended revision: check the arriving request against expiry before waiting. Out-of-window requests need an independent reservation; preserve cancellation and generation safety, and settle displaced originals/waiters without allowing a stale owner to delete a newer reservation. Add regressions for out-of-window pending originals, in-window waiters, displaced owner completion and deadline cancellation. Keep the feature disabled until that behavior is corrected.
+
+> The configured three-trigger review cap is exhausted. Step 5.4 of issue-automator requires a human revision handoff when the final allowed review still has findings. No fourth request, further source revision or merge was attempted; leave the P1 thread open.
+
+### Suggested Action
+Implement expiry check before waiting for out-of-window requests. Create independent reservations for out-of-window arrivals. Add regression tests for all four scenarios. Keep feature flag disabled until P1 resolved.
+
+### Metadata
+- Source: github_review
+- Related Files: src/controllers/webhooks/handlers/alert/alert.js (alert coalescing logic)
+- Tags: correction, feedback, alert-coalescing, p1, testing
+- See Also: https://github.com/francovp/cabros-bot/pull/1488
+- Pattern-Key: harden.feedback_response
+
+---
+
 ## [LRN-20261031-194500-0001] correction
 
 **Logged**: 2026-10-31T19:45:00.000000Z
