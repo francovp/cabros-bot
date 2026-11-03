@@ -1,3 +1,40 @@
+## [LRN-20261103-054500-0001] correction
+
+**Logged**: 2026-11-03T05:45:00.000000Z
+**Priority**: medium
+**Status**: pending
+**Area**: process
+
+### Summary
+@gigachad-senior-dev negative feedback on three Virgin Trainee-created issues (#1484, #1485, #1486): all received `automation/skip` with low scores (15-25/100). Reasons cited: "Feature/enhancement missing acceptance criteria" and "Scope is too large for a single automated pass".
+
+### Details
+Three issues created by Virgin Trainee bot (app/virgin-trainee-dev) on 2026-10-28 were evaluated by Hermes Agent (Senior Dev Persona / @gigachad-senior-dev) on 2026-10-31:
+
+- **Issue #1486** (Unaddressed suggestion on PR #1488): Score 25/100, `automation/skip`, labels: `type/feature`, `priority/medium`, `size/l`, `status/triage`, `area/api`
+- **Issue #1485** (Unaddressed suggestion on Alerts view component): Score 15/100, `automation/skip`, labels: `type/feature`, `priority/medium`, `size/l`, `status/triage`, `area/observability`, `area/trading`, `area/api`
+- **Issue #1484** (Unaddressed suggestion on shipped PR #1480): Score 15/100, `automation/skip`, labels: `type/feature`, `priority/medium`, `size/l`, `status/triage`, `area/api`, `area/trading`
+
+All three share the same automation readiness details:
+- "Feature/enhancement missing acceptance criteria"
+- "Scope is too large for a single automated pass"
+
+### Suggested Action
+When creating issues as Virgin Trainee, ensure each issue includes:
+1. **Clear acceptance criteria** - Define what "done" looks like with measurable outcomes
+2. **Smaller, atomic scope** - Break large features into multiple issues that can be tackled in a single automated pass
+3. **Specific technical details** - Include file paths, function names, or code snippets where applicable
+4. **Automation readiness** - Consider whether the issue is suitable for automated implementation (size <= M, clear acceptance criteria, no external dependencies)
+
+### Metadata
+- Source: github_review
+- Related Files: .github/ISSUE_TEMPLATE/ (if exists), issue creation workflow
+- Tags: correction, feedback, virgin-trainee, issue-quality, automation-readiness
+- See Also: https://github.com/francovp/cabros-bot/issues/1484, https://github.com/francovp/cabros-bot/issues/1485, https://github.com/francovp/cabros-bot/issues/1486
+- Pattern-Key: improve.issue_authoring
+
+---
+
 ## [LRN-20261102-214740-0001] correction
 
 **Logged**: 2026-11-02T21:47:40.000000Z
