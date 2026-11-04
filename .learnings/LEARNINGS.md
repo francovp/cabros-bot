@@ -516,3 +516,74 @@ Review the feedback and adjust engagement strategy accordingly. If this is a tec
 - Last-Seen: 2026-11-02
 
 ---
+
+## [LRN-20261104-001] correction
+
+**Logged**: 2026-11-04T23:45:00Z
+**Priority**: high
+**Status**: pending
+**Area**: infra
+
+### Summary
+Correction/negative feedback from @gigachad-senior-dev on francovp/cabros-bot#1488
+
+### Details
+@gigachad-senior-dev[bot] provided automated evaluation on PR #1488 (feat(alerts): coalesce exact webhook duplicates):
+
+> **PR:** #1488 - feat(alerts): coalesce exact webhook duplicates
+> **Assessment**: Priority: priority/medium, Type: type/feature, Areas: area/api/area/webhooks, Size: size/m, Status: status/triage
+> **Automation Readiness**: automation/skip (Score: 35/100)
+> **Labels Applied**: type/feature, priority/medium, size/m, status/triage, automation/skip, area/api, area/webhooks
+> **Automation Readiness Details**: Scope is too large for a single automated pass
+
+This evaluation indicates the PR scope exceeds automation readiness thresholds.
+
+### Suggested Action
+Review the automation readiness feedback and consider decomposing the PR into smaller, independently automatable units if further automation is desired.
+
+### Metadata
+- Source: user_feedback
+- Related Files: francovp/cabros-bot#1488
+- Tags: correction, trainee, engagement, gigachad-senior-dev, automation-readiness
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-03
+- Last-Seen: 2026-11-03
+
+---
+
+## [LRN-20261104-002] correction
+
+**Logged**: 2026-11-04T23:45:00Z
+**Priority**: high
+**Status**: pending
+**Area**: infra
+
+### Summary
+Correction/negative feedback from @gigachad-senior-dev on francovp/cabros-bot#1476
+
+### Details
+@gigachad-senior-dev[bot] provided automated evaluation on PR #1476 (learnings: log corrections from GitHub activity scan):
+
+> **PR:** #1476 - learnings: log corrections from GitHub activity scan
+> **Assessment**: Priority: priority/high, Type: type/docs, Areas: area/observability, Size: size/l, Status: status/triage
+> **Automation Readiness**: automation/skip (Score: 20/100)
+> **Labels Applied**: type/docs, priority/high, size/l, status/triage, automation/skip, area/observability
+> **Automation Readiness Details**: Scope is too large for a single automated pass
+
+Follow-up comment clarified:
+> **Type mismatch**: The evaluation correctly labels this `type/docs`. The PR only touches `.learnings/LEARNINGS.md` (a Markdown knowledge base), `.trainee-engaged.json` (a tracking data file), and adds `github-last-run.txt` (a timestamp marker). No code, workflow, or config changes appear in the diff. "Learnings" is a documentation subsystem, so `type/docs` is accurate.
+> **Automation readiness (20/100, automation/skip)**: The low score likely stems from the evaluator detecting a *scheduled workflow* reference in the PR description ("scheduled GitHub activity scan") but finding no workflow definition (`.github/workflows/*.yml`) in the diff. The evaluator penalizes implied cron workflows without visible automation definitions.
+
+### Suggested Action
+Ensure PR descriptions accurately reflect the implementation (no implied workflows without definitions). Consider adding a GitHub Actions workflow for the scheduled scan if automation is intended.
+
+### Metadata
+- Source: user_feedback
+- Related Files: francovp/cabros-bot#1476
+- Tags: correction, trainee, engagement, gigachad-senior-dev, automation-readiness, type-classification
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-04
+- Last-Seen: 2026-11-04
+
