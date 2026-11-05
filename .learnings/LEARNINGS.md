@@ -587,3 +587,94 @@ Ensure PR descriptions accurately reflect the implementation (no implied workflo
 - First-Seen: 2026-11-04
 - Last-Seen: 2026-11-04
 
+## [LRN-20261105-035022-506] correction
+
+**Logged**: 2026-11-05T03:50:22.506860Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Correction/negative feedback from @francovp on francovp/cabros-bot PR #1490
+
+### Details
+@francovp provided feedback that may indicate a correction or negative response to the trainee's engagement:
+
+> @codex review
+
+Exact head: 8801c2f. Full local `pnpm test`: 336 suites / 8,108 tests passed. Both independent pre-PR reviews are clean after the deadline regression fix. Local HTTP smoke and response-schema validation passed; deployment routing remains unchanged per issue #732's recorded decision.
+
+Actual model variant metadata is unavailable; attribution is recorded as Codex with `codex` and `codex-automation` labels. WhatsApp notification is not attempted because `NOTIFY_API_KEY` is unset; del
+
+### Suggested Action
+Review the feedback and adjust engagement strategy accordingly. If this is a technical correction, update the relevant learnings or code.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot/pull/1490
+- Tags: correction, feedback, trainee, engagement, francovp
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-05
+- Last-Seen: 2026-11-05
+
+## [LRN-20261105-035022-507] correction
+
+**Logged**: 2026-11-05T03:50:22.507021Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Correction/negative feedback from @francovp on francovp/cabros-bot PR #1490
+
+### Details
+@francovp provided feedback that may indicate a correction or negative response to the trainee's engagement:
+
+> @codex review
+
+Review request 2/3 for exact head `00ce1714325787dc020e176324ef0489464af38c`. The documentation-hierarchy finding is corrected and resolved in-thread: temporary planning notes are retained only in ignored local context. Runtime, tests, contracts and deploy configuration are identical to the fully tested implementation (336 suites / 8,108 tests); 168 relevant checks passed after the documentation correction and both independent re-reviews are clean.
+
+Preview verification remains un
+
+### Suggested Action
+Review the feedback and adjust engagement strategy accordingly. If this is a technical correction, update the relevant learnings or code.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot/pull/1490
+- Tags: correction, feedback, trainee, engagement, francovp
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-05
+- Last-Seen: 2026-11-05
+
+## [LRN-20261105-035022-507] correction
+
+**Logged**: 2026-11-05T03:50:22.507090Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Correction/negative feedback from @francovp on francovp/cabros-bot PR #1490
+
+### Details
+@francovp provided feedback that may indicate a correction or negative response to the trainee's engagement:
+
+> [PR_READY] Issue #732: https://github.com/francovp/cabros-bot/issues/732 — PR https://github.com/francovp/cabros-bot/pull/1490
+
+Head `00ce1714325787dc020e176324ef0489464af38c` is ready for normal merge after the complete quiet-window check: no new actionable discussion and no unresolved thread. Codex completed with no findings. Exact-head CI passed 336 suites / 8,108 tests plus 9 Firestore emulator tests; CodeQL, secret scanning and Actions/JavaScript/Python analyses passed. Both independent rev
+
+### Suggested Action
+Review the feedback and adjust engagement strategy accordingly. If this is a technical correction, update the relevant learnings or code.
+
+### Metadata
+- Source: github_review
+- Related Files: francovp/cabros-bot/pull/1490
+- Tags: correction, feedback, trainee, engagement, francovp
+- Pattern-Key: harden.engagement_feedback
+- Recurrence-Count: 1
+- First-Seen: 2026-11-05
+- Last-Seen: 2026-11-05
+
