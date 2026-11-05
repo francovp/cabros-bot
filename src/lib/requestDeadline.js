@@ -13,7 +13,7 @@
 //     has already stamped it; otherwise generates one).
 //   - If the response has already been sent before the deadline, the
 //     timeout is a no-op (no double-send).
-//   - Exempts `/healthcheck`, `/ready`, `/openapi.json`, `/docs`, and any
+//   - Exempts `/healthcheck`, `/ready`, `/livez`, `/readyz`, `/openapi.json`, `/docs`, and any
 //     path in REQUEST_DEADLINE_EXEMPT_PATHS (comma-separated).
 //   - Honors `REQUEST_TIMEOUT_MS` malformed/non-finite/out-of-range values
 //     by falling back to the documented default and logging a single
@@ -29,6 +29,8 @@ const invalidConfigWarnings = new Set();
 const DEFAULT_EXEMPT_PATHS = new Set([
 	'/healthcheck',
 	'/ready',
+	'/livez',
+	'/readyz',
 	'/openapi.json',
 	'/docs',
 ]);

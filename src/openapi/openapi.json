@@ -6808,6 +6808,256 @@
           }
         ]
       }
+    },
+    "/livez": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Get process liveness",
+        "description": "Public web liveness without dependency I/O. Ignores query parameters; remains 200 during drain. Existing /healthcheck is retained unchanged.",
+        "operationId": "getLiveness",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Alive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status",
+                    "uptimeMs"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "alive"
+                    },
+                    "uptimeMs": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "example": {
+                  "status": "alive",
+                  "uptimeMs": 42500
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ExpressFallthroughError"
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Get web dependency readiness",
+        "description": "Public web-only probe combining bootstrap, current process drain and the existing cached dependency readiness verdict. At least one considered dependency must be healthy and all considered dependencies must be healthy; all skipped returns 503. Disabled dependencies are unconfigured. Preview/API-only bot disablement alone does not fail readiness. No provider errors or configuration are exposed. Query parameters are ignored. Deployment healthCheckPath and legacy /ready remain unchanged.",
+        "operationId": "getWebReadiness",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status",
+                    "checks"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ready",
+                        "not_ready"
+                      ]
+                    },
+                    "checks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "name",
+                          "status"
+                        ],
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "enum": [
+                              "bootstrap",
+                              "processLifecycle",
+                              "dependencies",
+                              "firestore",
+                              "gemini",
+                              "tradingViewMcp",
+                              "binance",
+                              "telegram"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "ready",
+                              "unconfigured",
+                              "fail"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "status": "ready",
+                  "checks": [
+                    {
+                      "name": "bootstrap",
+                      "status": "ready"
+                    },
+                    {
+                      "name": "processLifecycle",
+                      "status": "ready"
+                    },
+                    {
+                      "name": "dependencies",
+                      "status": "ready"
+                    },
+                    {
+                      "name": "firestore",
+                      "status": "ready"
+                    },
+                    {
+                      "name": "gemini",
+                      "status": "unconfigured"
+                    },
+                    {
+                      "name": "tradingViewMcp",
+                      "status": "unconfigured"
+                    },
+                    {
+                      "name": "binance",
+                      "status": "unconfigured"
+                    },
+                    {
+                      "name": "telegram",
+                      "status": "unconfigured"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Bootstrap pending/failed, draining, dependency failure or no considered dependency.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status",
+                    "checks"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ready",
+                        "not_ready"
+                      ]
+                    },
+                    "checks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "name",
+                          "status"
+                        ],
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "enum": [
+                              "bootstrap",
+                              "processLifecycle",
+                              "dependencies",
+                              "firestore",
+                              "gemini",
+                              "tradingViewMcp",
+                              "binance",
+                              "telegram"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "ready",
+                              "unconfigured",
+                              "fail"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "status": "not_ready",
+                  "checks": [
+                    {
+                      "name": "bootstrap",
+                      "status": "ready"
+                    },
+                    {
+                      "name": "processLifecycle",
+                      "status": "ready"
+                    },
+                    {
+                      "name": "dependencies",
+                      "status": "fail"
+                    },
+                    {
+                      "name": "firestore",
+                      "status": "fail"
+                    },
+                    {
+                      "name": "gemini",
+                      "status": "unconfigured"
+                    },
+                    {
+                      "name": "tradingViewMcp",
+                      "status": "unconfigured"
+                    },
+                    {
+                      "name": "binance",
+                      "status": "unconfigured"
+                    },
+                    {
+                      "name": "telegram",
+                      "status": "unconfigured"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ExpressFallthroughError"
+          }
+        }
+      }
     }
   },
   "components": {
