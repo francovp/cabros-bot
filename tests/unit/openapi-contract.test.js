@@ -1043,7 +1043,7 @@ describe('status dependency contract drift', () => {
 
 	it('documents XRequestIdHeader parameter on every non-probe API operation (issue #1272)', () => {
 		const spec = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
-		const probeRoutes = ['/healthcheck', '/ready'];
+		const probeRoutes = ['/healthcheck', '/ready', '/livez', '/readyz'];
 		const missing = [];
 
 		for (const [routePath, operations] of Object.entries(spec.paths || {})) {

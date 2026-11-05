@@ -73,6 +73,7 @@ app.use(requestDeadline.guard);
 
 const { getDeepHealthcheckHandler } = require('./src/controllers/healthcheck');
 const { handleDependencyReadiness } = require('./src/controllers/readiness');
+const { getLiveness, getWebReadiness } = require('./src/controllers/webProbes');
 
 // `depth=readiness` runs external provider probes; bare requests keep the
 // legacy liveness / `?deep=true` channel contract from master. The deep
@@ -107,6 +108,9 @@ app.get('/ready', (req, res) => {
 	const status = bootstrapReadiness.getStatus();
 	return res.status(status.ready ? 200 : 503).json(status);
 });
+
+app.get('/livez', getLiveness);
+app.get('/readyz', getWebReadiness);
 
 // The performance harness needs process-local diagnostics during local test runs.
 // Keep the endpoint unavailable in development and production, and retain API-key auth.

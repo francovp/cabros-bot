@@ -98,6 +98,207 @@
       ]
     },
     {
+      "name": "Web Dependency Readiness",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "auth": {
+          "type": "noauth"
+        },
+        "description": "Public web probe; no request body or API key. Query parameters are ignored. 200 ready; 503 startup/drain/dependency failure or all dependencies disabled. Uses cached bounded probes; platform health path unchanged.",
+        "url": {
+          "raw": "{{baseUrl}}/readyz",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "readyz"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "200 Ready",
+          "status": "OK",
+          "code": 200,
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Public web probe; no request body or API key. Query parameters are ignored. 200 ready; 503 startup/drain/dependency failure or all dependencies disabled. Uses cached bounded probes; platform health path unchanged.",
+            "url": {
+              "raw": "{{baseUrl}}/readyz",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "readyz"
+              ]
+            }
+          },
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\"status\": \"ready\", \"checks\": [{\"name\": \"bootstrap\", \"status\": \"ready\"}, {\"name\": \"processLifecycle\", \"status\": \"ready\"}, {\"name\": \"dependencies\", \"status\": \"ready\"}, {\"name\": \"firestore\", \"status\": \"ready\"}, {\"name\": \"gemini\", \"status\": \"unconfigured\"}, {\"name\": \"tradingViewMcp\", \"status\": \"unconfigured\"}, {\"name\": \"binance\", \"status\": \"unconfigured\"}, {\"name\": \"telegram\", \"status\": \"unconfigured\"}]}"
+        },
+        {
+          "name": "503 Dependency unavailable",
+          "status": "Service Unavailable",
+          "code": 503,
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Public web probe; no request body or API key. Query parameters are ignored. 200 ready; 503 startup/drain/dependency failure or all dependencies disabled. Uses cached bounded probes; platform health path unchanged.",
+            "url": {
+              "raw": "{{baseUrl}}/readyz",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "readyz"
+              ]
+            }
+          },
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\"status\": \"not_ready\", \"checks\": [{\"name\": \"bootstrap\", \"status\": \"ready\"}, {\"name\": \"processLifecycle\", \"status\": \"ready\"}, {\"name\": \"dependencies\", \"status\": \"fail\"}, {\"name\": \"firestore\", \"status\": \"fail\"}, {\"name\": \"gemini\", \"status\": \"unconfigured\"}, {\"name\": \"tradingViewMcp\", \"status\": \"unconfigured\"}, {\"name\": \"binance\", \"status\": \"unconfigured\"}, {\"name\": \"telegram\", \"status\": \"unconfigured\"}]}"
+        },
+        {
+          "name": "503 Bootstrap pending or failed",
+          "status": "Service Unavailable",
+          "code": 503,
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Public web probe; no request body or API key. Query parameters are ignored. 200 ready; 503 startup/drain/dependency failure or all dependencies disabled. Uses cached bounded probes; platform health path unchanged.",
+            "url": {
+              "raw": "{{baseUrl}}/readyz",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "readyz"
+              ]
+            }
+          },
+          "body": "{\"status\": \"not_ready\", \"checks\": [{\"name\": \"bootstrap\", \"status\": \"fail\"}, {\"name\": \"processLifecycle\", \"status\": \"ready\"}, {\"name\": \"dependencies\", \"status\": \"ready\"}, {\"name\": \"firestore\", \"status\": \"ready\"}, {\"name\": \"gemini\", \"status\": \"unconfigured\"}, {\"name\": \"tradingViewMcp\", \"status\": \"unconfigured\"}, {\"name\": \"binance\", \"status\": \"unconfigured\"}, {\"name\": \"telegram\", \"status\": \"unconfigured\"}]}"
+        },
+        {
+          "name": "503 Process draining",
+          "status": "Service Unavailable",
+          "code": 503,
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Public web probe; no request body or API key. Query parameters are ignored. 200 ready; 503 startup/drain/dependency failure or all dependencies disabled. Uses cached bounded probes; platform health path unchanged.",
+            "url": {
+              "raw": "{{baseUrl}}/readyz",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "readyz"
+              ]
+            }
+          },
+          "body": "{\"status\": \"not_ready\", \"checks\": [{\"name\": \"bootstrap\", \"status\": \"ready\"}, {\"name\": \"processLifecycle\", \"status\": \"fail\"}, {\"name\": \"dependencies\", \"status\": \"ready\"}, {\"name\": \"firestore\", \"status\": \"ready\"}, {\"name\": \"gemini\", \"status\": \"unconfigured\"}, {\"name\": \"tradingViewMcp\", \"status\": \"unconfigured\"}, {\"name\": \"binance\", \"status\": \"unconfigured\"}, {\"name\": \"telegram\", \"status\": \"unconfigured\"}]}"
+        }
+      ],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "pm.test(\"Readiness verdict matches HTTP status\", () => { pm.expect([200, 503]).to.include(pm.response.code); pm.expect(body.status).to.eql(pm.response.code === 200 ? \"ready\" : \"not_ready\"); pm.expect(body.checks).to.be.an(\"array\"); pm.expect(body.checks.some(c => c.status === \"fail\")).to.eql(pm.response.code === 503); body.checks.forEach(c => pm.expect([\"ready\", \"unconfigured\", \"fail\"]).to.include(c.status)); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Web Process Liveness",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "auth": {
+          "type": "noauth"
+        },
+        "description": "Public web probe; no request body or API key. Query parameters are ignored. No external I/O.",
+        "url": {
+          "raw": "{{baseUrl}}/livez",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "livez"
+          ]
+        }
+      },
+      "response": [
+        {
+          "name": "200 Alive",
+          "status": "OK",
+          "code": 200,
+          "originalRequest": {
+            "method": "GET",
+            "header": [],
+            "auth": {
+              "type": "noauth"
+            },
+            "description": "Public web probe; no request body or API key. Query parameters are ignored. No external I/O.",
+            "url": {
+              "raw": "{{baseUrl}}/livez",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "livez"
+              ]
+            }
+          },
+          "header": [
+            {
+              "key": "Content-Type",
+              "value": "application/json"
+            }
+          ],
+          "body": "{\"status\": \"alive\", \"uptimeMs\": 42500}"
+        }
+      ],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "const body = pm.response.json();",
+              "pm.test(\"Process alive\", () => { pm.response.to.have.status(200); pm.expect(body.status).to.eql(\"alive\"); pm.expect(body.uptimeMs).to.be.a(\"number\").and.at.least(0); });"
+            ]
+          }
+        }
+      ]
+    },
+    {
       "name": "Healthcheck - Deep (channels ready)",
       "request": {
         "method": "GET",

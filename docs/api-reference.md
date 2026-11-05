@@ -14,6 +14,19 @@ For specific domain APIs, see:
 
 The canonical API contract is served publicly at [`/openapi.json`](http://localhost:80/openapi.json), with interactive Swagger UI at [`/docs`](http://localhost:80/docs), and the operator console at [`/admin`](http://localhost:80/admin). Use those endpoints for request schemas, response shapes, examples, and the current route inventory. Protected `/api` operations still require `x-api-key`; documentation and admin console assets are exempt from the global rate limit budget and never expose configured credentials.
 
+### GET /livez and GET /readyz
+
+`GET /livez` returns `200 {"status":"alive","uptimeMs":42500}` without dependency I/O, including during drain. `GET /readyz` returns `200` with `status: "ready"` or `503` with `status: "not_ready"` and a `checks` array of `{name, status}`. Both web probes are public and exempt from the API rate limiter. Query parameters are ignored and no request body is needed.
+
+Readiness combines bootstrap completion, the current process drain flag, and the existing cached, bounded dependency probes for Firestore, Gemini, TradingView MCP, Binance and Telegram. Names match those probes; `bootstrap`, `processLifecycle` and `dependencies` expose aggregate gates. Each check is `ready`, `unconfigured` (dependency skipped), or `fail`. At least one considered dependency must be healthy and every considered dependency must be healthy; all dependencies disabled returns 503, preserving the existing dependency-readiness verdict. Dependency results share the existing five-second cache; bootstrap and drain are checked after collection on every request. Provider errors and configuration are never exposed.
+
+Telegram being intentionally disabled in previews/API-only mode alone does not fail the web probe. Failed required Telegram startup still fails bootstrap. Worker health stays heartbeat-based; no worker HTTP listener is added. Existing `/healthcheck` and `/ready` response contracts and the production `healthCheckPath` remain unchanged. Operators can evaluate the new probes before changing platform routing; `/livez` is the dedicated liveness surface for new consumers.
+
+Example degraded response:
+```json
+{"status":"not_ready","checks":[{"name":"bootstrap","status":"ready"},{"name":"processLifecycle","status":"fail"},{"name":"dependencies","status":"ready"},{"name":"firestore","status":"ready"}]}
+```
+
 ### GET /healthcheck
 
 Liveness health check endpoint. The default behavior returns 200 with `uptime` only.
