@@ -1796,7 +1796,7 @@
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA \u2014 dry-run after budget exhausted\"\n}"
+          "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA — dry-run after budget exhausted\"\n}"
         },
         "description": "Dry-run alert delivery that does not consume the rolling 24h alert-delivery budget. Used to inspect the budget state via /api/status without sending further deliveries."
       },
@@ -1838,7 +1838,7 @@
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA \u2014 budget exhausted example\"\n}"
+          "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA — budget exhausted example\"\n}"
         },
         "description": "When the rolling 24h alert-delivery budget is exhausted, alert endpoints return 200 OK with success=true (fail-open) and per-channel results carrying success=false, statusCode=429, errorCode=ALERT_BUDGET_EXCEEDED, and a budget object with the current usage. deliveredChannels is empty."
       },

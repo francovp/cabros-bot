@@ -679,6 +679,13 @@
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
       "valueType": "NUMBER"
     },
+    "GLOBAL_ALERT_BUDGET_PER_24H": {
+      "defaultValue": {
+        "value": "500"
+      },
+      "description": "Rolling 24-hour alert-delivery budget capacity (0 disables budget)",
+      "valueType": "NUMBER"
+    },
     "ENABLE_MIN_ALERT_CONTEXT": {
       "defaultValue": {
         "value": "false"
