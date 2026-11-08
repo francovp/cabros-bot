@@ -49,6 +49,17 @@ describe('marketCalendar/notificationGate', () => {
 			expect(resolveAlertExchange({ signal: { exchange: 'NYSE' } })).toBe('NYSE');
 		});
 
+		it('reads exchange from a redrive-replay payload (enrichmentData shape)', () => {
+			// NotificationRedriveService persists `enrichmentData` (full object) and
+			// `enriched: true` (boolean). On replay, exchange must still resolve or
+			// the market gate silently passes and suppressed alerts leak.
+			expect(resolveAlertExchange({
+				text: 'NASDAQ:NVDA BUY',
+				enriched: true,
+				enrichmentData: { exchange: 'NASDAQ' },
+			})).toBe('NASDAQ');
+		});
+
 		it('returns null when no exchange candidate is present', () => {
 			expect(resolveAlertExchange({ text: 'no exchange here' })).toBeNull();
 		});
@@ -103,6 +114,44 @@ describe('marketCalendar/notificationGate', () => {
 			);
 			expect(decision.suppress).toBe(true);
 			expect(decision.exchange).toBe('BATS');
+		});
+	});
+
+	describe('evaluateDeliveryGate — feature enabled, half-day early close', () => {
+		// Black Friday 2026 (2026-11-27) is a half-day: regular session ends 13:00 ET.
+		it('suppresses with the half-day reason outside the early-close window', () => {
+			const decision = evaluateDeliveryGate(
+				{ exchange: 'NASDAQ' },
+				// 18:30 UTC = 13:30 ET — past the 13:00 ET close.
+				{ env: { ENABLE_MARKET_CALENDAR_GATING: 'true' }, timestamp: new Date(Date.UTC(2026, 10, 27, 18, 30)) },
+			);
+			expect(decision.suppress).toBe(true);
+			expect(decision.reason).toBe('market_half_day_outside_window');
+		});
+
+		it('does not suppress regular hours inside the early-close window', () => {
+			const decision = evaluateDeliveryGate(
+				{ exchange: 'NASDAQ' },
+				// 16:00 UTC = 12:00 ET — inside the 09:30–13:00 window.
+				{ env: { ENABLE_MARKET_CALENDAR_GATING: 'true' }, timestamp: new Date(Date.UTC(2026, 10, 27, 16, 0)) },
+			);
+			expect(decision.suppress).toBe(false);
+		});
+	});
+
+	describe('evaluateDeliveryGate — redrive replay payload', () => {
+		it('still suppresses a replayed holiday alert persisted with enrichmentData', () => {
+			const decision = evaluateDeliveryGate(
+				{
+					text: 'NASDAQ:NVDA BUY',
+					enriched: true,
+					enrichmentData: { exchange: 'NASDAQ' },
+				},
+				{ env: { ENABLE_MARKET_CALENDAR_GATING: 'true' }, timestamp: FIXED_HOLIDAY },
+			);
+			expect(decision.suppress).toBe(true);
+			expect(decision.reason).toBe('market_holiday');
+			expect(decision.exchange).toBe('NASDAQ');
 		});
 	});
 

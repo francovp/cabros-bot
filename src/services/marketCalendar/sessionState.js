@@ -164,11 +164,16 @@ function getSessionState(input = {}) {
 		if (holiday.type === 'half_day') {
 			const openMin = parseTimeOfDay('09:30');
 			const halfCloseMin = parseTimeOfDay((usMarketHolidays && usMarketHolidays.earlyCloseET) || '13:00');
-			const inHalfDay = Number.isFinite(openMin) && Number.isFinite(halfCloseMin)
-				&& minuteOfDay >= openMin && minuteOfDay < halfCloseMin;
+			const hours = (usMarketHolidays && usMarketHolidays.regularHoursET) || {};
+			const preOpenMin = parseTimeOfDay(hours.preOpen || '04:00');
+			const tradingOpenMin = Number.isFinite(preOpenMin) ? preOpenMin : openMin;
+			const inHalfDay = Number.isFinite(tradingOpenMin) && Number.isFinite(halfCloseMin)
+				&& minuteOfDay >= tradingOpenMin && minuteOfDay < halfCloseMin;
 			return {
 				...baseResult,
-				state: inHalfDay ? SESSION_STATES.REGULAR : SESSION_STATES.CLOSED,
+				state: inHalfDay
+					? (minuteOfDay < openMin ? SESSION_STATES.PRE : SESSION_STATES.REGULAR)
+					: SESSION_STATES.CLOSED,
 				venueKind: 'us_equity',
 				dateKey,
 				holiday,

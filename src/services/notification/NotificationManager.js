@@ -615,13 +615,15 @@ class NotificationManager {
 		// window, weekend, or weekday outside any session window). Routes the
 		// alert to the dead-letter queue with a structured `reason` for audit
 		// and replay. Fail-open when disabled, missing exchange, or classifier
-		// error.
+		// error. The gate still evaluates on redrive replays (holding the
+		// alert) but never writes a fresh dead letter for them, so replay
+		// cannot reset backoff/attempts.
 		const gate = evaluateDeliveryGate(alert, options);
 		if (gate.suppress) {
 			console.info(
 				`[NotificationManager] Suppressed by market calendar: exchange=${gate.exchange} reason=${gate.reason} state=${gate.sessionState && gate.sessionState.state}`,
 			);
-			if (notificationRedriveService.isEnabled()) {
+			if (!options.isRedrive && notificationRedriveService.isEnabled()) {
 				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(
 					{ ...alert, _marketCalendarGate: { suppress: true, reason: gate.reason, sessionState: gate.sessionState, exchange: gate.exchange } },
 					channelNames.map((name) => ({
@@ -631,7 +633,7 @@ class NotificationManager {
 						errorCode: gate.reason,
 						skipped: true,
 					})),
-					{ ...options, isRedrive: false },
+					options,
 				)).catch((error) => {
 					console.warn('[NotificationManager] Failed to record market-calendar dead-letter:', error.message);
 				});

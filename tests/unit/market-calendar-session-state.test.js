@@ -129,6 +129,15 @@ describe('marketCalendar/sessionState', () => {
 			expect(result.suppressDelivery).toBe(true);
 			expect(result.holiday && result.holiday.type).toBe('half_day');
 		});
+
+		it('classifies Black Friday 2026 pre-market as pre and does not suppress', () => {
+			// 2026-11-27 13:00 UTC = 08:00 ET (EST) — pre-market (04:00–09:30 ET)
+			// trades on early-close days and must not be suppressed.
+			const result = getSessionState({ exchange: 'NASDAQ', timestamp: etDate(2026, 11, 27, 13, 0) });
+			expect(result.state).toBe(SESSION_STATES.PRE);
+			expect(result.halfDay).toBe(true);
+			expect(result.suppressDelivery).toBe(false);
+		});
 	});
 
 	describe('unknown / malformed inputs', () => {

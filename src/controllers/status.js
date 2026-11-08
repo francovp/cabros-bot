@@ -681,7 +681,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			alertHtfRender: runtimeConfig.ENABLE_ALERT_HTF_RENDER,
 			alertModeration: alertModeration.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
-			marketCalendarGating: isMarketCalendarGatingEnabled(),
+			marketCalendarGating: isMarketCalendarGatingEnabled(env),
 			environmentBanner: isEnvironmentBannerEnabled(),
 			symbolAliasResolver: aliasResolver.isEnabled(),
 			userPriceAlerts: userPriceAlertService.isEnabled(),

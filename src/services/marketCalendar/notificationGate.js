@@ -37,6 +37,10 @@ function isFeatureEnabled(env = process.env) {
  *   2. `alert.enriched.exchange`
  *   3. `alert.enriched.symbolInfo.exchange`
  *   4. `alert.enriched.exchange` derived from `signal.exchange`
+ *   5. `alert.enrichmentData.exchange` (redrive-replay payload shape: the
+ *      dead-letter record persists the full enriched object under
+ *      `enrichmentData` and `enriched: true`, so without this candidate a
+ *      replayed holiday alert would fail open and leak while closed)
  * Returns null when none can be resolved.
  *
  * @param {Object} alert
@@ -50,6 +54,8 @@ function resolveAlertExchange(alert) {
 		alert && alert.enriched && alert.enriched.signal && alert.enriched.signal.exchange,
 		alert && alert.signal && alert.signal.exchange,
 		alert && alert.metadata && alert.metadata.exchange,
+		alert && alert.enrichmentData && alert.enrichmentData.exchange,
+		alert && alert.enrichmentData && alert.enrichmentData.signal && alert.enrichmentData.signal.exchange,
 	];
 	for (const c of candidates) {
 		if (typeof c === 'string' && c.trim()) return c.trim().toUpperCase();
@@ -97,10 +103,10 @@ function evaluateDeliveryGate(alert, options = {}) {
 	}
 
 	let reason;
-	if (sessionState.state === 'holiday') {
-		reason = 'market_holiday';
-	} else if (sessionState.state === 'half_day') {
+	if (sessionState.holiday && sessionState.holiday.type === 'half_day') {
 		reason = 'market_half_day_outside_window';
+	} else if (sessionState.state === 'holiday') {
+		reason = 'market_holiday';
 	} else if (sessionState.state === 'closed') {
 		reason = sessionState.holiday ? 'market_holiday' : 'market_closed';
 	} else {
