@@ -46,7 +46,19 @@ describe('pretradeCheck helpers', () => {
 		it('returns parsed symbol/exchange/assetClass when valid', () => {
 			fetchPrice.classifyPriceQuery.mockReturnValueOnce({ valid: true, assetClass: 'equity', exchange: 'NASDAQ', symbol: 'NVDA' });
 			const result = parseSymbol('NASDAQ:NVDA');
-			expect(result).toEqual({ raw: 'NASDAQ:NVDA', symbol: 'NVDA', exchange: 'NASDAQ', assetClass: 'equity' });
+			expect(result).toEqual({ raw: 'NASDAQ:NVDA', symbol: 'NVDA', exchange: 'NASDAQ', assetClass: 'equity', reason: null });
+		});
+
+		it('preserves classification reason when present', () => {
+			fetchPrice.classifyPriceQuery.mockReturnValueOnce({
+				valid: true,
+				assetClass: 'unsupported',
+				exchange: 'KUCOIN',
+				symbol: 'BTCUSDT',
+				reason: 'Exchange KUCOIN no soportado para consulta de precios.',
+			});
+			const result = parseSymbol('KUCOIN:BTCUSDT');
+			expect(result.reason).toBe('Exchange KUCOIN no soportado para consulta de precios.');
 		});
 	});
 
@@ -73,12 +85,13 @@ describe('pretradeCheck helpers', () => {
 			expect(result.wins).toBe(2);
 		});
 
-		it('treats NaN returns as non-wins', () => {
+		it('ignores NaN and non-finite returns completely', () => {
 			const result = computeHitRate([
 				{ outcomes: { '1h': { status: 'evaluated', return: NaN } } },
+				{ outcomes: { '1h': { status: 'evaluated', return: Infinity } } },
 				{ outcomes: { '1h': { status: 'evaluated', return: 1 } } },
 			]);
-			expect(result.total).toBe(2);
+			expect(result.total).toBe(1);
 			expect(result.wins).toBe(1);
 		});
 	});
@@ -151,7 +164,7 @@ describe('pretradeCheck helpers', () => {
 			expect(message).toContain('$50000');
 			expect(message).toContain('75%');
 			expect(message).toContain('42ms');
-			expect(message).toContain('Pre-trade');
+			expect(message).toContain('Pre\\-trade');
 		});
 
 		it('renders a graceful section when hit-rate is unavailable', () => {
@@ -163,6 +176,17 @@ describe('pretradeCheck helpers', () => {
 			});
 			expect(message).toContain('Equity service disabled');
 			expect(message).toContain('Tracking disabled');
+		});
+
+		it('produces valid MarkdownV2 without unescaped reserved characters', () => {
+			const { findPotentialInvalidLines } = require('../../src/services/notification/formatters/MarkdownV2Formatter');
+			const message = formatPretradeCheckMessage({
+				symbol: 'BINANCE:BTCUSDT',
+				price: { available: true, price: 50000.5, percentChange: 1.25, assetClass: 'crypto' },
+				hitRate: { available: true, hitRatePercent: 75.5, winWindows: 3, evaluatedWindows: 4, windowDays: 7 },
+				durationMs: 42,
+			});
+			expect(findPotentialInvalidLines(message)).toEqual([]);
 		});
 	});
 });

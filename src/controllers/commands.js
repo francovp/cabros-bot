@@ -11,11 +11,7 @@ const alertStorageService = require('../services/storage/AlertStorageService');
 const alertAcknowledgementService = require('../services/storage/AlertAcknowledgementService');
 const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
-const {
-	parseSymbol: parsePretradeSymbol,
-	composePretradeCheck,
-	formatPretradeCheckMessage,
-} = require('./pretradeCheck/pretradeCheck');
+const pretradeCheck = require('./pretradeCheck/pretradeCheck');
 const { resolveSymbolQuery } = require('../services/symbols/aliasResolver');
 const { isChatAuthorized } = require('../lib/telegramCommandAuth');
 const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
@@ -926,6 +922,10 @@ function parseOutcomeSymbol(rawSymbol) {
 }
 
 const pretradeCheckCommand = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
 	const chatId = getChatId(context);
 	const args = parseCommandArgs(context);
 	const rawSymbol = (args.positionals[0] || '').trim();
@@ -941,7 +941,7 @@ const pretradeCheckCommand = async (context) => {
 	});
 
 	try {
-		const parsed = parsePretradeSymbol(rawSymbol);
+		const parsed = pretradeCheck.parseSymbol(rawSymbol);
 		if (!parsed) {
 			await context.reply(
 				'Uso: `/check <simbolo>` — por ejemplo `/check BTCUSDT` o `/check BINANCE:BTCUSDT`',
@@ -951,15 +951,16 @@ const pretradeCheckCommand = async (context) => {
 		}
 
 		const payload = await withTimeout(
-			(signal) => composePretradeCheck({
+			(signal) => pretradeCheck.composePretradeCheck({
 				parsedSymbol: parsed,
 				limit: PRETRADE_COMMAND_HIT_RATE_LIMIT,
-				requestId: signal ? 'tg-check' : 'tg-check',
+				requestId: 'tg-check',
+				signal,
 			}),
 			PRETRADE_COMMAND_TIMEOUT_MS,
 			'pre-trade check timed out',
 		);
-		await context.reply(formatPretradeCheckMessage(payload), { parse_mode: 'MarkdownV2' });
+		await context.reply(pretradeCheck.formatPretradeCheckMessage(payload), { parse_mode: 'MarkdownV2' });
 	} catch (error) {
 		console.error('[commands] /check failed:', error.message);
 		const isExpectedError = Boolean(

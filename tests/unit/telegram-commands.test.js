@@ -57,6 +57,7 @@ const {
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	pretradeCheckCommand,
 	buildHelpMessage,
 	getTelegramCommandMenu,
 	parseCommandArgs,
@@ -1404,6 +1405,62 @@ describe('Telegram TradingView commands', () => {
 
 			expect(context.reply).toHaveBeenCalledTimes(1);
 			expect(context.reply.mock.calls[0][0]).toContain('Sin snapshots diarios de resultados todavía');
+		});
+	});
+
+	describe('pretradeCheckCommand', () => {
+		it('sends maintenance reply when maintenance mode is active', async () => {
+			const previous = process.env.ENABLE_MAINTENANCE_MODE;
+			process.env.ENABLE_MAINTENANCE_MODE = 'true';
+			try {
+				const context = buildContext('/check BTCUSDT');
+				await pretradeCheckCommand(context);
+				expect(context.reply).toHaveBeenCalled();
+			} finally {
+				if (previous === undefined) delete process.env.ENABLE_MAINTENANCE_MODE;
+				else process.env.ENABLE_MAINTENANCE_MODE = previous;
+			}
+		});
+
+		it('replies with usage hint when symbol is missing', async () => {
+			const context = buildContext('/check');
+			await pretradeCheckCommand(context);
+			expect(context.reply).toHaveBeenCalledWith(
+				'Uso: `/check <simbolo>` — por ejemplo `/check BTCUSDT` o `/check BINANCE:BTCUSDT`',
+				{ parse_mode: 'MarkdownV2' },
+			);
+		});
+
+		it('replies with pretrade check result on valid symbol', async () => {
+			const pretradeService = require('../../src/controllers/pretradeCheck/pretradeCheck');
+			const spy = jest.spyOn(pretradeService, 'composePretradeCheck').mockResolvedValueOnce({
+				symbol: 'BTCUSDT',
+				price: { available: true, price: 50000, percentChange: 1.5, assetClass: 'crypto' },
+				hitRate: { available: true, hitRatePercent: 80, winWindows: 4, evaluatedWindows: 5, windowDays: 7 },
+				durationMs: 25,
+			});
+			try {
+				const context = buildContext('/check BTCUSDT');
+				await pretradeCheckCommand(context);
+				expect(context.reply).toHaveBeenCalledTimes(1);
+				const replyMsg = context.reply.mock.calls[0][0];
+				expect(replyMsg).toContain('Pre\\-trade check');
+				expect(replyMsg).toContain('$50000');
+			} finally {
+				spy.mockRestore();
+			}
+		});
+
+		it('handles error gracefully and replies with fail-open message', async () => {
+			const pretradeService = require('../../src/controllers/pretradeCheck/pretradeCheck');
+			const spy = jest.spyOn(pretradeService, 'composePretradeCheck').mockRejectedValueOnce(new Error('service down'));
+			try {
+				const context = buildContext('/check BTCUSDT');
+				await pretradeCheckCommand(context);
+				expect(context.reply).toHaveBeenCalledWith('No pude generar el pre-trade check ahora mismo. Intenta nuevamente más tarde.');
+			} finally {
+				spy.mockRestore();
+			}
 		});
 	});
 });

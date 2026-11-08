@@ -24,6 +24,7 @@ function parseSymbol(rawSymbol) {
 		symbol: classification.symbol,
 		exchange: classification.exchange || null,
 		assetClass: classification.assetClass,
+		reason: classification.reason || null,
 	};
 }
 
@@ -41,10 +42,10 @@ function computeHitRate(outcomes) {
 		if (!outcome || !outcome.outcomes) return;
 		PRETRADE_CHECK_WINDOWS.forEach((windowKey) => {
 			const win = outcome.outcomes[windowKey];
-			if (!win || win.status !== 'evaluated') return;
+			if (!win || win.status !== 'evaluated' || !Number.isFinite(win.return)) return;
 			counts.total += 1;
 			counts.evaluated += 1;
-			if (Number.isFinite(win.return) && win.return > 0) {
+			if (win.return > 0) {
 				counts.wins += 1;
 			}
 		});
@@ -87,6 +88,7 @@ async function loadPrice(parsedSymbol) {
 		return {
 			available: true,
 			price: result.price,
+			percentChange: Number.isFinite(result.changePercent24h) ? result.changePercent24h : undefined,
 			assetClass: 'crypto',
 			symbol: result.symbol,
 		};
@@ -96,7 +98,7 @@ async function loadPrice(parsedSymbol) {
 	}
 }
 
-async function loadOutcomeHitRate(parsedSymbol, limit) {
+async function loadOutcomeHitRate(parsedSymbol, limit, options = {}) {
 	if (!signalOutcomeService.isEnabled()) {
 		return { available: false, reason: 'Signal outcome tracking is disabled.' };
 	}
@@ -106,8 +108,10 @@ async function loadOutcomeHitRate(parsedSymbol, limit) {
 			symbol: parsedSymbol.symbol,
 			exchange: parsedSymbol.exchange || undefined,
 			limit,
+			maxScanDocs: 1000,
 			status: 'evaluated',
 			from: new Date(cutoffMs).toISOString(),
+			signal: options.signal,
 		});
 		const outcomes = Array.isArray(result && result.outcomes) ? result.outcomes : [];
 		const counts = computeHitRate(outcomes);
@@ -125,11 +129,11 @@ async function loadOutcomeHitRate(parsedSymbol, limit) {
 	}
 }
 
-async function composePretradeCheck({ parsedSymbol, limit, requestId }) {
+async function composePretradeCheck({ parsedSymbol, limit, requestId, signal }) {
 	const startedAt = Date.now();
 	const [price, hitRate] = await Promise.all([
 		loadPrice(parsedSymbol),
-		loadOutcomeHitRate(parsedSymbol, limit),
+		loadOutcomeHitRate(parsedSymbol, limit, { signal }),
 	]);
 	return {
 		symbol: parsedSymbol.raw,
@@ -147,12 +151,13 @@ async function composePretradeCheck({ parsedSymbol, limit, requestId }) {
 }
 
 function formatPretradeCheckMessage(payload) {
-	const lines = [`*Pre-trade check — ${escapeMarkdownV2(payload.symbol)}*`, ''];
+	const symbolEscaped = escapeMarkdownV2(payload.symbol);
+	const lines = [`*Pre\\-trade check — ${symbolEscaped}*`, ''];
 
 	if (payload.price && payload.price.available) {
 		const priceStr = Number.isFinite(payload.price.price) ? `$${payload.price.price}` : 'n/d';
 		const changeLine = Number.isFinite(payload.price.percentChange)
-			? ` (${payload.price.percentChange >= 0 ? '+' : ''}${payload.price.percentChange.toFixed(2)}% 24h)`
+			? ` \\(${payload.price.percentChange >= 0 ? '\\+' : ''}${escapeMarkdownV2(payload.price.percentChange.toFixed(2))}% 24h\\)`
 			: '';
 		lines.push(`Precio: ${escapeMarkdownV2(priceStr)}${changeLine}`);
 	} else if (payload.price) {
@@ -161,14 +166,14 @@ function formatPretradeCheckMessage(payload) {
 
 	if (payload.hitRate && payload.hitRate.available) {
 		lines.push(
-			`Hit-rate (${escapeMarkdownV2(String(payload.hitRate.windowDays))}d): ${escapeMarkdownV2(String(payload.hitRate.hitRatePercent))}% (${escapeMarkdownV2(String(payload.hitRate.winWindows))}/${escapeMarkdownV2(String(payload.hitRate.evaluatedWindows))} ventanas)`,
+			`Hit\\-rate \\(${escapeMarkdownV2(String(payload.hitRate.windowDays))}d\\): ${escapeMarkdownV2(String(payload.hitRate.hitRatePercent))}% \\(${escapeMarkdownV2(String(payload.hitRate.winWindows))}/${escapeMarkdownV2(String(payload.hitRate.evaluatedWindows))} ventanas\\)`,
 		);
 	} else if (payload.hitRate) {
-		lines.push(`Hit-rate: ${escapeMarkdownV2(payload.hitRate.reason || 'No disponible')}`);
+		lines.push(`Hit\\-rate: ${escapeMarkdownV2(payload.hitRate.reason || 'No disponible')}`);
 	}
 
 	lines.push('');
-	lines.push(`_Generado en ${payload.durationMs}ms_`);
+	lines.push(`_Generado en ${escapeMarkdownV2(String(payload.durationMs))}ms_`);
 	return lines.join('\n');
 }
 
