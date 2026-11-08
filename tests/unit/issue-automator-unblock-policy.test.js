@@ -65,6 +65,9 @@ describe('issue-automator unblock policy and contract invariants', () => {
 		// 4. Preview-only failure fallback
 		expect(skill).toMatch(/Preview-only failure/i);
 		expect(skill).toMatch(/treat unavailable or unhealthy preview as `?unverified`? and continue to merge/i);
+
+		// 5. Named-priority fallback when numeric priorities are absent/exhausted
+		expect(skill).toMatch(/once numeric priorities are exhausted or absent, automatically continue through `priority\/critical`, `priority\/high`, `priority\/medium`, and `priority\/low`/i);
 	});
 
 	it('references/outcomes-and-deadlocks.md reflects unblock fallbacks', () => {
