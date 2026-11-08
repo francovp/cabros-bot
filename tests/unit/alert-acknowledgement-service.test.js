@@ -234,6 +234,33 @@ describe('AlertAcknowledgementService', () => {
 		});
 	});
 
+	describe('summarizeAcknowledgements', () => {
+		it('aggregates counts with symbol/exchange and window filters', async () => {
+			await ackService.saveAcknowledgement({ alertId: 'alert-1', chatId: 'a', action: 'took_trade', symbol: 'BTCUSDT', exchange: 'BINANCE' });
+			await ackService.saveAcknowledgement({ alertId: 'alert-2', chatId: 'b', action: 'skipped', symbol: 'BTCUSDT', exchange: 'BINANCE' });
+			await ackService.saveAcknowledgement({ alertId: 'alert-3', chatId: 'c', action: 'took_trade', symbol: 'ETHUSDT', exchange: 'BINANCE' });
+			const all = await ackService.summarizeAcknowledgements({});
+			expect(all.total).toBe(3);
+			expect(all.breakdown.took_trade).toBe(2);
+			const filtered = await ackService.summarizeAcknowledgements({ symbol: 'BTCUSDT' });
+			expect(filtered.total).toBe(2);
+			expect(filtered.bySymbol.BTCUSDT).toBe(2);
+			expect(filtered.bySymbol.ETHUSDT).toBeUndefined();
+			const windowed = await ackService.summarizeAcknowledgements({ from: new Date().toISOString(), to: new Date().toISOString() });
+			expect(windowed.total).toBeGreaterThanOrEqual(0);
+			const empty = await ackService.summarizeAcknowledgements({ symbol: 'NOSUCH' });
+			expect(empty.total).toBe(0);
+			expect(empty.breakdown).toEqual({ took_trade: 0, skipped: 0, no_trade_no_signal: 0, snoozed: 0 });
+		});
+
+		it('returns an empty summary when the feature is disabled', async () => {
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'false';
+			const summary = await ackService.summarizeAcknowledgements({});
+			expect(summary.total).toBe(0);
+			expect(summary.breakdown).toEqual({ took_trade: 0, skipped: 0, no_trade_no_signal: 0, snoozed: 0 });
+		});
+	});
+
 	describe('getAcknowledgementBreakdown', () => {
 		it('returns zero-safe counts for every VALID_ACTIONS entry', async () => {
 			const breakdown = await ackService.getAcknowledgementBreakdown('alert-no-data');

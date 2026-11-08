@@ -510,7 +510,7 @@ const ACK_TOAST_MAP = {
 	took_trade: '✅ Registrado: tomaste esta señal',
 	skipped: '⏭ Registrado: omitiste esta señal',
 	no_trade_no_signal: '❓ Registrado: sin trade',
-	snoozed: '🔕 Registrado: snoozed 4h',
+	snoozed: '🔕 Registrado: snoozed',
 };
 
 async function handleAcknowledgement(context, parsed, storeEntry) {

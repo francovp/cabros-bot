@@ -219,7 +219,10 @@ async function saveAcknowledgement({ alertId, chatId, action, notes, symbol, exc
 			const docRef = firestore.collection(COLLECTION_NAME).doc(documentId);
 			const existing = await docRef.get();
 			const nowMillis = Date.now();
-			const isUpdate = Boolean(existing && existing.exists);
+			const existingData = (existing && existing.exists) ? (existing.data() || {}) : null;
+			const isUpdate = Boolean(existingData);
+			const existingExpiryMs = existingData ? getTimestampMillis(existingData.expiresAt) : null;
+			const existingAckMs = existingData ? getTimestampMillis(existingData.acknowledgedAt) : null;
 			const document = {
 				alertId: alertId.trim(),
 				chatId: chatId.trim(),
@@ -229,7 +232,11 @@ async function saveAcknowledgement({ alertId, chatId, action, notes, symbol, exc
 				symbol: normalizedSymbol,
 				exchange: normalizedExchange,
 				updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-				expiresAt: buildRetentionExpiryTimestamp(nowMillis),
+				// expiresAt anchors to acknowledgedAt (first write), never to the
+				// latest update, so re-acknowledgements cannot extend retention.
+				expiresAt: existingExpiryMs !== null
+					? admin.firestore.Timestamp.fromMillis(existingExpiryMs)
+					: buildRetentionExpiryTimestamp(existingAckMs ?? nowMillis),
 			};
 			if (!isUpdate) {
 				document.acknowledgedAt = admin.firestore.FieldValue.serverTimestamp();
@@ -246,6 +253,9 @@ async function saveAcknowledgement({ alertId, chatId, action, notes, symbol, exc
 	}
 	const now = Date.now();
 	const existing = readMemoryRecord(documentId);
+	const anchorMs = existing && getTimestampMillis(existing.acknowledgedAt) !== null
+		? getTimestampMillis(existing.acknowledgedAt)
+		: now;
 	const record = {
 		id: documentId,
 		alertId: alertId.trim(),
@@ -257,7 +267,7 @@ async function saveAcknowledgement({ alertId, chatId, action, notes, symbol, exc
 		exchange: normalizedExchange,
 		acknowledgedAt: existing && existing.acknowledgedAt ? existing.acknowledgedAt : new Date(now).toISOString(),
 		updatedAt: new Date(now).toISOString(),
-		expiresAt: new Date(now + (getAlertStorageRetentionDays() * DAY_MS)),
+		expiresAt: new Date(anchorMs + (getAlertStorageRetentionDays() * DAY_MS)),
 	};
 	memoryStore.set(documentId, record);
 	return {
@@ -309,22 +319,25 @@ async function listAcknowledgements({ alertId, limit } = {}) {
 	if (!isEnabled()) {
 		return { records: [], storage: 'memory' };
 	}
-	const maxLimit = Math.max(1, Math.min(Number.isInteger(limit) ? limit : 50, 200));
+	const maxLimit = Math.max(1, Math.min(Number.isInteger(limit) ? limit : 50, 1000));
 	const firestore = getFirestore();
 	if (firestore) {
 		try {
-			let query = firestore.collection(COLLECTION_NAME).orderBy('updatedAt', 'desc').limit(maxLimit);
-			if (typeof alertId === 'string' && alertId.trim()) {
-				query = firestore
-					.collection(COLLECTION_NAME)
-					.where('alertId', '==', alertId.trim())
-					.orderBy('updatedAt', 'desc')
-					.limit(maxLimit);
-			}
-			const snapshot = await query.get();
+			// Single-field orderBy only: Firestore never merges single-field
+			// indexes, so where('alertId') + orderBy('updatedAt') would need a
+			// composite index and otherwise fail closed. Filter in memory,
+			// mirroring AlertStorageService read filtering.
+			const snapshot = await firestore
+				.collection(COLLECTION_NAME)
+				.orderBy('updatedAt', 'desc')
+				.limit(maxLimit)
+				.get();
 			const records = [];
 			snapshot.forEach((doc) => {
 				const data = doc.data() || {};
+				if (typeof alertId === 'string' && alertId.trim() && data.alertId !== alertId.trim()) {
+					return;
+				}
 				if (getTimestampMillis(data.expiresAt) !== null && getTimestampMillis(data.expiresAt) <= Date.now()) {
 					return;
 				}
@@ -357,7 +370,7 @@ async function getAcknowledgementBreakdown(targetAlertId) {
 	if (typeof targetAlertId !== 'string' || !targetAlertId.trim()) {
 		return { alertId: null, total: 0, breakdown: emptyBreakdown(), storage: 'memory' };
 	}
-	const { records, storage } = await listAcknowledgements({ alertId: targetAlertId });
+	const { records, storage } = await listAcknowledgements({ alertId: targetAlertId, limit: 1000 });
 	const breakdown = emptyBreakdown();
 	let total = 0;
 	for (const record of records) {
@@ -393,8 +406,17 @@ async function summarizeAcknowledgements({ symbol, exchange, from, to, limit } =
 	let storage = 'memory';
 	if (firestore) {
 		try {
-			const snapshot = await firestore
-				.collection(COLLECTION_NAME)
+			// Single-field range on acknowledgedAt only (no composite index).
+			// Symbol/exchange stay in-memory filters so no where+orderBy
+			// composite is ever required.
+			let query = firestore.collection(COLLECTION_NAME);
+			if (Number.isFinite(fromMs)) {
+				query = query.where('acknowledgedAt', '>=', admin.firestore.Timestamp.fromMillis(fromMs));
+			}
+			if (Number.isFinite(toMs)) {
+				query = query.where('acknowledgedAt', '<=', admin.firestore.Timestamp.fromMillis(toMs));
+			}
+			const snapshot = await query
 				.orderBy('acknowledgedAt', 'desc')
 				.limit(effectiveLimit)
 				.get();
@@ -484,6 +506,17 @@ function _resetForTests() {
 	clearMemoryStore();
 }
 
+function buildEmptyAcknowledgementSummary() {
+	return {
+		total: 0,
+		breakdown: emptyBreakdown(),
+		bySymbol: {},
+		byExchange: {},
+		storage: 'memory',
+		window: { from: null, to: null, limit: null },
+	};
+}
+
 module.exports = {
 	isEnabled,
 	saveAcknowledgement,
@@ -491,6 +524,7 @@ module.exports = {
 	listAcknowledgements,
 	getAcknowledgementBreakdown,
 	summarizeAcknowledgements,
+	buildEmptyAcknowledgementSummary,
 	clearMemoryStore,
 	_resetForTests,
 	VALID_ACTIONS,

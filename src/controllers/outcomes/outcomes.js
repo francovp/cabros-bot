@@ -430,35 +430,11 @@ function summarizeOutcomes(req, res) {
 						window: ackSummary.window,
 					};
 				} else {
-					summary.acknowledgementBreakdown = {
-						total: 0,
-						breakdown: {
-							took_trade: 0,
-							skipped: 0,
-							no_trade_no_signal: 0,
-							snoozed: 0,
-						},
-						bySymbol: {},
-						byExchange: {},
-						storage: 'memory',
-						window: { from: null, to: null, limit: null },
-					};
+					summary.acknowledgementBreakdown = alertAcknowledgementService.buildEmptyAcknowledgementSummary();
 				}
 			} catch (ackError) {
 				console.warn('[OutcomesController] Failed to read acknowledgement breakdown:', ackError.message);
-				summary.acknowledgementBreakdown = {
-					total: 0,
-					breakdown: {
-						took_trade: 0,
-						skipped: 0,
-						no_trade_no_signal: 0,
-						snoozed: 0,
-					},
-					bySymbol: {},
-					byExchange: {},
-					storage: 'memory',
-					window: { from: null, to: null, limit: null },
-				};
+				summary.acknowledgementBreakdown = alertAcknowledgementService.buildEmptyAcknowledgementSummary();
 			}
 		}
 

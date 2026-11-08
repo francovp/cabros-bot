@@ -1409,7 +1409,6 @@ function handleAsync(req, res, endpoint, handler) {
 		console.error('[AlertsController] Request failed:', error.message);
 		const statusCode = error.code === alertStorageService.STORAGE_UNAVAILABLE_CODE
 			|| error.code === alertFeedbackStorageService.STORAGE_UNAVAILABLE_CODE
-			|| error.code === alertAcknowledgementService.STORAGE_UNAVAILABLE_CODE
 			? 503
 			: (error.code === 'INVALID_REQUEST' ? 400 : 500);
 		sentryService.captureRuntimeError({

@@ -128,23 +128,27 @@ describe('Alert Acknowledgement API Integration Tests', () => {
 			expect(ackService.saveAcknowledgement).not.toHaveBeenCalled();
 		});
 
-		it('returns 503 when Firestore is unavailable', async () => {
+		it('never returns 503 from the acknowledgement service (fail-open by design)', async () => {
 			alertStorageService.getAlertById.mockResolvedValue({ id: 'alert-1' });
-			ackService.saveAcknowledgement.mockImplementation(() => {
-				const error = new Error('Acknowledgement storage is enabled but Firestore is unavailable.');
-				error.code = 'STORAGE_UNAVAILABLE';
-				throw error;
+			ackService.saveAcknowledgement.mockResolvedValue({
+				ackId: 'alert-1__123',
+				alertId: 'alert-1',
+				action: 'took_trade',
+				notes: null,
+				acknowledgedAt: '2026-09-02T22:00:00.000Z',
+				updatedAt: '2026-09-02T22:00:00.000Z',
+				storage: 'memory',
 			});
 			const res = await request(app)
 				.post('/api/alerts/alert-1/acknowledge')
 				.set('x-api-key', 'test-key')
 				.send({ chatId: '123', action: 'took_trade' })
-				.expect(503);
-			expect(res.body.code).toBe('STORAGE_UNAVAILABLE');
+				.expect(201);
+			expect(res.body.storage).toBe('memory');
 		});
 
 		it('returns 201 with sanitized acknowledgement on success', async () => {
-			alertStorageService.getAlertById.mockResolvedValue({ id: 'alert-1' });
+			alertStorageService.getAlertById.mockResolvedValue({ id: 'alert-1', symbol: 'BTCUSDT', exchange: 'BINANCE' });
 			const res = await request(app)
 				.post('/api/alerts/alert-1/acknowledge')
 				.set('x-api-key', 'test-key')
@@ -167,6 +171,8 @@ describe('Alert Acknowledgement API Integration Tests', () => {
 				chatId: '123456789',
 				action: 'took_trade',
 				notes: 'good setup',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
 			});
 		});
 

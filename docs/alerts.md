@@ -453,7 +453,7 @@ Aggregate trader verdicts within a bounded time window. Requires `admin.viewer`.
 
 #### POST /api/alerts/:alertId/acknowledge
 
-Record a trader acknowledgement for a stored alert. One record per `(alertId, chatId)` pair; re-acknowledgements update the action/notes instead of appending. Requires `admin.operator` and `ENABLE_FIRESTORE_ALERT_STORAGE=true`. The `chatId` is never returned in any response. Telegram inline-keyboard buttons (`✅ Took`, `⏭ Skipped`, `❓ No trade`, `🔕 Snooze 4h`) write the same record; the destination chat id is derived from the authorized callback update.
+Record a trader acknowledgement for a stored alert. One record per `(alertId, chatId)` pair; re-acknowledgements update the action/notes instead of appending. Requires `admin.operator` and `ENABLE_FIRESTORE_ALERT_STORAGE=true`. The `chatId` is never returned in any response. Telegram inline-keyboard buttons (`✅ Took`, `⏭ Skipped`, `❓ No trade`, `🔕 Snoozed`) write the same record; the destination chat id is derived from the authorized callback update. `snoozed` records snooze intent only and does not schedule or suppress alerts.
 
 **Request Body:**
 ```json

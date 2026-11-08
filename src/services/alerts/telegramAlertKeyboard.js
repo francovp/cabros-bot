@@ -60,7 +60,7 @@ const BUTTON_LABELS = Object.freeze({
 	[ACTION_TAKE]: '✅ Took',
 	[ACTION_SKIP]: '⏭ Skipped',
 	[ACTION_NO_TRADE]: '❓ No trade',
-	[ACTION_SNOOZE]: '🔕 Snooze 4h',
+	[ACTION_SNOOZE]: '🔕 Snoozed',
 });
 
 function buildReplyMarkup({ alertId, hasEnrichment = true, includeReplay = true, includeAcknowledgements = false } = {}) {
