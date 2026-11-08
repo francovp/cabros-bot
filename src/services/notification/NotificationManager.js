@@ -620,9 +620,7 @@ class NotificationManager {
 		// cannot reset backoff/attempts.
 		const gate = evaluateDeliveryGate(alert, options);
 		if (gate.suppress) {
-			console.info(
-				`[NotificationManager] Suppressed by market calendar: exchange=${gate.exchange} reason=${gate.reason} state=${gate.sessionState && gate.sessionState.state}`,
-			);
+			console.info('[NotificationManager] Suppressed by market calendar', gate.reason, gate.sessionState && gate.sessionState.state);
 			if (!options.isRedrive && notificationRedriveService.isEnabled()) {
 				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(
 					{ ...alert, _marketCalendarGate: { suppress: true, reason: gate.reason, sessionState: gate.sessionState, exchange: gate.exchange } },
@@ -691,9 +689,7 @@ class NotificationManager {
 		// error.
 		const gate = evaluateDeliveryGate(alert, options);
 		if (gate.suppress) {
-			console.info(
-				`[NotificationManager] Suppressed by market calendar: exchange=${gate.exchange} reason=${gate.reason} state=${gate.sessionState && gate.sessionState.state}`,
-			);
+			console.info('[NotificationManager] Suppressed by market calendar', gate.reason, gate.sessionState && gate.sessionState.state);
 			const candidateChannels = enabledChannels.length > 0
 				? enabledChannels.map((ch) => ch.name)
 				: Array.from(this.channels.keys());
