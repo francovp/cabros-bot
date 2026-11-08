@@ -2017,19 +2017,26 @@ function runScheduledSweep() {
 		return undefined;
 	}
 
-	const sweepPromise = evaluatePendingOutcomes()
-		.then(async (sweepResult) => {
-			try {
-				const firestore = AlertStorageService.getFirestore();
-				if (firestore) {
-					await dailyRollupService.rollupOutcomesDaily({ firestore });
-				}
-			} catch (rollupErr) {
-				console.warn('[SignalOutcomeService] Daily outcome rollup failed:', rollupErr.message);
-			}
+	if (activeSweepPromise) {
+		return activeSweepPromise;
+	}
+
+	const sweepPromise = (async () => {
+		const sweepResult = await evaluatePendingOutcomes();
+		if (sweepResult && sweepResult.skipped && sweepResult.reason === 'already_evaluating') {
 			return sweepResult;
-		})
-		.then(() => persistWorkerHeartbeat())
+		}
+		try {
+			const firestore = AlertStorageService.getFirestore();
+			if (firestore && dailyRollupService.isOutcomeRollupEnabled()) {
+				await dailyRollupService.rollupOutcomesDaily({ firestore });
+			}
+		} catch (rollupErr) {
+			console.warn('[SignalOutcomeService] Daily outcome rollup failed:', rollupErr.message);
+		}
+		await persistWorkerHeartbeat();
+		return sweepResult;
+	})()
 		.catch((err) => {
 			console.warn('[SignalOutcomeService] Scheduled worker sweep failed:', err.message);
 		})
@@ -4157,4 +4164,5 @@ module.exports = {
 	isUsMarketHalfDay,
 	isUsMarketHoliday,
 	_resetForTesting,
+	_runScheduledSweepForTesting: runScheduledSweep,
 };

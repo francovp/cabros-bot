@@ -445,6 +445,30 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 			rollupSpy.mockRestore();
 		});
 
+		it('keeps runScheduledSweep single-flight and reuses activeSweepPromise on concurrent ticks', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'worker';
+
+			let resolveSweep;
+			const sweepBlocker = new Promise((resolve) => {
+				resolveSweep = resolve;
+			});
+
+			const dailyRollupService = require('../../src/services/storage/SignalOutcomeDailyRollupService');
+			const rollupSpy = jest.spyOn(dailyRollupService, 'rollupOutcomesDaily').mockReturnValue(sweepBlocker);
+
+			const p1 = SignalOutcomeService._runScheduledSweepForTesting();
+			const p2 = SignalOutcomeService._runScheduledSweepForTesting();
+
+			expect(p1).toBe(p2);
+
+			resolveSweep({ success: true });
+			await p1;
+			rollupSpy.mockRestore();
+			SignalOutcomeService._resetForTesting();
+		});
+
 		it('persists safe worker heartbeat counters for cross-process inspection', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';

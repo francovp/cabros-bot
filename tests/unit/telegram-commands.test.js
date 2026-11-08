@@ -1300,6 +1300,38 @@ describe('Telegram TradingView commands', () => {
 			expect(reply).toContain('75\\.0% acierto');
 		});
 
+		it('splits long trend responses across multiple messages to stay within Telegram character limits', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const points = Array.from({ length: 100 }, (_, i) => ({
+				date: `2026-0${Math.floor(i / 28) + 1}-${String((i % 28) + 1).padStart(2, '0')}`,
+				window: '1D',
+				bucket: 'all',
+				sampleSize: 10,
+				wins: 7,
+				losses: 3,
+				hitRatePercent: 70.0,
+				avgMfe: 2.5,
+				avgMae: -0.8,
+				finalized: true,
+			}));
+			signalOutcomeService.getOutcomesTrend = jest.fn().mockResolvedValue({
+				success: true,
+				window: '1D',
+				bucket: 'all',
+				trend: points,
+			});
+			const context = buildContext('/outcomes trend 100');
+
+			await outcomesCommand(context);
+
+			expect(context.reply.mock.calls.length).toBeGreaterThan(1);
+			for (const call of context.reply.mock.calls) {
+				const message = call[0];
+				expect(message.length).toBeLessThanOrEqual(4096);
+				expect(call[1]).toEqual({ parse_mode: 'MarkdownV2' });
+			}
+		});
+
 		it('replies with friendly empty state when /outcomes trend has no snapshots', async () => {
 			signalOutcomeService.isEnabled.mockReturnValue(true);
 			signalOutcomeService.getOutcomesTrend = jest.fn().mockResolvedValue({

@@ -784,17 +784,30 @@ const outcomesCommand = async (context) => {
 				);
 				return;
 			}
-			const lines = [
-				`*📈 Tendencia de resultados \\(últimos ${days} días, ventana 1D\\)*`,
-				'',
-			];
-			trend.forEach((point) => {
+			const header = `*📈 Tendencia de resultados \\(últimos ${days} días, ventana 1D\\)*\n\n`;
+			const chunks = [];
+			let currentChunk = header;
+
+			for (const point of trend) {
 				const rate = point.hitRatePercent !== null ? `${escapeOutcomeText(point.hitRatePercent.toFixed(1))}%` : 'n/d';
 				const mfe = point.avgMfe !== null ? `${escapeOutcomeText(`${point.avgMfe >= 0 ? '+' : ''}${point.avgMfe.toFixed(1)}%`)}` : 'n/d';
 				const mae = point.avgMae !== null ? `${escapeOutcomeText(`${point.avgMae.toFixed(1)}%`)}` : 'n/d';
-				lines.push(`• *${escapeOutcomeText(point.date)}*: ${rate} acierto \\(${point.wins}/${point.sampleSize}\\) \\| MFE: ${mfe} \\| MAE: ${mae}`);
-			});
-			await context.reply(lines.join('\n'), { parse_mode: 'MarkdownV2' });
+				const line = `• *${escapeOutcomeText(point.date)}*: ${rate} acierto \\(${point.wins}/${point.sampleSize}\\) \\| MFE: ${mfe} \\| MAE: ${mae}\n`;
+
+				if (currentChunk.length + line.length > 4000) {
+					chunks.push(currentChunk.trimEnd());
+					currentChunk = line;
+				} else {
+					currentChunk += line;
+				}
+			}
+			if (currentChunk.trim()) {
+				chunks.push(currentChunk.trimEnd());
+			}
+
+			for (const chunk of chunks) {
+				await context.reply(chunk, { parse_mode: 'MarkdownV2' });
+			}
 			return;
 		}
 
