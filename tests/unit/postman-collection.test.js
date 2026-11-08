@@ -2645,7 +2645,7 @@ describe('CI coverage guards (Postman collection and README endpoints)', () => {
 	it('documents request-ID echo and omitted variants on every documented non-probe API operation (issue #1272)', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const openapi = JSON.parse(fs.readFileSync(openapiPath, 'utf8'));
-		const probeRoutes = ['/healthcheck', '/ready'];
+		const probeRoutes = ['/healthcheck', '/ready', '/livez', '/readyz'];
 
 		const allItems = collectRequestsAndSavedExamples(collection.item);
 		const requestItems = collectRequestItems(collection.item);

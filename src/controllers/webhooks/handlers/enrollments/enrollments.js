@@ -39,10 +39,15 @@ async function listEnrollments(req, res) {
 			}, { req });
 		}
 
+		const includeChatIdsQuery = req.query && req.query.includeChatIds;
+		if (includeChatIdsQuery !== undefined && !['true', 'false'].includes(includeChatIdsQuery)) {
+			return sendErrorFrom(res, 400, {
+				error: 'Invalid includeChatIds. Use true or false.', code: 'INVALID_REQUEST',
+			}, { req });
+		}
 		const adminRole = req && req.adminRole;
 		const includeChatIds = adminRole === ADMIN_OPERATOR
-			&& req.query
-			&& req.query.includeChatIds === 'true';
+			&& includeChatIdsQuery === 'true';
 
 		let payload;
 		try {

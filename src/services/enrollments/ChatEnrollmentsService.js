@@ -23,6 +23,9 @@
 const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 const { initializeFirebaseAdminApp } = require('../storage/firebaseAdminCredentials');
+const { firestoreWriteMetricsService } = require('../storage/FirestoreWriteMetricsService');
+const { classifyFirestoreError } = require('../storage/firestoreErrorCategories');
+const { normalizeSymbol } = require('../watchlist/WatchlistService');
 
 const COLLECTION_NAME = 'chatEnrollments';
 const DEFAULT_RETENTION_DAYS = 90;
@@ -51,6 +54,18 @@ function withTimeout(work, timeoutMs) {
 		timer = setTimeout(() => reject(new Error('Firestore deadline exceeded')), timeoutMs);
 		timer.unref?.();
 	})]).finally(() => clearTimeout(timer));
+}
+
+async function readWithMetrics(work) {
+	let result;
+	try {
+		result = await withTimeout(work(), READ_TIMEOUT_MS);
+	} catch (error) {
+		try { firestoreWriteMetricsService.recordReadFailure('chatEnrollments', classifyFirestoreError(error)); } catch { /* Monitoring must remain fail-open. */ }
+		throw error;
+	}
+	try { firestoreWriteMetricsService.recordReadSuccess('chatEnrollments'); } catch { /* Monitoring must remain fail-open. */ }
+	return result;
 }
 
 function isEnabled() {
@@ -116,11 +131,8 @@ function normalizeWatchlist(watchlist) {
 	const cleaned = [];
 	const seen = new Set();
 	for (const raw of watchlist) {
-		if (typeof raw !== 'string') continue;
-		const symbol = raw.trim().toUpperCase();
-		if (!symbol) continue;
-		if (symbol.length > 30) continue;
-		if (!/^[A-Z0-9._-]+$/.test(symbol)) continue;
+		let symbol;
+		try { symbol = normalizeSymbol(raw); } catch { continue; }
 		if (seen.has(symbol)) continue;
 		seen.add(symbol);
 		cleaned.push(symbol);
@@ -209,7 +221,7 @@ async function readFirestore(chatId) {
 	if (!db) return null;
 	try {
 		const docRef = db.collection(COLLECTION_NAME).doc(chatId);
-		const snapshot = await withTimeout(docRef.get(), READ_TIMEOUT_MS);
+		const snapshot = await readWithMetrics(() => docRef.get());
 		firestoreHealth = 'ready';
 		if (!snapshot.exists) return null;
 		const data = snapshot.data();
@@ -257,10 +269,18 @@ async function writeFirestore(chatId, record) {
 		};
 		let persistedRecord = record;
 		await withTimeout(db.runTransaction(async (transaction) => {
-			const snapshot = await transaction.get(docRef);
+			const snapshot = await readWithMetrics(() => transaction.get(docRef));
 			const prior = snapshot.exists && snapshot.data();
 			const priorTime = prior?.enrolledAt?.toMillis?.();
-			if (Number.isFinite(priorTime) && priorTime > record.enrolledAt) return;
+			if (Number.isFinite(priorTime) && priorTime > record.enrolledAt) {
+				persistedRecord = {
+					chatId, chatType: normalizeChatType(prior.chatType) || 'private',
+					language: normalizeLanguage(prior.language), watchlist: normalizeWatchlist(prior.watchlist) || [],
+					refSource: normalizeRefSource(prior.refSource), enrolledAt: priorTime,
+					expiresAt: prior.expiresAt?.toMillis?.() ?? null, pendingFields: [],
+				};
+				return;
+			}
 			const nextPayload = { ...payload };
 			const priorExpiry = prior?.expiresAt?.toMillis?.();
 			if (prior && (!Number.isFinite(priorExpiry) || priorExpiry > Date.now())) {
@@ -284,7 +304,7 @@ async function listFirestore(limit) {
 	const db = getFirestore();
 	if (!db) return null;
 	try {
-		const snapshot = await withTimeout(db.collection(COLLECTION_NAME).limit(limit).get(), READ_TIMEOUT_MS);
+		const snapshot = await readWithMetrics(() => db.collection(COLLECTION_NAME).limit(limit).get());
 		const records = [];
 		snapshot.forEach((doc) => {
 			const data = doc.data();

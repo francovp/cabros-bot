@@ -100,6 +100,16 @@ describe('GET /api/enrollments', () => {
 		} finally { spy?.mockRestore(); }
 	});
 
+	it.each(['invalid', '', 'true&includeChatIds=false', 'true&includeChatIds[]=false'])(
+		'rejects invalid or repeated includeChatIds %s', async (value) => {
+			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+			const response = await request(buildApp()).get(`/api/enrollments?includeChatIds=${value}`)
+				.set('x-api-key', 'test-key');
+			expect(response.status).toBe(400);
+			expect(response.body).toMatchObject({ success: false, code: 'INVALID_REQUEST', retryable: false });
+		},
+	);
+
 	it('rejects requests without API key', async () => {
 		process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
 

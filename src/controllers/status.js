@@ -39,6 +39,7 @@ const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsApp
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const priceQuoteCache = require('../services/cache/PriceQuoteCache');
 const { resolveStartupJitterMs } = require('../lib/startupJitter');
 const { getBackgroundTimerStats } = require('../lib/backgroundTimerRegistry');
 const { outcomeAnnotationService } = require('../services/alerts/outcomeAnnotationService');
@@ -61,10 +62,15 @@ const { getAdminAuthStatus } = require('../lib/adminAuth');
 const { getNotificationManager } = require('./webhooks/handlers/alert/alert');
 const {
 	getDeploymentCommit,
+	resolveDeploymentEnvironment,
 	getBuildInfo,
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
 } = require('../lib/deploymentEnvironment');
+const {
+	getEnvironmentBannerPayload,
+	isEnvironmentBannerEnabled,
+} = require('../lib/environmentBanner');
 const { getAggregateStats: getDiscordSourceRoutingAggregateStats } = require('../services/notification/discordSourceRouting');
 const {
 	getLastRunAt: getTestAlertLastRunAt,
@@ -112,19 +118,7 @@ function isPreview(env = process.env) {
 }
 
 function getEnvironment(env = process.env) {
-	if (env.SENTRY_ENVIRONMENT) {
-		return env.SENTRY_ENVIRONMENT;
-	}
-
-	if (isPreview(env)) {
-		return 'preview';
-	}
-
-	if (isProductionLikeEnvironment(env)) {
-		return 'production';
-	}
-
-	return env.NODE_ENV || 'development';
+	return resolveDeploymentEnvironment(env);
 }
 
 function getReadinessStatus({ enabled, configured }) {
@@ -660,12 +654,14 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			jobExecutionWorker: jobExecutionQueueStatus.enabled || process.env.JOB_EXECUTION_MODE === 'firestore-poller',
 			notificationRedrive: notificationRedriveService.isEnabled(),
 			alertSignalRepeatSuppression: signalRepeatCooldown.isEnabled(),
+			priceQuoteCache: priceQuoteCache.isEnabled(),
 			outcomeInformedDelivery: outcomeAnnotationService.isEnabled(),
 			alertCrossTimeframeSuppression: crossTimeframeCooldown.isEnabled(),
 			alertBurstAggregation: burstAggregator.isEnabled(),
 			alertHtfRender: runtimeConfig.ENABLE_ALERT_HTF_RENDER,
 			alertModeration: alertModeration.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			environmentBanner: isEnvironmentBannerEnabled(),
 			symbolAliasResolver: aliasResolver.isEnabled(),
 			userPriceAlerts: userPriceAlertService.isEnabled(),
 			alertFeedback: alertFeedbackStorageService.isEnabled(),
@@ -833,6 +829,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
 			},
+			priceQuoteCache: priceQuoteCache.getStatus(),
 			symbolAliasResolver: {
 				enabled: aliasResolver.isEnabled(),
 				totalEntries: aliasResolver.listAliases().length,
@@ -911,6 +908,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 				};
 			})(),
 			binanceOrderAudit: binanceOrderAuditService.getStatus(),
+			environmentBanner: getEnvironmentBannerPayload(env),
 			tradeLedger: tradeLedgerService.getStatus(),
 			symbolAnalysisStorage: symbolAnalysisStorageService.getStatus(),
 			testAlert: {

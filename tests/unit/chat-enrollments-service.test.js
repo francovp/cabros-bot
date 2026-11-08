@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const chatEnrollmentsService = require('../../src/services/enrollments/ChatEnrollmentsService');
+const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 
 describe('ChatEnrollmentsService', () => {
 	it('ships a Firestore TTL policy for enrollment retention', () => {
@@ -23,6 +24,7 @@ describe('ChatEnrollmentsService', () => {
 			CHAT_ENROLLMENT_RETENTION_DAYS: process.env.CHAT_ENROLLMENT_RETENTION_DAYS,
 		};
 		chatEnrollmentsService._resetForTesting();
+		firestoreWriteMetricsService.resetForTesting();
 		delete process.env.ENABLE_CHAT_ENROLLMENTS;
 		delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 		delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
@@ -32,6 +34,7 @@ describe('ChatEnrollmentsService', () => {
 
 	afterEach(() => {
 		chatEnrollmentsService._resetForTesting();
+		firestoreWriteMetricsService.resetForTesting();
 		for (const [key, value] of Object.entries(originalEnv)) {
 			if (value === undefined) delete process.env[key];
 			else process.env[key] = value;
@@ -137,6 +140,26 @@ describe('ChatEnrollmentsService', () => {
 	});
 
 	describe('enroll + getByChatId', () => {
+		it('returns the newer durable snapshot when clock skew skips the requested update', async () => {
+			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+			const durableTime = Date.now() + 60_000;
+			const durableExpiry = durableTime + 86_400_000;
+			const set = jest.fn();
+			chatEnrollmentsService._setFirestoreForTesting({
+				collection: () => ({ doc: () => ({}) }),
+				runTransaction: async (work) => work({
+					get: async () => ({ exists: true, data: () => ({ chatType: 'group', language: 'es',
+						watchlist: ['NASDAQ:NVDA'], refSource: 'stored', enrolledAt: { toMillis: () => durableTime },
+						expiresAt: { toMillis: () => durableExpiry } }) }), set,
+				}),
+			});
+			const result = await chatEnrollmentsService.enroll({ chatId: 42, language: 'en' });
+			expect(set).not.toHaveBeenCalled();
+			expect(result).toMatchObject({ chatId: '42', chatType: 'group', language: 'es',
+				watchlist: ['NASDAQ:NVDA'], refSource: 'stored', enrolledAt: durableTime });
+			expect(await chatEnrollmentsService.getByChatId(42)).toMatchObject({ language: 'es', enrolledAt: durableTime });
+			expect(chatEnrollmentsService.getStorageStatus()).toMatchObject({ ready: true, mode: 'durable' });
+		});
 		it.each([false, true])('keeps newer cached preferences when an older read resolves (write fails: %s)', async (failWrite) => {
 			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
 			let releaseRead;
@@ -372,6 +395,26 @@ describe('ChatEnrollmentsService', () => {
 	});
 
 	describe('getStorageStatus', () => {
+		it.each(['document', 'list'])('records sanitized %s read failures and recovery in shared health', async (operation) => {
+			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+			const get = jest.fn().mockRejectedValueOnce(Object.assign(new Error('private-provider-detail'), { code: 7 }))
+				.mockResolvedValueOnce({ exists: false, size: 0, forEach: () => {} });
+			chatEnrollmentsService._setFirestoreForTesting({ collection: () => ({
+				doc: () => ({ get }), limit: () => ({ get }),
+			}) });
+			const read = () => operation === 'document'
+				? chatEnrollmentsService.getByChatId(42) : chatEnrollmentsService.getSummary();
+			await read();
+			expect(firestoreWriteMetricsService.getReadSnapshot()).toMatchObject({
+				readHealth: 'degraded', readsFailed: 1, lastErrorCategory: 'permission_denied',
+				byDomain: { chatEnrollments: { failure: 1 } },
+			});
+			expect(JSON.stringify(firestoreWriteMetricsService.getReadSnapshot())).not.toContain('private-provider-detail');
+			await read();
+			expect(firestoreWriteMetricsService.getReadSnapshot()).toMatchObject({
+				readHealth: 'healthy', readsFailed: 1, readsSucceeded: 1, consecutiveReadFailures: 0,
+			});
+		});
 		it('keeps Firestore unverified until a successful operation and degrades after a failed read', async () => {
 			process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
 			chatEnrollmentsService._setFirestoreForTesting({ collection: () => ({

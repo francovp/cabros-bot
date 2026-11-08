@@ -225,7 +225,7 @@ describe('OpenAPI contract', () => {
 			'GET /api/trading/binance/orders', 'GET /api/trading/binance/orders/audit', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders',
 			'GET /api/trading/binance/pause', 'POST /api/trading/binance/pause', 'POST /api/trading/binance/resume',
 			'GET /api/trading/binance/reconciliation', 'GET /api/trading/binance/reconciliation/{reservationId}', 'POST /api/trading/binance/reconciliation/{reservationId}',
-			'GET /api/status', 'GET /api/capabilities', 'GET /api/enrollments',
+			'GET /api/status', 'GET /api/capabilities', 'GET /api/enrollments', 'GET /api/metrics',
 			'POST /api/symbols/resolve', 'GET /api/symbols/aliases',
 			'POST /api/trading/binance/orders/preview', 'GET /api/trading/binance/account/balances',
 			'GET /api/trading/positions', 'GET /api/trading/pnl/summary', 'GET /api/trading/trades',
@@ -254,13 +254,18 @@ describe('OpenAPI contract', () => {
 			'POST /api/trading/binance/reconciliation/{reservationId}',
 		]);
 
+		// Public operations opt out of API-key auth by declaring `security: []`.
+		const publicOperations = new Set([
+			'GET /api/banner',
+		]);
+
 		for (const operation of operations) {
 			const operationKey = `${operation.method || 'UNKNOWN'} ${operation.path || ''}`;
 			if (unauthenticatedOperations.has(operationKey)) {
 				expect(operation.security).toBeUndefined();
 				continue;
 			}
-			const expected = [{ ApiKeyHeader: [] }, { ApiKeyQuery: [] }];
+			const expected = publicOperations.has(operationKey) ? [] : [{ ApiKeyHeader: [] }, { ApiKeyQuery: [] }];
 			if (binanceTradingOperations.has(operationKey)) {
 				expected.unshift({ BinanceTradingApiKeyHeader: [] }, { AdminApiKeyHeader: [] });
 			} else if (firebaseAdminOperations.has(operationKey)) {
@@ -292,6 +297,7 @@ describe('OpenAPI contract', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const expectedRoles = {
 			'GET /api/status': 'admin.viewer',
+			'GET /api/metrics': 'admin.viewer',
 			'GET /api/outcomes': 'admin.viewer',
 			'GET /api/outcomes/summary': 'admin.viewer',
 			'GET /api/outcomes/calibration': 'admin.viewer',
@@ -1037,7 +1043,7 @@ describe('status dependency contract drift', () => {
 
 	it('documents XRequestIdHeader parameter on every non-probe API operation (issue #1272)', () => {
 		const spec = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
-		const probeRoutes = ['/healthcheck', '/ready'];
+		const probeRoutes = ['/healthcheck', '/ready', '/livez', '/readyz'];
 		const missing = [];
 
 		for (const [routePath, operations] of Object.entries(spec.paths || {})) {

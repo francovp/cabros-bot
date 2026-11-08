@@ -185,6 +185,9 @@ describe('validate-env', () => {
 		process.env.TRADINGVIEW_MCP_MAX_RETRIES = '1.5';
 		process.env.TRADINGVIEW_MCP_CACHE_TTL_MS = '9999';
 		process.env.GROUNDING_MAX_SOURCES = '0';
+		process.env.PRICE_CACHE_TTL_MS_CRYPTO = '500';
+		process.env.PRICE_CACHE_TTL_MS_EQUITY = '999999';
+		process.env.PRICE_CACHE_MAX_ENTRIES_PER_BUCKET = '0';
 		process.env.REQUEST_TIMEOUT_MS = '500';
 
 		const variables = validateEnv().map((warning) => warning.variable);
@@ -194,6 +197,9 @@ describe('validate-env', () => {
 			'TRADINGVIEW_MCP_MAX_RETRIES',
 			'TRADINGVIEW_MCP_CACHE_TTL_MS',
 			'GROUNDING_MAX_SOURCES',
+			'PRICE_CACHE_TTL_MS_CRYPTO',
+			'PRICE_CACHE_TTL_MS_EQUITY',
+			'PRICE_CACHE_MAX_ENTRIES_PER_BUCKET',
 			'REQUEST_TIMEOUT_MS',
 		]));
 	});

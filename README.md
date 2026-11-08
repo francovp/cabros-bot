@@ -155,6 +155,8 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | :--- | :--- | :--- | :--- |
 | `GET` | `/healthcheck` | Process liveness probe; `?deep=true` = channel readiness, `?depth=readiness` = dependency report (advisory, always 200) | [API Reference](docs/api-reference.md#get-healthcheck) |
 | `GET` | `/ready` | Bootstrap gate; `?depth=dependencies` adds a fail-closed dependency probe | [API Reference](docs/api-reference.md#get-ready) |
+| `GET` | `/livez` | Public web process liveness, no dependency I/O | [API Reference](docs/api-reference.md#get-livez-and-get-readyz) |
+| `GET` | `/readyz` | Public web bootstrap + drain + cached dependency readiness (200/503) | [API Reference](docs/api-reference.md#get-livez-and-get-readyz) |
 | `GET` | `/api/status` | System capabilities, deployment build metadata (`commit`, `full`, `repo`, `environment`, `uptimeSeconds`), and dependency matrix | [API Reference](docs/api-reference.md#get-apistatus) |
 | `GET` | `/api/public/status` | Safe public subset of capabilities & channel statuses | [API Reference](docs/api-reference.md#get-apipublicstatus) |
 | `POST` | `/api/webhook/alert` | Ingest and dispatch alert to configured channels | [Webhook Alerts](docs/webhooks.md#post-apiwebhookalert) |
@@ -852,7 +854,7 @@ Every protected `/api` response (success and throttled) carries the standard `X-
 | `X-RateLimit-Remaining` | Requests remaining in the current window. Zero on a throttled response. |
 | `X-RateLimit-Reset` | Unix timestamp (seconds) when the current window resets. |
 
-Dedicated limits use independent per-endpoint buckets keyed by the existing API-key hash and trusted client IP. Heavy routes are expanded analysis, market scanner, symbol analysis, and news monitor; trading covers Binance order reads, writes, and previews; standard covers volume-confirmation; light covers `/api/status` and `/api/capabilities`. All webhook and news-monitor ingest requests also share an aggregate 1,000-request bucket per `RATE_LIMIT_WINDOW_MS`; mapped webhook tiers enforce both limits. Alert and message ingest use the aggregate bucket without an additional tier. Other routes use `RATE_LIMIT_WINDOW_MS` and `RATE_LIMIT_MAX`. Throttled (`429`) responses include the `Retry-After` header and the positive `retryAfterSeconds` field in the standard retryable `RATE_LIMITED` error envelope. `/healthcheck`, `/ready`, `/openapi.json`, `/docs`, and static assets are mounted before the rate limiter in `app.js` and are exempt.
+Dedicated limits use independent per-endpoint buckets keyed by the existing API-key hash and trusted client IP. Heavy routes are expanded analysis, market scanner, symbol analysis, and news monitor; trading covers Binance order reads, writes, and previews; standard covers volume-confirmation; light covers `/api/status` and `/api/capabilities`. All webhook and news-monitor ingest requests also share an aggregate 1,000-request bucket per `RATE_LIMIT_WINDOW_MS`; mapped webhook tiers enforce both limits. Alert and message ingest use the aggregate bucket without an additional tier. Other routes use `RATE_LIMIT_WINDOW_MS` and `RATE_LIMIT_MAX`. Throttled (`429`) responses include the `Retry-After` header and the positive `retryAfterSeconds` field in the standard retryable `RATE_LIMITED` error envelope. `/healthcheck`, `/ready`, `/livez`, `/readyz`, `/openapi.json`, `/docs`, and static assets are mounted before the rate limiter in `app.js` and are exempt.
 
 ## Architecture Overview
 
@@ -908,6 +910,35 @@ https://t.me/<bot>?startgroup=enroll
 
 `GET /api/enrollments` requires admin viewer access for bounded aggregate counts. Its optional `limit` accepts one positive decimal integer string (default 200, clamped to 1000); exponent, hex, fractional, empty, and repeated values return `400 INVALID_REQUEST`. Errors use the standard `success`, `error`, `code`, `requestId`, and `retryable` envelope. Re-enrollment preserves omitted language, watchlist, and referral preferences, including when a preliminary Firestore read fails. `partial=true` means more documents may exist beyond the scan limit, so `count` is not a total. An admin operator may add `includeChatIds=true` to view per-chat records. Deep-link enrollment does not grant command authorization. Deploy the `chatEnrollments.expiresAt` Firestore TTL policy from `firestore.indexes.json` before enabling durable storage.
 
+`includeChatIds` accepts a single `true` or `false`; invalid or repeated values return `400 INVALID_REQUEST`. Enrollment reads feed the shared Firestore read-health metrics with sanitized failure categories and recovery. When a newer durable enrollment supersedes an update, the response and cache reflect that stored record.
+
 ## License
 
 This project is licensed under the ISC License.
+
+### /precio quote cache
+
+Successful `/precio` quotes use a bounded process-local LRU cache. Repeated requests within the TTL skip provider calls and their Sentry spans; expired entries fetch again, and provider errors are never cached. Equity keys include the exchange. Crypto entries include the existing optional 24-hour ticker context and bare-price fallback. Each replica has its own cache, so replies may differ within the configured TTL; this cache is for chat quotes, not order execution or outcome pricing.
+
+| Remote Config parameter | Environment/default fallback | Bounds | Purpose |
+| --- | --- | --- | --- |
+| `PRICE_CACHE_TTL_MS_CRYPTO` | `15000` | `1000`–`600000` | Crypto quote TTL in milliseconds. |
+| `PRICE_CACHE_TTL_MS_EQUITY` | `60000` | `1000`–`600000` | Equity quote TTL in milliseconds. |
+| `PRICE_CACHE_MAX_ENTRIES_PER_BUCKET` | `256` | `1`–`10000` | Maximum entries per crypto/equity bucket. |
+
+All three are non-secret runtime tuning settings supported by Firebase Remote Config. Fresh published values override environment values; invalid values retain the environment/default fallback. `/api/status` and `/api/capabilities` expose `featureFlags.priceQuoteCache` and sanitized `dependencies.priceQuoteCache` counters and effective configuration. No credentials, destinations, startup gates, or authentication controls are added.
+
+### GET /api/metrics
+
+Protected Node.js process health endpoint. Requires admin API-key access or a Firebase ID token with the `admin.viewer` role. Reports memory bytes, cumulative CPU microseconds, event-loop lag in milliseconds, uptime in seconds, and Node.js/process metadata. Collection is lazy; no polling or sampling runs between requests.
+
+
+### Deployment environment banner
+
+`GET /api/banner` is a public read-only snapshot of `environment`, full `commit`, `name`, and nullable ISO 8601 `deployedAt` (host-provided commit date, never a deployment ID). Its environment resolver is shared with `/api/status`; it does not load provider readiness or credentials. Non-production `/admin` consoles display a sticky warning and a copy button for the selected backend origin.
+
+| Remote Config parameter | Environment/default fallback | Purpose |
+| --- | --- | --- |
+| `ENABLE_ENVIRONMENT_BANNER` | `true` | Emit optional `X-Cabros-Environment`, eight-character `X-Cabros-Commit` (when available), and `X-Cabros-Service` response headers. Rechecked on every request, including errors and healthchecks. |
+
+The template uses `useInAppDefault: true` to preserve deployment fallbacks until an explicit remote value is published. This non-secret display setting controls response headers; the public snapshot and console remain available when headers are disabled. Existing `ENABLE_MESSAGE_FOOTER_METADATA` independently controls alert footer metadata, including `(env: preview @ abcdef12)` in non-production environments. Production messages keep their current footer. Credentials, authentication, security controls, destinations, and startup gates remain environment-only.

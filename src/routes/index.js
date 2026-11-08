@@ -59,6 +59,7 @@ const {
 const { validateApiKey } = require('../lib/auth');
 const { validateRequest } = require('../lib/requestValidator');
 const { getApiStatus } = require('../controllers/status');
+const { getMetrics } = require('../controllers/observability/metrics');
 const {
 	postBinanceOrder,
 	getBinanceOrders,
@@ -201,10 +202,20 @@ function getRoutes(botOrGetter) {
 
 	router.get('/status', ...adminRead, getApiStatus);
 	router.get('/capabilities', ...adminRead, getApiStatus);
+	router.get('/metrics', ...adminRead, getMetrics);
 
 	const { getSelfTest, postSelfTestRun } = require('../controllers/diagnostics/selftest');
 	router.get('/selftest', ...adminRead, getSelfTest(botOrGetter));
 	router.post('/selftest/run', ...adminWrite, postSelfTestRun(botOrGetter));
+
+	// Public, unauthenticated deployment banner snapshot for external
+	// status pages / badge generators. Mounted under /api so the path
+	// appears in the OpenAPI contract but explicitly opts out of API-key
+	// auth via `security: []` (see src/openapi/openapi.json).
+	const { getEnvironmentBannerPayload } = require('../lib/environmentBanner');
+	router.get('/banner', (req, res) => {
+		return res.status(200).json(getEnvironmentBannerPayload());
+	});
 
 	return router;
 }

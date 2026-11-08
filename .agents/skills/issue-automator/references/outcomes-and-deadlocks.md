@@ -2,6 +2,10 @@
 
 This reference defines the required outcomes and the deadlock policy for issue automation.
 
+## Decision reconciliation exception
+
+SKILL.md **Decision Reconciliation and Queue Recovery** takes precedence for an explicitly requested decision batch or bounded exhausted-queue recovery. Comments and label reconciliation do not start implementation or consume its max-2 write budget. Finish every assigned decision item, preserve unresolved real prerequisites, and continue independent eligible work. Routine implementation retains its stop/write limits. `NEEDS_USER` ends work on the affected item, not the entire explicit decision batch.
+
 ## Outcome Contract
 
 Every processed issue must end with exactly one of these outcomes:
@@ -41,6 +45,6 @@ Use `SHIPPED` for direct merges. Use `IN_REVIEW` only when the PR is intentional
    - Failures that prevent safe work in general.
 7. **Resolution**: Re-evaluate historical `GLOBAL_BLOCKED` labels against current evidence. Docs-only and preview-only exceptions in SKILL.md take precedence. Retry an independent blocker once; use a stable fingerprint to avoid duplicate GitHub comments or notifications. Release only claims owned by this session. If a real blocker remains and GitHub works, advance with `SKIPPED_ISSUES`; if GitHub access is gone, stop with `GLOBAL_BLOCKED`.
 8. **Stale-deploy / bounded-retry recovery**: Resolve the URL and SHA with `scripts/get-pr-deployment-url.sh <PR_NUMBER> --details`. Do not probe Railway fallback or treat its URL as proof. Use SKILL.md Step 6.5 for one OpenClaw recovery attempt; re-resolve and run `scripts/verify-preview.sh` against the selected deployment and PR head. Only report verified recovery after health and exact-head checks. If unavailable, apply the preview-only exception when every other gate passes. A genuinely missing required environment variable remains an independent operator prerequisite; identify its name, never its value.
-9. **Filtered labels**: `get-oldest-issue.sh` filters `need manual PR deploy` and `NEEDS_USER` from its normal cursor; SKILL.md separately inspects relevant labeled items when new evidence or explicit assignment warrants it. `brainstorming` / `brainstorm` items remain out of scope.
+9. **Filtered labels**: `get-oldest-issue.sh` filters manual-deploy and user-handoff aliases from its normal cursor; `--reconsider` exposes them for a bounded audit. SKILL.md requires reassessment on explicit assignment, new evidence, or exhausted-queue recovery, with durable decisions and duplicate suppression. `--priority-order` uses numeric tiers before the named fallback tiers; it never changes labels. `brainstorming` / `brainstorm` items remain out of scope.
 10. **Firebase Hosting quota**: `RESOURCE_EXHAUSTED` / `channel quota reached` errors from Firebase Hosting preview channels are NOT a global blocker. Run `node scripts/cleanup-preview-channels.js --apply` locally to reclaim channels and retry; see SKILL.md for the exact command.
 11. **Limits**: Never retry indefinitely. After a non-skip outcome (`IN_REVIEW` with writes, `DONE`, `SHIPPED`, `SYNCED`, or write-producing `GLOBAL_BLOCKED`), stop the run — do not process further issues. `CLAIMED`, `LOCAL_DEADLOCK`, `GLOBAL_BLOCKED` no-writes (still blocked), and `IN_REVIEW` no-writes loop freely in a skip loop until a non-skip outcome — an unblocked PR `SHIPPED` or `IN_REVIEW` — or no issues remain. `CLAIMED` skips also loop freely: a claimed issue is re-evaluated each session so stale claims can be taken over.

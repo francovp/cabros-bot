@@ -147,6 +147,13 @@
       "description": "Enable metadata footer on outgoing messages",
       "valueType": "BOOLEAN"
     },
+    "ENABLE_ENVIRONMENT_BANNER": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Enable optional X-Cabros-* deployment response headers. Non-secret runtime display setting; useInAppDefault preserves the environment/default fallback (true). Does not gate the public snapshot or footer metadata.",
+      "valueType": "BOOLEAN"
+    },
     "GROUNDING_MAX_SOURCES": {
       "defaultValue": {
         "value": "3"
@@ -435,12 +442,16 @@
       "valueType": "NUMBER"
     },
     "SCANNER_ATR_MULTIPLIER": {
-      "defaultValue": { "value": "2" },
+      "defaultValue": {
+        "value": "2"
+      },
       "description": "ATR multiple for ranked scanner sizing stop distance (0.1-10)",
       "valueType": "NUMBER"
     },
     "SCANNER_ACCOUNT_RISK_PCT": {
-      "defaultValue": { "value": "1" },
+      "defaultValue": {
+        "value": "1"
+      },
       "description": "Target percent of capital at risk for ranked scanner hints (0.01-5)",
       "valueType": "NUMBER"
     },
@@ -966,6 +977,27 @@
       "conditionalValues": {},
       "description": "Enable durable Firestore persistence for alert subscriber webhooks. Ships with useInAppDefault so publishing this template yields NO remote override for this key and the deployment value decides. Without it the Admin SDK reports the defaultValue with source 'remote', which would silently override render.yaml.",
       "valueType": "BOOLEAN"
+    },
+    "PRICE_CACHE_TTL_MS_CRYPTO": {
+      "defaultValue": {
+        "value": "15000"
+      },
+      "description": "Process-local TTL in milliseconds for cached /precio crypto (Binance) quotes",
+      "valueType": "NUMBER"
+    },
+    "PRICE_CACHE_TTL_MS_EQUITY": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Process-local TTL in milliseconds for cached /precio equity (Twelve Data) quotes",
+      "valueType": "NUMBER"
+    },
+    "PRICE_CACHE_MAX_ENTRIES_PER_BUCKET": {
+      "defaultValue": {
+        "value": "256"
+      },
+      "description": "Maximum number of cached entries per bucket in the /precio price cache (LRU eviction)",
+      "valueType": "NUMBER"
     }
   },
   "version": {
