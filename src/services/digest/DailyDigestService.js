@@ -140,8 +140,16 @@ class DailyDigestService {
 		} catch (err) { console.warn('[DailyDigest] summarizeOutcomes failed:', err.message); }
 		try {
 			if (typeof outcomeStorage.listOutcomes === 'function') {
-				const listed = await outcomeStorage.listOutcomes({ from: fromISO, to: toISO, window: '1D', limit: 500 });
-				outcomes = Array.isArray(listed?.outcomes) ? listed.outcomes : (Array.isArray(listed) ? listed : []);
+				// listOutcomes clamps to MAX_LIMIT 100 per page; page through the
+				// whole previous-day cohort before ranking winners.
+				let before;
+				for (let page = 0; page < 10; page += 1) {
+					const listed = await outcomeStorage.listOutcomes({ from: fromISO, to: toISO, window: '1D', limit: 100, ...(before ? { before } : {}) });
+					const arr = Array.isArray(listed?.outcomes) ? listed.outcomes : (Array.isArray(listed) ? listed : []);
+					outcomes.push(...arr);
+					if (!listed?.hasMore || !listed?.nextBefore || arr.length === 0) break;
+					before = listed.nextBefore;
+				}
 			}
 		} catch (err) { console.warn('[DailyDigest] listOutcomes failed:', err.message); }
 		// Scanner hits come from persisted outcome records, not alert docs.

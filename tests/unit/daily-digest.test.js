@@ -283,3 +283,30 @@ describe('DailyDigestService ranking units', () => {
 		expect(agg.topWinners.map((o) => o.symbol)).toEqual(['REAL']);
 	});
 });
+
+describe('DailyDigestService pagination', () => {
+	const savedEnv = { ...process.env };
+	beforeEach(() => {
+		process.env.ENABLE_DAILY_DIGEST = 'true';
+		process.env.ENABLE_FIRESTORE_DIGEST_RUNS = 'true';
+		process.env.TELEGRAM_DIGEST_CHAT_ID = '-100123';
+	});
+	afterEach(() => { process.env = { ...savedEnv }; jest.clearAllMocks(); });
+
+	test('pages through outcomes cursor so older high-R signals are ranked', async () => {
+		const listOutcomes = jest.fn()
+			.mockResolvedValueOnce({ outcomes: [{ symbol: 'NEW', exchange: 'BINANCE', outcomes: { '1D': { status: 'evaluated', rMultiple: 0.5 } } }], hasMore: true, nextBefore: 'cursor-2' })
+			.mockResolvedValueOnce({ outcomes: [{ symbol: 'OLDWIN', exchange: 'BINANCE', outcomes: { '1D': { status: 'evaluated', rMultiple: 3.0 } } }], hasMore: false, nextBefore: null });
+		const svc = new DailyDigestService({
+			getAlertStorage: () => ({ summarizeAlerts: jest.fn(async () => ({ totalAlerts: 0, bySource: {}, delivery: { byChannel: {} } })) }),
+			getOutcomeStorage: () => ({
+				summarizeOutcomes: jest.fn(async () => ({ windows: { '1D': { hitRatePercent: 50 } } })),
+				listOutcomes,
+			}),
+		});
+		const agg = await svc.aggregateForDay(previousUtcDay(new Date('2026-11-08T13:30:00Z')));
+		expect(listOutcomes).toHaveBeenCalledTimes(2);
+		expect(listOutcomes.mock.calls[1][0].before).toBe('cursor-2');
+		expect(agg.topWinners[0].symbol).toBe('OLDWIN');
+	});
+});
