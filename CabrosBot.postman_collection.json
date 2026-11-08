@@ -30222,6 +30222,178 @@
       ]
     },
     {
+      "name": "Pre-Trade Check",
+      "description": "GET /api/pretrade-check composes a decision-support snapshot (current price + recent hit-rate) for a single symbol so a trader can decide without leaving the chat. Requires admin.viewer authorization (API key or Firebase bearer).",
+      "item": [
+        {
+          "name": "GET Pre-Trade Check (crypto)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh1272-test-001",
+                "type": "text",
+                "description": "Optional client-supplied correlation ID (1-128 printable ASCII). Returned in the X-Request-Id response header on every non-exempt route."
+              }
+            ],
+            "description": "Returns a pre-trade snapshot for BINANCE:BTCUSDT (current Binance price + 7-day hit-rate).",
+            "url": {
+              "raw": "{{baseUrl}}/api/pretrade-check?symbol=BINANCE:BTCUSDT",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pretrade-check"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BINANCE:BTCUSDT"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"pretradeCheck\": {\n    \"symbol\": \"BINANCE:BTCUSDT\",\n    \"normalized\": {\n      \"symbol\": \"BTCUSDT\",\n      \"exchange\": \"BINANCE\",\n      \"assetClass\": \"crypto\"\n    },\n    \"price\": {\n      \"available\": true,\n      \"price\": 65000,\n      \"assetClass\": \"crypto\",\n      \"symbol\": \"BTCUSDT\"\n    },\n    \"hitRate\": {\n      \"available\": true,\n      \"hitRatePercent\": 66.67,\n      \"winWindows\": 2,\n      \"evaluatedWindows\": 3,\n      \"sampleSize\": 5,\n      \"windowDays\": 7\n    },\n    \"requestId\": null,\n    \"generatedAt\": \"2026-08-30T12:00:00.000Z\",\n    \"durationMs\": 142\n  }\n}"
+            },
+            {
+              "name": "400 Invalid Symbol",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid symbol. Use a TradingView-style symbol like BINANCE:BTCUSDT or a bare ticker (BTCUSDT, NVDA).\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing API key\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A valid X-Request-Id must be echoed back verbatim.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id response header matches supplied value\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh1272-test-001\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Pre-Trade Check (equity)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Returns a pre-trade snapshot for NASDAQ:NVDA (current Twelve Data quote + 7-day hit-rate).",
+            "url": {
+              "raw": "{{baseUrl}}/api/pretrade-check?symbol=NASDAQ:NVDA",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pretrade-check"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "NASDAQ:NVDA"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"pretradeCheck\": {\n    \"symbol\": \"NASDAQ:NVDA\",\n    \"normalized\": {\n      \"symbol\": \"NVDA\",\n      \"exchange\": \"NASDAQ\",\n      \"assetClass\": \"equity\"\n    },\n    \"price\": {\n      \"available\": true,\n      \"price\": 450.12,\n      \"change\": 6.55,\n      \"percentChange\": 1.5,\n      \"currency\": \"USD\",\n      \"assetClass\": \"equity\",\n      \"symbol\": \"NVDA\",\n      \"exchange\": \"NASDAQ\"\n    },\n    \"hitRate\": {\n      \"available\": false,\n      \"reason\": \"Signal outcome tracking is disabled.\"\n    },\n    \"requestId\": null,\n    \"generatedAt\": \"2026-08-30T12:00:00.000Z\",\n    \"durationMs\": 87\n  }\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Request ID is returned\", function () { pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\"); });",
+                  "pm.test(\"status is 2xx\", function () { pm.expect(pm.response.code).to.be.within(200, 299); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Pre-Trade Check (invalid limit)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "limit=2000 exceeds the 1000 max.",
+            "url": {
+              "raw": "{{baseUrl}}/api/pretrade-check?symbol=BINANCE:BTCUSDT&limit=2000",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pretrade-check"
+              ],
+              "query": [
+                {
+                  "key": "symbol",
+                  "value": "BINANCE:BTCUSDT"
+                },
+                {
+                  "key": "limit",
+                  "value": "2000"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Limit",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid limit. Use an integer between 1 and 1000.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Async Jobs",
       "item": [
         {

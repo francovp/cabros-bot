@@ -17,6 +17,7 @@ const {
 	helpCmd,
 	startCmd,
 	outcomesCommand,
+	pretradeCheckCommand,
 	resolveCmd,
 	reactionsCommand,
 	versionCmd,
@@ -216,6 +217,7 @@ async function bootstrapApplication() {
 		bot.command(['history', 'alertas'], alertHistoryCommand);
 		bot.command(['noticias', 'news'], newsMonitorCmd);
 		bot.command(['outcomes', 'rendimiento'], outcomesCommand);
+		bot.command(['check', 'pretrade', 'setup'], pretradeCheckCommand);
 		bot.command(['resolve'], resolveCmd);
 		bot.command(['reactions', 'reacciones'], reactionsCommand);
 		bot.command(['version'], versionCmd);

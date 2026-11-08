@@ -62,6 +62,7 @@ const {
 } = require('../controllers/subscribers/alertSubscribers');
 const { validateApiKey, validateWebhookSignature } = require('../lib/auth');
 const { validateRequest } = require('../lib/requestValidator');
+const { getPretradeCheckHandler } = require('../controllers/pretradeCheck/pretradeCheck');
 const { getApiStatus } = require('../controllers/status');
 const { getMetrics } = require('../controllers/observability/metrics');
 const {
@@ -137,6 +138,7 @@ function getRoutes(botOrGetter) {
 	router.get('/admin/events', ...sseRead, handleSseStream);
 	router.get('/outcomes', ...adminRead, listOutcomes);
 	router.get('/outcomes/summary', ...adminRead, summarizeOutcomes);
+	router.get('/pretrade-check', ...adminRead, getPretradeCheckHandler());
 	router.get('/portfolio/snapshot', ...adminRead, getPortfolioSnapshot);
 	router.get('/outcomes/trend', ...adminRead, getOutcomesTrend);
 	router.get('/enrollments', ...adminRead, listEnrollments);

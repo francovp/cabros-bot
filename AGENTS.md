@@ -59,6 +59,7 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 - `src/lib/startupJitter.js` — Resolves bounded environment/Remote Config startup delays and applies a crypto-random first-run delay without holding shutdown open.
 - `src/services/storage/SignalOutcomeService.js` — Records and evaluates signal outcomes, schedules the role-gated evaluator, and persists safe worker heartbeats.
 - `src/controllers/outcomes/outcomes.js` — Signal outcome query and summary handlers for `GET /api/outcomes` and `GET /api/outcomes/summary`.
+- `src/controllers/pretradeCheck/pretradeCheck.js` — Pre-trade decision-support composer that aggregates current price (Binance / Twelve Data) and a recent (7d) hit-rate from `signalOutcomeService.listOutcomes()` into a single fail-open snapshot, exposed via `GET /api/pretrade-check` and the `/check` Telegram command.
 - `src/workers/signalOutcomeWorker.js` — Dedicated Render worker bootstrap with SIGTERM drain handling.
 - `src/lib/adminAuth.js` — Opt-in Firebase ID-token verification and `admin.viewer`/`admin.operator` authorization for browser admin workflows; legacy API keys remain supported.
 - `src/services/sse/AdminSseService.js` — Real-time Server-Sent Events service streaming admin events (GET `/api/admin/events`) with per-client and global connection ceilings, keepalive heartbeats, backpressure drain handling, and Firebase Remote Config runtime tuning.

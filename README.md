@@ -203,6 +203,7 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `GET` | `/api/outcomes/trend` | Query daily outcome snapshot metrics (hit rate, wins, losses, MFE, MAE) over time | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomestrend) |
 | `GET` | `/api/outcomes/{outcomeId}` | Retrieve one sanitized signal outcome | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomesoutcomeid) |
 | `GET` | `/api/outcomes/export` | Export bounded signal outcomes as JSONL or CSV | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomesexport) |
+| `GET` | `/api/pretrade-check` | Pre-trade decision-support snapshot (price + outcome hit-rate) for one symbol | [OpenAPI Spec](/openapi.json) |
 | `GET` | `/api/portfolio/snapshot` | Implied-paper portfolio snapshot from recent alerts | [OpenAPI Spec](/openapi.json) |
 | `GET`/`POST` | `/api/alert-subscribers` | Manage outbound alert subscriber webhooks with HMAC and SSRF guards | [OpenAPI Spec](/openapi.json) |
 
@@ -243,6 +244,7 @@ When the Telegram bot is enabled (`ENABLE_TELEGRAM_BOT=true`), the bot provides 
 | :--- | :--- | :--- |
 | `/help`, `/start` | None | Displays command list and argument help. |
 | `/precio` | `<symbol>` | Real-time crypto (Binance) or equity (Twelve Data) price quote. |
+| `/check`, `/pretrade`, `/setup` | `<symbol>` | Pre-trade snapshot: current price plus 7-day outcome hit-rate for one symbol. |
 | `/alerta`, `/alert` | `<symbol> <op> <price>` | Creates a user-defined price-threshold alert. Also `/alerta list` and `/alerta cancel <id>`. |
 | `/cryptobot` | `id` | Displays the current Telegram chat ID. |
 | `/analisis` | `<symbols>` | Runs quick TradingView technical analysis for specified symbols. |

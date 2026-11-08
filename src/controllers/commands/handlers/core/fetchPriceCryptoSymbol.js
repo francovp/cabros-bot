@@ -21,16 +21,25 @@ function resolveBinanceBaseUrl() {
 	return 'https://api.binance.com';
 }
 
-const clientOptions = {
-	// Optional (default: false) - when true, response strings are parsed to floats (only for known keys).
-	beautifyResponses: true,
-};
-const baseUrl = resolveBinanceBaseUrl();
-if (baseUrl) {
-	clientOptions.baseUrl = baseUrl;
+function buildPriceClientOptions() {
+	const clientOptions = {
+		// Optional (default: false) - when true, response strings are parsed to floats (only for known keys).
+		beautifyResponses: true,
+	};
+	const baseUrl = resolveBinanceBaseUrl();
+	if (baseUrl) {
+		clientOptions.baseUrl = baseUrl;
+	}
+	return clientOptions;
 }
 
-const client = new MainClient(clientOptions);
+let priceClient;
+function getPriceClient() {
+	if (!priceClient) {
+		priceClient = new MainClient(buildPriceClientOptions());
+	}
+	return priceClient;
+}
 
 const CRYPTO_QUOTE_SUFFIXES = ['USDT', 'USDC', 'BUSD', 'FDUSD', 'TUSD', 'BTC', 'ETH', 'BNB'];
 const FOREX_PAIRS = new Set(['USDCLP', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD']);
@@ -162,7 +171,7 @@ async function fetchCryptoPrice(symbol, options = {}) {
 	});
 
 	try {
-		const data = await client.getAvgPrice({ symbol });
+		const data = await getPriceClient().getAvgPrice({ symbol });
 		const price = data.price >= 1 ? round10(data.price, -2) : data.price;
 		let ticker;
 		const tickerSpan = sentryService.startInactiveSpan({
