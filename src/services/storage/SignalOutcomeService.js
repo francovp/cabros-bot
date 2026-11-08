@@ -899,15 +899,10 @@ function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProv
 			reason: 'Symbol or exchange unparseable or unknown',
 		};
 	}
-	if (entryPrice !== null && entryPrice !== undefined) {
-		const providerLabel = equityProviderName
-			? `${equityProviderName} market data supported`
-			: (resolvedEntryPriceSource === ENTRY_PRICE_SOURCE_MCP
-				? 'TradingView MCP market data supported'
-				: 'Binance market data supported');
+	if (resolvedEntryPriceSource === ENTRY_PRICE_SOURCE_MCP && entryPrice !== null && entryPrice !== undefined) {
 		return {
 			state: 'supported_provider',
-			reason: providerLabel,
+			reason: 'TradingView MCP market data supported',
 		};
 	}
 	if (normSymbolInfo.exchange !== 'BINANCE'
