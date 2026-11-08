@@ -256,8 +256,30 @@ When the Telegram bot is enabled (`ENABLE_TELEGRAM_BOT=true`), the bot provides 
 | `/noticias` | `[options]` | Trigger news monitoring analysis for specified crypto/equity tickers. |
 | `/reactions`, `/reacciones` | `<symbol>` | Returns top 3 setups by trader reaction approval over the last 7 days. |
 | `/version` | None | Confirms running build SHA, platform environment, and uptime. Sourced from the same `build` object as `GET /api/capabilities`. |
+| `/digest` | `[--dry-run]` | Daily trader digest of the previous UTC day (alerts by source/channel, matured 1D outcome hit-rate, top scanner hits, top winners, LLM spend). `--dry-run` returns the formatted digest without sending or persisting. Rate-limited to once per 5 minutes per chat; sends require `ENABLE_DAILY_DIGEST=true` plus durable `ENABLE_FIRESTORE_DIGEST_RUNS=true` and `TELEGRAM_DIGEST_CHAT_ID`. |
 
 See the [Telegram Commands Reference](docs/commands.md) for aliases, throttling rules, and examples.
+
+### Daily digest sample
+
+With `ENABLE_DAILY_DIGEST=true` and `DIGEST_DELIVERY_HOUR_UTC=13`, the digest is delivered once per UTC day to `TELEGRAM_DIGEST_CHAT_ID`. `/api/status` exposes `dependencies.dailyDigest`. A sample MarkdownV2 digest:
+
+```
+*📊 Daily Digest — 2026-11-07*
+
+*Alertas:* 12
+*Por fuente:* webhook 9 · market-scanner 3
+*Por canal:* telegram 12/12
+*Outcomes (maduros 1D):* hit-rate 55.0% | elegibles 10 / evaluados 8 / pendientes 2
+
+*Top scanner hits:*
+1. BINANCE:BTCUSDT
+
+*Top outcome winners:*
+1. NASDAQ:NVDA R=2.10
+
+*Gasto LLM:* $0.0123
+```
 
 ---
 

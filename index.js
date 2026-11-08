@@ -28,6 +28,7 @@ const {
 	categoriasCmd,
 	telegramCommandRateLimiter,
 	watchlistCommand,
+	digestCmd,
 } = require('./src/controllers/commands');
 const { telegramReactionService } = require('./src/services/telegram/telegramReactionService');
 const { registerStartActions } = require('./src/controllers/commands/handlers/start/startCommand');
@@ -59,6 +60,7 @@ const { userPriceAlertService } = require('./src/services/alerts/UserPriceAlertS
 const { burstAggregator } = require('./src/services/alerts/burstAggregator');
 const { newsMonitorSchedulerService } = require('./src/services/newsMonitorScheduler');
 const { alertSchedulerService } = require('./src/services/scheduler');
+const { dailyDigestService } = require('./src/services/digest');
 const { adminSseService } = require('./src/services/sse/AdminSseService');
 const sentryService = require('./src/services/monitoring/SentryService');
 const remoteConfigService = require('./src/services/remoteConfig/RemoteConfigService');
@@ -108,6 +110,7 @@ const lifecycle = createProcessLifecycle({
 	stopUserPriceAlertWorker: (options) => userPriceAlertService.stopWorker(options),
 	stopNewsMonitorScheduler: (options) => newsMonitorSchedulerService.stopWorker(options),
 	stopAlertScheduler: (options) => alertSchedulerService.stopWorker(options),
+	stopDailyDigestScheduler: (options) => dailyDigestService.stopWorker(options),
 	stopTradingViewMcpWarmup: () => tradingViewMcpService.stopWarmupScheduler(),
 	stopRemoteConfig: () => remoteConfigService.stop(),
 	closeAllSseConnections: () => adminSseService.closeAll(),
@@ -175,6 +178,8 @@ async function bootstrapApplication() {
 			// Start background alert scheduler (JSON-defined news + scanner schedules) if enabled
 			alertSchedulerService.botGetter = () => bot;
 			alertSchedulerService.startWorker({ source: 'web' });
+			dailyDigestService.setBotGetter(() => bot);
+			dailyDigestService.startWorker();
 			// Start proactive TradingView MCP keepalive warm-up probe if enabled
 			tradingViewMcpService.startWarmupScheduler();
 		})
@@ -223,6 +228,7 @@ async function bootstrapApplication() {
 		bot.command(['version'], versionCmd);
 		bot.command(['preferencias', 'preferences'], preferenciasCmd);
 		bot.command(['watchlist'], watchlistCommand);
+		bot.command(['digest'], digestCmd);
 
 		if (process.env.ENABLE_TELEGRAM_REACTION_AGGREGATION === 'true') {
 			bot.on('message_reaction', async (ctx) => {
