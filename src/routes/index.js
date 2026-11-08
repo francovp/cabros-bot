@@ -33,6 +33,8 @@ const {
 	listReplays,
 	submitFeedback,
 	getFeedbackSummary,
+	acknowledgeAlert,
+	getAcknowledgementBreakdown,
 } = require('../controllers/alerts/alerts');
 const {
 	postResolveSymbol,
@@ -128,6 +130,8 @@ function getRoutes(botOrGetter) {
 	router.get('/alerts/:alertId', ...adminRead, getAlertById);
 	router.post('/alerts/feedback', ...adminWrite, idempotencyMiddleware, submitFeedback);
 	router.get('/alerts/feedback/summary', ...adminRead, getFeedbackSummary);
+	router.post('/alerts/:alertId/acknowledge', ...adminWrite, idempotencyMiddleware, acknowledgeAlert);
+	router.get('/alerts/:alertId/acknowledgements/breakdown', ...adminRead, getAcknowledgementBreakdown);
 	router.post('/admin/test-alert', ...adminWrite, idempotencyMiddleware, postTestAlert(botOrGetter));
 	router.get('/admin/events', ...sseRead, handleSseStream);
 	router.get('/outcomes', ...adminRead, listOutcomes);

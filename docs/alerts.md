@@ -451,6 +451,54 @@ Aggregate trader verdicts within a bounded time window. Requires `admin.viewer`.
 }
 ```
 
+#### POST /api/alerts/:alertId/acknowledge
+
+Record a trader acknowledgement for a stored alert. One record per `(alertId, chatId)` pair; re-acknowledgements update the action/notes instead of appending. Requires `admin.operator` and `ENABLE_FIRESTORE_ALERT_STORAGE=true`. The `chatId` is never returned in any response. Telegram inline-keyboard buttons (`✅ Took`, `⏭ Skipped`, `❓ No trade`, `🔕 Snooze 4h`) write the same record; the destination chat id is derived from the authorized callback update.
+
+**Request Body:**
+```json
+{
+  "chatId": "-1001234567890",
+  "action": "took_trade",
+  "notes": "Entered at 100.5, stop 99.0"
+}
+```
+
+`action` must be one of `took_trade`, `skipped`, `no_trade_no_signal`, `snoozed`. `notes` is optional, trimmed, capped at 280 characters. The stored alert's `symbol`/`exchange` are copied onto the acknowledgement for outcome attribution.
+
+**Response (201 Created):**
+```json
+{
+  "success": true,
+  "ackId": "alert-123__9a6a7f8b1c2d3e4f5a6b7c8d9e0f1a2b",
+  "alertId": "alert-123",
+  "action": "took_trade",
+  "notes": "Entered at 100.5, stop 99.0",
+  "acknowledgedAt": "2026-09-02T22:00:00.000Z",
+  "updatedAt": "2026-09-02T22:00:00.000Z",
+  "storage": "firestore"
+}
+```
+
+`ackId` is the deterministic document id (`<alertId>__<sha256(chatId) prefix>`); the same pair always returns the same `ackId`. `storage` reports `firestore` when the durable `alertAcknowledgements` collection accepted the write and `memory` when the fail-open in-memory fallback is used.
+
+#### GET /api/alerts/:alertId/acknowledgements/breakdown
+
+Zero-safe per-action counts for a stored alert. Every action key is always present, even at zero. Requires `admin.viewer` and `ENABLE_FIRESTORE_ALERT_STORAGE=true`.
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "alertId": "alert-123",
+  "total": 3,
+  "breakdown": { "took_trade": 2, "skipped": 1, "no_trade_no_signal": 0, "snoozed": 0 },
+  "storage": "firestore"
+}
+```
+
+Acknowledgements are also aggregated into `GET /api/outcomes/summary?includeAcknowledgments=true` as `acknowledgementBreakdown` (joined by stored `symbol`/`exchange`), and the `/outcomes <symbol>` command appends a `✅ Tú tomaste X de Y señales` footer when acknowledgements exist for the queried symbol/exchange.
+
 #### POST /api/alerts/:alertId/replay
 
 Replay a stored alert through the configured notification channels. The endpoint requires an idempotency key (`idempotency-key`/`x-idempotency-key` header or `idempotencyKey` body/query field) and an `ENABLE_FIRESTORE_ALERT_STORAGE=true` gate. Successful replays persist a `alertReplays` audit document with a SHA-256 hash of the key.

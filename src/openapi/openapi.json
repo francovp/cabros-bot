@@ -2154,6 +2154,222 @@
         "x-admin-role": "admin.operator"
       }
     },
+    "/api/alerts/{alertId}/acknowledge": {
+      "post": {
+        "tags": [
+          "Alerts"
+        ],
+        "summary": "Record a trader acknowledgement for a stored alert",
+        "operationId": "acknowledgeAlert",
+        "description": "Persists a single acknowledgement record per (alertId, chatId) pair. Re-acknowledgements update the action/notes instead of appending. The chatId is never returned in any response. Requires ENABLE_FIRESTORE_ALERT_STORAGE=true.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AlertId"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertAcknowledgementSubmission"
+              },
+              "examples": {
+                "tookTrade": {
+                  "summary": "Trader entered the trade",
+                  "value": {
+                    "chatId": "-1001234567890",
+                    "action": "took_trade",
+                    "notes": "Entered at 100.5, stop 99.0"
+                  }
+                },
+                "skipped": {
+                  "summary": "Trader skipped the alert",
+                  "value": {
+                    "chatId": "-1001234567890",
+                    "action": "skipped",
+                    "notes": "Wait for confirmation"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Acknowledgement created or updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertAcknowledgement"
+                },
+                "examples": {
+                  "created": {
+                    "summary": "First acknowledgement for this (alert, chat) pair",
+                    "value": {
+                      "success": true,
+                      "ackId": "alert-123__9a6a7f8b1c2d3e4f5a6b7c8d9e0f1a2b",
+                      "alertId": "alert-123",
+                      "action": "took_trade",
+                      "notes": "Entered at 100.5, stop 99.0",
+                      "acknowledgedAt": "2026-09-02T22:00:00.000Z",
+                      "updatedAt": "2026-09-02T22:00:00.000Z",
+                      "storage": "firestore"
+                    }
+                  },
+                  "updated": {
+                    "summary": "Subsequent acknowledgement for the same pair",
+                    "value": {
+                      "success": true,
+                      "ackId": "alert-123__9a6a7f8b1c2d3e4f5a6b7c8d9e0f1a2b",
+                      "alertId": "alert-123",
+                      "action": "skipped",
+                      "notes": "Wait for confirmation",
+                      "acknowledgedAt": "2026-09-02T22:00:00.000Z",
+                      "updatedAt": "2026-09-02T22:30:00.000Z",
+                      "storage": "firestore"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/alerts/{alertId}/acknowledgements/breakdown": {
+      "get": {
+        "tags": [
+          "Alerts"
+        ],
+        "summary": "Zero-safe acknowledgement action counts for a stored alert",
+        "operationId": "getAcknowledgementBreakdown",
+        "description": "Returns per-action counts for one stored alert. Every action key is always present, even at zero. Requires ENABLE_FIRESTORE_ALERT_STORAGE=true.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AlertId"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Breakdown computed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertAcknowledgementBreakdownResponse"
+                },
+                "example": {
+                  "success": true,
+                  "alertId": "alert-123",
+                  "total": 3,
+                  "breakdown": {
+                    "took_trade": 2,
+                    "skipped": 1,
+                    "no_trade_no_signal": 0,
+                    "snoozed": 0
+                  },
+                  "storage": "firestore"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/alerts/{alertId}": {
       "get": {
         "tags": [
@@ -4124,7 +4340,7 @@
           "Signal outcomes"
         ],
         "summary": "Summarize signal outcomes metrics",
-        "description": "Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, setupType, status, window, and date range. Add breakdown=symbol,setup to opt into bounded per-symbol and per-setup hit-rate rollups.",
+        "description": "Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, setupType, status, window, and date range. Add breakdown=symbol,setup to opt into bounded per-symbol and per-setup hit-rate rollups. Add includeAcknowledgments=true to include the acknowledgementBreakdown (zero-safe trader action counts joined by stored symbol/exchange).",
         "operationId": "summarizeOutcomes",
         "parameters": [
           {
@@ -4156,6 +4372,19 @@
           },
           {
             "$ref": "#/components/parameters/XRequestIdHeader"
+          },
+          {
+            "name": "includeAcknowledgments",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "description": "When true, include the acknowledgementBreakdown (zero-safe trader action counts joined by stored symbol/exchange). Omitted when false or absent. Any other value returns 400 INVALID_REQUEST."
           }
         ],
         "responses": {
@@ -13886,6 +14115,9 @@
             "type": "string",
             "example": "Metrics represent 40 evaluated signals out of 50 total received signals (80% coverage)."
           },
+          "acknowledgementBreakdown": {
+            "$ref": "#/components/schemas/AcknowledgementBreakdown"
+          },
           "exchangeBreakdown": {
             "type": "object",
             "additionalProperties": {
@@ -15788,6 +16020,208 @@
           "idempotencyReplayed": {
             "type": "boolean",
             "description": "True when the response was replayed from the idempotency cache."
+          }
+        }
+      },
+      "AlertAcknowledgementSubmission": {
+        "type": "object",
+        "required": [
+          "chatId",
+          "action"
+        ],
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "Telegram chat id. Sensitive - never returned in any response.",
+            "example": "-1001234567890"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "took_trade",
+              "skipped",
+              "no_trade_no_signal",
+              "snoozed"
+            ],
+            "example": "took_trade"
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 280,
+            "example": "Entered at 100.5, stop 99.0"
+          }
+        }
+      },
+      "AlertAcknowledgement": {
+        "type": "object",
+        "description": "Sanitized acknowledgement record. The chatId is never returned in any response payload.",
+        "required": [
+          "success",
+          "ackId",
+          "alertId",
+          "action",
+          "notes",
+          "acknowledgedAt",
+          "updatedAt",
+          "storage"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "ackId": {
+            "type": "string",
+            "description": "Stable document id (<alertId>__<sha256(chatId) prefix>). The same (alert, chat) pair always returns the same ackId.",
+            "example": "alert-123__9a6a7f8b1c2d3e4f5a6b7c8d9e0f1a2b"
+          },
+          "alertId": {
+            "type": "string",
+            "example": "alert-123"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "took_trade",
+              "skipped",
+              "no_trade_no_signal",
+              "snoozed"
+            ],
+            "example": "took_trade"
+          },
+          "notes": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 280,
+            "example": "Entered at 100.5, stop 99.0"
+          },
+          "acknowledgedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Set on the first acknowledgement for the pair; preserved across updates."
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Refreshed on every write to the acknowledgement record."
+          },
+          "storage": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ],
+            "description": "firestore when the durable collection accepted the write, memory when the fail-open fallback is in use."
+          }
+        }
+      },
+      "AlertAcknowledgementBreakdown": {
+        "type": "object",
+        "description": "Zero-safe action counts. Every VALID_ACTIONS key is always present, even when the value is 0.",
+        "required": [
+          "took_trade",
+          "skipped",
+          "no_trade_no_signal",
+          "snoozed"
+        ],
+        "properties": {
+          "took_trade": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "skipped": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "no_trade_no_signal": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "snoozed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "AlertAcknowledgementBreakdownResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "alertId",
+          "total",
+          "breakdown",
+          "storage"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "alertId": {
+            "type": "string",
+            "nullable": true,
+            "example": "alert-123"
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "breakdown": {
+            "$ref": "#/components/schemas/AlertAcknowledgementBreakdown"
+          },
+          "storage": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ]
+          }
+        }
+      },
+      "AcknowledgementBreakdown": {
+        "type": "object",
+        "description": "Aggregate acknowledgement counts for the summary window, joined by stored symbol/exchange.",
+        "required": [
+          "total",
+          "breakdown"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "breakdown": {
+            "$ref": "#/components/schemas/AlertAcknowledgementBreakdown"
+          },
+          "bySymbol": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "byExchange": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "storage": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ]
+          },
+          "window": {
+            "type": "object",
+            "additionalProperties": true,
+            "example": {
+              "from": null,
+              "to": null,
+              "limit": 1000
+            }
           }
         }
       },

@@ -9,6 +9,7 @@ const sentryService = require('../../../../services/monitoring/SentryService');
 const { TokenUsageTracker, tokenCostBudgetService } = require('../../../../lib/tokenUsage');
 const { trackBackgroundTask } = require('../../../../lib/backgroundTaskTracker');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const alertAcknowledgementService = require('../../../../services/storage/AlertAcknowledgementService');
 const { getCalibratedRiskMetadata } = require('../../../../services/prompts/promptRiskMetadata');
 const {
 	NotificationRoutingValidationError,
@@ -933,12 +934,15 @@ function postAlert(botOrGetter) {
 				const telegramEnabled = process.env.ENABLE_TELEGRAM_BOT === 'true';
 				const telegramRequested = requestedChannels.length === 0
 					|| requestedChannels.includes('telegram');
+				const ackEnabled = typeof alertAcknowledgementService.isEnabled === 'function'
+					&& alertAcknowledgementService.isEnabled();
 				if (storageEnabled && telegramEnabled && telegramRequested && !suppressedRepeat) {
 					inlineAlertId = uuidv4();
 					const replyMarkup = buildReplyMarkup({
 						alertId: inlineAlertId,
 						hasEnrichment: Boolean(alert.enriched),
 						includeReplay: true,
+						includeAcknowledgements: ackEnabled,
 					});
 					if (replyMarkup) {
 						inlineReplyMarkup = replyMarkup;

@@ -8,6 +8,7 @@ const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor'
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const signalOutcomeService = require('../services/storage/SignalOutcomeService');
 const alertStorageService = require('../services/storage/AlertStorageService');
+const alertAcknowledgementService = require('../services/storage/AlertAcknowledgementService');
 const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
 const { resolveSymbolQuery } = require('../services/symbols/aliasResolver');
@@ -841,7 +842,28 @@ const outcomesCommand = async (context) => {
 			);
 			return;
 		}
-		await context.reply(formatOutcomesMessage(parsed.symbol, outcomes), { parse_mode: 'MarkdownV2' });
+		let ackFooter = null;
+		try {
+			if (alertAcknowledgementService.isEnabled()) {
+				const ackSummary = await withTimeout(
+					() => alertAcknowledgementService.summarizeAcknowledgements({
+						symbol: parsed.symbol,
+						exchange: parsed.exchange,
+					}),
+					OUTCOMES_COMMAND_TIMEOUT_MS,
+					'acknowledgement summary timed out',
+				);
+				if (ackSummary && ackSummary.total > 0) {
+					ackFooter = {
+						took: ackSummary.breakdown ? (ackSummary.breakdown.took_trade || 0) : 0,
+						total: ackSummary.total,
+					};
+				}
+			}
+		} catch (_) {
+			ackFooter = null;
+		}
+		await context.reply(formatOutcomesMessage(parsed.symbol, outcomes, ackFooter), { parse_mode: 'MarkdownV2' });
 	} catch (error) {
 		console.error('[commands] /outcomes failed:', error.message);
 		const isExpectedError = Boolean(
@@ -916,11 +938,15 @@ async function withTimeout(asyncFn, timeoutMs, message) {
 	}
 }
 
-function formatOutcomesMessage(symbol, outcomes) {
+function formatOutcomesMessage(symbol, outcomes, ackFooter = null) {
 	const lines = [
 		`*📊 Rendimiento reciente — ${escapeOutcomeText(symbol)}*`,
 		'',
 	];
+	if (ackFooter && typeof ackFooter.took === 'number' && typeof ackFooter.total === 'number' && ackFooter.total > 0) {
+		lines.push(`✅ Tú tomaste ${ackFooter.took} de ${ackFooter.total} señales con acknowledgment para ${escapeOutcomeText(symbol)}`);
+		lines.push('');
+	}
 	const configuredLabels = typeof signalOutcomeService.getOutcomeWindowLabels === 'function'
 		? signalOutcomeService.getOutcomeWindowLabels()
 		: {};

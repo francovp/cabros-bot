@@ -26,6 +26,10 @@ const ACTION_DETAILS = 'd';
 const ACTION_DISMISS = 'x';
 const ACTION_VOTE_UP = 'vu';
 const ACTION_VOTE_DOWN = 'vd';
+const ACTION_TAKE = 'kt';
+const ACTION_SKIP = 'ks';
+const ACTION_NO_TRADE = 'kn';
+const ACTION_SNOOZE = 'kz';
 const CALLBACK_ALERT_ID_PATTERN = /^[A-Za-z0-9_-]{1,60}$/;
 
 function buildCallbackData(action, alertId) {
@@ -53,9 +57,13 @@ const BUTTON_LABELS = Object.freeze({
 	[ACTION_DISMISS]: '✖️ Descartar',
 	[ACTION_VOTE_UP]: '👍',
 	[ACTION_VOTE_DOWN]: '👎',
+	[ACTION_TAKE]: '✅ Took',
+	[ACTION_SKIP]: '⏭ Skipped',
+	[ACTION_NO_TRADE]: '❓ No trade',
+	[ACTION_SNOOZE]: '🔕 Snooze 4h',
 });
 
-function buildReplyMarkup({ alertId, hasEnrichment = true, includeReplay = true } = {}) {
+function buildReplyMarkup({ alertId, hasEnrichment = true, includeReplay = true, includeAcknowledgements = false } = {}) {
 	if (typeof alertId !== 'string' || !alertId || !CALLBACK_ALERT_ID_PATTERN.test(alertId)) {
 		return null;
 	}
@@ -93,6 +101,29 @@ function buildReplyMarkup({ alertId, hasEnrichment = true, includeReplay = true 
 		},
 	]);
 
+	if (includeAcknowledgements) {
+		rows.push([
+			{
+				text: BUTTON_LABELS[ACTION_TAKE],
+				callback_data: buildCallbackData(ACTION_TAKE, alertId),
+			},
+			{
+				text: BUTTON_LABELS[ACTION_SKIP],
+				callback_data: buildCallbackData(ACTION_SKIP, alertId),
+			},
+		]);
+		rows.push([
+			{
+				text: BUTTON_LABELS[ACTION_NO_TRADE],
+				callback_data: buildCallbackData(ACTION_NO_TRADE, alertId),
+			},
+			{
+				text: BUTTON_LABELS[ACTION_SNOOZE],
+				callback_data: buildCallbackData(ACTION_SNOOZE, alertId),
+			},
+		]);
+	}
+
 	return { inline_keyboard: rows };
 }
 
@@ -119,6 +150,10 @@ function getActionCodes() {
 		ACTION_DISMISS,
 		ACTION_VOTE_UP,
 		ACTION_VOTE_DOWN,
+		ACTION_TAKE,
+		ACTION_SKIP,
+		ACTION_NO_TRADE,
+		ACTION_SNOOZE,
 	};
 }
 

@@ -36,12 +36,18 @@ jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
 }));
 
+jest.mock('../../src/services/storage/AlertAcknowledgementService', () => ({
+	isEnabled: jest.fn(),
+	summarizeAcknowledgements: jest.fn(),
+}));
+
 const { captureRuntimeError } = require('../../src/services/monitoring/SentryService');
 const { jobService } = require('../../src/services/jobs/JobService');
 const { getNewsMonitor } = require('../../src/controllers/webhooks/handlers/newsMonitor/newsMonitor');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const alertAcknowledgementService = require('../../src/services/storage/AlertAcknowledgementService');
 const {
 	cryptoBotCmd,
 	expandedAnalysisCmd,
@@ -1033,6 +1039,7 @@ describe('Telegram TradingView commands', () => {
 
 		beforeEach(() => {
 			jest.clearAllMocks();
+			alertAcknowledgementService.isEnabled.mockReturnValue(false);
 		});
 
 		it('replies with a formatted summary of recent evaluated outcomes for the requested symbol', async () => {
@@ -1129,6 +1136,57 @@ describe('Telegram TradingView commands', () => {
 				}),
 			);
 			expect(context.reply.mock.calls[0][0]).toContain('No pude consultar los resultados');
+		});
+
+		it('adds a you-took footer when acknowledgements exist for the symbol', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.listOutcomes.mockResolvedValue({
+				outcomes: [evaluatedOutcome],
+				hasMore: false,
+				nextBefore: null,
+			});
+			alertAcknowledgementService.isEnabled.mockReturnValue(true);
+			alertAcknowledgementService.summarizeAcknowledgements.mockResolvedValue({
+				total: 10,
+				breakdown: { took_trade: 4, skipped: 5, no_trade_no_signal: 1, snoozed: 0 },
+				bySymbol: { BTCUSDT: 10 },
+				byExchange: { BINANCE: 10 },
+				storage: 'firestore',
+				window: { from: null, to: null, limit: 1000 },
+			});
+			const context = buildContext('/outcomes BINANCE:BTCUSDT');
+
+			await outcomesCommand(context);
+
+			expect(alertAcknowledgementService.summarizeAcknowledgements).toHaveBeenCalledWith(
+				expect.objectContaining({ symbol: 'BTCUSDT', exchange: 'BINANCE' }),
+			);
+			const reply = context.reply.mock.calls[0][0];
+			expect(reply).toContain('Tú tomaste 4 de 10 señales');
+		});
+
+		it('omits the acknowledgement footer when no acknowledgements exist', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.listOutcomes.mockResolvedValue({
+				outcomes: [evaluatedOutcome],
+				hasMore: false,
+				nextBefore: null,
+			});
+			alertAcknowledgementService.isEnabled.mockReturnValue(true);
+			alertAcknowledgementService.summarizeAcknowledgements.mockResolvedValue({
+				total: 0,
+				breakdown: { took_trade: 0, skipped: 0, no_trade_no_signal: 0, snoozed: 0 },
+				bySymbol: {},
+				byExchange: {},
+				storage: 'firestore',
+				window: { from: null, to: null, limit: 1000 },
+			});
+			const context = buildContext('/outcomes BINANCE:BTCUSDT');
+
+			await outcomesCommand(context);
+
+			const reply = context.reply.mock.calls[0][0];
+			expect(reply).not.toContain('Tú tomaste');
 		});
 
 		it('escapes MarkdownV2 special characters in generated outcome values', async () => {
