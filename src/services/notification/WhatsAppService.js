@@ -465,6 +465,12 @@ class WhatsAppService extends NotificationChannel {
 				);
 				if (chartResult.success) {
 					// The caption already carried the first chunk; send only the overflow.
+					// Caption is capped at MAX_FILE_CAPTION_LENGTH while chunks use the
+					// 20k message limit, so a 1k-20k report needs a follow-up for the tail.
+					if (formattedText.length > MAX_FILE_CAPTION_LENGTH) {
+						const remainder = formattedText.slice(MAX_FILE_CAPTION_LENGTH);
+						return this._sendChunkedMessage(splitMessageIntoChunks(remainder, GREEN_API_MESSAGE_LIMIT), chatId, options);
+					}
 					if (messageChunks.length > 1) {
 						return this._sendChunkedMessage(messageChunks.slice(1), chatId, options);
 					}
@@ -553,10 +559,24 @@ class WhatsAppService extends NotificationChannel {
 					};
 				}
 				const data = await response.json().catch(() => null);
+				const ackId = data?.idFile || data?.idMessage || data?.messageId;
+				const providerError = data?.error || data?.errorCode || data?.status === 'error';
+				if (!data || typeof data !== 'object' || providerError || ackId === undefined) {
+					// 200 without a delivery acknowledgement cannot be confirmed;
+					// failing here keeps the text-only fallback instead of losing the alert.
+					this.logger?.error?.('GreenAPI file upload unconfirmed response body');
+					return {
+						success: false,
+						channel: 'whatsapp',
+						error: 'GreenAPI file upload returned an unconfirmed response',
+						category: 'PROVIDER_ERROR',
+						statusCode: response.status,
+					};
+				}
 				return {
 					success: true,
 					channel: 'whatsapp',
-					messageId: data?.idFile || data?.messageId || undefined,
+					messageId: ackId,
 				};
 			} finally {
 				clearTimeout(timeoutId);

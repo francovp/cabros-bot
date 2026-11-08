@@ -22,16 +22,15 @@ const { ChartRendererService } = require('../services/notification/charts/chartR
 /**
  * Non-sensitive chart-renderer readiness for `/api/status` and `/api/capabilities`.
  *
- * A dedicated instance is used rather than the process-wide delivery singleton so
- * the reported `enabled` flag tracks the Remote-Config-resolved runtime value
- * without a channel having to render anything first. The counters stay at zero
- * until real delivery traffic exercises the shared renderer.
+ * The shared delivery singleton is used so counters reflect real traffic.
+ * `enabled` tracks the Remote-Config-resolved runtime value.
  */
 function getChartRendererStatus() {
 	const enabled = remoteConfigService.getRuntimeConfig().ENABLE_CHART_ATTACHMENTS === true;
-	const probe = new ChartRendererService();
+	const { getChartRendererService } = require('../services/notification/charts/chartRenderer');
+	const shared = getChartRendererService();
 	return {
-		...probe.getStatus(),
+		...shared.getStatus(),
 		enabled,
 		channels: { telegram: true, whatsapp: true, discord: false },
 		note: 'Discord webhooks have no inline image upload path; Discord always falls back to text.',

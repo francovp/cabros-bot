@@ -96,8 +96,11 @@ describe('chart attachments — Telegram photo delivery', () => {
 			expect(callApi).toHaveBeenCalledTimes(1);
 			const [method, payload] = callApi.mock.calls[0];
 			expect(method).toBe('sendPhoto');
-			expect(Buffer.isBuffer(payload.photo)).toBe(true);
-			expect(payload.photo.subarray(0, 8)).toEqual(PNG_MAGIC);
+			// Telegraf sendPhoto uploads only InputFile-shaped values; the
+			// service wraps the PNG Buffer as {source, filename}.
+			expect(payload.photo).toEqual(expect.objectContaining({ filename: 'chart.png' }));
+			expect(Buffer.isBuffer(payload.photo.source)).toBe(true);
+			expect(payload.photo.source.subarray(0, 8)).toEqual(PNG_MAGIC);
 			expect(payload.caption).toContain('BTC breakout');
 			expect(payload.parse_mode).toBe('MarkdownV2');
 			expect(payload.chat_id).toBe('chat-1');
@@ -141,7 +144,8 @@ describe('chart attachments — Telegram photo delivery', () => {
 			await service.send(alert);
 			await service.send({ ...alert });
 
-			expect(callApi.mock.calls[0][1].photo).toBe(callApi.mock.calls[1][1].photo);
+			// Both sends resolve the same cached PNG buffer (wrapped per send as InputFile).
+			expect(callApi.mock.calls[0][1].photo.source).toBe(callApi.mock.calls[1][1].photo.source);
 		});
 	});
 
@@ -349,5 +353,68 @@ describe('chart attachments — renderer failure keeps text-only delivery', () =
 			);
 		});
 		warn.mockRestore();
+	});
+});
+
+describe('chart attachments — Codex review regressions', () => {
+	afterEach(() => { resetChartRendererService(); });
+
+	function makeWhatsAppService() {
+		return new WhatsAppService({
+			apiUrl: 'https://api.greenapi.com/waInstance123/sendMessage/',
+			apiKey: 'test-key',
+			chatId: '1203630000@g.us',
+			formatter: { format: (text) => text, formatEnriched: (e) => JSON.stringify(e) },
+		});
+	}
+
+	it('sends WhatsApp caption overflow as a follow-up after upload', async () => {
+		await withChartFlag(true, async () => {
+			const fetchMock = jest.fn(async (url) => {
+				if (String(url).includes('sendFileByUpload')) {
+					return { ok: true, json: async () => ({ idFile: 'file-9' }), text: async () => '' };
+				}
+				return { ok: true, json: async () => ({ idMessage: 'm-9' }), text: async () => '' };
+			});
+			global.fetch = fetchMock;
+			const service = makeWhatsAppService();
+			const result = await service.send({
+				text: 'X'.repeat(5000), symbol: 'BTCUSDT', chartBars: makeBars(6),
+			});
+			expect(result.success).toBe(true);
+			expect(fetchMock.mock.calls[0][0]).toContain('sendFileByUpload');
+			expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
+			expect(fetchMock.mock.calls[1][0]).toContain('sendMessage');
+		});
+	});
+
+	it('fails WhatsApp upload on 200 without an acknowledgement', async () => {
+		await withChartFlag(true, async () => {
+			const fetchMock = jest.fn()
+				.mockResolvedValueOnce({ ok: true, json: async () => null, text: async () => '' })
+				.mockResolvedValueOnce({ ok: true, json: async () => ({ idMessage: 'm-fallback' }), text: async () => '' });
+			global.fetch = fetchMock;
+			const service = makeWhatsAppService();
+			const result = await service.send({
+				text: 'BTC breakout', symbol: 'BTCUSDT', chartBars: makeBars(6),
+			});
+			expect(result.success).toBe(true);
+			expect(fetchMock.mock.calls[0][0]).toContain('sendFileByUpload');
+			expect(fetchMock.mock.calls[1][0]).toContain('sendMessage');
+		});
+	});
+
+	it('wraps Telegram photo as Telegraf InputFile', async () => {
+		await withChartFlag(true, async () => {
+			const callApi = jest.fn().mockResolvedValue({ message_id: 77 });
+			const service = makeTelegramService(callApi);
+			const result = await service.send({
+				text: 'BTC breakout', symbol: 'BTCUSDT', chartBars: makeBars(6),
+			});
+			expect(result.success).toBe(true);
+			const payload = callApi.mock.calls[0][1];
+			expect(payload.photo).toEqual(expect.objectContaining({ filename: 'chart.png' }));
+			expect(Buffer.isBuffer(payload.photo.source)).toBe(true);
+		});
 	});
 });

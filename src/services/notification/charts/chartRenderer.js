@@ -107,8 +107,9 @@ function toFiniteNumber(value) {
  */
 class ChartRendererService {
 	constructor(options = {}) {
-		const env = options.env || process.env;
-		this.config = { ...resolveConfig(env), ...(options.config || {}) };
+		this._configOverride = options.config || null;
+		this._envOverride = options.env || null;
+		this.config = { ...this._resolveRuntimeConfig(), ...(this._configOverride || {}) };
 		this.cache = new Map();
 		this.stats = {
 			renders: 0,
@@ -122,7 +123,30 @@ class ChartRendererService {
 		};
 	}
 
+	_resolveRuntimeConfig() {
+		if (this._envOverride) return resolveConfig(this._envOverride);
+		if (this._configOverride) return { ...this.config };
+		try {
+			const { getRuntimeConfig } = require('../../remoteConfig/RemoteConfigService');
+			const runtime = getRuntimeConfig();
+			return {
+				enabled: runtime.ENABLE_CHART_ATTACHMENTS === true,
+				renderTimeoutMs: Number.isFinite(runtime.CHART_RENDER_TIMEOUT_MS) ? runtime.CHART_RENDER_TIMEOUT_MS : DEFAULT_TIMEOUT_MS,
+				cacheTtlSeconds: Number.isFinite(runtime.CHART_CACHE_TTL_SECONDS) ? runtime.CHART_CACHE_TTL_SECONDS : DEFAULT_CACHE_TTL_SECONDS,
+			};
+		} catch (_) {
+			return resolveConfig(process.env);
+		}
+	}
+
+	/** Refresh from current runtime config so Remote Config changes take effect. */
+	refreshConfig() {
+		this.config = { ...this._resolveRuntimeConfig(), ...(this._configOverride || {}) };
+		return this.config;
+	}
+
 	isEnabled() {
+		this.refreshConfig();
 		return this.config.enabled === true;
 	}
 
@@ -133,6 +157,7 @@ class ChartRendererService {
 	 * @returns {Promise<{buffer: Buffer, category: string, cacheHit: boolean}|null>}
 	 */
 	async renderChart(request = {}) {
+		this.refreshConfig();
 		if (!this.isEnabled()) {
 			this.stats.skippedDisabled += 1;
 			return null;

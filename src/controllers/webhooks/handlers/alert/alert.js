@@ -674,13 +674,26 @@ function postAlert(botOrGetter) {
 			const parsedSignal = parseTradingViewSignal(text);
 			const session = parsedSignal?.session
 				|| (parsedSignal?.exchange && isEquityExchange(parsedSignal.exchange) ? classifySession({ exchange: parsedSignal.exchange, symbol: parsedSignal.symbol }) : undefined);
+			// Chart attachments (GH-799) need the validated bars to reach delivery.
+			// Only finite OHLCV-shaped bars are forwarded; malformed data falls
+			// back to text-only delivery in the renderer. Bounded to 60 bars.
+			const chartBars = Array.isArray(body?.chartBars)
+				? body.chartBars.filter((bar) => bar && typeof bar === 'object'
+					&& [bar.open, bar.high, bar.low, bar.close].every((v) => Number.isFinite(Number(v)))).slice(-60)
+				: [];
+			const chartSymbol = typeof body?.chartSymbol === 'string' && body.chartSymbol.trim()
+				? body.chartSymbol.trim().toUpperCase()
+				: (typeof body?.symbol === 'string' && body.symbol.trim() ? body.symbol.trim().toUpperCase()
+					: (typeof parsedSignal?.symbol === 'string' && parsedSignal.symbol.trim() ? parsedSignal.symbol.trim().toUpperCase() : undefined));
 			alert = {
 				text,
 				source,
 				signalClass,
 				...(parsedSignal && parsedSignal.exchange ? { exchange: parsedSignal.exchange } : {}),
+				...(parsedSignal?.symbol ? { symbol: parsedSignal.symbol } : {}),
 				...(session ? { session } : {}),
 				...(traderIntent ? { traderIntent } : {}),
+				...(chartBars.length >= 2 && chartSymbol ? { chartBars, chartSymbol } : {}),
 				...truncation,
 			};
 
