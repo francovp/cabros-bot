@@ -1540,6 +1540,70 @@ const reactionsCommand = async (context) => {
 	return reactionsSymbol(context);
 };
 
+const DIGEST_COMMAND_RATE_LIMIT_MS = 5 * 60 * 1000;
+const digestCommandBuckets = new Map();
+
+const digestCmd = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
+	const chatId = getChatId(context);
+	const { dailyDigestService, previousUtcDay } = require('../services/digest');
+	const args = parseCommandArgs(context);
+	const dryRun = args.positionals.includes('--dry-run') || args.options.dryRun === 'true' || args.options.dryRun === true;
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.digest',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/digest',
+			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
+			'telegram.dry_run': Boolean(dryRun),
+		},
+	});
+	try {
+		if (!dailyDigestService.isEnabled()) {
+			await context.reply('El digest diario está desactivado — pide a un operador que active ENABLE_DAILY_DIGEST');
+			return;
+		}
+		if (chatId === undefined || chatId === null) {
+			await context.reply('No pude identificar el chat de origen.');
+			return;
+		}
+		const now = Date.now();
+		const key = String(chatId);
+		const recent = (digestCommandBuckets.get(key) || []).filter((ts) => now - ts < DIGEST_COMMAND_RATE_LIMIT_MS);
+		if (recent.length >= 1) {
+			const retryAfterSec = Math.max(1, Math.ceil((recent[0] + DIGEST_COMMAND_RATE_LIMIT_MS - now) / 1000));
+			await context.reply(`demasiadas solicitudes para /digest. Intenta nuevamente en ${retryAfterSec} s.`);
+			return;
+		}
+		recent.push(now);
+		digestCommandBuckets.set(key, recent);
+		const day = previousUtcDay(new Date());
+		const result = await dailyDigestService.runDigestForDay(day, { dryRun, chatId: String(chatId) });
+		if (dryRun) {
+			await context.reply(result.text, { parse_mode: 'MarkdownV2' });
+			return { ...result, chatId: String(chatId) };
+		}
+		if (result.sent) {
+			await context.reply(`Digest ${result.dateStr} enviado.`);
+		} else {
+			await context.reply(`Digest no enviado (${result.reason || 'sin resultado'}).`);
+		}
+		return { ...result, chatId: String(chatId) };
+	} catch (error) {
+		console.error('[commands] /digest failed:', error.message);
+		sentryService.captureRuntimeError({ channel: 'telegram', error, extra: { command: 'digest', chatId } });
+		try {
+			await context.reply('No pude generar el digest ahora mismo. Intenta nuevamente más tarde.');
+		} catch {}
+	} finally {
+		sentryService.endSpan(commandSpan);
+	}
+};
+
 const versionCmd = async (context, env = process.env) => {
 	if (isMaintenanceModeEnabled()) {
 		await sendMaintenanceReply(context);
@@ -1619,4 +1683,6 @@ module.exports = {
 	telegramMaintenanceMode,
 	setWarningReplyTimeoutMsForTest,
 	resolveJobRouting,
+	digestCmd,
+	digestCommandBuckets,
 };

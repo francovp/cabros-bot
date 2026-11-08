@@ -294,6 +294,7 @@ function canInitializeFirestore() {
 	}
 
 	return isEnabled()
+		|| process.env.ENABLE_FIRESTORE_DIGEST_RUNS === 'true'
 		|| process.env.ENABLE_AUTO_TRADE === 'true'
 		|| process.env.ENABLE_FIRESTORE_SCANNER_PRESETS === 'true'
 		|| process.env.ENABLE_FIRESTORE_WATCHLIST === 'true'

@@ -8,6 +8,7 @@ const {
 const { MAX_DESTINATIONS_PER_CHANNEL } = require('../services/scannerPresets/scannerPresetRouting');
 const { newsMonitorSchedulerService } = require('../services/newsMonitorScheduler');
 const { alertSchedulerService } = require('../services/scheduler');
+const { dailyDigestService } = require('../services/digest');
 const { alertSubscriberService } = require('../services/subscribers/AlertSubscriberService');
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const alertFeedbackStorageService = require('../services/storage/AlertFeedbackStorageService');
@@ -656,6 +657,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			presetBoundDestinations: true,
 			newsMonitorScheduler: newsMonitorSchedulerService.isEnabled(),
 			alertScheduler: alertSchedulerService.isEnabled(),
+			dailyDigest: dailyDigestService.isEnabled(),
 			sentryMonitoring: sentryEnabled,
 			sentryProfiling: sentryService.isProfilingEnabled(),
 			langfusePrompts: langfusePromptsEnabled,
@@ -823,6 +825,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			userPriceAlertWorker: userPriceAlertService.getStatus(),
 			newsMonitorScheduler: newsMonitorSchedulerService.getStatus(),
 			alertScheduler: alertSchedulerService.getStatus(),
+			dailyDigest: dailyDigestService.getStatus(),
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
 				...signalOutcomeWorkerDependency,
