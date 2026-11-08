@@ -480,3 +480,48 @@ Review the feedback and adjust engagement strategy accordingly. If this is a tec
 - First-Seen: 2026-11-08
 - Last-Seen: 2026-11-08
 
+## [LRN-20261108-174500-001] correction
+
+**Logged**: 2026-11-08T17:45:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Firestore TTL enforcement for signal outcome rollups is handled natively by the database, not by application-level cleanup jobs.
+
+### Details
+On PR #1493, @francovp clarified that `SIGNAL_OUTCOME_ROLLUP_TTL_DAYS` is enforced via Cloud Firestore native TTL policies. Specifically, the field `expiresAt` in the `tradingSignalOutcomesDaily` collection is configured with `ttl: true` in `firestore.indexes.json`, automating the deletion of documents after the retention period (default 180 days).
+
+### Suggested Action
+When implementing data retention for Firestore collections, prefer native TTL policies over custom cleanup scripts to reduce operational complexity and compute cost.
+
+### Metadata
+- Source: user_feedback
+- Related Files: firestore.indexes.json, SignalOutcomeDailyRollupService.js
+- Tags: firestore, TTL, data-retention, infrastructure
+- Pattern-Key: simplify.data_cleanup
+
+---
+
+## [LRN-20261108-174500-002] correction
+
+**Logged**: 2026-11-08T17:45:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: config
+
+### Summary
+The precedence chain for resolving configuration overrides follows a strict priority: Request Payload > Remote Config > Environment Variable > Default.
+
+### Details
+On PR #1491, @francovp clarified the override resolution logic. `resolveRemoteOverride(key)` only returns a value if Remote Config is enabled and contains a schema-valid published override. If it returns `undefined` (disabled, unreachable, or no override), the system falls back to `process.env` and then to the built-in default.
+
+### Suggested Action
+When debugging configuration behavior, verify the source in this order: 1. Incoming request body, 2. Firebase Remote Config, 3. OS Environment Variables, 4. Code defaults.
+
+### Metadata
+- Source: user_feedback
+- Related Files: remoteConfigService.js
+- Tags: config, precedence, remote-config, env-vars
+- Pattern-Key: harden.config_resolution
