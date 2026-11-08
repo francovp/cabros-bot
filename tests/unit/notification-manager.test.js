@@ -4,6 +4,7 @@ const sentryService = require('../../src/services/monitoring/SentryService');
 const { notificationRedriveService } = require('../../src/services/notification/NotificationRedriveService');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
 const { waitForBackgroundTasks, resetForTesting } = require('../../src/lib/backgroundTaskTracker');
+const { adminPagingDeduplicator } = require('../../src/services/notification/adminPagingDeduplicator');
 
 describe('NotificationManager admin failure notifications', () => {
 	const originalAdminChatId = process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
@@ -12,6 +13,7 @@ describe('NotificationManager admin failure notifications', () => {
 	const originalFetch = global.fetch;
 
 	afterEach(() => {
+		adminPagingDeduplicator.reset();
 		resetForTesting();
 		jest.restoreAllMocks();
 		if (originalFetch === undefined) {
