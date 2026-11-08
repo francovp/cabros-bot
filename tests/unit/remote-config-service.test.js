@@ -20,6 +20,22 @@ jest.mock('../../src/services/storage/firestoreConfig', () => ({
 
 describe('RemoteConfigService', () => {
 	let savedEnv;
+	it('validates opt-in alert coalescing defaults, bounds and template parity', () => {
+		const template = JSON.parse(fs.readFileSync(path.join(__dirname, '../../firebase-remote-config-template.json'), 'utf8'));
+		for (const [key, value] of Object.entries({ ENABLE_ALERT_COALESCE: false, ALERT_COALESCE_WINDOW_MS: 5000 })) {
+			expect(remoteConfigService.PARAMETER_SCHEMA[key].defaultValue).toBe(value);
+			expect(template.parameters[key].defaultValue).toEqual({ useInAppDefault: true });
+			expect(remoteConfigService.getRuntimeConfig()[key]).toBe(value);
+		}
+		process.env.ALERT_COALESCE_WINDOW_MS = '1.5';
+		expect(remoteConfigService.getRuntimeConfig().ALERT_COALESCE_WINDOW_MS).toBe(5000);
+		process.env.ALERT_COALESCE_WINDOW_MS = '60001';
+		expect(remoteConfigService.getRuntimeConfig().ALERT_COALESCE_WINDOW_MS).toBe(5000);
+		process.env.ENABLE_ALERT_COALESCE = 'true';
+		process.env.ALERT_COALESCE_WINDOW_MS = '1000';
+		expect(remoteConfigService.getRuntimeConfig().ENABLE_ALERT_COALESCE).toBe(true);
+		expect(remoteConfigService.getRuntimeConfig().ALERT_COALESCE_WINDOW_MS).toBe(1000);
+	});
 
 	it('bounds scanner sizing settings and publishes both template defaults', () => {
 		const template = JSON.parse(fs.readFileSync(path.join(__dirname, '../../firebase-remote-config-template.json'), 'utf8'));
