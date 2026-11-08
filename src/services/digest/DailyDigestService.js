@@ -248,12 +248,28 @@ class DailyDigestService {
 			lines.push(`*Alertas:* ${agg.totalAlerts ?? 0}`);
 		}
 		const sources = Object.entries(agg.bySource || {});
-		if (sources.length) lines.push(`*Por fuente:* ${sources.map(([k, v]) => `${esc(k)} ${v}`).join(' · ')}`);
+		if (sources.length) {
+			sources.sort((a, b) => (Number(b[1]) || 0) - (Number(a[1]) || 0));
+			const maxSources = 8;
+			const topSources = sources.slice(0, maxSources);
+			const otherCount = sources.slice(maxSources).reduce((sum, [, count]) => sum + (Number(count) || 0), 0);
+			const formattedSources = topSources.map(([k, v]) => {
+				const truncatedKey = k.length > 32 ? `${k.slice(0, 29)}...` : k;
+				return `${esc(truncatedKey)} ${v}`;
+			});
+			if (otherCount > 0) {
+				formattedSources.push(`otros ${otherCount}`);
+			}
+			lines.push(`*Por fuente:* ${formattedSources.join(' · ')}`);
+		}
 		const channels = Object.entries(agg.byChannel || {});
 		if (channels.length) {
-			lines.push(`*Por canal:* ${channels.map(([k, v]) => {
+			const maxChannels = 8;
+			const topChannels = channels.slice(0, maxChannels);
+			lines.push(`*Por canal:* ${topChannels.map(([k, v]) => {
 				const ok = v && typeof v.success === 'number' ? ` ${v.success}/${v.total ?? ''}` : '';
-				return `${esc(k)}${esc(ok)}`;
+				const truncatedKey = k.length > 32 ? `${k.slice(0, 29)}...` : k;
+				return `${esc(truncatedKey)}${esc(ok)}`;
 			}).join(' · ')}`);
 		}
 		const o = agg.outcomes || {};
@@ -292,7 +308,15 @@ class DailyDigestService {
 				lines.push('⚠️ Muestra limitada a 1000 alertas; no se puede descartar exceso de presupuesto\\.');
 			}
 		}
-		return lines.join('\n');
+		let text = lines.join('\n');
+		if (text.length > 4000) {
+			while (lines.length > 4 && lines.join('\n').length > 3900) {
+				lines.pop();
+			}
+			lines.push('⚠️ _Digest truncado por límite de longitud\\._');
+			text = lines.join('\n');
+		}
+		return text;
 	}
 
 	_digestDocId(dateStr, chatId) {

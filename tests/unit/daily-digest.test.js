@@ -582,4 +582,28 @@ describe('DailyDigestService Codex review follow-ups', () => {
 		// Must not contain unescaped dynamic underscores (excluding markdown bold * tags)
 		expect(text).not.toMatch(/(?<!\\)_/);
 	});
+
+	test('bounds rendered digest below 4000 chars when day contains 100 long custom sources', () => {
+		const svc = new DailyDigestService();
+		const bySource = {};
+		for (let i = 0; i < 100; i++) {
+			bySource[`custom_long_source_name_identifier_number_${String(i).padStart(3, '0')}_test`] = i + 1;
+		}
+		const agg = {
+			dateStr: '2026-11-07',
+			totalAlerts: 5050,
+			bySource,
+			byChannel: { telegram: { success: 10, total: 10 } },
+			outcomes: { hitRatePercent: 70, eligible: 10, evaluated: 10, pending: 0 },
+			topScannerHits: [],
+			topWinners: [],
+			totalSpend: 1.5,
+			maxSpend: 50,
+			spendExceeded: false,
+		};
+		const text = svc.formatDigest(agg);
+		expect(text.length).toBeLessThanOrEqual(4000);
+		expect(text).toContain('otros ');
+		expect(text).toContain('*Por fuente:*');
+	});
 });
