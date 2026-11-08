@@ -214,7 +214,7 @@ describe('Graceful Degradation & Fallback', () => {
 	describe('Test 7: Discord 429 rate limit retries in multi-channel setup', () => {
 		it('should retry Discord 429 while Telegram succeeds, completing fail-open multi-channel delivery', async () => {
 			process.env.ENABLE_DISCORD_ALERTS = 'true';
-			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/test/token';
+			process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123456789012345678/token';
 
 			const telegramService = new TelegramService({ bot: mockBot });
 			const whatsappService = new WhatsAppService();

@@ -1,0 +1,187 @@
+'use strict';
+
+/**
+ * startCommand — Telegram /start handler with deep-link payload support.
+ *
+ * Triggers on `t.me/<bot>?start=<payload>` deep links. Recognized tokens:
+ *   enroll, lang=es|en, watch=SYM1,SYM2, ref=<token>.
+ *
+ * Falls back to the generic help message when:
+ *   - no payload is present,
+ *   - the payload is empty,
+ *   - the payload is malformed.
+ *
+ * Fail-open: enrollment persistence errors are logged via Sentry and the
+ * welcome message is still sent so the user is never ghosted by a backend
+ * hiccup.
+ */
+
+const {
+	parseStartPayload,
+	buildStartMessage,
+	DEFAULT_LANGUAGE,
+} = require('./startPayload');
+const chatEnrollmentsService = require('../../../../services/enrollments/ChatEnrollmentsService');
+const { watchlistService } = require('../../../../services/watchlist/WatchlistService');
+const { escapeRiskFieldValue } = require('../../../../services/notification/formatters/markdownV2Formatter');
+
+const MAX_INLINE_BUTTONS = 8;
+
+function buildInlineKeyboard(botUsername) {
+	const buttons = [];
+	if (typeof botUsername === 'string' && botUsername.length > 0) {
+		buttons.push([
+			{
+				text: 'Add to group',
+				url: `https://t.me/${botUsername}?startgroup=enroll`,
+			},
+		]);
+	}
+	buttons.push([
+		{ text: '/precio', callback_data: 'cmd:precio' },
+		{ text: '/outcomes', callback_data: 'cmd:outcomes' },
+	]);
+	return { inline_keyboard: buttons.slice(0, MAX_INLINE_BUTTONS) };
+}
+
+function registerStartActions(bot) {
+	if (!bot || typeof bot.action !== 'function') return false;
+	for (const [action, message] of [
+		['cmd:precio', 'Para consultar un precio, escribe /precio BTCUSDT.'],
+		['cmd:outcomes', 'Para ver resultados, escribe /outcomes.'],
+	]) {
+		bot.action(action, async (context) => {
+			await context.answerCbQuery().catch(() => {});
+			await context.reply(escapeRiskFieldValue(message), { parse_mode: 'MarkdownV2' });
+		});
+	}
+	return true;
+}
+
+function resolveChatId(context) {
+	if (context && context.chat && context.chat.id !== undefined) return context.chat.id;
+	if (context && context.update && context.update.message && context.update.message.chat) {
+		return context.update.message.chat.id;
+	}
+	if (context && context.message && context.message.chat) return context.message.chat.id;
+	return null;
+}
+
+function resolveChatType(context) {
+	if (context && context.chat && typeof context.chat.type === 'string') return context.chat.type;
+	if (context && context.update && context.update.message && context.update.message.chat
+		&& typeof context.update.message.chat.type === 'string') {
+		return context.update.message.chat.type;
+	}
+	if (context && context.message && context.message.chat
+		&& typeof context.message.chat.type === 'string') {
+		return context.message.chat.type;
+	}
+	return null;
+}
+
+function resolveBotUsername(context) {
+	if (!context) return null;
+	if (context.botInfo && typeof context.botInfo.username === 'string') return context.botInfo.username;
+	if (context.telegram && context.telegram.botInfo
+		&& typeof context.telegram.botInfo.username === 'string') {
+		return context.telegram.botInfo.username;
+	}
+	return null;
+}
+
+/**
+ * Send the localized welcome message and reply_markup.
+ *
+ * @param {object} context Telegraf context
+ * @param {object} payload parsed payload result
+ * @param {string} preferredLanguage
+ * @returns {Promise<void>}
+ */
+async function replyWithWelcome(context, payload, preferredLanguage) {
+	const welcome = buildStartMessage(payload, preferredLanguage);
+	const botUsername = resolveBotUsername(context);
+	const replyMarkup = buildInlineKeyboard(botUsername);
+
+	await context.reply(escapeRiskFieldValue(welcome.message), {
+		parse_mode: 'MarkdownV2',
+		reply_markup: replyMarkup,
+	});
+	return welcome;
+}
+
+/**
+ * Compose the /start handler with optional enrollment persistence.
+ *
+ * @param {object} [options]
+ * @param {Function} [options.reply] injected reply (defaults to context.reply)
+ * @param {Function} [options.sentry] optional Sentry capture hook
+ * @returns {Function} Telegraf context handler
+ */
+function createStartCommand(options = {}) {
+	const captureRuntimeError = options.captureRuntimeError;
+
+	return async function startCommand(context) {
+		const payload = context && typeof context.payload === 'string'
+			? context.payload
+			: (context && typeof context.startPayload === 'string' ? context.startPayload : null);
+
+		const parsedResult = parseStartPayload(payload);
+		const chatId = resolveChatId(context);
+		const chatType = resolveChatType(context);
+
+		const hasTokens = Array.isArray(parsedResult.tokens) && parsedResult.tokens.length > 0;
+		if (chatId === null || chatId === undefined || !chatEnrollmentsService.isEnabled()
+			|| !hasTokens || parsedResult.invalid) {
+			await replyWithWelcome(context, null, DEFAULT_LANGUAGE);
+			return;
+		}
+
+		let welcomePayload = null;
+		let preferredLanguage = DEFAULT_LANGUAGE;
+		try {
+			const existing = await chatEnrollmentsService.getByChatId(chatId);
+
+			const merged = {
+				chatId,
+				chatType: chatType || (existing && existing.chatType) || 'private',
+				...(parsedResult.language ? { language: parsedResult.language } : {}),
+				...(parsedResult.refSource ? { refSource: parsedResult.refSource } : {}),
+			};
+
+			if (parsedResult.watchlist.length > 0) {
+				merged.watchlist = await watchlistService.add(chatId, parsedResult.watchlist);
+			}
+			const enrolled = await chatEnrollmentsService.enroll(merged);
+			if (!enrolled) throw new Error('Enrollment unavailable');
+			welcomePayload = payload;
+			preferredLanguage = enrolled.language || DEFAULT_LANGUAGE;
+		} catch (error) {
+			console.warn('[startCommand] failed to persist enrollment:', error.message);
+			if (typeof captureRuntimeError === 'function') {
+				try {
+					captureRuntimeError({
+						channel: 'telegram',
+						error,
+						extra: {
+							command: 'start',
+							chatId,
+						},
+					});
+				} catch (monitoringError) {
+					console.warn('[startCommand] monitoring failed:', monitoringError.message);
+				}
+			}
+		}
+		await replyWithWelcome(context, welcomePayload, preferredLanguage);
+	};
+}
+
+module.exports = {
+	createStartCommand,
+	resolveChatId,
+	resolveChatType,
+	resolveBotUsername,
+	buildInlineKeyboard,
+	registerStartActions,
+};

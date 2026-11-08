@@ -35,13 +35,39 @@ function parseVolumeConfirmationRequest(req = {}) {
 	const body = getRequestBody(req);
 	const { exchange, symbol } = parseSymbolIdentifier(body.symbol);
 	const timeframe = parseTimeframe(body);
+	const includeMultiTimeframe = parseIncludeMultiTimeframe(body);
 
 	return {
 		exchange,
 		symbol,
 		rawSymbol: `${exchange}:${symbol}`,
 		timeframe,
+		includeMultiTimeframe,
+		side: typeof body.side === 'string' && body.side.trim() ? body.side.trim() : null,
+		direction: typeof body.direction === 'string' && body.direction.trim() ? body.direction.trim() : null,
+		breakoutType: typeof body.breakoutType === 'string' && body.breakoutType.trim()
+			? body.breakoutType.trim()
+			: (typeof body.breakout_type === 'string' && body.breakout_type.trim() ? body.breakout_type.trim() : null),
+		tradingRecommendation: typeof body.tradingRecommendation === 'string' && body.tradingRecommendation.trim()
+			? body.tradingRecommendation.trim()
+			: (typeof body.trading_recommendation === 'string' && body.trading_recommendation.trim() ? body.trading_recommendation.trim() : null),
 	};
+}
+
+function parseIncludeMultiTimeframe(body = {}) {
+	const val = body.includeMultiTimeframe !== undefined ? body.includeMultiTimeframe : body.include_multi_timeframe;
+	if (val === undefined || val === null) {
+		return false;
+	}
+	if (typeof val !== 'boolean') {
+		if (typeof val === 'string') {
+			const lower = val.trim().toLowerCase();
+			if (lower === 'true') return true;
+			if (lower === 'false') return false;
+		}
+		throw new VolumeConfirmationRequestError('includeMultiTimeframe must be a boolean');
+	}
+	return val;
 }
 
 function getRequestBody(req = {}) {
