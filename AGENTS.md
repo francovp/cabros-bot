@@ -3079,6 +3079,6 @@ No new environment variable, Remote Config key, or notification channel was adde
 
 Two Remote-Config-eligible runtime settings govern the rollup:
 - `SIGNAL_OUTCOME_ROLLUP_ENABLED`: Boolean (default `true`). Opt-in runtime gate for computing daily signal outcome rollups during scheduled evaluation sweeps.
-- `SIGNAL_OUTCOME_ROLLUP_TTL_DAYS`: Integer `1`–`730` (default `180`). Retention policy in days for `tradingSignalOutcomesDaily` documents before Firestore native TTL deletion.
+- `SIGNAL_OUTCOME_ROLLUP_TTL_DAYS`: Integer `30`–`365` (default `180`). Retention policy in days for `tradingSignalOutcomesDaily` documents before Firestore native TTL deletion.
 
 The public/operator query endpoint `GET /api/outcomes/trend` exposes chronological daily metrics (`hitRatePercent`, `sampleSize`, `wins`, `losses`, `invalidated`, `pending`, `avgMfe`, `avgMae`, `avgReturnPercent`, `finalized`) with bounding (max 180 days, default 30 days) and `admin.viewer` authorization.

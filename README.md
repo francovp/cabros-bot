@@ -482,7 +482,7 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
 | Remote Config parameter | Environment/default fallback | Bounds | Purpose |
 | --- | --- | --- | --- |
 | `SIGNAL_OUTCOME_ROLLUP_ENABLED` | `true` | boolean | Opt-in runtime gate for computing daily signal outcome rollups during scheduled evaluation sweeps. |
-| `SIGNAL_OUTCOME_ROLLUP_TTL_DAYS` | `180` | integer `1`–`730` | Retention policy in days for `tradingSignalOutcomesDaily` documents before Firestore native TTL deletion. |
+| `SIGNAL_OUTCOME_ROLLUP_TTL_DAYS` | `180` | integer `30`–`365` | Retention policy in days for `tradingSignalOutcomesDaily` documents before Firestore native TTL deletion. |
 
 Both settings are non-secret runtime tuning parameters supported by Firebase Remote Config. Fresh published values override environment/default values.
 

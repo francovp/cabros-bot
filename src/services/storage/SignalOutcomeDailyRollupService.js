@@ -97,12 +97,18 @@ function computeDailyMetrics(docs, window, bucket = 'all') {
 	for (const doc of docs) {
 		const data = typeof doc.data === 'function' ? doc.data() : doc;
 		if (!matchesBucket(data, bucket)) continue;
-		signals++;
 
 		const outcomeMap = data.outcomes || {};
 		const winOutcome = outcomeMap[window];
 
-		if (!winOutcome || winOutcome.status === 'pending') {
+		// If this record did not configure the requested window, exclude it from this window's metrics
+		if (!winOutcome) {
+			continue;
+		}
+
+		signals++;
+
+		if (winOutcome.status === 'pending') {
 			pending++;
 			continue;
 		}
@@ -215,6 +221,30 @@ async function rollupOutcomesDaily({ firestore, date, window, bucket = 'all', fo
 			const candidateDates = date
 				? [date]
 				: getMaturityDaysOffsets(targetWin).map((offset) => getDateStringFromOffset(nowMs, offset));
+
+			if (!date) {
+				try {
+					const unfinishedSnapshot = await firestore
+						.collection(DAILY_COLLECTION_NAME)
+						.where('evaluationWindow', '==', targetWin)
+						.where('bucket', '==', bucket)
+						.where('finalized', '==', false)
+						.limit(10)
+						.get();
+
+					if (unfinishedSnapshot && !unfinishedSnapshot.empty) {
+						for (const unfinishedDoc of unfinishedSnapshot.docs) {
+							const unfinishedData = typeof unfinishedDoc.data === 'function' ? unfinishedDoc.data() : unfinishedDoc;
+							const unfinishedDate = unfinishedData?.date;
+							if (unfinishedDate && !candidateDates.includes(unfinishedDate)) {
+								candidateDates.push(unfinishedDate);
+							}
+						}
+					}
+				} catch (queryErr) {
+					// fail-open: do not fail sweep if historical unfinished query fails
+				}
+			}
 
 			for (const targetDate of candidateDates) {
 				scannedCohorts++;

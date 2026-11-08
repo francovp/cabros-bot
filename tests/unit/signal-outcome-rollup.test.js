@@ -151,6 +151,36 @@ describe('SignalOutcomeDailyRollupService', () => {
 			// 1 win out of 2 evaluated outcomes = 50.0%
 			expect(metrics.hitRatePercent).toBe(50.0);
 		});
+
+		it('excludes records that did not configure the requested window from signals and pending', () => {
+			const docs = [
+				{
+					// Only configured for 1h, omitted from 1D
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetHit: true,
+						},
+					},
+				},
+				{
+					// Configured for 1D and evaluated
+					outcomes: {
+						'1D': {
+							status: 'evaluated',
+							targetHit: true,
+							return: 3.0,
+						},
+					},
+				},
+			];
+
+			const metrics = SignalOutcomeDailyRollupService.computeDailyMetrics(docs, '1D');
+			expect(metrics.signals).toBe(1);
+			expect(metrics.sampleSize).toBe(1);
+			expect(metrics.wins).toBe(1);
+			expect(metrics.pending).toBe(0);
+		});
 	});
 
 	describe('formatDocId()', () => {
@@ -385,6 +415,85 @@ describe('SignalOutcomeDailyRollupService', () => {
 			expect(setCalls.length).toBe(1);
 			expect(setCalls[0].data.finalized).toBe(false);
 			expect(setCalls[0].data.pending).toBe(1);
+		});
+
+		it('revisits unfinished historical cohorts (finalized: false) beyond candidate maturity offsets', async () => {
+			const setCalls = [];
+			const batchCommit = jest.fn().mockResolvedValue([]);
+			const mockBatch = {
+				set: jest.fn((ref, data) => setCalls.push({ ref, data })),
+				commit: batchCommit,
+			};
+
+			const mockDailyDoc = {
+				get: jest.fn().mockResolvedValue({
+					exists: true,
+					data: () => ({ finalized: false, date: '2026-08-10' }),
+				}),
+			};
+
+			const mockFirestore = {
+				collection: (name) => {
+					if (name === 'tradingSignalOutcomesDaily') {
+						return {
+							doc: jest.fn().mockReturnValue(mockDailyDoc),
+							where: jest.fn().mockReturnThis(),
+							limit: jest.fn().mockReturnThis(),
+							get: jest.fn().mockResolvedValue({
+								docs: [
+									{
+										data: () => ({ date: '2026-08-10', finalized: false }),
+									},
+								],
+							}),
+						};
+					}
+					if (name === 'tradingSignalOutcomes') {
+						return {
+							where: jest.fn().mockReturnThis(),
+							select: jest.fn().mockReturnThis(),
+							limit: jest.fn().mockReturnThis(),
+							get: jest.fn().mockResolvedValue({
+								docs: [
+									{
+										data: () => ({
+											receivedAt: '2026-08-10T10:00:00.000Z',
+											assetClass: 'crypto',
+											setupType: 'breakout',
+											outcomeEvaluated: true,
+											outcomes: {
+												'1D': {
+													status: 'evaluated',
+													targetHit: true,
+													stopHit: false,
+													return: 2.5,
+												},
+											},
+										}),
+									},
+								],
+							}),
+						};
+					}
+					return {};
+				},
+				batch: () => mockBatch,
+			};
+
+			// now is 2026-09-01; 2026-08-10 is way past days -2 and -3
+			const now = new Date('2026-09-01T12:00:00.000Z');
+			const result = await SignalOutcomeDailyRollupService.rollupOutcomesDaily({
+				firestore: mockFirestore,
+				now,
+				window: '1D',
+			});
+
+			expect(result.success).toBe(true);
+			// setCalls should include an update for 2026-08-10
+			const updatedDates = setCalls.map((call) => call.data.date);
+			expect(updatedDates).toContain('2026-08-10');
+			const rollup20260810 = setCalls.find((call) => call.data.date === '2026-08-10');
+			expect(rollup20260810.data.finalized).toBe(true);
 		});
 	});
 

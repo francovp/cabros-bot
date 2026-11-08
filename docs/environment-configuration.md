@@ -210,7 +210,7 @@ Unlike equity market data, this feature **does** run a bounded startup probe (5s
 - `SIGNAL_OUTCOME_WINDOWS` - Ordered comma-separated evaluation windows (`1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1D`, `1W`, or `1M`; default: `1h,4h,1D,1W`). Invalid, duplicate, or empty values fall back to the default. Remote Config eligible.
 - `SIGNAL_OUTCOME_WINDOW_LABELS` - Optional JSON object mapping configured window keys to display labels (default: empty; omitted labels use the window key). Remote Config eligible.
 - `SIGNAL_OUTCOME_ROLLUP_ENABLED` - Enable automatic daily outcome rollup computation during scheduled worker sweeps (`true` or `false`, default: `true`). Remote Config eligible.
-- `SIGNAL_OUTCOME_ROLLUP_TTL_DAYS` - Retention for `tradingSignalOutcomesDaily` records in days (`1`-`730`, default: `180`). Remote Config eligible.
+- `SIGNAL_OUTCOME_ROLLUP_TTL_DAYS` - Retention for `tradingSignalOutcomesDaily` records in days (`30`-`365`, default: `180`). Remote Config eligible.
 - `ENABLE_EQUITY_MARKET_DATA` - Opt in to equity/forex/index outcome evaluation for `NASDAQ`, `BATS`, `NYSE`, `AMEX`, `NYSE ARCA`, `FX_IDC`, and `SPCFD` signals (`true` or `false`, default: `false`)
 - `EQUITY_MARKET_DATA_PROVIDER` - Equity provider name; currently `twelve-data`
 - `TWELVE_DATA_API_KEY` - Twelve Data API key; sent in the `Authorization` header and never returned by status endpoints
