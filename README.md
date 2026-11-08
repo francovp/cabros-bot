@@ -195,6 +195,8 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `GET` | `/api/trading/trades` | Historical trade fills and closed round trips with pagination | [API Reference](docs/api-reference.md#get-apitradingtrades) |
 | `GET` | `/api/alerts` | Query stored alerts with pagination & filtering | [Stored Alerts](docs/alerts.md#get-apialerts) |
 | `GET` | `/api/alerts/summary` | Analytics & delivery success rate metrics | [Stored Alerts](docs/alerts.md#get-apialertssummary) |
+| `POST` | `/api/alerts/:alertId/acknowledge` | Record a trader acknowledgement (took/skipped/no-trade/snoozed) for a stored alert | [Stored Alerts](docs/alerts.md#post-apialertsalertidacknowledge) |
+| `GET` | `/api/alerts/:alertId/acknowledgements/breakdown` | Zero-safe per-action acknowledgement counts for a stored alert | [Stored Alerts](docs/alerts.md#get-apialertsalertidacknowledgementsbreakdown) |
 | `POST` | `/api/alerts/:alertId/replay` | Dry-run or live replay of stored alert | [Stored Alerts](docs/alerts.md#post-apialertsalertidreplay) |
 | `GET` | `/api/outcomes` | Query signal outcomes with multi-window returns | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomes) |
 | `GET` | `/api/outcomes/summary` | Expectancy, win rate, filters, and optional bounded symbol/setup breakdowns | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomessummary) |

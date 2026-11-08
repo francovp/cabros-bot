@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const { sendErrorFrom } = require('../../lib/errorEnvelope');
 const alertStorageService = require('../../services/storage/AlertStorageService');
+const alertAcknowledgementService = require('../../services/storage/AlertAcknowledgementService');
 const alertFeedbackStorageService = require('../../services/storage/AlertFeedbackStorageService');
 const sentryService = require('../../services/monitoring/SentryService');
 const signalOutcomeService = require('../../services/storage/SignalOutcomeService');
@@ -1546,6 +1547,90 @@ function getFeedbackSummary(req, res) {
 	});
 }
 
+function acknowledgeAlert(req, res) {
+	return handleAsync(req, res, `/api/alerts/${req.params.alertId}/acknowledge`, async () => {
+		if (!alertStorageService.isEnabled() || !alertAcknowledgementService.isEnabled()) {
+			return sendErrorFrom(res, 403, {
+				error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+
+		const { alertId } = req.params;
+		if (!alertId) {
+			return sendErrorFrom(res, 400, {
+				error: 'Missing alertId parameter',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const body = req.body || {};
+		const chatId = typeof body.chatId === 'string' ? body.chatId.trim() : '';
+		if (!chatId) {
+			return sendErrorFrom(res, 400, {
+				error: 'chatId is required in the request body.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const storedAlert = await alertStorageService.getAlertById(alertId);
+		if (!storedAlert) {
+			return sendErrorFrom(res, 404, {
+				error: 'Alert not found',
+				code: 'NOT_FOUND',
+			});
+		}
+
+		const record = await alertAcknowledgementService.saveAcknowledgement({
+			alertId,
+			chatId,
+			action: body.action,
+			notes: body.notes,
+			symbol: storedAlert.symbol,
+			exchange: storedAlert.exchange,
+		});
+
+		return res.status(201).json({
+			success: true,
+			ackId: record.ackId,
+			alertId: record.alertId,
+			action: record.action,
+			notes: record.notes,
+			acknowledgedAt: record.acknowledgedAt,
+			updatedAt: record.updatedAt,
+			storage: record.storage,
+		});
+	});
+}
+
+function getAcknowledgementBreakdown(req, res) {
+	return handleAsync(req, res, `/api/alerts/${req.params.alertId}/acknowledgements/breakdown`, async () => {
+		if (!alertStorageService.isEnabled() || !alertAcknowledgementService.isEnabled()) {
+			return sendErrorFrom(res, 403, {
+				error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+
+		const { alertId } = req.params;
+		if (!alertId) {
+			return sendErrorFrom(res, 400, {
+				error: 'Missing alertId parameter',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const breakdown = await alertAcknowledgementService.getAcknowledgementBreakdown(alertId);
+		return res.status(200).json({
+			success: true,
+			alertId: breakdown.alertId,
+			total: breakdown.total,
+			breakdown: breakdown.breakdown,
+			storage: breakdown.storage,
+		});
+	});
+}
+
 module.exports = {
 	listAlerts,
 	getAlertById,
@@ -1558,5 +1643,7 @@ module.exports = {
 	exportAlerts,
 	submitFeedback,
 	getFeedbackSummary,
+	acknowledgeAlert,
+	getAcknowledgementBreakdown,
 	VALID_SUMMARY_INTERVALS,
 };

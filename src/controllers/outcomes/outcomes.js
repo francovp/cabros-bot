@@ -2,6 +2,7 @@
 
 const sentryService = require('../../services/monitoring/SentryService');
 const signalOutcomeService = require('../../services/storage/SignalOutcomeService');
+const alertAcknowledgementService = require('../../services/storage/AlertAcknowledgementService');
 const { parseAlertPaginationCursor } = require('../../services/storage/alertPaginationCursor');
 const { sendErrorFrom, STANDARD_ERROR_CODES } = require('../../lib/errorEnvelope');
 
@@ -185,6 +186,23 @@ function parseBreakdown(rawBreakdown) {
 		return null;
 	}
 	return [...new Set(values)];
+}
+
+function parseAcknowledgementsFlag(rawValue) {
+	if (rawValue === undefined) {
+		return false;
+	}
+	if (typeof rawValue !== 'string') {
+		return null;
+	}
+	const normalized = rawValue.trim().toLowerCase();
+	if (normalized === 'true') {
+		return true;
+	}
+	if (normalized === 'false') {
+		return false;
+	}
+	return null;
 }
 
 function parseOptionalTimestamp(rawValue, name) {
@@ -372,6 +390,14 @@ function summarizeOutcomes(req, res) {
 			setupType = req.query.setupType.trim();
 		}
 
+		const includeAcknowledgments = parseAcknowledgementsFlag(req.query.includeAcknowledgments);
+		if (includeAcknowledgments === null) {
+			return sendErrorFrom(res, 400, {
+				error: 'Invalid includeAcknowledgments flag. Use true or false.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
 		const summaryParams = {
 			limit,
 			symbol,
@@ -384,6 +410,33 @@ function summarizeOutcomes(req, res) {
 			to: to.value,
 		};
 		const summary = await signalOutcomeService.summarizeOutcomes(summaryParams);
+
+		if (includeAcknowledgments === true) {
+			try {
+				if (alertAcknowledgementService.isEnabled()) {
+					const ackSummary = await alertAcknowledgementService.summarizeAcknowledgements({
+						symbol,
+						exchange,
+						from: from.value,
+						to: to.value,
+						limit: 1000,
+					});
+					summary.acknowledgementBreakdown = {
+						total: ackSummary.total,
+						breakdown: ackSummary.breakdown,
+						bySymbol: ackSummary.bySymbol,
+						byExchange: ackSummary.byExchange,
+						storage: ackSummary.storage,
+						window: ackSummary.window,
+					};
+				} else {
+					summary.acknowledgementBreakdown = alertAcknowledgementService.buildEmptyAcknowledgementSummary();
+				}
+			} catch (ackError) {
+				console.warn('[OutcomesController] Failed to read acknowledgement breakdown:', ackError.message);
+				summary.acknowledgementBreakdown = alertAcknowledgementService.buildEmptyAcknowledgementSummary();
+			}
+		}
 
 		return res.status(200).json({
 			success: true,

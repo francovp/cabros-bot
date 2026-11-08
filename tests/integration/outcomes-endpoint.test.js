@@ -11,10 +11,16 @@ jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	INVALID_CURSOR_MESSAGE: 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.',
 }));
 
+jest.mock('../../src/services/storage/AlertAcknowledgementService', () => ({
+	isEnabled: jest.fn(),
+	summarizeAcknowledgements: jest.fn(),
+}));
+
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+const alertAcknowledgementService = require('../../src/services/storage/AlertAcknowledgementService');
 const { encodeAlertPaginationCursor } = require('../../src/services/storage/alertPaginationCursor');
 
 describe('Signal Outcomes API Integration Tests', () => {
@@ -501,6 +507,51 @@ describe('Signal Outcomes API Integration Tests', () => {
 				.expect(200);
 
 			expect(res.body.success).toBe(true);
+		});
+
+		it('includes acknowledgementBreakdown when includeAcknowledgments=true', async () => {
+			signalOutcomeService.summarizeOutcomes.mockResolvedValue({ totalSignalsReceived: 5 });
+			alertAcknowledgementService.isEnabled.mockReturnValue(true);
+			alertAcknowledgementService.summarizeAcknowledgements.mockResolvedValue({
+				total: 3,
+				breakdown: { took_trade: 2, skipped: 1, no_trade_no_signal: 0, snoozed: 0 },
+				bySymbol: { BTCUSDT: 3 },
+				byExchange: { BINANCE: 3 },
+				storage: 'firestore',
+				window: { from: null, to: null, limit: 1000 },
+			});
+
+			const res = await request(app)
+				.get('/api/outcomes/summary?includeAcknowledgments=true')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(res.body.summary.acknowledgementBreakdown.total).toBe(3);
+			expect(res.body.summary.acknowledgementBreakdown.breakdown.took_trade).toBe(2);
+		});
+
+		it('omits acknowledgementBreakdown when includeAcknowledgments is absent', async () => {
+			signalOutcomeService.summarizeOutcomes.mockResolvedValue({ totalSignalsReceived: 5 });
+			alertAcknowledgementService.isEnabled.mockReturnValue(true);
+
+			const res = await request(app)
+				.get('/api/outcomes/summary')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(res.body.summary.acknowledgementBreakdown).toBeUndefined();
+			expect(alertAcknowledgementService.summarizeAcknowledgements).not.toHaveBeenCalled();
+		});
+
+		it('returns 400 when includeAcknowledgments has an invalid value', async () => {
+			signalOutcomeService.summarizeOutcomes.mockResolvedValue({ totalSignalsReceived: 5 });
+
+			const res = await request(app)
+				.get('/api/outcomes/summary?includeAcknowledgments=yes')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+
+			expect(res.body.code).toBe('INVALID_REQUEST');
 		});
 	});
 

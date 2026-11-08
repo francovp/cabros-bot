@@ -10,6 +10,7 @@ const PAGE_SIZE = 400;
 const COLLECTIONS = [
 	{ name: 'alerts', timestampField: 'receivedAt' },
 	{ name: 'alertReplays', timestampField: 'replayedAt' },
+	{ name: 'alertAcknowledgements', timestampField: 'acknowledgedAt' },
 	{
 		name: 'tradingviewJobs',
 		timestampField: 'createdAt',
