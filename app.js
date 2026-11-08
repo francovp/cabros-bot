@@ -14,6 +14,10 @@ const requestDeadline = require('./src/lib/requestDeadline');
 const requestLogger = require('./src/lib/requestLogger');
 const { buildWebhookBodySize } = require('./src/lib/webhookBodySize');
 
+function captureRawBody(req, _res, buffer) {
+	req.rawBody = Buffer.from(buffer);
+}
+
 // Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
 setupTrustProxy(app);
 
@@ -43,17 +47,17 @@ const webhookBodyPaths = ['/api/webhook', /^\/api\/news-monitor\/?$/];
 
 // Apply the configurable limit only to webhook-style request bodies. Other API
 // routes retain Express' existing parser behavior and limit.
-app.use(webhookBodyPaths, express.urlencoded({ extended: false, limit: webhookBodySize.jsonLimit }));
-app.use(webhookBodyPaths, express.text({ type: 'text/plain', limit: webhookBodySize.textLimit }));
-app.use(webhookBodyPaths, express.json({ limit: webhookBodySize.jsonLimit }));
+app.use(webhookBodyPaths, express.urlencoded({ extended: false, limit: webhookBodySize.jsonLimit, verify: captureRawBody }));
+app.use(webhookBodyPaths, express.text({ type: 'text/plain', limit: webhookBodySize.textLimit, verify: captureRawBody }));
+app.use(webhookBodyPaths, express.json({ limit: webhookBodySize.jsonLimit, verify: captureRawBody }));
 app.use(webhookBodyPaths, webhookBodySize.middleware);
 // Fallback parsers for non-webhook routes. The limit is set explicitly rather
 // than relying on body-parser's implicit 100kb default, so an oversized payload
 // is rejected deterministically instead of tracking an undocumented value.
 const BODY_PARSER_LIMIT = '100kb';
-app.use(express.urlencoded({ extended: false, limit: BODY_PARSER_LIMIT }));
-app.use(express.text({ type: 'text/plain', limit: BODY_PARSER_LIMIT }));
-app.use(express.json({ limit: BODY_PARSER_LIMIT }));
+app.use(express.urlencoded({ extended: false, limit: BODY_PARSER_LIMIT, verify: captureRawBody }));
+app.use(express.text({ type: 'text/plain', limit: BODY_PARSER_LIMIT, verify: captureRawBody }));
+app.use(express.json({ limit: BODY_PARSER_LIMIT, verify: captureRawBody }));
 
 // Use helmet for improved security
 const contentSecurityPolicy = helmet.contentSecurityPolicy.getDefaultDirectives();
