@@ -126,6 +126,80 @@ describe('validateWebhookSignature', () => {
 		});
 	});
 
+	it('verifies non-UTF-8 raw bodies without a UTF-8 round-trip', () => {
+		const timestamp = String(Date.now());
+		const rawBody = Buffer.from('{"text":"hola"}', 'utf16le');
+		const canonicalPrefix = Buffer.from(`${timestamp}\nPOST\n/api/webhook/alert\n`, 'utf8');
+		const signature = `sha256=${crypto.createHmac('sha256', secret)
+			.update(Buffer.concat([canonicalPrefix, rawBody]))
+			.digest('hex')}`;
+		const next = jest.fn();
+
+		validateWebhookSignature({
+			method: 'POST',
+			originalUrl: '/api/webhook/alert',
+			rawBody,
+			headers: { 'x-webhook-timestamp': timestamp, 'x-webhook-signature': signature },
+		}, response(), next);
+
+		expect(next).toHaveBeenCalledTimes(1);
+	});
+
+	it('rejects compressed bodies with 400 WEBHOOK_SIGNATURE_COMPRESSED_BODY', () => {
+		const timestamp = String(Date.now());
+		const res = response();
+		const next = jest.fn();
+
+		validateWebhookSignature({
+			method: 'POST',
+			originalUrl: '/api/webhook/alert',
+			rawBody: Buffer.from('{}'),
+			headers: {
+				'x-webhook-timestamp': timestamp,
+				'x-webhook-signature': sign({ secret, timestamp, body: '{}', path: '/api/webhook/alert' }),
+				'content-encoding': 'gzip',
+			},
+		}, res, next);
+
+		expect(next).not.toHaveBeenCalled();
+		expect(res.status).toHaveBeenCalledWith(400);
+		expect(res.json).toHaveBeenCalledWith({
+			error: 'Bad Request: Compressed webhook bodies are not supported with signing',
+			code: 'WEBHOOK_SIGNATURE_COMPRESSED_BODY',
+		});
+	});
+
+	it('retains a future-dated signature through its own validity window', () => {
+		const timestamp = String(Date.now() + 200000);
+		const body = '{"text":"future"}';
+		const req = {
+			method: 'POST',
+			originalUrl: '/api/webhook/alert',
+			rawBody: Buffer.from(body),
+			headers: {
+				'x-webhook-timestamp': timestamp,
+				'x-webhook-signature': sign({ secret, timestamp, body, path: '/api/webhook/alert' }),
+			},
+		};
+		const next = jest.fn();
+		validateWebhookSignature(req, response(), next);
+		expect(next).toHaveBeenCalledTimes(1);
+
+		// Simulate time passing beyond first-receipt + tolerance but still
+		// inside the signature's own window: the replay must still be caught.
+		const realNow = Date.now;
+		Date.now = () => Number(timestamp) + 100000;
+		try {
+			const res = response();
+			const next2 = jest.fn();
+			validateWebhookSignature(req, res, next2);
+			expect(next2).not.toHaveBeenCalled();
+			expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'WEBHOOK_SIGNATURE_REPLAY' }));
+		} finally {
+			Date.now = realNow;
+		}
+	});
+
 	it('skips signature verification when the secret is unset', () => {
 		delete process.env.WEBHOOK_SIGNING_SECRET;
 		const next = jest.fn();

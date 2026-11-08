@@ -188,6 +188,16 @@ function validateWebhookSignature(req, res, next) {
 		});
 	}
 
+	// Signed bytes are captured post-inflation, so compressed bodies cannot
+	// verify against the sender's bytes. Reject them explicitly.
+	const contentEncoding = req.headers && req.headers['content-encoding'];
+	if (typeof contentEncoding === 'string' && /(?:^|,)\s*(?:gzip|deflate)\s*(?:,|$)/i.test(contentEncoding)) {
+		return res.status(400).json({
+			error: 'Bad Request: Compressed webhook bodies are not supported with signing',
+			code: 'WEBHOOK_SIGNATURE_COMPRESSED_BODY',
+		});
+	}
+
 	const timestampMs = Number(timestamp);
 	const toleranceMs = getSigningToleranceMs();
 	if (!Number.isSafeInteger(timestampMs)
@@ -198,9 +208,11 @@ function validateWebhookSignature(req, res, next) {
 		});
 	}
 
-	const rawBody = Buffer.isBuffer(req.rawBody) ? req.rawBody.toString('utf8') : '';
-	const canonical = `${timestamp}\n${req.method}\n${req.originalUrl || req.url}\n${rawBody}`;
-	const expected = `sha256=${crypto.createHmac('sha256', secret).update(canonical).digest('hex')}`;
+	// Hash the raw body bytes directly (no UTF-8 round-trip) so non-UTF-8
+	// charsets verify against the exact bytes the sender signed.
+	const rawBody = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.alloc(0);
+	const canonicalPrefix = Buffer.from(`${timestamp}\n${req.method}\n${req.originalUrl || req.url}\n`, 'utf8');
+	const expected = `sha256=${crypto.createHmac('sha256', secret).update(Buffer.concat([canonicalPrefix, rawBody])).digest('hex')}`;
 	const provided = Buffer.from(signature);
 	const expectedBuffer = Buffer.from(expected);
 	if (provided.length !== expectedBuffer.length || !crypto.timingSafeEqual(provided, expectedBuffer)) {
@@ -226,7 +238,10 @@ function validateWebhookSignature(req, res, next) {
 			const oldest = seenSignatures.keys().next().value;
 			if (oldest !== undefined) seenSignatures.delete(oldest);
 		}
-		seenSignatures.set(seenKey, now + toleranceMs);
+		// Retain through the signature's own validity window (inclusive
+		// boundary) so a future-dated timestamp cannot be replayed after a
+		// first-receipt-based expiry.
+		seenSignatures.set(seenKey, timestampMs + toleranceMs + 1);
 	} catch (_) {
 		// Fail-open: store errors must never block a valid request.
 	}
