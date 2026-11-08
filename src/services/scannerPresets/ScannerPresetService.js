@@ -1039,7 +1039,7 @@ class ScannerPresetService {
 
 	_parseExchange(exchange) {
 		if (exchange === undefined || exchange === null) {
-			return (process.env.MARKET_SCANNER_DEFAULT_EXCHANGE || DEFAULT_EXCHANGE).toUpperCase();
+			return (resolveRemoteOverride('MARKET_SCANNER_DEFAULT_EXCHANGE') ?? (process.env.MARKET_SCANNER_DEFAULT_EXCHANGE || DEFAULT_EXCHANGE)).toUpperCase();
 		}
 
 		if (typeof exchange !== 'string' || !exchange.trim()) {

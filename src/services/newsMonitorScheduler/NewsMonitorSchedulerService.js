@@ -2,6 +2,7 @@
 
 /* global AbortController */
 
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { getAnalyzer, setNotificationManager } = require('../../controllers/webhooks/handlers/newsMonitor/analyzer');
@@ -54,7 +55,7 @@ function parseEnvBool(value, fallback = false) {
 }
 
 function getSymbolsFromEnv(name) {
-	return (process.env[name] || '')
+	return (resolveRemoteOverride(name) ?? process.env[name] ?? '')
 		.split(',')
 		.map((s) => String(s).trim())
 		.filter(Boolean);

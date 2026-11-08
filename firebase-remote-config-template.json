@@ -998,6 +998,34 @@
       },
       "description": "Maximum number of cached entries per bucket in the /precio price cache (LRU eviction)",
       "valueType": "NUMBER"
+    },
+    "NEWS_SYMBOLS_CRYPTO": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Default comma-separated crypto symbols for news analysis; empty disables crypto defaults",
+      "valueType": "STRING"
+    },
+    "NEWS_SYMBOLS_STOCKS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Default comma-separated stock symbols for news analysis; empty disables stock defaults",
+      "valueType": "STRING"
+    },
+    "MARKET_SCANNER_DEFAULT_EXCHANGE": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Default non-empty TradingView exchange for scanner requests and new presets",
+      "valueType": "STRING"
+    },
+    "MARKET_SCANNER_TIMEOUT_MS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Scanner operation timeout in milliseconds (integer 1000-120000; application default 90000)",
+      "valueType": "NUMBER"
     }
   },
   "version": {
