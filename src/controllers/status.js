@@ -498,9 +498,14 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 	const tradingViewVolumeConfirmation = tradingViewMcpService.getVolumeConfirmationStatus({
 		enabled: tradingViewVolumeConfirmationEnabled,
 	});
-	const tradingViewStrategyResearch = tradingViewMcpService.getStrategyResearchStatus({
-		enabled: strategyResearchEnabled,
-	});
+	const tradingViewStrategyResearch = typeof tradingViewMcpService.getStrategyResearchStatus === 'function'
+		? tradingViewMcpService.getStrategyResearchStatus({
+			enabled: strategyResearchEnabled,
+		})
+		: dependencyStatus({
+			enabled: strategyResearchEnabled,
+			configured: false,
+		});
 	const firestore = withFirestoreReadHealth(dependencyStatus({
 		enabled: firestoreEnabled,
 		configured: isFirestoreConfigured(),
