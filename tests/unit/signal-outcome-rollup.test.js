@@ -299,8 +299,12 @@ describe('SignalOutcomeDailyRollupService', () => {
 			expect(SignalOutcomeDailyRollupService.formatDocId('2026-08-20', 'crypto', '4h')).toBe('2026-08-20_crypto_4h');
 		});
 
-		it('sanitizes slashes and special characters in bucket for document IDs', () => {
-			expect(SignalOutcomeDailyRollupService.formatDocId('2026-08-20', 'breakout/retest', '1D')).toBe('2026-08-20_breakout_retest_1D');
+		it('preserves bucket uniqueness and generates collision-resistant document IDs for distinct setup types', () => {
+			const docId1 = SignalOutcomeDailyRollupService.formatDocId('2026-08-20', 'breakout/retest', '1D');
+			const docId2 = SignalOutcomeDailyRollupService.formatDocId('2026-08-20', 'breakout_retest', '1D');
+			expect(docId1).not.toBe(docId2);
+			expect(docId1).toMatch(/^2026-08-20_breakout_retest_[a-f0-9]{8}_1D$/);
+			expect(docId2).toBe('2026-08-20_breakout_retest_1D');
 		});
 	});
 
@@ -314,6 +318,22 @@ describe('SignalOutcomeDailyRollupService', () => {
 				finalizedSnapshots: 0,
 				skippedCohorts: 0,
 			});
+		});
+
+		it('respects deadline and maxDurationMs budget to abort early when time expires', async () => {
+			const mockCollection = jest.fn();
+			const mockFirestore = {
+				collection: mockCollection,
+				batch: jest.fn().mockReturnValue({ set: jest.fn(), commit: jest.fn() }),
+			};
+
+			const result = await SignalOutcomeDailyRollupService.rollupOutcomesDaily({
+				firestore: mockFirestore,
+				deadline: Date.now() - 100,
+			});
+
+			expect(result.timedOut).toBe(true);
+			expect(mockCollection).not.toHaveBeenCalled();
 		});
 
 		it('skips immature cohorts and cohorts already finalized', async () => {
@@ -777,6 +797,28 @@ describe('SignalOutcomeDailyRollupService', () => {
 			expect(allSnapshot.wins).toBe(1);
 			expect(allSnapshot.losses).toBe(1);
 			expect(allSnapshot.hitRatePercent).toBe(50);
+		});
+
+		it('bounds rollup work within the specified deadline / maxDurationMs', async () => {
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue({
+					where: jest.fn().mockReturnThis(),
+					limit: jest.fn().mockReturnThis(),
+					get: jest.fn().mockResolvedValue({ empty: true, docs: [] }),
+				}),
+				batch: jest.fn().mockReturnValue({
+					set: jest.fn(),
+					commit: jest.fn().mockResolvedValue(),
+				}),
+			};
+
+			const result = await SignalOutcomeDailyRollupService.rollupOutcomesDaily({
+				firestore: mockFirestore,
+				deadline: Date.now() - 50,
+			});
+
+			expect(result.success).toBe(true);
+			expect(result.timedOut).toBe(true);
 		});
 	});
 

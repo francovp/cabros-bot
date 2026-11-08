@@ -2022,14 +2022,24 @@ function runScheduledSweep() {
 	}
 
 	const sweepPromise = (async () => {
-		const sweepResult = await evaluatePendingOutcomes();
+		const sweepStartTime = Date.now();
+		const maxDurationMs = parseTimerInterval(getRuntimeConfig().SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 30000);
+		const sweepResult = await evaluatePendingOutcomes({ maxDurationMs });
 		if (sweepResult && sweepResult.skipped && sweepResult.reason === 'already_evaluating') {
 			return sweepResult;
 		}
 		try {
 			const firestore = AlertStorageService.getFirestore();
 			if (firestore && dailyRollupService.isOutcomeRollupEnabled()) {
-				await dailyRollupService.rollupOutcomesDaily({ firestore });
+				const elapsed = Date.now() - sweepStartTime;
+				const remainingBudgetMs = Math.max(0, maxDurationMs - elapsed);
+				if (remainingBudgetMs > 0) {
+					await dailyRollupService.rollupOutcomesDaily({
+						firestore,
+						maxDurationMs: remainingBudgetMs,
+						deadline: sweepStartTime + maxDurationMs,
+					});
+				}
 			}
 		} catch (rollupErr) {
 			console.warn('[SignalOutcomeService] Daily outcome rollup failed:', rollupErr.message);

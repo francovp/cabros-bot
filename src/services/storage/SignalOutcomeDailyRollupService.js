@@ -1,5 +1,6 @@
 'use strict';
 
+const crypto = require('crypto');
 const admin = require('firebase-admin');
 const { round10 } = require('../../controllers/helpers');
 const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
@@ -47,15 +48,23 @@ function getRollupTtlDays() {
 	return DEFAULT_ROLLUP_TTL_DAYS;
 }
 
+function encodeBucketForDocId(bucket) {
+	const raw = String(bucket || 'all').trim().toLowerCase();
+	if (/^[a-z0-9_-]+$/.test(raw)) {
+		return raw;
+	}
+	// For buckets with special characters (e.g. slashes in setupType 'breakout/retest'),
+	// sanitize safe prefix and append a collision-resistant hash of the raw string.
+	const safePrefix = raw.replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24);
+	const hash = crypto.createHash('sha256').update(raw).digest('hex').slice(0, 8);
+	return `${safePrefix || 'bkt'}_${hash}`;
+}
+
 function buildDailyDocId(dateStr, bucket, window) {
 	const safeDate = String(dateStr).trim();
-	const safeBucket = String(bucket || 'all')
-		.trim()
-		.toLowerCase()
-		.replace(/[\/\s#?]+/g, '_')
-		.replace(/[^a-z0-9_-]/g, '_');
+	const safeBucket = encodeBucketForDocId(bucket);
 	const safeWindow = String(window || '1D').trim();
-	return `${safeDate}_${safeBucket || 'all'}_${safeWindow}`;
+	return `${safeDate}_${safeBucket}_${safeWindow}`;
 }
 
 function isCohortMature(dateStr, window, now = Date.now()) {
@@ -203,7 +212,18 @@ function getDateStringFromOffset(nowMs, daysOffset) {
 }
 
 async function rollupOutcomesDaily(options = {}) {
-	const { firestore, date, window, bucket = 'all', force = false, now = new Date(), ttlDays: customTtlDays, buckets } = options;
+	const {
+		firestore,
+		date,
+		window,
+		bucket = 'all',
+		force = false,
+		now = new Date(),
+		ttlDays: customTtlDays,
+		buckets,
+		deadline: customDeadline,
+		maxDurationMs,
+	} = options;
 	if (!isOutcomeRollupEnabled()) {
 		return { skipped: true, reason: 'disabled', scannedCohorts: 0, finalizedSnapshots: 0, skippedCohorts: 0 };
 	}
@@ -213,23 +233,37 @@ async function rollupOutcomesDaily(options = {}) {
 
 	try {
 		const nowMs = now instanceof Date ? now.getTime() : Number(now);
+		const startTime = Date.now();
+		const deadline = customDeadline
+			? Number(customDeadline)
+			: (maxDurationMs ? startTime + Number(maxDurationMs) : null);
 		const windows = window ? [window] : VALID_TREND_WINDOWS;
 		const results = [];
 		let scannedCohorts = 0;
 		let finalizedSnapshots = 0;
 		let skippedCohorts = 0;
+		let pendingBatchWrites = 0;
+		let timedOut = false;
 
 		const ttlDays = customTtlDays || getRollupTtlDays();
 		const expiresAt = admin.firestore.Timestamp.fromDate(new Date(nowMs + ttlDays * 24 * 60 * 60 * 1000));
 		const batch = firestore.batch ? firestore.batch() : null;
 
 		for (const targetWin of windows) {
+			if (deadline && Date.now() >= deadline) {
+				timedOut = true;
+				break;
+			}
 			const candidateDates = date
 				? [date]
 				: getMaturityDaysOffsets(targetWin).map((offset) => getDateStringFromOffset(nowMs, offset));
 
 			if (!date) {
 				try {
+					if (deadline && Date.now() >= deadline) {
+						timedOut = true;
+						break;
+					}
 					const cursorKey = `${targetWin}_${bucket || 'all'}`;
 					let query = firestore
 						.collection(DAILY_COLLECTION_NAME)
@@ -278,6 +312,10 @@ async function rollupOutcomesDaily(options = {}) {
 			}
 
 			for (const targetDate of candidateDates) {
+				if (deadline && Date.now() >= deadline) {
+					timedOut = true;
+					break;
+				}
 				scannedCohorts++;
 
 				const mature = isCohortMature(targetDate, targetWin, nowMs);
@@ -330,6 +368,10 @@ async function rollupOutcomesDaily(options = {}) {
 
 				let cohortSkipped = true;
 				for (const currentBucket of bucketsToRollup) {
+					if (deadline && Date.now() >= deadline) {
+						timedOut = true;
+						break;
+					}
 					const docId = buildDailyDocId(targetDate, currentBucket, targetWin);
 					const docRef = firestore.collection(DAILY_COLLECTION_NAME).doc(docId);
 
@@ -372,6 +414,7 @@ async function rollupOutcomesDaily(options = {}) {
 
 					if (batch) {
 						batch.set(docRef, dailyDoc, { merge: true });
+						pendingBatchWrites++;
 					} else {
 						await docRef.set(dailyDoc, { merge: true });
 					}
@@ -386,7 +429,7 @@ async function rollupOutcomesDaily(options = {}) {
 			}
 		}
 
-		if (batch) {
+		if (batch && pendingBatchWrites > 0) {
 			await batch.commit();
 		}
 
@@ -396,6 +439,7 @@ async function rollupOutcomesDaily(options = {}) {
 			finalizedSnapshots,
 			skippedCohorts,
 			results,
+			timedOut,
 		};
 	} catch (error) {
 		console.warn('[SignalOutcomeDailyRollupService] rollupOutcomesDaily failed:', error.message);
