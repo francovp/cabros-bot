@@ -11,6 +11,7 @@ const DEFAULT_DELIVERY_HOUR_UTC = 13;
 const DEFAULT_MAX_SPEND_USD = 50;
 const LEASE_TTL_MS = 5 * 60 * 1000;
 const CHECK_INTERVAL_MS = 60 * 1000;
+const DEFAULT_SEND_TIMEOUT_MS = 10000;
 const SCANNER_SOURCES = new Set(['market-scanner', 'scanner-preset']);
 
 function parseHour(value) {
@@ -345,7 +346,8 @@ class DailyDigestService {
 		} catch (err) { console.warn('[DailyDigest] mark done failed:', err.message); return false; }
 	}
 
-	async _defaultSend(chatId, text) {
+	async _defaultSend(chatId, text, options = {}) {
+		const timeoutMs = options.timeoutMs || DEFAULT_SEND_TIMEOUT_MS;
 		const bot = this.botGetter ? this.botGetter() : null;
 		if (!bot) {
 			const { getNotificationManager } = require('../../controllers/webhooks/handlers/alert/alert');
@@ -358,8 +360,20 @@ class DailyDigestService {
 			throw new Error('Bot instance not available');
 		}
 		if (typeof bot.telegram?.sendMessage === 'function') {
-			const msg = await bot.telegram.sendMessage(chatId, text, { parse_mode: 'MarkdownV2' });
-			return { success: true, messageId: msg?.message_id ? String(msg.message_id) : null };
+			const controller = new AbortController();
+			const timer = setTimeout(() => controller.abort(new Error('Telegram send timeout')), timeoutMs);
+			if (timer.unref) timer.unref();
+			try {
+				const msg = await Promise.race([
+					bot.telegram.sendMessage(chatId, text, { parse_mode: 'MarkdownV2', signal: controller.signal }),
+					new Promise((_, reject) => {
+						controller.signal.addEventListener('abort', () => reject(controller.signal.reason || new Error('Telegram send timeout')), { once: true });
+					}),
+				]);
+				return { success: true, messageId: msg?.message_id ? String(msg.message_id) : null };
+			} finally {
+				clearTimeout(timer);
+			}
 		}
 		throw new Error('Bot telegram not available');
 	}
@@ -409,7 +423,7 @@ class DailyDigestService {
 		// terminal mark cannot leave a reclaimable 'reserved' doc.
 		await this.markDigestDone(day.dateStr, chatId, token, 'sending', { sendingAt: new Date().toISOString() });
 		try {
-			const sendFn = this.sendTelegram || ((c, t) => this._defaultSend(c, t));
+			const sendFn = this.sendTelegram || ((c, t) => this._defaultSend(c, t, options));
 			const sent = await sendFn(chatId, text);
 			if (sent && sent.success) {
 				await this.markDigestDone(day.dateStr, chatId, token, 'sent', { sentAt: new Date().toISOString(), messageId: sent.messageId || null });

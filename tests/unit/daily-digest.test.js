@@ -430,4 +430,37 @@ describe('DailyDigestService Codex review follow-ups', () => {
 		expect(resAfterCooldown.ok).toBe(true);
 		expect(resAfterCooldown.reason).toBe('reserved');
 	});
+
+	test('bounds direct Telegram send with abortable deadline and preserves ambiguous outcome on timeout', async () => {
+		const stallingBot = {
+			telegram: {
+				sendMessage: jest.fn((_chatId, _text, { signal }) => new Promise((_, reject) => {
+					signal.addEventListener('abort', () => reject(new Error('Operation aborted')), { once: true });
+				})),
+			},
+		};
+
+		const docs = new Map();
+		const docId = '2026-11-07__' + require('crypto').createHash('sha256').update('-100123').digest('hex').slice(0, 16);
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => ({ id: docId })) })),
+			runTransaction: jest.fn(async (cb) => cb({
+				get: jest.fn(async () => ({ exists: docs.has(docId), data: () => docs.get(docId) })),
+				set: jest.fn((ref, data) => docs.set(ref.id || docId, { ...docs.get(ref.id || docId), ...data })),
+			})),
+		};
+
+		const svc = new DailyDigestService({
+			getAlertStorage: () => ({ summarizeAlerts: jest.fn(async () => ({ totalAlerts: 1, bySource: {}, delivery: { byChannel: {} } })) }),
+			getOutcomeStorage: () => ({ summarizeOutcomes: jest.fn(async () => ({ windows: { '1D': { hitRatePercent: 0 } } })), listOutcomes: jest.fn(async () => ({ outcomes: [] })) }),
+			getFirestoreFn: () => firestore,
+			botGetter: () => stallingBot,
+		});
+
+		const day = previousUtcDay(new Date('2026-11-08T13:30:00Z'));
+		// Use a short timeoutMs for fast unit test
+		await expect(svc.runDigestForDay(day, { timeoutMs: 50 })).rejects.toThrow();
+		expect(svc.getStatus().lastRunStatus).toBe('ambiguous');
+		expect(docs.get(docId).status).toBe('ambiguous');
+	});
 });
