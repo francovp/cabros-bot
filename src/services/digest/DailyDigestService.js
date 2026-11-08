@@ -462,8 +462,12 @@ class DailyDigestService {
 		} catch (err) {
 			const sanitizedError = sanitizeTelegramError(err);
 			const code = err?.response?.error_code ?? err?.statusCode;
-			const is429 = code === 429 || /429|too many requests/i.test(err?.message || '');
-			const isDefinitiveFailure = (code === 400 && /bad request/i.test(err?.message || '')) || /chat not found/i.test(err?.message || '');
+			const is429 = code === 429 || (typeof err?.response?.parameters?.retry_after === 'number') || (typeof err?.parameters?.retry_after === 'number');
+			const description = typeof err?.response?.description === 'string' ? err.response.description : (err?.message || '');
+			const isDefinitiveFailure = Boolean(err?.response) && (
+				(code === 400 && (/bad request/i.test(description) || /chat not found/i.test(description))) ||
+				(code === 403 && /bot was blocked|chat not found|user is deactivated/i.test(description))
+			);
 
 			if (is429) {
 				const retryAfterSeconds = err?.response?.parameters?.retry_after ?? err?.retry_after ?? 60;

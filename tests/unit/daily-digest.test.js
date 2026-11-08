@@ -522,4 +522,33 @@ describe('DailyDigestService Codex review follow-ups', () => {
 		expect(sendTelegram).not.toHaveBeenCalled();
 		expect(svc.getStatus().status).toBe('degraded');
 	});
+
+	test('incidental 429 in error text without structured Telegram error code leaves delivery ambiguous', async () => {
+		const docs = new Map();
+		const docId = '2026-11-07__' + require('crypto').createHash('sha256').update('-100123').digest('hex').slice(0, 16);
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => ({ id: docId })) })),
+			runTransaction: jest.fn(async (cb) => cb({
+				get: jest.fn(async () => ({ exists: docs.has(docId), data: () => docs.get(docId) })),
+				set: jest.fn((ref, data) => docs.set(ref.id || docId, { ...docs.get(ref.id || docId), ...data })),
+			})),
+		};
+
+		// Telegraf JSON parse error mentioning request URL with token containing "429"
+		const parseErrorWith429InUrl = new Error('invalid json response body at https://api.telegram.org/bot123456429:AAFakeToken/sendMessage reason: Unexpected token <');
+		// Notably no statusCode and no response.error_code
+
+		const svc = new DailyDigestService({
+			getAlertStorage: () => ({ summarizeAlerts: jest.fn(async () => ({ totalAlerts: 1, bySource: {}, delivery: { byChannel: {} } })) }),
+			getOutcomeStorage: () => ({ summarizeOutcomes: jest.fn(async () => ({})), listOutcomes: jest.fn(async () => ({ outcomes: [] })) }),
+			getFirestoreFn: () => firestore,
+			sendTelegram: jest.fn(async () => { throw parseErrorWith429InUrl; }),
+		});
+
+		const day = previousUtcDay(new Date('2026-11-08T13:30:00Z'));
+		await expect(svc.runDigestForDay(day)).rejects.toThrow();
+		expect(svc.getStatus().lastRunStatus).toBe('ambiguous');
+		expect(docs.get(docId).status).toBe('ambiguous');
+		expect(docs.get(docId).retryAfterSeconds).toBeUndefined();
+	});
 });
