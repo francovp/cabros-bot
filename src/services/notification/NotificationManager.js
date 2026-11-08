@@ -8,6 +8,7 @@ const remoteConfigService = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { notificationRedriveService } = require('./NotificationRedriveService');
 const { deliveryMetricsService } = require('./DeliveryMetricsService');
+const { adminPagingDeduplicator } = require('./adminPagingDeduplicator');
 const { chatPreferenceService } = require('../preferences/ChatPreferenceService');
 const NotificationChannel = require('./NotificationChannel');
 const { registerAdminPagingManager } = require('./adminPagingStatus');
@@ -415,7 +416,7 @@ class NotificationManager {
 	 * @param {string} params.pageType - Page identifier used for telemetry only
 	 * @returns {Promise<{delivered: boolean, channel: string|null, attempts: Array<{channel: string, success: boolean, error?: string, category?: string, attemptCount?: number, statusCode?: number|null}>}>}
 	 */
-	async _dispatchAdminPage({ message, pageType }) {
+	async _dispatchAdminPage({ message, pageType, pagingFingerprint, dedupChecked }) {
 		const attempts = [];
 		const adminChatId = process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
 		const telegramService = this.channels.get('telegram');
@@ -427,6 +428,8 @@ class NotificationManager {
 				result = await telegramService.send({
 					text: message,
 					telegramChatId: adminChatId,
+					pagingFingerprint,
+					dedupChecked,
 				});
 			} catch (error) {
 				result = { success: false, error: error.message };
@@ -549,7 +552,30 @@ class NotificationManager {
 			...(requestId ? [`Request ID: ${requestId}`] : []),
 		].join('\n');
 
-		await this._dispatchAdminPage({ message, pageType: 'delivery-failure' });
+		const failedChannels = failures.map(result => result.channel).filter(Boolean).sort().join(',');
+		const primaryFailure = failures[0] || {};
+		const category = primaryFailure.category || (failures.some(f => f.statusCode === 429) ? 'RATE_LIMITED' : 'PROVIDER_ERROR');
+		const errorCode = primaryFailure.statusCode || primaryFailure.errorCode || (primaryFailure.error ? String(primaryFailure.error).slice(0, 30) : 'unknown');
+
+		const deduplicator = this.adminPagingDeduplicator || adminPagingDeduplicator;
+		const fingerprint = deduplicator.computeFingerprint({
+			category,
+			channel: failedChannels,
+			requestId: requestId || 'none',
+			errorCode,
+		});
+
+		if (deduplicator.shouldSuppress(fingerprint)) {
+			console.info(`[NotificationManager] Admin delivery failure notification suppressed by deduplicator: ${fingerprint}`);
+			return;
+		}
+
+		await this._dispatchAdminPage({
+			message,
+			pageType: 'delivery-failure',
+			pagingFingerprint: fingerprint,
+			dedupChecked: true,
+		});
 	}
 
 	async notifyAdminOfZeroChannels(alert, options = {}) {

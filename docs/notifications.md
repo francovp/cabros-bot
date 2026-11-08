@@ -191,6 +191,9 @@ DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/<id>/<token>
 # Optional enrichment (applies to all channels)
 ENABLE_GEMINI_GROUNDING=true
 GEMINI_API_KEY=your_google_ai_studio_api_key
+
+# Admin paging deduplication (optional)
+ADMIN_PAGE_DEDUP_TTL_MS=300000
 ```
 
 ### Troubleshooting Multi-Channel Delivery

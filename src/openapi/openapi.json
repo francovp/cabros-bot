@@ -21761,6 +21761,9 @@
               "notificationRedrive": {
                 "$ref": "#/components/schemas/NotificationRedriveDependency"
               },
+              "telegramAdminPaging": {
+                "$ref": "#/components/schemas/TelegramAdminPagingDependency"
+              },
               "telegramCommandAuth": {
                 "$ref": "#/components/schemas/TelegramCommandAuthStatus"
               },
@@ -26269,6 +26272,34 @@
           },
           "snapshot": {
             "$ref": "#/components/schemas/PortfolioSnapshot"
+          }
+        }
+      },
+      "TelegramAdminPagingDependency": {
+        "type": "object",
+        "description": "Safe runtime metadata for Telegram admin paging deduplication without exposing message content or chat identifiers.",
+        "required": [
+          "enabled",
+          "dedupHits",
+          "dedupWindowMs",
+          "lastDedupAt"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "dedupHits": {
+            "type": "integer"
+          },
+          "dedupWindowMs": {
+            "type": "integer"
+          },
+          "lastDedupAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           }
         }
       }

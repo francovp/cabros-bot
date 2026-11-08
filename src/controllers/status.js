@@ -35,6 +35,7 @@ const { getPromptService } = require('../services/prompts');
 const { promptDriftService } = require('../services/prompts/PromptDriftService');
 const { signalClassMetrics } = require('../services/alerts/signalClassifier');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
+const { adminPagingDeduplicator } = require('../services/notification/adminPagingDeduplicator');
 const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsAppService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
@@ -865,6 +866,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
 			},
+			telegramAdminPaging: adminPagingDeduplicator.getStatus(),
 			priceQuoteCache: priceQuoteCache.getStatus(),
 			symbolAliasResolver: {
 				enabled: aliasResolver.isEnabled(),

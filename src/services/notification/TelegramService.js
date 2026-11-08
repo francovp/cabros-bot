@@ -6,6 +6,7 @@
 const NotificationChannel = require('./NotificationChannel');
 const MarkdownV2Formatter = require('./formatters/markdownV2Formatter');
 const { parseTelegramTopicRoutes, resolveTelegramThreadId } = require('./telegramTopicRouting');
+const { adminPagingDeduplicator } = require('./adminPagingDeduplicator');
 const sleepWithSignal = require('../../lib/sleepWithSignal');
 
 const DEFAULT_MAX_MESSAGE_LENGTH = 4000;
@@ -105,6 +106,7 @@ class TelegramService extends NotificationChannel {
 		this.requestTimeoutMs = Number.isFinite(config.requestTimeoutMs) && config.requestTimeoutMs > 0
 			? config.requestTimeoutMs
 			: DEFAULT_REQUEST_TIMEOUT_MS;
+		this.adminPagingDeduplicator = config.adminPagingDeduplicator || adminPagingDeduplicator;
 		this.enabled = false;
 	}
 
@@ -248,6 +250,29 @@ class TelegramService extends NotificationChannel {
 			}
 
 			const chatId = alert.telegramChatId || this.chatId;
+			const adminChatId = process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
+			const isAdminPage = Boolean(adminChatId && String(chatId) === String(adminChatId));
+
+			if (isAdminPage && !alert.dedupChecked && this.adminPagingDeduplicator?.isEnabled?.()) {
+				const fingerprint = alert.pagingFingerprint || this.adminPagingDeduplicator.computeFingerprint({
+					category: alert.category || alert.failureCategory,
+					channel: alert.channel || alert.failedChannels,
+					requestId: alert.requestId || alert.correlationId,
+					errorCode: alert.errorCode || alert.statusCode || alert.code,
+					text: alert.text || alert.message,
+				});
+				if (this.adminPagingDeduplicator.shouldSuppress(fingerprint)) {
+					this.logger?.info?.(`[TelegramService] Admin page suppressed by deduplicator (fingerprint: ${fingerprint})`);
+					return buildResult({
+						success: true,
+						channel: 'telegram',
+						suppressed: true,
+						dedup: true,
+						fingerprint,
+					});
+				}
+			}
+
 			const threadId = this.resolveThreadId(alert);
 			const replyMarkup = alert.replyMarkup && typeof alert.replyMarkup === 'object'
 				? alert.replyMarkup
