@@ -1,7 +1,6 @@
 'use strict';
 
 const crypto = require('crypto');
-const { smartEscapeMarkdownV2 } = require('../notification/formatters/markdownV2Formatter');
 const { redactString } = require('../../lib/logging');
 const sentryService = require('../monitoring/SentryService');
 
@@ -36,9 +35,9 @@ function previousUtcDay(now = new Date()) {
 
 function esc(value) {
 	if (value === undefined || value === null) return 'N/D';
-	return smartEscapeMarkdownV2(String(value))
-		.replace(/_/g, '\\_')
-		.replace(/\*/g, '\\*');
+	return String(value)
+		.replace(/\\/g, '\\\\')
+		.replace(/([_*[\]()~`>#+=|{}.!\-])/g, '\\$1');
 }
 
 function sanitizeTelegramError(err) {
