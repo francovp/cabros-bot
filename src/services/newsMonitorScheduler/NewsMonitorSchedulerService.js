@@ -2,6 +2,7 @@
 
 /* global AbortController */
 
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { getAnalyzer, setNotificationManager } = require('../../controllers/webhooks/handlers/newsMonitor/analyzer');
@@ -10,6 +11,7 @@ const { isNewsMonitorPaused } = require('../../controllers/webhooks/handlers/new
 const alertStorageService = require('../storage/AlertStorageService');
 const sentryService = require('../monitoring/SentryService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 
 const COLLECTION_NAME = 'newsMonitorSchedulerLocks';
 
@@ -53,7 +55,7 @@ function parseEnvBool(value, fallback = false) {
 }
 
 function getSymbolsFromEnv(name) {
-	return (process.env[name] || '')
+	return (resolveRemoteOverride(name) ?? process.env[name] ?? '')
 		.split(',')
 		.map((s) => String(s).trim())
 		.filter(Boolean);
@@ -341,7 +343,9 @@ class NewsMonitorSchedulerService {
 		try {
 			const result = await this._executeAnalysis(symbols, timeoutMs, {
 				...options,
-				renewLease: (nextUntilMs) => this._renewLease(nextUntilMs, leaseMs),
+				// Contract: renewLease receives the current time; _renewLease owns the
+				// now + leaseMs arithmetic. #1135 doubled the lease by passing a deadline here.
+				renewLease: (renewNowMs) => this._renewLease(renewNowMs, leaseMs),
 				leaseMs,
 			});
 			executedCount = result.executedCount;
@@ -525,8 +529,8 @@ class NewsMonitorSchedulerService {
 		const leaseMs = options.leaseMs || this.getLeaseMs();
 		const renewIntervalMs = Math.max(1000, Math.floor(leaseMs / 2));
 		const renewHandle = renewLease
-			? setInterval(() => {
-				renewLease(Date.now() + leaseMs).catch((err) => {
+			? createManagedInterval('news-monitor-lease-renewal', () => {
+				return renewLease(Date.now()).catch((err) => {
 					console.warn('[NewsMonitorScheduler] Lease renew tick failed:', err.message);
 				});
 			}, renewIntervalMs)
@@ -597,7 +601,7 @@ class NewsMonitorSchedulerService {
 			});
 		} finally {
 			clearTimeout(timer);
-			if (renewHandle) clearInterval(renewHandle);
+			if (renewHandle) await renewHandle.stop();
 			this.activeSweepController = null;
 		}
 

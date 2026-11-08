@@ -4,6 +4,8 @@
 process.env = {
 	...process.env,
 	NODE_ENV: 'test',
+	// Legacy suites opt out explicitly; request-validation suites set true.
+	ENABLE_REQUEST_VALIDATION: 'false',
 	ENABLE_GEMINI_GROUNDING: 'true',
 	SEARCH_API_KEY: 'test-search-key',
 	SEARCH_CX: 'test-search-cx',
@@ -63,6 +65,7 @@ const createMockSpan = () => ({
 
 jest.mock('@sentry/node', () => ({
 	init: jest.fn(),
+	isEnabled: jest.fn(() => false),
 	consoleIntegration: jest.fn(() => 'console-breadcrumb-integration'),
 	consoleLoggingIntegration: jest.fn(() => 'console-logging-integration'),
 	startSpan: jest.fn((_options, callback) => callback(createMockSpan())),

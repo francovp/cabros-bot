@@ -1,4 +1,5 @@
 const { isProductionLikeEnvironment: isManagedProductionEnvironment } = require('../../lib/deploymentEnvironment');
+const { getRemoteOverride } = require('../remoteConfig/RemoteConfigService');
 
 function isProductionLikeEnvironment() {
 	return isManagedProductionEnvironment();
@@ -25,9 +26,15 @@ function getLangfusePromptCacheTtlSeconds() {
 	return getLangfusePromptLabel() === 'latest' ? 0 : 60;
 }
 
+function shouldFallbackOnPromptDrift() {
+	const remote = getRemoteOverride('PROMPT_FALLBACK_ON_DRIFT');
+	return remote === undefined ? process.env.PROMPT_FALLBACK_ON_DRIFT === 'true' : remote === true;
+}
+
 module.exports = {
 	isProductionLikeEnvironment,
 	isLangfusePromptManagementEnabled,
 	getLangfusePromptLabel,
 	getLangfusePromptCacheTtlSeconds,
+	shouldFallbackOnPromptDrift,
 };

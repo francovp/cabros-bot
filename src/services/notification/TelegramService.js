@@ -7,6 +7,8 @@ const NotificationChannel = require('./NotificationChannel');
 const MarkdownV2Formatter = require('./formatters/markdownV2Formatter');
 const { parseTelegramTopicRoutes, resolveTelegramThreadId } = require('./telegramTopicRouting');
 const { renderAlertChart } = require('./charts/chartAttachment');
+const { adminPagingDeduplicator } = require('./adminPagingDeduplicator');
+const sleepWithSignal = require('../../lib/sleepWithSignal');
 
 const DEFAULT_MAX_MESSAGE_LENGTH = 4000;
 // Telegram rejects photo captions longer than this; longer reports still ship the
@@ -18,27 +20,6 @@ const DEFAULT_MAX_RETRY_DELAY_MS = 5000;
 const DEFAULT_MAX_TOTAL_RETRY_WAIT_MS = 10000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10000;
 const MARKDOWN_V2_ESCAPE_CHARS = '\\_*[]()~`>#+-=|{}.!<&';
-
-function sleepWithSignal(ms, signal) {
-	if (!signal) {
-		return new Promise(resolve => setTimeout(resolve, ms));
-	}
-	if (signal.aborted) {
-		return Promise.reject(new Error(signal.reason?.message || signal.reason || 'Operation aborted'));
-	}
-	return new Promise((resolve, reject) => {
-		const timeoutId = setTimeout(() => {
-			signal.removeEventListener('abort', onAbort);
-			resolve();
-		}, ms);
-		const onAbort = () => {
-			clearTimeout(timeoutId);
-			signal.removeEventListener('abort', onAbort);
-			reject(new Error(signal.reason?.message || signal.reason || 'Operation aborted'));
-		};
-		signal.addEventListener('abort', onAbort, { once: true });
-	});
-}
 
 function getStatusCode(error) {
 	const rawStatusCode = error?.response?.error_code
@@ -129,6 +110,7 @@ class TelegramService extends NotificationChannel {
 		this.requestTimeoutMs = Number.isFinite(config.requestTimeoutMs) && config.requestTimeoutMs > 0
 			? config.requestTimeoutMs
 			: DEFAULT_REQUEST_TIMEOUT_MS;
+		this.adminPagingDeduplicator = config.adminPagingDeduplicator || adminPagingDeduplicator;
 		this.enabled = false;
 	}
 
@@ -261,16 +243,40 @@ class TelegramService extends NotificationChannel {
 			// Format message for Telegram MarkdownV2
 			// If enriched is an object, use formatEnriched, otherwise format the text
 			const signalClass = alert.signalClass || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.signalClass : undefined);
+			const session = alert.session || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.session : undefined);
 			let formattedText;
 			if (alert.enriched && typeof alert.enriched === 'object') {
-				formattedText = this.formatter.formatEnriched(alert.enriched, { signalClass });
+				formattedText = this.formatter.formatEnriched(alert.enriched, { signalClass, session });
 				console.debug('Formatted enriched content for Telegram:', formattedText);
 			} else {
-				formattedText = this.formatter.format(alert.enriched || alert.text, { signalClass });
+				formattedText = this.formatter.format(alert.enriched || alert.text, { signalClass, session });
 				console.debug('Formatted text for Telegram:', formattedText);
 			}
 
 			const chatId = alert.telegramChatId || this.chatId;
+			const adminChatId = process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
+			const isAdminPage = Boolean(adminChatId && String(chatId) === String(adminChatId));
+
+			if (isAdminPage && !alert.dedupChecked && this.adminPagingDeduplicator?.isEnabled?.()) {
+				const fingerprint = alert.pagingFingerprint || this.adminPagingDeduplicator.computeFingerprint({
+					category: alert.category || alert.failureCategory,
+					channel: alert.channel || alert.failedChannels,
+					requestId: alert.requestId || alert.correlationId,
+					errorCode: alert.errorCode || alert.statusCode || alert.code,
+					text: alert.text || alert.message,
+				});
+				if (this.adminPagingDeduplicator.shouldSuppress(fingerprint)) {
+					this.logger?.info?.(`[TelegramService] Admin page suppressed by deduplicator (fingerprint: ${fingerprint})`);
+					return buildResult({
+						success: true,
+						channel: 'telegram',
+						suppressed: true,
+						dedup: true,
+						fingerprint,
+					});
+				}
+			}
+
 			const threadId = this.resolveThreadId(alert);
 			const replyMarkup = alert.replyMarkup && typeof alert.replyMarkup === 'object'
 				? alert.replyMarkup

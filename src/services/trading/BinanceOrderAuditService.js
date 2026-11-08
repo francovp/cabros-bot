@@ -228,6 +228,9 @@ function formatAuditRecord(doc) {
 		clientOrderId: data.clientOrderId !== undefined && data.clientOrderId !== null
 			? String(data.clientOrderId)
 			: null,
+		origin: data.origin || 'manual',
+		alertId: data.alertId ?? null,
+		setupType: data.setupType ?? null,
 		response: data.response ?? null,
 		processingMs: data.processingMs ?? 0,
 		expiresAt: toIsoString(data.expiresAt),
@@ -392,6 +395,9 @@ class BinanceOrderAuditService {
 				clientOrderId: params.clientOrderId !== undefined && params.clientOrderId !== null
 					? String(params.clientOrderId)
 					: null,
+				origin: typeof params.origin === 'string' && params.origin ? params.origin : (params.req?.body?.origin || 'manual'),
+				alertId: typeof params.alertId === 'string' && params.alertId ? params.alertId : (params.req?.body?.alertId || null),
+				setupType: typeof params.setupType === 'string' && params.setupType ? params.setupType : (params.req?.body?.setupType || null),
 				response: sanitizeFirestoreValue(params.response ?? null),
 				processingMs: typeof params.processingMs === 'number' && Number.isFinite(params.processingMs)
 					? Math.max(0, Math.round(params.processingMs))

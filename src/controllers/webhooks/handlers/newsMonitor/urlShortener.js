@@ -10,6 +10,34 @@ const DEFAULT_URL_SHORTENER_CACHE_MAX_ENTRIES = 1000;
 const MAX_URL_SHORTENER_CACHE_MAX_ENTRIES = 100_000;
 const DEFAULT_URL_SHORTENER_FAILURES_MAX_ENTRIES = 32;
 const MAX_URL_SHORTENER_FAILURES_MAX_ENTRIES = 1024;
+const DEFAULT_URL_SHORTENER_TIMEOUT_MS = 5000;
+const DEFAULT_URL_SHORTENER_BATCH_TIMEOUT_MS = 5000;
+
+function awaitBeforeDeadline(promise, deadlineAt, signal) {
+	const remainingMs = deadlineAt - Date.now();
+	if (remainingMs <= 0 || signal?.aborted) {
+		return Promise.resolve(null);
+	}
+
+	let timeoutId;
+	let abortHandler;
+	const races = [
+		promise,
+		new Promise((resolve) => {
+			timeoutId = setTimeout(() => resolve(null), remainingMs);
+		}),
+	];
+	if (signal) {
+		races.push(new Promise((resolve) => {
+			abortHandler = () => resolve(null);
+			signal.addEventListener('abort', abortHandler, { once: true });
+		}));
+	}
+	return Promise.race(races).finally(() => {
+		clearTimeout(timeoutId);
+		if (abortHandler) signal.removeEventListener('abort', abortHandler);
+	});
+}
 
 function parsePositiveInteger(value, fallback, envVarName, maxBound) {
 	if (value === undefined || value === null) {
@@ -134,8 +162,10 @@ class URLShortenerCache {
 class URLShortener {
 	constructor(options = {}) {
 		this.primaryService = (process.env.URL_SHORTENER_SERVICE || 'picsee').toLowerCase();
-		this.timeout = 60000; // 5s timeout per call
+		this.timeout = DEFAULT_URL_SHORTENER_TIMEOUT_MS;
+		this.batchTimeoutMs = DEFAULT_URL_SHORTENER_BATCH_TIMEOUT_MS;
 		this.cache = new URLShortenerCache(options.cacheOptions);
+		this.inFlightShortenings = new Map();
 		this.serviceFailures = new Map(); // Track consecutive failures per service
 		this._explicitServiceFailuresMaxEntries = options.serviceFailuresMaxEntries !== undefined
 			? parsePositiveInteger(options.serviceFailuresMaxEntries, DEFAULT_URL_SHORTENER_FAILURES_MAX_ENTRIES, 'serviceFailuresMaxEntries', MAX_URL_SHORTENER_FAILURES_MAX_ENTRIES)
@@ -360,7 +390,32 @@ class URLShortener {
 	/**
    * Shorten a single URL using configured services with fallback
    */
-	async shortenUrl(longUrl) {
+	async shortenUrl(longUrl, options = {}) {
+		const deadlineAt = options.deadlineAt ?? Date.now() + this.timeout;
+		if (options.signal?.aborted) {
+			return null;
+		}
+		const inFlight = this.inFlightShortenings.get(longUrl);
+		if (inFlight) {
+			return awaitBeforeDeadline(inFlight, deadlineAt, options.signal);
+		}
+
+		const shortening = this._shortenUrl(longUrl, deadlineAt, options.signal);
+		this.inFlightShortenings.set(longUrl, shortening);
+		const cleanup = () => {
+			if (this.inFlightShortenings.get(longUrl) === shortening) {
+				this.inFlightShortenings.delete(longUrl);
+			}
+		};
+		shortening.then(cleanup, cleanup);
+		return shortening;
+	}
+
+	async _shortenUrl(longUrl, deadlineAt, signal) {
+		if (signal?.aborted) {
+			return null;
+		}
+
 		// Check cache first
 		const cached = this.cache.get(longUrl);
 		if (cached) {
@@ -381,6 +436,11 @@ class URLShortener {
 
 		// Try each configured service in order
 		for (const service of this.configuredServices) {
+			const remainingMs = deadlineAt - Date.now();
+			if (remainingMs <= 0 || signal?.aborted) {
+				break;
+			}
+
 			if (failedServices.has(service)) {
 				continue; // Skip already failed services
 			}
@@ -397,14 +457,14 @@ class URLShortener {
 					longUrl.substring(0, 50),
 				);
 
-				const shortUrl = await this.callShortenerAPI(longUrl, service);
+				const shortUrl = await this.callShortenerAPI(longUrl, service, remainingMs, signal);
 
 				if (shortUrl) {
 					this.cache.set(longUrl, shortUrl);
 					// Reset failure count on success
-						this.serviceFailures.delete(service);
-						this.serviceFailures.set(service, 0);
-						this._evictServiceFailuresIfOverCapacity();
+					this.serviceFailures.delete(service);
+					this.serviceFailures.set(service, 0);
+					this._evictServiceFailuresIfOverCapacity();
 					console.debug(
 						`[URLShortener] Successfully shortened URL via ${service}`,
 					);
@@ -418,6 +478,9 @@ class URLShortener {
 					);
 				}
 			} catch (error) {
+				if (signal?.aborted) {
+					break;
+				}
 				failedServices.add(service);
 				this.recordServiceFailure(service);
 				lastError = error;
@@ -433,6 +496,9 @@ class URLShortener {
 			}
 		}
 
+		if (signal?.aborted) {
+			return null;
+		}
 		console.warn(
 			`All URL shortening services failed. Last error: ${lastError}`,
 		);
@@ -453,94 +519,115 @@ class URLShortener {
 	/**
    * Call URL shortener API using native fetch
    */
-	async callShortenerAPI(longUrl, service) {
-		return new Promise(async (resolve, reject) => {
-			const timeoutId = setTimeout(() => {
-				reject(new Error('URL shortening timeout'));
-			}, this.timeout);
+	async callShortenerAPI(longUrl, service, timeoutMs = this.timeout, signal) {
+		const controller = new AbortController();
+		const forwardAbort = () => controller.abort(signal.reason);
+		if (signal?.aborted) {
+			forwardAbort();
+		} else {
+			signal?.addEventListener('abort', forwardAbort, { once: true });
+		}
+		const timeoutId = setTimeout(
+			() => controller.abort(new Error('URL shortening timeout')),
+			timeoutMs,
+		);
 
-			try {
-				let shortUrl, response, body = null;
-				const apiKey = this.getAPIKey(service);
-				switch (service) {
-				case 'bitly':
-					response = await fetch('https://api-ssl.bitly.com/v4/shorten', {
-						method: 'POST',
-						headers: {
-							'Authorization': `Bearer ${apiKey}`,
-							'Content-Type': 'application/json',
-						},
-						body: JSON.stringify({ long_url: longUrl }),
-					});
-					body = await response.json();
-					shortUrl = body.link;
-					break;
-				case 'tinyurl':
-					response = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(longUrl)}`);
-					shortUrl = await response.text();
-					break;
-				case 'picsee':
-					await timersPromises.setTimeout(500);
-					response = await fetch(`https://api.picsee.co/v1/links?access_token=${apiKey}`, {
-						method: 'POST',
-						headers: {
-							'Content-Type': 'application/json',
-						},
-						body: JSON.stringify({ url: longUrl }),
-					});
-					body = await response.json();
-					shortUrl = body?.data?.picseeUrl;
-					break;
-				case 'cuttly':
-					response = await fetch(`https://cutt.ly/api/api.php?key=${apiKey}&short=${encodeURIComponent(longUrl)}`);
-					body = await response.json();
-					shortUrl = body?.url?.shortLink;
-					break;
-				case 'test':
-					// Test service that returns a dummy short URL
-					shortUrl = 'https://short.url/test';
-					break;
-				default:
-					clearTimeout(timeoutId);
-					reject(new Error(`Unsupported URL shortener service: ${service}`));
-				}
-
-				clearTimeout(timeoutId);
-				if (!shortUrl) {
-					reject(new Error('Empty response from shortener'));
-				}
-				resolve(shortUrl);
-
-			} catch (error) {
-				clearTimeout(timeoutId);
-				reject(error);
+		try {
+			let shortUrl, response, body = null;
+			const apiKey = this.getAPIKey(service);
+			switch (service) {
+			case 'bitly':
+				response = await fetch('https://api-ssl.bitly.com/v4/shorten', {
+					method: 'POST',
+					headers: {
+						'Authorization': `Bearer ${apiKey}`,
+						'Content-Type': 'application/json',
+					},
+					body: JSON.stringify({ long_url: longUrl }),
+					signal: controller.signal,
+				});
+				body = await response.json();
+				shortUrl = body.link;
+				break;
+			case 'tinyurl':
+				response = await fetch(`https://tinyurl.com/api-create.php?url=${encodeURIComponent(longUrl)}`, {
+					signal: controller.signal,
+				});
+				shortUrl = await response.text();
+				break;
+			case 'picsee':
+				await timersPromises.setTimeout(500, undefined, { signal: controller.signal });
+				response = await fetch(`https://api.picsee.co/v1/links?access_token=${apiKey}`, {
+					method: 'POST',
+					headers: {
+						'Content-Type': 'application/json',
+					},
+					body: JSON.stringify({ url: longUrl }),
+					signal: controller.signal,
+				});
+				body = await response.json();
+				shortUrl = body?.data?.picseeUrl;
+				break;
+			case 'cuttly':
+				response = await fetch(`https://cutt.ly/api/api.php?key=${apiKey}&short=${encodeURIComponent(longUrl)}`, {
+					signal: controller.signal,
+				});
+				body = await response.json();
+				shortUrl = body?.url?.shortLink;
+				break;
+			case 'test':
+				shortUrl = 'https://short.url/test';
+				break;
+			default:
+				throw new Error(`Unsupported URL shortener service: ${service}`);
 			}
-		});
+
+			if (controller.signal.aborted) {
+				throw controller.signal.reason || new Error('URL shortening aborted');
+			}
+			if (!shortUrl) {
+				throw new Error('Empty response from shortener');
+			}
+			return shortUrl;
+		} catch (error) {
+			if (controller.signal.aborted) {
+				throw controller.signal.reason || new Error('URL shortening timeout');
+			}
+			throw error;
+		} finally {
+			clearTimeout(timeoutId);
+			signal?.removeEventListener('abort', forwardAbort);
+		}
 	}
 
 	/**
    * Shorten multiple URLs in parallel
    */
-	async shortenUrlsParallel(urls) {
+	async shortenUrlsParallel(urls, options = {}) {
 		if (!this.enabled || !urls || urls.length === 0) {
 			return {};
 		}
+		if (options.signal?.aborted) {
+			return {};
+		}
+		const deadlineAt = Date.now() + this.batchTimeoutMs;
 
 		if (this.primaryService === 'picsee') {
 			// PicSee API rate limits parallel requests, use sequential shortening
 			console.debug('[URLShortener] PicSee detected as primary service, using sequential shortening to avoid rate limits');
-			return await this.shortenUrlsSequential(urls);
+			return await this.shortenUrlsSequential(urls, deadlineAt, options.signal);
 		}
 
 		const results = {};
 		const promises = urls.map(async (url) => {
 			try {
 				console.debug('[URLShortener] Shortening URL in parallel:', url.substring(0, 50));
-				const shortUrl = await this.shortenUrl(url);
+				const shortUrl = await this.shortenUrl(url, { deadlineAt, signal: options.signal });
 				if (shortUrl) {
 					results[url] = shortUrl;
 				}
 			} catch (error) {
+				if (options.signal?.aborted) return;
 				console.warn(
 					'[URLShortener] Failed to shorten parallel URL:',
 					error.message,
@@ -555,20 +642,27 @@ class URLShortener {
 	/**
 	* Shorten multiple URLs sequentially (not in parallel)
 	*/
-	async shortenUrlsSequential(urls) {
+	async shortenUrlsSequential(urls, deadlineAt = Date.now() + this.batchTimeoutMs, signal) {
 		if (!this.enabled || !urls || urls.length === 0) {
+			return {};
+		}
+		if (signal?.aborted) {
 			return {};
 		}
 
 		const results = {};
 		for (const url of urls) {
+			if (deadlineAt - Date.now() <= 0 || signal?.aborted) {
+				break;
+			}
 			try {
 				console.debug('[URLShortener] Shortening URL sequentially:', url.substring(0, 50));
-				const shortUrl = await this.shortenUrl(url);
+				const shortUrl = await this.shortenUrl(url, { deadlineAt, signal });
 				if (shortUrl) {
 					results[url] = shortUrl;
 				}
 			} catch (error) {
+				if (signal?.aborted) break;
 				console.warn(
 					'[URLShortener] Failed to shorten sequential URL:',
 					error.message,

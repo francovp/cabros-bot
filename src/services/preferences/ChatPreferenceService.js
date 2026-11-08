@@ -2,7 +2,7 @@
 
 const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('../storage/firestoreConfig');
-const { loadFirebaseAdminCredentialsOrNull } = require('../storage/firebaseAdminCredentials');
+const { initializeFirebaseAdminApp } = require('../storage/firebaseAdminCredentials');
 const remoteConfigService = require('../remoteConfig/RemoteConfigService');
 
 const VALID_CATEGORIES = Object.freeze(['scanner', 'news', 'expanded', 'core', 'volume']);
@@ -119,17 +119,13 @@ class ChatPreferenceService {
 			return this._db;
 		}
 		try {
-			const loaded = loadFirebaseAdminCredentialsOrNull();
-			const appOptions = {};
-			if (loaded && loaded.credential) {
-				appOptions.credential = loaded.credential;
-			}
-			if (loaded && loaded.projectId) {
-				appOptions.projectId = loaded.projectId;
-			}
-
-			if (!admin.apps.length) {
-				admin.initializeApp(appOptions);
+			const initialization = initializeFirebaseAdminApp({ admin });
+			if (!initialization.ok) {
+				console.warn(
+					`[ChatPreferenceService] Firebase credentials are configured but invalid (${initialization.error.code}); skipping Firestore and using in-memory fallback.`
+				);
+				this._db = null;
+				return null;
 			}
 
 			this._db = admin.firestore();

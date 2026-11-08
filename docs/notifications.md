@@ -20,7 +20,7 @@ The alert webhook system supports simultaneous delivery to multiple channels (Te
 
 - **Enabled by**: `ENABLE_WHATSAPP_ALERTS=true` + GreenAPI credentials
 - **Format**: WhatsApp markdown (bold, italic, strikethrough, code blocks, lists)
-- **Timeout**: ~10 seconds per delivery  
+- **Timeout**: ~10 seconds per delivery
 - **Retry**: 3 attempts with exponential backoff (1s → 2s → 4s) per chunk
 - **Message Size**: Payloads exceeding 20,000 characters are automatically split into sequential chunks that each deliver and retry independently (no ellipsis truncation)
 - **Provider**: GreenAPI (REST API via native fetch)
@@ -82,13 +82,13 @@ When a supported URL-shortening service is configured, URLs in WhatsApp alerts a
 
 **Before** (158 characters):
 ```
-Sources: 
+Sources:
 - https://example.com/research/crypto/bitcoin/technical-analysis?date=2024-01-15&symbol=BTCUSDT&period=4h&includeIndicators=true
 ```
 
 **After** (with URL shortening):
 ```
-Sources: 
+Sources:
 - https://short.url/crypto-analysis
 ```
 
@@ -191,6 +191,9 @@ DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/<id>/<token>
 # Optional enrichment (applies to all channels)
 ENABLE_GEMINI_GROUNDING=true
 GEMINI_API_KEY=your_google_ai_studio_api_key
+
+# Admin paging deduplication (optional)
+ADMIN_PAGE_DEDUP_TTL_MS=300000
 ```
 
 ### Troubleshooting Multi-Channel Delivery

@@ -28,6 +28,26 @@ Where:
 
 Only alerts meeting `NEWS_ALERT_THRESHOLD` (default: 0.7) are sent to channels.
 
+#### Source quality calibration
+
+The base score above is then calibrated against the actual grounding sources before the threshold is applied:
+
+1. **Additive penalties** for source count (0 / 1 source), freshness (stale, moderate, or unknown), source authority, model uncertainty, and invalidation hints.
+2. **Multiplicative domain-quality penalty** based on the *weakest* quality tier present in the source set, so one low-quality source cannot be masked by reputable ones:
+
+| Tier | Multiplier | Examples |
+|---|---|---|
+| `high` | `×1` (baseline) | Reuters, Bloomberg, CNBC, SEC, Binance |
+| `medium` | `×0.95` | Forbes, MarketWatch, Investopedia, Decrypt |
+| `low` | `×0.85` | Medium, Substack, Reddit, `.blog` / `.buzz` / `.xyz` TLDs |
+| `unknown` | `×1` (no penalty) | Domain not in the classification lists — unclassified rather than judged weak |
+
+3. The result is clamped into `[0, 1]`.
+
+This is a false-positive **reduction** mechanism: every multiplier is `≤ 1`, so calibration can only lower a score, never inflate one. `NEWS_ALERT_THRESHOLD` is unchanged — the effective bar simply rises for weak-source signals. When no tier can be resolved (no grounding sources, or the tier classifier fails) no penalty is applied and the score is identical to the pre-calibration-tier behavior.
+
+To audit *why* an alert passed the threshold, inspect `alert.sourceQualityTier` and `alert.calibration.qualityTier` / `alert.calibration.qualityPenalty` in the response. The delivered Telegram/WhatsApp message also includes a `Source Quality: <tier> (x<multiplier>)` line.
+
 ### Optional classifier.dev fallback
 
 Set `ENABLE_NEWS_MONITOR_CLASSIFIER=true` to send Gemini `none` headlines through classifier.dev for a second-pass classification. Only recognized event categories meeting `NEWS_ALERT_THRESHOLD` are promoted; provider failures or unsupported labels leave the original `none` result unchanged. This is disabled by default and sends the symbol and generated headline to an external provider, so treat it as an environment-only privacy setting. The effective flag is exposed as `featureFlags.newsMonitorClassifier` in `/api/status`.

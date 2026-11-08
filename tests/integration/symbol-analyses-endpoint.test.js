@@ -52,10 +52,15 @@ describe('Symbol Analyses API Integration Tests', () => {
 				.set('x-api-key', 'test-key')
 				.expect(403);
 
-			expect(res.body).toEqual({
+			expect(res.body).toEqual(expect.objectContaining({
 				error: 'Symbol analysis storage feature is disabled. Set ENABLE_SYMBOL_ANALYSIS_STORAGE=true to enable.',
 				code: 'FEATURE_DISABLED',
-			});
+			}));
+			expect(res.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 503 when Firestore is unavailable', async () => {
@@ -68,10 +73,15 @@ describe('Symbol Analyses API Integration Tests', () => {
 				.set('x-api-key', 'test-key')
 				.expect(503);
 
-			expect(res.body).toEqual({
+			expect(res.body).toEqual(expect.objectContaining({
 				error: 'Symbol analysis storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.',
 				code: 'STORAGE_UNAVAILABLE',
-			});
+			}));
+			expect(res.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: true,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 for invalid query parameters', async () => {
@@ -169,10 +179,15 @@ describe('Symbol Analyses API Integration Tests', () => {
 				.set('x-api-key', 'test-key')
 				.expect(403);
 
-			expect(res.body).toEqual({
+			expect(res.body).toEqual(expect.objectContaining({
 				error: 'Symbol analysis storage feature is disabled. Set ENABLE_SYMBOL_ANALYSIS_STORAGE=true to enable.',
 				code: 'FEATURE_DISABLED',
-			});
+			}));
+			expect(res.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 503 when Firestore is unavailable', async () => {
@@ -185,10 +200,15 @@ describe('Symbol Analyses API Integration Tests', () => {
 				.set('x-api-key', 'test-key')
 				.expect(503);
 
-			expect(res.body).toEqual({
+			expect(res.body).toEqual(expect.objectContaining({
 				error: 'Symbol analysis storage is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.',
 				code: 'STORAGE_UNAVAILABLE',
-			});
+			}));
+			expect(res.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: true,
+				requestId: expect.any(String),
+			}));
 		});
 
 		it('returns 400 for invalid limit or date range', async () => {

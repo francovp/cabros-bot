@@ -15,13 +15,14 @@
 
 const { parseCallbackData, getActionCodes } = require('../services/alerts/telegramAlertKeyboard');
 const alertStorageService = require('../services/storage/AlertStorageService');
+const alertAcknowledgementService = require('../services/storage/AlertAcknowledgementService');
 const alertFeedbackStorageService = require('../services/storage/AlertFeedbackStorageService');
 const { idempotencyService } = require('../services/storage/IdempotencyService');
 const sentryService = require('../services/monitoring/SentryService');
 const alertModule = require('../controllers/webhooks/handlers/alert/alert');
 const { escapeRiskFieldValue } = require('../services/notification/formatters/markdownV2Formatter');
 
-const ACTION_CALLBACK_REGEX = /^(r|d|x|vu|vd):([A-Za-z0-9_-]{1,60})$/;
+const ACTION_CALLBACK_REGEX = /^(r|d|x|vu|vd|kt|ks|kn|kz):([A-Za-z0-9_-]{1,60})$/;
 const REPLY_MESSAGE_TRUNCATE = 3500;
 const VOTE_RECORD_LIMIT = 5;
 const REPLAY_OPERATOR_IDS_ENV = 'TELEGRAM_ACTION_OPERATOR_USER_IDS';
@@ -42,23 +43,42 @@ function isOperatorAuthorized(context) {
 }
 
 async function answerCallback(context, text) {
+	if (!context || typeof context.answerCbQuery !== 'function') return;
 	try {
-		await context.answerCbQuery(text, { show_alert: false });
+		await withCallbackTimeout(
+			() => context.answerCbQuery(text, { show_alert: false }),
+			null,
+			CALLBACK_STORAGE_TIMEOUT_MS,
+			'Telegram callback answerCbQuery timed out',
+			'TELEGRAM_CALLBACK_TIMEOUT',
+		);
 	} catch (error) {
 		console.warn('[telegramAlertActions] Failed to answer callback:', error.message);
 	}
 }
 
 async function replyToUser(context, text) {
-	if (typeof context.reply !== 'function') return;
+	if (!context || typeof context.reply !== 'function') return;
 	try {
-		await context.reply(text);
+		await withCallbackTimeout(
+			() => context.reply(text),
+			null,
+			CALLBACK_STORAGE_TIMEOUT_MS,
+			'Telegram callback reply timed out',
+			'TELEGRAM_REPLY_TIMEOUT',
+		);
 	} catch (error) {
 		console.warn('[telegramAlertActions] Failed to send callback result:', error.message);
 	}
 }
 
-function withCallbackTimeout(operation, onLateResult) {
+function withCallbackTimeout(
+	operation,
+	onLateResult,
+	timeoutMs = CALLBACK_STORAGE_TIMEOUT_MS,
+	errorMessage = 'Telegram callback storage operation timed out',
+	errorCode = 'TELEGRAM_CALLBACK_STORAGE_TIMEOUT',
+) {
 	let timeoutId;
 	let timedOut = false;
 	const operationPromise = Promise.resolve().then(operation);
@@ -70,10 +90,10 @@ function withCallbackTimeout(operation, onLateResult) {
 	const timeoutPromise = new Promise((resolve, reject) => {
 		timeoutId = setTimeout(() => {
 			timedOut = true;
-			const error = new Error('Telegram callback storage operation timed out');
-			error.code = 'TELEGRAM_CALLBACK_STORAGE_TIMEOUT';
+			const error = new Error(errorMessage);
+			error.code = errorCode;
 			reject(error);
-		}, CALLBACK_STORAGE_TIMEOUT_MS);
+		}, timeoutMs);
 	});
 
 	return Promise.race([
@@ -465,35 +485,90 @@ async function handleVote(context, parsed, storeEntry) {
 
 	if (alertFeedbackStorageService && typeof alertFeedbackStorageService.isEnabled === 'function' && alertFeedbackStorageService.isEnabled()) {
 		try {
-			await alertFeedbackStorageService.saveFeedback({
+			await withCallbackTimeout(() => alertFeedbackStorageService.saveFeedback({
 				alertId: storeEntry.alertId,
 				chatId: String(senderId ?? context?.update?.callbackQuery?.message?.chat?.id ?? 'unknown'),
 				verdict: side,
 				source: 'webhook-alert',
-			});
+			}));
 		} catch (error) {
 			console.warn('[telegramAlertActions] Failed to persist feedback:', error.message);
 		}
 	}
 
-	await context.answerCbQuery(side === 'up' ? '👍 Gracias por tu feedback' : '👎 Gracias por tu feedback', { show_alert: false });
+	await answerCallback(context, side === 'up' ? '👍 Gracias por tu feedback' : '👎 Gracias por tu feedback');
+}
+
+const ACK_ACTION_MAP = {
+	kt: 'took_trade',
+	ks: 'skipped',
+	kn: 'no_trade_no_signal',
+	kz: 'snoozed',
+};
+
+const ACK_TOAST_MAP = {
+	took_trade: '✅ Registrado: tomaste esta señal',
+	skipped: '⏭ Registrado: omitiste esta señal',
+	no_trade_no_signal: '❓ Registrado: sin trade',
+	snoozed: '🔕 Registrado: snoozed',
+};
+
+async function handleAcknowledgement(context, parsed, storeEntry) {
+	const actionCode = parsed?.action;
+	const action = ACK_ACTION_MAP[actionCode];
+	if (!action) {
+		await answerCallback(context, 'Acción no reconocida');
+		return;
+	}
+	const chatId = context?.update?.callbackQuery?.message?.chat?.id
+		?? context?.update?.callbackQuery?.from?.id;
+	if (chatId === undefined || chatId === null) {
+		await answerCallback(context, 'Chat no identificado');
+		return;
+	}
+	let storedAlert = null;
+	try {
+		storedAlert = await withCallbackTimeout(() => alertStorageService.getAlertById(storeEntry.alertId));
+	} catch (error) {
+		console.warn('[telegramAlertActions] Failed to read alert for acknowledgement:', error.message);
+	}
+	if (!storedAlert) {
+		await replyToUser(context, 'Alerta no encontrada o ya expirada');
+		return;
+	}
+	try {
+		const record = await withCallbackTimeout(() => alertAcknowledgementService.saveAcknowledgement({
+			alertId: storeEntry.alertId,
+			chatId: String(chatId),
+			action,
+			symbol: storedAlert.symbol,
+			exchange: storedAlert.exchange,
+		}));
+		await answerCallback(context, ACK_TOAST_MAP[action]);
+		return record;
+	} catch (error) {
+		if (error && error.code === 'INVALID_REQUEST') {
+			await answerCallback(context, error.message);
+			return;
+		}
+		console.warn('[telegramAlertActions] Failed to persist acknowledgement:', error.message);
+		await answerCallback(context, 'No se pudo registrar tu respuesta');
+	}
 }
 
 async function handleAlertAction(context) {
-	const callbackData = context.update && context.update.callbackQuery
-		? context.update.callbackQuery.data
-		: null;
+	const callbackData = context?.update?.callbackQuery?.data ?? null;
 	if (!callbackData) {
-		await context.answerCbQuery('Acción no reconocida', { show_alert: false });
+		await answerCallback(context, 'Acción no reconocida');
 		return;
 	}
 	if (!ACTION_CALLBACK_REGEX.test(callbackData)) {
-		await context.answerCbQuery('Acción no reconocida', { show_alert: false });
+		await answerCallback(context, 'Acción no reconocida');
 		return;
 	}
 	const parsed = parseCallbackData(callbackData);
 	if (!parsed) {
-		await context.answerCbQuery('Acción no reconocida', { show_alert: false });
+		await answerCallback(context, 'Acción no reconocida');
 		return;
 	}
 	if (parsed.action === getActionCodes().ACTION_REPLAY) {
@@ -512,7 +587,11 @@ async function handleAlertAction(context) {
 		await handleVote(context, parsed, { alertId: parsed.alertId });
 		return;
 	}
-	await context.answerCbQuery('Acción no soportada', { show_alert: false });
+	if (ACK_ACTION_MAP[parsed.action]) {
+		await handleAcknowledgement(context, parsed, { alertId: parsed.alertId });
+		return;
+	}
+	await answerCallback(context, 'Acción no soportada');
 }
 
 function registerAlertActionHandlers(bot) {
@@ -537,8 +616,13 @@ function getRecordedQualityFeedback() {
 module.exports = {
 	registerAlertActionHandlers,
 	handleAlertAction,
+	handleAcknowledgement,
+	ACK_ACTION_MAP,
 	ACTION_CALLBACK_REGEX,
 	CALLBACK_STORAGE_TIMEOUT_MS,
 	recordQualityFeedback,
 	getRecordedQualityFeedback,
+	answerCallback,
+	replyToUser,
+	withCallbackTimeout,
 };

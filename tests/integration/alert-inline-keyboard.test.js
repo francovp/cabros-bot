@@ -30,13 +30,23 @@ jest.mock('../../src/services/notification/DiscordService', () => {
 	mockModule.send = jest.fn();
 	return mockModule;
 });
+jest.mock('../../src/services/grounding/grounding', () => ({
+	groundAlert: jest.fn().mockResolvedValue({
+		sentiment: 'BULLISH',
+		sentiment_score: 0.8,
+		insights: ['Momentum alcista detectado en BTCUSDT'],
+		sources: [{ title: 'CryptoNews', url: 'https://example.com' }],
+	}),
+}));
 jest.mock('../../src/lib/validation', () => ({
 	validateAlert: jest.fn((text) => ({ text })),
 }));
 
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const { groundAlert } = require('../../src/services/grounding/grounding');
 const NotificationManager = require('../../src/services/notification/NotificationManager');
 const alertModule = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { waitForBackgroundTasks, resetForTesting: resetTasksForTesting } = require('../../src/lib/backgroundTaskTracker');
 
 function buildApp() {
 	const app = express();
@@ -58,7 +68,8 @@ describe('Inline keyboard markup on /api/webhook/alert', () => {
 
 	beforeEach(() => {
 		jest.clearAllMocks();
-		alertModule.__resetNotificationManagerForTesting();
+		resetTasksForTesting();
+		alertModule.resetNotificationManagerForTesting();
 		editMessageReplyMarkupMock = jest.fn().mockResolvedValue(undefined);
 		sendToAllMock = jest.fn().mockImplementation((alert) => Promise.resolve([
 			{ channel: 'telegram', success: true, messageId: '101', alert },
@@ -118,6 +129,30 @@ describe('Inline keyboard markup on /api/webhook/alert', () => {
 			undefined,
 			replyMarkup,
 		);
+	});
+
+	it('omits details button when enrichment is unrenderable or absent', async () => {
+		groundAlert.mockResolvedValueOnce({
+			sentiment: 'NEUTRAL',
+			sentiment_score: 0,
+			insights: [],
+			sources: [],
+		});
+		const app = buildApp();
+		const response = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-api-key')
+			.send({ text: 'BINANCE:BTCUSDT' });
+		await new Promise((resolve) => setImmediate(resolve));
+
+		expect(response.status).toBe(200);
+		expect(editMessageReplyMarkupMock).toHaveBeenCalledTimes(1);
+		const replyMarkup = editMessageReplyMarkupMock.mock.calls[0][3];
+		const callbackActions = replyMarkup.inline_keyboard
+			.flat()
+			.map((button) => button.callback_data.split(':')[0]);
+		expect(callbackActions).toEqual(expect.arrayContaining(['r', 'x', 'vu', 'vd']));
+		expect(callbackActions).not.toContain('d');
 	});
 
 	it('does not attach a keyboard when durable alert storage fails', async () => {
@@ -193,5 +228,75 @@ describe('Inline keyboard markup on /api/webhook/alert', () => {
 		const sentAlert = sendToChannelsMock.mock.calls[0][0];
 		expect(sentAlert.replyMarkup).toBeUndefined();
 		expect(editMessageReplyMarkupMock).toHaveBeenCalledTimes(1);
+	});
+
+	it('tracks post-persistence keyboard attachment in backgroundTaskTracker', async () => {
+		let resolveKeyboardEdit;
+		editMessageReplyMarkupMock.mockImplementation(() => new Promise((resolve) => {
+			resolveKeyboardEdit = resolve;
+		}));
+
+		const app = buildApp();
+		const response = await request(app)
+			.post('/api/webhook/alert')
+			.set('x-api-key', 'test-api-key')
+			.send({ text: 'BINANCE:BTCUSDT' });
+
+		expect(response.status).toBe(200);
+
+		let drained = false;
+		const drainPromise = waitForBackgroundTasks().then(() => {
+			drained = true;
+		});
+
+		await new Promise((resolve) => setImmediate(resolve));
+		expect(drained).toBe(false);
+		expect(editMessageReplyMarkupMock).toHaveBeenCalledTimes(1);
+
+		resolveKeyboardEdit();
+		await drainPromise;
+		expect(drained).toBe(true);
+	});
+
+	describe('attachInlineKeyboardAfterPersistence', () => {
+		it('bounds slow or hanging editMessageReplyMarkup with a timeout and logs a warning', async () => {
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			const hangingEdit = jest.fn(() => new Promise(() => {}));
+			const manager = {
+				channels: new Map([
+					['telegram', { bot: { telegram: { editMessageReplyMarkup: hangingEdit } } }],
+				]),
+			};
+			const results = [{ channel: 'telegram', success: true, messageId: 42 }];
+			const routing = { telegramChatId: 'chat-1' };
+			const replyMarkup = { inline_keyboard: [] };
+
+			await alertModule.attachInlineKeyboardAfterPersistence({
+				manager,
+				results,
+				routing,
+				replyMarkup,
+				timeoutMs: 50,
+			});
+
+			expect(hangingEdit).toHaveBeenCalledTimes(1);
+			expect(warnSpy).toHaveBeenCalledWith(
+				'[Alert] Failed to attach inline keyboard after persistence:',
+				expect.stringContaining('timed out after 50ms'),
+			);
+			warnSpy.mockRestore();
+		});
+
+		it('does nothing when results or replyMarkup or manager are missing', async () => {
+			await expect(alertModule.attachInlineKeyboardAfterPersistence({})).resolves.toBeUndefined();
+			await expect(alertModule.attachInlineKeyboardAfterPersistence({
+				results: [],
+				replyMarkup: {},
+			})).resolves.toBeUndefined();
+			await expect(alertModule.attachInlineKeyboardAfterPersistence({
+				aggregated: true,
+				replyMarkup: {},
+			})).resolves.toBeUndefined();
+		});
 	});
 });

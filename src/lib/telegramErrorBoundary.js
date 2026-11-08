@@ -8,6 +8,7 @@
 
 const sentryService = require('../services/monitoring/SentryService');
 const MarkdownV2Formatter = require('../services/notification/formatters/markdownV2Formatter');
+const { adminPagingDeduplicator } = require('../services/notification/adminPagingDeduplicator');
 
 const markdownFormatter = new MarkdownV2Formatter();
 
@@ -78,7 +79,7 @@ async function handleTelegrafUpdateError(err, ctx, options = {}) {
 			command,
 		});
 
-		const sendAlertContent = process.env.SENTRY_SEND_ALERT_CONTENT === 'true';
+		const sendAlertContent = sentryService.shouldSendAlertContent();
 		const extra = {
 			updateType,
 			updateId,
@@ -191,6 +192,19 @@ async function handlePollingError(err, options = {}) {
 			pollingErrorState.consecutiveFailures >= adminAlertThreshold &&
 			now - pollingErrorState.lastPagingAt >= adminAlertCooldownMs
 		) {
+			const errorCode = errorObj.code || (errorObj.response && errorObj.response.error_code) || 'polling_error';
+			const fingerprint = adminPagingDeduplicator.computeFingerprint({
+				category: 'polling_error',
+				channel: 'telegram',
+				requestId: 'none',
+				errorCode,
+			});
+
+			if (adminPagingDeduplicator.shouldSuppress(fingerprint, now)) {
+				console.info('[telegram] Admin paging for polling error suppressed by deduplicator:', fingerprint);
+				return;
+			}
+
 			pollingErrorState.lastPagingAt = now;
 			const safeMessage = markdownFormatter.format(errorObj.message);
 			const alertText = `⚠️ *Telegram bot sustained polling failure*\nConsecutive failures: ${pollingErrorState.consecutiveFailures}\nError: ${safeMessage}`;

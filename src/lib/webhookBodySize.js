@@ -1,3 +1,4 @@
+const { sendErrorFrom } = require('./errorEnvelope');
 'use strict';
 
 /**
@@ -98,12 +99,12 @@ function buildWebhookBodySize(options = {}) {
 	const { limitBytes, limitString } = resolveWebhookMaxBodySize(env);
 
 	const payloadTooLargeResponse = (req, res) => {
-		res.status(413).json({
+		sendErrorFrom(res, 413, {
 			success: false,
 			error: 'PAYLOAD_TOO_LARGE',
 			message: `Request body exceeds maximum size of ${limitString}`,
 			limit: limitString,
-		});
+		}, { req });
 	};
 
 	// 4-arg signature is required for Express to recognize this as an error-handling middleware.

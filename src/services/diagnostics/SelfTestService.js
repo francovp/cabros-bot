@@ -15,10 +15,33 @@
 
 const packageJson = require('../../../package.json');
 const { getDeploymentCommit } = require('../../lib/deploymentEnvironment');
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
+const { redactString } = require('../../lib/logging');
+const { isFirestoreConfigured } = require('../storage/firestoreConfig');
 
 const DEFAULT_PER_CHECK_TIMEOUT_MS = 5000;
 const DEFAULT_SUITE_TIMEOUT_MS = 30000;
 const RESULT_TTL_MS = 60_000;
+const FIRESTORE_STORAGE_GATES = Object.freeze([
+	'ENABLE_FIRESTORE_ALERT_STORAGE',
+	'ENABLE_FIRESTORE_JOB_STORAGE',
+	'ENABLE_FIRESTORE_SCANNER_PRESETS',
+	'ENABLE_FIRESTORE_IDEMPOTENCY',
+	'ENABLE_SIGNAL_OUTCOME_TRACKING',
+	'ENABLE_FIRESTORE_NEWS_ANALYSIS',
+	'ENABLE_FIRESTORE_ALERT_FEEDBACK',
+	'ENABLE_FIRESTORE_CHAT_PREFERENCES',
+	'ENABLE_FIRESTORE_ALERT_SUBSCRIBERS',
+	'ENABLE_BINANCE_ORDER_AUDIT',
+	'ENABLE_SYMBOL_ANALYSIS_STORAGE',
+	'ENABLE_TRADE_LEDGER',
+	'ENABLE_AUTO_TRADE',
+	'ENABLE_NOTIFICATION_REDRIVE',
+	'ENABLE_USER_PRICE_ALERTS',
+	'ENABLE_ALERT_SCHEDULER',
+	'ENABLE_NEWS_MONITOR_SCHEDULER',
+	'ENABLE_TOKEN_COST_BUDGET',
+]);
 const SENSITIVE_KEYS = new Set([
 	'authorization',
 	'x-api-key',
@@ -40,6 +63,47 @@ function nowIso() {
 	return new Date().toISOString();
 }
 
+function sanitizeUrlForEvidence(rawUrl) {
+	if (!rawUrl || typeof rawUrl !== 'string') return rawUrl;
+	if (/^https?:\/\//i.test(rawUrl)) {
+		try {
+			const parsed = new URL(rawUrl);
+			const baseWithoutQuery = rawUrl.split(/[?#]/)[0];
+			parsed.username = '';
+			parsed.password = '';
+			parsed.search = '';
+			parsed.hash = '';
+			let result = parsed.toString();
+			if (!baseWithoutQuery.endsWith('/') && result.endsWith('/')) {
+				result = result.slice(0, -1);
+			}
+			return redactString(result);
+		} catch {
+			const withoutQuery = rawUrl.split(/[?#]/)[0];
+			const withoutUserInfo = withoutQuery.replace(/^(https?:\/\/)[^/?#@]+(?::[^/?#@]*)?@/i, '$1');
+			return redactString(withoutUserInfo);
+		}
+	}
+
+	try {
+		const fallback = new URL(`http://${rawUrl}`);
+		const baseWithoutQuery = rawUrl.split(/[?#]/)[0];
+		fallback.username = '';
+		fallback.password = '';
+		fallback.search = '';
+		fallback.hash = '';
+		let res = fallback.toString().replace(/^http:\/\//, '');
+		if (!baseWithoutQuery.endsWith('/') && res.endsWith('/')) {
+			res = res.slice(0, -1);
+		}
+		return redactString(res);
+	} catch {
+		const withoutQuery = rawUrl.split(/[?#]/)[0];
+		const withoutUserInfo = withoutQuery.replace(/(^|\/\/)[^/?#@]+(?::[^/?#@]*)?@/i, '$1');
+		return redactString(withoutUserInfo);
+	}
+}
+
 function sanitizeEvidence(value) {
 	if (value == null) return value;
 	if (typeof value === 'string') return value.length > 256 ? `${value.slice(0, 256)}…` : value;
@@ -48,8 +112,14 @@ function sanitizeEvidence(value) {
 	if (typeof value !== 'object') return value;
 	const out = {};
 	for (const [key, val] of Object.entries(value)) {
-		if (SENSITIVE_KEYS.has(key.toLowerCase())) {
+		const lowerKey = key.toLowerCase();
+		if (SENSITIVE_KEYS.has(lowerKey)) {
 			out[key] = '[REDACTED]';
+			continue;
+		}
+		if ((lowerKey.endsWith('endpoint') || lowerKey.endsWith('url')) && typeof val === 'string') {
+			const sanitized = sanitizeUrlForEvidence(val);
+			out[key] = sanitized.length > 256 ? `${sanitized.slice(0, 256)}…` : sanitized;
 			continue;
 		}
 		out[key] = sanitizeEvidence(val);
@@ -117,6 +187,16 @@ function describeError(error) {
 
 function toBoolean(value) {
 	return value === 'true';
+}
+
+function isRuntimeGateEnabled(key) {
+	const remote = resolveRemoteOverride(key);
+	if (typeof remote === 'boolean') {
+		return remote;
+	}
+	return toBoolean(process.env[key])
+		|| (key === 'ENABLE_FIRESTORE_IDEMPOTENCY'
+			&& toBoolean(process.env.ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE));
 }
 
 function hasValue(value) {
@@ -193,14 +273,11 @@ function buildChecks({ botOrGetter, getBinanceOrderService }) {
 	checks.push({
 		id: 'firestore.collections',
 		run: () => {
-			const firestoreEnabled = toBoolean(process.env.ENABLE_FIRESTORE_ALERT_STORAGE)
-				|| toBoolean(process.env.ENABLE_FIRESTORE_JOB_STORAGE)
-				|| toBoolean(process.env.ENABLE_FIRESTORE_SCANNER_PRESETS)
-				|| toBoolean(process.env.ENABLE_FIRESTORE_IDEMPOTENCY);
+			const firestoreEnabled = FIRESTORE_STORAGE_GATES.some(isRuntimeGateEnabled);
 			if (!firestoreEnabled) {
 				return { status: 'skipped', message: 'No Firestore feature is enabled' };
 			}
-			if (!hasValue(process.env.FIREBASE_SERVICE_ACCOUNT_JSON) && !hasValue(process.env.GOOGLE_APPLICATION_CREDENTIALS)) {
+			if (!isFirestoreConfigured()) {
 				return makeResult('fail', 'Firestore enabled but credentials are missing', null);
 			}
 			return makeResult('pass', 'Firestore credentials are configured');
@@ -219,8 +296,19 @@ function buildChecks({ botOrGetter, getBinanceOrderService }) {
 			const service = typeof getBinanceOrderService === 'function' ? getBinanceOrderService() : null;
 			if (service && typeof service.getStatus === 'function') {
 				const status = service.getStatus();
-				if (status && status.environment && !status.environment.ok) {
-					return makeResult('fail', `Binance trading is misconfigured: ${status.environment.reason || 'unknown'}`, null);
+				if (status) {
+					if (typeof status.environment === 'object' && status.environment !== null && !status.environment.ok) {
+						return makeResult('fail', `Binance trading is misconfigured: ${status.environment.reason || 'unknown'}`, null);
+					}
+					if (status.status === 'misconfigured' || status.configured === false) {
+						return makeResult('fail', `Binance trading is misconfigured: ${status.reason || 'unknown'}`, null);
+					}
+					if (status.ready === false && status.status !== 'paused') {
+						return makeResult('fail', `Binance trading is not ready: ${status.status || 'unknown'}`, null);
+					}
+					if (status.status === 'paused') {
+						return makeResult('warn', `Binance trading is paused: ${status.pausedReason || 'runtime pause'}`, null);
+					}
 				}
 			}
 			return makeResult('pass', 'Binance trading credentials are configured');
@@ -244,8 +332,10 @@ function buildChecks({ botOrGetter, getBinanceOrderService }) {
 	checks.push({
 		id: 'rate_limiter.config',
 		run: () => {
-			const max = Number(process.env.RATE_LIMIT_MAX);
-			const window = Number(process.env.RATE_LIMIT_WINDOW_MS);
+			const rawMax = process.env.RATE_LIMIT_MAX;
+			const rawWindow = process.env.RATE_LIMIT_WINDOW_MS;
+			const max = rawMax !== undefined && rawMax !== '' ? Number(rawMax) : 100;
+			const window = rawWindow !== undefined && rawWindow !== '' ? Number(rawWindow) : 900000;
 			if (!Number.isFinite(max) || max <= 0) return makeResult('fail', 'RATE_LIMIT_MAX is invalid', null);
 			if (!Number.isFinite(window) || window <= 0) return makeResult('fail', 'RATE_LIMIT_WINDOW_MS is invalid', null);
 			return makeResult('pass', 'Rate limiter is configured', { max, windowMs: window });
@@ -323,6 +413,9 @@ function createSelfTestService({ botOrGetter, getBinanceOrderService } = {}) {
 		}
 
 		const ran = await Promise.all(selected.map((check) => runCheck(check, { perCheckTimeoutMs: DEFAULT_PER_CHECK_TIMEOUT_MS })));
+		if (unknownIds.length > 0) {
+			ran.push({ id: 'unknown', status: 'fail', message: `unknown checks: ${unknownIds.join(', ')}`, durationMs: 0 });
+		}
 		const finishedAt = nowIso();
 		const result = buildResult({ checks: ran, startedAt, finishedAt });
 		lastResult = result;
@@ -346,7 +439,12 @@ function createSelfTestService({ botOrGetter, getBinanceOrderService } = {}) {
 		};
 	}
 
-	return { run, getLastResult, getStatus };
+	function updateDependencies({ botOrGetter: newBot, getBinanceOrderService: newBinance } = {}) {
+		if (newBot !== undefined) botOrGetter = newBot;
+		if (newBinance !== undefined) getBinanceOrderService = newBinance;
+	}
+
+	return { run, getLastResult, getStatus, updateDependencies };
 }
 
 module.exports = {
@@ -354,4 +452,5 @@ module.exports = {
 	DEFAULT_PER_CHECK_TIMEOUT_MS,
 	DEFAULT_SUITE_TIMEOUT_MS,
 	RESULT_TTL_MS,
+	FIRESTORE_STORAGE_GATES,
 };
