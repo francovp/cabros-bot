@@ -551,4 +551,35 @@ describe('DailyDigestService Codex review follow-ups', () => {
 		expect(docs.get(docId).status).toBe('ambiguous');
 		expect(docs.get(docId).retryAfterSeconds).toBeUndefined();
 	});
+
+	test('escapes underscores and asterisks in dynamic sources, symbols and channels for MarkdownV2', () => {
+		const svc = new DailyDigestService();
+		const agg = {
+			dateStr: '2026-11-07',
+			totalAlerts: 5,
+			bySource: { tradingview_alert: 3, custom_source_v1: 2 },
+			byChannel: { whatsapp_group: { success: 2, total: 2 } },
+			outcomes: { hitRatePercent: 66.7, eligible: 3, evaluated: 2, pending: 1 },
+			topScannerHits: [
+				{ symbol: 'BTC_USDT', exchange: 'BINANCE_FUTURES', score: 0.9 },
+				{ symbol: 'ETH*SPECIAL', exchange: 'BYBIT', score: 0.8 },
+			],
+			topWinners: [
+				{ symbol: 'SOL_USDT', exchange: 'BINANCE', outcomes: { '1D': { status: 'evaluated', rMultiple: 2.5 } } },
+			],
+			totalSpend: 0.05,
+			maxSpend: 50,
+			spendExceeded: false,
+		};
+		const text = svc.formatDigest(agg);
+		// Underscores and asterisks must be escaped
+		expect(text).toContain('tradingview\\_alert');
+		expect(text).toContain('custom\\_source\\_v1');
+		expect(text).toContain('whatsapp\\_group');
+		expect(text).toContain('BINANCE\\_FUTURES:BTC\\_USDT');
+		expect(text).toContain('ETH\\*SPECIAL');
+		expect(text).toContain('SOL\\_USDT');
+		// Must not contain unescaped dynamic underscores (excluding markdown bold * tags)
+		expect(text).not.toMatch(/(?<!\\)_/);
+	});
 });

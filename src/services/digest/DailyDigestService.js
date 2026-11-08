@@ -36,7 +36,9 @@ function previousUtcDay(now = new Date()) {
 
 function esc(value) {
 	if (value === undefined || value === null) return 'N/D';
-	return smartEscapeMarkdownV2(String(value));
+	return smartEscapeMarkdownV2(String(value))
+		.replace(/_/g, '\\_')
+		.replace(/\*/g, '\\*');
 }
 
 function sanitizeTelegramError(err) {
