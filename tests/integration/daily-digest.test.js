@@ -33,7 +33,7 @@ describe('Daily digest integration', () => {
 				})),
 			}),
 			getOutcomeStorage: () => ({
-				summarizeOutcomes: jest.fn(async () => ({ hitRatePercent: 60, totalSignalsEligible: 20, totalSignalsEvaluated: 15, totalSignalsPending: 5 })),
+				summarizeOutcomes: jest.fn(async () => ({ windows: { '1D': { hitRatePercent: 60 } }, totalSignalsEligible: 20, totalSignalsEvaluated: 15, totalSignalsPending: 5 })),
 				listOutcomes: jest.fn(async () => ({
 					outcomes: [
 						{ symbol: 'BTCUSDT', exchange: 'BINANCE', outcomes: { '1D': { status: 'evaluated', rMultiple: 2.5 } } },

@@ -43,7 +43,7 @@ describe('DailyDigestService', () => {
 			}),
 			getOutcomeStorage: () => ({
 				summarizeOutcomes: jest.fn(async () => ({
-					hitRatePercent: 55,
+					windows: { '1D': { hitRatePercent: 55 } },
 					totalSignalsEligible: 10,
 					totalSignalsEvaluated: 8,
 					totalSignalsPending: 2,
@@ -78,7 +78,7 @@ describe('DailyDigestService', () => {
 		const firestore = { collection: jest.fn(), runTransaction: jest.fn() };
 		const svc = new DailyDigestService({
 			getAlertStorage: () => ({ summarizeAlerts: jest.fn(async () => ({ totalAlerts: 1, bySource: { webhook: 1 }, delivery: { byChannel: {} }, enrichment: { tokenUsage: { totalCost: 0.01 } } })), listAlerts: jest.fn(async () => ({ alerts: [] })) }),
-			getOutcomeStorage: () => ({ summarizeOutcomes: jest.fn(async () => ({ hitRatePercent: 50, totalSignalsEligible: 2, totalSignalsEvaluated: 2, totalSignalsPending: 0 })), listOutcomes: jest.fn(async () => ({ outcomes: [] })) }),
+			getOutcomeStorage: () => ({ summarizeOutcomes: jest.fn(async () => ({ windows: { '1D': { hitRatePercent: 50 } }, totalSignalsEligible: 2, totalSignalsEvaluated: 2, totalSignalsPending: 0 })), listOutcomes: jest.fn(async () => ({ outcomes: [] })) }),
 			getFirestoreFn: () => firestore,
 			sendTelegram,
 		});
@@ -185,5 +185,77 @@ describe('DailyDigestService', () => {
 		const st = svc.getStatus();
 		expect(st).toMatchObject({ enabled: true, configured: true, deliveryHourUtc: 13, maxSpendUsd: 50 });
 		expect(JSON.stringify(st)).not.toContain('-100123');
+	});
+});
+describe('DailyDigestService Codex fixes', () => {
+	const savedEnv = { ...process.env };
+	beforeEach(() => {
+		process.env.ENABLE_DAILY_DIGEST = 'true';
+		process.env.ENABLE_FIRESTORE_DIGEST_RUNS = 'true';
+		process.env.TELEGRAM_DIGEST_CHAT_ID = '-100123';
+	});
+	afterEach(() => { process.env = { ...savedEnv }; jest.clearAllMocks(); });
+
+	test('spend amount and budget warning are MarkdownV2-escaped', async () => {
+		const svc = new DailyDigestService({
+			getAlertStorage: () => ({ summarizeAlerts: jest.fn(async () => ({ totalAlerts: 0, bySource: {}, delivery: { byChannel: {} }, enrichment: { tokenUsage: { totalCost: 51 } } })), listAlerts: jest.fn(async () => ({ alerts: [] })) }),
+			getOutcomeStorage: () => ({ summarizeOutcomes: jest.fn(async () => ({ windows: { '1D': { hitRatePercent: 10 } } })), listOutcomes: jest.fn(async () => ({ outcomes: [] })) }),
+		});
+		const agg = await svc.aggregateForDay(previousUtcDay(new Date('2026-11-08T13:30:00Z')));
+		const text = svc.formatDigest(agg);
+		expect(text).toContain('51\\.0000');
+		expect(text).toContain('presupuesto\\.');
+	});
+
+	test('thrown transport error marks ambiguous not failed', async () => {
+		const svc = new DailyDigestService({
+			getAlertStorage: () => ({ summarizeAlerts: jest.fn(async () => ({ totalAlerts: 0, bySource: {}, delivery: { byChannel: {} } })), listAlerts: jest.fn(async () => ({ alerts: [] })) }),
+			getOutcomeStorage: () => ({ summarizeOutcomes: jest.fn(async () => ({ windows: { '1D': { hitRatePercent: 10 } } })), listOutcomes: jest.fn(async () => ({ outcomes: [] })) }),
+			getFirestoreFn: () => ({
+				collection: () => ({ doc: () => ({ id: 'x' }) }),
+				runTransaction: jest.fn(async (cb) => cb({ get: jest.fn(async () => ({ exists: false, data: () => undefined })), set: jest.fn() })),
+			}),
+			sendTelegram: jest.fn(async () => { throw new Error('ECONNRESET'); }),
+		});
+		jest.spyOn(svc, 'markDigestDone');
+		const day = previousUtcDay(new Date('2026-11-08T13:30:00Z'));
+		await expect(svc.runDigestForDay(day)).rejects.toThrow('ECONNRESET');
+		expect(svc.getStatus().lastRunStatus).toBe('ambiguous');
+		const statuses = svc.markDigestDone.mock.calls.map((c) => c[3]);
+		expect(statuses).toContain('sending');
+		expect(statuses).toContain('ambiguous');
+		expect(statuses).not.toContain('failed');
+	});
+
+	test('sending checkpoint prevents reclaim of in-flight reservation', async () => {
+		const firestore = {
+			collection: () => ({ doc: () => ({ id: 'x' }) }),
+			runTransaction: jest.fn(async (cb) => cb({
+				get: jest.fn(async () => ({ exists: true, data: () => ({ status: 'sending' }) })),
+				set: jest.fn(),
+			})),
+		};
+		const svc = new DailyDigestService({ getFirestoreFn: () => firestore });
+		const res = await svc.reserveDigest('2026-11-07', '-100123');
+		expect(res.ok).toBe(false);
+		expect(res.reason).toBe('ambiguous');
+	});
+
+	test('on-demand send does not suppress scheduled destination', async () => {
+		const svc = new DailyDigestService({
+			getAlertStorage: () => ({ summarizeAlerts: jest.fn(async () => ({ totalAlerts: 0, bySource: {}, delivery: { byChannel: {} } })), listAlerts: jest.fn(async () => ({ alerts: [] })) }),
+			getOutcomeStorage: () => ({ summarizeOutcomes: jest.fn(async () => ({ windows: { '1D': { hitRatePercent: 10 } } })), listOutcomes: jest.fn(async () => ({ outcomes: [] })) }),
+			getFirestoreFn: () => ({
+				collection: () => ({ doc: () => ({ id: 'x' }) }),
+				runTransaction: jest.fn(async (cb) => cb({ get: jest.fn(async () => ({ exists: false, data: () => undefined })), set: jest.fn() })),
+			}),
+			sendTelegram: jest.fn(async () => ({ success: true, messageId: '1' })),
+		});
+		const day = previousUtcDay(new Date('2026-11-08T13:30:00Z'));
+		await svc.runDigestForDay(day, { chatId: '-999' });
+		expect(svc.lastRunKey).toBe(`${day.dateStr}|-999`);
+		// Scheduled key is different destination, so already-sent shortcut must not fire.
+		const check = await svc.runScheduledCheck(new Date('2026-11-08T13:30:00Z'));
+		expect(check.skipped).not.toBe(true);
 	});
 });

@@ -72,6 +72,7 @@ class DailyDigestService {
 		this.lastRunAt = null;
 		this.lastRunStatus = 'never';
 		this.lastRunDateStr = null;
+		this.lastRunKey = null;
 		this.lastRunDigestMessageId = null;
 		this.lastRunError = null;
 		this.dailyChats = [];
@@ -163,17 +164,15 @@ class DailyDigestService {
 		let hitRatePercent = null;
 		let eligible = 0; let evaluated = 0; let pending = 0;
 		if (outcomeSummary && typeof outcomeSummary === 'object') {
-			hitRatePercent = outcomeSummary.hitRatePercent ?? outcomeSummary['hitRatePercent'] ?? null;
 			eligible = outcomeSummary.totalSignalsEligible ?? outcomeSummary.eligible ?? eligible;
 			evaluated = outcomeSummary.totalSignalsEvaluated ?? outcomeSummary.evaluated ?? evaluated;
 			pending = outcomeSummary.totalSignalsPending ?? outcomeSummary.pending ?? pending;
-			// summarizeOutcomes aggregates across windows; when only 1D requested it is already scoped.
-			if (outcomeSummary.byWindow && outcomeSummary.byWindow['1D']) {
-				const w = outcomeSummary.byWindow['1D'];
-				hitRatePercent = w.hitRatePercent ?? hitRatePercent;
-				eligible = w.eligible ?? eligible;
-				evaluated = w.evaluated ?? evaluated;
-				pending = w.pending ?? pending;
+			// summarizeOutcomes returns per-window metrics under windows['1D'].hitRatePercent.
+			const win = outcomeSummary.windows && outcomeSummary.windows['1D'];
+			if (win && typeof win.hitRatePercent === 'number' && Number.isFinite(win.hitRatePercent)) {
+				hitRatePercent = win.hitRatePercent;
+			} else if (outcomeSummary.hitRatePercent !== undefined && outcomeSummary.hitRatePercent !== null) {
+				hitRatePercent = outcomeSummary.hitRatePercent;
 			}
 		}
 
@@ -234,9 +233,9 @@ class DailyDigestService {
 			});
 		}
 		lines.push('');
-		lines.push(`*Gasto LLM:* $${Number(agg.totalSpend || 0).toFixed(4)}`);
+		lines.push(`*Gasto LLM:* \\$${esc(Number(agg.totalSpend || 0).toFixed(4))}`);
 		if (agg.spendExceeded) {
-			lines.push('⚠️ Ayer el gasto LLM superó el presupuesto.');
+			lines.push('⚠️ Ayer el gasto LLM superó el presupuesto\\.');
 		}
 		return lines.join('\n');
 	}
@@ -262,6 +261,7 @@ class DailyDigestService {
 					const data = snap.data() || {};
 					if (data.status === 'sent') return { outcome: 'already-sent', data };
 					if (data.status === 'ambiguous') return { outcome: 'ambiguous', data };
+					if (data.status === 'sending') return { outcome: 'ambiguous', data };
 					if (data.status === 'reserved') {
 						const ts = data.reservedAt ? new Date(data.reservedAt).getTime() : 0;
 						if (Date.now() - ts < LEASE_TTL_MS) return { outcome: 'reserved-elsewhere', data };
@@ -288,21 +288,23 @@ class DailyDigestService {
 
 	async markDigestDone(dateStr, chatId, token, status, extra = {}) {
 		const firestore = this.getFirestoreFn();
-		if (!firestore) return;
+		if (!firestore) return false;
 		const ref = firestore.collection(RUNS_COLLECTION).doc(this._digestDocId(dateStr, chatId));
 		try {
-			await firestore.runTransaction(async (tx) => {
+			const ok = await firestore.runTransaction(async (tx) => {
 				const snap = await tx.get(ref);
-				if (!snap.exists) return;
+				if (!snap.exists) return false;
 				const data = snap.data() || {};
-				if (token && data.claimToken !== token) return;
+				if (token && data.claimToken !== token) return false;
 				tx.set(ref, {
 					status,
 					updatedAt: new Date().toISOString(),
 					...extra,
 				}, { merge: true });
+				return true;
 			});
-		} catch (err) { console.warn('[DailyDigest] mark done failed:', err.message); }
+			return Boolean(ok);
+		} catch (err) { console.warn('[DailyDigest] mark done failed:', err.message); return false; }
 	}
 
 	async _defaultSend(chatId, text) {
@@ -357,6 +359,9 @@ class DailyDigestService {
 			return { dryRun: false, skipped: true, reason: reservation.reason, dateStr: day.dateStr, text };
 		}
 		const token = reservation.token;
+		// Persist the send-attempt checkpoint BEFORE sending so a failed
+		// terminal mark cannot leave a reclaimable 'reserved' doc.
+		await this.markDigestDone(day.dateStr, chatId, token, 'sending', { sendingAt: new Date().toISOString() });
 		try {
 			const sendFn = this.sendTelegram || ((c, t) => this._defaultSend(c, t));
 			const sent = await sendFn(chatId, text);
@@ -365,6 +370,7 @@ class DailyDigestService {
 				this.lastRunStatus = 'sent';
 				this.lastRunDigestMessageId = sent.messageId || null;
 				this.dailyChats = [crypto.createHash('sha256').update(String(chatId)).digest('hex').slice(0, 12)];
+				this.lastRunKey = `${day.dateStr}|${chatId}`;
 				return { dryRun: false, sent: true, dateStr: day.dateStr, text, messageId: sent.messageId || null };
 			}
 			// Ambiguous: provider accepted but we cannot prove it. Per decision, do not auto-retry.
@@ -373,8 +379,12 @@ class DailyDigestService {
 			this.lastRunError = (sent && sent.error) || 'unknown-send-outcome';
 			return { dryRun: false, sent: false, ambiguous: true, dateStr: day.dateStr, text, error: this.lastRunError };
 		} catch (err) {
-			await this.markDigestDone(day.dateStr, chatId, token, 'failed', { error: err.message });
-			this.lastRunStatus = 'failed';
+			// A thrown transport error does not prove non-delivery.
+			const code = err?.response?.error_code ?? err?.statusCode;
+			const definitive = (code === 400 && /bad request/i.test(err.message || '')) || /chat not found/i.test(err.message || '');
+			const terminal = definitive ? 'failed' : 'ambiguous';
+			await this.markDigestDone(day.dateStr, chatId, token, terminal, { error: err.message });
+			this.lastRunStatus = terminal;
 			this.lastRunError = err.message;
 			sentryService.captureRuntimeError?.({ channel: 'telegram', error: err, extra: { feature: 'daily-digest' } });
 			throw err;
@@ -389,8 +399,15 @@ class DailyDigestService {
 		const hour = this.getDeliveryHourUtc();
 		if (now.getUTCHours() < hour) return { skipped: true, reason: 'before-delivery-hour' };
 		const day = previousUtcDay(now);
-		if (this.lastRunDateStr === day.dateStr && this.lastRunStatus === 'sent') return { skipped: true, reason: 'already-sent' };
-		return this.runDigestForDay(day);
+		const destChatId = this.getDigestChatId();
+		const key = `${day.dateStr}|${destChatId}`;
+		if (this.lastRunKey === key && this.lastRunStatus === 'sent') return { skipped: true, reason: 'already-sent' };
+		this.activeRunPromise = this.runDigestForDay(day);
+		try {
+			return await this.activeRunPromise;
+		} finally {
+			this.activeRunPromise = null;
+		}
 	}
 
 	startWorker() {
