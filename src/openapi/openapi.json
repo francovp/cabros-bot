@@ -10268,7 +10268,17 @@
                     "$ref": "#/components/schemas/OutcomeTrendPoint"
                   }
                 },
+                "trend": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OutcomeTrendPoint"
+                  }
+                },
                 "totalPoints": {
+                  "type": "integer",
+                  "example": 31
+                },
+                "totalDays": {
                   "type": "integer",
                   "example": 31
                 }

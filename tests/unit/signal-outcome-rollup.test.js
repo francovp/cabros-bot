@@ -114,6 +114,43 @@ describe('SignalOutcomeDailyRollupService', () => {
 			// MAE: (-0.5 + -2.0 + -0.8) / 3 = -1.1
 			expect(metrics.avgMae).toBe(-1.1);
 		});
+
+		it('includes flat evaluated outcomes (zero return) in hit-rate denominator and sampleSize', () => {
+			const docs = [
+				{
+					outcomes: {
+						'1D': {
+							status: 'evaluated',
+							targetHit: false,
+							stopHit: false,
+							return: 2.0,
+							maxFavorableExcursion: 2.5,
+							maxAdverseExcursion: -0.5,
+						},
+					},
+				},
+				{
+					outcomes: {
+						'1D': {
+							status: 'evaluated',
+							targetHit: false,
+							stopHit: false,
+							return: 0.0,
+							maxFavorableExcursion: 0.5,
+							maxAdverseExcursion: -0.5,
+						},
+					},
+				},
+			];
+
+			const metrics = SignalOutcomeDailyRollupService.computeDailyMetrics(docs, '1D');
+			expect(metrics.signals).toBe(2);
+			expect(metrics.sampleSize).toBe(2);
+			expect(metrics.wins).toBe(1);
+			expect(metrics.losses).toBe(0);
+			// 1 win out of 2 evaluated outcomes = 50.0%
+			expect(metrics.hitRatePercent).toBe(50.0);
+		});
 	});
 
 	describe('formatDocId()', () => {
@@ -281,6 +318,73 @@ describe('SignalOutcomeDailyRollupService', () => {
 			expect(firstWrite.sampleSize).toBe(1);
 			expect(firstWrite.wins).toBe(1);
 			expect(firstWrite.hitRatePercent).toBe(100);
+		});
+
+		it('keeps snapshots refreshable (finalized: false) if mature cohort still contains pending outcomes', async () => {
+			const setCalls = [];
+			const batchCommit = jest.fn().mockResolvedValue([]);
+			const mockBatch = {
+				set: jest.fn((ref, data) => setCalls.push({ ref, data })),
+				commit: batchCommit,
+			};
+
+			const mockDailyDoc = {
+				get: jest.fn().mockResolvedValue({
+					exists: false,
+					data: () => null,
+				}),
+			};
+
+			const mockFirestore = {
+				collection: (name) => {
+					if (name === 'tradingSignalOutcomesDaily') {
+						return {
+							doc: jest.fn().mockReturnValue(mockDailyDoc),
+						};
+					}
+					if (name === 'tradingSignalOutcomes') {
+						return {
+							where: jest.fn().mockReturnThis(),
+							select: jest.fn().mockReturnThis(),
+							limit: jest.fn().mockReturnThis(),
+							get: jest.fn().mockImplementation(() => {
+								return Promise.resolve({
+									docs: [
+										{
+											data: () => ({
+												receivedAt: '2026-08-20T10:00:00.000Z',
+												assetClass: 'crypto',
+												setupType: 'breakout',
+												outcomeEvaluated: false,
+												outcomes: {
+													'1D': {
+														status: 'pending',
+													},
+												},
+											}),
+										},
+									],
+								});
+							}),
+						};
+					}
+					return {};
+				},
+				batch: () => mockBatch,
+			};
+
+			const now = new Date('2026-09-01T12:00:00.000Z');
+			const result = await SignalOutcomeDailyRollupService.rollupOutcomesDaily({
+				firestore: mockFirestore,
+				now,
+				date: '2026-08-20',
+				window: '1D',
+			});
+
+			expect(result.finalizedSnapshots).toBe(0);
+			expect(setCalls.length).toBe(1);
+			expect(setCalls[0].data.finalized).toBe(false);
+			expect(setCalls[0].data.pending).toBe(1);
 		});
 	});
 

@@ -758,8 +758,13 @@ const outcomesCommand = async (context) => {
 		}
 
 		if (rawSymbol.toLowerCase() === 'trend' || rawSymbol.toLowerCase() === 'tendencia') {
+			let days = 7;
+			const requestedDays = parseInt(args.positionals[1] || args.options.days, 10);
+			if (!isNaN(requestedDays) && requestedDays > 0) {
+				days = Math.min(Math.max(requestedDays, 1), 180);
+			}
 			const toDate = new Date().toISOString().slice(0, 10);
-			const fromDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+			const fromDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 			const trendResult = await withTimeout(
 				(signal) => signalOutcomeService.getOutcomesTrend({
 					window: '1D',
@@ -780,7 +785,7 @@ const outcomesCommand = async (context) => {
 				return;
 			}
 			const lines = [
-				'*📈 Tendencia de resultados \\(últimos 7 días, ventana 1D\\)*',
+				`*📈 Tendencia de resultados \\(últimos ${days} días, ventana 1D\\)*`,
 				'',
 			];
 			trend.forEach((point) => {

@@ -82,6 +82,7 @@ function matchesBucket(data, bucket) {
 
 function computeDailyMetrics(docs, window, bucket = 'all') {
 	let signals = 0;
+	let evaluated = 0;
 	let wins = 0;
 	let losses = 0;
 	let invalidated = 0;
@@ -112,6 +113,7 @@ function computeDailyMetrics(docs, window, bucket = 'all') {
 		}
 
 		if (winOutcome.status === 'evaluated') {
+			evaluated++;
 			const ret = typeof winOutcome.returnPercent === 'number' && Number.isFinite(winOutcome.returnPercent)
 				? winOutcome.returnPercent
 				: (typeof winOutcome.return === 'number' && Number.isFinite(winOutcome.return) ? winOutcome.return : null);
@@ -148,9 +150,8 @@ function computeDailyMetrics(docs, window, bucket = 'all') {
 		}
 	}
 
-	const decisiveSignals = wins + losses;
-	const hitRatePercent = decisiveSignals > 0
-		? round10((wins / decisiveSignals) * 100, -2)
+	const hitRatePercent = evaluated > 0
+		? round10((wins / evaluated) * 100, -2)
 		: null;
 
 	const avgMfe = countMfe > 0 ? round10(totalMfe / countMfe, -2) : null;
@@ -159,7 +160,7 @@ function computeDailyMetrics(docs, window, bucket = 'all') {
 
 	return {
 		signals,
-		sampleSize: decisiveSignals > 0 ? decisiveSignals : signals,
+		sampleSize: evaluated,
 		wins,
 		losses,
 		invalidated,
@@ -263,6 +264,8 @@ async function rollupOutcomesDaily({ firestore, date, window, bucket = 'all', fo
 				const docs = snapshot && !snapshot.empty ? snapshot.docs : [];
 				const metrics = computeDailyMetrics(docs, targetWin, bucket);
 
+				const isFinalized = (mature || force) && metrics.pending === 0;
+
 				const dailyDoc = {
 					date: targetDate,
 					bucket,
@@ -277,7 +280,7 @@ async function rollupOutcomesDaily({ firestore, date, window, bucket = 'all', fo
 					avgMfe: metrics.avgMfe,
 					avgMae: metrics.avgMae,
 					avgReturnPercent: metrics.avgReturnPercent,
-					finalized: mature,
+					finalized: isFinalized,
 					updatedAt: new Date(nowMs).toISOString(),
 					expiresAt,
 				};
@@ -288,8 +291,8 @@ async function rollupOutcomesDaily({ firestore, date, window, bucket = 'all', fo
 					await docRef.set(dailyDoc, { merge: true });
 				}
 
-				if (mature) finalizedSnapshots++;
-				results.push({ docId, status: 'upserted', finalized: mature });
+				if (isFinalized) finalizedSnapshots++;
+				results.push({ docId, status: 'upserted', finalized: isFinalized });
 			}
 		}
 
@@ -330,7 +333,6 @@ async function getOutcomesTrend({ firestore, window = '1D', from, to, bucket = '
 
 	const now = new Date();
 	const todayUtc = now.toISOString().split('T')[0];
-	const thirtyDaysAgoUtc = new Date(Date.now() - DEFAULT_TREND_DAYS * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
 	let toDateStr = todayUtc;
 	if (to) {
@@ -345,7 +347,7 @@ async function getOutcomesTrend({ firestore, window = '1D', from, to, bucket = '
 			: parsedTo.toISOString().split('T')[0];
 	}
 
-	let fromDateStr = thirtyDaysAgoUtc;
+	let fromDateStr;
 	if (from) {
 		const parsedFrom = new Date(from);
 		if (isNaN(parsedFrom.getTime())) {
@@ -356,6 +358,9 @@ async function getOutcomesTrend({ firestore, window = '1D', from, to, bucket = '
 		fromDateStr = typeof from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(from)
 			? from
 			: parsedFrom.toISOString().split('T')[0];
+	} else {
+		const defaultFromDate = new Date(new Date(toDateStr).getTime() - DEFAULT_TREND_DAYS * 24 * 60 * 60 * 1000);
+		fromDateStr = defaultFromDate.toISOString().split('T')[0];
 	}
 
 	if (fromDateStr > toDateStr) {

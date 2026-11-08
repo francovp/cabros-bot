@@ -1265,6 +1265,41 @@ describe('Telegram TradingView commands', () => {
 			expect(reply).toContain('7/10');
 		});
 
+		it('supports requesting 14 or 30 days via /outcomes trend 14', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.getOutcomesTrend = jest.fn().mockResolvedValue({
+				success: true,
+				window: '1D',
+				bucket: 'all',
+				trend: [
+					{
+						date: '2026-08-15',
+						window: '1D',
+						bucket: 'all',
+						sampleSize: 8,
+						wins: 6,
+						losses: 2,
+						hitRatePercent: 75.0,
+						avgMfe: 3.0,
+						avgMae: -0.5,
+						finalized: true,
+					},
+				],
+			});
+			const context = buildContext('/outcomes trend 14');
+
+			await outcomesCommand(context);
+
+			expect(signalOutcomeService.getOutcomesTrend).toHaveBeenCalledWith(
+				expect.objectContaining({ window: '1D', bucket: 'all' }),
+			);
+			expect(context.reply).toHaveBeenCalledTimes(1);
+			const reply = context.reply.mock.calls[0][0];
+			expect(reply).toContain('últimos 14 días');
+			expect(reply).toContain('2026\\-08\\-15');
+			expect(reply).toContain('75\\.0% acierto');
+		});
+
 		it('replies with friendly empty state when /outcomes trend has no snapshots', async () => {
 			signalOutcomeService.isEnabled.mockReturnValue(true);
 			signalOutcomeService.getOutcomesTrend = jest.fn().mockResolvedValue({

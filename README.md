@@ -475,6 +475,17 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
 | `SIGNAL_OUTCOME_WORKER_ROLE` | `web` | `web`/`worker`/`disabled` | Which entrypoint may start the sweep. Environment-only. |
 | `SIGNAL_OUTCOME_EVALUATION_LEASE_MS` | `120000` | `10000`–`600000` | Distributed sweep lease duration. Environment-only. |
 
+### Signal Outcome Daily Rollups and Trend (#749)
+
+`GET /api/outcomes/trend` queries pre-aggregated daily outcome cohorts over a time range (default 30 days, max 180 days). Daily snapshots are computed and finalized by `SignalOutcomeDailyRollupService` following cohort maturity windows (`1h`, `4h`, `1D`, `1W`) and stored in the `tradingSignalOutcomesDaily` Firestore collection.
+
+| Remote Config parameter | Environment/default fallback | Bounds | Purpose |
+| --- | --- | --- | --- |
+| `SIGNAL_OUTCOME_ROLLUP_ENABLED` | `true` | boolean | Opt-in runtime gate for computing daily signal outcome rollups during scheduled evaluation sweeps. |
+| `SIGNAL_OUTCOME_ROLLUP_TTL_DAYS` | `180` | integer `1`–`730` | Retention policy in days for `tradingSignalOutcomesDaily` documents before Firestore native TTL deletion. |
+
+Both settings are non-secret runtime tuning parameters supported by Firebase Remote Config. Fresh published values override environment/default values.
+
 ### Langfuse Dynamic Prompt Readiness
 
 `ENABLE_LANGFUSE_PROMPTS=true` is enabled in production by `render.yaml` on the web service and on the jobs worker (which starts the news-monitor and alert schedulers and therefore resolves the same prompts). Previews keep it off, so a throwaway PR deploy cannot publish traces against the production Langfuse project or spend its quota. The credentials are `sync: false` and must be set in the Render dashboard for each service.

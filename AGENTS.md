@@ -3072,3 +3072,13 @@ No new environment variable, Remote Config key, or notification channel was adde
 ## Deployment banner (issue #856)
 
 `src/lib/environmentBanner.js` shares `resolveDeploymentEnvironment` with status. `ENABLE_ENVIRONMENT_BANNER` is a non-secret, Remote Config eligible display flag (default true), read for each response; it controls headers only. `/api/banner` exposes only environment/commit/name/deployedAt and remains public when headers are disabled. Missing host commit timestamps produce null, never deployment identifiers. Mount metadata before CORS/parsers so errors and healthchecks retain it; invalid optional header characters must not block delivery. Shared notification footer construction must respect `ENABLE_MESSAGE_FOOTER_METADATA`, and production messages stay unchanged. Change the admin source tree and regenerate hosting assets; keep existing Firebase authorization and route navigation intact.
+
+## Signal Outcome Daily Rollups and Trend Endpoint (Issue #749)
+
+`SignalOutcomeDailyRollupService` computes idempotent per-day outcome cohorts aggregated across configured evaluation windows (`1h`, `4h`, `1D`, `1W`) and persists them into the `tradingSignalOutcomesDaily` Firestore collection (`${date}_${bucket}_${window}`) with native TTL support (`expiresAt`). Cohort maturity delays prevent premature finalization, and cohorts with unresolved pending outcomes remain refreshable across worker sweeps until fully evaluated.
+
+Two Remote-Config-eligible runtime settings govern the rollup:
+- `SIGNAL_OUTCOME_ROLLUP_ENABLED`: Boolean (default `true`). Opt-in runtime gate for computing daily signal outcome rollups during scheduled evaluation sweeps.
+- `SIGNAL_OUTCOME_ROLLUP_TTL_DAYS`: Integer `1`–`730` (default `180`). Retention policy in days for `tradingSignalOutcomesDaily` documents before Firestore native TTL deletion.
+
+The public/operator query endpoint `GET /api/outcomes/trend` exposes chronological daily metrics (`hitRatePercent`, `sampleSize`, `wins`, `losses`, `invalidated`, `pending`, `avgMfe`, `avgMae`, `avgReturnPercent`, `finalized`) with bounding (max 180 days, default 30 days) and `admin.viewer` authorization.
