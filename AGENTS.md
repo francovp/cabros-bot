@@ -221,6 +221,12 @@ Coverage: `tests/unit/admin-auth-status.test.js` (state matrix, the rejected-tok
 
 The audited controls include grounding limits/model/timeout, TradingView enrichment budget, persistent news deduplication, Binance timeout, Binance Spot order execution settings (`ENABLE_BINANCE_TRADING`, `BINANCE_API_KEY`, `BINANCE_API_SECRET`, `BINANCE_TRADING_ENV`, `BINANCE_TRADING_ALLOWED_SYMBOLS`, `BINANCE_TRADING_MAX_NOTIONAL`, `BINANCE_TRADING_TIMEOUT_MS`), rate limiting, service identity, Discord retry controls, local prompt overrides, callback security/retry settings, idempotency TTL, Cloudflare enablement, Sentry debug-route gating, and public Firebase browser configuration fields. Defaults and security boundaries remain unchanged.
 
+### News and scanner runtime defaults (issue #723)
+
+The news webhook and scheduler resolve `NEWS_SYMBOLS_CRYPTO` / `NEWS_SYMBOLS_STOCKS` on each use through `resolveRemoteOverride`, preserving environment fallback and accepting an explicit empty remote string to clear a default list. Scanner parsing and new preset creation resolve `MARKET_SCANNER_DEFAULT_EXCHANGE` the same way; explicit request/persisted preset values take precedence. Preserve any non-empty exchange identifier rather than inventing a closed venue enum. Both synchronous scanner handlers resolve `MARKET_SCANNER_TIMEOUT_MS` (remote integer 1000–120000 ms, fallback 90000 ms) while retaining legacy environment parsing, including positive subsecond test budgets. No endpoint/response shape changes.
+
+All four template entries use `useInAppDefault: true` so publication alone does not replace environment settings. Disabled, missing, stale or invalid Remote Config falls back through the existing fail-open helper. Only the two symbol-list keys declare `allowEmpty`; blank values for all other keys retain their previous absent-override semantics. `ENABLE_NEWS_MONITOR`, `ENABLE_NEWS_MONITOR_TEST_MODE`, and `SCANNER_PRESET_SCHEDULER_WORKER_ROLE` stay environment-only because they control startup/test/worker execution. Existing scheduler lease Remote Config support remains unchanged. Credentials, authentication and notification destinations are excluded.
+
 ### Firebase Remote Config parity workflow
 
 For every pull request that adds or changes an application-owned environment variable:

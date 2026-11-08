@@ -87,6 +87,41 @@ describe('RemoteConfigService', () => {
 		return { template, initServerTemplate };
 	}
 
+	it('loads news/scanner runtime defaults without publishing startup or worker gates', async () => {
+		const template = JSON.parse(fs.readFileSync(path.join(__dirname, '../../firebase-remote-config-template.json'), 'utf8'));
+		const values = {
+			NEWS_SYMBOLS_CRYPTO: 'ETHUSDT, SOLUSDT', NEWS_SYMBOLS_STOCKS: '',
+			MARKET_SCANNER_DEFAULT_EXCHANGE: 'NYSE ARCA', MARKET_SCANNER_TIMEOUT_MS: 12000,
+		};
+		for (const key of Object.keys(values)) {
+			expect(template.parameters[key].defaultValue).toEqual({ useInAppDefault: true });
+		}
+		for (const key of ['ENABLE_NEWS_MONITOR', 'ENABLE_NEWS_MONITOR_TEST_MODE', 'SCANNER_PRESET_SCHEDULER_WORKER_ROLE']) {
+			expect(remoteConfigService.PARAMETER_SCHEMA).not.toHaveProperty(key);
+			expect(template.parameters).not.toHaveProperty(key);
+		}
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.NEWS_SYMBOLS_STOCKS = 'AAPL';
+		mockTemplate(values);
+		alertStorageService.getFirestore.mockReturnValue({});
+		await remoteConfigService.start();
+		for (const [key, value] of Object.entries(values)) {
+			expect(remoteConfigService.getRemoteOverride(key)).toBe(value);
+		}
+	});
+
+	it.each([999, 120001, 1.5, 'invalid'])(
+		'ignores an invalid published scanner timeout %s while preserving its environment budget', async (value) => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			process.env.MARKET_SCANNER_TIMEOUT_MS = '5000';
+			mockTemplate({ MARKET_SCANNER_TIMEOUT_MS: value, MARKET_SCANNER_DEFAULT_EXCHANGE: '   ' });
+			alertStorageService.getFirestore.mockReturnValue({});
+			await remoteConfigService.start();
+			expect(remoteConfigService.getRemoteOverride('MARKET_SCANNER_TIMEOUT_MS')).toBeUndefined();
+			expect(remoteConfigService.getRemoteOverride('MARKET_SCANNER_DEFAULT_EXCHANGE')).toBeUndefined();
+		},
+	);
+
 	it('keeps environment behavior and performs no fetch when disabled', async () => {
 		await remoteConfigService.start();
 

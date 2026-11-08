@@ -1,3 +1,4 @@
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 const {
 	normalizeTradingViewTimeframe,
 	SUPPORTED_MCP_TIMEFRAMES,
@@ -125,7 +126,7 @@ function parseExchange(body = {}) {
 		return body.exchange.trim().toUpperCase();
 	}
 
-	return (process.env.MARKET_SCANNER_DEFAULT_EXCHANGE || DEFAULT_EXCHANGE).toUpperCase();
+	return (resolveRemoteOverride('MARKET_SCANNER_DEFAULT_EXCHANGE') ?? (process.env.MARKET_SCANNER_DEFAULT_EXCHANGE || DEFAULT_EXCHANGE)).toUpperCase();
 }
 
 function parseTimeframe(body = {}) {
