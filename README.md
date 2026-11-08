@@ -206,6 +206,9 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `GET` | `/api/pretrade-check` | Pre-trade decision-support snapshot (price + outcome hit-rate) for one symbol | [OpenAPI Spec](/openapi.json) |
 | `GET` | `/api/portfolio/snapshot` | Implied-paper portfolio snapshot from recent alerts | [OpenAPI Spec](/openapi.json) |
 | `GET`/`POST` | `/api/alert-subscribers` | Manage outbound alert subscriber webhooks with HMAC and SSRF guards | [OpenAPI Spec](/openapi.json) |
+| `GET` | `/api/research/strategies` | Compare 6 TradingView MCP strategies (RSI, Bollinger, MACD, EMA Cross, Supertrend, Donchian) for one symbol | [OpenAPI Spec](/openapi.json) |
+| `POST` | `/api/research/walk-forward` | Run out-of-sample walk-forward validation for a strategy to detect overfitting | [OpenAPI Spec](/openapi.json) |
+| `POST` | `/api/research/backtest` | Run historical backtest for a strategy with commission and slippage | [OpenAPI Spec](/openapi.json) |
 
 Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`. CI coverage guards (`tests/unit/postman-collection.test.js` and `tests/unit/openapi-contract.test.js`) enforce that every mounted `/api` route appears in both OpenAPI and `CabrosBot.postman_collection.json`, and that every unique endpoint path referenced in README API documentation exists in `src/openapi/openapi.json`.
 
