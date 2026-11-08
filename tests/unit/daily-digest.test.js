@@ -463,4 +463,63 @@ describe('DailyDigestService Codex review follow-ups', () => {
 		expect(svc.getStatus().lastRunStatus).toBe('ambiguous');
 		expect(docs.get(docId).status).toBe('ambiguous');
 	});
+
+	test('marks alerts and LLM spend as truncated when 1000 alert ceiling is reached', async () => {
+		const svc = new DailyDigestService({
+			getAlertStorage: () => ({
+				summarizeAlerts: jest.fn(async () => ({
+					totalAlerts: 1000,
+					bySource: { webhook: 1000 },
+					delivery: { byChannel: {} },
+					enrichment: { tokenUsage: { totalCost: 25.0 } },
+				})),
+			}),
+			getOutcomeStorage: () => ({ summarizeOutcomes: jest.fn(async () => ({ windows: { '1D': { hitRatePercent: 0 } } })), listOutcomes: jest.fn(async () => ({ outcomes: [] })) }),
+		});
+		const agg = await svc.aggregateForDay(previousUtcDay(new Date('2026-11-08T13:30:00Z')));
+		expect(agg.alertsTruncated).toBe(true);
+		const text = svc.formatDigest(agg);
+		expect(text).toContain('1000\\+ \\(límite 1000 alcanzado\\)');
+		expect(text).toContain('25\\.0000\\+ \\(parcial\\)');
+		expect(text).toContain('Muestra limitada a 1000 alertas');
+	});
+
+	test('keeps ranked scanner candidates separate from raw unranked indicator scores', async () => {
+		const svc = new DailyDigestService({
+			getAlertStorage: () => ({ summarizeAlerts: jest.fn(async () => ({ totalAlerts: 1, bySource: {}, delivery: { byChannel: {} } })) }),
+			getOutcomeStorage: () => ({
+				summarizeOutcomes: jest.fn(async () => ({ windows: { '1D': { hitRatePercent: 50 } } })),
+				listOutcomes: jest.fn(async () => ({
+					outcomes: [
+						// Preset unranked scan with raw RSI indicator score of 75
+						{ source: 'scanner-preset', symbol: 'RSI_OUTLIER', exchange: 'BINANCE', score: 75, confidenceScore: null },
+						// Ranked market scan with conviction score 0.95
+						{ source: 'market-scanner', symbol: 'HIGH_CONVICTION', exchange: 'BINANCE', score: -0.95, confidenceScore: 0.8 },
+					],
+				})),
+			}),
+		});
+		const agg = await svc.aggregateForDay(previousUtcDay(new Date('2026-11-08T13:30:00Z')));
+		// Ranked candidate must not be eclipsed by raw unranked RSI score 75
+		expect(agg.topScannerHits[0].symbol).toBe('HIGH_CONVICTION');
+		expect(agg.topScannerHits.map((h) => h.symbol)).not.toContain('RSI_OUTLIER');
+	});
+
+	test('treats a null alert summary from disabled storage as unavailable and defers delivery', async () => {
+		const sendTelegram = jest.fn();
+		const svc = new DailyDigestService({
+			getAlertStorage: () => ({
+				summarizeAlerts: jest.fn(async () => null),
+			}),
+			getOutcomeStorage: () => ({ summarizeOutcomes: jest.fn(async () => ({})), listOutcomes: jest.fn(async () => ({ outcomes: [] })) }),
+			getFirestoreFn: () => ({ collection: () => ({ doc: () => ({ id: 'x' }) }), runTransaction: jest.fn() }),
+			sendTelegram,
+		});
+		const day = previousUtcDay(new Date('2026-11-08T13:30:00Z'));
+		const res = await svc.runDigestForDay(day, { dryRun: false });
+		expect(res.skipped).toBe(true);
+		expect(res.reason).toBe('alert-summary-unavailable');
+		expect(sendTelegram).not.toHaveBeenCalled();
+		expect(svc.getStatus().status).toBe('degraded');
+	});
 });

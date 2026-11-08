@@ -175,7 +175,8 @@ class DailyDigestService {
 		// Market-scanner alerts persist enrichmentData:null with no score; the
 		// per-signal outcomes are what recordMarketScannerOutcomes actually writes.
 
-		const alertsUnavailable = alertSummaryFailed;
+		const alertsUnavailable = alertSummaryFailed || !alertSummary;
+		const alertsTruncated = Boolean(alertSummary && alertSummary.totalAlerts >= 1000);
 		const bySource = alertsUnavailable ? {} : (alertSummary?.bySource || {});
 		const deliveryByChannel = alertsUnavailable ? {} : (alertSummary?.delivery?.byChannel || {});
 		const totalSpend = alertsUnavailable ? null : (Number(alertSummary?.enrichment?.tokenUsage?.totalCost ?? alertSummary?.tokenUsage?.totalCost ?? 0) || 0);
@@ -196,10 +197,23 @@ class DailyDigestService {
 			}
 		}
 
+		const scannerCandidates = outcomes.filter((o) => SCANNER_SOURCES.has(o.source));
+		// Separate ranked candidates (which store conviction in [-1, 1] or confidenceScore)
+		// from unranked preset scans that store raw RSI (0-100), changePercent, or volume_ratio.
+		const rankedCandidates = scannerCandidates.filter(
+			(o) => typeof o.score === 'number' && Number.isFinite(o.score) && (
+				(typeof o.confidenceScore === 'number' && Number.isFinite(o.confidenceScore)) ||
+				Math.abs(o.score) <= 1
+			),
+		);
+		const scannerPool = rankedCandidates.length > 0 ? rankedCandidates : scannerCandidates;
 		const topScannerHits = topByScore(
-			outcomes.filter((o) => SCANNER_SOURCES.has(o.source)),
+			scannerPool,
 			3,
-			(o) => (typeof o.score === 'number' && Number.isFinite(o.score) ? Math.abs(o.score) : null),
+			(o) => {
+				if (typeof o.score !== 'number' || !Number.isFinite(o.score)) return null;
+				return Math.abs(o.score) <= 1 ? Math.abs(o.score) : Math.abs(o.score) / 100;
+			},
 		);
 		const topWinners = topByScore(outcomes.filter((o) => outcomeRMultiple(o) !== null), 3, outcomeRMultiple);
 
@@ -207,6 +221,7 @@ class DailyDigestService {
 			dateStr: day.dateStr,
 			fromISO, toISO,
 			alertsUnavailable,
+			alertsTruncated,
 			totalAlerts: alertsUnavailable ? null : (alertSummary?.totalAlerts ?? 0),
 			bySource,
 			byChannel: deliveryByChannel,
@@ -226,6 +241,8 @@ class DailyDigestService {
 		lines.push('');
 		if (agg.alertsUnavailable) {
 			lines.push('*Alertas:* N/D');
+		} else if (agg.alertsTruncated) {
+			lines.push(`*Alertas:* ${agg.totalAlerts}\\+ \\(límite 1000 alcanzado\\)`);
 		} else {
 			lines.push(`*Alertas:* ${agg.totalAlerts ?? 0}`);
 		}
@@ -266,9 +283,12 @@ class DailyDigestService {
 		if (agg.alertsUnavailable) {
 			lines.push('*Gasto LLM:* N/D');
 		} else {
-			lines.push(`*Gasto LLM:* \\$${esc(Number(agg.totalSpend || 0).toFixed(4))}`);
+			const spendSuffix = agg.alertsTruncated ? '\\+ \\(parcial\\)' : '';
+			lines.push(`*Gasto LLM:* \\$${esc(Number(agg.totalSpend || 0).toFixed(4))}${spendSuffix}`);
 			if (agg.spendExceeded) {
 				lines.push('⚠️ Ayer el gasto LLM superó el presupuesto\\.');
+			} else if (agg.alertsTruncated) {
+				lines.push('⚠️ Muestra limitada a 1000 alertas; no se puede descartar exceso de presupuesto\\.');
 			}
 		}
 		return lines.join('\n');
