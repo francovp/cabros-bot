@@ -198,6 +198,56 @@ GET /api/outcomes/summary?setupType=breakout&breakdown=symbol,setup
 
 `GET /api/alerts/summary` accepts the same `breakdown` values to add these arrays inside its `shadowModeMetrics` object when that object is available.
 
+#### GET /api/outcomes/trend
+
+Query precomputed daily outcome snapshot metrics (hit rate, wins, losses, MFE, MAE) over time for a given evaluation window (`1h`, `4h`, `1D`, `1W`) and date range (up to 180 days, default 30 days).
+
+Snapshots are stored in `tradingSignalOutcomesDaily` keyed by `${date}_${bucket}_${window}`, finalized once per mature cohort with 180-day TTL.
+
+```http
+GET /api/outcomes/trend?window=1D&bucket=all&from=2026-08-01&to=2026-08-20
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "window": "1D",
+  "bucket": "all",
+  "from": "2026-08-01",
+  "to": "2026-08-20",
+  "totalDays": 2,
+  "trend": [
+    {
+      "date": "2026-08-19",
+      "window": "1D",
+      "bucket": "all",
+      "sampleSize": 12,
+      "wins": 8,
+      "losses": 4,
+      "hitRatePercent": 66.67,
+      "avgMfe": 2.45,
+      "avgMae": -0.85,
+      "finalized": true,
+      "updatedAt": "2026-08-21T01:00:00.000Z"
+    },
+    {
+      "date": "2026-08-20",
+      "window": "1D",
+      "bucket": "all",
+      "sampleSize": 10,
+      "wins": 7,
+      "losses": 3,
+      "hitRatePercent": 70.0,
+      "avgMfe": 2.8,
+      "avgMae": -0.65,
+      "finalized": true,
+      "updatedAt": "2026-08-22T01:00:00.000Z"
+    }
+  ]
+}
+```
+
 #### GET /api/outcomes/{outcomeId}
 
 Retrieve one stored signal outcome by Firestore document ID. Its fields use the same sanitized representation as `GET /api/outcomes`; raw MCP payloads, provider responses, and prompt text are not returned. Requires `x-api-key` or a Firebase bearer token with `admin.viewer` or `admin.operator` role. Returns `404 NOT_FOUND` for missing or retention-expired IDs, `403 FEATURE_DISABLED` when outcome tracking is disabled, and `503 STORAGE_UNAVAILABLE` when Firestore cannot be read.

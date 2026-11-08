@@ -215,6 +215,10 @@ Coverage: `tests/unit/admin-auth-status.test.js` (state matrix, the rejected-tok
 
 `WEBHOOK_MAX_BODY_SIZE` defaults to `256kb`, accepts human-readable byte units, and falls back to that default with a startup warning when malformed or outside `[1kb, 10mb]`. It applies to JSON, text/plain, and application/x-www-form-urlencoded bodies on `/api/webhook/*` and the exact `/api/news-monitor` ingest route. This is a security control and remains environment-only, excluded from Firebase Remote Config. The per-endpoint rate-limit maxima are request-abuse controls and also remain environment-only, excluded from Firebase Remote Config. `GENERIC_MESSAGE_MAX_LENGTH` is a request-time, non-secret truncation limit for `POST /api/webhook/message` (integer `1`-`20000`, default `4000`) and is eligible for Firebase Remote Config. The four Admin SSE runtime tuning settings (`ADMIN_SSE_MAX_CLIENT_CONNECTIONS`, `ADMIN_SSE_MAX_TOTAL_CONNECTIONS`, `ADMIN_SSE_HEARTBEAT_MS`, `ADMIN_SSE_DRAIN_TIMEOUT_MS`) are non-secret connection and keepalive controls eligible for Firebase Remote Config; `ENABLE_ADMIN_SSE` is a route and process-startup gate and remains environment-only. The five startup-jitter settings are non-secret runtime tuning values (integer `0`-`30000`, default `5000`) and are eligible for Firebase Remote Config; a global value of `0` disables jitter on every worker. The Remote Config bootstrap fetch uses environment values; after bootstrap, the environment override or published `REMOTE_CONFIG_REFRESH_JITTER_MS` value offsets only the first scheduled refresh.
 
+### Inbound Webhook HMAC Signing (Issue #683)
+
+When `WEBHOOK_SIGNING_SECRET` is configured, POST `/api/webhook/*` routes require `x-webhook-timestamp` and `x-webhook-signature`. The signature is HMAC-SHA256 over `timestamp + "\\n" + method + "\\n" + path/query + "\\n" + raw request body`; `WEBHOOK_SIGNING_TOLERANCE_MS` defaults to `300000`. Both variables are environment-only: the secret is a credential and the tolerance is an authentication/replay control, so neither belongs in Firebase Remote Config.
+
 ### Environment-template parity
 
 `.env.example` is the canonical operator template. Static application-owned environment reads must appear there with defaults and valid-value guidance. The documentation-alignment test also extracts audited literal arguments for dynamic environment helpers (`parseEnvInt`, `getSymbolsFromEnv`, prompt `envVar` overrides, URL-shortener maps, and aliases created from `process.env`), so computed or aliased reads do not evade the guard. It explicitly classifies platform-injected values (Render, GitHub, Google runtime metadata), test-only controls (`ENABLE_TEST_RATE_LIMITER`), and deprecated aliases (`ENABLE_FIRESTORE_IDEMPOTENCY_STORAGE`, `SIGNAL_OUTCOME_EVALUATION_CADENCE_MS`) so they are not mistaken for production configuration.
@@ -3072,6 +3076,16 @@ No new environment variable, Remote Config key, or notification channel was adde
 ## Deployment banner (issue #856)
 
 `src/lib/environmentBanner.js` shares `resolveDeploymentEnvironment` with status. `ENABLE_ENVIRONMENT_BANNER` is a non-secret, Remote Config eligible display flag (default true), read for each response; it controls headers only. `/api/banner` exposes only environment/commit/name/deployedAt and remains public when headers are disabled. Missing host commit timestamps produce null, never deployment identifiers. Mount metadata before CORS/parsers so errors and healthchecks retain it; invalid optional header characters must not block delivery. Shared notification footer construction must respect `ENABLE_MESSAGE_FOOTER_METADATA`, and production messages stay unchanged. Change the admin source tree and regenerate hosting assets; keep existing Firebase authorization and route navigation intact.
+
+## Signal Outcome Daily Rollups and Trend Endpoint (Issue #749)
+
+`SignalOutcomeDailyRollupService` computes idempotent per-day outcome cohorts aggregated across configured evaluation windows (`1h`, `4h`, `1D`, `1W`) and persists them into the `tradingSignalOutcomesDaily` Firestore collection (`${date}_${bucket}_${window}`) with native TTL support (`expiresAt`). Cohort maturity delays prevent premature finalization, and cohorts with unresolved pending outcomes remain refreshable across worker sweeps until fully evaluated.
+
+Two Remote-Config-eligible runtime settings govern the rollup:
+- `SIGNAL_OUTCOME_ROLLUP_ENABLED`: Boolean (default `true`). Opt-in runtime gate for computing daily signal outcome rollups during scheduled evaluation sweeps.
+- `SIGNAL_OUTCOME_ROLLUP_TTL_DAYS`: Integer `30`–`365` (default `180`). Retention policy in days for `tradingSignalOutcomesDaily` documents before Firestore native TTL deletion.
+
+The public/operator query endpoint `GET /api/outcomes/trend` exposes chronological daily metrics (`hitRatePercent`, `sampleSize`, `wins`, `losses`, `invalidated`, `pending`, `avgMfe`, `avgMae`, `avgReturnPercent`, `finalized`) with bounding (max 180 days, default 30 days) and `admin.viewer` authorization.
 
 ## Market Calendar Gating (CB-? / GH-806)
 

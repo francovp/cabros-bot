@@ -26,6 +26,14 @@ const OUTCOME_EXPORT_FIELDS = [
 	'outcomes',
 ];
 const VALID_STATUSES = new Set(['pending', 'evaluated', 'unavailable']);
+const VALID_TREND_WINDOWS = {
+	'1h': '1h',
+	'4h': '4h',
+	'1d': '1D',
+	'1D': '1D',
+	'1w': '1W',
+	'1W': '1W',
+};
 const VALID_WINDOWS = {
 	'1m': '1m',
 	'5m': '5m',
@@ -528,6 +536,62 @@ function getOutcomesCalibration(req, res) {
 	});
 }
 
+function parseTrendWindow(rawWindow) {
+	if (rawWindow === undefined || (typeof rawWindow === 'string' && rawWindow.trim() === '')) return '1D';
+	if (typeof rawWindow !== 'string') return null;
+	const trimmed = rawWindow.trim();
+	return VALID_TREND_WINDOWS[trimmed] || null;
+}
+
+function getOutcomesTrend(req, res) {
+	return handleAsync(req, res, '/api/outcomes/trend', async () => {
+		if (!signalOutcomeService.isEnabled()) {
+			return sendErrorFrom(res, 403, {
+				error: 'Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+
+		const window = parseTrendWindow(req.query.window);
+		if (window === null) {
+			return sendErrorFrom(res, 400, {
+				error: 'Invalid window filter. Use 1h, 4h, 1D, or 1W.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const from = parseOptionalTimestamp(req.query.from, 'from');
+		if (from.error) {
+			return sendErrorFrom(res, 400, from.error);
+		}
+
+		const to = parseOptionalTimestamp(req.query.to, 'to');
+		if (to.error) {
+			return sendErrorFrom(res, 400, to.error);
+		}
+
+		if (from.value && to.value && new Date(from.value) > new Date(to.value)) {
+			return sendErrorFrom(res, 400, {
+				error: 'Invalid time window. from must be before or equal to to.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const bucket = typeof req.query.bucket === 'string' && req.query.bucket.trim()
+			? req.query.bucket.trim()
+			: 'all';
+
+		const trend = await signalOutcomeService.getOutcomesTrend({
+			window,
+			from: from.value,
+			to: to.value,
+			bucket,
+		});
+
+		return res.status(200).json(trend);
+	});
+}
+
 function handleAsync(req, res, endpoint, handler) {
 	return Promise.resolve(handler()).catch((error) => {
 		if (error.code === 'ABORTED' && req.requestDeadlineSignal?.aborted) return undefined;
@@ -586,6 +650,7 @@ module.exports = {
 	listOutcomes,
 	summarizeOutcomes,
 	getOutcomesCalibration,
+	getOutcomesTrend,
 	getOutcomeById,
 	exportOutcomes,
 	parseLimit,
@@ -600,5 +665,6 @@ module.exports = {
 	MAX_EXPORT_LIMIT,
 	parseStatus,
 	parseWindow,
+	parseTrendWindow,
 	parseOptionalTimestamp,
 };

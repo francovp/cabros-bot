@@ -757,6 +757,60 @@ const outcomesCommand = async (context) => {
 			return;
 		}
 
+		if (rawSymbol.toLowerCase() === 'trend' || rawSymbol.toLowerCase() === 'tendencia') {
+			let days = 7;
+			const requestedDays = parseInt(args.positionals[1] || args.options.days, 10);
+			if (!isNaN(requestedDays) && requestedDays > 0) {
+				days = Math.min(Math.max(requestedDays, 1), 180);
+			}
+			const toDate = new Date().toISOString().slice(0, 10);
+			const fromDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+			const trendResult = await withTimeout(
+				(signal) => signalOutcomeService.getOutcomesTrend({
+					window: '1D',
+					bucket: 'all',
+					from: fromDate,
+					to: toDate,
+					signal,
+				}),
+				OUTCOMES_COMMAND_TIMEOUT_MS,
+				'outcome trend read timed out',
+			);
+			const trend = Array.isArray(trendResult && trendResult.trend) ? trendResult.trend : [];
+			if (trend.length === 0) {
+				await context.reply(
+					'Sin snapshots diarios de resultados todavía \\(los snapshots se generan para cohortes maduras\\)',
+					{ parse_mode: 'MarkdownV2' },
+				);
+				return;
+			}
+			const header = `*📈 Tendencia de resultados \\(últimos ${days} días, ventana 1D\\)*\n\n`;
+			const chunks = [];
+			let currentChunk = header;
+
+			for (const point of trend) {
+				const rate = point.hitRatePercent !== null ? `${escapeOutcomeText(point.hitRatePercent.toFixed(1))}%` : 'n/d';
+				const mfe = point.avgMfe !== null ? `${escapeOutcomeText(`${point.avgMfe >= 0 ? '+' : ''}${point.avgMfe.toFixed(1)}%`)}` : 'n/d';
+				const mae = point.avgMae !== null ? `${escapeOutcomeText(`${point.avgMae.toFixed(1)}%`)}` : 'n/d';
+				const line = `• *${escapeOutcomeText(point.date)}*: ${rate} acierto \\(${point.wins}/${point.sampleSize}\\) \\| MFE: ${mfe} \\| MAE: ${mae}\n`;
+
+				if (currentChunk.length + line.length > 4000) {
+					chunks.push(currentChunk.trimEnd());
+					currentChunk = line;
+				} else {
+					currentChunk += line;
+				}
+			}
+			if (currentChunk.trim()) {
+				chunks.push(currentChunk.trimEnd());
+			}
+
+			for (const chunk of chunks) {
+				await context.reply(chunk, { parse_mode: 'MarkdownV2' });
+			}
+			return;
+		}
+
 		const parsed = parseOutcomeSymbol(rawSymbol);
 		if (!parsed) {
 			await context.reply(

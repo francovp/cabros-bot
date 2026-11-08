@@ -114,6 +114,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	SIGNAL_OUTCOME_MAX_RETRY_AGE_MS: { type: 'number', defaultValue: 604800000, integer: true, min: 60000, max: 2592000000 },
 	SIGNAL_OUTCOME_RETENTION_DAYS: { type: 'number', defaultValue: 365, integer: true, min: 1, max: 3650 },
+	SIGNAL_OUTCOME_ROLLUP_ENABLED: { type: 'boolean', defaultValue: true },
+	SIGNAL_OUTCOME_ROLLUP_TTL_DAYS: { type: 'number', defaultValue: 180, integer: true, min: 30, max: 365 },
 	SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES: {
 		type: 'string',
 		defaultValue: '',

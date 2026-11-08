@@ -807,6 +807,12 @@
             "$ref": "#/components/parameters/XRequestIdHeader"
           },
           {
+            "$ref": "#/components/parameters/WebhookTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignature"
+          },
+          {
             "$ref": "#/components/parameters/WebhookSignalClass"
           }
         ],
@@ -822,6 +828,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
@@ -880,6 +889,12 @@
             "$ref": "#/components/parameters/IdempotencyKeyQuerySnake"
           },
           {
+            "$ref": "#/components/parameters/WebhookTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignature"
+          },
+          {
             "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
@@ -895,6 +910,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
@@ -946,6 +964,12 @@
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
           },
           {
+            "$ref": "#/components/parameters/WebhookTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignature"
+          },
+          {
             "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
@@ -964,6 +988,12 @@
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
           },
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
@@ -1018,6 +1048,12 @@
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
           },
           {
+            "$ref": "#/components/parameters/WebhookTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignature"
+          },
+          {
             "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
@@ -1030,6 +1066,9 @@
           },
           "400": {
             "$ref": "#/components/responses/WebhookRequestValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -1079,6 +1118,14 @@
         ],
         "summary": "Check TradingView volume confirmation",
         "operationId": "postVolumeConfirmation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WebhookTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignature"
+          }
+        ],
         "requestBody": {
           "$ref": "#/components/requestBodies/VolumeConfirmation"
         },
@@ -1105,6 +1152,12 @@
             "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
             "$ref": "#/components/responses/Error"
           },
           "502": {
@@ -1137,6 +1190,14 @@
         "summary": "Analyze one TradingView symbol without delivery",
         "description": "Runs TradingView MCP `coin_analysis` (and optionally `combined_analysis` / `multi_timeframe_analysis`) for a single EXCHANGE:SYMBOL identifier and returns decision-ready structured analysis plus a Spanish markdown report. Plans below SYMBOL_ANALYSIS_MIN_RISK_REWARD_RATIO (default 1.5) are downgraded to NO_TRADE with an explicit Spanish warning and `risk.rejectionReason: 'risk_reward_below_minimum'`; when a higher S/R level, Bollinger band, or ATR target clears the floor, the controller upgrades the take-profit automatically before flagging the plan.",
         "operationId": "postSymbolAnalysis",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WebhookTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignature"
+          }
+        ],
         "requestBody": {
           "$ref": "#/components/requestBodies/SymbolAnalysis"
         },
@@ -1163,6 +1224,12 @@
             "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
             "$ref": "#/components/responses/Error"
           },
           "502": {
@@ -4094,6 +4161,71 @@
         "responses": {
           "200": {
             "$ref": "#/components/responses/OutcomesSummaryResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/outcomes/trend": {
+      "get": {
+        "tags": [
+          "Signal outcomes"
+        ],
+        "summary": "Query signal outcomes daily trend series",
+        "description": "Query daily outcome snapshot metrics (hit rate, wins, losses, MFE, MAE) over time for a given evaluation window (1h, 4h, 1D, 1W) and date range (up to 180 days).",
+        "operationId": "getOutcomesTrend",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TrendWindow"
+          },
+          {
+            "$ref": "#/components/parameters/TrendBucket"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OutcomesTrendResult"
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -7427,6 +7559,26 @@
         },
         "description": "Optional legacy-compatible replay key query parameter."
       },
+      "WebhookTimestamp": {
+        "name": "x-webhook-timestamp",
+        "in": "header",
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "example": "1700000000000",
+        "description": "Required when WEBHOOK_SIGNING_SECRET is configured. Unix timestamp in milliseconds used to prevent replay attacks."
+      },
+      "WebhookSignature": {
+        "name": "x-webhook-signature",
+        "in": "header",
+        "schema": {
+          "type": "string",
+          "pattern": "^sha256=[a-f0-9]{64}$"
+        },
+        "example": "sha256=8f8b7d6c5b4a39281716151413121110ffeeddccbbaa99887766554433221100",
+        "description": "Required when WEBHOOK_SIGNING_SECRET is configured. HMAC-SHA256 of timestamp + '\\n' + method + '\\n' + request path/query + '\\n' + raw request body."
+      },
       "DryRun": {
         "name": "dryRun",
         "in": "query",
@@ -7560,6 +7712,30 @@
           ]
         },
         "description": "Filter by measurement window."
+      },
+      "TrendWindow": {
+        "name": "window",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "1h",
+            "4h",
+            "1D",
+            "1W"
+          ],
+          "default": "1D"
+        },
+        "description": "Evaluation window for daily outcome trend series. Defaults to 1D."
+      },
+      "TrendBucket": {
+        "name": "bucket",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "default": "all"
+        },
+        "description": "Aggregation bucket identifier. Defaults to all."
       },
       "JobListLimit": {
         "name": "limit",
@@ -10126,6 +10302,72 @@
                       ]
                     }
                   ]
+                }
+              }
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
+      },
+      "OutcomesTrendResult": {
+        "description": "Signal outcomes daily trend series",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "window",
+                "bucket",
+                "from",
+                "to",
+                "points",
+                "totalPoints"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "window": {
+                  "type": "string",
+                  "example": "1D"
+                },
+                "bucket": {
+                  "type": "string",
+                  "example": "all"
+                },
+                "from": {
+                  "type": "string",
+                  "example": "2026-08-01"
+                },
+                "to": {
+                  "type": "string",
+                  "example": "2026-08-31"
+                },
+                "points": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OutcomeTrendPoint"
+                  }
+                },
+                "trend": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OutcomeTrendPoint"
+                  }
+                },
+                "totalPoints": {
+                  "type": "integer",
+                  "example": 31
+                },
+                "totalDays": {
+                  "type": "integer",
+                  "example": 31
                 }
               }
             }
@@ -13437,6 +13679,81 @@
               "null"
             ],
             "example": 0.6
+          }
+        }
+      },
+      "OutcomeTrendPoint": {
+        "type": "object",
+        "required": [
+          "date",
+          "bucket",
+          "evaluationWindow",
+          "signals",
+          "wins",
+          "losses",
+          "hitRatePercent",
+          "avgMfe",
+          "avgMae",
+          "avgReturnPercent",
+          "finalized"
+        ],
+        "properties": {
+          "date": {
+            "type": "string",
+            "example": "2026-08-20"
+          },
+          "bucket": {
+            "type": "string",
+            "example": "all"
+          },
+          "evaluationWindow": {
+            "type": "string",
+            "example": "1D"
+          },
+          "signals": {
+            "type": "integer",
+            "example": 12
+          },
+          "wins": {
+            "type": "integer",
+            "example": 8
+          },
+          "losses": {
+            "type": "integer",
+            "example": 4
+          },
+          "invalidated": {
+            "type": "integer",
+            "example": 0
+          },
+          "pending": {
+            "type": "integer",
+            "example": 0
+          },
+          "hitRatePercent": {
+            "type": "number",
+            "example": 66.67
+          },
+          "avgMfe": {
+            "type": "number",
+            "example": 1.452
+          },
+          "avgMae": {
+            "type": "number",
+            "example": -0.621
+          },
+          "avgReturnPercent": {
+            "type": "number",
+            "example": 0.831
+          },
+          "finalized": {
+            "type": "boolean",
+            "example": true
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true,
+            "example": "2026-08-22T00:05:00.000Z"
           }
         }
       },
