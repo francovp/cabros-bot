@@ -99,6 +99,10 @@ function createCorsOptions(env = process.env) {
 			'X-Idempotency-Key',
 			'If-Match',
 			'if-match',
+			'x-webhook-timestamp',
+			'X-Webhook-Timestamp',
+			'x-webhook-signature',
+			'X-Webhook-Signature',
 		],
 		exposedHeaders: [
 			'ETag',
