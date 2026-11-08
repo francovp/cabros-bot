@@ -586,6 +586,17 @@ The Alerts view includes an operator-only alert preview. `Render preview` calls 
 
 ### Durable News-Monitor Analysis Records
 
+News and scanner defaults can be tuned with a fresh published Firebase Remote Config value. Explicit request symbols/exchanges still win. The checked-in template uses `useInAppDefault: true` for these four keys, preserving deployment settings until an operator publishes an override.
+
+| Parameter | Application fallback | Runtime behavior |
+| --- | --- | --- |
+| `NEWS_SYMBOLS_CRYPTO` | Environment value or empty list | Comma-separated crypto defaults for news webhook and scheduler; a published empty string clears them. |
+| `NEWS_SYMBOLS_STOCKS` | Environment value or empty list | Comma-separated stock defaults for news webhook and scheduler; a published empty string clears them. |
+| `MARKET_SCANNER_DEFAULT_EXCHANGE` | Environment value or `BINANCE` | Any non-empty TradingView exchange; applies to scanner requests and new presets, normalized to uppercase. Existing saved presets keep their exchange. |
+| `MARKET_SCANNER_TIMEOUT_MS` | Environment value or `90000` | Published values must be integers `1000`–`120000` ms; invalid or stale overrides fall back to existing environment parsing. |
+
+`ENABLE_NEWS_MONITOR`, `ENABLE_NEWS_MONITOR_TEST_MODE`, and `SCANNER_PRESET_SCHEDULER_WORKER_ROLE` remain environment-only startup/test/worker gates. Publishing this template does not enable news monitoring or start another worker.
+
 `ENABLE_FIRESTORE_NEWS_ANALYSIS=true` is enabled in production by `render.yaml` on the **web service only** (previews off), so every analyzed symbol is recorded in the `news_analysis` collection and `GET /api/news-monitor/analyses` and `GET /api/news-monitor/summary` have an audit trail to read. Previews stay off because a PR preview shares the production Firestore project.
 
 Setting the flag is **necessary but not sufficient**. Every Firestore error in this service is swallowed so news alert delivery is never blocked, which means a deployment that cannot reach Firestore behaves exactly as it did before the flag existed. `dependencies.newsAnalysisStorage` therefore reports observed work rather than credential shape:

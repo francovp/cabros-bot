@@ -1,5 +1,6 @@
 /* global AbortController */
 
+const { resolveRemoteOverride } = require('../../../../services/remoteConfig/resolveRemoteOverride');
 const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
@@ -436,6 +437,10 @@ function parsePositiveEnvFloat(value) {
 }
 
 function getMarketScannerTimeoutMs() {
+	const remoteTimeout = resolveRemoteOverride('MARKET_SCANNER_TIMEOUT_MS');
+	if (remoteTimeout !== undefined) {
+		return remoteTimeout;
+	}
 	const parsedTimeout = parseInt(process.env.MARKET_SCANNER_TIMEOUT_MS || `${DEFAULT_SCANNER_TIMEOUT_MS}`, 10);
 
 	if (!Number.isFinite(parsedTimeout) || parsedTimeout <= 0) {

@@ -20,6 +20,12 @@ const MAX_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const PARAMETER_SCHEMA = Object.freeze({
 	PROMPT_FALLBACK_ON_DRIFT: { type: 'boolean', defaultValue: false },
+	NEWS_SYMBOLS_CRYPTO: { type: 'string', defaultValue: '', allowEmpty: true },
+	NEWS_SYMBOLS_STOCKS: { type: 'string', defaultValue: '', allowEmpty: true },
+	MARKET_SCANNER_DEFAULT_EXCHANGE: {
+		type: 'string', defaultValue: 'BINANCE', validate: (value) => value.length > 0,
+	},
+	MARKET_SCANNER_TIMEOUT_MS: { type: 'number', defaultValue: 90000, integer: true, min: 1000, max: 120000 },
 	NEWS_ALERT_THRESHOLD: { type: 'number', defaultValue: 0.7, min: 0, max: 1 },
 	NEWS_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1000, max: 120000 },
 	NEWS_GEMINI_CONCURRENCY: { type: 'number', defaultValue: Infinity, integer: true, min: 1, max: 50 },
@@ -301,6 +307,9 @@ function parseBoolean(value, fallback) {
 }
 
 function parseString(value, schema, fallback) {
+	if (value === '' && schema.allowEmpty) {
+		return '';
+	}
 	if (value === undefined || value === null || value === '') {
 		return fallback;
 	}
@@ -503,14 +512,15 @@ function getRemoteValue(config, key, schema) {
 			return { present: false };
 		}
 		const raw = value.asString();
-		// A blank remote value carries no tuning, so it is an absent override
+		// Except for symbol lists that explicitly allow clearing their defaults,
+		// a blank remote value carries no tuning, so it is an absent override
 		// rather than a malformed one. The published template ships
 		// `SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES` as an intentional empty string,
 		// which is that parameter's own schema default; reporting it as invalid
 		// would pin `lastErrorCategory: "invalid_value"` on every load and mask a
 		// genuinely malformed value. `buildDefaultConfig()` already supplies the
 		// default for any parameter the template leaves blank.
-		if (typeof raw === 'string' && raw.trim() === '') {
+		if (typeof raw === 'string' && raw.trim() === '' && !schema.allowEmpty) {
 			return { present: false };
 		}
 		const parsed = parseValue(raw, schema, undefined);
