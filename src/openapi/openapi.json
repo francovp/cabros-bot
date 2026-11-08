@@ -4131,6 +4131,71 @@
         "x-admin-role": "admin.viewer"
       }
     },
+    "/api/outcomes/trend": {
+      "get": {
+        "tags": [
+          "Signal outcomes"
+        ],
+        "summary": "Query signal outcomes daily trend series",
+        "description": "Query daily outcome snapshot metrics (hit rate, wins, losses, MFE, MAE) over time for a given evaluation window (1h, 4h, 1D, 1W) and date range (up to 180 days).",
+        "operationId": "getOutcomesTrend",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TrendWindow"
+          },
+          {
+            "$ref": "#/components/parameters/TrendBucket"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OutcomesTrendResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
     "/api/outcomes/export": {
       "get": {
         "tags": [
@@ -7561,6 +7626,30 @@
         },
         "description": "Filter by measurement window."
       },
+      "TrendWindow": {
+        "name": "window",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "1h",
+            "4h",
+            "1D",
+            "1W"
+          ],
+          "default": "1D"
+        },
+        "description": "Evaluation window for daily outcome trend series. Defaults to 1D."
+      },
+      "TrendBucket": {
+        "name": "bucket",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "default": "all"
+        },
+        "description": "Aggregation bucket identifier. Defaults to all."
+      },
       "JobListLimit": {
         "name": "limit",
         "in": "query",
@@ -10126,6 +10215,62 @@
                       ]
                     }
                   ]
+                }
+              }
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
+      },
+      "OutcomesTrendResult": {
+        "description": "Signal outcomes daily trend series",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "window",
+                "bucket",
+                "from",
+                "to",
+                "points",
+                "totalPoints"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "window": {
+                  "type": "string",
+                  "example": "1D"
+                },
+                "bucket": {
+                  "type": "string",
+                  "example": "all"
+                },
+                "from": {
+                  "type": "string",
+                  "example": "2026-08-01"
+                },
+                "to": {
+                  "type": "string",
+                  "example": "2026-08-31"
+                },
+                "points": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OutcomeTrendPoint"
+                  }
+                },
+                "totalPoints": {
+                  "type": "integer",
+                  "example": 31
                 }
               }
             }
@@ -13415,6 +13560,81 @@
               "null"
             ],
             "example": 0.6
+          }
+        }
+      },
+      "OutcomeTrendPoint": {
+        "type": "object",
+        "required": [
+          "date",
+          "bucket",
+          "evaluationWindow",
+          "signals",
+          "wins",
+          "losses",
+          "hitRatePercent",
+          "avgMfe",
+          "avgMae",
+          "avgReturnPercent",
+          "finalized"
+        ],
+        "properties": {
+          "date": {
+            "type": "string",
+            "example": "2026-08-20"
+          },
+          "bucket": {
+            "type": "string",
+            "example": "all"
+          },
+          "evaluationWindow": {
+            "type": "string",
+            "example": "1D"
+          },
+          "signals": {
+            "type": "integer",
+            "example": 12
+          },
+          "wins": {
+            "type": "integer",
+            "example": 8
+          },
+          "losses": {
+            "type": "integer",
+            "example": 4
+          },
+          "invalidated": {
+            "type": "integer",
+            "example": 0
+          },
+          "pending": {
+            "type": "integer",
+            "example": 0
+          },
+          "hitRatePercent": {
+            "type": "number",
+            "example": 66.67
+          },
+          "avgMfe": {
+            "type": "number",
+            "example": 1.452
+          },
+          "avgMae": {
+            "type": "number",
+            "example": -0.621
+          },
+          "avgReturnPercent": {
+            "type": "number",
+            "example": 0.831
+          },
+          "finalized": {
+            "type": "boolean",
+            "example": true
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true,
+            "example": "2026-08-22T00:05:00.000Z"
           }
         }
       },

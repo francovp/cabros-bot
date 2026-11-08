@@ -427,6 +427,20 @@
       "description": "Retention window in days for tradingSignalOutcomes documents before expiration and cleanup",
       "valueType": "NUMBER"
     },
+    "SIGNAL_OUTCOME_ROLLUP_ENABLED": {
+      "defaultValue": {
+        "value": "true"
+      },
+      "description": "Enable daily outcome snapshot rollups for trend analytics",
+      "valueType": "BOOLEAN"
+    },
+    "SIGNAL_OUTCOME_ROLLUP_TTL_DAYS": {
+      "defaultValue": {
+        "value": "180"
+      },
+      "description": "Retention window in days for tradingSignalOutcomesDaily snapshot documents before expiration",
+      "valueType": "NUMBER"
+    },
     "SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES": {
       "defaultValue": {
         "value": ""

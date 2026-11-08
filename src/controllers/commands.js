@@ -757,6 +757,42 @@ const outcomesCommand = async (context) => {
 			return;
 		}
 
+		if (rawSymbol.toLowerCase() === 'trend' || rawSymbol.toLowerCase() === 'tendencia') {
+			const toDate = new Date().toISOString().slice(0, 10);
+			const fromDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+			const trendResult = await withTimeout(
+				(signal) => signalOutcomeService.getOutcomesTrend({
+					window: '1D',
+					bucket: 'all',
+					from: fromDate,
+					to: toDate,
+					signal,
+				}),
+				OUTCOMES_COMMAND_TIMEOUT_MS,
+				'outcome trend read timed out',
+			);
+			const trend = Array.isArray(trendResult && trendResult.trend) ? trendResult.trend : [];
+			if (trend.length === 0) {
+				await context.reply(
+					'Sin snapshots diarios de resultados todavía \\(los snapshots se generan para cohortes maduras\\)',
+					{ parse_mode: 'MarkdownV2' },
+				);
+				return;
+			}
+			const lines = [
+				'*📈 Tendencia de resultados \\(últimos 7 días, ventana 1D\\)*',
+				'',
+			];
+			trend.forEach((point) => {
+				const rate = point.hitRatePercent !== null ? `${escapeOutcomeText(point.hitRatePercent.toFixed(1))}%` : 'n/d';
+				const mfe = point.avgMfe !== null ? `${escapeOutcomeText(`${point.avgMfe >= 0 ? '+' : ''}${point.avgMfe.toFixed(1)}%`)}` : 'n/d';
+				const mae = point.avgMae !== null ? `${escapeOutcomeText(`${point.avgMae.toFixed(1)}%`)}` : 'n/d';
+				lines.push(`• *${escapeOutcomeText(point.date)}*: ${rate} acierto \\(${point.wins}/${point.sampleSize}\\) \\| MFE: ${mfe} \\| MAE: ${mae}`);
+			});
+			await context.reply(lines.join('\n'), { parse_mode: 'MarkdownV2' });
+			return;
+		}
+
 		const parsed = parseOutcomeSymbol(rawSymbol);
 		if (!parsed) {
 			await context.reply(

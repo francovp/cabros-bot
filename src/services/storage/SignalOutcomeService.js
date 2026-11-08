@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const admin = require('firebase-admin');
 const { createHash } = require('node:crypto');
 const AlertStorageService = require('./AlertStorageService');
+const dailyRollupService = require('./SignalOutcomeDailyRollupService');
 const equityMarketDataService = require('./EquityMarketDataService');
 const geminiPriceService = require('../grounding/geminiPriceService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
@@ -2016,6 +2017,17 @@ function runScheduledSweep() {
 	}
 
 	return evaluatePendingOutcomes()
+		.then(async (sweepResult) => {
+			try {
+				const firestore = AlertStorageService.getFirestore();
+				if (firestore) {
+					await dailyRollupService.rollupOutcomesDaily({ firestore });
+				}
+			} catch (rollupErr) {
+				console.warn('[SignalOutcomeService] Daily outcome rollup failed:', rollupErr.message);
+			}
+			return sweepResult;
+		})
 		.then(() => persistWorkerHeartbeat())
 		.catch((err) => {
 			console.warn('[SignalOutcomeService] Scheduled worker sweep failed:', err.message);
@@ -4082,11 +4094,24 @@ function _resetForTesting() {
 	leaseHeldSkipCount = 0;
 }
 
+async function rollupOutcomesDaily(options = {}) {
+	const firestore = AlertStorageService.getFirestore();
+	return dailyRollupService.rollupOutcomesDaily({ firestore, ...options });
+}
+
+async function getOutcomesTrend(options = {}) {
+	const firestore = AlertStorageService.getFirestore();
+	return dailyRollupService.getOutcomesTrend({ firestore, ...options });
+}
+
 module.exports = {
 	isEnabled,
 	recordSignal,
 	getSessionContext,
 	evaluatePendingOutcomes,
+	rollupOutcomesDaily,
+	getOutcomesTrend,
+	dailyRollupService,
 	getMetricsSummary,
 	summarizeOutcomes,
 	listOutcomes,

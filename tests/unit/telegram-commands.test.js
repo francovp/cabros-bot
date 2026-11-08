@@ -1228,6 +1228,58 @@ describe('Telegram TradingView commands', () => {
 			expect(receivedSignal.aborted).toBe(true);
 			expect(captureRuntimeError).not.toHaveBeenCalled();
 		}, 12000);
+
+		it('replies with trend summary when /outcomes trend is invoked', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.getOutcomesTrend = jest.fn().mockResolvedValue({
+				success: true,
+				window: '1D',
+				bucket: 'all',
+				trend: [
+					{
+						date: '2026-08-20',
+						window: '1D',
+						bucket: 'all',
+						sampleSize: 10,
+						wins: 7,
+						losses: 3,
+						hitRatePercent: 70.0,
+						avgMfe: 2.5,
+						avgMae: -0.8,
+						finalized: true,
+					},
+				],
+			});
+			const context = buildContext('/outcomes trend');
+
+			await outcomesCommand(context);
+
+			expect(signalOutcomeService.getOutcomesTrend).toHaveBeenCalledWith(
+				expect.objectContaining({ window: '1D', bucket: 'all' }),
+			);
+			expect(context.reply).toHaveBeenCalledTimes(1);
+			const reply = context.reply.mock.calls[0][0];
+			expect(reply).toContain('Tendencia de resultados');
+			expect(reply).toContain('2026\\-08\\-20');
+			expect(reply).toContain('70\\.0% acierto');
+			expect(reply).toContain('7/10');
+		});
+
+		it('replies with friendly empty state when /outcomes trend has no snapshots', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.getOutcomesTrend = jest.fn().mockResolvedValue({
+				success: true,
+				window: '1D',
+				bucket: 'all',
+				trend: [],
+			});
+			const context = buildContext('/outcomes trend');
+
+			await outcomesCommand(context);
+
+			expect(context.reply).toHaveBeenCalledTimes(1);
+			expect(context.reply.mock.calls[0][0]).toContain('Sin snapshots diarios de resultados todavía');
+		});
 	});
 });
 
