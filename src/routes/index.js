@@ -42,6 +42,7 @@ const {
 	listOutcomes,
 	summarizeOutcomes,
 	getOutcomesCalibration,
+	getOutcomesTrend,
 	getOutcomeById,
 	exportOutcomes,
 } = require('../controllers/outcomes/outcomes');
@@ -131,6 +132,7 @@ function getRoutes(botOrGetter) {
 	router.get('/admin/events', ...sseRead, handleSseStream);
 	router.get('/outcomes', ...adminRead, listOutcomes);
 	router.get('/outcomes/summary', ...adminRead, summarizeOutcomes);
+	router.get('/outcomes/trend', ...adminRead, getOutcomesTrend);
 	router.get('/enrollments', ...adminRead, listEnrollments);
 	router.get('/outcomes/calibration', ...adminRead, getOutcomesCalibration);
 	router.get('/outcomes/export', ...adminRead, exportOutcomes);

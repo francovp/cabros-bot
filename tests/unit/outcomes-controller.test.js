@@ -5,6 +5,7 @@ const {
 	listOutcomes,
 	summarizeOutcomes,
 	getOutcomesCalibration,
+	getOutcomesTrend,
 	getOutcomeById,
 	exportOutcomes,
 	parseExportLimit,
@@ -15,6 +16,7 @@ const {
 	parseLimit,
 	parseStatus,
 	parseWindow,
+	parseTrendWindow,
 	parseOptionalTimestamp,
 } = require('../../src/controllers/outcomes/outcomes');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
@@ -25,6 +27,7 @@ jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	listOutcomes: jest.fn(),
 	summarizeOutcomes: jest.fn(),
 	getOutcomesCalibration: jest.fn(),
+	getOutcomesTrend: jest.fn(),
 	getOutcomeById: jest.fn(),
 	exportOutcomes: jest.fn(),
 	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
@@ -1305,6 +1308,155 @@ describe('Outcomes Controller Unit Tests', () => {
 			const res = httpMocks.createResponse();
 
 			await exportOutcomes(req, res);
+
+			expect(res.statusCode).toBe(503);
+			expect(res._getJSONData().code).toBe('STORAGE_UNAVAILABLE');
+		});
+	});
+
+	describe('parseTrendWindow', () => {
+		it('defaults to 1D when undefined', () => {
+			expect(parseTrendWindow(undefined)).toBe('1D');
+			expect(parseTrendWindow('')).toBe('1D');
+		});
+
+		it('accepts valid windows', () => {
+			expect(parseTrendWindow('1h')).toBe('1h');
+			expect(parseTrendWindow('4h')).toBe('4h');
+			expect(parseTrendWindow('1D')).toBe('1D');
+			expect(parseTrendWindow('1W')).toBe('1W');
+		});
+
+		it('returns null for unsupported windows', () => {
+			expect(parseTrendWindow('5m')).toBeNull();
+			expect(parseTrendWindow('15m')).toBeNull();
+			expect(parseTrendWindow('bogus')).toBeNull();
+		});
+	});
+
+	describe('getOutcomesTrend', () => {
+		it('returns 403 when outcome tracking is disabled', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(false);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/trend',
+				query: { window: '1D' },
+			});
+			const res = httpMocks.createResponse();
+
+			await getOutcomesTrend(req, res);
+
+			expect(res.statusCode).toBe(403);
+			expect(res._getJSONData().code).toBe('FEATURE_DISABLED');
+		});
+
+		it('returns 400 when window is invalid', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/trend',
+				query: { window: 'invalid' },
+			});
+			const res = httpMocks.createResponse();
+
+			await getOutcomesTrend(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData().code).toBe('INVALID_REQUEST');
+			expect(res._getJSONData().error).toContain('Invalid window filter');
+		});
+
+		it('returns 400 when from date is invalid', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/trend',
+				query: { window: '1D', from: 'not-a-date' },
+			});
+			const res = httpMocks.createResponse();
+
+			await getOutcomesTrend(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData().code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 400 when from > to', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/trend',
+				query: {
+					window: '1D',
+					from: '2026-08-30T00:00:00.000Z',
+					to: '2026-08-01T00:00:00.000Z',
+				},
+			});
+			const res = httpMocks.createResponse();
+
+			await getOutcomesTrend(req, res);
+
+			expect(res.statusCode).toBe(400);
+			expect(res._getJSONData().code).toBe('INVALID_REQUEST');
+			expect(res._getJSONData().error).toContain('from must be before or equal to to');
+		});
+
+		it('returns 200 with trend data on success', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.getOutcomesTrend.mockResolvedValue({
+				success: true,
+				window: '1D',
+				bucket: 'all',
+				from: '2026-08-01',
+				to: '2026-08-20',
+				totalDays: 1,
+				trend: [
+					{
+						date: '2026-08-19',
+						window: '1D',
+						bucket: 'all',
+						sampleSize: 10,
+						wins: 7,
+						losses: 3,
+						hitRatePercent: 70.0,
+						avgMfe: 2.5,
+						avgMae: -0.8,
+						finalized: true,
+					},
+				],
+			});
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/trend',
+				query: { window: '1D', bucket: 'all' },
+			});
+			const res = httpMocks.createResponse();
+
+			await getOutcomesTrend(req, res);
+
+			expect(res.statusCode).toBe(200);
+			const data = res._getJSONData();
+			expect(data.success).toBe(true);
+			expect(data.trend).toHaveLength(1);
+			expect(data.trend[0].hitRatePercent).toBe(70.0);
+			expect(signalOutcomeService.getOutcomesTrend).toHaveBeenCalledWith(
+				expect.objectContaining({ window: '1D', bucket: 'all' }),
+			);
+		});
+
+		it('returns 503 when storage is unavailable', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const error = new Error('Signal outcome tracking is enabled but Firestore is unavailable.');
+			error.code = 'STORAGE_UNAVAILABLE';
+			signalOutcomeService.getOutcomesTrend.mockRejectedValue(error);
+			const req = httpMocks.createRequest({
+				method: 'GET',
+				url: '/api/outcomes/trend',
+				query: { window: '1D' },
+			});
+			const res = httpMocks.createResponse();
+
+			await getOutcomesTrend(req, res);
 
 			expect(res.statusCode).toBe(503);
 			expect(res._getJSONData().code).toBe('STORAGE_UNAVAILABLE');

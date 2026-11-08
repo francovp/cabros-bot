@@ -198,6 +198,7 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `POST` | `/api/alerts/:alertId/replay` | Dry-run or live replay of stored alert | [Stored Alerts](docs/alerts.md#post-apialertsalertidreplay) |
 | `GET` | `/api/outcomes` | Query signal outcomes with multi-window returns | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomes) |
 | `GET` | `/api/outcomes/summary` | Expectancy, win rate, filters, and optional bounded symbol/setup breakdowns | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomessummary) |
+| `GET` | `/api/outcomes/trend` | Query daily outcome snapshot metrics (hit rate, wins, losses, MFE, MAE) over time | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomestrend) |
 | `GET` | `/api/outcomes/{outcomeId}` | Retrieve one sanitized signal outcome | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomesoutcomeid) |
 | `GET` | `/api/outcomes/export` | Export bounded signal outcomes as JSONL or CSV | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomesexport) |
 | `GET`/`POST` | `/api/alert-subscribers` | Manage outbound alert subscriber webhooks with HMAC and SSRF guards | [OpenAPI Spec](/openapi.json) |
@@ -484,6 +485,17 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
 | `ENABLE_TELEGRAM_REACTION_AGGREGATION` | `false` | — | Aggregate Telegram message reactions into signal quality scores. |
 | `SIGNAL_OUTCOME_WORKER_ROLE` | `web` | `web`/`worker`/`disabled` | Which entrypoint may start the sweep. Environment-only. |
 | `SIGNAL_OUTCOME_EVALUATION_LEASE_MS` | `120000` | `10000`–`600000` | Distributed sweep lease duration. Environment-only. |
+
+### Signal Outcome Daily Rollups and Trend (#749)
+
+`GET /api/outcomes/trend` queries pre-aggregated daily outcome cohorts over a time range (default 30 days, max 180 days). Daily snapshots are computed and finalized by `SignalOutcomeDailyRollupService` following cohort maturity windows (`1h`, `4h`, `1D`, `1W`) and stored in the `tradingSignalOutcomesDaily` Firestore collection.
+
+| Remote Config parameter | Environment/default fallback | Bounds | Purpose |
+| --- | --- | --- | --- |
+| `SIGNAL_OUTCOME_ROLLUP_ENABLED` | `true` | boolean | Opt-in runtime gate for computing daily signal outcome rollups during scheduled evaluation sweeps. |
+| `SIGNAL_OUTCOME_ROLLUP_TTL_DAYS` | `180` | integer `30`–`365` | Retention policy in days for `tradingSignalOutcomesDaily` documents before Firestore native TTL deletion. |
+
+Both settings are non-secret runtime tuning parameters supported by Firebase Remote Config. Fresh published values override environment/default values.
 
 ### Langfuse Dynamic Prompt Readiness
 

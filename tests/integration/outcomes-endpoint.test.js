@@ -4,6 +4,7 @@ jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	isEnabled: jest.fn(),
 	listOutcomes: jest.fn(),
 	summarizeOutcomes: jest.fn(),
+	getOutcomesTrend: jest.fn(),
 	getOutcomeById: jest.fn(),
 	exportOutcomes: jest.fn(),
 	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
@@ -782,6 +783,103 @@ describe('Signal Outcomes API Integration Tests', () => {
 			expect(res.text).toContain("'-BTCUSDT");
 			expect(res.text).toContain("'@BINANCE");
 			expect(res.text).toContain("'=SUM(1,1)");
+		});
+	});
+
+	describe('GET /api/outcomes/trend', () => {
+		it('returns 401 when API key is missing', async () => {
+			await request(app)
+				.get('/api/outcomes/trend')
+				.expect(401);
+		});
+
+		it('returns 403 when outcome tracking is disabled', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(false);
+
+			const res = await request(app)
+				.get('/api/outcomes/trend?window=1D')
+				.set('x-api-key', 'test-key')
+				.expect(403);
+
+			expect(res.body.code).toBe('FEATURE_DISABLED');
+		});
+
+		it('returns 400 when window is unsupported', async () => {
+			const res = await request(app)
+				.get('/api/outcomes/trend?window=5m')
+				.set('x-api-key', 'test-key')
+				.expect(400);
+
+			expect(res.body.code).toBe('INVALID_REQUEST');
+		});
+
+		it('returns 200 with daily trend points when valid', async () => {
+			signalOutcomeService.getOutcomesTrend.mockResolvedValue({
+				success: true,
+				window: '1D',
+				bucket: 'all',
+				from: '2026-08-01',
+				to: '2026-08-20',
+				totalDays: 2,
+				trend: [
+					{
+						date: '2026-08-19',
+						window: '1D',
+						bucket: 'all',
+						sampleSize: 12,
+						wins: 8,
+						losses: 4,
+						hitRatePercent: 66.67,
+						avgMfe: 2.45,
+						avgMae: -0.85,
+						finalized: true,
+					},
+					{
+						date: '2026-08-20',
+						window: '1D',
+						bucket: 'all',
+						sampleSize: 10,
+						wins: 7,
+						losses: 3,
+						hitRatePercent: 70.0,
+						avgMfe: 2.8,
+						avgMae: -0.65,
+						finalized: true,
+					},
+				],
+			});
+
+			const res = await request(app)
+				.get('/api/outcomes/trend?window=1D&bucket=all&from=2026-08-01&to=2026-08-20')
+				.set('x-api-key', 'test-key')
+				.expect(200);
+
+			expect(res.body.success).toBe(true);
+			expect(res.body.totalDays).toBe(2);
+			expect(res.body.trend).toHaveLength(2);
+			expect(res.body.trend[0].date).toBe('2026-08-19');
+			expect(res.body.trend[1].hitRatePercent).toBe(70.0);
+			expect(signalOutcomeService.getOutcomesTrend).toHaveBeenCalledWith(
+				expect.objectContaining({
+					window: '1D',
+					bucket: 'all',
+					from: '2026-08-01T00:00:00.000Z',
+					to: '2026-08-20T00:00:00.000Z',
+				}),
+			);
+		});
+
+		it('returns 503 when Firestore is unavailable', async () => {
+			const error = new Error('Firestore is unavailable');
+			error.code = 'STORAGE_UNAVAILABLE';
+			signalOutcomeService.getOutcomesTrend.mockRejectedValue(error);
+
+			const res = await request(app)
+				.get('/api/outcomes/trend?window=1D')
+				.set('x-api-key', 'test-key')
+				.expect(503);
+
+			expect(res.body.code).toBe('STORAGE_UNAVAILABLE');
 		});
 	});
 });

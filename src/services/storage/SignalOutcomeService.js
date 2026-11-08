@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const admin = require('firebase-admin');
 const { createHash } = require('node:crypto');
 const AlertStorageService = require('./AlertStorageService');
+const dailyRollupService = require('./SignalOutcomeDailyRollupService');
 const equityMarketDataService = require('./EquityMarketDataService');
 const geminiPriceService = require('../grounding/geminiPriceService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
@@ -116,6 +117,7 @@ let workerStartupPending = false;
 let workerStartupGeneration = 0;
 let workerStartupAbortController = null;
 let activeEvaluationPromise = null;
+let activeSweepPromise = null;
 let shutdownRequested = false;
 let activeIntervalMs = null;
 let lastRunAt = null;
@@ -2015,11 +2017,47 @@ function runScheduledSweep() {
 		return undefined;
 	}
 
-	return evaluatePendingOutcomes()
-		.then(() => persistWorkerHeartbeat())
+	if (activeSweepPromise) {
+		return activeSweepPromise;
+	}
+
+	const sweepPromise = (async () => {
+		const sweepStartTime = Date.now();
+		const maxDurationMs = parseTimerInterval(getRuntimeConfig().SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 30000);
+		const sweepResult = await evaluatePendingOutcomes({ maxDurationMs });
+		if (sweepResult && sweepResult.skipped && sweepResult.reason === 'already_evaluating') {
+			return sweepResult;
+		}
+		try {
+			const firestore = AlertStorageService.getFirestore();
+			if (firestore && dailyRollupService.isOutcomeRollupEnabled()) {
+				const elapsed = Date.now() - sweepStartTime;
+				const remainingBudgetMs = Math.max(0, maxDurationMs - elapsed);
+				if (remainingBudgetMs > 0) {
+					await dailyRollupService.rollupOutcomesDaily({
+						firestore,
+						maxDurationMs: remainingBudgetMs,
+						deadline: sweepStartTime + maxDurationMs,
+					});
+				}
+			}
+		} catch (rollupErr) {
+			console.warn('[SignalOutcomeService] Daily outcome rollup failed:', rollupErr.message);
+		}
+		await persistWorkerHeartbeat();
+		return sweepResult;
+	})()
 		.catch((err) => {
 			console.warn('[SignalOutcomeService] Scheduled worker sweep failed:', err.message);
+		})
+		.finally(() => {
+			if (activeSweepPromise === sweepPromise) {
+				activeSweepPromise = null;
+			}
 		});
+
+	activeSweepPromise = sweepPromise;
+	return sweepPromise;
 }
 
 /**
@@ -2140,14 +2178,15 @@ function stopWorker(options = {}) {
 	activeIntervalMs = null;
 	lastEvaluatedDoc = null;
 
-	if (options.drain !== true || !activeEvaluationPromise) {
+	const activeDrainPromise = activeSweepPromise || activeEvaluationPromise;
+	if (options.drain !== true || !activeDrainPromise) {
 		isEvaluating = false;
 		return persistWorkerHeartbeat();
 	}
 
 	const drainTimeoutMs = Math.min(getWorkerStatus().maxDurationMs, MAX_WORKER_DRAIN_TIMEOUT_MS);
 	return awaitWithTimeout(
-		activeEvaluationPromise,
+		activeDrainPromise,
 		drainTimeoutMs,
 		`Dedicated worker drain timed out after ${drainTimeoutMs}ms`,
 	)
@@ -4063,6 +4102,8 @@ function _resetForTesting() {
 	binanceClient = null;
 	lastEvaluatedDoc = null;
 	isEvaluating = false;
+	activeSweepPromise = null;
+	activeEvaluationPromise = null;
 	shutdownRequested = false;
 	workerStartupGeneration += 1;
 	if (workerStartupAbortController) {
@@ -4082,11 +4123,24 @@ function _resetForTesting() {
 	leaseHeldSkipCount = 0;
 }
 
+async function rollupOutcomesDaily(options = {}) {
+	const firestore = AlertStorageService.getFirestore();
+	return dailyRollupService.rollupOutcomesDaily({ firestore, ...options });
+}
+
+async function getOutcomesTrend(options = {}) {
+	const firestore = AlertStorageService.getFirestore();
+	return dailyRollupService.getOutcomesTrend({ firestore, ...options });
+}
+
 module.exports = {
 	isEnabled,
 	recordSignal,
 	getSessionContext,
 	evaluatePendingOutcomes,
+	rollupOutcomesDaily,
+	getOutcomesTrend,
+	dailyRollupService,
 	getMetricsSummary,
 	summarizeOutcomes,
 	listOutcomes,
@@ -4120,4 +4174,5 @@ module.exports = {
 	isUsMarketHalfDay,
 	isUsMarketHoliday,
 	_resetForTesting,
+	_runScheduledSweepForTesting: runScheduledSweep,
 };

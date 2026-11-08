@@ -27383,6 +27383,435 @@
           ]
         },
         {
+          "name": "GET Signal Outcomes Trend",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Query daily outcome snapshot metrics (hit rate, wins, losses, MFE, MAE) over time for a given evaluation window (1h, 4h, 1D, 1W) and date range (up to 180 days).",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/trend?window=1D&bucket=all&from=2026-08-01&to=2026-08-20",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "trend"
+              ],
+              "query": [
+                {
+                  "key": "window",
+                  "value": "1D",
+                  "description": "Evaluation window (1h, 4h, 1D, 1W). Default is 1D."
+                },
+                {
+                  "key": "bucket",
+                  "value": "all",
+                  "description": "Signal bucket (all, crypto, stocks, or setup type). Default is all."
+                },
+                {
+                  "key": "from",
+                  "value": "2026-08-01",
+                  "description": "Start date in YYYY-MM-DD format (inclusive). Default is 30 days before 'to'."
+                },
+                {
+                  "key": "to",
+                  "value": "2026-08-20",
+                  "description": "End date in YYYY-MM-DD format (inclusive). Default is today (UTC)."
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"window\": \"1D\",\n  \"bucket\": \"all\",\n  \"from\": \"2026-08-01\",\n  \"to\": \"2026-08-20\",\n  \"totalDays\": 2,\n  \"totalPoints\": 2,\n  \"points\": [\n    {\n      \"date\": \"2026-08-19\",\n      \"bucket\": \"all\",\n      \"evaluationWindow\": \"1D\",\n      \"window\": \"1D\",\n      \"signals\": 12,\n      \"sampleSize\": 12,\n      \"wins\": 8,\n      \"losses\": 4,\n      \"invalidated\": 0,\n      \"pending\": 0,\n      \"hitRatePercent\": 66.67,\n      \"avgMfe\": 2.45,\n      \"avgMae\": -0.85,\n      \"avgReturnPercent\": 1.15,\n      \"finalized\": true,\n      \"updatedAt\": \"2026-08-21T01:00:00.000Z\"\n    },\n    {\n      \"date\": \"2026-08-20\",\n      \"bucket\": \"all\",\n      \"evaluationWindow\": \"1D\",\n      \"window\": \"1D\",\n      \"signals\": 10,\n      \"sampleSize\": 10,\n      \"wins\": 7,\n      \"losses\": 3,\n      \"invalidated\": 0,\n      \"pending\": 0,\n      \"hitRatePercent\": 70.0,\n      \"avgMfe\": 2.8,\n      \"avgMae\": -0.65,\n      \"avgReturnPercent\": 1.45,\n      \"finalized\": true,\n      \"updatedAt\": \"2026-08-22T01:00:00.000Z\"\n    }\n  ],\n  \"trend\": [\n    {\n      \"date\": \"2026-08-19\",\n      \"bucket\": \"all\",\n      \"evaluationWindow\": \"1D\",\n      \"window\": \"1D\",\n      \"signals\": 12,\n      \"sampleSize\": 12,\n      \"wins\": 8,\n      \"losses\": 4,\n      \"invalidated\": 0,\n      \"pending\": 0,\n      \"hitRatePercent\": 66.67,\n      \"avgMfe\": 2.45,\n      \"avgMae\": -0.85,\n      \"avgReturnPercent\": 1.15,\n      \"finalized\": true,\n      \"updatedAt\": \"2026-08-21T01:00:00.000Z\"\n    },\n    {\n      \"date\": \"2026-08-20\",\n      \"bucket\": \"all\",\n      \"evaluationWindow\": \"1D\",\n      \"window\": \"1D\",\n      \"signals\": 10,\n      \"sampleSize\": 10,\n      \"wins\": 7,\n      \"losses\": 3,\n      \"invalidated\": 0,\n      \"pending\": 0,\n      \"hitRatePercent\": 70.0,\n      \"avgMfe\": 2.8,\n      \"avgMae\": -0.65,\n      \"avgReturnPercent\": 1.45,\n      \"finalized\": true,\n      \"updatedAt\": \"2026-08-22T01:00:00.000Z\"\n    }\n  ]\n}"
+            },
+            {
+              "name": "400 Invalid Window",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid window. Allowed values: 1h, 4h, 1D, 1W.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}"
+            },
+            {
+              "name": "403 Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}"
+            },
+            {
+              "name": "503 Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Response has success true\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.success).to.be.true;",
+                  "});",
+                  "pm.test(\"Trend array is present\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.trend).to.be.an(\"array\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Signal Outcomes Trend (request ID echo)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "X-Request-Id",
+                "value": "gh1272-test-001",
+                "type": "text",
+                "description": "Optional client-supplied correlation ID (1-128 printable ASCII). Returned in the X-Request-Id response header on every non-exempt route."
+              }
+            ],
+            "description": "Query daily outcome snapshot metrics with request ID echo.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/trend?window=1D&bucket=all",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "trend"
+              ],
+              "query": [
+                {
+                  "key": "window",
+                  "value": "1D"
+                },
+                {
+                  "key": "bucket",
+                  "value": "all"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"window\": \"1D\",\n  \"bucket\": \"all\",\n  \"from\": \"2026-08-01\",\n  \"to\": \"2026-08-20\",\n  \"totalDays\": 0,\n  \"trend\": []\n}",
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "gh1272-test-001"
+                }
+              ]
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}",
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "gh1272-test-001"
+                }
+              ]
+            },
+            {
+              "name": "403 Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}",
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "gh1272-test-001"
+                }
+              ]
+            },
+            {
+              "name": "503 Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}",
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "gh1272-test-001"
+                }
+              ]
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A valid X-Request-Id must be echoed back verbatim.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id response header matches supplied value\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.eql(\"gh1272-test-001\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Signal Outcomes Trend (request ID omitted)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Query daily outcome snapshot metrics with omitted request ID (server generated).",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/trend?window=1D&bucket=all",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "trend"
+              ],
+              "query": [
+                {
+                  "key": "window",
+                  "value": "1D"
+                },
+                {
+                  "key": "bucket",
+                  "value": "all"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "200 Success",
+              "status": "OK",
+              "code": 200,
+              "body": "{\n  \"success\": true,\n  \"window\": \"1D\",\n  \"bucket\": \"all\",\n  \"from\": \"2026-08-01\",\n  \"to\": \"2026-08-20\",\n  \"totalDays\": 0,\n  \"trend\": []\n}",
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ]
+            },
+            {
+              "name": "401 Unauthorized",
+              "status": "Unauthorized",
+              "code": 401,
+              "body": "{\n  \"error\": \"Unauthorized: Missing or invalid API key.\",\n  \"code\": \"UNAUTHORIZED\"\n}",
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ]
+            },
+            {
+              "name": "403 Feature Disabled",
+              "status": "Forbidden",
+              "code": 403,
+              "body": "{\n  \"error\": \"Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.\",\n  \"code\": \"FEATURE_DISABLED\"\n}",
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ]
+            },
+            {
+              "name": "503 Storage Unavailable",
+              "status": "Service Unavailable",
+              "code": 503,
+              "body": "{\n  \"error\": \"Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.\",\n  \"code\": \"STORAGE_UNAVAILABLE\"\n}",
+              "header": [
+                {
+                  "key": "X-Request-Id",
+                  "value": "req-1726214400000-abcdef"
+                }
+              ]
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// When X-Request-Id is omitted, the server must generate and return a correlation ID.",
+                  "pm.test(\"status is 2xx\", function () {",
+                  "  pm.expect(pm.response.code).to.be.within(200, 299);",
+                  "});",
+                  "",
+                  "pm.test(\"X-Request-Id response header is populated\", function () {",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\")).to.be.a(\"string\");",
+                  "  pm.expect(pm.response.headers.get(\"X-Request-Id\").length).to.be.above(0);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Signal Outcomes Trend (invalid window - 400 Bad Request)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when passing an unsupported window parameter.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/trend?window=invalid",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "trend"
+              ],
+              "query": [
+                {
+                  "key": "window",
+                  "value": "invalid"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Window",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid window. Allowed values: 1h, 4h, 1D, 1W.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST body\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "GET Signal Outcomes Trend (reversed time range)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-api-key",
+                "value": "{{adminApiKey}}",
+                "type": "text"
+              }
+            ],
+            "description": "Example of 400 INVALID_REQUEST response when from date is after to date.",
+            "url": {
+              "raw": "{{baseUrl}}/api/outcomes/trend?from=2026-08-30&to=2026-08-01",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "outcomes",
+                "trend"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-08-30"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-08-01"
+                }
+              ]
+            }
+          },
+          "response": [
+            {
+              "name": "400 Invalid Time Window",
+              "status": "Bad Request",
+              "code": 400,
+              "body": "{\n  \"error\": \"Invalid time range. 'from' date must be before or equal to 'to' date.\",\n  \"code\": \"INVALID_REQUEST\"\n}"
+            }
+          ],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test(\"Status code is 400\", function () {",
+                  "    pm.response.to.have.status(400);",
+                  "});",
+                  "pm.test(\"Response has INVALID_REQUEST body\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData.code).to.eql(\"INVALID_REQUEST\");",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "GET Get Signal Outcome by ID",
           "request": {
             "method": "GET",
