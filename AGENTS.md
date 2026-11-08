@@ -3036,6 +3036,11 @@ No new environment variable, Remote Config key, or external credential was added
 
 ## Express Body Parser Limits (GH-607)
 Webhook and exact `/api/news-monitor` request parsers use `WEBHOOK_MAX_BODY_SIZE` (default `256kb`). Other JSON, text/plain, and URL-encoded parsers use an explicit `100kb` limit. Oversized bodies return the structured 413 `PAYLOAD_TOO_LARGE` response. OpenAPI documents 413 responses, and Postman includes oversized webhook and non-webhook examples. No new environment variable or Remote Config setting was added.
+## Telegram chat enrollment configuration
+
+`ENABLE_CHAT_ENROLLMENTS` is an opt-in route and persistence gate. It remains environment-only because enabling it changes the exposed admin API and collection writes. `CHAT_ENROLLMENT_RETENTION_DAYS` controls the Firestore TTL/privacy retention policy (1–365 days, default 90) and remains environment-only as a data-retention control. Neither value belongs in Firebase Remote Config.
+
+Telegram deep-link parameters accept only letters, digits, `_`, and `-` with a 64-character maximum. Publish encoded `v1_` parameters from `encodeStartPayload` for language, watchlist, referral, or combined tokens; plain `enroll` remains valid. The parser also accepts the raw token syntax for manually typed `/start` commands. `/start` enrollment does not bypass Telegram command authorization.
 
 ## Process Health Metrics Endpoint (GH-612 / Issue #612)
 

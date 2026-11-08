@@ -906,6 +906,23 @@ See [Architecture Guide](docs/deployment.md) and [Notifications Guide](docs/noti
 
 ---
 
+## Telegram deep-link enrollment
+
+With `ENABLE_CHAT_ENROLLMENTS=true`, chats must still be authorized by `TELEGRAM_ALLOWED_CHAT_IDS` (or its existing `TELEGRAM_CHAT_ID` fallback). `/start` stores an opt-in chat enrollment in Firestore when configured and falls back to memory during storage outages. The enrollment record expires after `CHAT_ENROLLMENT_RETENTION_DAYS` (default 90). The `watch=` payload also adds symbols to the chat's `/watchlist`.
+
+Telegram accepts only URL-safe start parameters. Use `encodeStartPayload` from `src/controllers/commands/handlers/start/startPayload.js` to encode `lang=es|en`, `watch=SYMBOL1,SYMBOL2`, `ref=SOURCE`, or combined tokens. Examples:
+
+```text
+https://t.me/<bot>?start=enroll
+https://t.me/<bot>?start=v1_bGFuZz1lbg
+https://t.me/<bot>?start=v1_d2F0Y2g9QlRDVVNEVCxFVEhVU0RU
+https://t.me/<bot>?startgroup=enroll
+```
+
+`GET /api/enrollments` requires admin viewer access for bounded aggregate counts. Its optional `limit` accepts one positive decimal integer string (default 200, clamped to 1000); exponent, hex, fractional, empty, and repeated values return `400 INVALID_REQUEST`. Errors use the standard `success`, `error`, `code`, `requestId`, and `retryable` envelope. Re-enrollment preserves omitted language, watchlist, and referral preferences, including when a preliminary Firestore read fails. `partial=true` means more documents may exist beyond the scan limit, so `count` is not a total. An admin operator may add `includeChatIds=true` to view per-chat records. Deep-link enrollment does not grant command authorization. Deploy the `chatEnrollments.expiresAt` Firestore TTL policy from `firestore.indexes.json` before enabling durable storage.
+
+`includeChatIds` accepts a single `true` or `false`; invalid or repeated values return `400 INVALID_REQUEST`. Enrollment reads feed the shared Firestore read-health metrics with sanitized failure categories and recovery. When a newer durable enrollment supersedes an update, the response and cache reflect that stored record.
+
 ## License
 
 This project is licensed under the ISC License.

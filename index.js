@@ -15,6 +15,7 @@ const {
 	alertHistoryCommand,
 	newsMonitorCmd,
 	helpCmd,
+	startCmd,
 	outcomesCommand,
 	resolveCmd,
 	reactionsCommand,
@@ -28,6 +29,7 @@ const {
 	watchlistCommand,
 } = require('./src/controllers/commands');
 const { telegramReactionService } = require('./src/services/telegram/telegramReactionService');
+const { registerStartActions } = require('./src/controllers/commands/handlers/start/startCommand');
 const app = require('./app.js');
 const { Telegraf, Markup } = require('telegraf');
 const { getRoutes } = require('./src/routes');
@@ -229,10 +231,12 @@ async function bootstrapApplication() {
 		bot.command(['silencio', 'quiet'], silencioCmd);
 		bot.command(['umbral', 'threshold'], umbralCmd);
 		bot.command(['categorias', 'categories'], categoriasCmd);
-		bot.command(['help', 'start'], helpCmd);
+		bot.command(['help'], helpCmd);
+		bot.start(startCmd);
 
 		// Register inline keyboard action handlers for Telegram alerts.
 		registerAlertActionHandlers(bot);
+		registerStartActions(bot);
 
 		// Attach Telegram error boundary
 		attachTelegramErrorBoundary(bot);

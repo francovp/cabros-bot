@@ -44,7 +44,7 @@ if [[ "$BACKFILL" == "true" ]]; then
 	FIREBASE_PROJECT_ID="$project" node ops/backfill-operational-collection-retention.js
 fi
 
-for collection_group in idempotency_keys news-monitor-dedup notificationDeadLetters tradingSignalOutcomes symbolAnalyses chatPreferences binanceOrderAudit news_analysis; do
+for collection_group in idempotency_keys news-monitor-dedup notificationDeadLetters tradingSignalOutcomes symbolAnalyses chatPreferences chatEnrollments binanceOrderAudit news_analysis; do
 	echo "Enabling TTL on expiresAt for collection group: $collection_group"
 	gcloud firestore fields ttls update expiresAt \
 		--collection-group="$collection_group" \
@@ -52,4 +52,4 @@ for collection_group in idempotency_keys news-monitor-dedup notificationDeadLett
 		--project="$project"
 done
 
-echo "Done. Firestore will now auto-delete expired documents in idempotency_keys, news-monitor-dedup, notificationDeadLetters, tradingSignalOutcomes, symbolAnalyses, chatPreferences, binanceOrderAudit, and news_analysis."
+echo "Done. Firestore will now auto-delete expired documents in idempotency_keys, news-monitor-dedup, notificationDeadLetters, tradingSignalOutcomes, symbolAnalyses, chatPreferences, chatEnrollments, binanceOrderAudit, and news_analysis."

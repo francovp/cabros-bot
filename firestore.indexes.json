@@ -313,6 +313,12 @@
   ],
   "fieldOverrides": [
     {
+      "collectionGroup": "chatEnrollments",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
       "collectionGroup": "promptDriftEvents",
       "fieldPath": "expiresAt",
       "ttl": true,
