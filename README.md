@@ -42,6 +42,7 @@ Comprehensive guides and technical documentation are maintained inside the [`doc
 | **[Telegram Commands](docs/commands.md)** | Interactive bot commands (`/help`, `/precio`, `/cryptobot`, `/analisis`, `/scanner`, `/jobs`, `/noticias`), throttling, and forum topic routing. |
 | **[News Monitoring](docs/news-monitor.md)** | Event detection engine, confidence scoring, persistent deduplication, secondary LLM refinement, and volume throttling. |
 | **[Observability & Monitoring](docs/monitoring.md)** | Sentry runtime error monitoring (005), health probes, external uptime monitoring, production smoke probes, structured JSON logging, structured per-request HTTP access logs, and Firestore write/read metrics. |
+| **[Operator Runbook](RUNBOOK.md)** | Incident checklists and mitigation runbooks for 12 paging surfaces (Gemini 429 burst, Telegram/Discord/WhatsApp exhaustion, TradingView MCP black-hole, Binance order rejection, Firestore credential rotation, dead background workers, and rate-limit storms). |
 | **[Deployment & Operations](docs/deployment.md)** | Render.com web services and BullMQ workers, preview PR environments, ngrok local tunneling, and Docker/Devcontainer. |
 | **[Troubleshooting Guide](docs/troubleshooting.md)** | Diagnostic checklists and recovery runbooks for news monitoring, messaging channels, URL shortening, and retries. |
 | **[Firestore Backup & Restore](docs/firestore-backup-and-restore.md)** | Procedures and scripts for backing up and restoring Firestore operational collections. |
@@ -998,6 +999,10 @@ https://t.me/<bot>?startgroup=enroll
 `GET /api/enrollments` requires admin viewer access for bounded aggregate counts. Its optional `limit` accepts one positive decimal integer string (default 200, clamped to 1000); exponent, hex, fractional, empty, and repeated values return `400 INVALID_REQUEST`. Errors use the standard `success`, `error`, `code`, `requestId`, and `retryable` envelope. Re-enrollment preserves omitted language, watchlist, and referral preferences, including when a preliminary Firestore read fails. `partial=true` means more documents may exist beyond the scan limit, so `count` is not a total. An admin operator may add `includeChatIds=true` to view per-chat records. Deep-link enrollment does not grant command authorization. Deploy the `chatEnrollments.expiresAt` Firestore TTL policy from `firestore.indexes.json` before enabling durable storage.
 
 `includeChatIds` accepts a single `true` or `false`; invalid or repeated values return `400 INVALID_REQUEST`. Enrollment reads feed the shared Firestore read-health metrics with sanitized failure categories and recovery. When a newer durable enrollment supersedes an update, the response and cache reflect that stored record.
+
+### Operator Runbook
+
+Production pages from `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, Sentry, or the smoke probe all point at one document: [RUNBOOK.md](./RUNBOOK.md). It covers 12 incident classes (Gemini 429 burst, Telegram/Discord exhaustion, WhatsApp GreenAPI outage, TradingView MCP black-hole, Binance order rejection, Firestore credential rotation, dead signal-outcome/scanner/redrive workers, rate-limit storms, and Telegram deep-link onboarding) with a fixed `Symptoms → First check → Mitigation → Verification → Postmortem` template per section. Run `pnpm test -- tests/integration/runbook-links.test.js` to confirm the runbook still covers every `TelegramService` error category and Sentry tag.
 
 ## License
 

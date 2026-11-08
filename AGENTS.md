@@ -31,6 +31,8 @@ This project is a small Express + Telegraf (Telegram) bot service that exposes a
 
 > For a human-readable capability map, status legend, and the first-24-hours operator journey, see [`docs/PRODUCT.md`](docs/PRODUCT.md).
 
+For operator-facing incident narratives (mitigation steps, runbook sections, paging-surface maps) see [RUNBOOK.md](./RUNBOOK.md). The runbook is the source of truth for incident triage; `AGENTS.md` focuses on architecture and contribution patterns.
+
 ### Key Files & Entry Points
 - `index.js` — App entry. Starts Express server and conditionally launches the Telegraf bot. Important logic for enabling the bot lives here.
 - `instrument.js` — Initializes Sentry logging + monitoring early (loaded by `index.js`).
@@ -1358,6 +1360,7 @@ See the [Terminology Guide: Grounding vs Enrichment](#terminology-guide-groundin
 - GH-183 / CB-78: Azure, OpenRouter, and Cloudflare `llmCallv2()` results now return normalized token usage for downstream `tokenUsage` aggregation; the shared normalizer accepts OpenAI-compatible `prompt_tokens`, `completion_tokens`, and `total_tokens` fields.
 - GH-199 / CB-83: `detect-unused-features` derives disabled flags, status mappings, indirect env lookups, `.env.example` gaps, and Sentry profiling findings from the fresh protected capabilities response and current repository files; dated snapshots are guidance-free and a healthy-data dry run guards against stale issues.
 - GH-655 / CB-?: Exposed per-channel delivery success/failure counters in `/api/status` (and the `/api/capabilities` alias) under `deliveryHealth`. `NotificationManager` now tracks rolling in-memory counters (`success`, `failure`, `lastSuccessAt`, `lastFailureAt`, `firstObservedAt`) updated on every `sendToAll` and `sendToChannels` outcome. Channels that have never sent an alert are omitted, counters reset on process restart (in-memory only, no Firestore persistence), and OpenAPI documents the new `DeliveryHealth` schema plus `DeliveryHealthChannel` with safe timestamp fields. Postman and README examples updated.
+- GH-794: added a top-level `RUNBOOK.md` covering 12 incident classes (Gemini 429 burst, Telegram/Discord/WhatsApp exhaustion, TradingView MCP black-hole, Binance order rejection, Firestore credential rotation, dead signal-outcome/scanner/redrive workers, rate-limit storms, Telegram deep-link onboarding) with a fixed `Symptoms → First check → Mitigation → Verification → Postmortem prompt` template. The admin console sidebar links to `/RUNBOOK.md` via a new public `GET /RUNBOOK.md` route in `src/openapi/docs.js`; `tests/integration/runbook-links.test.js` parses the runbook and asserts coverage against every `TelegramService` `getCategory()` value and every Sentry provider/feature tag the paging code emits. `.github/workflows/ops-issue-from-runbook.yml` opens a labelled `ops/runbook` issue on every `RUNBOOK.md` push so reviewers can spot documentation drift. No new env vars, no Remote Config additions, no new dependencies.
 
 ## Architectural Patterns & Extension Guide
 
