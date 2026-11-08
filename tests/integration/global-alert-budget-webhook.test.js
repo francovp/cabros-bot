@@ -3,6 +3,7 @@
 const request = require('supertest');
 const express = require('express');
 const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const NotificationManagerBootstrap = require('../../src/services/notification/NotificationManagerBootstrap');
 const { globalAlertBudget, resetAdminPageCooldownForTesting } = require('../../src/services/notifications/globalAlertBudget');
 const { notificationRedriveService } = require('../../src/services/notification/NotificationRedriveService');
 const { signalRepeatCooldown } = require('../../src/services/alerts/signalRepeatCooldown');
@@ -45,6 +46,7 @@ describe('Global alert budget webhook gate', () => {
 		});
 
 		jest.clearAllMocks();
+		NotificationManagerBootstrap.resetForTesting();
 		globalAlertBudget.resetForTesting();
 		signalRepeatCooldown.reset();
 		notificationRedriveService._resetForTesting();
@@ -70,6 +72,7 @@ describe('Global alert budget webhook gate', () => {
 				process.env[key] = value;
 			}
 		}
+		NotificationManagerBootstrap.resetForTesting();
 		globalAlertBudget.resetForTesting();
 		signalRepeatCooldown.reset();
 		notificationRedriveService._resetForTesting();
