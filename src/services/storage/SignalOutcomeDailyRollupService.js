@@ -3,6 +3,8 @@
 const admin = require('firebase-admin');
 const { round10 } = require('../../controllers/helpers');
 const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
+const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
+const { classifyFirestoreError, FIRESTORE_ERROR_CATEGORIES } = require('./firestoreErrorCategories');
 const sentryService = require('../monitoring/SentryService');
 
 const DAILY_COLLECTION_NAME = 'tradingSignalOutcomesDaily';
@@ -47,9 +49,13 @@ function getRollupTtlDays() {
 
 function buildDailyDocId(dateStr, bucket, window) {
 	const safeDate = String(dateStr).trim();
-	const safeBucket = String(bucket || 'all').trim();
+	const safeBucket = String(bucket || 'all')
+		.trim()
+		.toLowerCase()
+		.replace(/[\/\s#?]+/g, '_')
+		.replace(/[^a-z0-9_-]/g, '_');
 	const safeWindow = String(window || '1D').trim();
-	return `${safeDate}_${safeBucket}_${safeWindow}`;
+	return `${safeDate}_${safeBucket || 'all'}_${safeWindow}`;
 }
 
 function isCohortMature(dateStr, window, now = Date.now()) {
@@ -112,7 +118,7 @@ function computeDailyMetrics(docs, window, bucket = 'all') {
 			continue;
 		}
 
-		if (winOutcome.status === 'invalidated') {
+		if (winOutcome.status === 'invalidated' || winOutcome.status === 'unavailable') {
 			invalidated++;
 			continue;
 		}
@@ -126,15 +132,15 @@ function computeDailyMetrics(docs, window, bucket = 'all') {
 			if (ret !== null) {
 				totalReturn += ret;
 				countReturn++;
-			}
-
-			if (winOutcome.targetHit === true || winOutcome.firstHit === 'target') {
+				if (ret > 0) {
+					wins++;
+				} else if (ret < 0) {
+					losses++;
+				}
+			} else if (winOutcome.targetHit === true || winOutcome.firstHit === 'target') {
 				wins++;
 			} else if (winOutcome.stopHit === true || winOutcome.firstHit === 'stop') {
 				losses++;
-			} else if (ret !== null) {
-				if (ret > 0) wins++;
-				else if (ret < 0) losses++;
 			}
 
 			const mfe = typeof winOutcome.mfe === 'number' && Number.isFinite(winOutcome.mfe)
@@ -403,8 +409,11 @@ async function rollupOutcomesDaily(options = {}) {
 
 async function getOutcomesTrend({ firestore, window = '1D', from, to, bucket = 'all' } = {}) {
 	if (!firestore) {
+		const category = FIRESTORE_ERROR_CATEGORIES?.UNINITIALIZED || 'uninitialized';
+		firestoreWriteMetricsService.recordReadFailure('signalOutcomes', category);
 		const error = new Error('Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.');
 		error.code = 'STORAGE_UNAVAILABLE';
+		error.category = category;
 		throw error;
 	}
 
@@ -472,9 +481,13 @@ async function getOutcomesTrend({ firestore, window = '1D', from, to, bucket = '
 			.where('date', '>=', fromDateStr)
 			.where('date', '<=', toDateStr)
 			.get();
+		firestoreWriteMetricsService.recordReadSuccess('signalOutcomes');
 	} catch (err) {
+		const category = typeof classifyFirestoreError === 'function' ? classifyFirestoreError(err) : 'unknown';
+		firestoreWriteMetricsService.recordReadFailure('signalOutcomes', category);
 		const error = new Error('Signal outcome tracking is enabled but Firestore is unavailable. Check Firestore credentials and project configuration.');
 		error.code = 'STORAGE_UNAVAILABLE';
+		error.category = category;
 		throw error;
 	}
 

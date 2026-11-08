@@ -2,6 +2,7 @@
 
 const SignalOutcomeDailyRollupService = require('../../src/services/storage/SignalOutcomeDailyRollupService');
 const RemoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 
 describe('SignalOutcomeDailyRollupService', () => {
 	describe('isOutcomeRollupEnabled()', () => {
@@ -232,12 +233,74 @@ describe('SignalOutcomeDailyRollupService', () => {
 			expect(metrics.wins).toBe(1);
 			expect(metrics.pending).toBe(0);
 		});
+
+		it('derives wins from return rather than barrier hits (negative return with targetHit is a loss)', () => {
+			const docs = [
+				{
+					outcomes: {
+						'1D': {
+							status: 'evaluated',
+							targetHit: true,
+							return: -5.0,
+							maxFavorableExcursion: 1.0,
+							maxAdverseExcursion: -5.5,
+						},
+					},
+				},
+				{
+					outcomes: {
+						'1D': {
+							status: 'evaluated',
+							targetHit: false,
+							return: 2.0,
+							maxFavorableExcursion: 3.0,
+							maxAdverseExcursion: -0.5,
+						},
+					},
+				},
+			];
+
+			const metrics = SignalOutcomeDailyRollupService.computeDailyMetrics(docs, '1D');
+			expect(metrics.signals).toBe(2);
+			expect(metrics.sampleSize).toBe(2);
+			expect(metrics.wins).toBe(1);
+			expect(metrics.losses).toBe(1);
+			expect(metrics.hitRatePercent).toBe(50.0);
+		});
+
+		it('counts terminal status unavailable in invalidated count', () => {
+			const docs = [
+				{
+					outcomes: {
+						'1D': {
+							status: 'unavailable',
+						},
+					},
+				},
+				{
+					outcomes: {
+						'1D': {
+							status: 'invalidated',
+						},
+					},
+				},
+			];
+
+			const metrics = SignalOutcomeDailyRollupService.computeDailyMetrics(docs, '1D');
+			expect(metrics.signals).toBe(2);
+			expect(metrics.sampleSize).toBe(0);
+			expect(metrics.invalidated).toBe(2);
+		});
 	});
 
 	describe('formatDocId()', () => {
 		it('formats document ID with date, bucket, and window', () => {
 			expect(SignalOutcomeDailyRollupService.formatDocId('2026-08-20', 'all', '1D')).toBe('2026-08-20_all_1D');
 			expect(SignalOutcomeDailyRollupService.formatDocId('2026-08-20', 'crypto', '4h')).toBe('2026-08-20_crypto_4h');
+		});
+
+		it('sanitizes slashes and special characters in bucket for document IDs', () => {
+			expect(SignalOutcomeDailyRollupService.formatDocId('2026-08-20', 'breakout/retest', '1D')).toBe('2026-08-20_breakout_retest_1D');
 		});
 	});
 
@@ -826,6 +889,46 @@ describe('SignalOutcomeDailyRollupService', () => {
 			expect(result.bucket).toBe('crypto');
 			const bucketFilter = whereFilters.find((f) => f.field === 'bucket');
 			expect(bucketFilter).toEqual({ field: 'bucket', op: '==', val: 'crypto' });
+		});
+
+		it('records read success in FirestoreWriteMetricsService on successful trend query', async () => {
+			const readSuccessSpy = jest.spyOn(firestoreWriteMetricsService, 'recordReadSuccess');
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue({
+					where: jest.fn().mockReturnThis(),
+					get: jest.fn().mockResolvedValue({ docs: [] }),
+				}),
+			};
+
+			await SignalOutcomeDailyRollupService.getOutcomesTrend({
+				firestore: mockFirestore,
+				window: '1D',
+				bucket: 'all',
+			});
+
+			expect(readSuccessSpy).toHaveBeenCalledWith('signalOutcomes');
+			readSuccessSpy.mockRestore();
+		});
+
+		it('records read failure in FirestoreWriteMetricsService when Firestore throws', async () => {
+			const readFailureSpy = jest.spyOn(firestoreWriteMetricsService, 'recordReadFailure');
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue({
+					where: jest.fn().mockReturnThis(),
+					get: jest.fn().mockRejectedValue(new Error('Firestore unavailable')),
+				}),
+			};
+
+			await expect(
+				SignalOutcomeDailyRollupService.getOutcomesTrend({
+					firestore: mockFirestore,
+					window: '1D',
+					bucket: 'all',
+				}),
+			).rejects.toThrow();
+
+			expect(readFailureSpy).toHaveBeenCalledWith('signalOutcomes', expect.any(String));
+			readFailureSpy.mockRestore();
 		});
 	});
 });
