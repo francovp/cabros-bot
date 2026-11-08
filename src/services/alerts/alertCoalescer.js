@@ -27,24 +27,26 @@ class AlertCoalescer {
 			if (signal?.aborted) return null;
 			const entry = this.entries.get(key);
 			if (!entry) break;
+			if (entry.expiresAt <= arrivedAt) {
+				this.finish({ key, entry }, false);
+				continue;
+			}
 			if (entry.pending) {
 				let onAbort;
 				try {
-					await Promise.race([entry.done, new Promise(resolve => {
+					const delivered = await Promise.race([entry.done, new Promise(resolve => {
 						onAbort = resolve;
 						signal?.addEventListener('abort', onAbort, { once: true });
 					})]);
+					if (signal?.aborted) return null;
+					return delivered ? { originalRequestId: entry.requestId } : null;
 				} finally {
 					signal?.removeEventListener('abort', onAbort);
 				}
-				continue;
-			}
-			if (entry.expiresAt > arrivedAt) {
-				this.entries.delete(key);
-				this.entries.set(key, entry);
-				return { originalRequestId: entry.requestId };
 			}
 			this.entries.delete(key);
+			this.entries.set(key, entry);
+			return { originalRequestId: entry.requestId };
 		}
 		while (this.entries.size >= this.maxEntries) {
 			const oldest = this.entries.keys().next().value;
@@ -65,7 +67,7 @@ class AlertCoalescer {
 		clearTimeout(entry.timer);
 		entry.pending = false;
 		if (!delivered) this.entries.delete(token.key);
-		entry.resolve();
+		entry.resolve(delivered);
 	}
 
 	reset() {

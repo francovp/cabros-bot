@@ -25,6 +25,24 @@ describe('AlertCoalescer', () => {
 		cache.finish(owner, true);
 		expect(await waiting).toEqual({ originalRequestId: 'first' });
 	});
+	it('starts a new delivery when arrival is outside a pending original window', async () => {
+		jest.useFakeTimers();
+		const original = await cache.acquire('key', 'first', 5000);
+		const insideWaiter = cache.acquire('key', 'inside', 5000);
+		jest.advanceTimersByTime(6000);
+		const outside = cache.acquire('key', 'outside', 5000);
+		let outsideSettled = false;
+		outside.then(() => { outsideSettled = true; });
+		await Promise.resolve();
+		expect(outsideSettled).toBe(true);
+		const replacement = await outside;
+		expect(replacement.entry.requestId).toBe('outside');
+		expect(await insideWaiter).toBeNull();
+		cache.finish(original, true);
+		expect(cache.entries.get('key')).toBe(replacement.entry);
+		cache.finish(replacement, true);
+		expect(await cache.acquire('key', 'later', 5000)).toEqual({ originalRequestId: 'outside' });
+	});
 	it('releases failed delivery and ignores a stale owner', async () => {
 		const owner = await cache.acquire('key', 'first', 5000);
 		cache.finish(owner, false);
@@ -50,7 +68,8 @@ describe('AlertCoalescer', () => {
 		await cache.acquire('key', 'first', 5000);
 		const waiting = cache.acquire('key', 'second', 5000);
 		await jest.advanceTimersByTimeAsync(180000);
-		expect((await waiting).entry.requestId).toBe('second');
+		expect(await waiting).toBeNull();
+		expect((await cache.acquire('key', 'third', 5000)).entry.requestId).toBe('third');
 	});
 	it('stops a waiting request when its request deadline is aborted', async () => {
 		await cache.acquire('key', 'first', 5000);
