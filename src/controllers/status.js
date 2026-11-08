@@ -18,6 +18,26 @@ const SignalOutcomeService = require('../services/storage/SignalOutcomeService')
 const { jobQueue } = require('../services/jobs/JobQueue');
 const equityMarketDataService = require('../services/storage/EquityMarketDataService');
 const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
+const { ChartRendererService } = require('../services/notification/charts/chartRenderer');
+
+/**
+ * Non-sensitive chart-renderer readiness for `/api/status` and `/api/capabilities`.
+ *
+ * A dedicated instance is used rather than the process-wide delivery singleton so
+ * the reported `enabled` flag tracks the Remote-Config-resolved runtime value
+ * without a channel having to render anything first. The counters stay at zero
+ * until real delivery traffic exercises the shared renderer.
+ */
+function getChartRendererStatus() {
+	const enabled = remoteConfigService.getRuntimeConfig().ENABLE_CHART_ATTACHMENTS === true;
+	const probe = new ChartRendererService();
+	return {
+		...probe.getStatus(),
+		enabled,
+		channels: { telegram: true, whatsapp: true, discord: false },
+		note: 'Discord webhooks have no inline image upload path; Discord always falls back to text.',
+	};
+}
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
 const { binanceOrderAuditService } = require('../services/trading/BinanceOrderAuditService');
@@ -403,6 +423,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
 	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
 	const signalClassMarkerEnabled = runtimeConfig.ENABLE_SIGNAL_CLASS_MARKER;
+	const chartAttachmentsEnabled = runtimeConfig.ENABLE_CHART_ATTACHMENTS === true;
 	const remoteConfigStatus = remoteConfigService.getStatus();
 	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING);
 	const equityMarketDataStatus = equityMarketDataService.getStatus();
@@ -712,6 +733,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			testAlert: isTestAlertEnabled(),
 			tokenCostBudget: tokenCostBudgetService.isEnabled(),
 			signalClassMarker: signalClassMarkerEnabled,
+			chartAttachments: chartAttachmentsEnabled,
 			equitySessionTag: runtimeConfig.ENABLE_EQUITY_SESSION_TAG,
 			maintenanceMode: isMaintenanceModeEnabled(),
 			telegramCommandAuth: telegramCommandAuth.getStatus().enabled,
@@ -767,6 +789,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 		dependencies: {
 			watchlist: watchlistService.getStatus(),
 			telegram,
+			chartRenderer: getChartRendererStatus(),
 			whatsapp,
 			discord,
 			discordSourceRouting,
