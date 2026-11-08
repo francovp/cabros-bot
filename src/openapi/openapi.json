@@ -10469,6 +10469,20 @@
                   "collection": "binanceOrderAudit",
                   "retentionDays": 30
                 },
+                "gemini": {
+                  "enabled": true,
+                  "configured": true,
+                  "ready": true,
+                  "status": "ready",
+                  "circuitBreaker": {
+                    "state": "closed",
+                    "consecutiveFailures": 0,
+                    "openedAt": null,
+                    "lastStateChangeAt": null,
+                    "failureThreshold": 5,
+                    "cooldownMs": 60000
+                  }
+                },
                 "geminiQuota": {
                   "enabled": true,
                   "configured": true,
@@ -10577,6 +10591,14 @@
                   "lastSuccessAt": null,
                   "lastFailureAt": null,
                   "lastErrorReason": null,
+                  "circuitBreaker": {
+                    "state": "closed",
+                    "consecutiveFailures": 0,
+                    "openedAt": null,
+                    "lastStateChangeAt": null,
+                    "failureThreshold": 5,
+                    "cooldownMs": 60000
+                  },
                   "supportedExchanges": [
                     "BATS",
                     "NASDAQ",

@@ -119,6 +119,20 @@
       "description": "TTL for successful process-local TradingView MCP tool results in milliseconds",
       "valueType": "NUMBER"
     },
+    "CIRCUIT_BREAKER_THRESHOLD": {
+      "defaultValue": {
+        "value": "5"
+      },
+      "description": "Consecutive external API provider failures before circuit breaker opens",
+      "valueType": "NUMBER"
+    },
+    "CIRCUIT_BREAKER_COOLDOWN_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Cooldown duration in milliseconds before circuit breaker allows half-open probe",
+      "valueType": "NUMBER"
+    },
     "ENABLE_TRADINGVIEW_MCP_WARMUP": {
       "defaultValue": {
         "value": "true"

@@ -44,6 +44,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS: { type: 'number', defaultValue: 600000, integer: true, min: 1000, max: 86400000 },
 	TRADINGVIEW_MCP_PAGE_COOLDOWN_MS: { type: 'number', defaultValue: 3600000, integer: true, min: 1000, max: 86400000 },
 	TRADINGVIEW_MCP_CACHE_TTL_MS: { type: 'number', defaultValue: 90000, integer: true, min: 10000, max: 600000 },
+	CIRCUIT_BREAKER_THRESHOLD: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 100 },
+	CIRCUIT_BREAKER_COOLDOWN_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 86400000 },
 	ENABLE_TRADINGVIEW_MCP_WARMUP: { type: 'boolean', defaultValue: true },
 	TRADINGVIEW_MCP_WARMUP_INTERVAL_MS: { type: 'number', defaultValue: 600000, integer: true, min: 60000, max: 3600000 },
 	TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS: { type: 'number', defaultValue: 60000, integer: true, min: 5000, max: 120000 },

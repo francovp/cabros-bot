@@ -290,7 +290,7 @@ function getGeminiDependency({
 }) {
 	const requiresGeminiModel = geminiGroundingEnabled && modelProvider === 'gemini';
 
-	return dependencyStatus({
+	const base = dependencyStatus({
 		enabled,
 		configured:
 			hasValue(process.env.GEMINI_API_KEY)
@@ -298,6 +298,25 @@ function getGeminiDependency({
 				resolveRemoteOverride('GEMINI_MODEL_NAME') ?? process.env.GEMINI_MODEL_NAME,
 			)),
 	});
+
+	let circuitBreaker = null;
+	try {
+		const grounding = require('../services/grounding/grounding');
+		if (typeof grounding.getCircuitBreakerStatus === 'function') {
+			circuitBreaker = grounding.getCircuitBreakerStatus();
+		}
+	} catch (_) {
+		circuitBreaker = null;
+	}
+
+	const isDegraded = base.ready && circuitBreaker && circuitBreaker.state === 'open';
+
+	return {
+		...base,
+		status: isDegraded ? 'degraded' : base.status,
+		ready: isDegraded ? false : base.ready,
+		circuitBreaker,
+	};
 }
 
 function getGeminiQuotaDependency({ gemini }) {

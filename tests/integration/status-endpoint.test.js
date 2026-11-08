@@ -29,6 +29,7 @@ const backgroundTimerStatsSchema = require('../../src/openapi/openapi.json')
 	.components.schemas.BackgroundTimerStats;
 const { getPromptService } = require('../../src/services/prompts');
 const { signalClassMetrics } = require('../../src/services/alerts/signalClassifier');
+const groundingService = require('../../src/services/grounding/grounding');
 const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
 const { resetAdminAuthReadinessForTesting } = require('../../src/lib/adminAuth');
 const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
@@ -36,6 +37,15 @@ const newsAnalysisStorageService = require('../../src/services/storage/NewsAnaly
 const promptReadiness = require('../../src/services/prompts/promptReadiness');
 const symbolAnalysisStorageService = require('../../src/services/storage/SymbolAnalysisStorageService');
 const { getRoutes } = require('../../src/routes');
+
+const defaultCircuitBreaker = Object.freeze({
+	state: 'closed',
+	consecutiveFailures: 0,
+	openedAt: null,
+	lastStateChangeAt: null,
+	failureThreshold: 5,
+	cooldownMs: 60000,
+});
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
 	type: 'pkcs1',
@@ -290,6 +300,7 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.geminiQuota).toEqual({
 			enabled: true,
@@ -1587,6 +1598,7 @@ describe('Status endpoints', () => {
 			lastSuccessAt: null,
 			lastFailureAt: null,
 			lastErrorReason: null,
+			circuitBreaker: defaultCircuitBreaker,
 			supportedExchanges: ['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD'],
 			timeoutMs: 5000,
 			rpm: 0,
@@ -2318,6 +2330,7 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'misconfigured',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.geminiQuota).toEqual(expect.objectContaining({
 			enabled: true,
@@ -2343,6 +2356,7 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 	});
 
@@ -2440,6 +2454,7 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 	});
 
@@ -2477,6 +2492,7 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.newsMonitorLlm).toEqual({
 			enabled: true,
@@ -2508,6 +2524,7 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'disabled',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.braveSearch).toEqual({
 			enabled: true,
@@ -2597,6 +2614,7 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'disabled',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.newsMonitorLlm).toEqual({
 			enabled: true,
@@ -2625,6 +2643,7 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'disabled',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.newsMonitorLlm).toEqual({
 			enabled: true,
