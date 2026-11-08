@@ -276,7 +276,7 @@ const createControllableStream = () => {
 	};
 };
 
-function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', firebase, location = {} }) {
+function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', firebase, location = {}, environmentBanner = null }) {
 	const body = new FakeElement('body');
 	const elementsById = {};
 	[
@@ -295,6 +295,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		['clear-key', 'button', { type: 'button' }],
 		['connection-form', 'form', {}],
 		['view', 'section', {}],
+		['environment-banner', 'section', { hidden: true }],
 		['view-status', 'p', { role: 'status' }],
 		['sse-status', 'div', { role: 'status' }],
 		['sse-label', 'span', {}],
@@ -380,6 +381,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		URL,
 		URLSearchParams,
 		fetch: jest.fn(async (url, options) => {
+			if (url.endsWith('/api/banner')) return response(environmentBanner);
 			if (url === '/admin/auth-config' && !firebase) return response({ enabled: false, configured: false });
 			return fetchImpl(url, options);
 		}),
@@ -10429,5 +10431,28 @@ describe('structured analysis forms', () => {
 		const viewText = browser.elementsById.view.textContent;
 		expect(viewText).toContain('News monitor paused');
 		expect(viewText).not.toContain('All configured services and delivery channels operating normally');
+	});
+});
+
+
+describe('admin environment banner', () => {
+	it('renders custom staging metadata and copies the selected API base without a query string', async () => {
+		const browser = createBrowser({
+			location: { search: '?backend=https%3A%2F%2Fopenclaw.tail5e4271.ts.net' },
+			environmentBanner: { environment: 'staging-eu', commit: null, name: 'bot' },
+			fetchImpl: async (url) => url.endsWith('/api/banner')
+				? response({ environment: 'staging-eu', commit: null, name: 'bot' })
+				: response({}),
+		});
+		await flush();
+		const host = browser.elementsById['environment-banner'];
+		expect(host.hidden).toBe(false);
+		expect(host.textContent).toContain('staging-eu');
+		expect(host.textContent).not.toContain('null');
+		const writeText = jest.fn().mockResolvedValue(undefined);
+		browser.context.navigator = { clipboard: { writeText } };
+		const button = find(host, (node) => node.tagName === 'BUTTON');
+		await button.dispatch('click');
+		expect(writeText).toHaveBeenCalledWith('https://openclaw.tail5e4271.ts.net');
 	});
 });

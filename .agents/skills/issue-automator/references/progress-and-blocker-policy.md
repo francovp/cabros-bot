@@ -17,3 +17,16 @@ In unclaimed mode, do not start parallel work on that item or remove another ses
 Preview exception proof is a compact gate record: PR head SHA; current local test and smoke results for that head; required CI statuses; mergeability and branch protection; issue criteria; paginated review threads and top-level comments; quiet-window result; preview URL, attempted recovery, and why exact-head preview is unavailable. `401/403` on a protected endpoint can establish liveness but cannot establish behavior or served SHA. Do not describe an unverified deployment as passed.
 
 Recent examples: [issue #626](https://github.com/francovp/cabros-bot/issues/626) had preview 502 **plus** failed CI, conflicts, and open review threads, so it was not preview-only. [issue #655](https://github.com/francovp/cabros-bot/issues/655) had a 502 and an unresolved scope thread. For [issue #805](https://github.com/francovp/cabros-bot/issues/805), choose a conservative retention policy that preserves durable duplicate prevention and keeps live order execution gated; stop only if no such choice satisfies the issue's criteria. [issue #709](https://github.com/francovp/cabros-bot/issues/709) recorded an undelivered WhatsApp attempt; that delivery failure is not itself a reason to stop other work.
+
+## Durable decision handoffs
+
+Use this compact record when reconciling a decision:
+
+- **Decision:** the selected safe default, or the recommended option when authority is still missing.
+- **Acceptance clarification:** exact behavior and any explicitly deferred scope; no claimed owner approval.
+- **Next action:** implementation on the canonical PR, dependency work, or the precise operator action.
+- **Remaining prerequisite:** `none (decision resolved)` or a concrete secret, billing approval, owner hold, CI, conflict, or review gate.
+
+An unavailable optional provider can be reported as unavailable; missing mandatory credentials remain a real prerequisite. Resolve ordinary design choices without another approval cycle. A technical CodeQL finding needs evidence and remediation/review, not an automatic human-only requirement or an automatic dismissal. Preserve explicit owner holds, branch protection, and live-trading controls. Read the existing record before posting and deduplicate by substantive evidence, not timestamps or claim comments.
+
+For an exhausted recurring queue, reassess at most three stale handoffs (72 hours since the last substantive assessment) per run. Rotate candidates by least-recently-audited, never-audited first, and persist every audit in automation memory even if unchanged. Exclude already-audited issues within this run. Unchanged genuine blockers get no duplicate comment/page. A fresh safe decision clears only its decision labels and returns the item to the normal implementation queue. An explicit all-issues decision request instead covers the finite assigned snapshot.

@@ -17,6 +17,7 @@ function fingerprint(value) {
 class AlertCoalescer {
 	constructor({ maxEntries = 10000, pendingMs = 180000 } = {}) {
 		this.entries = new Map();
+		this.detached = new Set();
 		this.maxEntries = maxEntries;
 		this.pendingMs = pendingMs;
 	}
@@ -28,7 +29,8 @@ class AlertCoalescer {
 			const entry = this.entries.get(key);
 			if (!entry) break;
 			if (entry.expiresAt <= arrivedAt) {
-				this.finish({ key, entry }, false);
+				this.entries.delete(key);
+				if (entry.pending) this.detached.add(entry);
 				continue;
 			}
 			if (entry.pending) {
@@ -39,20 +41,27 @@ class AlertCoalescer {
 						signal?.addEventListener('abort', onAbort, { once: true });
 					})]);
 					if (signal?.aborted) return null;
-					return delivered ? { originalRequestId: entry.requestId } : null;
+					if (delivered) return { originalRequestId: entry.requestId };
 				} finally {
 					signal?.removeEventListener('abort', onAbort);
 				}
+				continue;
 			}
 			this.entries.delete(key);
 			this.entries.set(key, entry);
 			return { originalRequestId: entry.requestId };
 		}
-		while (this.entries.size >= this.maxEntries) {
-			const oldest = this.entries.keys().next().value;
-			this.finish({ key: oldest, entry: this.entries.get(oldest) }, false);
+		while (this.entries.size + this.detached.size >= this.maxEntries) {
+			const oldDetached = this.detached.values().next().value;
+			if (oldDetached) this.finish({ key: oldDetached.key, entry: oldDetached }, false);
+			else {
+				const oldest = this.entries.keys().next().value;
+				const oldEntry = this.entries.get(oldest);
+				if (oldEntry.pending) this.finish({ key: oldest, entry: oldEntry }, false);
+				else this.entries.delete(oldest);
+			}
 		}
-		const entry = { requestId, pending: true, expiresAt: Date.now() + windowMs };
+		const entry = { key, requestId, pending: true, expiresAt: Date.now() + windowMs };
 		entry.done = new Promise(resolve => { entry.resolve = resolve; });
 		const token = { key, entry };
 		entry.timer = setTimeout(() => this.finish(token, false), this.pendingMs);
@@ -62,16 +71,19 @@ class AlertCoalescer {
 	}
 
 	finish(token, delivered) {
-		if (!token?.entry || this.entries.get(token.key) !== token.entry) return;
+		if (!token?.entry || !token.entry.pending) return;
 		const entry = token.entry;
 		clearTimeout(entry.timer);
 		entry.pending = false;
-		if (!delivered) this.entries.delete(token.key);
+		this.detached.delete(entry);
+		if (!delivered && this.entries.get(token.key) === entry) this.entries.delete(token.key);
 		entry.resolve(delivered);
 	}
 
 	reset() {
 		for (const [key, entry] of this.entries) this.finish({ key, entry }, false);
+		for (const entry of this.detached) this.finish({ key: entry.key, entry }, false);
+		this.entries.clear();
 	}
 }
 

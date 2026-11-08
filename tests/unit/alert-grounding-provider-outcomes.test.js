@@ -87,3 +87,24 @@ describe('alert provider outcome metadata', () => {
 		});
 	});
 });
+
+
+describe('Gemini-only environment footer', () => {
+	it('marks a preview result and preserves the footer opt-out', async () => {
+		const saved = { ...process.env };
+		try {
+			process.env.SENTRY_ENVIRONMENT = 'preview';
+			process.env.RENDER_GIT_COMMIT = 'abcdef1234567890';
+			getRuntimeConfig.mockReturnValue({ ENABLE_GEMINI_GROUNDING: true, ENABLE_MESSAGE_FOOTER_METADATA: true });
+			groundAlert.mockResolvedValue({ insights: ['Overnight market volume increased'], sources: [], modelUsed: 'gemini-test' });
+			const result = await enrichAlert({ text: 'macro news' });
+			expect(result.extraText).toContain('\\(env: preview @ abcdef12\\)');
+			getRuntimeConfig.mockReturnValue({ ENABLE_GEMINI_GROUNDING: true, ENABLE_MESSAGE_FOOTER_METADATA: false });
+			const disabled = await enrichAlert({ text: 'macro news' });
+			expect(disabled.extraText).toBe('');
+		} finally {
+			Object.keys(process.env).forEach(key => delete process.env[key]);
+			Object.assign(process.env, saved);
+		}
+	});
+});

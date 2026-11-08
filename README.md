@@ -155,6 +155,8 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | :--- | :--- | :--- | :--- |
 | `GET` | `/healthcheck` | Process liveness probe; `?deep=true` = channel readiness, `?depth=readiness` = dependency report (advisory, always 200) | [API Reference](docs/api-reference.md#get-healthcheck) |
 | `GET` | `/ready` | Bootstrap gate; `?depth=dependencies` adds a fail-closed dependency probe | [API Reference](docs/api-reference.md#get-ready) |
+| `GET` | `/livez` | Public web process liveness, no dependency I/O | [API Reference](docs/api-reference.md#get-livez-and-get-readyz) |
+| `GET` | `/readyz` | Public web bootstrap + drain + cached dependency readiness (200/503) | [API Reference](docs/api-reference.md#get-livez-and-get-readyz) |
 | `GET` | `/api/status` | System capabilities, deployment build metadata (`commit`, `full`, `repo`, `environment`, `uptimeSeconds`), and dependency matrix | [API Reference](docs/api-reference.md#get-apistatus) |
 | `GET` | `/api/public/status` | Safe public subset of capabilities & channel statuses | [API Reference](docs/api-reference.md#get-apipublicstatus) |
 | `POST` | `/api/webhook/alert` | Ingest and dispatch alert to configured channels | [Webhook Alerts](docs/webhooks.md#post-apiwebhookalert) |
@@ -852,7 +854,7 @@ Every protected `/api` response (success and throttled) carries the standard `X-
 | `X-RateLimit-Remaining` | Requests remaining in the current window. Zero on a throttled response. |
 | `X-RateLimit-Reset` | Unix timestamp (seconds) when the current window resets. |
 
-Dedicated limits use independent per-endpoint buckets keyed by the existing API-key hash and trusted client IP. Heavy routes are expanded analysis, market scanner, symbol analysis, and news monitor; trading covers Binance order reads, writes, and previews; standard covers volume-confirmation; light covers `/api/status` and `/api/capabilities`. All webhook and news-monitor ingest requests also share an aggregate 1,000-request bucket per `RATE_LIMIT_WINDOW_MS`; mapped webhook tiers enforce both limits. Alert and message ingest use the aggregate bucket without an additional tier. Other routes use `RATE_LIMIT_WINDOW_MS` and `RATE_LIMIT_MAX`. Throttled (`429`) responses include the `Retry-After` header and the positive `retryAfterSeconds` field in the standard retryable `RATE_LIMITED` error envelope. `/healthcheck`, `/ready`, `/openapi.json`, `/docs`, and static assets are mounted before the rate limiter in `app.js` and are exempt.
+Dedicated limits use independent per-endpoint buckets keyed by the existing API-key hash and trusted client IP. Heavy routes are expanded analysis, market scanner, symbol analysis, and news monitor; trading covers Binance order reads, writes, and previews; standard covers volume-confirmation; light covers `/api/status` and `/api/capabilities`. All webhook and news-monitor ingest requests also share an aggregate 1,000-request bucket per `RATE_LIMIT_WINDOW_MS`; mapped webhook tiers enforce both limits. Alert and message ingest use the aggregate bucket without an additional tier. Other routes use `RATE_LIMIT_WINDOW_MS` and `RATE_LIMIT_MAX`. Throttled (`429`) responses include the `Retry-After` header and the positive `retryAfterSeconds` field in the standard retryable `RATE_LIMITED` error envelope. `/healthcheck`, `/ready`, `/livez`, `/readyz`, `/openapi.json`, `/docs`, and static assets are mounted before the rate limiter in `app.js` and are exempt.
 
 ## Architecture Overview
 
@@ -913,6 +915,7 @@ All three are non-secret runtime tuning settings supported by Firebase Remote Co
 
 Protected Node.js process health endpoint. Requires admin API-key access or a Firebase ID token with the `admin.viewer` role. Reports memory bytes, cumulative CPU microseconds, event-loop lag in milliseconds, uptime in seconds, and Node.js/process metadata. Collection is lazy; no polling or sampling runs between requests.
 
+
 ### Exact webhook alert coalescing (#751)
 
 | Remote Config parameter | Environment/default fallback | Bounds | Purpose |
@@ -925,3 +928,13 @@ Fresh valid Remote Config values override environment/default values. Both setti
 Identical payloads with identical effective destinations wait for an in-flight original, then receive HTTP 200 `{ "success": true, "coalesced": true, "originalRequestId": "original-id", "requestId": "duplicate-id" }` only after every requested channel succeeds. Distinct routing, metadata or query options are distinct requests. Failed, partial, skipped or empty delivery releases the reservation so a retry can deliver; a partial retry may repeat an already successful channel. Duplicates skip enrichment, persistence and outcome recording. Dry-run, auto-trade, symbol/destination fanout, watchlist routing and asynchronous subscribers bypass coalescing. Expanded analysis and Telegram command limits retain their existing behavior.
 
 The cache retains only SHA-256 fingerprints and request IDs, is bounded to 10000 entries per process and evicts least-recently-used entries. Replicas do not share it; restarts, capacity eviction and 180-second pending expiry can allow duplicate delivery. Waiting requests honor their HTTP deadline or disconnect signal; expired waiters do not resume enrichment or delivery. No cross-replica exactly-once guarantee is provided.
+
+### Deployment environment banner
+
+`GET /api/banner` is a public read-only snapshot of `environment`, full `commit`, `name`, and nullable ISO 8601 `deployedAt` (host-provided commit date, never a deployment ID). Its environment resolver is shared with `/api/status`; it does not load provider readiness or credentials. Non-production `/admin` consoles display a sticky warning and a copy button for the selected backend origin.
+
+| Remote Config parameter | Environment/default fallback | Purpose |
+| --- | --- | --- |
+| `ENABLE_ENVIRONMENT_BANNER` | `true` | Emit optional `X-Cabros-Environment`, eight-character `X-Cabros-Commit` (when available), and `X-Cabros-Service` response headers. Rechecked on every request, including errors and healthchecks. |
+
+The template uses `useInAppDefault: true` to preserve deployment fallbacks until an explicit remote value is published. This non-secret display setting controls response headers; the public snapshot and console remain available when headers are disabled. Existing `ENABLE_MESSAGE_FOOTER_METADATA` independently controls alert footer metadata, including `(env: preview @ abcdef12)` in non-production environments. Production messages keep their current footer. Credentials, authentication, security controls, destinations, and startup gates remain environment-only.

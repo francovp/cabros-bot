@@ -6755,6 +6755,310 @@
           }
         ]
       }
+    },
+    "/api/banner": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Get deployment banner snapshot",
+        "description": "Returns the public, unauthenticated deployment banner snapshot. Mirrors the X-Cabros-* response headers (when ENABLE_ENVIRONMENT_BANNER is enabled). The endpoint is auth-free and exposes only environment/commit/name/deployedAt — never credentials or webhook secrets. Use it for external status pages and badge generators that cannot read response headers.",
+        "operationId": "getBanner",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Banner snapshot returned successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnvironmentBanner"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
+          "500": {
+            "description": "Internal server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
+      }
+    },
+    "/livez": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Get process liveness",
+        "description": "Public web liveness without dependency I/O. Ignores query parameters; remains 200 during drain. Existing /healthcheck is retained unchanged.",
+        "operationId": "getLiveness",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Alive",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status",
+                    "uptimeMs"
+                  ],
+                  "properties": {
+                    "status": {
+                      "const": "alive"
+                    },
+                    "uptimeMs": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                },
+                "example": {
+                  "status": "alive",
+                  "uptimeMs": 42500
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ExpressFallthroughError"
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Get web dependency readiness",
+        "description": "Public web-only probe combining bootstrap, current process drain and the existing cached dependency readiness verdict. At least one considered dependency must be healthy and all considered dependencies must be healthy; all skipped returns 503. Disabled dependencies are unconfigured. Preview/API-only bot disablement alone does not fail readiness. No provider errors or configuration are exposed. Query parameters are ignored. Deployment healthCheckPath and legacy /ready remain unchanged.",
+        "operationId": "getWebReadiness",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Ready",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status",
+                    "checks"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ready",
+                        "not_ready"
+                      ]
+                    },
+                    "checks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "name",
+                          "status"
+                        ],
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "enum": [
+                              "bootstrap",
+                              "processLifecycle",
+                              "dependencies",
+                              "firestore",
+                              "gemini",
+                              "tradingViewMcp",
+                              "binance",
+                              "telegram"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "ready",
+                              "unconfigured",
+                              "fail"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "status": "ready",
+                  "checks": [
+                    {
+                      "name": "bootstrap",
+                      "status": "ready"
+                    },
+                    {
+                      "name": "processLifecycle",
+                      "status": "ready"
+                    },
+                    {
+                      "name": "dependencies",
+                      "status": "ready"
+                    },
+                    {
+                      "name": "firestore",
+                      "status": "ready"
+                    },
+                    {
+                      "name": "gemini",
+                      "status": "unconfigured"
+                    },
+                    {
+                      "name": "tradingViewMcp",
+                      "status": "unconfigured"
+                    },
+                    {
+                      "name": "binance",
+                      "status": "unconfigured"
+                    },
+                    {
+                      "name": "telegram",
+                      "status": "unconfigured"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Bootstrap pending/failed, draining, dependency failure or no considered dependency.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "status",
+                    "checks"
+                  ],
+                  "properties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ready",
+                        "not_ready"
+                      ]
+                    },
+                    "checks": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": [
+                          "name",
+                          "status"
+                        ],
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "enum": [
+                              "bootstrap",
+                              "processLifecycle",
+                              "dependencies",
+                              "firestore",
+                              "gemini",
+                              "tradingViewMcp",
+                              "binance",
+                              "telegram"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "ready",
+                              "unconfigured",
+                              "fail"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "example": {
+                  "status": "not_ready",
+                  "checks": [
+                    {
+                      "name": "bootstrap",
+                      "status": "ready"
+                    },
+                    {
+                      "name": "processLifecycle",
+                      "status": "ready"
+                    },
+                    {
+                      "name": "dependencies",
+                      "status": "fail"
+                    },
+                    {
+                      "name": "firestore",
+                      "status": "fail"
+                    },
+                    {
+                      "name": "gemini",
+                      "status": "unconfigured"
+                    },
+                    {
+                      "name": "tradingViewMcp",
+                      "status": "unconfigured"
+                    },
+                    {
+                      "name": "binance",
+                      "status": "unconfigured"
+                    },
+                    {
+                      "name": "telegram",
+                      "status": "unconfigured"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ExpressFallthroughError"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -19404,6 +19708,9 @@
               },
               "priceQuoteCache": {
                 "$ref": "#/components/schemas/PriceQuoteCacheDependency"
+              },
+              "environmentBanner": {
+                "$ref": "#/components/schemas/EnvironmentBanner"
               }
             }
           }
@@ -23049,6 +23356,9 @@
           "priceQuoteCache": {
             "type": "boolean",
             "description": "Whether the process-local /precio quote cache is enabled."
+          },
+          "environmentBanner": {
+            "type": "boolean"
           }
         }
       },
@@ -23460,6 +23770,40 @@
               "null"
             ],
             "description": "Mirror of process.version (e.g. v24.18.0)."
+          }
+        }
+      },
+      "EnvironmentBanner": {
+        "type": "object",
+        "required": [
+          "environment",
+          "commit",
+          "name",
+          "deployedAt"
+        ],
+        "properties": {
+          "environment": {
+            "type": "string",
+            "description": "Active deployment environment (e.g. production, preview, development, staging)."
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Active deployment commit SHA. Null when the deployment host does not expose the SHA."
+          },
+          "name": {
+            "type": "string",
+            "description": "Service name from SERVICE_NAME or package.json."
+          },
+          "deployedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Host-provided commit timestamp, normalized to ISO 8601, or null when unavailable. Deployment IDs are not timestamps.",
+            "format": "date-time"
           }
         }
       }

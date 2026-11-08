@@ -26,6 +26,8 @@ const {
 	getTakeProfitTarget,
 	getRiskRewardRatio,
 } = require('./expandedAnalysisAlertReport');
+const { appendEnvironmentFooter } = require('../../lib/environmentBanner');
+
 const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
 const { hasConfluenceEvidence } = require('./confluenceEvidence');
 const remoteConfigService = require('../remoteConfig/RemoteConfigService');
@@ -2017,9 +2019,11 @@ class TradingViewMcpService {
 		}
 
 		const sentiment = sentimentScore > 0.15 ? 'BULLISH' : sentimentScore < -0.15 ? 'BEARISH' : 'NEUTRAL';
-		const extraText = getRuntimeConfig().ENABLE_MESSAGE_FOOTER_METADATA
-			? '*Grounding*: `tradingview-mcp`'
-			: '';
+		const extraText = appendEnvironmentFooter(
+			getRuntimeConfig().ENABLE_MESSAGE_FOOTER_METADATA
+				? '*Grounding*: `tradingview-mcp`'
+				: '',
+		);
 
 		return {
 			original_text: originalText,
