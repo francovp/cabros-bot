@@ -562,12 +562,11 @@ describe('SignalOutcomeDailyRollupService', () => {
 
 			let callCount = 0;
 			const mockWhere = {
-				where: jest.fn().mockReturnThis(),
 				startAfter: jest.fn((doc) => {
 					startAfterCalls.push(doc);
 					return mockWhere;
 				}),
-				limit: jest.fn().mockReturnThis(),
+				limit: jest.fn().mockImplementation(() => mockWhere),
 				get: jest.fn().mockImplementation(() => {
 					callCount++;
 					return Promise.resolve({
@@ -576,6 +575,7 @@ describe('SignalOutcomeDailyRollupService', () => {
 					});
 				}),
 			};
+			mockWhere.where = jest.fn().mockImplementation(() => mockWhere);
 
 			const mockFirestore = {
 				collection: (name) => {
