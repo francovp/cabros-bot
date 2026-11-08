@@ -30,6 +30,8 @@ Improve only skill assets unless the user explicitly requests a broader reposito
 - Use GitHub GraphQL `reviewThreads` as the authority for inline unresolved discussions. General PR comments are context, not actionable threads by themselves.
 - If a Codex comment begins `You have reached your Codex usage limits for code reviews`, run one focused self-review against the changed diff and acceptance criteria. Do not wait, retry quota checks, reset a quiet window, or request human review solely because of that comment.
 - Check issue, PR, branch, and Linear linkage before implementation. Reuse a matching open PR; if the work is already merged, synchronize trackers and stop instead of producing a parallel PR.
+- Deduplicate bot engagement and review comments across cron runs. Inspect existing comments and conversation history on the PR or issue before posting; skip posting if the agent (or automated run) has already commented on the thread.
+- Prioritize canonical PRs and skip duplicates or superseded work. Before reviewing or engaging, check whether the PR or issue has been marked as a duplicate or superseded by another PR (e.g. PR #1167 superseded by canonical PR #1176); direct engagement strictly to the canonical PR.
 - Require human review only for an unresolved concrete concern, missing authority, material risk that cannot be tested, or a repository rule that explicitly requires it. Keep normal CI, preview, and quiet-window gates intact.
 
 ### Reduce tokens and friction
@@ -60,6 +62,9 @@ Apply the smallest relevant improvement:
 | Evidence | Skill improvement |
 | --- | --- |
 | Parallel or duplicate PR | Add early issue/PR/Linear dedupe and a merged-work exit. |
+| Duplicate engagement comments on cron runs | Add comment existence check and conversation history inspection before posting. |
+| Engaging on duplicate or superseded PR | Check canonical PR references and skip superseded PRs. |
+| Missing negative Postman collection variants | Add explicit 400/401/409 variant verification in contract-alignment-review. |
 | CLI auth error | Add a capability preflight and a scoped fallback; never add secret logging. |
 | Quoting/parsing error | Add a body-file pattern or a tested helper script. |
 | Rate-limited Codex review | Add a bounded self-review fallback with explicit checks. |

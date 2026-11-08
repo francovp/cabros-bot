@@ -13,6 +13,7 @@ describe('process lifecycle coordinator', () => {
 		const bot = { stop: jest.fn().mockResolvedValue(undefined) };
 		const stopWorker = jest.fn().mockResolvedValue(undefined);
 		const stopNewsMonitorScheduler = jest.fn().mockResolvedValue(undefined);
+		const stopAlertScheduler = jest.fn().mockResolvedValue(undefined);
 		const shutdownNewsMonitor = jest.fn();
 		const flushSentry = jest.fn().mockResolvedValue(true);
 		const forceExit = jest.fn();
@@ -22,6 +23,7 @@ describe('process lifecycle coordinator', () => {
 			getBot: () => bot,
 			stopSignalOutcomeWorker: stopWorker,
 			stopNewsMonitorScheduler,
+			stopAlertScheduler,
 			shutdownNewsMonitor,
 			flushSentry,
 			timeoutMs: 100,
@@ -38,6 +40,7 @@ describe('process lifecycle coordinator', () => {
 		expect(server.close).toHaveBeenCalledTimes(1);
 		expect(stopWorker).toHaveBeenCalledWith({ drain: true });
 		expect(stopNewsMonitorScheduler).toHaveBeenCalledWith({ drain: true });
+		expect(stopAlertScheduler).toHaveBeenCalledWith({ drain: true });
 		expect(shutdownNewsMonitor).toHaveBeenCalledTimes(1);
 		expect(bot.stop).toHaveBeenCalledWith('SIGTERM');
 		expect(flushSentry).toHaveBeenCalledWith(100);
@@ -170,13 +173,52 @@ describe('process lifecycle coordinator', () => {
 
 		releasePolling();
 		await new Promise((resolve) => setImmediate(resolve));
-		expect(events.slice(0, 3)).toEqual(['server', 'bot', 'jobs']);
+		expect(events.slice(0, 5)).toEqual(['server', 'bot', 'worker', 'news', 'jobs']);
 		expect(events).not.toContain('sentry');
 
 		releaseJobs();
 		await shutdown;
 
-		expect(events).toEqual(['server', 'bot', 'jobs', 'worker', 'news', 'sentry', 'exit:0']);
+		expect(events).toEqual(['server', 'bot', 'worker', 'news', 'jobs', 'sentry', 'exit:0']);
+	});
+
+	it('stops the backlog monitor before tearing down Telegram', async () => {
+		const events = [];
+		const server = { close: jest.fn((callback) => callback()) };
+		const bot = { stop: jest.fn(async () => { events.push('bot'); }) };
+		let releaseMonitor;
+		const monitorDrain = new Promise((resolve) => { releaseMonitor = resolve; });
+		const forceExit = jest.fn();
+
+		const lifecycle = createProcessLifecycle({
+			getServer: () => server,
+			getBot: () => bot,
+			stopJobBacklogMonitor: async () => {
+				events.push('monitor:stop');
+				await monitorDrain;
+				events.push('monitor:drained');
+			},
+			flushSentry: jest.fn().mockResolvedValue(true),
+			timeoutMs: 5000,
+			forceExit,
+		});
+
+		const shutdown = lifecycle.handleSignal('SIGTERM');
+		await new Promise((resolve) => setImmediate(resolve));
+
+		// The monitor's timer is cleared in the same turn shutdown begins, before
+		// the bot is stopped. A probe armed during the shutdown window would page
+		// an operator through a bot that is already shutting down, so the stop must
+		// be initiated first rather than after the bot teardown is awaited.
+		expect(events).toEqual(['monitor:stop', 'bot']);
+
+		// The in-flight probe is still drained before cleanup completes.
+		releaseMonitor();
+		await shutdown;
+
+		expect(events).toEqual(['monitor:stop', 'bot', 'monitor:drained']);
+		expect(bot.stop).toHaveBeenCalledTimes(1);
+		expect(forceExit).toHaveBeenCalledWith(0);
 	});
 
 	it('waits for post-response persistence before flushing Sentry', async () => {
@@ -259,6 +301,64 @@ describe('process lifecycle coordinator', () => {
 		await shutdown;
 
 		expect(events).toEqual(['jobs', 'persistence']);
+		expect(forceExit).toHaveBeenCalledWith(0);
+	});
+
+	it('stops service timers before draining tasks and reports the bounded timer result', async () => {
+		const events = [];
+		let timerTimeoutMs;
+		const timerDrain = { registered: 2, drained: 1, failed: 1 };
+		const server = { close: jest.fn((callback) => { events.push('server'); callback(); }) };
+		const lifecycle = createProcessLifecycle({
+			getServer: () => server,
+			stopSignalOutcomeWorker: ({ drain }) => {
+				events.push('worker-stop');
+				expect(drain).toBe(true);
+			},
+			waitForBackgroundJobs: () => { events.push('jobs'); },
+			waitForBackgroundTasks: () => { events.push('tasks'); },
+			stopBackgroundTimers: ({ timeoutMs }) => {
+				events.push('timer-drain');
+				timerTimeoutMs = timeoutMs;
+				return timerDrain;
+			},
+			reportBackgroundTimerDrain: (stats) => {
+				events.push('timer-report');
+				expect(stats).toEqual(timerDrain);
+			},
+			flushSentry: () => { events.push('sentry-flush'); },
+			timeoutMs: 5000,
+			finalizationTimeoutMs: 4000,
+			forceExit: (code) => events.push(`exit:${code}`),
+		});
+
+		await lifecycle.handleSignal('SIGTERM');
+
+		expect(events.indexOf('worker-stop')).toBeLessThan(events.indexOf('jobs'));
+		expect(events.indexOf('jobs')).toBeLessThan(events.indexOf('tasks'));
+		expect(events.indexOf('tasks')).toBeLessThan(events.indexOf('timer-drain'));
+		expect(events.indexOf('timer-drain')).toBeLessThan(events.indexOf('timer-report'));
+		expect(events.indexOf('timer-report')).toBeLessThan(events.indexOf('sentry-flush'));
+		expect(timerTimeoutMs).toBe(2000);
+		expect(events).toContain('exit:0');
+	});
+
+	it('continues shutdown when the background timer registry fails', async () => {
+		const forceExit = jest.fn();
+		const flushSentry = jest.fn();
+		const reportBackgroundTimerDrain = jest.fn();
+		const lifecycle = createProcessLifecycle({
+			stopBackgroundTimers: jest.fn().mockRejectedValue(new Error('timer drain failed')),
+			reportBackgroundTimerDrain,
+			flushSentry,
+			forceExit,
+			logger: { info: jest.fn(), warn: jest.fn() },
+		});
+
+		await expect(lifecycle.handleSignal('SIGTERM')).resolves.toEqual({ timedOut: false });
+
+		expect(reportBackgroundTimerDrain).not.toHaveBeenCalled();
+		expect(flushSentry).toHaveBeenCalledTimes(1);
 		expect(forceExit).toHaveBeenCalledWith(0);
 	});
 });

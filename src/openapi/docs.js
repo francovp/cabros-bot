@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const swaggerUiDist = require('swagger-ui-dist');
@@ -9,6 +10,14 @@ const { getAdminAuthConfig } = require('../lib/adminAuth');
 const docsHtmlPath = path.join(__dirname, 'index.html');
 const initializerPath = path.join(__dirname, 'swagger-initializer.js');
 const adminDir = path.join(__dirname, '../admin');
+const repoRoot = path.join(__dirname, '..', '..');
+
+let runbookContent = '';
+try {
+	runbookContent = fs.readFileSync(path.join(repoRoot, 'RUNBOOK.md'), 'utf8');
+} catch {
+	runbookContent = '# Cabros Bot Operator Runbook\n\nRunbook unavailable.\n';
+}
 
 function getOpenApiDocsRouter() {
 	const router = express.Router();
@@ -44,11 +53,11 @@ function getOpenApiDocsRouter() {
 
 	// Public, unauthenticated operator runbook so the admin console sidebar
 	// link (`/RUNBOOK.md`) resolves without API-key auth. The runbook is
-	// designed to be reachable from inside a paging flow.
-	const repoRoot = path.join(__dirname, '..', '..');
+	// loaded into memory at startup to serve without per-request disk I/O.
 	router.get('/RUNBOOK.md', (req, res) => {
 		res.set('Cache-Control', 'no-cache');
-		return res.sendFile(path.join(repoRoot, 'RUNBOOK.md'));
+		res.type('text/markdown');
+		return res.send(runbookContent);
 	});
 
 	return router;

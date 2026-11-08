@@ -50,6 +50,9 @@ function parseArgs(argv = process.argv.slice(2)) {
 		noOpReasons: {},
 		logFile: DEFAULT_LOG_FILE,
 		checkDrift: false,
+		checkWorkerParity: false,
+		exitOnDrift: false,
+		strict: false,
 		json: false,
 		help: false,
 	};
@@ -66,6 +69,14 @@ function parseArgs(argv = process.argv.slice(2)) {
 			i++;
 		} else if (arg === '--diff' || arg === '--check-drift') {
 			args.checkDrift = true;
+			i++;
+		} else if (arg === '--check-worker-parity') {
+			args.checkWorkerParity = true;
+			i++;
+		} else if (arg === '--exit-on-drift' || arg === '--strict') {
+			args.checkDrift = true;
+			args.exitOnDrift = true;
+			args.strict = true;
 			i++;
 		} else if (arg === '--apply' || arg === '--record-log') {
 			args.apply = true;
@@ -332,6 +343,102 @@ function checkEnvironmentDrift(repoRoot = path.join(__dirname, '..')) {
 	};
 }
 
+const JOB_EXECUTION_MIRRORED_KEYS = Object.freeze([
+	'TRADINGVIEW_MCP_DEFAULT_EXCHANGE',
+	'MARKET_SCANNER_DEFAULT_EXCHANGE',
+	'EXPANDED_ANALYSIS_ALERT_SYMBOLS',
+	'ZERO_CHANNEL_ALERT_COOLDOWN_MS',
+	'ENABLE_API_ONLY_MODE',
+	'FIREBASE_REMOTE_CONFIG_REFRESH_INTERVAL_MS',
+	'FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS',
+	'FIREBASE_REMOTE_CONFIG_MAX_AGE_MS',
+	'ENABLE_NOTIFICATION_REDRIVE',
+	'NOTIFICATION_REDRIVE_INTERVAL_MS',
+	'NOTIFICATION_REDRIVE_BATCH_LIMIT',
+	'NOTIFICATION_REDRIVE_MAX_ATTEMPTS',
+	'NOTIFICATION_REDRIVE_MAX_AGE_MS',
+]);
+
+/**
+ * Checks that all job-execution environment variables declared on the web service
+ * are mirrored to the jobs worker in render.yaml (#855).
+ * @param {string} repoRoot
+ * @returns {{valid: boolean, webDeclaredKeys: string[], mirroredKeys: string[], missingKeys: string[]}}
+ */
+function checkJobWorkerParity(repoRoot = path.join(__dirname, '..')) {
+	const blueprintPath = path.join(repoRoot, 'render.yaml');
+	if (!fs.existsSync(blueprintPath)) {
+		throw new Error(`render.yaml not found at ${blueprintPath}`);
+	}
+
+	const content = fs.readFileSync(blueprintPath, 'utf8').replace(/\r\n/g, '\n');
+
+	function extractServiceBlock(name) {
+		const start = content.indexOf(`  name: ${name}\n`);
+		if (start === -1) return '';
+		const next = content.indexOf('\n- type: ', start);
+		return next === -1 ? content.slice(start) : content.slice(start, next);
+	}
+
+	const webBlock = extractServiceBlock('cabros-crypto-bot-telegram-iac');
+	const workerBlock = extractServiceBlock('cabros-crypto-bot-telegram-worker');
+
+	if (!webBlock) {
+		throw new Error('Service cabros-crypto-bot-telegram-iac not found in render.yaml');
+	}
+	if (!workerBlock) {
+		throw new Error('Service cabros-crypto-bot-telegram-worker not found in render.yaml');
+	}
+
+	const webKeys = new Set();
+	const webKeyMatches = webBlock.matchAll(/- key:\s*([A-Za-z0-9_]+)/g);
+	for (const match of webKeyMatches) {
+		webKeys.add(match[1]);
+	}
+
+	const workerMirrors = new Set();
+	const workerLines = workerBlock.split('\n');
+	for (let idx = 0; idx < workerLines.length; idx++) {
+		const line = workerLines[idx];
+		const keyMatch = line.match(/- key:\s*([A-Za-z0-9_]+)/);
+		if (keyMatch) {
+			const key = keyMatch[1];
+			const nextChunk = workerLines.slice(idx + 1, idx + 6).join('\n');
+			if (
+				nextChunk.includes('fromService:') &&
+				nextChunk.includes('name: cabros-crypto-bot-telegram-iac') &&
+				nextChunk.includes(`envVarKey: ${key}`)
+			) {
+				workerMirrors.add(key);
+			}
+		}
+	}
+
+	const webDeclaredKeys = [];
+	const mirroredKeys = [];
+	const missingKeys = [];
+
+	for (const key of JOB_EXECUTION_MIRRORED_KEYS) {
+		if (webKeys.has(key)) {
+			webDeclaredKeys.push(key);
+			if (workerMirrors.has(key)) {
+				mirroredKeys.push(key);
+			} else {
+				missingKeys.push(key);
+			}
+		}
+	}
+
+	const valid = webDeclaredKeys.length > 0 && missingKeys.length === 0;
+
+	return {
+		valid,
+		webDeclaredKeys: webDeclaredKeys.sort(),
+		mirroredKeys: mirroredKeys.sort(),
+		missingKeys: missingKeys.sort(),
+	};
+}
+
 /**
  * CLI Main execution
  */
@@ -347,6 +454,7 @@ Usage:
   node scripts/sync-production-env.js --key <VAR_NAME> [options]
   node scripts/sync-production-env.js <VAR_NAME> [options]
   node scripts/sync-production-env.js --check-drift
+  node scripts/sync-production-env.js --check-worker-parity
 
 Options:
   --key, -k <NAME>       Variable name to synchronize (required for sync plan)
@@ -359,17 +467,44 @@ Options:
   --no-op-reason <p=r>   Reason for no-op (e.g. --no-op-reason vercel="Web-only host")
   --log-file <path>      Path to local sync log (default: .env-sync.log)
   --check-drift, --diff  Diff .env.example against platform deployment definitions
+  --check-worker-parity  Validate job worker environment mirrors against web service
+  --exit-on-drift       When used with --check-drift, exit non-zero (2) if any unmanaged keys are found. Implies --check-drift.
+  --strict              Synonym for --exit-on-drift
   --json                 Output results as JSON
   --help, -h             Show this help message
 
 Security Rules:
   - NEVER pass variable values on argv (e.g. --key FOO=bar is strictly rejected).
   - Secrets must be entered interactively or through platform dashboard/CLI secret prompts.
+
+Exit codes:
+  0  Plan generated, drift inspection clean, or audit record written
+  1  CLI validation failure (unknown flag, missing value, etc.)
+  2  Drift inspection failed under --exit-on-drift / --strict
 `);
 			process.exit(0);
 		}
 
 		const repoRoot = path.resolve(__dirname, '..');
+
+		if (args.checkWorkerParity) {
+			const parity = checkJobWorkerParity(repoRoot);
+			if (args.json) {
+				console.log(JSON.stringify(parity, null, 2));
+			} else {
+				console.log('\n=== Job Worker Blueprint Parity (#855) ===\n');
+				console.log(`Job-execution keys declared on web: ${parity.webDeclaredKeys.length}`);
+				console.log(`Mirrored on worker: ${parity.mirroredKeys.length}`);
+				console.log(`Missing on worker: ${parity.missingKeys.length}\n`);
+				if (parity.missingKeys.length > 0) {
+					console.error('Missing on jobs worker:');
+					parity.missingKeys.forEach((k) => console.error(`  - ${k}`));
+				} else {
+					console.log('✓ All job-execution controls declared on web are mirrored on the jobs worker.');
+				}
+			}
+			process.exit(parity.valid ? 0 : 1);
+		}
 
 		if (args.checkDrift) {
 			const drift = checkEnvironmentDrift(repoRoot);
@@ -384,6 +519,12 @@ Security Rules:
 					console.log('Unmanaged in blueprint:');
 					drift.unmanagedKeys.forEach((k) => console.log(`  - ${k}`));
 				}
+			}
+			if (args.exitOnDrift && drift.unmanagedKeys.length > 0) {
+				console.error(
+					`\n✗ Drift detected: ${drift.unmanagedKeys.length} unmanaged key(s) in .env.example. Failing because --exit-on-drift / --strict was set.`
+				);
+				process.exit(2);
 			}
 			process.exit(0);
 		}
@@ -492,4 +633,6 @@ module.exports = {
 	generateSyncPlan,
 	recordSyncLog,
 	checkEnvironmentDrift,
+	checkJobWorkerParity,
+	JOB_EXECUTION_MIRRORED_KEYS,
 };

@@ -39,12 +39,13 @@ export interface EnrichedAlert {
   sentiment: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   sentiment_score: number;
   sentiment_score_raw?: number;
+  sentiment_score_evidence?: string;
   current_price?: number | null;
   price_data?: PriceData | null;
   insights: string[];
   promptProvenance?: PromptProvenance;
   technical_levels?: TechnicalLevels;
-  levelsSource?: 'gemini-grounding';
+  levelsSource?: 'gemini-grounding' | 'fallback-trade-plan' | 'derived-quote';
   invalidation_level?: string | number;
   target_level?: string | number;
   setup_type?: 'breakout' | 'mean_reversion' | 'trend_continuation' | 'reversal';

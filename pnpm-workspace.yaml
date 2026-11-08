@@ -1,4 +1,8 @@
 allowBuilds:
   '@firebase/util': true
+  '@scarf/scarf': false
+  '@sentry/node-cpu-profiler': false
+  msgpackr-extract: false
   protobufjs: true
+  re2: false
   unrs-resolver: true
