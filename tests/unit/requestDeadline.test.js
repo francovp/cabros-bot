@@ -34,9 +34,9 @@ describe('Request Deadline Middleware (unit)', () => {
 		expect(res.getHeader('X-Request-Id')).toBeUndefined();
 	});
 
-	test('exempts /ready, /openapi.json, /docs by default', () => {
+	test('exempts readiness, liveness and documentation paths by default', () => {
 		process.env.REQUEST_TIMEOUT_MS = '5000';
-		for (const path of ['/ready', '/openapi.json', '/docs']) {
+		for (const path of ['/ready', '/livez', '/readyz', '/openapi.json', '/docs']) {
 			const req = httpMocks.createRequest({ method: 'GET', url: path });
 			const res = httpMocks.createResponse();
 			const next = jest.fn();
@@ -44,6 +44,43 @@ describe('Request Deadline Middleware (unit)', () => {
 			expect(next).toHaveBeenCalled();
 			expect(res.getHeader('X-Request-Id')).toBeUndefined();
 		}
+	});
+
+	test('stamps req.startTime and req.requestContext when none is provided', () => {
+		process.env.REQUEST_TIMEOUT_MS = '5000';
+		const before = Date.now();
+		const req = httpMocks.createRequest({ method: 'POST', url: '/api/webhook/alert' });
+		const res = httpMocks.createResponse();
+		const next = jest.fn();
+		requestDeadline(req, res, next);
+		const after = Date.now();
+
+		expect(next).toHaveBeenCalled();
+		expect(typeof req.startTime).toBe('number');
+		expect(req.startTime).toBeGreaterThanOrEqual(before);
+		expect(req.startTime).toBeLessThanOrEqual(after);
+		expect(req.requestContext).toEqual({
+			requestId: req.requestId,
+			startTime: req.startTime,
+		});
+	});
+
+	test('preserves upstream req.startTime in req.requestContext and deadline', () => {
+		process.env.REQUEST_TIMEOUT_MS = '5000';
+		const explicitStartTime = Date.now() - 1000;
+		const req = httpMocks.createRequest({ method: 'POST', url: '/api/webhook/alert' });
+		req.startTime = explicitStartTime;
+		const res = httpMocks.createResponse();
+		const next = jest.fn();
+		requestDeadline(req, res, next);
+
+		expect(next).toHaveBeenCalled();
+		expect(req.startTime).toBe(explicitStartTime);
+		expect(req.requestContext).toEqual({
+			requestId: req.requestId,
+			startTime: explicitStartTime,
+		});
+		expect(req.requestDeadlineAt).toBe(explicitStartTime + 5000);
 	});
 
 	test('reuses req.requestId stamped upstream and exposes X-Request-Id', () => {
@@ -56,6 +93,8 @@ describe('Request Deadline Middleware (unit)', () => {
 		expect(next).toHaveBeenCalled();
 		expect(req.requestId).toBe('preset-request-id');
 		expect(res.getHeader('X-Request-Id')).toBe('preset-request-id');
+		expect(req.requestDeadlineAt).toBeGreaterThanOrEqual(Date.now());
+		expect(req.requestDeadlineAt - Date.now()).toBeLessThanOrEqual(5000);
 	});
 
 	test('mints a request id when none is provided', () => {
@@ -92,6 +131,36 @@ describe('Request Deadline Middleware (unit)', () => {
 		requestDeadline(req, res, next);
 		expect(next).toHaveBeenCalled();
 		expect(res.getHeader('X-Request-Id')).toBeUndefined();
+	});
+
+	test('normalizes a trailing slash in a configured exempt path', () => {
+		// The request normalizer strips trailing slashes, so the configured value
+		// must be normalized identically or the entry silently exempts nothing.
+		process.env.REQUEST_DEADLINE_EXEMPT_PATHS = '/api/exempt/';
+		const { isExemptPath, resolveExemptPaths } = requestDeadline;
+		const exemptPaths = resolveExemptPaths();
+
+		expect(exemptPaths.has('/api/exempt')).toBe(true);
+		expect(isExemptPath('/api/exempt', exemptPaths)).toBe(true);
+		expect(isExemptPath('/api/exempt/', exemptPaths)).toBe(true);
+	});
+
+	test('treats /docs as a subtree so its assets are exempt too', () => {
+		// Swagger UI pulls css/js from the same router; exact set membership
+		// exempted none of them.
+		const { isExemptPath, resolveExemptPaths } = requestDeadline;
+		const exemptPaths = resolveExemptPaths();
+
+		for (const path of [
+			'/docs',
+			'/docs/swagger-ui.css',
+			'/docs/swagger-ui-bundle.js',
+			'/docs/swagger-ui-standalone-preset.js',
+			'/docs/swagger-initializer.js',
+		]) {
+			expect(isExemptPath(path, exemptPaths)).toBe(true);
+		}
+		expect(isExemptPath('/api/alerts', exemptPaths)).toBe(false);
 	});
 
 	test('exposes documented bounds via constants export', () => {

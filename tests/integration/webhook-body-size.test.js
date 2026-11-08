@@ -151,6 +151,7 @@ describe('POST /api/webhook/* - Webhook body size limits', () => {
 		app.post('/api/webhook/test', (req, res) => res.status(200).json({ body: req.body }));
 		const response = await request(app)
 			.post('/api/webhook/test')
+			.set('x-request-id', 'req-body-size-001')
 			.set('Content-Type', 'application/json')
 			.send({ text: 'W'.repeat(2048) });
 
@@ -159,7 +160,9 @@ describe('POST /api/webhook/* - Webhook body size limits', () => {
 			success: false,
 			error: 'PAYLOAD_TOO_LARGE',
 			limit: '1kb',
+			requestId: 'req-body-size-001',
 		}));
+		expect(response.headers['x-request-id']).toBe('req-body-size-001');
 	});
 
 	it('preserves CORS headers on structured 413 responses', async () => {

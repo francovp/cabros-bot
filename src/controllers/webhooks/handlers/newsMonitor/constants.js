@@ -19,7 +19,15 @@ const AnalysisStatus = {
 	THROTTLED: 'throttled',
 };
 
+const ALLOWED_EVENT_CATEGORIES = [
+	EventCategory.PRICE_SURGE,
+	EventCategory.PRICE_DECLINE,
+	EventCategory.PUBLIC_FIGURE,
+	EventCategory.REGULATORY,
+];
+
 module.exports = {
 	EventCategory,
 	AnalysisStatus,
+	ALLOWED_EVENT_CATEGORIES,
 };

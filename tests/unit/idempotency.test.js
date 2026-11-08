@@ -565,6 +565,38 @@ describe('Idempotency Service & Middleware', () => {
 			expect(record).toBeNull();
 		});
 
+		test('should NOT cache transient rate-limit responses with status code 429 and should release reservation', async () => {
+			const key = 'transient-rate-limit-key';
+			req.headers['idempotency-key'] = key;
+
+			await idempotencyMiddleware(req, res, next);
+			res.status(429).json({ error: 'Too Many Requests', code: 'RATE_LIMITED' });
+
+			// Check that key is not in cache
+			const record = await idempotencyService.get(key, {
+				method: req.method,
+				path: req.url,
+				body: req.body,
+				query: req.query || {},
+			});
+			expect(record).toBeNull();
+
+			// Subsequent request with the same key should be treated as fresh (not waiting/pending/completed)
+			const req2 = httpMocks.createRequest({
+				method: 'POST',
+				url: '/api/webhook/alert',
+				headers: { 'idempotency-key': key },
+				body: { text: 'test alert' },
+			});
+			const res2 = httpMocks.createResponse();
+			const next2 = jest.fn();
+
+			await idempotencyMiddleware(req2, res2, next2);
+			expect(next2).toHaveBeenCalledTimes(1);
+			expect(res2.getHeader('Idempotency-Replay')).toBe('false');
+		});
+
+
 		test('should cache successful error responses with status code < 500 (e.g. 400)', async () => {
 			const key = 'client-error-key';
 			req.headers['idempotency-key'] = key;
@@ -638,7 +670,12 @@ describe('Idempotency Service & Middleware', () => {
 
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2.statusCode).toBe(409);
+			// The middleware now emits the standard error envelope, which adds
+			// success/retryable/requestId on top of the original {error, code}.
 			expect(JSON.parse(res2._getData())).toEqual({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
 				error: 'Idempotency key was reused with a different payload',
 				code: 'IDEMPOTENCY_CONFLICT',
 			});
@@ -666,7 +703,12 @@ describe('Idempotency Service & Middleware', () => {
 
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2.statusCode).toBe(409);
+			// The middleware now emits the standard error envelope, which adds
+			// success/retryable/requestId on top of the original {error, code}.
 			expect(JSON.parse(res2._getData())).toEqual({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
 				error: 'Idempotency key was reused with a different payload',
 				code: 'IDEMPOTENCY_CONFLICT',
 			});
@@ -694,6 +736,9 @@ describe('Idempotency Service & Middleware', () => {
 				expect(next2).not.toHaveBeenCalled();
 				expect(res2.statusCode).toBe(429);
 				expect(JSON.parse(res2._getData())).toEqual({
+					success: false,
+					retryable: true,
+					requestId: expect.any(String),
 					error: 'Server is currently processing too many requests with idempotency keys',
 					code: 'IDEMPOTENCY_LIMIT_EXCEEDED',
 				});
@@ -808,7 +853,12 @@ describe('Idempotency Service & Middleware', () => {
 
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2.statusCode).toBe(409);
+			// The middleware now emits the standard error envelope, which adds
+			// success/retryable/requestId on top of the original {error, code}.
 			expect(JSON.parse(res2._getData())).toEqual({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
 				error: 'Idempotency key was reused with a different payload',
 				code: 'IDEMPOTENCY_CONFLICT',
 			});
@@ -837,7 +887,12 @@ describe('Idempotency Service & Middleware', () => {
 
 			expect(next2).not.toHaveBeenCalled();
 			expect(res2.statusCode).toBe(409);
+			// The middleware now emits the standard error envelope, which adds
+			// success/retryable/requestId on top of the original {error, code}.
 			expect(JSON.parse(res2._getData())).toEqual({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
 				error: 'Idempotency key was reused with a different payload',
 				code: 'IDEMPOTENCY_CONFLICT',
 			});

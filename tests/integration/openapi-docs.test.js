@@ -1,4 +1,5 @@
 const request = require('supertest');
+const { saveEnv, restoreEnv } = global;
 
 describe('public OpenAPI documentation', () => {
 	let app;
@@ -20,11 +21,39 @@ describe('public OpenAPI documentation', () => {
 		expect(response.status).toBe(200);
 		expect(response.headers['content-type']).toMatch(/application\/json/);
 		expect(response.body.openapi).toMatch(/^3\./);
-		expect(response.body.components.securitySchemes.ApiKeyHeader).toEqual({
+		expect(response.body.components.securitySchemes.ApiKeyHeader).toEqual(expect.objectContaining({
 			type: 'apiKey',
 			in: 'header',
 			name: 'x-api-key',
-		});
+		}));
+		expect(response.body.components.securitySchemes.AdminApiKeyHeader).toEqual(expect.objectContaining({
+			type: 'apiKey',
+			in: 'header',
+			name: 'x-api-key',
+		}));
+		expect(response.body.components.securitySchemes.BinanceTradingApiKeyHeader).toEqual(expect.objectContaining({
+			type: 'apiKey',
+			in: 'header',
+			name: 'x-api-key',
+		}));
+		expect(response.body.components.securitySchemes.ApiKeyHeader.description).toContain(
+			'Admin routes accept it only when ADMIN_API_KEY is unset',
+		);
+		expect(response.body.components.securitySchemes.ApiKeyQuery.description).toContain(
+			'BINANCE_TRADING_API_KEY is unset and the admin-auth fallback also accepts the query',
+		);
+		const binanceOperations = Object.entries(response.body.paths)
+			.filter(([path]) => path.startsWith('/api/trading/binance/'))
+			.flatMap(([, pathItem]) => Object.values(pathItem).filter((operation) => operation.operationId));
+		expect(binanceOperations.length).toBeGreaterThan(0);
+		for (const operation of binanceOperations) {
+			expect(operation.description).toContain(
+				'when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted',
+			);
+			expect(operation.description).toContain(
+				'accepts Firebase bearer tokens when enabled',
+			);
+		}
 		expect(response.text).not.toContain(process.env.WEBHOOK_API_KEY);
 	});
 
@@ -60,10 +89,10 @@ describe('public OpenAPI documentation', () => {
 		const page = await request(app).get('/admin');
 		const policy = page.headers['content-security-policy'];
 
-		expect(policy).toContain("script-src 'self' https://www.gstatic.com");
+		expect(policy).toContain('script-src \'self\' https://www.gstatic.com');
 		expect(policy).toContain('https://identitytoolkit.googleapis.com');
 		expect(policy).toContain('https://securetoken.googleapis.com');
-		expect(policy).not.toContain("script-src 'self' https:;");
+		expect(policy).not.toContain('script-src \'self\' https:;');
 	});
 
 	it('keeps the admin client contract-driven without exposing the configured API key', async () => {
@@ -73,6 +102,31 @@ describe('public OpenAPI documentation', () => {
 		expect(client.text).toContain('fetchWithTimeout(`${prefix}/openapi.json`');
 		expect(client.text).toContain('CONTRACT_TIMEOUT_MS');
 		expect(client.text).not.toContain(process.env.WEBHOOK_API_KEY);
+	});
+
+	describe('hosting asset sync', () => {
+		const fs = require('fs');
+		const path = require('path');
+
+		// Compares the source asset with its generated copy in memory. It must
+		// NOT call buildHosting(): the copier writes into the worktree, and the
+		// clean-worktree invariant forbids a test from mutating tracked files.
+		const ASSETS = ['admin.js', 'admin.css', 'admin-request.js', 'admin-components.js', 'index.html'];
+
+		it.each(ASSETS)('public/admin/%s matches its src/admin source byte for byte', (file) => {
+			const source = fs.readFileSync(path.join(__dirname, '../../src/admin', file));
+			const built = fs.readFileSync(path.join(__dirname, '../../public/admin', file));
+
+			expect(built.equals(source)).toBe(true);
+		});
+
+		it('serves the same bytes that the source asset declares', async () => {
+			const served = await request(app).get('/admin/admin.js');
+			const source = fs.readFileSync(path.join(__dirname, '../../src/admin/admin.js'), 'utf8');
+
+			expect(served.status).toBe(200);
+			expect(served.text).toBe(source);
+		});
 	});
 
 	describe('rate limit exemption', () => {

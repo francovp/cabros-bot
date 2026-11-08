@@ -129,3 +129,10 @@ docs/antigravity/
 
 docs/superpowers/
 .omo/
+
+# Local browser verification artifacts
+.playwright-cli/
+output/playwright/
+
+# Backlog hygiene report artifact
+backlog-report.md
