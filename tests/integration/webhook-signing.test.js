@@ -59,11 +59,11 @@ describe('webhook request signing', () => {
 			.expect(200);
 
 		expect(res.body).toEqual(expect.objectContaining({ success: true, decision: 'confirm' }));
-		expect(tradingViewMcpService.callVolumeConfirmation).toHaveBeenCalledWith({
+		expect(tradingViewMcpService.callVolumeConfirmation).toHaveBeenCalledWith(expect.objectContaining({
 			symbol: 'BTCUSDT',
 			exchange: 'BINANCE',
 			timeframe: '1h',
-		});
+		}));
 	});
 
 	it('rejects an unsigned webhook before invoking its handler', async () => {

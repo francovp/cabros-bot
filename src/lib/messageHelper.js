@@ -73,7 +73,36 @@ function splitMessageIntoChunks(text, maxChars = 20000) {
 	return chunks;
 }
 
+const CHANNEL_CHUNK_LIMITS = Object.freeze({
+	telegram: 1,
+	whatsapp: 20000,
+	discord: 2000,
+});
+
+/**
+ * Estimate per-channel chunk count for a given message text.
+ * @param {string} text - Message text
+ * @returns {{ telegram: number, whatsapp: number, discord: number }} Per-channel chunk counts
+ */
+function estimateMessageChunks(text) {
+	if (!text || typeof text !== 'string') {
+		return {
+			telegram: 1,
+			whatsapp: 1,
+			discord: 1,
+		};
+	}
+
+	return {
+		telegram: 1,
+		whatsapp: splitMessageIntoChunks(text, CHANNEL_CHUNK_LIMITS.whatsapp).length,
+		discord: splitMessageIntoChunks(text, CHANNEL_CHUNK_LIMITS.discord).length,
+	};
+}
+
 module.exports = {
 	truncateMessage,
 	splitMessageIntoChunks,
+	estimateMessageChunks,
+	CHANNEL_CHUNK_LIMITS,
 };

@@ -1,0 +1,425 @@
+'use strict';
+
+const { TradeLedgerService, buildFillRecords } = require('../../src/services/trading/TradeLedgerService');
+const { FirestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
+
+const ORDER = {
+	symbol: 'BTCUSDT',
+	orderId: 123,
+	clientOrderId: 'cid-1',
+	side: 'BUY',
+	transactTime: Date.parse('2026-10-01T00:00:00.000Z'),
+	fills: [
+		{ price: '100', qty: '0.6', commission: '0.06', commissionAsset: 'USDT', tradeId: 11 },
+		{ price: '101', qty: '0.4', commission: '0.0004', commissionAsset: 'BTC', tradeId: 12 },
+		{ price: '101', qty: '0.1', commission: '0.00001', commissionAsset: 'BNB', tradeId: 13 },
+	],
+};
+
+function createFirestoreMock({ createImpl } = {}) {
+	const docs = new Map();
+	const create = jest.fn(createImpl || (async function create(id, data) {
+		if (docs.has(id)) {
+			const err = new Error('already exists');
+			err.code = 6;
+			throw err;
+		}
+		docs.set(id, data);
+	}));
+	const queryState = {};
+	const query = {
+		where: jest.fn((field, op, value) => { queryState.where = [field, op, value]; return query; }),
+		orderBy: jest.fn((field, dir) => { queryState.orderBy = [field, dir]; return query; }),
+		limit: jest.fn((n) => { queryState.limit = n; return query; }),
+		startAfter: jest.fn((doc) => { queryState.startAfter = doc; return query; }),
+		get: jest.fn(async () => {
+			const [, , env] = queryState.where || [];
+			let rows = [...docs.values()]
+				.filter((d) => d.environment === env)
+				.sort((a, b) => a.filledAt.localeCompare(b.filledAt));
+			if (queryState.startAfter) {
+				const afterData = typeof queryState.startAfter.data === 'function' ? queryState.startAfter.data() : queryState.startAfter;
+				const afterId = queryState.startAfter.id;
+				const idx = rows.findIndex((r) => (afterId && `${r.environment}:${r.symbol}:${r.tradeId}` === afterId) || (afterData && r.tradeId === afterData.tradeId));
+				if (idx >= 0) {
+					rows = rows.slice(idx + 1);
+				}
+			}
+			if (queryState.limit !== undefined) {
+				rows = rows.slice(0, queryState.limit);
+			}
+			return { docs: rows.map((d) => ({ id: `${d.environment}:${d.symbol}:${d.tradeId}`, data: () => d })) };
+		}),
+	};
+	return {
+		docs,
+		queryState,
+		create,
+		firestore: {
+			collection: jest.fn(() => ({
+				doc: jest.fn((id) => ({ create: (data) => create(id, data) })),
+				...query,
+			})),
+		},
+	};
+}
+
+describe('buildFillRecords', () => {
+	it('normalizes FULL order fills into idempotent ledger records', () => {
+		const records = buildFillRecords({ environment: 'testnet', order: ORDER, origin: 'manual', alertId: null });
+		expect(records.map((r) => r.id)).toEqual(['testnet:BTCUSDT:11', 'testnet:BTCUSDT:12', 'testnet:BTCUSDT:13']);
+		const [quoteFee, baseFee, bnbFee] = records.map((r) => r.data);
+		expect(quoteFee).toMatchObject({
+			environment: 'testnet',
+			symbol: 'BTCUSDT',
+			baseAsset: 'BTC',
+			quoteAsset: 'USDT',
+			side: 'BUY',
+			price: '100',
+			qty: '0.6',
+			quoteQty: '60',
+			commission: '0.06',
+			commissionAsset: 'USDT',
+			commissionQuote: '0.06',
+			binanceOrderId: '123',
+			clientOrderId: 'cid-1',
+			alertId: null,
+			origin: 'manual',
+			tradeId: 11,
+			filledAt: '2026-10-01T00:00:00.000Z',
+		});
+		expect(baseFee.commissionQuote).toBe('0.0404');
+		expect(bnbFee.commissionQuote).toBeNull();
+		for (const { data } of records) {
+			expect(Object.values(data)).not.toContain(undefined);
+		}
+	});
+
+	it('returns no records for dry runs or orders without fills', () => {
+		expect(buildFillRecords({ environment: 'testnet', order: { symbol: 'BTCUSDT', side: 'BUY' } })).toEqual([]);
+		expect(buildFillRecords({ environment: 'testnet', order: null })).toEqual([]);
+	});
+
+	it('coerces unknown origins to manual', () => {
+		const [record] = buildFillRecords({ environment: 'live', order: ORDER, origin: 'hacker' });
+		expect(record.data.origin).toBe('manual');
+	});
+
+	it('preserves documented origin alert and setupType', () => {
+		const [record] = buildFillRecords({ environment: 'live', order: ORDER, origin: 'alert', setupType: 'breakout' });
+		expect(record.data.origin).toBe('alert');
+		expect(record.data.setupType).toBe('breakout');
+	});
+
+	it('preserves trade execution time when present on fills', () => {
+		const orderWithTimes = {
+			...ORDER,
+			fills: [
+				{ price: '100', qty: '0.6', commission: '0.06', commissionAsset: 'USDT', tradeId: 11, time: 1760000000000 },
+			],
+		};
+		const [record] = buildFillRecords({ environment: 'testnet', order: orderWithTimes });
+		expect(record.data.filledAt).toBe(new Date(1760000000000).toISOString());
+	});
+});
+
+describe('TradeLedgerService', () => {
+	const ORIGINAL_ENV = { ...process.env };
+	afterEach(() => {
+		process.env = { ...ORIGINAL_ENV };
+	});
+
+	it('is disabled by default and records nothing', async () => {
+		delete process.env.ENABLE_TRADE_LEDGER;
+		const mock = createFirestoreMock();
+		const service = new TradeLedgerService({ firestore: mock.firestore });
+		expect(service.isEnabled()).toBe(false);
+		expect(await service.recordOrderFills({ environment: 'testnet', order: ORDER })).toEqual({ written: 0, duplicates: 0, failed: 0 });
+		expect(mock.create).not.toHaveBeenCalled();
+	});
+
+	it('writes fills once and treats replays as duplicates', async () => {
+		process.env.ENABLE_TRADE_LEDGER = 'true';
+		const mock = createFirestoreMock();
+		const metrics = new FirestoreWriteMetricsService();
+		const service = new TradeLedgerService({ firestore: mock.firestore, metrics });
+		expect(await service.recordOrderFills({ environment: 'testnet', order: ORDER })).toEqual({ written: 3, duplicates: 0, failed: 0 });
+		expect(await service.recordOrderFills({ environment: 'testnet', order: ORDER })).toEqual({ written: 0, duplicates: 3, failed: 0 });
+		expect(mock.docs.size).toBe(3);
+		expect(metrics.getSnapshot().byDomain.trades).toMatchObject({ success: 6, failure: 0 });
+	});
+
+	it('fails open and counts failures when Firestore rejects the write', async () => {
+		process.env.ENABLE_TRADE_LEDGER = 'true';
+		const mock = createFirestoreMock({ createImpl: async () => { throw new Error('boom'); } });
+		const metrics = new FirestoreWriteMetricsService();
+		const service = new TradeLedgerService({ firestore: mock.firestore, metrics });
+		await expect(service.recordOrderFills({ environment: 'testnet', order: ORDER })).resolves.toEqual({ written: 0, duplicates: 0, failed: 3 });
+		expect(metrics.getSnapshot().byDomain.trades).toMatchObject({ success: 0, failure: 3 });
+	});
+
+	it('lists fills for a single environment bounded by TRADE_LEDGER_MAX_SCAN', async () => {
+		process.env.ENABLE_TRADE_LEDGER = 'true';
+		process.env.TRADE_LEDGER_MAX_SCAN = '2';
+		const mock = createFirestoreMock();
+		const service = new TradeLedgerService({ firestore: mock.firestore });
+		await service.recordOrderFills({ environment: 'testnet', order: ORDER });
+		await service.recordOrderFills({ environment: 'live', order: ORDER });
+		const result = await service.listFills({ environment: 'testnet' });
+		expect(mock.queryState.where).toEqual(['environment', '==', 'testnet']);
+		expect(mock.queryState.orderBy).toEqual(['filledAt', 'asc']);
+		expect(result.fills).toHaveLength(2);
+		expect(result.fills.every((f) => f.environment === 'testnet')).toBe(true);
+		expect(result.scanTruncated).toBe(true);
+	});
+
+	it('paginates through subsequent fills using startAfter', async () => {
+		process.env.ENABLE_TRADE_LEDGER = 'true';
+		const mock = createFirestoreMock();
+		const service = new TradeLedgerService({ firestore: mock.firestore });
+		await service.recordOrderFills({ environment: 'testnet', order: ORDER });
+		const page1 = await service.listFills({ environment: 'testnet', limit: 2 });
+		expect(page1.fills).toHaveLength(2);
+		expect(page1.scanTruncated).toBe(true);
+
+		const page2 = await service.listFills({ environment: 'testnet', limit: 2, startAfter: page1.lastDoc });
+		expect(page2.fills).toHaveLength(1);
+		expect(page2.scanTruncated).toBe(false);
+	});
+
+	it('does not synthesize approximate fills when fills array is absent', () => {
+		const records = buildFillRecords({
+			environment: 'testnet',
+			order: {
+				symbol: 'BTCUSDT',
+				side: 'BUY',
+				orderId: 88,
+				clientOrderId: 'cabros-test-1',
+				status: 'FILLED',
+				executedQty: '0.00200000',
+				cummulativeQuoteQty: '100.00',
+			},
+		});
+		expect(records).toEqual([]);
+	});
+
+	it('tracks observed readiness states and durability counters', async () => {
+		delete process.env.ENABLE_TRADE_LEDGER;
+		const mock = createFirestoreMock();
+		const metrics = new FirestoreWriteMetricsService();
+		const service = new TradeLedgerService({ firestore: mock.firestore, metrics });
+
+		// 1. disabled
+		expect(service.getStatus()).toMatchObject({
+			enabled: false,
+			configured: true,
+			ready: false,
+			status: 'disabled',
+		});
+
+		// 2. misconfigured
+		process.env.ENABLE_TRADE_LEDGER = 'true';
+		const unconfiguredService = new TradeLedgerService({ firestore: null, metrics });
+		expect(unconfiguredService.getStatus()).toMatchObject({
+			enabled: true,
+			configured: false,
+			ready: false,
+			status: 'misconfigured',
+		});
+
+		// 3. unverified (configured but no successful write observed)
+		expect(service.getStatus()).toMatchObject({
+			enabled: true,
+			configured: true,
+			ready: false,
+			status: 'unverified',
+			readiness: 'unverified',
+			writesAttempted: 0,
+			writesSucceeded: 0,
+			writesFailed: 0,
+			readsAttempted: 0,
+			readsSucceeded: 0,
+			readsFailed: 0,
+		});
+
+		// 4. ready (verified once write succeeds)
+		await service.recordOrderFills({ environment: 'testnet', order: ORDER });
+		expect(service.getStatus()).toMatchObject({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			readiness: 'verified',
+			writesAttempted: 3,
+			writesSucceeded: 3,
+			writesFailed: 0,
+			consecutiveFailures: 0,
+		});
+
+		// 5. degraded on write failure
+		mock.create.mockRejectedValueOnce(new Error('unavailable'));
+		await service.recordOrderFills({
+			environment: 'testnet',
+			order: {
+				...ORDER,
+				fills: [{ price: '100', qty: '0.1', commission: '0', tradeId: 99 }],
+			},
+		});
+		expect(service.getStatus()).toMatchObject({
+			enabled: true,
+			configured: true,
+			ready: false,
+			status: 'degraded',
+			readiness: 'degraded',
+			consecutiveFailures: 1,
+			lastErrorReason: 'firestore_unavailable',
+		});
+
+		// 6. self-heal on next successful write
+		await service.recordOrderFills({
+			environment: 'testnet',
+			order: {
+				...ORDER,
+				fills: [{ price: '100', qty: '0.1', commission: '0', tradeId: 100 }],
+			},
+		});
+		expect(service.getStatus()).toMatchObject({
+			ready: true,
+			status: 'ready',
+			readiness: 'verified',
+			consecutiveFailures: 0,
+		});
+	});
+
+	it('keeps readiness degraded after a partially failed fill batch', async () => {
+		process.env.ENABLE_TRADE_LEDGER = 'true';
+		const mock = createFirestoreMock();
+		const service = new TradeLedgerService({ firestore: mock.firestore });
+
+		let callCount = 0;
+		mock.create.mockImplementation(async () => {
+			callCount += 1;
+			if (callCount === 1) {
+				await new Promise((r) => setTimeout(r, 10));
+				return;
+			}
+			throw new Error('unavailable');
+		});
+
+		const result = await service.recordOrderFills({
+			environment: 'testnet',
+			order: {
+				...ORDER,
+				fills: [
+					{ price: '100', qty: '0.1', commission: '0', tradeId: 101 },
+					{ price: '100', qty: '0.1', commission: '0', tradeId: 102 },
+				],
+			},
+		});
+
+		expect(result).toEqual({ written: 1, duplicates: 0, failed: 1 });
+		expect(service.getStatus()).toMatchObject({
+			ready: false,
+			status: 'degraded',
+			readiness: 'degraded',
+			consecutiveFailures: 1,
+			lastErrorReason: 'firestore_unavailable',
+		});
+	});
+
+	it('records read health metrics on listFills query success and failure', async () => {
+		process.env.ENABLE_TRADE_LEDGER = 'true';
+		const mock = createFirestoreMock();
+		const metrics = new FirestoreWriteMetricsService();
+		const service = new TradeLedgerService({ firestore: mock.firestore, metrics });
+
+		await service.listFills({ environment: 'testnet' });
+		expect(metrics.getReadSnapshot().byDomain.trades).toMatchObject({ success: 1, failure: 0 });
+		expect(service.getStatus()).toMatchObject({
+			readsAttempted: 1,
+			readsSucceeded: 1,
+			readsFailed: 0,
+		});
+
+		// Read failure records metrics and degrades
+		mock.firestore.collection = jest.fn(() => ({
+			where: () => ({
+				orderBy: () => ({
+					limit: () => ({
+						get: jest.fn().mockRejectedValue(new Error('failed_precondition: query requires an index')),
+					}),
+				}),
+			}),
+		}));
+
+		await expect(service.listFills({ environment: 'testnet' })).rejects.toThrow();
+		expect(metrics.getReadSnapshot().byDomain.trades).toMatchObject({ success: 1, failure: 1 });
+		expect(service.getStatus()).toMatchObject({
+			readsAttempted: 2,
+			readsSucceeded: 1,
+			readsFailed: 1,
+			consecutiveFailures: 1,
+			status: 'degraded',
+		});
+	});
+
+	it('keeps write failures degraded even after a successful listFills read', async () => {
+		process.env.ENABLE_TRADE_LEDGER = 'true';
+		const mock = createFirestoreMock({
+			createImpl: async () => {
+				throw new Error('permission-denied: writes not allowed');
+			},
+		});
+		const service = new TradeLedgerService({ firestore: mock.firestore });
+
+		// 1. Initial write failure degrades service
+		await service.recordOrderFills({
+			environment: 'testnet',
+			order: ORDER,
+		});
+		expect(service.getStatus()).toMatchObject({
+			status: 'degraded',
+			readiness: 'degraded',
+			ready: false,
+			consecutiveFailures: 1,
+			consecutiveWriteFailures: 1,
+			consecutiveReadFailures: 0,
+			lastErrorReason: 'firestore_unavailable',
+		});
+
+		// 2. Subsequent successful listFills read must NOT clear write degradation
+		await service.listFills({ environment: 'testnet' });
+		expect(service.getStatus()).toMatchObject({
+			status: 'degraded',
+			readiness: 'degraded',
+			ready: false,
+			consecutiveFailures: 1,
+			consecutiveWriteFailures: 1,
+			consecutiveReadFailures: 0,
+			lastErrorReason: 'firestore_unavailable',
+		});
+
+		// 3. Only a successful write clears write degradation
+		mock.create.mockImplementation(async () => {});
+		await service.recordOrderFills({
+			environment: 'testnet',
+			order: ORDER,
+		});
+		expect(service.getStatus()).toMatchObject({
+			status: 'ready',
+			readiness: 'verified',
+			ready: true,
+			consecutiveFailures: 0,
+			consecutiveWriteFailures: 0,
+			consecutiveReadFailures: 0,
+			lastErrorReason: null,
+		});
+	});
+
+	it('falls back to the default scan bound on invalid values', () => {
+		process.env.TRADE_LEDGER_MAX_SCAN = 'nope';
+		expect(new TradeLedgerService().getMaxScan()).toBe(5000);
+		process.env.TRADE_LEDGER_MAX_SCAN = '999999';
+		expect(new TradeLedgerService().getMaxScan()).toBe(5000);
+	});
+});

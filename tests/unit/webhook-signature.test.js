@@ -99,6 +99,33 @@ describe('validateWebhookSignature', () => {
 		});
 	});
 
+	it('rejects a replayed signature with 403 WEBHOOK_SIGNATURE_REPLAY', () => {
+		const timestamp = String(Date.now());
+		const body = '{"text":"hello"}';
+		const req = {
+			method: 'POST',
+			originalUrl: '/api/webhook/alert',
+			rawBody: Buffer.from(body),
+			headers: {
+				'x-webhook-timestamp': timestamp,
+				'x-webhook-signature': sign({ secret, timestamp, body, path: '/api/webhook/alert' }),
+			},
+		};
+		const next = jest.fn();
+		validateWebhookSignature(req, response(), next);
+		expect(next).toHaveBeenCalledTimes(1);
+
+		const res = response();
+		const next2 = jest.fn();
+		validateWebhookSignature(req, res, next2);
+		expect(next2).not.toHaveBeenCalled();
+		expect(res.status).toHaveBeenCalledWith(403);
+		expect(res.json).toHaveBeenCalledWith({
+			error: 'Forbidden: Webhook signature already used',
+			code: 'WEBHOOK_SIGNATURE_REPLAY',
+		});
+	});
+
 	it('skips signature verification when the secret is unset', () => {
 		delete process.env.WEBHOOK_SIGNING_SECRET;
 		const next = jest.fn();

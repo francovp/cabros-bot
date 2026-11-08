@@ -1,9 +1,17 @@
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 const {
 	normalizeTradingViewTimeframe,
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('./parseTradingViewSignal');
-const { rankScannerItems, resolveTrendConfluence } = require('./marketScannerScoring');
+const {
+	rankScannerItems,
+	resolveTrendConfluence,
+	numberOrNull,
+	DEFAULT_ATR_MULTIPLIER,
+	DEFAULT_ACCOUNT_RISK_PCT,
+} = require('./marketScannerScoring');
 const { SCANNER_ERROR_CATEGORY_DISPLAY, isScannerErrorCategory } = require('./marketScannerErrorCategories');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const SUPPORTED_SCAN_TYPES = new Set([
 	'top_gainers',
@@ -11,6 +19,8 @@ const SUPPORTED_SCAN_TYPES = new Set([
 	'bollinger_scan',
 	'volume_breakout_scanner',
 	'smart_volume_scanner',
+	'rating_filter',
+	'consecutive_candles_scan',
 ]);
 
 const DEFAULT_SCAN_LIMIT = 5;
@@ -23,6 +33,8 @@ const SCAN_SECTIONS = {
 	volume_breakout_scanner: { emoji: '💥', title: 'BREAKOUT DE VOLUMEN' },
 	smart_volume_scanner: { emoji: '🔎', title: 'VOLUMEN INTELIGENTE' },
 	bollinger_scan: { emoji: '🔥', title: 'SQUEEZE BOLLINGER' },
+	rating_filter: { emoji: '📊', title: 'RATING BOLLINGER' },
+	consecutive_candles_scan: { emoji: '🕯️', title: 'VELAS CONSECUTIVAS' },
 };
 
 const DEFAULT_SCANS = ['top_gainers', 'top_losers', 'volume_breakout_scanner'];
@@ -68,10 +80,26 @@ function parseMarketScannerRequest(req = {}) {
 	const scans = parseScans(body);
 	const limit = parseLimit(body);
 	const bbwThreshold = parseBbwThreshold(body);
+	const rating = parseRating(body);
+	const consecutiveCandlesPatternType = parseConsecutiveCandlesPatternType(body);
+	const candleCount = parseCandleCount(body);
+	const minGrowth = parseMinGrowth(body);
 	const ranked = parseRanked(body);
 	const includeMultiTimeframe = parseIncludeMultiTimeframe(body);
 
-	return { exchange, timeframe, scans, limit, bbwThreshold, ranked, includeMultiTimeframe };
+	return {
+		exchange,
+		timeframe,
+		scans,
+		limit,
+		bbwThreshold,
+		rating,
+		consecutiveCandlesPatternType,
+		candleCount,
+		minGrowth,
+		ranked,
+		includeMultiTimeframe,
+	};
 }
 
 function getRequestBody(req = {}) {
@@ -98,7 +126,7 @@ function parseExchange(body = {}) {
 		return body.exchange.trim().toUpperCase();
 	}
 
-	return (process.env.MARKET_SCANNER_DEFAULT_EXCHANGE || DEFAULT_EXCHANGE).toUpperCase();
+	return (resolveRemoteOverride('MARKET_SCANNER_DEFAULT_EXCHANGE') ?? (process.env.MARKET_SCANNER_DEFAULT_EXCHANGE || DEFAULT_EXCHANGE)).toUpperCase();
 }
 
 function parseTimeframe(body = {}) {
@@ -223,11 +251,74 @@ function parseIncludeMultiTimeframe(body = {}) {
 	throw new MarketScannerRequestError('includeMultiTimeframe must be a boolean');
 }
 
+function parseRating(body = {}) {
+	const raw = body.rating !== undefined ? body.rating : body.rating_filter_rating;
+	if (raw === undefined || raw === null || raw === '') {
+		return 3;
+	}
+	if (typeof raw === 'boolean') {
+		throw new MarketScannerRequestError('rating must be an integer between -3 and 3');
+	}
+	const num = Number(raw);
+	if (!Number.isInteger(num) || num < -3 || num > 3) {
+		throw new MarketScannerRequestError('rating must be an integer between -3 and 3');
+	}
+	return num;
+}
+
+function parseConsecutiveCandlesPatternType(body = {}) {
+	const raw = body.pattern_type !== undefined
+		? body.pattern_type
+		: (body.patternType !== undefined ? body.patternType : body.consecutive_candles_pattern_type);
+	if (raw === undefined || raw === null || raw === '') {
+		return 'bullish';
+	}
+	if (typeof raw !== 'string') {
+		throw new MarketScannerRequestError('pattern_type must be either "bullish" or "bearish"');
+	}
+	const lower = raw.trim().toLowerCase();
+	if (lower !== 'bullish' && lower !== 'bearish') {
+		throw new MarketScannerRequestError('pattern_type must be either "bullish" or "bearish"');
+	}
+	return lower;
+}
+
+function parseCandleCount(body = {}) {
+	const raw = body.candle_count !== undefined ? body.candle_count : body.candleCount;
+	if (raw === undefined || raw === null || raw === '') {
+		return 3;
+	}
+	if (typeof raw === 'boolean') {
+		throw new MarketScannerRequestError('candle_count must be an integer between 2 and 5');
+	}
+	const num = Number(raw);
+	if (!Number.isInteger(num) || num < 2 || num > 5) {
+		throw new MarketScannerRequestError('candle_count must be an integer between 2 and 5');
+	}
+	return num;
+}
+
+function parseMinGrowth(body = {}) {
+	const raw = body.min_growth !== undefined ? body.min_growth : body.minGrowth;
+	if (raw === undefined || raw === null || raw === '') {
+		return undefined;
+	}
+	if (typeof raw === 'boolean') {
+		throw new MarketScannerRequestError('min_growth must be a non-negative number');
+	}
+	const num = Number(raw);
+	if (!Number.isFinite(num) || num < 0) {
+		throw new MarketScannerRequestError('min_growth must be a non-negative number');
+	}
+	return num;
+}
+
 function buildMarketScannerReport(scanResults = [], options = {}) {
 	const now = options.now || new Date();
 	const exchange = options.exchange || DEFAULT_EXCHANGE;
 	const timeframe = options.timeframe || '4h';
 	const ranked = options.ranked === true;
+	const positionSizingOptions = resolvePositionSizingOptions(options);
 
 	const lines = [
 		`📡 *SCANNER DE MERCADO — ${formatReportDate(now)}*`,
@@ -249,7 +340,7 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 			return;
 		}
 
-		const itemsToRender = prepareMarketScannerItems(scanResult, ranked);
+		const itemsToRender = prepareMarketScannerItems(scanResult, ranked, positionSizingOptions);
 
 		if (itemsToRender.length === 0) {
 			lines.push('No hay.');
@@ -257,14 +348,30 @@ function buildMarketScannerReport(scanResults = [], options = {}) {
 		}
 
 		itemsToRender.forEach((item, index) => {
-			lines.push(formatScanItem(item, index + 1, scanResult.scan, ranked));
+			lines.push(formatScanItem(item, index + 1, scanResult.scan, ranked, positionSizingOptions));
 		});
 	});
 
+	if (lines.some((line) => line.includes('Position Sizing'))) {
+		lines.push('');
+		lines.push('_Tamaño orientativo; verifica liquidez, comisiones y riesgo antes de operar._');
+	}
 	return lines.join('\n');
 }
 
-function prepareMarketScannerItems(scanResult = {}, ranked = false) {
+function resolvePositionSizingOptions(options = {}) {
+	const positiveOrDefault = (value, fallback) => {
+		const parsed = numberOrNull(value);
+		return parsed !== null && parsed > 0 ? parsed : fallback;
+	};
+	const config = getRuntimeConfig();
+	return {
+		atrMultiplier: positiveOrDefault(options.atrMultiplier ?? config.SCANNER_ATR_MULTIPLIER, DEFAULT_ATR_MULTIPLIER),
+		accountRiskPct: positiveOrDefault(options.accountRiskPct ?? config.SCANNER_ACCOUNT_RISK_PCT, DEFAULT_ACCOUNT_RISK_PCT),
+	};
+}
+
+function prepareMarketScannerItems(scanResult = {}, ranked = false, positionSizingOptions = {}) {
 	let itemsToRender = scanResult.items || [];
 	if (scanResult.scan === 'top_gainers') {
 		itemsToRender = itemsToRender.filter((item) => typeof item.changePercent === 'number' && item.changePercent > 0);
@@ -279,7 +386,7 @@ function prepareMarketScannerItems(scanResult = {}, ranked = false) {
 	}
 
 	if (ranked) {
-		itemsToRender = rankScannerItems(itemsToRender, scanResult.scan);
+		itemsToRender = rankScannerItems(itemsToRender, scanResult.scan, positionSizingOptions);
 	}
 
 	return itemsToRender;
@@ -319,7 +426,7 @@ function classifyRiskReward(ratio) {
 	return 'poor';
 }
 
-function formatScanItem(item, rank, scanType, ranked = false) {
+function formatScanItem(item, rank, scanType, ranked = false, positionSizingOptions = {}) {
 	const symbol = stripExchange(item.symbol);
 	const priceVal = numberOrNull(item.indicators?.close ?? null);
 	const price = formatCurrency(priceVal);
@@ -342,6 +449,30 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 	} else if (scanType === 'bollinger_scan') {
 		const bbw = numberOrNull(item.bbw ?? null);
 		suffix = ` | BBW ${formatNumber(bbw, 2)}`;
+	} else if (scanType === 'rating_filter') {
+		const bbRating = item.bollinger_rating !== undefined && item.bollinger_rating !== null
+			? item.bollinger_rating
+			: item.rating;
+		if (bbRating !== undefined && bbRating !== null) {
+			const sign = Number(bbRating) > 0 ? '+' : '';
+			suffix = ` | BB Rating ${sign}${bbRating}`;
+		}
+		const rsi = numberOrNull(item.indicators?.RSI ?? null);
+		if (rsi !== null) {
+			suffix += ` | RSI ${formatNumber(rsi, 1)}`;
+		}
+	} else if (scanType === 'consecutive_candles_scan') {
+		const count = item.candle_count ? `${item.candle_count} velas` : '';
+		const patternType = typeof item.pattern_type === 'string'
+			? (item.pattern_type.toLowerCase() === 'bullish' ? '🟢 Bullish' : '🔴 Bearish')
+			: '';
+		const patternDetails = [count, patternType].filter(Boolean).join(' ');
+		if (patternDetails) {
+			suffix = ` | ${patternDetails}`;
+		}
+		if (item.pattern_strength !== undefined && item.pattern_strength !== null) {
+			suffix += ` | Fuerza ${item.pattern_strength}`;
+		}
 	}
 
 	if (ranked && item._score !== undefined) {
@@ -404,7 +535,21 @@ function formatScanItem(item, rank, scanType, ranked = false) {
 		}
 	}
 
+	if (ranked && item._positionSizing) {
+		const sizingLine = formatPositionSizing(item._positionSizing, positionSizingOptions);
+		if (sizingLine) itemLine += `\n  - ${sizingLine}`;
+	}
 	return itemLine;
+}
+
+function formatPositionSizing(sizing, options = {}) {
+	const stop = numberOrNull(sizing?.suggestedStopPct);
+	const position = numberOrNull(sizing?.suggestedPositionPct);
+	if (stop === null || position === null) return null;
+	const multiplier = numberOrNull(options.atrMultiplier) || DEFAULT_ATR_MULTIPLIER;
+	const risk = numberOrNull(options.accountRiskPct) || DEFAULT_ACCOUNT_RISK_PCT;
+	const capped = position === 100 && stop < risk;
+	return `📏 *Position Sizing — ATR scenario:* ${formatNumber(multiplier, 1)}×ATR stop: ${formatNumber(stop, 2)}% | Pos: ${formatNumber(position, 2)}% @ ${capped ? '≤' : ''}${formatNumber(risk, 2)}% risk | Stop Loss anterior puede diferir`;
 }
 
 function formatTrendConfluence(trendConfluence = {}) {
@@ -445,12 +590,29 @@ function getCandidateDirection(item = {}) {
 		}
 	}
 
+	if (typeof item.pattern_type === 'string') {
+		if (/(bull|buy|long|alcist|compra)/i.test(item.pattern_type)) {
+			return 'bullish';
+		}
+		if (/(bear|sell|short|bajist|venta)/i.test(item.pattern_type)) {
+			return 'bearish';
+		}
+	}
+
 	return null;
 }
 
 function getScanItemSide(scanType, item = {}) {
 	if (scanType === 'top_losers') {
 		return 'SELL';
+	}
+
+	if (scanType === 'rating_filter') {
+		const bbRating = numberOrNull(item.bollinger_rating ?? item.rating);
+		if (bbRating !== null && bbRating < 0) {
+			return 'SELL';
+		}
+		return 'BUY';
 	}
 
 	const candidateDirection = getCandidateDirection(item);
@@ -641,13 +803,6 @@ function formatNumber(value, decimals) {
 	return value.toFixed(decimals);
 }
 
-function numberOrNull(value) {
-	if (value === null || value === undefined) {
-		return null;
-	}
-	const number = Number(value);
-	return Number.isFinite(number) ? number : null;
-}
 
 function formatScannerErrorLine(scanResult = {}) {
 	const baseMessage = typeof scanResult.error === 'string' ? scanResult.error : 'Unknown error';
@@ -676,13 +831,113 @@ function pickLevel(candidates) {
 	return null;
 }
 
+/**
+ * Records signal outcomes for completed market scanner results in a fail-open manner.
+ * @param {Array<Object>} scanResults
+ * @param {Object} [parsed] - { exchange, timeframe, ranked }
+ * @param {Object} [options] - { requestId, startTime, receivedAt, source, jobId, idempotencyKeyPrefix }
+ * @returns {void}
+ */
+function recordMarketScannerOutcomes(scanResults, parsed = {}, options = {}) {
+	try {
+		const signalOutcomeService = require('../storage/SignalOutcomeService');
+		if (!signalOutcomeService.isEnabled() || !Array.isArray(scanResults)) {
+			return;
+		}
+
+		const requestId = options.requestId || null;
+		const source = options.source || 'market-scanner';
+		const endTime = options.receivedAt ? new Date(options.receivedAt).getTime() : Date.now();
+		const processingTimeMs = Number.isFinite(options.startTime) && Number.isFinite(endTime) && endTime >= options.startTime
+			? endTime - options.startTime : null;
+		const ranked = parsed?.ranked === true;
+		const exchange = parsed?.exchange || null;
+		const timeframe = parsed?.timeframe || null;
+
+		for (const [scanIndex, scanResult] of scanResults.entries()) {
+			if (scanResult && scanResult.status === 'success' && Array.isArray(scanResult.items) && scanResult.items.length > 0) {
+				const preparedItems = prepareMarketScannerItems(scanResult, ranked);
+				for (const [itemIndex, item] of preparedItems.entries()) {
+					const closePrice = item.indicators?.close ?? null;
+					const itemSide = getScanItemSide(scanResult.scan, item);
+					const itemScore = typeof item._score === 'number' && Number.isFinite(item._score)
+						? (itemSide === 'SELL' ? -1 : 1) * Math.min(100, Math.max(0, item._score)) / 100
+						: (item.changePercent ?? item.indicators?.RSI ?? item.volume_ratio ?? null);
+
+					const atr = pickLevel([item.indicators?.atr, item.indicators?.ATR, item.atr]);
+					const bbLower = pickLevel([item.indicators?.bb_lower, item.indicators?.bollinger_lower, item.indicators?.lower, item.bollinger?.lower, item.bollinger_lower]);
+					const bbUpper = pickLevel([item.indicators?.bb_upper, item.indicators?.bollinger_upper, item.indicators?.upper, item.bollinger?.upper, item.bollinger_upper]);
+					const support = pickLevel([
+						item.indicators?.support,
+						item.indicators?.nearest_support,
+						item.support,
+						item.support_resistance?.nearest_support,
+						item.support_resistance?.support_1,
+					]);
+					const resistance = pickLevel([
+						item.indicators?.resistance,
+						item.indicators?.nearest_resistance,
+						item.resistance,
+						item.support_resistance?.nearest_resistance,
+						item.support_resistance?.resistance_1,
+					]);
+
+					const validPrice = typeof closePrice === 'number' && Number.isFinite(closePrice) && closePrice > 0 ? closePrice : null;
+					let stopLoss = null;
+					let takeProfit = null;
+					if (validPrice !== null) {
+						const riskLevels = getRiskLevelsForSide({
+							side: itemSide,
+							price: validPrice,
+							atr: typeof atr === 'number' && Number.isFinite(atr) && atr > 0 ? atr : null,
+							bbLower: typeof bbLower === 'number' && Number.isFinite(bbLower) && bbLower > 0 ? bbLower : null,
+							bbUpper: typeof bbUpper === 'number' && Number.isFinite(bbUpper) && bbUpper > 0 ? bbUpper : null,
+							support: typeof support === 'number' && Number.isFinite(support) && support > 0 ? support : null,
+							resistance: typeof resistance === 'number' && Number.isFinite(resistance) && resistance > 0 ? resistance : null,
+						});
+						stopLoss = riskLevels.stopLoss;
+						takeProfit = riskLevels.takeProfit;
+					}
+
+					signalOutcomeService.recordSignal({
+						idempotencyKey: options.idempotencyKeyPrefix
+							? JSON.stringify([options.idempotencyKeyPrefix, scanResult.scan, item.symbol])
+							: options.jobId ? `job:${options.jobId}:market-scanner:${scanIndex}:${itemIndex}` : null,
+						requestId,
+						receivedAt: options.receivedAt,
+						source,
+						symbol: item.symbol,
+						exchange,
+						timeframe,
+						setupType: scanResult.scan,
+						score: itemScore,
+						confidenceScore: typeof item.confidence === 'number' && Number.isFinite(item.confidence) && item.confidence >= 0 && item.confidence <= 1 ? item.confidence : null,
+						side: itemSide,
+						price: validPrice,
+						priceSource: validPrice !== null ? 'tradingview-mcp' : null,
+						stop: stopLoss,
+						target: takeProfit,
+						sources: [],
+						tokenUsage: null,
+						processingTimeMs,
+					}).catch(() => {});
+				}
+			}
+		}
+	} catch (err) {
+		// Fail-open: signal-outcome tracking failure must never block callers or throw
+	}
+}
+
 module.exports = {
 	MarketScannerRequestError,
 	parseMarketScannerRequest,
 	buildMarketScannerReport,
 	prepareMarketScannerItems,
+	resolvePositionSizingOptions,
 	getRiskLevelsForSide,
 	getScanItemSide,
 	pickLevel,
+	recordMarketScannerOutcomes,
 	SUPPORTED_SCAN_TYPES,
 };

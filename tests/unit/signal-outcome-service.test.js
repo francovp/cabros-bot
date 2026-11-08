@@ -4,12 +4,14 @@ const admin = require('firebase-admin');
 const SignalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const AlertStorageService = require('../../src/services/storage/AlertStorageService');
 const EquityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
+const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
 
 // Shorthand references to mock internals
 const {
 	__mockAdd: mockAdd,
 	__mockCollection: mockCollection,
 	__mockGet: mockGet,
+	__mockLimit: mockLimit,
 	__mockDocGet: mockDocGet,
 	__mockDocSet: mockDocSet,
 	__mockDocUpdate: mockDocUpdate,
@@ -42,6 +44,7 @@ jest.mock('../../src/services/grounding/geminiPriceService', () => ({
 describe('SignalOutcomeService', () => {
 	beforeEach(() => {
 		jest.clearAllMocks();
+		firestoreWriteMetricsService.resetForTesting();
 		mockFetchGeminiPrice.mockResolvedValue(null);
 		admin.__resetApps();
 		admin.__resetCollectionState();
@@ -49,8 +52,12 @@ describe('SignalOutcomeService', () => {
 		EquityMarketDataService._resetPacerForTesting();
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
+		delete process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES;
+		delete process.env.SIGNAL_OUTCOME_WINDOWS;
+		delete process.env.SIGNAL_OUTCOME_WINDOW_LABELS;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
+		process.env.WORKER_STARTUP_JITTER_MS = '0';
 		delete process.env.ENABLE_EQUITY_MARKET_DATA;
 		delete process.env.EQUITY_MARKET_DATA_PROVIDER;
 		delete process.env.TWELVE_DATA_API_KEY;
@@ -64,6 +71,9 @@ describe('SignalOutcomeService', () => {
 		EquityMarketDataService._resetPacerForTesting();
 		delete process.env.ENABLE_SHADOW_MODE_OUTCOME_TRACKING;
 		delete process.env.SIGNAL_OUTCOME_WORKER_ROLE;
+		delete process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES;
+		delete process.env.SIGNAL_OUTCOME_WINDOWS;
+		delete process.env.SIGNAL_OUTCOME_WINDOW_LABELS;
 		delete process.env.ENABLE_SIGNAL_OUTCOME_TRACKING;
 		delete process.env.ENABLE_FIRESTORE_ALERT_STORAGE;
 		delete process.env.ENABLE_EQUITY_MARKET_DATA;
@@ -93,6 +103,127 @@ describe('SignalOutcomeService', () => {
 		it('returns true when ENABLE_SIGNAL_OUTCOME_TRACKING is "true"', () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			expect(SignalOutcomeService.isEnabled()).toBe(true);
+		});
+	});
+
+	describe('entry price source configuration', () => {
+		it('keeps the existing crypto and equity fallback chains by default', () => {
+			expect(SignalOutcomeService.getEntryPriceSourceChains()).toEqual({
+				configured: false,
+				crypto: ['mcp', 'binance', 'gemini'],
+				equity: ['twelve-data'],
+			});
+		});
+
+		it('preserves the configured provider order for both asset classes', () => {
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'mcp, twelve-data, binance, gemini';
+
+			expect(SignalOutcomeService.getEntryPriceSourceChains()).toEqual({
+				configured: true,
+				crypto: ['mcp', 'twelve-data', 'binance', 'gemini'],
+				equity: ['mcp', 'twelve-data', 'binance', 'gemini'],
+			});
+		});
+
+		it('honors the configured provider before an incoming MCP price', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'binance';
+			mockGetAvgPrice.mockResolvedValue({ price: '68100.50' });
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-configured-source-order',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 64863.03,
+				side: 'BUY',
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(mockGetAvgPrice).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
+			expect(saved.price).toBe(68100.50);
+			expect(saved.entryPriceSource).toBe('binance');
+		});
+
+		it('tries providers before an incoming price when they precede its source', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'binance,mcp';
+			mockGetAvgPrice.mockResolvedValue({ price: '68100.50' });
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-configured-source-prefix',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 64863.03,
+				side: 'BUY',
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(mockGetAvgPrice).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
+			expect(saved.price).toBe(68100.50);
+			expect(saved.entryPriceSource).toBe('binance');
+		});
+
+		it('keeps the incoming price when earlier providers do not resolve', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'binance,mcp';
+			mockGetAvgPrice.mockRejectedValue(new Error('Binance unavailable'));
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-configured-source-fallback',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 64863.03,
+				side: 'BUY',
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(mockGetAvgPrice).toHaveBeenCalledWith({ symbol: 'BTCUSDT' });
+			expect(saved.price).toBe(64863.03);
+			expect(saved.entryPriceSource).toBe('tradingview-mcp');
+		});
+
+		it('rejects unknown providers', () => {
+			expect(() => SignalOutcomeService.parseEntryPriceSources('mcp,unknown')).toThrow(/unknown/i);
+		});
+	});
+
+	describe('configured outcome windows', () => {
+		it('uses the current default windows and labels', () => {
+			expect(SignalOutcomeService.getConfiguredOutcomeWindows()).toEqual(['1h', '4h', '1D', '1W']);
+			expect(SignalOutcomeService.getOutcomeWindowLabels()).toEqual({
+				'1h': '1h',
+				'4h': '4h',
+				'1D': '1D',
+				'1W': '1W',
+			});
+		});
+
+		it('parses custom supported windows and optional JSON labels', () => {
+			process.env.SIGNAL_OUTCOME_WINDOWS = '5m, 1h, 1M';
+			process.env.SIGNAL_OUTCOME_WINDOW_LABELS = '{"5m":"5 minutos","1h":"1 hora","1M":"1 mes"}';
+
+			expect(SignalOutcomeService.getConfiguredOutcomeWindows()).toEqual(['5m', '1h', '1M']);
+			expect(SignalOutcomeService.getOutcomeWindowLabels()).toEqual({
+				'5m': '5 minutos',
+				'1h': '1 hora',
+				'1M': '1 mes',
+			});
+		});
+
+		it.each(['', '5m,5m', '1h,2h', '1h,1.5h', '1h,-5m', '1h,1e3m'])('falls back for invalid window configuration %s', (value) => {
+			process.env.SIGNAL_OUTCOME_WINDOWS = value;
+			expect(SignalOutcomeService.getConfiguredOutcomeWindows()).toEqual(['1h', '4h', '1D', '1W']);
+		});
+
+		it('warns once for a repeated invalid window value', () => {
+			const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			process.env.SIGNAL_OUTCOME_WINDOWS = '2h';
+
+			SignalOutcomeService.getConfiguredOutcomeWindows();
+			SignalOutcomeService.getConfiguredOutcomeWindows();
+
+			expect(warn).toHaveBeenCalledTimes(1);
+			warn.mockRestore();
 		});
 	});
 
@@ -147,7 +278,241 @@ describe('SignalOutcomeService', () => {
 		});
 	});
 
+	describe('getSessionContext()', () => {
+		it('flags a post-close daily equity signal and points to the next session open', () => {
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'NYSE',
+				assetClass: 'stock',
+				timeframe: '1D',
+				receivedAt: new Date('2026-08-25T20:01:00.000Z'),
+			})).toEqual(expect.objectContaining({
+				sessionContext: 'after_hours',
+				measurementCohort: 'raw_received_at_after_hours',
+				anchorMode: 'raw_received_at',
+				calendarId: 'nyse',
+				calendarTimeZone: 'America/New_York',
+				decisionBarClosedAt: '2026-08-25T20:00:00.000Z',
+				tradableAt: '2026-08-26T13:30:00.000Z',
+			}));
+		});
+
+		it('preserves DST-aware session times and skips US holidays', () => {
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'NASDAQ_DLY',
+				assetClass: 'stock',
+				timeframe: '1D',
+				receivedAt: new Date('2026-11-26T20:01:00.000Z'),
+			})).toEqual(expect.objectContaining({
+				sessionContext: 'market_holiday',
+				decisionBarClosedAt: null,
+				tradableAt: '2026-11-27T14:30:00.000Z',
+			}));
+
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'NYSE',
+				assetClass: 'stock',
+				timeframe: '1D',
+				receivedAt: new Date('2026-11-27T18:01:00.000Z'),
+			})).toEqual(expect.objectContaining({
+				sessionContext: 'after_hours',
+				decisionBarClosedAt: '2026-11-27T18:00:00.000Z',
+				tradableAt: '2026-11-30T14:30:00.000Z',
+			}));
+		});
+
+		it('uses the correct DST offset after a Friday close', () => {
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'BATS',
+				assetClass: 'stock',
+				timeframe: '1D',
+				receivedAt: new Date('2026-11-02T21:01:00.000Z'),
+			})).toEqual(expect.objectContaining({
+				decisionBarClosedAt: '2026-11-02T21:00:00.000Z',
+				tradableAt: '2026-11-03T14:30:00.000Z',
+			}));
+		});
+
+		it('does not add equity session assumptions to crypto signals', () => {
+			const receivedAt = new Date('2026-08-25T20:01:00.000Z');
+			expect(SignalOutcomeService.getSessionContext({
+				exchange: 'BINANCE',
+				assetClass: 'crypto',
+				timeframe: '1D',
+				receivedAt,
+			})).toEqual(expect.objectContaining({
+				sessionContext: 'crypto_24_7',
+				measurementCohort: 'raw_received_at',
+				tradableAt: receivedAt.toISOString(),
+			}));
+		});
+
+		it('labels pre-open observations as pre_open', () => {
+			// Wednesday 2026-08-26 09:00 EDT = 13:00 UTC
+			const preOpen = new Date('2026-08-26T13:00:00.000Z');
+			const context = SignalOutcomeService.getSessionContext({
+				exchange: 'NYSE',
+				assetClass: 'stock',
+				receivedAt: preOpen,
+			});
+			expect(context.sessionContext).toBe('pre_open');
+			expect(context.measurementCohort).toBe('raw_pre_open');
+			expect(context.tradableAt).toBe('2026-08-26T13:30:00.000Z');
+		});
+
+		it('normalizes ARCA and ARCA_DLY aliases to regular equity exchange', () => {
+			// 10:30 EDT = 14:30 UTC
+			const regularTime = new Date('2026-08-26T14:30:00.000Z');
+			const arcaContext = SignalOutcomeService.getSessionContext({
+				exchange: 'ARCA',
+				assetClass: 'stock',
+				receivedAt: regularTime,
+			});
+			expect(arcaContext.sessionContext).toBe('regular');
+			expect(arcaContext.calendarId).toBe('nyse');
+
+			const arcaDlyContext = SignalOutcomeService.getSessionContext({
+				exchange: 'ARCA_DLY',
+				assetClass: 'stock',
+				receivedAt: regularTime,
+			});
+			expect(arcaDlyContext.sessionContext).toBe('regular');
+			expect(arcaDlyContext.calendarId).toBe('nyse');
+		});
+
+		it('accounts for weekend Independence Day early close on the preceding trading day', () => {
+			// In 2026, July 4 is Saturday. Thursday July 2 is the early-close day (13:00 EDT / 17:00 UTC).
+			// Alert at 14:00 EDT = 18:00 UTC on July 2 is after early close.
+			const afterEarlyClose = new Date('2026-07-02T18:00:00.000Z');
+			const context = SignalOutcomeService.getSessionContext({
+				exchange: 'NYSE',
+				assetClass: 'stock',
+				receivedAt: afterEarlyClose,
+			});
+			expect(context.sessionContext).toBe('after_hours');
+			expect(context.decisionBarClosedAt).toBe('2026-07-02T17:00:00.000Z');
+			// Friday July 3 is observed holiday for July 4, so next open is Monday July 6 09:30 EDT = 13:30 UTC
+			expect(context.tradableAt).toBe('2026-07-06T13:30:00.000Z');
+		});
+
+		it('checks next year observed New Years closure on December 31 when Jan 1 is Saturday', () => {
+			// In 2027, Dec 31 is Friday. Jan 1 2028 is Saturday. Observed holiday is Friday Dec 31, 2027.
+			const observedNewYear = new Date('2027-12-31T15:00:00.000Z');
+			const context = SignalOutcomeService.getSessionContext({
+				exchange: 'NYSE',
+				assetClass: 'stock',
+				receivedAt: observedNewYear,
+			});
+			expect(context.sessionContext).toBe('market_holiday');
+			expect(context.tradableAt).toBe('2028-01-03T14:30:00.000Z');
+		});
+	});
+
 	describe('recordSignal()', () => {
+		it.each([
+			{ price: null, chain: 'binance,gemini', expected: null },
+			{ price: 50000, chain: 'binance,mcp', expected: 50000 },
+			{ price: 50000, chain: 'binance', expected: null },
+		])('never backdates live quotes during recovery: %j', async ({ price, chain, expected }) => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = chain;
+			mockGetAvgPrice.mockResolvedValue({ price: '90000' });
+			mockFetchGeminiPrice.mockResolvedValue({ price: 90000 });
+			mockGetKlines.mockResolvedValue([]);
+			const id = await SignalOutcomeService.recordSignal({
+				symbol: 'BINANCE:BTCUSDT', price, priceSource: 'tradingview-mcp',
+				receivedAt: '2026-10-02T12:00:05.500Z',
+			});
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(id);
+			expect(saved.price).toBe(expected);
+			if (expected === null) {
+				expect(saved.eligibilityState).toBe('pending_entry_price');
+				await SignalOutcomeService.evaluatePendingOutcomes();
+				const updated = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(id);
+				expect(updated.price).toBeNull();
+				expect(mockGetKlines).toHaveBeenCalledWith(expect.objectContaining({ startTime: 1790942405500 }));
+			}
+			expect(mockGetAvgPrice).not.toHaveBeenCalled();
+			expect(mockFetchGeminiPrice).not.toHaveBeenCalled();
+		});
+
+		it('anchors recovered outcome windows to the original delivery timestamp', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const id = await SignalOutcomeService.recordSignal({
+				symbol: 'BINANCE:BTCUSDT', price: 50000,
+				receivedAt: '2026-10-02T12:00:05.500Z',
+			});
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(id);
+			expect(saved.receivedAt.toDate().toISOString()).toBe('2026-10-02T12:00:05.500Z');
+			expect(saved.observedAt.toDate().toISOString()).toBe('2026-10-02T12:00:05.500Z');
+			expect(saved.outcomes['1h'].targetTime).toBe('2026-10-02T13:00:05.500Z');
+			expect(saved.outcomes['1D'].targetTime).toBe('2026-10-03T12:00:05.500Z');
+		});
+
+		it.each([undefined, null, 'invalid'])('falls back to current time for an unavailable delivery timestamp: %s', async (receivedAt) => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			jest.useFakeTimers().setSystemTime(new Date('2026-10-03T12:00:00.000Z'));
+			try {
+				const id = await SignalOutcomeService.recordSignal({ symbol: 'BINANCE:BTCUSDT', price: 50000, receivedAt });
+				const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(id);
+				expect(saved.receivedAt.toDate().toISOString()).toBe('2026-10-03T12:00:00.000Z');
+				expect(saved.outcomes['1h'].targetTime).toBe('2026-10-03T13:00:00.000Z');
+			} finally {
+				jest.useRealTimers();
+			}
+		});
+
+		it('creates one durable outcome for concurrent and later replays without overwriting evaluation', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const documents = new Map();
+			const firestore = {
+				collection: () => ({
+					doc: (id) => ({ id, create: async (document) => {
+						if (documents.has(id)) throw Object.assign(new Error('Already exists'), { code: 6 });
+						documents.set(id, document);
+					} }),
+				}),
+			};
+			const storage = jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue(firestore);
+			try {
+				const signal = { symbol: 'BINANCE:BTCUSDT', price: 50000, idempotencyKey: 'job-1:expanded:0' };
+				const [first, replay] = await Promise.all([SignalOutcomeService.recordSignal(signal), SignalOutcomeService.recordSignal(signal)]);
+				expect(first).toMatch(/^[a-f0-9]{64}$/);
+				expect(replay).toBe(first);
+				expect(documents.size).toBe(1);
+				documents.get(first).outcomeEvaluated = true;
+				expect(await SignalOutcomeService.recordSignal(signal)).toBe(first);
+				expect(documents.get(first).outcomeEvaluated).toBe(true);
+				expect(await SignalOutcomeService.recordSignal({ ...signal, idempotencyKey: 'job-1:expanded:1' })).not.toBe(first);
+				expect(documents.size).toBe(2);
+				expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.signalOutcomes)
+					.toMatchObject({ success: 4, failure: 0 });
+			} finally {
+				storage.mockRestore();
+			}
+		});
+
+		it('records a failed Firestore write while preserving the fail-open null result', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const storage = jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue({
+				collection: () => ({
+					doc: () => ({
+						create: jest.fn().mockRejectedValue(Object.assign(new Error('write rejected'), { code: 14 })),
+					}),
+				}),
+			});
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			try {
+				await expect(SignalOutcomeService.recordSignal({
+					symbol: 'BINANCE:BTCUSDT', price: 50000, idempotencyKey: 'failed-outcome-write',
+				})).resolves.toBeNull();
+				expect(firestoreWriteMetricsService.getPersistentWriteHealthSnapshot().byDomain.signalOutcomes)
+					.toMatchObject({ success: 0, failure: 1, lastFailureCategory: 'firestore_unavailable' });
+			} finally {
+				warnSpy.mockRestore();
+				storage.mockRestore();
+			}
+		});
+
 		it('returns null when feature is disabled', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'false';
 			const res = await SignalOutcomeService.recordSignal({ symbol: 'BTCUSDT', price: 50000 });
@@ -190,7 +555,46 @@ describe('SignalOutcomeService', () => {
 			expect(saved.side).toBe('BUY');
 		});
 
-		it('saves a normalised document when enabled with alert storage', async () => {
+		it('persists a sanitized trader plan without replacing the bot setup', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const resId = await SignalOutcomeService.recordSignal({
+				symbol: 'BINANCE:BTCUSDT', price: 50000, side: 'BUY', stop: 48000, target: 55000,
+				traderIntent: { side: 'SELL', entry: 51000, target: 49000, invalidation: 52000, horizon: '1h', notes: '  manual plan  ' },
+			});
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toMatchObject({ price: 50000, side: 'BUY', stop: 48000, target: 55000 });
+			expect(saved.traderIntent).toEqual({ side: 'SELL', entry: 51000, target: 49000, invalidation: 52000, horizon: '1h', notes: 'manual plan' });
+		});
+
+		it('persists equity session context without mixing post-close windows into a tradable cohort', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_EQUITY_MARKET_DATA = 'true';
+			process.env.EQUITY_MARKET_DATA_PROVIDER = 'twelve-data';
+			process.env.TWELVE_DATA_API_KEY = 'test-twelve-data-key';
+			jest.useFakeTimers().setSystemTime(new Date('2026-08-25T20:01:00.000Z'));
+
+			try {
+				const resId = await SignalOutcomeService.recordSignal({
+					requestId: 'req-post-close-session',
+					source: 'market-scanner',
+					symbol: 'NYSE:AAPL',
+					timeframe: '1D',
+					assetClass: 'stock',
+					price: 150,
+				});
+
+				const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+				expect(saved.sessionContext).toBe('after_hours');
+				expect(saved.measurementCohort).toBe('raw_received_at_after_hours');
+				expect(saved.anchorMode).toBe('raw_received_at');
+				expect(saved.tradablePrice).toBeNull();
+				expect(saved.outcomes['1h'].measurementCohort).toBe('raw_received_at_after_hours');
+			} finally {
+				jest.useRealTimers();
+			}
+		});
+
+		it('does not infer market-scanner confidence from a technical score', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 
@@ -201,6 +605,7 @@ describe('SignalOutcomeService', () => {
 				price: 50000,
 				side: 'BUY',
 				score: 0.85,
+				confidenceScore: null,
 			});
 
 			expect(resId).not.toBeNull();
@@ -213,9 +618,79 @@ describe('SignalOutcomeService', () => {
 			expect(saved.side).toBe('BUY');
 			expect(saved.price).toBe(50000);
 			expect(saved.score).toBe(0.85);
+			expect(saved.confidenceScore).toBeNull();
+			expect(saved.confidenceScoreOrigin).toBeUndefined();
 			expect(saved.outcomeEvaluated).toBe(false);
 			expect(saved.outcomes['1h']).toBeDefined();
 			expect(saved.outcomes['1h'].status).toBe('pending');
+		});
+
+		it('does not infer scanner-preset confidence from a technical score', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'test-req-scanner-preset',
+				source: 'scanner-preset',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 50000,
+				score: 0.85,
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved.score).toBe(0.85);
+			expect(saved.confidenceScore).toBeNull();
+			expect(saved.confidenceScoreOrigin).toBeUndefined();
+		});
+
+		it('marks explicitly provided scanner-preset confidence for calibration', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'test-req-scanner-preset-explicit-confidence',
+				source: 'scanner-preset',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 50000,
+				score: 0.85,
+				confidenceScore: 0.92,
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved.confidenceScore).toBe(0.92);
+			expect(saved.confidenceScoreOrigin).toBe('explicit');
+		});
+
+		it('marks explicitly provided market-scanner confidence for calibration', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'test-req-explicit-confidence',
+				source: 'market-scanner',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 50000,
+				score: 0.85,
+				confidenceScore: 0.92,
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved.confidenceScore).toBe(0.92);
+			expect(saved.confidenceScoreOrigin).toBe('explicit');
+		});
+
+		it('persists only the configured windows and their labels', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_WINDOWS = '5m,1h';
+			process.env.SIGNAL_OUTCOME_WINDOW_LABELS = '{"5m":"5 minutos","1h":"1 hora"}';
+
+			const resId = await SignalOutcomeService.recordSignal({
+				symbol: 'BINANCE:BTCUSDT',
+				price: 50000,
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved.outcomeWindows).toEqual(['5m', '1h']);
+			expect(saved.outcomeWindowLabels).toEqual({ '5m': '5 minutos', '1h': '1 hora' });
+			expect(Object.keys(saved.outcomes)).toEqual(['5m', '1h']);
 		});
 
 		it('resolves a configured equity entry price without using Binance', async () => {
@@ -518,6 +993,25 @@ describe('SignalOutcomeService', () => {
 			expect(saved.outcomes['1h'].status).toBe('pending');
 		});
 
+		it('keeps Gemini failures retryable when Gemini is the configured source', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES = 'gemini';
+			mockFetchGeminiPrice.mockRejectedValue(new Error('Gemini timeout'));
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'req-gemini-transient',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: null,
+				side: 'BUY',
+			});
+
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved.eligibilityState).toBe('pending_entry_price');
+			expect(saved.outcomeEvaluated).toBe(false);
+			expect(saved.outcomes['1h'].status).toBe('pending');
+		});
+
 		it('marks signal immediately unavailable when Binance getAvgPrice throws structural invalid symbol error', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			mockGetAvgPrice.mockRejectedValue(new Error('Binance 400: Invalid symbol'));
@@ -619,9 +1113,68 @@ describe('SignalOutcomeService', () => {
 
 			checkNoUndefined(saved);
 		});
+
+		it('persists invalidationLevel, targetLevel, riskRewardRatio, and clean setupType from risk metadata (GH-832)', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+
+			const resId = await SignalOutcomeService.recordSignal({
+				requestId: 'test-req-risk-meta',
+				source: 'webhook-alert',
+				symbol: 'BINANCE:BTCUSDT',
+				price: 65000,
+				side: 'BUY',
+				invalidationLevel: 63000,
+				targetLevel: 68000,
+				riskRewardRatio: 2.5,
+				setupType: 'BREAKOUT',
+			});
+
+			expect(resId).not.toBeNull();
+			const saved = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(resId);
+			expect(saved).toBeDefined();
+			expect(saved.invalidationLevel).toBe(63000);
+			expect(saved.targetLevel).toBe(68000);
+			expect(saved.stop).toBe(63000);
+			expect(saved.target).toBe(68000);
+			expect(saved.riskRewardRatio).toBe(2.5);
+			expect(saved.setupType).toBe('breakout');
+		});
 	});
 
 	describe('evaluatePendingOutcomes()', () => {
+		it('evaluates a configured short window using its matching market-data interval', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.SIGNAL_OUTCOME_WINDOWS = '5m';
+
+			const receivedAtDate = new Date(Date.now() - 10 * 60 * 1000);
+			const mockDocId = 'test-custom-window';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: false,
+					outcomes: {
+						'5m': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 5 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+			mockGetKlines.mockResolvedValue([
+				[receivedAtDate.getTime(), '50000', '52000', '49000', '51000'],
+			]);
+
+			await SignalOutcomeService.evaluatePendingOutcomes();
+
+			expect(mockGetKlines).toHaveBeenCalledWith(expect.objectContaining({ interval: '5m' }));
+			expect(global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId).outcomes['5m'].status).toBe('evaluated');
+		});
+
 		it('evaluates pending outcomes using mocked klines', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
@@ -959,6 +1512,28 @@ describe('SignalOutcomeService', () => {
 			expect(updated.outcomes['1h'].return).toBe(4); // ((52000-50000)/50000)*100
 			expect(updated.outcomes['1h'].rMultiple).toBe(0.4); // (52000-50000)/(50000-45000) = 2000/5000 = 0.4
 			expect(updated.outcomes['1h'].firstHitTime).toBeNull();
+		});
+
+		it('evaluates a complete trader plan only at its selected horizon without changing bot metrics', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const mockDocId = 'trader-plan-buy';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([[
+				mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate), symbol: 'BTCUSDT', exchange: 'BINANCE',
+					side: 'SELL', price: 100, stop: 110, target: 90, outcomeEvaluated: false,
+					traderIntent: { side: 'BUY', entry: 100, target: 120, invalidation: 95, horizon: '1h' },
+					outcomes: { '1h': { status: 'pending', targetTime: new Date(receivedAtDate.getTime() + 3600000).toISOString() } },
+				},
+			]]));
+			mockGetKlines.mockResolvedValue([[receivedAtDate.getTime(), '100', '121', '99', '119']]);
+
+			await SignalOutcomeService.evaluatePendingOutcomes();
+
+			const outcome = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId).outcomes['1h'];
+			expect(outcome).toMatchObject({ firstHit: 'stop', return: -10 });
+			expect(outcome.traderPlanOutcome).toMatchObject({ firstHit: 'target', targetHit: true, stopHit: false, price: 120, return: 20, rMultiple: 4 });
 		});
 
 		it('does not trigger false barrier hits on candle crossing entry price when stop and target are null (incomplete market-scanner setup)', async () => {
@@ -1306,6 +1881,50 @@ describe('SignalOutcomeService', () => {
 			expect(updated.outcomes['1h'].return).toBe(2);
 		});
 
+		it('stores late-resolved prices in tradablePrice when resolved at or after tradableAt for closed-session equity', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const receivedAtDate = new Date(Date.now() - 2 * 60 * 60 * 1000);
+			const tradableAtDate = new Date(Date.now() - 1 * 60 * 60 * 1000);
+			const mockDocId = 'test-equity-late-resolved';
+
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				[mockDocId, {
+					receivedAt: admin.firestore.Timestamp.fromDate(receivedAtDate),
+					requestId: 'req-equity-late',
+					source: 'news-monitor',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: null,
+					observedPrice: null,
+					tradablePrice: null,
+					sessionContext: 'after_hours',
+					tradableAt: tradableAtDate.toISOString(),
+					eligibilityState: 'pending_entry_price',
+					outcomeEvaluated: false,
+					outcomes: {
+						'1h': {
+							status: 'pending',
+							targetTime: new Date(receivedAtDate.getTime() + 1 * 60 * 60 * 1000).toISOString(),
+						},
+					},
+				}],
+			]));
+
+			mockGetKlines.mockResolvedValue([
+				[receivedAtDate.getTime(), '50000', '52000', '49000', '51000'],
+			]);
+
+			await SignalOutcomeService.evaluatePendingOutcomes();
+
+			const updated = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME).get(mockDocId);
+			expect(updated).toBeDefined();
+			expect(updated.price).toBe(50000);
+			expect(updated.tradablePrice).toBe(50000);
+			expect(updated.observedPrice).toBeNull();
+		});
 
 		it('enforces sweep max duration budget on slow or hanging getKlines requests', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
@@ -1940,9 +2559,149 @@ describe('SignalOutcomeService', () => {
 			expect(res).not.toBe('No measurements found');
 			expect(res.falsePositiveCandidates).toHaveLength(2);
 			expect(res.falsePositiveCandidates).toEqual(expect.arrayContaining([
-				expect.objectContaining({ symbol: 'BTCUSDT', score: 0.85, side: 'BUY' }),
-				expect.objectContaining({ symbol: 'ETHUSDT', score: -0.85, side: 'SELL' }),
+				expect.objectContaining({ symbol: 'BTCUSDT', score: 0.85, side: 'BUY', confidence: 0.85 }),
+				expect.objectContaining({ symbol: 'ETHUSDT', score: -0.85, side: 'SELL', confidence: 0.85 }),
 			]));
+		});
+
+		it('drops sign-coherence mismatches and null-score candidates from false-positive list', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+			const now = new Date();
+			const map = new Map([
+				['sign-mismatch-buy', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-sign-mismatch-buy',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					score: -0.85,
+					price: 60000,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 58000,
+							return: -3.33,
+							maxAdverseExcursion: -4.0,
+							targetHit: false,
+							stopHit: true,
+							rMultiple: -1.0,
+						},
+					},
+				}],
+				['null-score', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-null-score',
+					source: 'alert',
+					symbol: 'SOLUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 100,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 95,
+							return: -5.0,
+							maxAdverseExcursion: -6.0,
+							targetHit: false,
+							stopHit: true,
+							rMultiple: -1.0,
+						},
+					},
+				}],
+				['aligned-bearish', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-aligned-bearish',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'SELL',
+					score: -0.9,
+					price: 60000,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 62000,
+							return: -3.33,
+							maxAdverseExcursion: -4.0,
+							targetHit: false,
+							stopHit: true,
+							rMultiple: -1.0,
+						},
+					},
+				}],
+			]);
+
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, map);
+
+			const res = await SignalOutcomeService.getMetricsSummary();
+			expect(res).not.toBe('No measurements found');
+			expect(res.falsePositiveCandidates).toHaveLength(1);
+			expect(res.falsePositiveCandidates[0]).toEqual(expect.objectContaining({
+				symbol: 'BTCUSDT',
+				side: 'SELL',
+				score: -0.9,
+				confidence: 0.9,
+			}));
+			expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('sign-coherence mismatch'));
+			warnSpy.mockRestore();
+		});
+
+		it('preserves legacy unmigrated SELL records with positive scores for backward compatibility', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const map = new Map([
+				['legacy-unsigned-sell', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-legacy-unsigned-sell',
+					source: 'news-monitor',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					side: 'SELL',
+					score: 0.85,
+					price: 3000,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 3150,
+							return: -5.0,
+							maxAdverseExcursion: -6.0,
+							targetHit: false,
+							stopHit: true,
+							rMultiple: -1.0,
+						},
+					},
+				}],
+			]);
+
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, map);
+
+			const res = await SignalOutcomeService.getMetricsSummary();
+			expect(res).not.toBe('No measurements found');
+			expect(res.falsePositiveCandidates).toHaveLength(1);
+			expect(res.falsePositiveCandidates[0]).toEqual(expect.objectContaining({
+				symbol: 'ETHUSDT',
+				side: 'SELL',
+				score: 0.85,
+				confidence: 0.85,
+			}));
 		});
 
 		it('splits window stats by side and setup type with same metric shape as parent window', async () => {
@@ -2074,6 +2833,82 @@ describe('SignalOutcomeService', () => {
 			expect(win.maxAdverseExcursionPercent).toBeDefined();
 		});
 
+		it('computes win rate, avg RRR, and avg return in bySetupType when riskRewardRatio is present (GH-832)', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				['breakout-win', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-bo-win',
+					source: 'alert',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					setupType: 'breakout',
+					riskRewardRatio: 2.0,
+					price: 50000,
+					stop: 48000,
+					target: 54000,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 54000,
+							return: 8.0,
+							rMultiple: 2.0,
+							firstHit: 'target',
+							targetHit: true,
+							stopHit: false,
+							maxFavorableExcursion: 8.0,
+							maxAdverseExcursion: -1.0,
+						},
+					},
+				}],
+				['breakout-loss', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-bo-loss',
+					source: 'alert',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					setupType: 'breakout',
+					riskRewardRatio: 3.0,
+					price: 3000,
+					stop: 2900,
+					target: 3300,
+					eligibilityState: 'supported_provider',
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': {
+							status: 'evaluated',
+							targetTime: now.toISOString(),
+							price: 2900,
+							return: -3.3333,
+							rMultiple: -1.0,
+							firstHit: 'stop',
+							targetHit: false,
+							stopHit: true,
+							maxFavorableExcursion: 1.0,
+							maxAdverseExcursion: -3.3333,
+						},
+					},
+				}],
+			]));
+
+			const res = await SignalOutcomeService.getMetricsSummary();
+			const boStats = res.windows['1h'].bySetupType.breakout;
+			expect(boStats).toBeDefined();
+			expect(boStats.totalSignals).toBe(2);
+			expect(boStats.hitRatePercent).toBe(50);
+			expect(boStats.averageRiskRewardRatio).toBe(2.5);
+			expect(boStats.avgRrr).toBe(2.5);
+			expect(boStats.averageReturnPercent).toBe(2.3334);
+		});
+
 		it('omits empty bySide and bySetupType buckets when only one side or one setupType has signals', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
@@ -2167,6 +3002,45 @@ describe('SignalOutcomeService', () => {
 	});
 
 	describe('summarizeOutcomes()', () => {
+		it('returns only the currently configured windows while preserving legacy outcome data', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.SIGNAL_OUTCOME_WINDOWS = '5m';
+
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				['custom-summary', {
+					receivedAt: admin.firestore.Timestamp.fromDate(new Date()),
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					price: 50000,
+					side: 'BUY',
+					outcomeEvaluated: true,
+					outcomes: {
+						'5m': { status: 'evaluated', return: 1, maxFavorableExcursion: 2, maxAdverseExcursion: -1 },
+						'1h': { status: 'evaluated', return: 9, maxFavorableExcursion: 10, maxAdverseExcursion: -2 },
+					},
+				}],
+			]));
+
+			const summary = await SignalOutcomeService.summarizeOutcomes();
+
+			expect(Object.keys(summary.windows)).toEqual(['5m']);
+			expect(summary.windows['5m'].averageReturnPercent).toBe(1);
+			expect(summary.expectancyR).toBeNull();
+		});
+
+		it('reports trader-plan hit rate and average R separately from bot metrics', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				['plan-win', { receivedAt: admin.firestore.Timestamp.fromDate(new Date()), symbol: 'BTCUSDT', exchange: 'BINANCE', price: 100, side: 'SELL', outcomeEvaluated: true, traderIntent: { side: 'BUY', entry: 100, target: 110, invalidation: 95, horizon: '1h' }, outcomes: { '1h': { status: 'evaluated', return: -1, maxFavorableExcursion: 1, maxAdverseExcursion: -2, traderPlanOutcome: { targetHit: true, rMultiple: 2 } } } }],
+				['plan-loss', { receivedAt: admin.firestore.Timestamp.fromDate(new Date()), symbol: 'ETHUSDT', exchange: 'BINANCE', price: 100, side: 'BUY', outcomeEvaluated: true, traderIntent: { side: 'SELL', entry: 100, target: 90, invalidation: 105, horizon: '1h' }, outcomes: { '1h': { status: 'evaluated', return: 1, maxFavorableExcursion: 2, maxAdverseExcursion: -1, traderPlanOutcome: { targetHit: false, rMultiple: -1 } } } }],
+			]));
+
+			const summary = await SignalOutcomeService.summarizeOutcomes();
+			expect(summary.byTraderPlan).toEqual({ samples: 2, hitRatePercent: 50, averageRMultiple: 0.5 });
+		});
+
 		it('throws STORAGE_UNAVAILABLE when Firestore is unavailable', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			const origGetFirestore = AlertStorageService.getFirestore;
@@ -2199,11 +3073,18 @@ describe('SignalOutcomeService', () => {
 				targetHitRatePercent: 0,
 				stopHitRatePercent: 0,
 				expectancyR: null,
+				byTraderPlan: { samples: 0, hitRatePercent: 0, averageRMultiple: null },
 				populationNote: 'No outcome measurements found for the requested criteria.',
 				exchangeBreakdown: {},
 				providerBreakdown: {},
 				entryPriceSourceBreakdown: {},
 				eligibilityBreakdown: {},
+				bySession: {},
+				barrierSourceBreakdown: {
+					derived: { received: 0, eligible: 0, targetEligible: 0, stopEligible: 0, targetHits: 0, stopHits: 0, targetHitRatePercent: 0, stopHitRatePercent: 0 },
+					marketContext: { received: 0, eligible: 0, targetEligible: 0, stopEligible: 0, targetHits: 0, stopHits: 0, targetHitRatePercent: 0, stopHitRatePercent: 0 },
+					none: { received: 0, eligible: 0, targetEligible: 0, stopEligible: 0, targetHits: 0, stopHits: 0, targetHitRatePercent: 0, stopHitRatePercent: 0 },
+				},
 				windows: {},
 				drawdownProxy: {
 					averageMaxAdverseExcursionPercent: 0,
@@ -2211,12 +3092,23 @@ describe('SignalOutcomeService', () => {
 				},
 				falsePositiveCandidatesCount: 0,
 				falsePositiveCandidates: [],
+				reactions: {
+					total: 0,
+					approve: 0,
+					reject: 0,
+					approveRate: 0,
+					weightedScore: null,
+				},
 				latencyCostMetadata: {
 					averageProcessingTimeMs: null,
 					tokenUsage: {
 						inputTokens: 0,
 						outputTokens: 0,
 						totalCost: 0,
+						pricing: {
+							unknownModelPricing: false,
+							unknownModels: [],
+						},
 					},
 				},
 			});
@@ -2322,6 +3214,9 @@ describe('SignalOutcomeService', () => {
 			expect(allRes.totalSignalsEvaluated).toBe(2);
 			expect(allRes.windows['1h'].totalSignals).toBe(2);
 			expect(allRes.windows['1h'].hitRatePercent).toBe(50);
+			expect(allRes.bySession).toBeDefined();
+			expect(allRes.bySession.BTCUSDT).toEqual({ regular: 0, pre: 0, post: 0, closed: 0, total: 1 });
+			expect(allRes.bySession.ETHUSDT).toEqual({ regular: 0, pre: 0, post: 0, closed: 0, total: 1 });
 		});
 
 		it('collects matching records beyond the initial slice when filters are applied (GH-715)', async () => {
@@ -2427,6 +3322,65 @@ describe('SignalOutcomeService', () => {
 			expect(res.windows['1h'].averageReturnPercent).toBe(-0.5);
 		});
 
+		it('aggregates unknownModelPricing and unknownModels in latencyCostMetadata tokenUsage', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const now = new Date();
+			const map = new Map([
+				['doc-1', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-1',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 50000,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', return: 1.0, maxAdverseExcursion: -0.1 },
+					},
+					tokenUsage: {
+						inputTokens: 100,
+						outputTokens: 50,
+						totalCost: 0.0001,
+						pricing: {
+							unknownModelPricing: true,
+							unknownModels: ['gemini-custom-future-model'],
+						},
+					},
+				}],
+				['doc-2', {
+					receivedAt: admin.firestore.Timestamp.fromDate(now),
+					requestId: 'req-2',
+					symbol: 'ETHUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 3000,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', return: 0.5, maxAdverseExcursion: -0.2 },
+					},
+					tokenUsage: {
+						inputTokens: 200,
+						outputTokens: 80,
+						totalCost: 0.0002,
+						pricing: {
+							unknownModelPricing: false,
+							unknownModels: [],
+						},
+					},
+				}],
+			]);
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, map);
+
+			const res = await SignalOutcomeService.summarizeOutcomes();
+			expect(res.available).toBe(true);
+			expect(res.latencyCostMetadata.tokenUsage.pricing).toEqual({
+				unknownModelPricing: true,
+				unknownModels: ['gemini-custom-future-model'],
+			});
+		});
+
 		it('scopes status filter to the requested window when both filters are set (GH-715)', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
@@ -2475,6 +3429,352 @@ describe('SignalOutcomeService', () => {
 			expect(res.totalSignalsEvaluated).toBe(0);
 			// Without window scoping, the 4h evaluated outcome on doc-1 would have marked it as evaluated
 		});
+
+		it('returns empty arrays and a false truncation flag for requested breakdowns with no measurements', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+			const res = await SignalOutcomeService.summarizeOutcomes({ breakdown: ['symbol', 'setup'] });
+
+			expect(res.symbolBreakdown).toEqual([]);
+			expect(res.setupBreakdown).toEqual([]);
+			expect(res.truncated).toBe(false);
+		});
+
+		it('groups requested breakdowns and excludes barrierless outcomes from hit-rate denominators', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const receivedAt = admin.firestore.Timestamp.fromDate(new Date());
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+				['btc-breakout', {
+					receivedAt,
+					symbol: 'btcusdt',
+					exchange: 'binance',
+					setupType: 'Breakout',
+					eligibilityState: 'supported_provider',
+					price: 50000,
+					target: 52000,
+					stop: 49000,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', targetHit: true, stopHit: false, maxFavorableExcursion: 1.5, maxAdverseExcursion: -0.4 },
+						'4h': { status: 'evaluated', targetHit: false, stopHit: true, maxFavorableExcursion: 2.5, maxAdverseExcursion: -1.0 },
+					},
+				}],
+				['btc-barrierless', {
+					receivedAt,
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					setupType: 'breakout',
+					eligibilityState: 'supported_provider',
+					price: 50000,
+					target: null,
+					stop: 0,
+					outcomeEvaluated: true,
+					outcomes: {
+						'1h': { status: 'evaluated', targetHit: true, stopHit: true, maxFavorableExcursion: 8, maxAdverseExcursion: -2 },
+					},
+				}],
+				['eth-pending', {
+					receivedAt,
+					symbol: 'ETHUSDT',
+					exchange: 'NASDAQ',
+					setupType: 'mean-reversion',
+					eligibilityState: 'supported_provider',
+					price: 3000,
+					target: 3200,
+					stop: 2900,
+					outcomeEvaluated: false,
+					outcomes: { '1h': { status: 'pending' } },
+				}],
+				['unknown-symbol', {
+					receivedAt,
+					eligibilityState: 'missing_entry_price',
+					outcomeEvaluated: false,
+					outcomes: {},
+				}],
+			]));
+
+			const res = await SignalOutcomeService.summarizeOutcomes({ breakdown: ['symbol', 'setup'] });
+			const btc = res.symbolBreakdown.find((item) => item.symbol === 'BTCUSDT' && item.exchange === 'BINANCE');
+			const breakout = res.setupBreakdown.find((item) => item.setupType === 'breakout' && item.exchange === 'BINANCE');
+
+			expect(res.totalSignalsReceived).toBe(4);
+			expect(btc).toMatchObject({ received: 2, eligible: 2, evaluated: 2, pending: 0, unavailable: 0 });
+			expect(breakout).toMatchObject({ received: 2, eligible: 2, evaluated: 2, pending: 0, unavailable: 0 });
+			expect(btc.targetEligibleWindows).toBe(2);
+			expect(btc.stopEligibleWindows).toBe(2);
+			expect(btc.targetHitRate).toBe(0.5);
+			expect(btc.stopHitRate).toBe(0.5);
+			expect(btc.windows['1h']).toMatchObject({
+				targetEligibleWindows: 1,
+				stopEligibleWindows: 1,
+				targetHitRate: 1,
+				stopHitRate: 0,
+				averageMfePercent: 1.5,
+				averageMaePercent: -0.4,
+			});
+			expect(res.symbolBreakdown.map((item) => item.symbol)).toEqual(['BTCUSDT', 'ETHUSDT', 'UNKNOWN']);
+			expect(res.setupBreakdown.map((item) => item.setupType)).toEqual(['breakout', 'mean-reversion', 'UNKNOWN']);
+			expect(res.truncated).toBe(false);
+		});
+
+		it('trims stored setupType values before the summary limit and breakdown', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			const receivedAt = admin.firestore.Timestamp.fromDate(new Date());
+			const records = new Map();
+			for (let index = 0; index < 100; index += 1) {
+				records.set(`noise-${index}`, {
+					receivedAt,
+					symbol: `NOISE${index}`,
+					exchange: 'BINANCE',
+					setupType: 'noise',
+					eligibilityState: 'supported_provider',
+					price: 10,
+					outcomeEvaluated: false,
+					outcomes: { '1h': { status: 'pending' } },
+				});
+			}
+			records.set('breakout-padded-match', {
+				receivedAt,
+				symbol: 'ETHUSDT',
+				exchange: 'BINANCE',
+				setupType: ' Breakout ',
+				eligibilityState: 'supported_provider',
+				price: 3000,
+				outcomeEvaluated: true,
+				outcomes: { '1h': { status: 'evaluated', targetHit: true, maxFavorableExcursion: 1.5, maxAdverseExcursion: -0.3 } },
+			});
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, records);
+
+			const res = await SignalOutcomeService.summarizeOutcomes({ setupType: 'BREAKOUT', breakdown: ['setup'], limit: 1 });
+
+			expect(res.totalSignalsReceived).toBe(1);
+			expect(res.setupBreakdown).toHaveLength(1);
+			expect(res.setupBreakdown[0]).toMatchObject({ setupType: 'breakout', received: 1 });
+			expect(res.symbolBreakdown).toBeUndefined();
+		});
+
+		it('caps setup buckets and reports truncation in worker status', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			SignalOutcomeService._resetForTesting();
+			const receivedAt = admin.firestore.Timestamp.fromDate(new Date());
+			const records = new Map();
+			for (let index = 0; index < 101; index += 1) {
+				records.set(`setup-${index}`, {
+					receivedAt,
+					symbol: `COIN${index}`,
+					exchange: 'BINANCE',
+					setupType: `setup-${index}`,
+					eligibilityState: 'supported_provider',
+					price: 10,
+					outcomeEvaluated: false,
+					outcomes: { '1h': { status: 'pending' } },
+				});
+			}
+			global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, records);
+
+			const res = await SignalOutcomeService.summarizeOutcomes({ breakdown: ['setup'] });
+			const status = SignalOutcomeService.getWorkerStatus();
+
+			expect(res.setupBreakdown).toHaveLength(100);
+			expect(res.truncated).toBe(true);
+			expect(status.breakdownBucketCap).toBe(100);
+			expect(status.lastBreakdownBucketCount).toBe(100);
+			expect(status.lastBreakdownTruncated).toBe(true);
+			expect(status.breakdownTruncationCount).toBe(1);
+		});
+	});
+
+	describe('summarizeOutcomes() barrierSourceBreakdown (issue #809 / CB-???)', () => {
+			it('counts received/eligible per barrier source and exposes hit-rate breakdown', async () => {
+				process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+				const now = new Date();
+				global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+					['derived-1', {
+						receivedAt: admin.firestore.Timestamp.fromDate(now),
+						source: 'news-monitor',
+						symbol: 'BTCUSDT',
+						exchange: 'BINANCE',
+						marketDataProvider: 'binance',
+						entryPriceSource: 'binance',
+						side: 'BUY',
+						price: 100,
+						stop: 98,
+						target: 103,
+						eligibilityState: 'supported_provider',
+						barriers: { source: 'derived', side: 'BUY', stopPct: 0.02, rewardMultiplier: 1.5 },
+						outcomeEvaluated: true,
+						outcomes: {
+							'1h': {
+								status: 'evaluated',
+								return: 0.03,
+								maxFavorableExcursion: 0.04,
+								maxAdverseExcursion: -0.01,
+								targetHit: true,
+								stopHit: false,
+								firstHit: 'target',
+								rMultiple: 1.5,
+							},
+						},
+					}],
+					['market-1', {
+						receivedAt: admin.firestore.Timestamp.fromDate(now),
+						source: 'news-monitor',
+						symbol: 'ETHUSDT',
+						exchange: 'BINANCE',
+						marketDataProvider: 'binance',
+						entryPriceSource: 'binance',
+						side: 'SELL',
+						price: 200,
+						stop: 210,
+						target: 185,
+						eligibilityState: 'supported_provider',
+						barriers: { source: 'marketContext' },
+						outcomeEvaluated: true,
+						outcomes: {
+							'1h': {
+								status: 'evaluated',
+								return: -0.02,
+								maxFavorableExcursion: 0.01,
+								maxAdverseExcursion: -0.03,
+								targetHit: false,
+								stopHit: true,
+								firstHit: 'stop',
+								rMultiple: -1.0,
+							},
+						},
+					}],
+					['none-1', {
+						receivedAt: admin.firestore.Timestamp.fromDate(now),
+						source: 'news-monitor',
+						symbol: 'SOLUSDT',
+						exchange: 'BINANCE',
+						marketDataProvider: 'binance',
+						entryPriceSource: 'binance',
+						side: 'BUY',
+						price: 50,
+						// No stop/target and no barriers.source
+						eligibilityState: 'supported_provider',
+						outcomeEvaluated: true,
+						outcomes: {
+							'1h': {
+								status: 'evaluated',
+								return: 0.01,
+								maxFavorableExcursion: 0.02,
+								maxAdverseExcursion: -0.005,
+							},
+						},
+					}],
+				]));
+
+				const res = await SignalOutcomeService.summarizeOutcomes();
+
+				expect(res.available).toBe(true);
+				expect(res.barrierSourceBreakdown.derived.received).toBe(1);
+				expect(res.barrierSourceBreakdown.derived.eligible).toBe(1);
+				expect(res.barrierSourceBreakdown.derived.targetEligible).toBe(1);
+				expect(res.barrierSourceBreakdown.derived.targetHits).toBe(1);
+				expect(res.barrierSourceBreakdown.derived.targetHitRatePercent).toBe(100);
+				expect(res.barrierSourceBreakdown.derived.stopEligible).toBe(1);
+				expect(res.barrierSourceBreakdown.derived.stopHits).toBe(0);
+				expect(res.barrierSourceBreakdown.derived.stopHitRatePercent).toBe(0);
+
+				expect(res.barrierSourceBreakdown.marketContext.received).toBe(1);
+				expect(res.barrierSourceBreakdown.marketContext.targetEligible).toBe(1);
+				expect(res.barrierSourceBreakdown.marketContext.targetHits).toBe(0);
+				expect(res.barrierSourceBreakdown.marketContext.stopEligible).toBe(1);
+				expect(res.barrierSourceBreakdown.marketContext.stopHits).toBe(1);
+				expect(res.barrierSourceBreakdown.marketContext.stopHitRatePercent).toBe(100);
+
+				expect(res.barrierSourceBreakdown.none.received).toBe(1);
+				expect(res.barrierSourceBreakdown.none.targetEligible).toBe(0);
+				expect(res.barrierSourceBreakdown.none.stopEligible).toBe(0);
+				expect(res.barrierSourceBreakdown.none.targetHitRatePercent).toBe(0);
+				expect(res.barrierSourceBreakdown.none.stopHitRatePercent).toBe(0);
+			});
+
+			it('counts signals with no barriers payload under the "none" bucket', async () => {
+				process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+				const now = new Date();
+				global.__firebaseAdminMockState.collections.set(SignalOutcomeService.COLLECTION_NAME, new Map([
+					['no-barriers', {
+						receivedAt: admin.firestore.Timestamp.fromDate(now),
+						source: 'news-monitor',
+						symbol: 'BTCUSDT',
+						exchange: 'BINANCE',
+						marketDataProvider: 'binance',
+						entryPriceSource: 'binance',
+						side: 'BUY',
+						price: 100,
+						eligibilityState: 'supported_provider',
+						outcomeEvaluated: true,
+						outcomes: {
+							'1h': {
+								status: 'evaluated',
+								return: 0.01,
+								maxFavorableExcursion: 0.02,
+								maxAdverseExcursion: -0.005,
+							},
+						},
+					}],
+				]));
+
+				const res = await SignalOutcomeService.summarizeOutcomes();
+
+				expect(res.barrierSourceBreakdown.none.received).toBe(1);
+				expect(res.barrierSourceBreakdown.derived.received).toBe(0);
+			});
+
+			it('persists sanitized barriers via recordSignal() and aggregates them in summarizeOutcomes()', async () => {
+				process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+				process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+
+				const docId = await SignalOutcomeService.recordSignal({
+					requestId: 'req-barriers-persist',
+					source: 'news-monitor',
+					symbol: 'BTCUSDT',
+					exchange: 'BINANCE',
+					side: 'BUY',
+					price: 100,
+					stop: 98,
+					target: 103,
+					barriers: {
+						source: 'derived',
+						side: 'BUY',
+						stop: 98,
+						target: 103,
+						stopPct: 0.02,
+						rewardMultiplier: 1.5,
+						timeHorizon: 'short_term',
+						ignoredUndefined: undefined,
+					},
+				});
+
+				expect(docId).toBeTruthy();
+				const storedDocs = global.__firebaseAdminMockState.collections.get(SignalOutcomeService.COLLECTION_NAME);
+				const storedDoc = storedDocs.get(docId);
+				expect(storedDoc.barriers).toEqual({
+					source: 'derived',
+					side: 'BUY',
+					stop: 98,
+					target: 103,
+					stopPct: 0.02,
+					rewardMultiplier: 1.5,
+					timeHorizon: 'short_term',
+				});
+				expect('ignoredUndefined' in storedDoc.barriers).toBe(false);
+
+				const res = await SignalOutcomeService.summarizeOutcomes();
+				expect(res.barrierSourceBreakdown.derived.received).toBe(1);
+				expect(res.barrierSourceBreakdown.derived.eligible).toBe(1);
+			});
 	});
 
 	describe('worker lifecycle and scheduling', () => {
@@ -2549,6 +3849,67 @@ describe('SignalOutcomeService', () => {
 			status = SignalOutcomeService.getWorkerStatus();
 			expect(status.running).toBe(false);
 			expect(status.timerId).toBeNull();
+		});
+
+		it('does not arm the periodic outcome sweep until startup jitter elapses', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.WORKER_STARTUP_JITTER_MS = '1000';
+			process.env.SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS = '50';
+			jest.useFakeTimers();
+			const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+			const setIntervalSpy = jest.spyOn(global, 'setInterval');
+			const getFirestoreSpy = jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue(null);
+
+			try {
+				const started = SignalOutcomeService.startWorker({ intervalMs: 1000 });
+				expect(started).toBe(true);
+				expect(setIntervalSpy).not.toHaveBeenCalled();
+				expect(getFirestoreSpy).not.toHaveBeenCalled();
+
+				await jest.advanceTimersByTimeAsync(49);
+				expect(setIntervalSpy).not.toHaveBeenCalled();
+				expect(getFirestoreSpy).not.toHaveBeenCalled();
+
+				await jest.advanceTimersByTimeAsync(1);
+				expect(setIntervalSpy.mock.calls.filter(([, delay]) => delay === 1000)).toHaveLength(1);
+				expect(getFirestoreSpy).toHaveBeenCalled();
+			} finally {
+				SignalOutcomeService.stopWorker();
+				randomIntSpy.mockRestore();
+				setIntervalSpy.mockRestore();
+				getFirestoreSpy.mockRestore();
+				jest.useRealTimers();
+			}
+		});
+
+		it('keeps standalone startup jitter referenced and cancels it on stop', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'worker';
+			process.env.WORKER_STARTUP_JITTER_MS = '1000';
+			process.env.SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS = '50';
+			jest.useFakeTimers();
+			const randomIntSpy = jest.spyOn(require('crypto'), 'randomInt').mockReturnValue(50);
+			const setTimeoutSpy = jest.spyOn(global, 'setTimeout');
+			const getFirestoreSpy = jest.spyOn(AlertStorageService, 'getFirestore').mockReturnValue(null);
+
+			try {
+				SignalOutcomeService.startWorker({ intervalMs: 1000, source: 'worker', unref: false });
+				const startupTimer = setTimeoutSpy.mock.results[0].value;
+				expect(startupTimer.hasRef()).toBe(true);
+
+				await SignalOutcomeService.stopWorker();
+				expect(jest.getTimerCount()).toBe(0);
+				const callsAfterStop = getFirestoreSpy.mock.calls.length;
+				await jest.advanceTimersByTimeAsync(50);
+				expect(getFirestoreSpy).toHaveBeenCalledTimes(callsAfterStop);
+			} finally {
+				randomIntSpy.mockRestore();
+				setTimeoutSpy.mockRestore();
+				getFirestoreSpy.mockRestore();
+				jest.useRealTimers();
+			}
 		});
 
 		it('prevents overlapping sweeps when an evaluation is in progress', async () => {
@@ -2808,6 +4169,9 @@ describe('SignalOutcomeService', () => {
 				entryPriceSource: 'tradingview-mcp',
 				stop: 63000,
 				target: 68000,
+				invalidationLevel: 63000,
+				targetLevel: 68000,
+				riskRewardRatio: null,
 				marketDataProvider: 'binance',
 				eligibilityState: 'supported_provider',
 				eligibilityReason: null,
@@ -2962,6 +4326,295 @@ describe('SignalOutcomeService', () => {
 					expect.stringContaining('[SignalOutcomeService]'),
 					expect.stringContaining('Connection terminated'),
 				);
+			} finally {
+				warnSpy.mockRestore();
+			}
+		});
+	});
+
+	describe('getOutcomeById()', () => {
+		function buildQueryDoc(id, data) {
+			return {
+				id,
+				data: () => data,
+				exists: true,
+			};
+		}
+
+		it('returns null when feature is disabled', async () => {
+			const res = await SignalOutcomeService.getOutcomeById('outcome-1');
+			expect(res).toBeNull();
+		});
+
+		it('returns null for empty or invalid outcomeId', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			expect(await SignalOutcomeService.getOutcomeById(undefined)).toBeNull();
+			expect(await SignalOutcomeService.getOutcomeById('')).toBeNull();
+			expect(await SignalOutcomeService.getOutcomeById('   ')).toBeNull();
+		});
+
+		it('throws STORAGE_UNAVAILABLE when Firestore is not available', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const origGetFirestore = AlertStorageService.getFirestore;
+			AlertStorageService.getFirestore = () => null;
+
+			try {
+				await expect(SignalOutcomeService.getOutcomeById('outcome-1')).rejects.toMatchObject({
+					code: 'STORAGE_UNAVAILABLE',
+				});
+			} finally {
+				AlertStorageService.getFirestore = origGetFirestore;
+			}
+		});
+
+		it('returns null when the document does not exist', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			mockDocGet.mockResolvedValueOnce({ exists: false, id: 'outcome-1', data: () => ({}) });
+
+			const res = await SignalOutcomeService.getOutcomeById('outcome-1');
+			expect(res).toBeNull();
+			expect(mockDocGet).toHaveBeenCalled();
+		});
+
+		it('returns null when the document is retention-expired', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const longAgo = new Date(Date.now() - 2 * 365 * 24 * 60 * 60 * 1000);
+			mockDocGet.mockResolvedValueOnce(buildQueryDoc('outcome-1', {
+				receivedAt: admin.firestore.Timestamp.fromDate(longAgo),
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+			}));
+
+			const res = await SignalOutcomeService.getOutcomeById('outcome-1');
+			expect(res).toBeNull();
+		});
+
+		it('returns the formatted outcome document when found', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const receivedAt = new Date('2026-08-23T12:00:00.000Z');
+			mockDocGet.mockResolvedValueOnce(buildQueryDoc('outcome-1', {
+				receivedAt: admin.firestore.Timestamp.fromDate(receivedAt),
+				requestId: 'req-1',
+				source: 'news-monitor',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				side: 'BUY',
+				price: 65000,
+				setupType: 'breakout',
+				score: 0.9,
+				outcomeEvaluated: true,
+				outcomes: { '1h': { status: 'evaluated' } },
+				tokenUsage: { totalTokens: 140 },
+			}));
+
+			const res = await SignalOutcomeService.getOutcomeById('outcome-1');
+			expect(res).toMatchObject({
+				id: 'outcome-1',
+				receivedAt: '2026-08-23T12:00:00.000Z',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				side: 'BUY',
+				price: 65000,
+				setupType: 'breakout',
+				score: 0.9,
+				outcomeEvaluated: true,
+			});
+		});
+
+		it('wraps Firestore read failures as STORAGE_UNAVAILABLE', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			mockDocGet.mockRejectedValueOnce(new Error('Connection terminated'));
+
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			try {
+				await expect(SignalOutcomeService.getOutcomeById('outcome-1')).rejects.toMatchObject({
+					code: 'STORAGE_UNAVAILABLE',
+				});
+			} finally {
+				warnSpy.mockRestore();
+			}
+		});
+	});
+
+	describe('exportOutcomes()', () => {
+		function buildQueryDoc(id, data) {
+			return {
+				id,
+				data: () => data,
+			};
+		}
+
+		it('returns null when feature is disabled', async () => {
+			const res = await SignalOutcomeService.exportOutcomes({ from: '2026-08-23T00:00:00.000Z', to: '2026-08-24T00:00:00.000Z' });
+			expect(res).toBeNull();
+		});
+
+		it('throws STORAGE_UNAVAILABLE when Firestore is not available', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const origGetFirestore = AlertStorageService.getFirestore;
+			AlertStorageService.getFirestore = () => null;
+
+			try {
+				await expect(SignalOutcomeService.exportOutcomes({
+					from: '2026-08-23T00:00:00.000Z',
+					to: '2026-08-24T00:00:00.000Z',
+				})).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
+			} finally {
+				AlertStorageService.getFirestore = origGetFirestore;
+			}
+		});
+
+		it('throws INVALID_REQUEST when bounds are missing', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			await expect(SignalOutcomeService.exportOutcomes({})).rejects.toMatchObject({
+				code: 'INVALID_REQUEST',
+			});
+		});
+
+		it('throws INVALID_REQUEST when window exceeds 31 days', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			await expect(SignalOutcomeService.exportOutcomes({
+				from: '2026-01-01T00:00:00.000Z',
+				to: '2026-03-01T00:00:00.000Z',
+			})).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
+		});
+
+		it('returns empty list when no documents match the bounds', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			mockGet.mockResolvedValueOnce({ empty: true, docs: [] });
+
+			const res = await SignalOutcomeService.exportOutcomes({
+				from: '2026-08-23T00:00:00.000Z',
+				to: '2026-08-24T00:00:00.000Z',
+			});
+			expect(res.window.from).toBe('2026-08-23T00:00:00.000Z');
+			expect(res.window.to).toBe('2026-08-24T00:00:00.000Z');
+			expect(res.window.maxDays).toBe(31);
+			expect(res.outcomes).toEqual([]);
+		});
+
+		it('rejects incomplete exports when the scan budget is exhausted before the result limit', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const receivedAt = admin.firestore.Timestamp.fromDate(new Date('2026-08-23T12:00:00.000Z'));
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: Array.from({ length: 3 }, (_, index) => buildQueryDoc(`other-${index}`, {
+					receivedAt,
+					symbol: 'OTHER',
+					exchange: 'BINANCE',
+				})),
+			});
+
+			await expect(SignalOutcomeService.exportOutcomes({
+				from: '2026-08-23T00:00:00.000Z',
+				to: '2026-08-24T00:00:00.000Z',
+				limit: 10,
+				symbol: 'TARGET',
+				maxScanDocs: 3,
+			})).rejects.toMatchObject({
+				code: 'INVALID_REQUEST',
+				message: expect.stringContaining('scan limit'),
+			});
+			expect(mockLimit).toHaveBeenCalledWith(3);
+		});
+
+		it('includes a matching document at the end of the scan budget', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const receivedAt = admin.firestore.Timestamp.fromDate(new Date('2026-08-23T12:00:00.000Z'));
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('other-1', { receivedAt, symbol: 'OTHER', exchange: 'BINANCE' }),
+					buildQueryDoc('other-2', { receivedAt, symbol: 'OTHER', exchange: 'BINANCE' }),
+					buildQueryDoc('target-3', { receivedAt, symbol: 'TARGET', exchange: 'BINANCE' }),
+				],
+			});
+
+			const result = await SignalOutcomeService.exportOutcomes({
+				from: '2026-08-23T00:00:00.000Z',
+				to: '2026-08-24T00:00:00.000Z',
+				limit: 1,
+				symbol: 'TARGET',
+				maxScanDocs: 3,
+			});
+
+			expect(result.outcomes).toEqual([expect.objectContaining({ id: 'target-3', symbol: 'TARGET' })]);
+			expect(mockLimit).toHaveBeenCalledWith(3);
+		});
+
+		it('stops export pagination when the request signal is aborted', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const controller = new AbortController();
+			mockGet.mockImplementationOnce(async () => {
+				controller.abort();
+				return { empty: true, docs: [] };
+			});
+
+			await expect(SignalOutcomeService.exportOutcomes({
+				from: '2026-08-23T00:00:00.000Z',
+				to: '2026-08-24T00:00:00.000Z',
+				symbol: 'TARGET',
+				signal: controller.signal,
+			})).rejects.toMatchObject({ name: 'AbortError', code: 'ABORTED' });
+			expect(mockGet).toHaveBeenCalledTimes(1);
+		});
+
+		it('returns formatted export records with safe fields only', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			const receivedAt = new Date('2026-08-23T12:00:00.000Z');
+			mockGet.mockResolvedValueOnce({
+				empty: false,
+				docs: [
+					buildQueryDoc('outcome-1', {
+						receivedAt: admin.firestore.Timestamp.fromDate(receivedAt),
+						source: 'webhook',
+						symbol: 'BTCUSDT',
+						exchange: 'BINANCE',
+						assetClass: 'crypto',
+						side: 'BUY',
+						price: 65000,
+						stop: 63000,
+						target: 68000,
+						score: 0.9,
+						setupType: 'breakout',
+						outcomeEvaluated: true,
+						outcomes: { '1h': { status: 'evaluated' } },
+						rawMcpPayload: { sensitive: 'must-not-leak' },
+					}),
+				],
+			});
+
+			const res = await SignalOutcomeService.exportOutcomes({
+				from: '2026-08-23T00:00:00.000Z',
+				to: '2026-08-24T00:00:00.000Z',
+			});
+			expect(res.outcomes).toHaveLength(1);
+			expect(res.outcomes[0]).toMatchObject({
+				id: 'outcome-1',
+				receivedAt: '2026-08-23T12:00:00.000Z',
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				side: 'BUY',
+				price: 65000,
+				setupType: 'breakout',
+				score: 0.9,
+			});
+			expect(res.outcomes[0]).not.toHaveProperty('rawMcpPayload');
+			expect(res.outcomes[0]).not.toHaveProperty('outcomeEvaluated');
+		});
+
+		it('wraps Firestore read failures as STORAGE_UNAVAILABLE', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			mockGet.mockRejectedValueOnce(new Error('Connection terminated'));
+
+			const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+			try {
+				await expect(SignalOutcomeService.exportOutcomes({
+					from: '2026-08-23T00:00:00.000Z',
+					to: '2026-08-24T00:00:00.000Z',
+				})).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' });
 			} finally {
 				warnSpy.mockRestore();
 			}
