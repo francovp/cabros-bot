@@ -310,3 +310,124 @@ describe('DailyDigestService pagination', () => {
 		expect(agg.topWinners[0].symbol).toBe('OLDWIN');
 	});
 });
+
+describe('DailyDigestService Codex review follow-ups', () => {
+	const savedEnv = { ...process.env };
+	beforeEach(() => {
+		process.env.ENABLE_DAILY_DIGEST = 'true';
+		process.env.ENABLE_FIRESTORE_DIGEST_RUNS = 'true';
+		process.env.TELEGRAM_DIGEST_CHAT_ID = '-100123';
+	});
+	afterEach(() => { process.env = { ...savedEnv }; jest.clearAllMocks(); });
+
+	test('sanitizes Telegram errors so bot tokens are never stored or exposed', async () => {
+		const rawError = new Error('invalid json response body at https://api.telegram.org/bot987654321:AAFakeTokenForTest1234567890abcdef/sendMessage reason: Unexpected token');
+		const docs = new Map();
+		const firestore = {
+			collection: () => ({ doc: () => ({ id: 'x' }) }),
+			runTransaction: jest.fn(async (cb) => cb({
+				get: jest.fn(async () => ({ exists: false, data: () => undefined })),
+				set: jest.fn((ref, data) => docs.set(ref.id, data)),
+			})),
+		};
+		const svc = new DailyDigestService({
+			getAlertStorage: () => ({ summarizeAlerts: jest.fn(async () => ({ totalAlerts: 0, bySource: {}, delivery: { byChannel: {} } })) }),
+			getOutcomeStorage: () => ({ summarizeOutcomes: jest.fn(async () => ({ windows: { '1D': { hitRatePercent: 0 } } })), listOutcomes: jest.fn(async () => ({ outcomes: [] })) }),
+			getFirestoreFn: () => firestore,
+			sendTelegram: jest.fn(async () => { throw rawError; }),
+		});
+		const day = previousUtcDay(new Date('2026-11-08T13:30:00Z'));
+		await expect(svc.runDigestForDay(day)).rejects.toThrow();
+		const st = svc.getStatus();
+		expect(st.lastRunError).not.toContain('987654321:AAFakeTokenForTest1234567890abcdef');
+		expect(st.lastRunError).toContain('[REDACTED]');
+		expect(st.lastRunStatus).toBe('ambiguous');
+	});
+
+	test('normalizes directional scanner scores so strong bearish hits rank above weaker ones', async () => {
+		const svc = new DailyDigestService({
+			getAlertStorage: () => ({ summarizeAlerts: jest.fn(async () => ({ totalAlerts: 0, bySource: {}, delivery: { byChannel: {} } })) }),
+			getOutcomeStorage: () => ({
+				summarizeOutcomes: jest.fn(async () => ({ windows: { '1D': { hitRatePercent: 50 } } })),
+				listOutcomes: jest.fn(async () => ({
+					outcomes: [
+						{ source: 'market-scanner', symbol: 'WEAK_SELL', exchange: 'BINANCE', score: -0.2 },
+						{ source: 'market-scanner', symbol: 'STRONG_SELL', exchange: 'BINANCE', score: -0.95 },
+						{ source: 'market-scanner', symbol: 'MEDIUM_BUY', exchange: 'BINANCE', score: 0.5 },
+					],
+				})),
+			}),
+		});
+		const agg = await svc.aggregateForDay(previousUtcDay(new Date('2026-11-08T13:30:00Z')));
+		expect(agg.topScannerHits.map((o) => o.symbol)).toEqual(['STRONG_SELL', 'MEDIUM_BUY', 'WEAK_SELL']);
+	});
+
+	test('distinguishes failed summarizeAlerts query from zero activity and defers delivery', async () => {
+		const sendTelegram = jest.fn();
+		const svc = new DailyDigestService({
+			getAlertStorage: () => ({
+				summarizeAlerts: jest.fn(async () => { throw new Error('Firestore timeout'); }),
+			}),
+			getOutcomeStorage: () => ({
+				summarizeOutcomes: jest.fn(async () => ({ windows: { '1D': { hitRatePercent: 50 } } })),
+				listOutcomes: jest.fn(async () => ({ outcomes: [] })),
+			}),
+			getFirestoreFn: () => ({ collection: () => ({ doc: () => ({ id: 'x' }) }), runTransaction: jest.fn() }),
+			sendTelegram,
+		});
+		const day = previousUtcDay(new Date('2026-11-08T13:30:00Z'));
+		// In dryRun, text renders N/D instead of 0 or $0.0000
+		const dryResult = await svc.runDigestForDay(day, { dryRun: true });
+		expect(dryResult.text).toContain('Alertas:* N/D');
+		expect(dryResult.text).toContain('Gasto LLM:* N/D');
+		expect(dryResult.text).not.toContain('$0.0000');
+
+		// In real send, delivery is deferred so the day is not permanently deduplicated with zero data
+		const realResult = await svc.runDigestForDay(day, { dryRun: false });
+		expect(realResult.skipped).toBe(true);
+		expect(realResult.reason).toBe('alert-summary-unavailable');
+		expect(sendTelegram).not.toHaveBeenCalled();
+		expect(svc.getStatus().status).toBe('degraded');
+	});
+
+	test('Telegram 429 rate limit is marked rate-limited and allows retry after cooldown', async () => {
+		const rateLimitError = new Error('Too Many Requests: retry after 2');
+		rateLimitError.statusCode = 429;
+		rateLimitError.response = { error_code: 429, parameters: { retry_after: 2 } };
+
+		const docs = new Map();
+		const docId = '2026-11-07__' + require('crypto').createHash('sha256').update('-100123').digest('hex').slice(0, 16);
+		const firestore = {
+			collection: jest.fn(() => ({ doc: jest.fn(() => ({ id: docId })) })),
+			runTransaction: jest.fn(async (cb) => cb({
+				get: jest.fn(async () => ({ exists: docs.has(docId), data: () => docs.get(docId) })),
+				set: jest.fn((ref, data) => docs.set(ref.id || docId, { ...docs.get(ref.id || docId), ...data })),
+			})),
+		};
+
+		const svc = new DailyDigestService({
+			getAlertStorage: () => ({ summarizeAlerts: jest.fn(async () => ({ totalAlerts: 1, bySource: {}, delivery: { byChannel: {} } })) }),
+			getOutcomeStorage: () => ({ summarizeOutcomes: jest.fn(async () => ({ windows: { '1D': { hitRatePercent: 0 } } })), listOutcomes: jest.fn(async () => ({ outcomes: [] })) }),
+			getFirestoreFn: () => firestore,
+			sendTelegram: jest.fn(async () => { throw rateLimitError; }),
+		});
+
+		const day = previousUtcDay(new Date('2026-11-08T13:30:00Z'));
+		await expect(svc.runDigestForDay(day)).rejects.toThrow('Too Many Requests');
+		expect(svc.getStatus().lastRunStatus).toBe('rate-limited');
+
+		// During cooldown, reservation is rate-limited
+		const resImmediate = await svc.reserveDigest(day.dateStr, '-100123');
+		expect(resImmediate.ok).toBe(false);
+		expect(resImmediate.reason).toBe('rate-limited');
+
+		// After cooldown passes, reservation succeeds so the digest is not lost forever
+		const savedDoc = docs.get(docId);
+		savedDoc.updatedAt = new Date(Date.now() - 5000).toISOString();
+		docs.set(docId, savedDoc);
+
+		const resAfterCooldown = await svc.reserveDigest(day.dateStr, '-100123');
+		expect(resAfterCooldown.ok).toBe(true);
+		expect(resAfterCooldown.reason).toBe('reserved');
+	});
+});

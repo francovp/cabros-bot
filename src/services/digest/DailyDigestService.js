@@ -2,6 +2,7 @@
 
 const crypto = require('crypto');
 const { smartEscapeMarkdownV2 } = require('../notification/formatters/markdownV2Formatter');
+const { redactString } = require('../../lib/logging');
 const sentryService = require('../monitoring/SentryService');
 
 const RUNS_COLLECTION = 'digestRuns';
@@ -35,6 +36,15 @@ function previousUtcDay(now = new Date()) {
 function esc(value) {
 	if (value === undefined || value === null) return 'N/D';
 	return smartEscapeMarkdownV2(String(value));
+}
+
+function sanitizeTelegramError(err) {
+	if (!err) return 'unknown-error';
+	let msg = typeof err === 'string' ? err : (err.message || String(err));
+	msg = msg.replace(/(\/bot)[^/\s?#]+/gi, '$1[REDACTED]');
+	msg = redactString(msg);
+	if (msg.length > 256) msg = msg.slice(0, 256);
+	return msg;
 }
 
 function topByScore(items, n = 3, pickScore) {
@@ -96,7 +106,7 @@ class DailyDigestService {
 		let status = 'disabled';
 		if (enabled) {
 			if (!durableEnabled || !chatConfigured) status = 'degraded';
-			else if (this.lastRunStatus === 'failed' || this.lastRunStatus === 'ambiguous' || this.lastRunStatus === 'degraded') status = 'degraded';
+			else if (this.lastRunStatus === 'failed' || this.lastRunStatus === 'ambiguous' || this.lastRunStatus === 'degraded' || this.lastRunStatus === 'rate-limited') status = 'degraded';
 			else status = 'ready';
 		}
 		return {
@@ -125,19 +135,27 @@ class DailyDigestService {
 		const toISO = day.toISO || day.to.toISOString();
 
 		let alertSummary = null;
+		let alertSummaryFailed = false;
 		let outcomeSummary = null;
+		let outcomeSummaryFailed = false;
 		let outcomes = [];
 
 		try {
 			if (typeof alertStorage.summarizeAlerts === 'function') {
 				alertSummary = await alertStorage.summarizeAlerts({ from: fromISO, to: toISO, limit: 1000 });
 			}
-		} catch (err) { console.warn('[DailyDigest] summarizeAlerts failed:', err.message); }
+		} catch (err) {
+			alertSummaryFailed = true;
+			console.warn('[DailyDigest] summarizeAlerts failed:', err.message);
+		}
 		try {
 			if (typeof outcomeStorage.summarizeOutcomes === 'function') {
 				outcomeSummary = await outcomeStorage.summarizeOutcomes({ from: fromISO, to: toISO, window: '1D', limit: 1000 });
 			}
-		} catch (err) { console.warn('[DailyDigest] summarizeOutcomes failed:', err.message); }
+		} catch (err) {
+			outcomeSummaryFailed = true;
+			console.warn('[DailyDigest] summarizeOutcomes failed:', err.message);
+		}
 		try {
 			if (typeof outcomeStorage.listOutcomes === 'function') {
 				// listOutcomes clamps to MAX_LIMIT 100 per page; page through the
@@ -156,9 +174,10 @@ class DailyDigestService {
 		// Market-scanner alerts persist enrichmentData:null with no score; the
 		// per-signal outcomes are what recordMarketScannerOutcomes actually writes.
 
-		const bySource = alertSummary?.bySource || {};
-		const deliveryByChannel = alertSummary?.delivery?.byChannel || {};
-		const totalSpend = Number(alertSummary?.enrichment?.tokenUsage?.totalCost ?? alertSummary?.tokenUsage?.totalCost ?? 0) || 0;
+		const alertsUnavailable = alertSummaryFailed;
+		const bySource = alertsUnavailable ? {} : (alertSummary?.bySource || {});
+		const deliveryByChannel = alertsUnavailable ? {} : (alertSummary?.delivery?.byChannel || {});
+		const totalSpend = alertsUnavailable ? null : (Number(alertSummary?.enrichment?.tokenUsage?.totalCost ?? alertSummary?.tokenUsage?.totalCost ?? 0) || 0);
 		const maxSpend = this.getMaxSpendUsd();
 
 		let hitRatePercent = null;
@@ -179,20 +198,22 @@ class DailyDigestService {
 		const topScannerHits = topByScore(
 			outcomes.filter((o) => SCANNER_SOURCES.has(o.source)),
 			3,
-			(o) => (typeof o.score === 'number' && Number.isFinite(o.score) ? o.score : null),
+			(o) => (typeof o.score === 'number' && Number.isFinite(o.score) ? Math.abs(o.score) : null),
 		);
 		const topWinners = topByScore(outcomes.filter((o) => outcomeRMultiple(o) !== null), 3, outcomeRMultiple);
 
 		return {
 			dateStr: day.dateStr,
 			fromISO, toISO,
-			totalAlerts: alertSummary?.totalAlerts ?? 0,
+			alertsUnavailable,
+			totalAlerts: alertsUnavailable ? null : (alertSummary?.totalAlerts ?? 0),
 			bySource,
 			byChannel: deliveryByChannel,
 			totalSpend,
 			maxSpend,
-			spendExceeded: totalSpend > maxSpend,
+			spendExceeded: totalSpend !== null ? totalSpend > maxSpend : false,
 			outcomes: { hitRatePercent, eligible, evaluated, pending },
+			outcomesUnavailable: outcomeSummaryFailed,
 			topScannerHits,
 			topWinners,
 		};
@@ -202,7 +223,11 @@ class DailyDigestService {
 		const lines = [];
 		lines.push(`*📊 Daily Digest — ${esc(agg.dateStr)}*`);
 		lines.push('');
-		lines.push(`*Alertas:* ${agg.totalAlerts}`);
+		if (agg.alertsUnavailable) {
+			lines.push('*Alertas:* N/D');
+		} else {
+			lines.push(`*Alertas:* ${agg.totalAlerts ?? 0}`);
+		}
 		const sources = Object.entries(agg.bySource || {});
 		if (sources.length) lines.push(`*Por fuente:* ${sources.map(([k, v]) => `${esc(k)} ${v}`).join(' · ')}`);
 		const channels = Object.entries(agg.byChannel || {});
@@ -213,8 +238,12 @@ class DailyDigestService {
 			}).join(' · ')}`);
 		}
 		const o = agg.outcomes || {};
-		const hr = o.hitRatePercent === null || o.hitRatePercent === undefined ? 'N/D' : `${Number(o.hitRatePercent).toFixed(1)}%`;
-		lines.push(`*Outcomes \\(maduros 1D\\):* hit\\-rate ${esc(hr)} \\| elegibles ${o.eligible || 0} / evaluados ${o.evaluated || 0} / pendientes ${o.pending || 0}`);
+		if (agg.outcomesUnavailable) {
+			lines.push('*Outcomes \\(maduros 1D\\):* N/D');
+		} else {
+			const hr = o.hitRatePercent === null || o.hitRatePercent === undefined ? 'N/D' : `${Number(o.hitRatePercent).toFixed(1)}%`;
+			lines.push(`*Outcomes \\(maduros 1D\\):* hit\\-rate ${esc(hr)} \\| elegibles ${o.eligible || 0} / evaluados ${o.evaluated || 0} / pendientes ${o.pending || 0}`);
+		}
 		if ((agg.topScannerHits || []).length) {
 			lines.push('');
 			lines.push('*Top scanner hits:*');
@@ -233,9 +262,13 @@ class DailyDigestService {
 			});
 		}
 		lines.push('');
-		lines.push(`*Gasto LLM:* \\$${esc(Number(agg.totalSpend || 0).toFixed(4))}`);
-		if (agg.spendExceeded) {
-			lines.push('⚠️ Ayer el gasto LLM superó el presupuesto\\.');
+		if (agg.alertsUnavailable) {
+			lines.push('*Gasto LLM:* N/D');
+		} else {
+			lines.push(`*Gasto LLM:* \\$${esc(Number(agg.totalSpend || 0).toFixed(4))}`);
+			if (agg.spendExceeded) {
+				lines.push('⚠️ Ayer el gasto LLM superó el presupuesto\\.');
+			}
 		}
 		return lines.join('\n');
 	}
@@ -265,6 +298,11 @@ class DailyDigestService {
 					if (data.status === 'reserved') {
 						const ts = data.reservedAt ? new Date(data.reservedAt).getTime() : 0;
 						if (Date.now() - ts < LEASE_TTL_MS) return { outcome: 'reserved-elsewhere', data };
+					}
+					if (data.status === 'rate-limited') {
+						const ts = data.updatedAt ? new Date(data.updatedAt).getTime() : (data.reservedAt ? new Date(data.reservedAt).getTime() : 0);
+						const retryAfterMs = (data.retryAfterSeconds || 60) * 1000;
+						if (Date.now() - ts < retryAfterMs) return { outcome: 'rate-limited', data };
 					}
 				}
 				tx.set(ref, {
@@ -334,6 +372,11 @@ class DailyDigestService {
 		if (dryRun) {
 			return { dryRun: true, dateStr: day.dateStr, text, aggregation: agg };
 		}
+		if (agg.alertsUnavailable) {
+			this.lastRunStatus = 'degraded';
+			this.lastRunError = 'alert-summary-unavailable';
+			return { dryRun: false, skipped: true, reason: 'alert-summary-unavailable', dateStr: day.dateStr, text };
+		}
 		if (!chatId) {
 			this.lastRunStatus = 'degraded';
 			this.lastRunError = 'digest-chat-not-configured';
@@ -344,7 +387,7 @@ class DailyDigestService {
 		if (!reservation.ok) {
 			if (reservation.degraded) {
 				this.lastRunStatus = 'degraded';
-				this.lastRunError = reservation.reason;
+				this.lastRunError = sanitizeTelegramError(reservation.reason);
 			} else if (reservation.reason === 'already-sent') {
 				console.log('[DailyDigest] digest already sent, skipping');
 				this.lastRunStatus = 'already-sent';
@@ -353,6 +396,9 @@ class DailyDigestService {
 				this.lastRunStatus = 'ambiguous';
 			} else if (reservation.reason === 'reserved-elsewhere') {
 				this.lastRunStatus = 'lease-held';
+			} else if (reservation.reason === 'rate-limited') {
+				console.log('[DailyDigest] digest destination rate-limited, cooling down');
+				this.lastRunStatus = 'rate-limited';
 			}
 			this.lastRunDateStr = day.dateStr;
 			this.lastRunAt = new Date();
@@ -374,18 +420,34 @@ class DailyDigestService {
 				return { dryRun: false, sent: true, dateStr: day.dateStr, text, messageId: sent.messageId || null };
 			}
 			// Ambiguous: provider accepted but we cannot prove it. Per decision, do not auto-retry.
-			await this.markDigestDone(day.dateStr, chatId, token, 'ambiguous', { error: (sent && sent.error) || 'unknown-send-outcome' });
+			const sendErr = sanitizeTelegramError((sent && sent.error) || 'unknown-send-outcome');
+			await this.markDigestDone(day.dateStr, chatId, token, 'ambiguous', { error: sendErr });
 			this.lastRunStatus = 'ambiguous';
-			this.lastRunError = (sent && sent.error) || 'unknown-send-outcome';
+			this.lastRunError = sendErr;
 			return { dryRun: false, sent: false, ambiguous: true, dateStr: day.dateStr, text, error: this.lastRunError };
 		} catch (err) {
-			// A thrown transport error does not prove non-delivery.
+			const sanitizedError = sanitizeTelegramError(err);
 			const code = err?.response?.error_code ?? err?.statusCode;
-			const definitive = (code === 400 && /bad request/i.test(err.message || '')) || /chat not found/i.test(err.message || '');
-			const terminal = definitive ? 'failed' : 'ambiguous';
-			await this.markDigestDone(day.dateStr, chatId, token, terminal, { error: err.message });
+			const is429 = code === 429 || /429|too many requests/i.test(err?.message || '');
+			const isDefinitiveFailure = (code === 400 && /bad request/i.test(err?.message || '')) || /chat not found/i.test(err?.message || '');
+
+			if (is429) {
+				const retryAfterSeconds = err?.response?.parameters?.retry_after ?? err?.retry_after ?? 60;
+				await this.markDigestDone(day.dateStr, chatId, token, 'rate-limited', {
+					error: sanitizedError,
+					retryAfterSeconds: typeof retryAfterSeconds === 'number' ? retryAfterSeconds : 60,
+				});
+				this.lastRunStatus = 'rate-limited';
+				this.lastRunError = sanitizedError;
+				sentryService.captureRuntimeError?.({ channel: 'telegram', error: err, extra: { feature: 'daily-digest', status: 'rate-limited' } });
+				throw err;
+			}
+
+			// A thrown transport error does not prove non-delivery.
+			const terminal = isDefinitiveFailure ? 'failed' : 'ambiguous';
+			await this.markDigestDone(day.dateStr, chatId, token, terminal, { error: sanitizedError });
 			this.lastRunStatus = terminal;
-			this.lastRunError = err.message;
+			this.lastRunError = sanitizedError;
 			sentryService.captureRuntimeError?.({ channel: 'telegram', error: err, extra: { feature: 'daily-digest' } });
 			throw err;
 		} finally {
