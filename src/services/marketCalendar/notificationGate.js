@@ -110,7 +110,7 @@ function evaluateDeliveryGate(alert, options = {}) {
 			feature: 'marketCalendar',
 			context: { exchange },
 		});
-		console.warn(`[marketCalendar] classifier failed for ${exchange}; fail-open delivery:`, error.message);
+		console.warn('[marketCalendar] classifier failed; fail-open delivery:', error && error.message);
 		return { suppress: false, reason: null, sessionState: null, exchange };
 	}
 

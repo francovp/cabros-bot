@@ -142,7 +142,7 @@ function getSessionState(input = {}) {
 
 	const parts = resolveEasternParts(timestamp);
 	if (!parts) {
-		console.warn(`[marketCalendar] Could not resolve ET parts for exchange=${exchange}; returning unknown`);
+		console.warn('[marketCalendar] Could not resolve ET parts; returning unknown');
 		return { ...baseResult, venueKind: 'us_equity' };
 	}
 
