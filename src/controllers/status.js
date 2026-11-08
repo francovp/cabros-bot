@@ -39,6 +39,7 @@ const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsApp
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const portfolioAnalyticsService = require('../services/portfolio/PortfolioAnalyticsService');
 const priceQuoteCache = require('../services/cache/PriceQuoteCache');
 const { resolveStartupJitterMs } = require('../lib/startupJitter');
 const { getBackgroundTimerStats } = require('../lib/backgroundTimerRegistry');
@@ -681,6 +682,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			alertHtfRender: runtimeConfig.ENABLE_ALERT_HTF_RENDER,
 			alertModeration: alertModeration.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			portfolioAnalytics: portfolioAnalyticsService.isEnabled(),
 			marketCalendarGating: isMarketCalendarGatingEnabled(env),
 			environmentBanner: isEnvironmentBannerEnabled(),
 			symbolAliasResolver: aliasResolver.isEnabled(),
@@ -894,6 +896,15 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 				blocked: binanceTradingStatus.blocked,
 				ambiguousCount: autoTradeReservationService.getAmbiguousCount(),
 				ambiguousReservationsCount: autoTradeReservationService.getAmbiguousCount(),
+			},
+			portfolioAnalytics: {
+				enabled: portfolioAnalyticsService.isEnabled(),
+				ready: portfolioAnalyticsService.isEnabled() && firestore.configured,
+				status: portfolioAnalyticsService.isEnabled()
+					? (firestore.configured ? 'ready' : 'storage_unavailable')
+					: 'disabled',
+				storage: firestore.configured ? 'firestore' : 'memory',
+				alertStorageEnabled: firestore.enabled,
 			},
 			startupJitter: (() => {
 				const global = resolveStartupJitterMs({
