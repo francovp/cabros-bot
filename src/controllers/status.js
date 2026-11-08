@@ -375,10 +375,12 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 	const tradingViewMcpEnrichmentEnabled = runtimeConfig.ENABLE_TRADINGVIEW_MCP_ENRICHMENT;
 	const tradingViewVolumeConfirmationFlagEnabled = runtimeConfig.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
 	const tradingViewVolumeConfirmationEnabled = tradingViewVolumeConfirmationFlagEnabled && tradingViewMcpEnrichmentEnabled;
+	const strategyResearchEnabled = runtimeConfig.ENABLE_STRATEGY_RESEARCH;
 	const observedTradingViewMcpStatus = tradingViewMcpService.getStatus({ enabled: true });
 	const tradingViewMcpEnabled =
 		tradingViewMcpEnrichmentEnabled
 		|| marketScannerEnabled
+		|| strategyResearchEnabled
 		|| observedTradingViewMcpStatus.lastCheckedAt !== null;
 	// Issue #721: report the gate that actually runs, not the raw environment value.
 	// These gates are runtime-resolved, so a published remote value is what the
@@ -497,6 +499,14 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 	const tradingViewVolumeConfirmation = tradingViewMcpService.getVolumeConfirmationStatus({
 		enabled: tradingViewVolumeConfirmationEnabled,
 	});
+	const tradingViewStrategyResearch = typeof tradingViewMcpService.getStrategyResearchStatus === 'function'
+		? tradingViewMcpService.getStrategyResearchStatus({
+			enabled: strategyResearchEnabled,
+		})
+		: dependencyStatus({
+			enabled: strategyResearchEnabled,
+			configured: false,
+		});
 	const firestore = withFirestoreReadHealth(dependencyStatus({
 		enabled: firestoreEnabled,
 		configured: isFirestoreConfigured(),
@@ -647,6 +657,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			tradingViewVolumeConfirmation: tradingViewVolumeConfirmationFlagEnabled,
 			tradingViewConfluenceEnrichment: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT),
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
+			strategyResearch: strategyResearchEnabled,
 			firestoreAlertStorage: firestoreEnabled,
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
 			firestoreAlertSubscribers: firestoreAlertSubscribersEnabled,
@@ -767,6 +778,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			...(grounding ? { grounding } : {}),
 			tradingViewMcp,
 			tradingViewVolumeConfirmation,
+			tradingViewStrategyResearch,
 			firestore,
 			firestoreJobStorage,
 			...(firestoreWriteMetricsService.getSnapshot()

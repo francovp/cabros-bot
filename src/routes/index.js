@@ -53,6 +53,11 @@ const { listSymbolAnalyses, summarizeSymbolAnalyses } = require('../controllers/
 const { listEnrollments } = require('../controllers/webhooks/handlers/enrollments/enrollments');
 const { getPreferencesHandler, putPreferencesHandler, deletePreferencesHandler } = require('../controllers/preferences/preferences');
 const {
+	getCompareStrategies,
+	postWalkForward,
+	postBacktest,
+} = require('../controllers/research/strategyResearch');
+const {
 	listSubscribers,
 	postSubscriber,
 	getSubscriber,
@@ -153,6 +158,20 @@ function getRoutes(botOrGetter) {
 	router.put('/scanner-presets/:id', ...adminWrite, updatePreset);
 	router.delete('/scanner-presets/:id', ...adminWrite, deletePreset);
 	router.post('/scanner-presets/:id/run', ...adminWrite, idempotencyMiddleware, postRunPreset(botOrGetter));
+
+	// Strategy research (TradingView MCP backtest / compare / walk-forward).
+	// Gated by validateApiKey plus the ENABLE_STRATEGY_RESEARCH feature flag:
+	// read-only analytics over upstream MCP results, not operator data, so
+	// adminRead would be the wrong tier. Each handler is a factory that
+	// returns the express handler.
+	// Rate limited by the app-wide src/lib/rateLimiter (app.use).
+	// CodeQL's js/missing-rate-limiting cannot see the app-level middleware.
+	/* codeql[js/missing-rate-limiting] */
+	router.get('/research/strategies', validateApiKey, getCompareStrategies());
+	/* codeql[js/missing-rate-limiting] */
+	router.post('/research/walk-forward', validateApiKey, postWalkForward());
+	/* codeql[js/missing-rate-limiting] */
+	router.post('/research/backtest', validateApiKey, postBacktest());
 
 	// Symbol alias resolver (issue #845) — operator-only lookup endpoints.
 	router.post('/symbols/resolve', ...adminWrite, postResolveSymbol());

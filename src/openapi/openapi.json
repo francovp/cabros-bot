@@ -3,7 +3,7 @@
   "info": {
     "title": "Cabros Bot API",
     "version": "0.1.0",
-    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter is deprecated and exists only for legacy compatibility — it may leak through reverse-proxy access logs. A one-time per-process deprecation warning is emitted on use; setting API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) rejects query-parameter auth with 401 API_KEY_QUERY_REMOVED after the date. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true. HTTP 429 responses include Retry-After and retryAfterSeconds. Dedicated per-endpoint limits default to heavy 5, trading 10, standard 30, and light 100 requests per 60 seconds. All webhook/news ingest paths share an aggregate 1,000-request bucket per RATE_LIMIT_WINDOW_MS; tiered webhook routes enforce both the aggregate and per-endpoint limits, while alert/message use only the aggregate. Other routes use RATE_LIMIT_WINDOW_MS and RATE_LIMIT_MAX."
+    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter is deprecated and exists only for legacy compatibility \u2014 it may leak through reverse-proxy access logs. A one-time per-process deprecation warning is emitted on use; setting API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) rejects query-parameter auth with 401 API_KEY_QUERY_REMOVED after the date. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true. HTTP 429 responses include Retry-After and retryAfterSeconds. Dedicated per-endpoint limits default to heavy 5, trading 10, standard 30, and light 100 requests per 60 seconds. All webhook/news ingest paths share an aggregate 1,000-request bucket per RATE_LIMIT_WINDOW_MS; tiered webhook routes enforce both the aggregate and per-endpoint limits, while alert/message use only the aggregate. Other routes use RATE_LIMIT_WINDOW_MS and RATE_LIMIT_MAX."
   },
   "servers": [
     {
@@ -427,7 +427,7 @@
                 },
                 "examples": {
                   "depthReadiness": {
-                    "summary": "?depth=readiness — always 200; degradation is reported in the body",
+                    "summary": "?depth=readiness \u2014 always 200; degradation is reported in the body",
                     "value": {
                       "ready": true,
                       "failClosed": false,
@@ -463,7 +463,7 @@
                     }
                   },
                   "depthReadinessDegraded": {
-                    "summary": "?depth=readiness with a degraded provider — still 200 (advisory)",
+                    "summary": "?depth=readiness with a degraded provider \u2014 still 200 (advisory)",
                     "value": {
                       "ready": false,
                       "failClosed": false,
@@ -545,7 +545,7 @@
                 },
                 "examples": {
                   "dependenciesHealthy": {
-                    "summary": "/ready?depth=dependencies — bootstrap ready AND every considered dependency healthy",
+                    "summary": "/ready?depth=dependencies \u2014 bootstrap ready AND every considered dependency healthy",
                     "value": {
                       "ready": true,
                       "failClosed": true,
@@ -594,7 +594,7 @@
                     }
                   },
                   "bootstrapReady": {
-                    "summary": "Bare /ready — bootstrap gate only, no provider probes",
+                    "summary": "Bare /ready \u2014 bootstrap gate only, no provider probes",
                     "value": {
                       "status": "ready",
                       "ready": true,
@@ -639,7 +639,7 @@
                 },
                 "examples": {
                   "bootstrapPending": {
-                    "summary": "Bare /ready — bootstrap still pending (503)",
+                    "summary": "Bare /ready \u2014 bootstrap still pending (503)",
                     "value": {
                       "status": "pending",
                       "ready": false,
@@ -661,7 +661,7 @@
                     }
                   },
                   "dependenciesDegraded": {
-                    "summary": "/ready?depth=dependencies — dependency degraded (503)",
+                    "summary": "/ready?depth=dependencies \u2014 dependency degraded (503)",
                     "value": {
                       "ready": false,
                       "failClosed": true,
@@ -711,7 +711,7 @@
                     }
                   },
                   "bootstrapPendingBlocksDependencies": {
-                    "summary": "/ready?depth=dependencies — bootstrap still pending, so the gate stays 503 even though every dependency is healthy",
+                    "summary": "/ready?depth=dependencies \u2014 bootstrap still pending, so the gate stays 503 even though every dependency is healthy",
                     "value": {
                       "ready": false,
                       "failClosed": true,
@@ -1646,7 +1646,7 @@
         "tags": [
           "Alerts"
         ],
-        "summary": "Record a trader verdict (👍 / 👎) for a stored alert",
+        "summary": "Record a trader verdict (\ud83d\udc4d / \ud83d\udc4e) for a stored alert",
         "operationId": "submitAlertFeedback",
         "description": "Persists a single trader verdict per (alertId, chatId) tuple. Re-clicks update the verdict instead of appending a new row. Bounded by ALERT_FEEDBACK_RETENTION_DAYS and a SHA-256 chat hash; raw chat ids are never returned through this surface.",
         "requestBody": {
@@ -4250,7 +4250,7 @@
           "Signal outcomes"
         ],
         "summary": "Retrieve confidence calibration analysis for signal outcomes",
-        "description": "Calculates empirical target-hit rates and average returns grouped by confidence score buckets (e.g. 0.70–0.75, 0.75–0.80, 0.80–0.85, 0.85–0.90, 0.90–1.00) over evaluated signals, suggesting an optimal confidence threshold.",
+        "description": "Calculates empirical target-hit rates and average returns grouped by confidence score buckets (e.g. 0.70\u20130.75, 0.75\u20130.80, 0.80\u20130.85, 0.85\u20130.90, 0.90\u20131.00) over evaluated signals, suggesting an optimal confidence threshold.",
         "operationId": "getOutcomesCalibration",
         "parameters": [
           {
@@ -4902,7 +4902,7 @@
           "Trading"
         ],
         "summary": "Preview a Binance Spot order without submitting it",
-        "description": "Accepts only MARKET and LIMIT order types. Returns a BINANCE_ORDER_PREVIEW response with the LOT_SIZE-adjusted quantity, projected notional, estimated maker/taker fees, slippage estimate from a fail-open depth probe (4-second AbortController deadline), and a 5-second expiresAt token. The endpoint is read-only and never calls submitNewOrder. Preview-time validation reuses the same exchange-info filters and Binance order-test filters as POST /api/trading/binance/orders, but cannot be replayed after expiresAt. maxSlippageBps is honored for MARKET BUY orders that include a depth snapshot; wouldExceedBudget is reported when the slippageBps estimate exceeds the supplied budget but no order is rejected. BINANCE_TRADING_MAX_NOTIONAL is enforced — previews above the cap return 403 MAX_NOTIONAL_EXCEEDED. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
+        "description": "Accepts only MARKET and LIMIT order types. Returns a BINANCE_ORDER_PREVIEW response with the LOT_SIZE-adjusted quantity, projected notional, estimated maker/taker fees, slippage estimate from a fail-open depth probe (4-second AbortController deadline), and a 5-second expiresAt token. The endpoint is read-only and never calls submitNewOrder. Preview-time validation reuses the same exchange-info filters and Binance order-test filters as POST /api/trading/binance/orders, but cannot be replayed after expiresAt. maxSlippageBps is honored for MARKET BUY orders that include a depth snapshot; wouldExceedBudget is reported when the slippageBps estimate exceeds the supplied budget but no order is rejected. BINANCE_TRADING_MAX_NOTIONAL is enforced \u2014 previews above the cap return 403 MAX_NOTIONAL_EXCEEDED. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
         "operationId": "postBinanceSpotOrderPreview",
         "requestBody": {
           "required": true,
@@ -5009,7 +5009,7 @@
                         "makerFeeBps": 10,
                         "appliedFeeBps": 10,
                         "estimatedFeeQuote": "0.65",
-                        "label": "estimate — not a Binance fill guarantee"
+                        "label": "estimate \u2014 not a Binance fill guarantee"
                       },
                       "slippage": {
                         "slippageBudgetBps": 75,
@@ -5500,7 +5500,7 @@
                     }
                   },
                   "tradingUnavailable": {
-                    "summary": "Authoritative pause state could not be read — failing closed",
+                    "summary": "Authoritative pause state could not be read \u2014 failing closed",
                     "value": {
                       "success": false,
                       "error": "Binance Spot order submission is unavailable (control state cannot be read; failing closed)",
@@ -5979,7 +5979,7 @@
             "$ref": "#/components/responses/Error"
           },
           "503": {
-            "description": "Authoritative pause storage is unavailable — refusing to mutate state",
+            "description": "Authoritative pause storage is unavailable \u2014 refusing to mutate state",
             "headers": {
               "X-Request-Id": {
                 "$ref": "#/components/headers/XRequestIdResponseHeader"
@@ -6131,7 +6131,7 @@
             "$ref": "#/components/responses/Error"
           },
           "503": {
-            "description": "Authoritative pause storage is unavailable — refusing to mutate state",
+            "description": "Authoritative pause storage is unavailable \u2014 refusing to mutate state",
             "headers": {
               "X-Request-Id": {
                 "$ref": "#/components/headers/XRequestIdResponseHeader"
@@ -7431,7 +7431,7 @@
           "Operations"
         ],
         "summary": "Get deployment banner snapshot",
-        "description": "Returns the public, unauthenticated deployment banner snapshot. Mirrors the X-Cabros-* response headers (when ENABLE_ENVIRONMENT_BANNER is enabled). The endpoint is auth-free and exposes only environment/commit/name/deployedAt — never credentials or webhook secrets. Use it for external status pages and badge generators that cannot read response headers.",
+        "description": "Returns the public, unauthenticated deployment banner snapshot. Mirrors the X-Cabros-* response headers (when ENABLE_ENVIRONMENT_BANNER is enabled). The endpoint is auth-free and exposes only environment/commit/name/deployedAt \u2014 never credentials or webhook secrets. Use it for external status pages and badge generators that cannot read response headers.",
         "operationId": "getBanner",
         "security": [],
         "responses": {
@@ -7902,6 +7902,591 @@
           }
         ]
       }
+    },
+    "/api/research/strategies": {
+      "get": {
+        "tags": [
+          "Research"
+        ],
+        "summary": "Compare multiple technical strategies using TradingView MCP",
+        "description": "Evaluates multiple strategies across historical data for a given asset and returns comparative performance metrics.",
+        "operationId": "getCompareStrategies",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": true,
+            "description": "TradingView symbol (e.g. BTCUSDT or BINANCE:BTCUSDT)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": false,
+            "description": "Exchange identifier (e.g. BINANCE)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "interval",
+            "in": "query",
+            "required": false,
+            "description": "Bar interval (1h or 1d; 4h is mapped to 1h)",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1h",
+                "1d"
+              ],
+              "default": "1h"
+            }
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "description": "Historical lookback period (e.g. 1y, 6m, 30d)",
+            "schema": {
+              "type": "string",
+              "default": "1y"
+            }
+          },
+          {
+            "name": "initial_capital",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 10000
+            }
+          },
+          {
+            "name": "commission_pct",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 0.001
+            }
+          },
+          {
+            "name": "slippage_pct",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 0.0005
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Strategy comparison results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "tool",
+                    "symbol",
+                    "exchange",
+                    "cached",
+                    "result",
+                    "requestId",
+                    "processingTimeMs"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "tool": {
+                      "type": "string",
+                      "example": "compare_strategies"
+                    },
+                    "symbol": {
+                      "type": "string",
+                      "example": "BTCUSDT"
+                    },
+                    "exchange": {
+                      "type": "string",
+                      "example": "BINANCE"
+                    },
+                    "interval": {
+                      "type": "string",
+                      "example": "1h"
+                    },
+                    "period": {
+                      "type": "string",
+                      "example": "1y"
+                    },
+                    "cached": {
+                      "type": "boolean"
+                    },
+                    "result": {
+                      "type": "object"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "processingTimeMs": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/research/walk-forward": {
+      "post": {
+        "tags": [
+          "Research"
+        ],
+        "summary": "Execute walk-forward strategy backtest using TradingView MCP",
+        "description": "Performs out-of-sample walk-forward validation across rolling train/test splits for a specified strategy.",
+        "operationId": "postWalkForward",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "symbol",
+                  "strategy"
+                ],
+                "properties": {
+                  "symbol": {
+                    "type": "string",
+                    "example": "BINANCE:BTCUSDT"
+                  },
+                  "exchange": {
+                    "type": "string",
+                    "example": "BINANCE"
+                  },
+                  "strategy": {
+                    "type": "string",
+                    "enum": [
+                      "rsi",
+                      "bollinger",
+                      "macd",
+                      "ema_cross",
+                      "supertrend",
+                      "donchian"
+                    ],
+                    "example": "rsi"
+                  },
+                  "interval": {
+                    "type": "string",
+                    "enum": [
+                      "1h",
+                      "1d"
+                    ],
+                    "default": "1h"
+                  },
+                  "period": {
+                    "type": "string",
+                    "default": "1y"
+                  },
+                  "n_splits": {
+                    "type": "integer",
+                    "minimum": 2,
+                    "maximum": 10,
+                    "default": 5
+                  },
+                  "train_ratio": {
+                    "type": "number",
+                    "minimum": 0.5,
+                    "maximum": 0.9,
+                    "default": 0.7
+                  },
+                  "initial_capital": {
+                    "type": "number",
+                    "default": 10000
+                  },
+                  "commission_pct": {
+                    "type": "number",
+                    "default": 0.001
+                  },
+                  "slippage_pct": {
+                    "type": "number",
+                    "default": 0.0005
+                  },
+                  "include_trade_log": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Walk forward backtest results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "tool",
+                    "symbol",
+                    "exchange",
+                    "strategy",
+                    "cached",
+                    "result",
+                    "requestId",
+                    "processingTimeMs"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "tool": {
+                      "type": "string",
+                      "example": "walk_forward_backtest_strategy"
+                    },
+                    "symbol": {
+                      "type": "string",
+                      "example": "BTCUSDT"
+                    },
+                    "exchange": {
+                      "type": "string",
+                      "example": "BINANCE"
+                    },
+                    "strategy": {
+                      "type": "string",
+                      "example": "rsi"
+                    },
+                    "interval": {
+                      "type": "string",
+                      "example": "1h"
+                    },
+                    "period": {
+                      "type": "string",
+                      "example": "1y"
+                    },
+                    "cached": {
+                      "type": "boolean"
+                    },
+                    "result": {
+                      "type": "object"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "processingTimeMs": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/research/backtest": {
+      "post": {
+        "tags": [
+          "Research"
+        ],
+        "summary": "Execute single technical strategy backtest using TradingView MCP",
+        "description": "Runs a backtest for a chosen indicator-based strategy over historical price data.",
+        "operationId": "postBacktest",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "symbol",
+                  "strategy"
+                ],
+                "properties": {
+                  "symbol": {
+                    "type": "string",
+                    "example": "BINANCE:BTCUSDT"
+                  },
+                  "exchange": {
+                    "type": "string",
+                    "example": "BINANCE"
+                  },
+                  "strategy": {
+                    "type": "string",
+                    "enum": [
+                      "rsi",
+                      "bollinger",
+                      "macd",
+                      "ema_cross",
+                      "supertrend",
+                      "donchian"
+                    ],
+                    "example": "ema_cross"
+                  },
+                  "interval": {
+                    "type": "string",
+                    "enum": [
+                      "1h",
+                      "1d"
+                    ],
+                    "default": "1h"
+                  },
+                  "period": {
+                    "type": "string",
+                    "default": "1y"
+                  },
+                  "initial_capital": {
+                    "type": "number",
+                    "default": 10000
+                  },
+                  "commission_pct": {
+                    "type": "number",
+                    "default": 0.001
+                  },
+                  "slippage_pct": {
+                    "type": "number",
+                    "default": 0.0005
+                  },
+                  "include_trade_log": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Backtest results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "tool",
+                    "symbol",
+                    "exchange",
+                    "strategy",
+                    "cached",
+                    "result",
+                    "requestId",
+                    "processingTimeMs"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "tool": {
+                      "type": "string",
+                      "example": "backtest_strategy"
+                    },
+                    "symbol": {
+                      "type": "string",
+                      "example": "BTCUSDT"
+                    },
+                    "exchange": {
+                      "type": "string",
+                      "example": "BINANCE"
+                    },
+                    "strategy": {
+                      "type": "string",
+                      "example": "ema_cross"
+                    },
+                    "interval": {
+                      "type": "string",
+                      "example": "1h"
+                    },
+                    "period": {
+                      "type": "string",
+                      "example": "1y"
+                    },
+                    "cached": {
+                      "type": "boolean"
+                    },
+                    "result": {
+                      "type": "object"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "processingTimeMs": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
     }
   },
   "components": {
@@ -7916,7 +8501,7 @@
         "type": "apiKey",
         "in": "query",
         "name": "api-key",
-        "description": "Deprecated (GH-756): legacy compatibility only — query strings may be logged by reverse proxies and access logs. Prefer the x-api-key header. Admin routes accept query credentials only through the WEBHOOK_API_KEY fallback when ADMIN_API_KEY is unset. Binance routes accept query credentials only when BINANCE_TRADING_API_KEY is unset and the admin-auth fallback also accepts the query. A process-scoped deprecation warning is logged on first use, and API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) can reject query auth with 401 API_KEY_QUERY_REMOVED.",
+        "description": "Deprecated (GH-756): legacy compatibility only \u2014 query strings may be logged by reverse proxies and access logs. Prefer the x-api-key header. Admin routes accept query credentials only through the WEBHOOK_API_KEY fallback when ADMIN_API_KEY is unset. Binance routes accept query credentials only when BINANCE_TRADING_API_KEY is unset and the admin-auth fallback also accepts the query. A process-scoped deprecation warning is logged on first use, and API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) can reject query auth with 401 API_KEY_QUERY_REMOVED.",
         "x-deprecated": true
       },
       "AdminApiKeyHeader": {
@@ -11820,7 +12405,7 @@
                 },
                 "message": {
                   "type": "string",
-                  "example": "Preferencias eliminadas. Se usarán valores por defecto."
+                  "example": "Preferencias eliminadas. Se usar\u00e1n valores por defecto."
                 }
               },
               "required": [
@@ -12881,7 +13466,7 @@
       },
       "SignalClassClassification": {
         "type": "object",
-        "description": "In-memory counters for signal classification on the webhook ingest path. `featureFlags.signalClassMarker` only states that the badge marker is allowed to render; this block states whether alerts are actually being classified, so a silent regression back to 100% `unknown` is detectable instead of looking healthy. Counters reset on process restart, never block delivery or persistence, and the field is omitted entirely from /api/status when no alert has been classified yet. Contains only enum class names and counts — never alert text, symbols, or chat ids.",
+        "description": "In-memory counters for signal classification on the webhook ingest path. `featureFlags.signalClassMarker` only states that the badge marker is allowed to render; this block states whether alerts are actually being classified, so a silent regression back to 100% `unknown` is detectable instead of looking healthy. Counters reset on process restart, never block delivery or persistence, and the field is omitted entirely from /api/status when no alert has been classified yet. Contains only enum class names and counts \u2014 never alert text, symbols, or chat ids.",
         "required": [
           "window",
           "totalAlerts",
@@ -13461,7 +14046,7 @@
           },
           "ready": {
             "type": "boolean",
-            "description": "True when the audit trail is enabled and Firestore credentials are present (credential readiness only, equivalent to `enabled && configured`); it does not prove a write has succeeded — audit writes are fail-open and a failed write is dropped with a warning."
+            "description": "True when the audit trail is enabled and Firestore credentials are present (credential readiness only, equivalent to `enabled && configured`); it does not prove a write has succeeded \u2014 audit writes are fail-open and a failed write is dropped with a warning."
           },
           "status": {
             "type": "string",
@@ -17544,7 +18129,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Spanish warnings surfaced from the plan-quality gate (e.g. R/R por debajo del mínimo)."
+            "description": "Spanish warnings surfaced from the plan-quality gate (e.g. R/R por debajo del m\u00ednimo)."
           }
         }
       },
@@ -17818,7 +18403,7 @@
               "firestore_unavailable",
               null
             ],
-            "description": "Closed enum so a Firestore error message — which embeds the project and database path — can never reach a status response."
+            "description": "Closed enum so a Firestore error message \u2014 which embeds the project and database path \u2014 can never reach a status response."
           }
         }
       },
@@ -17938,7 +18523,7 @@
               "unknown_error",
               null
             ],
-            "description": "Closed enum so a Firestore error message — which embeds the fully-qualified project/database path — can never reach a status response."
+            "description": "Closed enum so a Firestore error message \u2014 which embeds the fully-qualified project/database path \u2014 can never reach a status response."
           },
           "lastMissingIndex": {
             "type": "boolean",
@@ -18290,7 +18875,7 @@
       },
       "ScannerPresetStorage": {
         "type": "object",
-        "description": "Scanner-preset persistence state. `mode` and `backend` are intent-derived: they report the configured target and must not flip to `memory` while ENABLE_FIRESTORE_SCANNER_PRESETS=true and credentials are present, because an operator reading `memory` concludes the feature is off. `status` separates the three causes that need different action — `disabled` (ENABLE_FIRESTORE_SCANNER_PRESETS is not true), `misconfigured` (credentials genuinely absent or rejected), and `degraded` (a durable operation failed and nothing has answered since). `unverified` means no durable operation has been observed yet: neither healthy nor broken, and the normal state immediately after a restart.",
+        "description": "Scanner-preset persistence state. `mode` and `backend` are intent-derived: they report the configured target and must not flip to `memory` while ENABLE_FIRESTORE_SCANNER_PRESETS=true and credentials are present, because an operator reading `memory` concludes the feature is off. `status` separates the three causes that need different action \u2014 `disabled` (ENABLE_FIRESTORE_SCANNER_PRESETS is not true), `misconfigured` (credentials genuinely absent or rejected), and `degraded` (a durable operation failed and nothing has answered since). `unverified` means no durable operation has been observed yet: neither healthy nor broken, and the normal state immediately after a restart.",
         "required": [
           "enabled",
           "configured",
@@ -18495,7 +19080,7 @@
           },
           "writesAttempted": {
             "type": "integer",
-            "description": "Durable write attempts, including those where Firebase initialization was rejected — asking for durable storage and not getting it is the event an operator needs to see. A rejected initialization is charged to the operation that triggered it, so browsing the collection never increments this counter."
+            "description": "Durable write attempts, including those where Firebase initialization was rejected \u2014 asking for durable storage and not getting it is the event an operator needs to see. A rejected initialization is charged to the operation that triggered it, so browsing the collection never increments this counter."
           },
           "writesSucceeded": {
             "type": "integer"
@@ -18535,7 +19120,7 @@
               "firestore_unavailable"
             ],
             "nullable": true,
-            "description": "Closed enum so a Firestore error message — which embeds the fully-qualified project and database path — can never leak into a status response."
+            "description": "Closed enum so a Firestore error message \u2014 which embeds the fully-qualified project and database path \u2014 can never leak into a status response."
           }
         }
       },
@@ -22945,7 +23530,7 @@
           },
           "bySymbol": {
             "type": "object",
-            "description": "Per-symbol analysis volume. The count key is `totalAnalyses` here and `total` in `byEventCategory`, and the service does not emit a per-row alert rate — derive it as `alertsSent / totalAnalyses`.",
+            "description": "Per-symbol analysis volume. The count key is `totalAnalyses` here and `total` in `byEventCategory`, and the service does not emit a per-row alert rate \u2014 derive it as `alertsSent / totalAnalyses`.",
             "additionalProperties": {
               "type": "object",
               "required": [
@@ -23289,7 +23874,7 @@
               "boolean",
               "null"
             ],
-            "description": "Result of the bounded broker readiness probe: true once a probe has proven connectivity, false when the last probe ran and the broker did not answer, and null when no probe has produced a verdict — which includes queue mode being disabled, a missing broker URL (misconfigured), and an enabled+configured queue whose probe has not settled yet. Unlike `configured`, this is evidence rather than configuration shape."
+            "description": "Result of the bounded broker readiness probe: true once a probe has proven connectivity, false when the last probe ran and the broker did not answer, and null when no probe has produced a verdict \u2014 which includes queue mode being disabled, a missing broker URL (misconfigured), and an enabled+configured queue whose probe has not settled yet. Unlike `configured`, this is evidence rather than configuration shape."
           },
           "lastBrokerProbeAt": {
             "type": [
