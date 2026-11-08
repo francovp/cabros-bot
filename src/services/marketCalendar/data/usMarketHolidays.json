@@ -52,8 +52,7 @@
       { "date": "2027-09-06", "name": "Labor Day", "type": "full_day" },
       { "date": "2027-11-25", "name": "Thanksgiving Day", "type": "full_day" },
       { "date": "2027-11-26", "name": "Day after Thanksgiving (Black Friday early close)", "type": "half_day" },
-      { "date": "2027-12-24", "name": "Christmas Eve (early close)", "type": "half_day" },
-      { "date": "2027-12-31", "name": "Christmas (observed, early close)", "type": "half_day" }
+      { "date": "2027-12-24", "name": "Christmas Day (observed)", "type": "full_day" }
     ]
   }
 }

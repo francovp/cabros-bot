@@ -110,6 +110,23 @@ describe('marketCalendar/sessionState', () => {
 			expect(result.state).toBe(SESSION_STATES.HOLIDAY);
 			expect(result.suppressDelivery).toBe(true);
 		});
+
+		it('classifies observed Christmas 2027 (Dec 24) as full-day holiday', () => {
+			// Per the official NYSE 2027 calendar, Dec 25 2027 is a Saturday so
+			// Friday Dec 24 is the observed full-day Christmas closure, and
+			// Dec 31 is a normal trading day.
+			const result = getSessionState({ exchange: 'NASDAQ', timestamp: etDate(2027, 12, 24, 15, 30) });
+			expect(result.state).toBe(SESSION_STATES.HOLIDAY);
+			expect(result.suppressDelivery).toBe(true);
+		});
+
+		it('classifies Dec 31 2027 as a regular session (not an early close)', () => {
+			// 2027-12-31 19:00 UTC = 14:00 ET — would be suppressed if the stale
+			// "observed early close" entry were still present.
+			const result = getSessionState({ exchange: 'NASDAQ', timestamp: etDate(2027, 12, 31, 19, 0) });
+			expect(result.state).toBe(SESSION_STATES.REGULAR);
+			expect(result.suppressDelivery).toBe(false);
+		});
 	});
 
 	describe('U.S. equity venues — half-day early close', () => {

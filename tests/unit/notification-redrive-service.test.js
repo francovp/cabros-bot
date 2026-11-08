@@ -402,6 +402,52 @@ describe('NotificationRedriveService', () => {
 			expect(pending.destinationOverride.whatsappChatId).toBe('120363@g.us');
 		});
 
+		it('preserves exchange and _marketCalendarGate on stored alert payload for calendar replay gating', async () => {
+			const alert = {
+				text: 'NASDAQ:AAPL BUY',
+				correlationId: 'corr-cal-gate',
+				exchange: 'NASDAQ',
+				_marketCalendarGate: { suppress: true, reason: 'market_holiday', exchange: 'NASDAQ' },
+			};
+			const results = [
+				{ channel: 'telegram', success: false, error: 'market_holiday', skipped: true },
+			];
+			const recorded = await service.recordDeliveryResults(alert, results);
+			expect(recorded).toHaveLength(1);
+			const pending = service.inMemoryStore.get('corr-cal-gate_telegram');
+			expect(pending.alert.exchange).toBe('NASDAQ');
+			expect(pending.alert._marketCalendarGate).toEqual({
+				suppress: true,
+				reason: 'market_holiday',
+				exchange: 'NASDAQ',
+			});
+		});
+
+		it('preserves exchange and market-calendar gate context through serialization', async () => {
+			const alert = {
+				text: 'NASDAQ:NVDA BUY',
+				correlationId: 'corr-market-gate',
+				exchange: 'NASDAQ',
+				_marketCalendarGate: {
+					suppress: true,
+					reason: 'market_holiday',
+					exchange: 'NASDAQ',
+					sessionState: { state: 'holiday' },
+				},
+			};
+			const results = [
+				{ channel: 'telegram', success: false, error: 'market_holiday', errorCode: 'market_holiday', skipped: true },
+			];
+
+			const recorded = await service.recordDeliveryResults(alert, results);
+			expect(recorded).toHaveLength(1);
+
+			const pending = service.inMemoryStore.get('corr-market-gate_telegram');
+			expect(pending.alert.exchange).toBe('NASDAQ');
+			expect(pending.alert._marketCalendarGate).toEqual(alert._marketCalendarGate);
+			expect(pending.lastError).toBe('market_holiday');
+		});
+
 		it('keeps recipient-specific failures under distinct in-memory and Firestore redrive IDs', async () => {
 			alertStorageService.getFirestore.mockReturnValue(mockFirestore);
 			const alert = { text: 'Alert body', requestId: 'delivery-1' };

@@ -60,7 +60,17 @@ describe('marketCalendar/notificationGate', () => {
 			})).toBe('NASDAQ');
 		});
 
-		it('returns null when no exchange candidate is present', () => {
+		it('reads exchange from _marketCalendarGate payload', () => {
+			expect(resolveAlertExchange({
+				_marketCalendarGate: { exchange: 'NYSE' },
+			})).toBe('NYSE');
+		});
+
+		it('resolves exchange from alert.text when candidates are absent', () => {
+			expect(resolveAlertExchange({ text: 'NASDAQ:AAPL BUY' })).toBe('NASDAQ');
+		});
+
+		it('returns null when no exchange candidate is present and text cannot be parsed', () => {
 			expect(resolveAlertExchange({ text: 'no exchange here' })).toBeNull();
 		});
 	});
@@ -105,6 +115,16 @@ describe('marketCalendar/notificationGate', () => {
 			expect(decision.suppress).toBe(true);
 			expect(decision.reason).toBe('market_holiday');
 			expect(decision.sessionState.state).toBe('holiday');
+		});
+
+		it('suppresses plain text alerts whose exchange is resolved from text on a holiday', () => {
+			const decision = evaluateDeliveryGate(
+				{ text: 'NASDAQ:AAPL BUY' },
+				{ env: { ENABLE_MARKET_CALENDAR_GATING: 'true' }, timestamp: FIXED_HOLIDAY },
+			);
+			expect(decision.suppress).toBe(true);
+			expect(decision.reason).toBe('market_holiday');
+			expect(decision.exchange).toBe('NASDAQ');
 		});
 
 		it('suppresses from the enriched.exchange path', () => {

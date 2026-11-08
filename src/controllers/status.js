@@ -943,8 +943,8 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			telegramCommandAuth: telegramCommandAuth.getStatus(),
 			adminAuth: adminAuthStatus,
 			marketCalendar: {
-				enabled: isMarketCalendarGatingEnabled(),
-				gatesDelivery: isMarketCalendarGatingEnabled(),
+				enabled: isMarketCalendarGatingEnabled(env),
+				gatesDelivery: isMarketCalendarGatingEnabled(env),
 				dataset: getMarketCalendarMetadata(),
 			},
 		},

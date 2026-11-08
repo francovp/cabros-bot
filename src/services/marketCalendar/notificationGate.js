@@ -21,6 +21,7 @@
 
 const sentryService = require('../monitoring/SentryService');
 const { getSessionState, shouldSuppressDelivery, getDatasetMetadata } = require('./sessionState');
+const { parseTradingViewSignal } = require('../tradingview/parseTradingViewSignal');
 
 const FEATURE_FLAG = 'ENABLE_MARKET_CALENDAR_GATING';
 
@@ -50,7 +51,9 @@ function resolveAlertExchange(alert) {
 	if (!alert || typeof alert !== 'object') return null;
 	const candidates = [
 		alert.exchange,
+		alert && alert._marketCalendarGate && alert._marketCalendarGate.exchange,
 		alert && alert.enriched && alert.enriched.exchange,
+		alert && alert.enriched && alert.enriched.symbolInfo && alert.enriched.symbolInfo.exchange,
 		alert && alert.enriched && alert.enriched.signal && alert.enriched.signal.exchange,
 		alert && alert.signal && alert.signal.exchange,
 		alert && alert.metadata && alert.metadata.exchange,
@@ -59,6 +62,19 @@ function resolveAlertExchange(alert) {
 	];
 	for (const c of candidates) {
 		if (typeof c === 'string' && c.trim()) return c.trim().toUpperCase();
+	}
+	const text = alert.text || alert.rawText || alert.message;
+	if (typeof text === 'string' && text.trim()) {
+		try {
+			const parsed = parseTradingViewSignal(text);
+			if (parsed && typeof parsed.exchange === 'string' && parsed.exchange.trim()) {
+				return parsed.exchange.trim().toUpperCase();
+			}
+			const match = text.match(/(?:^|\s)([A-Za-z_]+):[A-Za-z0-9._-]{2,20}/);
+			if (match && match[1]) {
+				return match[1].trim().toUpperCase();
+			}
+		} catch (_) { /* fail open */ }
 	}
 	return null;
 }
