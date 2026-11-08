@@ -414,6 +414,37 @@ describe('SignalOutcomeService Worker & Bounded Evaluation', () => {
 			expect(mockGetKlines).toHaveBeenCalledTimes(callsAfterDrain);
 		});
 
+		it('drains active daily rollup sweep on stopWorker({ drain: true }) before resolving', async () => {
+			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+			process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'worker';
+
+			const dailyRollupService = require('../../src/services/storage/SignalOutcomeDailyRollupService');
+			let resolveRollup;
+			const rollupPromise = new Promise((resolve) => {
+				resolveRollup = resolve;
+			});
+			const rollupSpy = jest.spyOn(dailyRollupService, 'rollupOutcomesDaily').mockReturnValue(rollupPromise);
+
+			SignalOutcomeService.startWorker({ source: 'worker', intervalMs: 300000, unref: false });
+			await jest.advanceTimersByTimeAsync(0);
+
+			expect(rollupSpy).toHaveBeenCalled();
+
+			let drainFinished = false;
+			const stopPromise = SignalOutcomeService.stopWorker({ drain: true }).then(() => {
+				drainFinished = true;
+			});
+
+			await jest.advanceTimersByTimeAsync(50);
+			expect(drainFinished).toBe(false);
+
+			resolveRollup({ success: true });
+			await stopPromise;
+			expect(drainFinished).toBe(true);
+			rollupSpy.mockRestore();
+		});
+
 		it('persists safe worker heartbeat counters for cross-process inspection', async () => {
 			process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
 			process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';

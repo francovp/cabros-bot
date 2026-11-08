@@ -117,6 +117,7 @@ let workerStartupPending = false;
 let workerStartupGeneration = 0;
 let workerStartupAbortController = null;
 let activeEvaluationPromise = null;
+let activeSweepPromise = null;
 let shutdownRequested = false;
 let activeIntervalMs = null;
 let lastRunAt = null;
@@ -2016,7 +2017,7 @@ function runScheduledSweep() {
 		return undefined;
 	}
 
-	return evaluatePendingOutcomes()
+	const sweepPromise = evaluatePendingOutcomes()
 		.then(async (sweepResult) => {
 			try {
 				const firestore = AlertStorageService.getFirestore();
@@ -2031,7 +2032,15 @@ function runScheduledSweep() {
 		.then(() => persistWorkerHeartbeat())
 		.catch((err) => {
 			console.warn('[SignalOutcomeService] Scheduled worker sweep failed:', err.message);
+		})
+		.finally(() => {
+			if (activeSweepPromise === sweepPromise) {
+				activeSweepPromise = null;
+			}
 		});
+
+	activeSweepPromise = sweepPromise;
+	return sweepPromise;
 }
 
 /**
@@ -2152,14 +2161,15 @@ function stopWorker(options = {}) {
 	activeIntervalMs = null;
 	lastEvaluatedDoc = null;
 
-	if (options.drain !== true || !activeEvaluationPromise) {
+	const activeDrainPromise = activeSweepPromise || activeEvaluationPromise;
+	if (options.drain !== true || !activeDrainPromise) {
 		isEvaluating = false;
 		return persistWorkerHeartbeat();
 	}
 
 	const drainTimeoutMs = Math.min(getWorkerStatus().maxDurationMs, MAX_WORKER_DRAIN_TIMEOUT_MS);
 	return awaitWithTimeout(
-		activeEvaluationPromise,
+		activeDrainPromise,
 		drainTimeoutMs,
 		`Dedicated worker drain timed out after ${drainTimeoutMs}ms`,
 	)
@@ -4075,6 +4085,8 @@ function _resetForTesting() {
 	binanceClient = null;
 	lastEvaluatedDoc = null;
 	isEvaluating = false;
+	activeSweepPromise = null;
+	activeEvaluationPromise = null;
 	shutdownRequested = false;
 	workerStartupGeneration += 1;
 	if (workerStartupAbortController) {

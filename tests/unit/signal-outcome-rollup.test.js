@@ -1,8 +1,59 @@
 'use strict';
 
 const SignalOutcomeDailyRollupService = require('../../src/services/storage/SignalOutcomeDailyRollupService');
+const RemoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
 describe('SignalOutcomeDailyRollupService', () => {
+	describe('isOutcomeRollupEnabled()', () => {
+		const originalEnv = process.env.SIGNAL_OUTCOME_ROLLUP_ENABLED;
+		const originalRcEnv = process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+
+		afterEach(() => {
+			if (originalEnv === undefined) {
+				delete process.env.SIGNAL_OUTCOME_ROLLUP_ENABLED;
+			} else {
+				process.env.SIGNAL_OUTCOME_ROLLUP_ENABLED = originalEnv;
+			}
+			if (originalRcEnv === undefined) {
+				delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+			} else {
+				process.env.ENABLE_FIREBASE_REMOTE_CONFIG = originalRcEnv;
+			}
+			RemoteConfigService._resetForTesting();
+		});
+
+		it('returns true by default when neither Remote Config nor env is set', () => {
+			delete process.env.SIGNAL_OUTCOME_ROLLUP_ENABLED;
+			delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+			RemoteConfigService._resetForTesting();
+			expect(SignalOutcomeDailyRollupService.isOutcomeRollupEnabled()).toBe(true);
+		});
+
+		it('returns false when env disables it and Remote Config is unset', () => {
+			process.env.SIGNAL_OUTCOME_ROLLUP_ENABLED = 'false';
+			delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+			RemoteConfigService._resetForTesting();
+			expect(SignalOutcomeDailyRollupService.isOutcomeRollupEnabled()).toBe(false);
+		});
+
+		it('honors Remote Config override of true when env is false', () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			process.env.SIGNAL_OUTCOME_ROLLUP_ENABLED = 'false';
+			RemoteConfigService._setRemoteOverridesForTesting({
+				SIGNAL_OUTCOME_ROLLUP_ENABLED: true,
+			});
+			expect(SignalOutcomeDailyRollupService.isOutcomeRollupEnabled()).toBe(true);
+		});
+
+		it('honors Remote Config override of false when env is true', () => {
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			process.env.SIGNAL_OUTCOME_ROLLUP_ENABLED = 'true';
+			RemoteConfigService._setRemoteOverridesForTesting({
+				SIGNAL_OUTCOME_ROLLUP_ENABLED: false,
+			});
+			expect(SignalOutcomeDailyRollupService.isOutcomeRollupEnabled()).toBe(false);
+		});
+	});
 	describe('isCohortMature()', () => {
 		it('identifies mature and premature cohorts based on Opción C delays', () => {
 			const dateStr = '2026-08-20';
@@ -412,9 +463,12 @@ describe('SignalOutcomeDailyRollupService', () => {
 			});
 
 			expect(result.finalizedSnapshots).toBe(0);
-			expect(setCalls.length).toBe(1);
-			expect(setCalls[0].data.finalized).toBe(false);
-			expect(setCalls[0].data.pending).toBe(1);
+			expect(setCalls.length).toBe(3);
+			for (const call of setCalls) {
+				expect(call.data.finalized).toBe(false);
+				expect(call.data.pending).toBe(1);
+			}
+			expect(setCalls.map((c) => c.data.bucket)).toEqual(['all', 'crypto', 'breakout']);
 		});
 
 		it('revisits unfinished historical cohorts (finalized: false) beyond candidate maturity offsets', async () => {
@@ -494,6 +548,172 @@ describe('SignalOutcomeDailyRollupService', () => {
 			expect(updatedDates).toContain('2026-08-10');
 			const rollup20260810 = setCalls.find((call) => call.data.date === '2026-08-10');
 			expect(rollup20260810.data.finalized).toBe(true);
+		});
+
+		it('rotates unfinished historical cohorts query across sweeps using startAfter cursor', async () => {
+			SignalOutcomeDailyRollupService._resetForTesting();
+			const startAfterCalls = [];
+			const firstBatchDocs = Array.from({ length: 10 }, (_, i) => ({
+				data: () => ({ date: `2026-08-0${i + 1}`, finalized: false }),
+			}));
+			const secondBatchDocs = [
+				{ data: () => ({ date: '2026-08-11', finalized: false }) },
+			];
+
+			let callCount = 0;
+			const mockWhere = {
+				where: jest.fn().mockReturnThis(),
+				startAfter: jest.fn((doc) => {
+					startAfterCalls.push(doc);
+					return mockWhere;
+				}),
+				limit: jest.fn().mockReturnThis(),
+				get: jest.fn().mockImplementation(() => {
+					callCount++;
+					return Promise.resolve({
+						empty: false,
+						docs: callCount === 1 ? firstBatchDocs : secondBatchDocs,
+					});
+				}),
+			};
+
+			const mockFirestore = {
+				collection: (name) => {
+					if (name === 'tradingSignalOutcomesDaily') {
+						return {
+							doc: jest.fn().mockReturnValue({
+								get: jest.fn().mockResolvedValue({
+									exists: true,
+									data: () => ({ finalized: false }),
+								}),
+							}),
+							where: mockWhere.where,
+						};
+					}
+					if (name === 'tradingSignalOutcomes') {
+						return {
+							where: jest.fn().mockReturnThis(),
+							get: jest.fn().mockResolvedValue({ docs: [] }),
+						};
+					}
+					return {};
+				},
+				batch: () => ({
+					set: jest.fn(),
+					commit: jest.fn().mockResolvedValue([]),
+				}),
+			};
+
+			const now = new Date('2026-09-01T12:00:00.000Z');
+			// Sweep 1
+			await SignalOutcomeDailyRollupService.rollupOutcomesDaily({
+				firestore: mockFirestore,
+				now,
+				window: '1D',
+				bucket: 'all',
+			});
+			expect(startAfterCalls.length).toBe(0);
+
+			// Sweep 2 should use startAfter cursor from the end of sweep 1
+			await SignalOutcomeDailyRollupService.rollupOutcomesDaily({
+				firestore: mockFirestore,
+				now,
+				window: '1D',
+				bucket: 'all',
+			});
+			expect(startAfterCalls.length).toBe(1);
+			expect(startAfterCalls[0]).toBe(firstBatchDocs[9]);
+			SignalOutcomeDailyRollupService._resetForTesting();
+		});
+
+		it('generates non-default buckets (assetClass, setupType, side) observed in cohort documents', async () => {
+			const setCalls = [];
+			const batchCommit = jest.fn().mockResolvedValue([]);
+			const mockBatch = {
+				set: jest.fn((ref, data) => setCalls.push({ ref, data })),
+				commit: batchCommit,
+			};
+
+			const mockFirestore = {
+				collection: (name) => {
+					if (name === 'tradingSignalOutcomesDaily') {
+						return {
+							doc: jest.fn().mockReturnValue({
+								get: jest.fn().mockResolvedValue({ exists: false }),
+							}),
+						};
+					}
+					if (name === 'tradingSignalOutcomes') {
+						return {
+							where: jest.fn().mockReturnThis(),
+							get: jest.fn().mockResolvedValue({
+								docs: [
+									{
+										data: () => ({
+											receivedAt: '2026-08-20T10:00:00.000Z',
+											assetClass: 'crypto',
+											setupType: 'breakout',
+											side: 'buy',
+											outcomes: {
+												'1D': {
+													status: 'evaluated',
+													targetHit: true,
+													return: 3.5,
+												},
+											},
+										}),
+									},
+									{
+										data: () => ({
+											receivedAt: '2026-08-20T11:00:00.000Z',
+											assetClass: 'stocks',
+											setupType: 'reversal',
+											side: 'sell',
+											outcomes: {
+												'1D': {
+													status: 'evaluated',
+													stopHit: true,
+													return: -1.5,
+												},
+											},
+										}),
+									},
+								],
+							}),
+						};
+					}
+					return {};
+				},
+				batch: () => mockBatch,
+			};
+
+			const now = new Date('2026-09-01T12:00:00.000Z');
+			const result = await SignalOutcomeDailyRollupService.rollupOutcomesDaily({
+				firestore: mockFirestore,
+				now,
+				date: '2026-08-20',
+				window: '1D',
+			});
+
+			expect(result.success).toBe(true);
+			const generatedBuckets = setCalls.map((c) => c.data.bucket);
+			expect(generatedBuckets).toEqual(expect.arrayContaining(['all', 'crypto', 'stocks', 'breakout', 'reversal', 'buy', 'sell']));
+
+			const cryptoSnapshot = setCalls.find((c) => c.data.bucket === 'crypto').data;
+			expect(cryptoSnapshot.sampleSize).toBe(1);
+			expect(cryptoSnapshot.wins).toBe(1);
+			expect(cryptoSnapshot.hitRatePercent).toBe(100);
+
+			const stocksSnapshot = setCalls.find((c) => c.data.bucket === 'stocks').data;
+			expect(stocksSnapshot.sampleSize).toBe(1);
+			expect(stocksSnapshot.losses).toBe(1);
+			expect(stocksSnapshot.hitRatePercent).toBe(0);
+
+			const allSnapshot = setCalls.find((c) => c.data.bucket === 'all').data;
+			expect(allSnapshot.sampleSize).toBe(2);
+			expect(allSnapshot.wins).toBe(1);
+			expect(allSnapshot.losses).toBe(1);
+			expect(allSnapshot.hitRatePercent).toBe(50);
 		});
 	});
 
@@ -580,6 +800,32 @@ describe('SignalOutcomeDailyRollupService', () => {
 					to: '2026-08-25', // > 180 days
 				}),
 			).rejects.toThrow('Date range must not exceed 180 days.');
+		});
+
+		it('normalizes bucket query parameter (e.g. Crypto -> crypto)', async () => {
+			const whereFilters = [];
+			const mockFirestore = {
+				collection: jest.fn().mockReturnValue({
+					where: jest.fn((field, op, val) => {
+						whereFilters.push({ field, op, val });
+						return mockFirestore.collection();
+					}),
+					get: jest.fn().mockResolvedValue({ docs: [] }),
+				}),
+			};
+
+			const result = await SignalOutcomeDailyRollupService.getOutcomesTrend({
+				firestore: mockFirestore,
+				window: '1D',
+				bucket: 'Crypto',
+				from: '2026-08-20',
+				to: '2026-08-25',
+			});
+
+			expect(result.success).toBe(true);
+			expect(result.bucket).toBe('crypto');
+			const bucketFilter = whereFilters.find((f) => f.field === 'bucket');
+			expect(bucketFilter).toEqual({ field: 'bucket', op: '==', val: 'crypto' });
 		});
 	});
 });

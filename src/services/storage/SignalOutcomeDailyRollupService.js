@@ -2,7 +2,7 @@
 
 const admin = require('firebase-admin');
 const { round10 } = require('../../controllers/helpers');
-const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 const sentryService = require('../monitoring/SentryService');
 
 const DAILY_COLLECTION_NAME = 'tradingSignalOutcomesDaily';
@@ -23,21 +23,20 @@ const WINDOW_MATURITY_MS = Object.freeze({
 	'1W': 7 * 24 * 60 * 60 * 1000,
 });
 
+const lastUnfinishedDocByWindow = new Map();
+
 function isOutcomeRollupEnabled() {
-	if (process.env.SIGNAL_OUTCOME_ROLLUP_ENABLED === 'false') {
-		return false;
+	const remote = resolveRemoteOverride('SIGNAL_OUTCOME_ROLLUP_ENABLED');
+	if (typeof remote === 'boolean') {
+		return remote;
 	}
-	const rc = getRuntimeConfig();
-	if (rc && rc.SIGNAL_OUTCOME_ROLLUP_ENABLED === false) {
-		return false;
-	}
-	return true;
+	return process.env.SIGNAL_OUTCOME_ROLLUP_ENABLED !== 'false';
 }
 
 function getRollupTtlDays() {
-	const rc = getRuntimeConfig();
-	const configured = rc && typeof rc.SIGNAL_OUTCOME_ROLLUP_TTL_DAYS === 'number'
-		? rc.SIGNAL_OUTCOME_ROLLUP_TTL_DAYS
+	const remote = resolveRemoteOverride('SIGNAL_OUTCOME_ROLLUP_TTL_DAYS');
+	const configured = typeof remote === 'number'
+		? remote
 		: Number(process.env.SIGNAL_OUTCOME_ROLLUP_TTL_DAYS);
 
 	if (Number.isFinite(configured) && configured >= MIN_ROLLUP_TTL_DAYS && configured <= MAX_ROLLUP_TTL_DAYS) {
@@ -197,7 +196,8 @@ function getDateStringFromOffset(nowMs, daysOffset) {
 	return d.toISOString().split('T')[0];
 }
 
-async function rollupOutcomesDaily({ firestore, date, window, bucket = 'all', force = false, now = new Date(), ttlDays: customTtlDays } = {}) {
+async function rollupOutcomesDaily(options = {}) {
+	const { firestore, date, window, bucket = 'all', force = false, now = new Date(), ttlDays: customTtlDays, buckets } = options;
 	if (!isOutcomeRollupEnabled()) {
 		return { skipped: true, reason: 'disabled', scannedCohorts: 0, finalizedSnapshots: 0, skippedCohorts: 0 };
 	}
@@ -224,20 +224,45 @@ async function rollupOutcomesDaily({ firestore, date, window, bucket = 'all', fo
 
 			if (!date) {
 				try {
-					const unfinishedSnapshot = await firestore
+					const cursorKey = `${targetWin}_${bucket || 'all'}`;
+					let query = firestore
 						.collection(DAILY_COLLECTION_NAME)
-						.where('evaluationWindow', '==', targetWin)
-						.where('bucket', '==', bucket)
-						.where('finalized', '==', false)
-						.limit(10)
-						.get();
+						.where('evaluationWindow', '==', targetWin);
+
+					if (bucket && bucket !== 'all') {
+						query = query.where('bucket', '==', String(bucket).trim().toLowerCase());
+					}
+
+					query = query.where('finalized', '==', false);
+					const lastDoc = lastUnfinishedDocByWindow.get(cursorKey);
+					if (lastDoc && typeof query.startAfter === 'function') {
+						query = query.startAfter(lastDoc);
+					}
+					query = query.limit(10);
+					let unfinishedSnapshot = await query.get();
+
+					if ((!unfinishedSnapshot || unfinishedSnapshot.empty) && lastDoc) {
+						lastUnfinishedDocByWindow.delete(cursorKey);
+						let restartQuery = firestore
+							.collection(DAILY_COLLECTION_NAME)
+							.where('evaluationWindow', '==', targetWin);
+						if (bucket && bucket !== 'all') {
+							restartQuery = restartQuery.where('bucket', '==', String(bucket).trim().toLowerCase());
+						}
+						query = restartQuery.where('finalized', '==', false).limit(10);
+						unfinishedSnapshot = await query.get();
+					}
 
 					if (unfinishedSnapshot && !unfinishedSnapshot.empty) {
-						for (const unfinishedDoc of unfinishedSnapshot.docs) {
-							const unfinishedData = typeof unfinishedDoc.data === 'function' ? unfinishedDoc.data() : unfinishedDoc;
-							const unfinishedDate = unfinishedData?.date;
-							if (unfinishedDate && !candidateDates.includes(unfinishedDate)) {
-								candidateDates.push(unfinishedDate);
+						const docs = unfinishedSnapshot.docs;
+						if (docs && docs.length > 0) {
+							lastUnfinishedDocByWindow.set(cursorKey, docs[docs.length - 1]);
+							for (const unfinishedDoc of docs) {
+								const unfinishedData = typeof unfinishedDoc.data === 'function' ? unfinishedDoc.data() : unfinishedDoc;
+								const unfinishedDate = unfinishedData?.date;
+								if (unfinishedDate && !candidateDates.includes(unfinishedDate)) {
+									candidateDates.push(unfinishedDate);
+								}
 							}
 						}
 					}
@@ -248,17 +273,6 @@ async function rollupOutcomesDaily({ firestore, date, window, bucket = 'all', fo
 
 			for (const targetDate of candidateDates) {
 				scannedCohorts++;
-				const docId = buildDailyDocId(targetDate, bucket, targetWin);
-				const docRef = firestore.collection(DAILY_COLLECTION_NAME).doc(docId);
-
-				if (!force) {
-					const existing = await docRef.get();
-					if (existing && existing.exists && existing.data() && existing.data().finalized === true) {
-						results.push({ docId, status: 'already_finalized' });
-						skippedCohorts++;
-						continue;
-					}
-				}
 
 				const mature = isCohortMature(targetDate, targetWin, nowMs);
 				if (!mature && !force) {
@@ -292,37 +306,77 @@ async function rollupOutcomesDaily({ firestore, date, window, bucket = 'all', fo
 					.get();
 
 				const docs = snapshot && !snapshot.empty ? snapshot.docs : [];
-				const metrics = computeDailyMetrics(docs, targetWin, bucket);
 
-				const isFinalized = (mature || force) && metrics.pending === 0;
-
-				const dailyDoc = {
-					date: targetDate,
-					bucket,
-					evaluationWindow: targetWin,
-					signals: metrics.signals,
-					sampleSize: metrics.sampleSize,
-					wins: metrics.wins,
-					losses: metrics.losses,
-					invalidated: metrics.invalidated,
-					pending: metrics.pending,
-					hitRatePercent: metrics.hitRatePercent,
-					avgMfe: metrics.avgMfe,
-					avgMae: metrics.avgMae,
-					avgReturnPercent: metrics.avgReturnPercent,
-					finalized: isFinalized,
-					updatedAt: new Date(nowMs).toISOString(),
-					expiresAt,
-				};
-
-				if (batch) {
-					batch.set(docRef, dailyDoc, { merge: true });
+				let bucketsToRollup;
+				if (Array.isArray(buckets) && buckets.length > 0) {
+					bucketsToRollup = new Set(buckets.map((b) => String(b).trim().toLowerCase()));
+				} else if (bucket && bucket !== 'all') {
+					bucketsToRollup = new Set([String(bucket).trim().toLowerCase()]);
 				} else {
-					await docRef.set(dailyDoc, { merge: true });
+					bucketsToRollup = new Set(['all']);
+					for (const doc of docs) {
+						const data = typeof doc.data === 'function' ? doc.data() : doc;
+						if (data.assetClass) bucketsToRollup.add(String(data.assetClass).trim().toLowerCase());
+						if (data.setupType) bucketsToRollup.add(String(data.setupType).trim().toLowerCase());
+						if (data.side) bucketsToRollup.add(String(data.side).trim().toLowerCase());
+					}
 				}
 
-				if (isFinalized) finalizedSnapshots++;
-				results.push({ docId, status: 'upserted', finalized: isFinalized });
+				let cohortSkipped = true;
+				for (const currentBucket of bucketsToRollup) {
+					const docId = buildDailyDocId(targetDate, currentBucket, targetWin);
+					const docRef = firestore.collection(DAILY_COLLECTION_NAME).doc(docId);
+
+					let existing = null;
+					if (!force) {
+						existing = await docRef.get();
+						if (existing && existing.exists && existing.data() && existing.data().finalized === true) {
+							results.push({ docId, status: 'already_finalized' });
+							continue;
+						}
+					}
+
+					const metrics = computeDailyMetrics(docs, targetWin, currentBucket);
+
+					if (metrics.signals === 0 && currentBucket !== 'all' && (!existing || !existing.exists)) {
+						continue;
+					}
+
+					cohortSkipped = false;
+					const isFinalized = (mature || force) && metrics.pending === 0;
+
+					const dailyDoc = {
+						date: targetDate,
+						bucket: currentBucket,
+						evaluationWindow: targetWin,
+						signals: metrics.signals,
+						sampleSize: metrics.sampleSize,
+						wins: metrics.wins,
+						losses: metrics.losses,
+						invalidated: metrics.invalidated,
+						pending: metrics.pending,
+						hitRatePercent: metrics.hitRatePercent,
+						avgMfe: metrics.avgMfe,
+						avgMae: metrics.avgMae,
+						avgReturnPercent: metrics.avgReturnPercent,
+						finalized: isFinalized,
+						updatedAt: new Date(nowMs).toISOString(),
+						expiresAt,
+					};
+
+					if (batch) {
+						batch.set(docRef, dailyDoc, { merge: true });
+					} else {
+						await docRef.set(dailyDoc, { merge: true });
+					}
+
+					if (isFinalized) finalizedSnapshots++;
+					results.push({ docId, status: 'upserted', finalized: isFinalized });
+				}
+
+				if (cohortSkipped) {
+					skippedCohorts++;
+				}
 			}
 		}
 
@@ -407,12 +461,14 @@ async function getOutcomesTrend({ firestore, window = '1D', from, to, bucket = '
 		throw error;
 	}
 
+	const normalizedBucket = String(bucket || 'all').trim().toLowerCase();
+
 	let snapshot;
 	try {
 		snapshot = await firestore
 			.collection(DAILY_COLLECTION_NAME)
 			.where('evaluationWindow', '==', normalizedWindow)
-			.where('bucket', '==', bucket)
+			.where('bucket', '==', normalizedBucket)
 			.where('date', '>=', fromDateStr)
 			.where('date', '<=', toDateStr)
 			.get();
@@ -452,7 +508,7 @@ async function getOutcomesTrend({ firestore, window = '1D', from, to, bucket = '
 	return {
 		success: true,
 		window: normalizedWindow,
-		bucket,
+		bucket: normalizedBucket,
 		from: fromDateStr,
 		to: toDateStr,
 		points,
@@ -460,6 +516,10 @@ async function getOutcomesTrend({ firestore, window = '1D', from, to, bucket = '
 		trend: points,
 		totalDays: points.length,
 	};
+}
+
+function _resetForTesting() {
+	lastUnfinishedDocByWindow.clear();
 }
 
 module.exports = {
@@ -482,4 +542,5 @@ module.exports = {
 	getMaturityDaysOffsets,
 	rollupOutcomesDaily,
 	getOutcomesTrend,
+	_resetForTesting,
 };
