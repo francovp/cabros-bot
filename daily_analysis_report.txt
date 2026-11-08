@@ -1,0 +1,153 @@
+📊 *ANÁLISIS AMPLIADO — Viernes 23 de octubre de 2026*
+
+*🔴 SOBRESVENDIDOS EXTREMOS*
+No hay
+
+*⚠️ SOBRESVENDIDOS*
+- NYSE:SQM RSI: 21.2
+
+*🟡 NEUTROS*
+NASDAQ:NVDA $212.21 (-4.40%) | RSI: 39.1
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $0.32
+- *Stop Loss sugerido:* $211.58
+- *Sugerencia:* Neutral, esperar confirmación
+
+NASDAQ:AAPL $348.22 (+1.23%) | RSI: 64.8
+- *Tendencia (SMA20):* Alcista | *MACD:* Bullish
+- *Volumen:* Normal | *ATR:* $0.30
+- *Stop Loss sugerido:* $347.62
+- *Sugerencia:* Mantener, tendencia alcista
+
+NASDAQ:GOOG $320.76 (-3.08%) | RSI: 32.8
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $0.34
+- *Stop Loss sugerido:* $320.09
+- *Sugerencia:* Acumular en caídas
+
+NASDAQ:MSFT $521.08 (-2.23%) | RSI: 50.5
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $0.48
+- *Stop Loss sugerido:* $520.12
+- *Sugerencia:* Neutral, esperar confirmación
+
+NASDAQ:AMZN $250.38 (-4.57%) | RSI: 45.1
+- *Tendencia (SMA20):* Alcista | *MACD:* Bullish
+- *Volumen:* Normal | *ATR:* $0.27
+- *Stop Loss sugerido:* $249.85
+- *Sugerencia:* Entrada potencial en pullback
+
+NYSE:TSM $412.35 (-4.52%) | RSI: 37.9
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $0.45
+- *Stop Loss sugerido:* $411.44
+- *Sugerencia:* Neutral, esperar confirmación
+
+NASDAQ:META $648.85 (-6.98%) | RSI: 36.8
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $1.09
+- *Stop Loss sugerido:* $646.67
+- *Sugerencia:* Neutral, esperar confirmación
+
+NASDAQ:AVGO $323.24 (-4.31%) | RSI: 34.8
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $0.54
+- *Stop Loss sugerido:* $322.17
+- *Sugerencia:* Acumular en caídas
+
+NASDAQ:TSLA $374.58 (-3.08%) | RSI: 52.8
+- *Tendencia (SMA20):* Bajista | *MACD:* Bullish
+- *Volumen:* Normal | *ATR:* $0.96
+- *Stop Loss sugerido:* $372.66
+- *Sugerencia:* Neutral, esperar confirmación
+
+NASDAQ:MU $856.49 (-6.26%) | RSI: 34.7
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $1.99
+- *Stop Loss sugerido:* $852.52
+- *Sugerencia:* Acumular en caídas
+
+NASDAQ:AMD $507.93 (-8.10%) | RSI: 36.5
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $1.05
+- *Stop Loss sugerido:* $505.83
+- *Sugerencia:* Neutral, esperar confirmación
+
+NASDAQ:INTC $85.49 (-8.04%) | RSI: 30.5
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $0.18
+- *Stop Loss sugerido:* $85.13
+- *Sugerencia:* Acumular en caídas
+
+NYSE:ORCL $125.54 (-2.78%) | RSI: 38.4
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $0.26
+- *Stop Loss sugerido:* $125.01
+- *Sugerencia:* Neutral, esperar confirmación
+
+NASDAQ:NFLX $67.05 (+3.09%) | RSI: 39.6
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $0.08
+- *Stop Loss sugerido:* $66.89
+- *Sugerencia:* Neutral, esperar confirmación
+
+NASDAQ:QCOM $172.83 (-2.88%) | RSI: 44.5
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $0.38
+- *Stop Loss sugerido:* $172.07
+- *Sugerencia:* Neutral, esperar confirmación
+
+NASDAQ:WDC $354.19 (-6.43%) | RSI: 37.7
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $0.96
+- *Stop Loss sugerido:* $352.27
+- *Sugerencia:* Neutral, esperar confirmación
+
+NASDAQ:TTWO $207.81 (+0.80%) | RSI: 49.1
+- *Tendencia (SMA20):* Alcista | *MACD:* Bullish
+- *Volumen:* Normal | *ATR:* $0.22
+- *Stop Loss sugerido:* $207.36
+- *Sugerencia:* Entrada potencial en pullback
+
+NASDAQ:SMCI $33.72 (-5.20%) | RSI: 39.5
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $0.08
+- *Stop Loss sugerido:* $33.55
+- *Sugerencia:* Neutral, esperar confirmación
+
+NYSE:BCH $38.53 (-2.80%) | RSI: 39.8
+- *Tendencia (SMA20):* Bajista | *MACD:* Bullish
+- *Volumen:* Normal | *ATR:* $0.05
+- *Stop Loss sugerido:* $38.43
+- *Sugerencia:* Vigilar soporte, posible rebote
+
+BINANCE:BTCUSDT $81557.05 (+0.16%) | RSI: 46.7
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $32.38
+- *Stop Loss sugerido:* $81492.29
+- *Sugerencia:* Neutral, esperar confirmación
+
+BINANCE:ETHUSDT $2396.43 (+0.30%) | RSI: 39.5
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $1.42
+- *Stop Loss sugerido:* $2393.59
+- *Sugerencia:* Vigilar soporte, posible rebote
+
+BINANCE:BNBUSDT $746.83 (+2.13%) | RSI: 51.3
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $0.36
+- *Stop Loss sugerido:* $746.11
+- *Sugerencia:* Neutral, esperar confirmación
+
+*📰 NOTICIAS DESTACADAS*
+- Tech sector bajo presión macro: tasas altas y guidance conservador en earnings recientes
+- NVDA: Blackwell ramp en Q4, pero China restrictions limitan upside a corto plazo
+- INTC: Plan de reestructuración y spin-off de Foundry genera incertidumbre
+- BTC: ETF flows positivos pero macro risk-off limita rally sostenido
+- TSLA: Robotaxi event decepcionó, deliveries Q3 below expectations
+
+*🧭 LECTURA GENERAL*
+- Mayoría de tickers tech en zona neutral-bajista (RSI 30-45) con precio sobre SMA20 pero MACD bearish: divergencia bajista a corto plazo
+- Solo SQM en sobreventa (RSI 21): posible rebote técnico si commodity complex se estabiliza
+- MACD mayoritariamente bearish (level < signal) confirma momentum bajista en mega-caps
+- AAPL y NFLX outliers positivos: RSI > 60 y precio > SMA20, muestran fortaleza relativa

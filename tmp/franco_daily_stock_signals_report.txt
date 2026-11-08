@@ -1,0 +1,122 @@
+---
+📊 *ANÁLISIS AMPLIADO — Friday 12/06/2026*
+
+*🔴 SOBRESVENDIDOS EXTREMOS*
+No hay.
+
+*⚠️ SOBRESVENDIDOS*
+NFLX $81.27 (-0.9%) | RSI: 31.2
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $2.11
+- *Stop Loss sugerido:* $78.10
+- *Sugerencia:* 📉 REDUCIR POSICIÓN (Tendencia Bajista)
+
+BABA $112.69 (-2.3%) | RSI: 29.4
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Alto | *ATR:* $4.46
+- *Stop Loss sugerido:* $106.00
+- *Sugerencia:* 👀 ESPERAR SUELO (Oversold pero sin confirmación)
+
+*🟡 NEUTROS*
+QCOM $202.96 (+6.2%) | RSI: 47.6
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $17.43
+- *Stop Loss sugerido:* $176.82
+- *Sugerencia:* 📉 REDUCIR POSICIÓN (Tendencia Bajista)
+
+AMD $488.45 (+8.0%) | RSI: 56.9
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $32.33
+- *Stop Loss sugerido:* $439.96
+- *Sugerencia:* ⏳ MONITORIZAR (Sin señal clara)
+
+INTC $116.96 (+9.3%) | RSI: 57.8
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Alto | *ATR:* $9.27
+- *Stop Loss sugerido:* $103.06
+- *Sugerencia:* ⏳ MONITORIZAR (Sin señal clara)
+
+TSLA $399.15 (+4.6%) | RSI: 46.3
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $17.96
+- *Stop Loss sugerido:* $372.21
+- *Sugerencia:* 📉 REDUCIR POSICIÓN (Tendencia Bajista)
+
+AAPL $295.63 (+1.4%) | RSI: 48.1
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $7.31
+- *Stop Loss sugerido:* $284.67
+- *Sugerencia:* 📉 REDUCIR POSICIÓN (Tendencia Bajista)
+
+ORCL $184.10 (-8.5%) | RSI: 42.1
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Alto | *ATR:* $14.07
+- *Stop Loss sugerido:* $162.99
+- *Sugerencia:* 📉 REDUCIR POSICIÓN (Tendencia Bajista)
+
+META $568.43 (-0.4%) | RSI: 35.0
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $18.83
+- *Stop Loss sugerido:* $540.18
+- *Sugerencia:* 📉 REDUCIR POSICIÓN (Tendencia Bajista)
+
+MU $995.87 (+11.7%) | RSI: 62.1
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Alto | *ATR:* $75.29
+- *Stop Loss sugerido:* $882.93
+- *Sugerencia:* ⏳ MONITORIZAR (Sin señal clara)
+
+GOOG $356.56 (+0.9%) | RSI: 42.1
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $10.63
+- *Stop Loss sugerido:* $340.62
+- *Sugerencia:* 📉 REDUCIR POSICIÓN (Tendencia Bajista)
+
+AMZN $241.51 (+1.5%) | RSI: 36.8
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $7.28
+- *Stop Loss sugerido:* $230.59
+- *Sugerencia:* 📉 REDUCIR POSICIÓN (Tendencia Bajista)
+
+TSM $421.07 (+3.0%) | RSI: 52.8
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $17.83
+- *Stop Loss sugerido:* $394.33
+- *Sugerencia:* ⏳ MONITORIZAR (Sin señal clara)
+
+MSFT $390.34 (-1.8%) | RSI: 36.8
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Alto | *ATR:* $12.38
+- *Stop Loss sugerido:* $371.76
+- *Sugerencia:* 📉 REDUCIR POSICIÓN (Tendencia Bajista)
+
+AVGO $385.57 (+3.6%) | RSI: 42.2
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $22.85
+- *Stop Loss sugerido:* $351.29
+- *Sugerencia:* 📉 REDUCIR POSICIÓN (Tendencia Bajista)
+
+NVDA $204.87 (+2.2%) | RSI: 45.0
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $8.37
+- *Stop Loss sugerido:* $192.31
+- *Sugerencia:* 📉 REDUCIR POSICIÓN (Tendencia Bajista)
+
+*🔴 SOBRECOMPRADOS*
+No hay.
+
+*⚪ NO DISPONIBLES HOY EN TRADINGVIEW*
+- NASDAQ:SMCI
+- NASDAQ:WDC
+- NYSE:SQM
+- NYSE:BCH
+- NASDAQ:TTWO
+- NASDAQ:NDX
+- SP:SPX
+- AMEX:GLD
+- AMEX:SLV
+- BINANCE:BNBUSDT
+- BINANCE:ETHUSDT
+- BINANCE:BTCUSDT
+- FX_IDC:USDCLP
+---

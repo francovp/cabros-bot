@@ -1,0 +1,22 @@
+{
+  "games": [
+    {
+      "name": "Counter-Strike 2",
+      "appid": 730
+    },
+    {
+      "name": "PUBG: BATTLEGROUNDS",
+      "appid": 578080
+    },
+    {
+      "name": "ARC Raiders",
+      "appid": 1808500
+    }
+  ],
+  "lookback_days": 3,
+  "exclude_patterns": {
+    "578080": [
+      "Weekly Ban"
+    ]
+  }
+}

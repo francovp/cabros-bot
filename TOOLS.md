@@ -1,0 +1,38 @@
+## GitHub Interaction
+- **Identity Separation**: Always use the designated Python script (`github_app_client.py`) with GitHub App credentials to post comments as the "Virgin Trainee" identity. Never use the `gh` CLI for posting comments to avoid impersonating the user.
+- Auth: Use `x-api-key` header.
+- Endpoints:
+  - **Webhooks**
+    - `POST /api/webhook/alert`: Deliver alert.
+    - `POST /api/webhook/message`: Generic message.
+    - `POST /api/webhook/expanded-analysis-alert`: Deep TradingView analysis. (Target: Telegram `-1001433927713`)
+    - `POST /api/webhook/market-scanner-alert`: Run scanners & report.
+    - `POST /api/webhook/volume-confirmation`: Check TV volume confirmation.
+  - **Alerts**
+    - `GET /api/alerts`: List alerts.
+    - `GET /api/alerts/summary`: Alert analytics.
+    - `GET /api/alerts/export`: Export window (JSONL/CSV).
+    - `GET /api/alerts/{alertId}`: Get specific alert.
+    - `POST /api/alerts/{alertId}/replay`: Replay alert.
+  - **Scanner Presets**
+    - `GET/POST /api/scanner-presets`: List/Create presets.
+    - `GET/PUT/DELETE /api/scanner-presets/{id}`: Manage preset.
+    - `POST /api/scanner-presets/{id}/run`: Run preset.
+    - Presets handy for Franco: `tech`, `chile`, `indexes`, `crypto`, `fx`.
+  - **Jobs (Async)**
+    - `POST /api/jobs/tradingview-analysis`: Create async TV job.
+    - `GET /api/jobs/{jobId}`: Check status.
+    - `POST /api/jobs/{jobId}/cancel|retry|retry-failed`: Job control.
+  - **News**
+    - `GET/POST /api/news-monitor`: Analyze market symbols.
+  - **Local watchlist**
+    - Source: `memory/watchlist-stocks.md`
+    - Tech tickers: `QCOM, SMCI, AMD, INTC, TSLA, AAPL, ORCL, META, MU, WDC, GOOG, AMZN, TSM, MSFT, AVGO, NVDA`
+    - Chile: `SQM, BCH`
+    - Others: `NFLX, TTWO`
+    - Indexes: `NDX, SPX, GLD, SLV`
+    - Crypto: `BNBUSDT, ETHUSDT, BTCUSDT`
+    - FX: `USDCLP`
+  - **Operations**
+    - `GET /api/status`: Runtime capabilities.
+    - `GET /api/capabilities`: Alias for status.

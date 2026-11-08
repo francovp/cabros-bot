@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "tradingview": {
+      "baseUrl": "https://tradingview-mcp.onrender.com/mcp"
+    }
+  }
+}

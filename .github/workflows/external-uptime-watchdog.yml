@@ -47,7 +47,7 @@ jobs:
           MAX_AGE_MINUTES: ${{ vars.UPTIME_WATCHDOG_MAX_AGE_MINUTES || '30' }}
         run: |
           set -euo pipefail
-          runs_json="$(gh api "repos/${{ github.repository }}/actions/workflows/external-uptime-monitor.yml/runs?per_page=1")"
+          runs_json="$(gh api "repos/${{ github.repository }}/actions/workflows/external-uptime-monitor.yml/runs?per_page=1&status=completed")"
           run_url="$(printf '%s' "$runs_json" | jq -r '.workflow_runs[0].html_url // empty')"
           created_at="$(printf '%s' "$runs_json" | jq -r '.workflow_runs[0].created_at // empty')"
           conclusion="$(printf '%s' "$runs_json" | jq -r '.workflow_runs[0].status // "none"')"

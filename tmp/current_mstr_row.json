@@ -1,0 +1,17 @@
+[
+  {
+    "Symbol": "NASDAQ:MSTR",
+    "Name": "MSTR",
+    "Price": 92.68,
+    "Change %": 12.598712185639659,
+    "Rsi9": 31.990786587872307,
+    "Volume": 44931518.0,
+    "Average Volume (10 day)": 31524256.2,
+    "Average Volume (30 day)": 22907959.6,
+    "Simple Moving Average (20)": 115.83474999999983,
+    "MACD Level (12, 26)": -16.53266761288242,
+    "MACD Signal (12, 26)": -14.061450970197587,
+    "Average True Range (14)": 10.065901904735824,
+    "Update Mode": "delayed_streaming_900"
+  }
+]

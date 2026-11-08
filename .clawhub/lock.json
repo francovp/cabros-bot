@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "skills": {
+    "answeroverflow": {
+      "version": "1.0.2",
+      "installedAt": 1771125217884
+    },
+    "tavily-search": {
+      "version": "1.0.0",
+      "installedAt": 1771125391871
+    },
+    "api-gateway": {
+      "version": "1.0.30",
+      "installedAt": 1771125512507
+    },
+    "brave-api-search": {
+      "version": "1.0.0",
+      "installedAt": 1771125851124
+    },
+    "tradingview-screener": {
+      "version": "1.1.0",
+      "installedAt": 1774837150048
+    },
+    "steam": {
+      "version": "0.4.0",
+      "installedAt": 1776649863930
+    },
+    "steam-games-updates": {
+      "version": "1.0.0",
+      "installedAt": 1776649866546
+    },
+    "steam-gaming-companion": {
+      "version": "1.0.0",
+      "installedAt": 1776649869210
+    },
+    "openclaw-cron-setup": {
+      "version": "1.0.0",
+      "installedAt": 1777263040275
+    },
+    "self-improving-agent": {
+      "version": "3.0.21",
+      "installedAt": 1777958476528
+    },
+    "skill-vetter": {
+      "version": "1.0.0",
+      "installedAt": 1778201146417
+    },
+    "multi-search-engine": {
+      "version": "2.1.3",
+      "installedAt": 1778201180474
+    },
+    "pollyreach": {
+      "version": "1.0.3",
+      "installedAt": 1778201382968
+    },
+    "ontology": {
+      "version": "1.0.4",
+      "installedAt": 1782629822157
+    },
+    "proactive-agent": {
+      "version": "3.1.0",
+      "installedAt": 1782629824949
+    },
+    "linear": {
+      "version": "1.0.0",
+      "installedAt": 1782630047641
+    },
+    "agent-browser-clawdbot": {
+      "version": "0.1.0",
+      "installedAt": 1782630116440
+    },
+    "discord": {
+      "version": "1.0.1",
+      "installedAt": 1782630529305
+    }
+  }
+}

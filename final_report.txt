@@ -1,0 +1,118 @@
+📊 *ANÁLISIS AMPLIADO — Tuesday, July 28th, 2026*
+
+*🔴 SOBRESVENDIDOS EXTREMOS*
+TSLA
+
+*⚠️ SOBRESVENDIDOS*
+QCOM
+AMD
+INTC
+ORCL
+MU
+WDC
+GOOG
+AMZN
+TSM
+SQM
+NDX
+SLV
+
+*🟡 NEUTROS*
+SMCI $27.43 (-8.0%) | RSI: 45.6
+- *Tendencia (SMA20):* Bajista | *MACD:* Bullish
+- *Volumen:* Normal | *ATR:* $2.05
+- *Stop Loss sugerido:* $24.35
+- *Sugerencia:* ESPERAR REBOTE
+
+AAPL $338.32 (+0.4%) | RSI: 68.0
+- *Tendencia (SMA20):* Alcista | *MACD:* Bullish
+- *Volumen:* Normal | *ATR:* $7.81
+- *Stop Loss sugerido:* $326.61
+- *Sugerencia:* MANTENER
+
+META $593.73 (-0.0%) | RSI: 43.5
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $25.59
+- *Stop Loss sugerido:* $555.35
+- *Sugerencia:* REDUCIR POSICIÓN
+
+MSFT $394.78 (+1.5%) | RSI: 52.5
+- *Tendencia (SMA20):* Alcista | *MACD:* Bullish
+- *Volumen:* Normal | *ATR:* $11.65
+- *Stop Loss sugerido:* $377.30
+- *Sugerencia:* MANTENER / ACUMULAR
+
+AVGO $372.77 (-2.7%) | RSI: 44.5
+- *Tendencia (SMA20):* Bajista | *MACD:* Bullish
+- *Volumen:* Normal | *ATR:* $14.77
+- *Stop Loss sugerido:* $350.62
+- *Sugerencia:* ESPERAR REBOTE
+
+NVDA $193.27 (-1.6%) | RSI: 40.2
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $7.56
+- *Stop Loss sugerido:* $181.94
+- *Sugerencia:* REDUCIR POSICIÓN
+
+BCH $41.40 (+0.0%) | RSI: 59.0
+- *Tendencia (SMA20):* Alcista | *MACD:* Bullish
+- *Volumen:* Normal | *ATR:* $1.08
+- *Stop Loss sugerido:* $39.78
+- *Sugerencia:* MANTENER / ACUMULAR
+
+NFLX $73.31 (+4.1%) | RSI: 49.1
+- *Tendencia (SMA20):* Alcista | *MACD:* Bullish
+- *Volumen:* Normal | *ATR:* $2.65
+- *Stop Loss sugerido:* $69.33
+- *Sugerencia:* MANTENER / ACUMULAR
+
+TTWO $245.13 (+0.5%) | RSI: 56.7
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $6.44
+- *Stop Loss sugerido:* $235.47
+- *Sugerencia:* MANTENER
+
+SPX $7387.09 (-0.4%) | RSI: 42.8
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $69.52
+- *Stop Loss sugerido:* $7282.81
+- *Sugerencia:* REDUCIR POSICIÓN
+
+GLD $369.17 (-1.5%) | RSI: 43.1
+- *Tendencia (SMA20):* Bajista | *MACD:* Bullish
+- *Volumen:* Normal | *ATR:* $6.26
+- *Stop Loss sugerido:* $359.79
+- *Sugerencia:* ESPERAR REBOTE
+
+BNBUSDT $564.49 (-2.0%) | RSI: 43.7
+- *Tendencia (SMA20):* Bajista | *MACD:* Bullish
+- *Volumen:* Normal | *ATR:* $10.21
+- *Stop Loss sugerido:* $549.18
+- *Sugerencia:* ESPERAR REBOTE
+
+ETHUSDT $1864.46 (-5.3%) | RSI: 52.4
+- *Tendencia (SMA20):* Alcista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $60.04
+- *Stop Loss sugerido:* $1774.39
+- *Sugerencia:* MANTENER
+
+BTCUSDT $62845.26 (-4.1%) | RSI: 44.1
+- *Tendencia (SMA20):* Bajista | *MACD:* Bearish
+- *Volumen:* Normal | *ATR:* $1455.63
+- *Stop Loss sugerido:* $60661.82
+- *Sugerencia:* REDUCIR POSICIÓN
+
+USDCLP $938.16 (-0.8%) | RSI: 61.2
+- *Tendencia (SMA20):* Alcista | *MACD:* Bullish
+- *Volumen:* Normal | *ATR:* $10.84
+- *Stop Loss sugerido:* $921.90
+- *Sugerencia:* MANTENER / ACUMULAR
+
+*📰 NOTICIAS DESTACADAS*
+No hay
+
+*🧭 LECTURA GENERAL*
+- Semis siguen débiles, QCOM, AMD, INTC, MU, WDC y NVDA siguen bajo SMA20.
+- TSLA es el extremo del día, pero todavía sin giro limpio.
+- Crypto sigue flojo, BTC y BNB abajo de tendencia, ETH aguanta mejor pero sin confirmación.
+- Lo más sano hoy está en MSFT, BCH y NFLX, pero sin volumen de ruptura fuerte todavía.

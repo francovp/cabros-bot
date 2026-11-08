@@ -1,0 +1,515 @@
+{
+  "version": 1,
+  "updatedAt": "2026-10-04T00:04:04.229Z",
+  "entries": {
+    "memory:memory/2026-03-23.md:1:5": {
+      "key": "memory:memory/2026-03-23.md:1:5",
+      "path": "memory/2026-03-23.md",
+      "startLine": 1,
+      "endLine": 5,
+      "source": "memory",
+      "snippet": "# 2026-03-23 - [10:18] Franco asked \"Estás vivo?\". I'm alive and kicking. - [10:25] Franco asked \"Y ahora?\". Ready for action.",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.4448156088590622,
+      "maxScore": 0.4448156088590622,
+      "firstRecalledAt": "2026-04-17T18:17:09.998Z",
+      "lastRecalledAt": "2026-04-17T18:17:09.998Z",
+      "queryHashes": [
+        "72c6e7dc7efb"
+      ],
+      "recallDays": [
+        "2026-04-17"
+      ],
+      "conceptTags": [
+        "franco",
+        "asked",
+        "estás",
+        "vivo",
+        "i'm",
+        "alive",
+        "kicking",
+        "ahora"
+      ]
+    },
+    "memory:memory/2024-03-05.md:1:1": {
+      "key": "memory:memory/2024-03-05.md:1:1",
+      "path": "memory/2024-03-05.md",
+      "startLine": 1,
+      "endLine": 1,
+      "source": "memory",
+      "snippet": "**User**: Why you do...",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.4227784931659698,
+      "maxScore": 0.4227784931659698,
+      "firstRecalledAt": "2026-04-20T03:52:21.953Z",
+      "lastRecalledAt": "2026-04-20T03:52:21.953Z",
+      "queryHashes": [
+        "0f9e2a035e5d"
+      ],
+      "recallDays": [
+        "2026-04-20"
+      ],
+      "conceptTags": [
+        "user",
+        "why",
+        "you"
+      ]
+    },
+    "memory:memory/2026-04-20.md:1:20": {
+      "key": "memory:memory/2026-04-20.md:1:20",
+      "path": "memory/2026-04-20.md",
+      "startLine": 1,
+      "endLine": 20,
+      "source": "memory",
+      "snippet": "# 2026-04-20 ## Wiki LLM — Karpathy Pattern - Implementé el patrón LLM Wiki de Karpathy en el vault de Obsidian - **Ruta:** `~/OneDrive/obsidian-vault/personal/wiki/` - Estructura: CLAUDE.md (schema), index.md, log.md, raw/, pages/summaries/ - Ingestado: documento original de Karpathy - Guardado en MEMORY.md para persistencia entre sesiones ## Morgan Stanley — AI Off-Balance Sheet - Buscado y discutido con Franco: concepto de financiar infraestructura AI con deuda fuera del balance (SPV) - Caso Meta: $27-30B debt para Hyperion data center (Louisiana), 80% Blue Owl Capital - Warning de Morgan Stanley: deals circulares, presión por ROI, posible corrección 10-20% si AI no paga - Franco pregun",
+      "recallCount": 2,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.9512831836938858,
+      "maxScore": 0.4908221274614334,
+      "firstRecalledAt": "2026-05-14T18:07:44.268Z",
+      "lastRecalledAt": "2026-06-07T08:18:27.537Z",
+      "queryHashes": [
+        "b65f9ff057b3",
+        "00fc419dc901"
+      ],
+      "recallDays": [
+        "2026-05-14",
+        "2026-06-07"
+      ],
+      "conceptTags": [
+        "claude.md",
+        "index.md",
+        "log.md",
+        "pages/summaries",
+        "memory.md",
+        "off-balance",
+        "27-30b",
+        "10-20"
+      ]
+    },
+    "memory:memory/2026-05-27.md:1:12": {
+      "key": "memory:memory/2026-05-27.md:1:12",
+      "path": "memory/2026-05-27.md",
+      "startLine": 1,
+      "endLine": 12,
+      "source": "memory",
+      "snippet": "# 2026-05-27 - Revisé el cron \"Franco Daily Stock Signals\". - Está en `cron:list` con id `826d7cca-9731-402e-a4de-e9138c70d5b8`. - Prompt actual: usa `generate_stock_signals.py` con TradingView Screener directo. - Detecté que el binario local `tvscreener-mcp` existe, pero falla porque falta el módulo `mcp` (`ModuleNotFoundError: No module named 'mcp'`). - Leí la guía local del skill `tradingview-screener` y sus referencias. - Extras útiles disponibles para reporte desde el screener: `NAME`, `PRICE`, `CHANGE_PERCENT`, `VOLUME`, `AVERAGE_VOLUME_10_DAY`, `AVERAGE_VOLUME_30_DAY`, `MARKET_CAPITALIZATION`, `SECTOR`, `SIMPLE_MOVING_AVERAGE_50`, `SIMPLE_MOVING_AVERAGE_200`, `RELATIVE_STRENGTH_INDEX",
+      "recallCount": 56,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 29.239330017285404,
+      "maxScore": 0.7840133005004566,
+      "firstRecalledAt": "2026-06-05T20:41:08.580Z",
+      "lastRecalledAt": "2026-10-04T00:04:04.229Z",
+      "queryHashes": [
+        "38f87b5ca397",
+        "faa5ae2251cf",
+        "9f9c5496f3f6",
+        "1405640f34f6",
+        "2697e52a1740",
+        "dadea554b0f2",
+        "ac2fa77f68c2",
+        "4c04b1678db0",
+        "76bc7dc15ab8",
+        "95d0938b0271",
+        "0878ced0d3b4",
+        "b9ca0f9c0cae",
+        "a963792098bd",
+        "9a8d5aacb156",
+        "e2d87e1c4176",
+        "7fbdda3d9165",
+        "0dbdda2bc8e2",
+        "f8a499dd7275",
+        "aa2f33c001c1",
+        "4c153155510e",
+        "6911ab23d30c",
+        "08f2a2c90c41",
+        "b6314c5b98b9",
+        "8208af8cfc8d",
+        "37f49cf01fac",
+        "ef5ae483fc5d",
+        "327506a7c3c7",
+        "46630f950615",
+        "f2fb8c5fcf7b",
+        "ce0d2505d844",
+        "6c3c6f9f8115",
+        "35c97be95be9"
+      ],
+      "recallDays": [
+        "2026-07-27",
+        "2026-07-30",
+        "2026-08-03",
+        "2026-08-04",
+        "2026-08-06",
+        "2026-08-07",
+        "2026-08-10",
+        "2026-08-11",
+        "2026-08-14",
+        "2026-08-24",
+        "2026-08-25",
+        "2026-08-26",
+        "2026-08-27",
+        "2026-09-01",
+        "2026-09-07",
+        "2026-10-04"
+      ],
+      "conceptTags": [
+        "generate-stock-signals.py",
+        "tvscreener-mcp",
+        "tradingview-screener",
+        "change-percent",
+        "average-volume-10-day",
+        "average-volume-30-day",
+        "market-capitalization",
+        "simple-moving-average-50"
+      ]
+    },
+    "memory:memory/2026-05-06.md:1:18": {
+      "key": "memory:memory/2026-05-06.md:1:18",
+      "path": "memory/2026-05-06.md",
+      "startLine": 1,
+      "endLine": 18,
+      "source": "memory",
+      "snippet": "2026-05-06 01:30 UTC - Memory flush - Guardado plan de desarrollo SRE de Franco en wiki personal siguiendo patrón LLM Wiki: * Fuente original (marzo 2025-febrero 2026) en raw/articles/plan-desarrollo-sre-franco-marzo2025-febrero2026.md * Summary desplazado (mayo 2026-abril 2027) en pages/summaries/summary-plan-desarrollo-sre-franco-mayo2026-abril2027.md * Actualizado index.md, creado entity-franco-sre-desarrollo, concepto-desarrollo-carrera-sre, y log.md con registro de ingest. - Ejecutado cron de señales de acciones (Franco Daily Stock Signals) para actualizar RSI y precios; reporte enviado por WhatsApp. - Análisis post-market de AMD y SMCI solicitado: * AMD: subió +4% en post-ma",
+      "recallCount": 6,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 3.0351733565330505,
+      "maxScore": 0.5171534210443497,
+      "firstRecalledAt": "2026-06-06T00:17:58.928Z",
+      "lastRecalledAt": "2026-08-25T13:06:33.473Z",
+      "queryHashes": [
+        "10ae4d659ca8",
+        "473bb72d9dc1",
+        "f58e88663af8",
+        "38f87b5ca397",
+        "ac2fa77f68c2",
+        "b6314c5b98b9"
+      ],
+      "recallDays": [
+        "2026-06-06",
+        "2026-07-02",
+        "2026-07-07",
+        "2026-07-14",
+        "2026-07-24",
+        "2026-08-25"
+      ],
+      "conceptTags": [
+        "2025-febrero",
+        "2026-abril",
+        "index.md",
+        "entity-franco-sre-desarrollo",
+        "concepto-desarrollo-carrera-sre",
+        "log.md",
+        "post-market",
+        "post-ma"
+      ]
+    },
+    "memory:memory/2026-04-19.md:1:12": {
+      "key": "memory:memory/2026-04-19.md:1:12",
+      "path": "memory/2026-04-19.md",
+      "startLine": 1,
+      "endLine": 12,
+      "source": "memory",
+      "snippet": "# 2026-04-19 ## Cron 6AM Chile - Trading Alerts - Hora UTC: 13:00 (6AM CLT) - Intenté enviar mensaje de bienvenida al grupo WhatsApp (120363423602228635@g.us) - wacli falló: \"Binary was compiled with 'CGO_ENABLED=0', go-sqlite3 requires cgo to work\" - No se envió el mensaje de buena mañana ## Notas - wacli necesita recompilarse con CGO enabled o usar un binary pre-built que soporte sqlite3 - Revisar instalación de wacli en este ambiente",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.5129355132579804,
+      "maxScore": 0.5129355132579804,
+      "firstRecalledAt": "2026-06-14T16:38:21.381Z",
+      "lastRecalledAt": "2026-06-14T16:38:21.381Z",
+      "queryHashes": [
+        "25ad3bbbe964"
+      ],
+      "recallDays": [
+        "2026-06-14"
+      ],
+      "conceptTags": [
+        "g.us",
+        "cgo-enabled",
+        "go-sqlite3",
+        "pre-built",
+        "cron",
+        "6am",
+        "chile",
+        "trading"
+      ]
+    },
+    "memory:memory/2026-04-22.md:1:13": {
+      "key": "memory:memory/2026-04-22.md:1:13",
+      "path": "memory/2026-04-22.md",
+      "startLine": 1,
+      "endLine": 13,
+      "source": "memory",
+      "snippet": "# 2026-04-22 ## Daily Context Reset - 6AM Chile - Read SOUL.md, USER.md - No memory files from yesterday (2026-04-21.md doesn't exist) - Message sent to Trading Alerts group (120363423602228635@g.us) - Gateway showed timeout error in CLI but message was sent (log shows \"sent message\" with messageId 3EB0F262B8ED6A8ACBDEA7) - WhatsApp channel: linked and working ## Notes - First cron run after context reset - No previous context to load from memory files",
+      "recallCount": 7,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 3.4026851475238793,
+      "maxScore": 0.5134116381406784,
+      "firstRecalledAt": "2026-07-02T13:08:27.703Z",
+      "lastRecalledAt": "2026-08-26T13:02:07.784Z",
+      "queryHashes": [
+        "7551d3253fee",
+        "f6951f2ca2f5",
+        "b9ca0f9c0cae",
+        "55930be0ccf6",
+        "2516e145fe67",
+        "37f49cf01fac",
+        "ef5ae483fc5d"
+      ],
+      "recallDays": [
+        "2026-07-02",
+        "2026-07-09",
+        "2026-07-30",
+        "2026-08-04",
+        "2026-08-07",
+        "2026-08-26"
+      ],
+      "conceptTags": [
+        "gateway",
+        "soul.md",
+        "user.md",
+        "g.us",
+        "context",
+        "reset",
+        "6am",
+        "chile"
+      ]
+    },
+    "memory:memory/2026-04-25.md:1:16": {
+      "key": "memory:memory/2026-04-25.md:1:16",
+      "path": "memory/2026-04-25.md",
+      "startLine": 1,
+      "endLine": 16,
+      "source": "memory",
+      "snippet": "# 2026-04-25 ## Daily Context Reset - 6AM Chile (ejecutado a las 13:00 UTC) - Read SOUL.md, USER.md - Read yesterday's memory (2026-04-24.md) - Sent welcome message to Trading Alerts group (120363423602228635@g.us) - Message: \"Buenos días, gente ☀️ El que madrugó... sí, yo, porque a las 6 AM nadie pidió un bot. ¿Qué hacemos hoy?\" - Message sent via subagent (spawned to handle gateway timeout issues) ## Notes - Gateway sigue con timeout issues cuando se llama desde exec (10s default timeout) - Subagent pudo enviar el mensaje sin problemas (runtime 20s) - wacli binario sigue roto (cgo/sqlite3 stub error) - openclaw message send funciona desde subagent pero no desde exec directo",
+      "recallCount": 5,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 2.3864247798919678,
+      "maxScore": 0.49369790256023405,
+      "firstRecalledAt": "2026-07-03T13:03:00.130Z",
+      "lastRecalledAt": "2026-08-26T13:01:58.194Z",
+      "queryHashes": [
+        "f70e3dcb3436",
+        "c9793ecfef2a",
+        "55930be0ccf6",
+        "2516e145fe67",
+        "37f49cf01fac"
+      ],
+      "recallDays": [
+        "2026-07-03",
+        "2026-07-08",
+        "2026-08-04",
+        "2026-08-07",
+        "2026-08-26"
+      ],
+      "conceptTags": [
+        "gateway",
+        "soul.md",
+        "user.md",
+        "g.us",
+        "cgo/sqlite3",
+        "context",
+        "reset",
+        "6am"
+      ]
+    },
+    "memory:memory/2026-05-28.md:1:7": {
+      "key": "memory:memory/2026-05-28.md:1:7",
+      "path": "memory/2026-05-28.md",
+      "startLine": 1,
+      "endLine": 7,
+      "source": "memory",
+      "snippet": "# 2026-05-28 - Trading Alerts group debugging, Franco and Jano discussed SMCI vs SMIC. - Connected mcporter TradingView MCP endpoint: https://tradingview-mcp.onrender.com/mcp - Validated SMCI with TradingView MCP and observed repeated classification as bullish thesis but poor entry due to extension / overbought conditions. - Agreed to document improved alert specs for the bot in the wiki.",
+      "recallCount": 11,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 5.287219539284707,
+      "maxScore": 0.5009543269872665,
+      "firstRecalledAt": "2026-07-06T13:09:58.888Z",
+      "lastRecalledAt": "2026-08-31T13:07:48.948Z",
+      "queryHashes": [
+        "b5446dc0590a",
+        "f58e88663af8",
+        "faa5ae2251cf",
+        "47155c4c563c",
+        "32fd9b86be46",
+        "08f2a2c90c41",
+        "b6314c5b98b9",
+        "8208af8cfc8d",
+        "091275ac1691",
+        "b3abd7932ee4",
+        "1d03eb386356"
+      ],
+      "recallDays": [
+        "2026-07-06",
+        "2026-07-07",
+        "2026-07-16",
+        "2026-07-21",
+        "2026-08-25",
+        "2026-08-29",
+        "2026-08-31"
+      ],
+      "conceptTags": [
+        "tradingview-mcp.onrender.com/mcp",
+        "trading",
+        "alerts",
+        "group",
+        "debugging",
+        "franco",
+        "jano",
+        "discussed"
+      ]
+    },
+    "memory:memory/2026-03-31.md:1:12": {
+      "key": "memory:memory/2026-03-31.md:1:12",
+      "path": "memory/2026-03-31.md",
+      "startLine": 1,
+      "endLine": 12,
+      "source": "memory",
+      "snippet": "# 2026-03-31 ## 6AM Chile - Arranque Trading Alerts - Grupo JID: `120363423602228635@g.us` - Saludo enviado a las 12:00 UTC (~8AM Chile hora de verano) - Sin memoria de días anteriores (no existían archivos para 03-30 o 03-31) ## Notas - El grupo \"Trading Alerts\" está activo desde hace rato (sesiones del 03-03) - La última sesión guardada fue 2026-03-30",
+      "recallCount": 3,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 1.4245498776435852,
+      "maxScore": 0.47880084514617915,
+      "firstRecalledAt": "2026-07-08T13:04:06.481Z",
+      "lastRecalledAt": "2026-07-21T17:18:19.715Z",
+      "queryHashes": [
+        "f4340acc7dd8",
+        "b5a0dfd8b50a",
+        "5b550ef22ae6"
+      ],
+      "recallDays": [
+        "2026-07-08",
+        "2026-07-09",
+        "2026-07-21"
+      ],
+      "conceptTags": [
+        "g.us",
+        "03-30",
+        "03-31",
+        "03-03",
+        "6am",
+        "chile",
+        "arranque",
+        "trading"
+      ]
+    },
+    "memory:memory/2026-04-24.md:1:17": {
+      "key": "memory:memory/2026-04-24.md:1:17",
+      "path": "memory/2026-04-24.md",
+      "startLine": 1,
+      "endLine": 17,
+      "source": "memory",
+      "snippet": "# 2026-04-24 ## Daily Context Reset - 6AM Chile - Read SOUL.md, USER.md - Read yesterday's memory (2026-04-23.md) - Sent welcome message to Trading Alerts group (120363423602228635@g.us) - Message: \"Buenos días, gente ☀️ El que madrugó... sí, yo, porque a las 6 AM nadie pidió un bot. ¿Qué hacemos hoy?\" - Message ID: 3EB0AA50E6177651C9F62B ## Notes - WhatsApp connection unstable - keep getting 408/499 errors and reconnecting - Gateway timeout issues but message did go through - Connection seems to be re-establishing repeatedly (status=499, status=408) - wacli binary still broken (cgo/sqlite3 stub error) - Using openclaw message send --channel whatsapp worked after gateway reconnected",
+      "recallCount": 3,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 1.4455070912837982,
+      "maxScore": 0.48743422031402583,
+      "firstRecalledAt": "2026-07-21T17:26:41.151Z",
+      "lastRecalledAt": "2026-08-07T13:05:11.320Z",
+      "queryHashes": [
+        "47155c4c563c",
+        "55930be0ccf6",
+        "2516e145fe67"
+      ],
+      "recallDays": [
+        "2026-07-21",
+        "2026-08-04",
+        "2026-08-07"
+      ],
+      "conceptTags": [
+        "gateway",
+        "soul.md",
+        "user.md",
+        "g.us",
+        "408/499",
+        "re-establishing",
+        "cgo/sqlite3",
+        "context"
+      ]
+    },
+    "memory:memory/2026-04-23.md:1:15": {
+      "key": "memory:memory/2026-04-23.md:1:15",
+      "path": "memory/2026-04-23.md",
+      "startLine": 1,
+      "endLine": 15,
+      "source": "memory",
+      "snippet": "# 2026-04-23 ## Daily Context Reset - 6AM Chile - Read SOUL.md, USER.md - Read yesterday's memory (2026-04-22.md) - Sent welcome message to Trading Alerts group (120363423602228635@g.us) - Message: \"Buenos días, gente 🌅 El que madrugó... sí, yo, porque a las 6 AM nadie pidió un bot. ¿Qué hacemos hoy?\" - Message ID: 3EB0ABE6E8BD90E13D17FF - wacli binary has issues (cgo/sqlite3 stub error) - subagent used gateway directly ## Notes - Cron working correctly - WhatsApp channel active - Channel: whatsapp (via gateway)",
+      "recallCount": 7,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 3.395402646064758,
+      "maxScore": 0.5054023593664169,
+      "firstRecalledAt": "2026-07-21T17:26:41.151Z",
+      "lastRecalledAt": "2026-08-26T13:02:07.784Z",
+      "queryHashes": [
+        "47155c4c563c",
+        "55930be0ccf6",
+        "2b8d9b36005e",
+        "a0e81d4d8ccb",
+        "2516e145fe67",
+        "37f49cf01fac",
+        "ef5ae483fc5d"
+      ],
+      "recallDays": [
+        "2026-07-21",
+        "2026-08-04",
+        "2026-08-05",
+        "2026-08-07",
+        "2026-08-26"
+      ],
+      "conceptTags": [
+        "gateway",
+        "soul.md",
+        "user.md",
+        "g.us",
+        "cgo/sqlite3",
+        "context",
+        "reset",
+        "6am"
+      ]
+    },
+    "memory:memory/2026-04-26.md:1:20": {
+      "key": "memory:memory/2026-04-26.md:1:20",
+      "path": "memory/2026-04-26.md",
+      "startLine": 1,
+      "endLine": 20,
+      "source": "memory",
+      "snippet": "# 2026-04-26 ## Daily Context Reset - 6AM Chile (ejecutado a las 13:00 UTC) - Read SOUL.md, USER.md - Read yesterday's memory (2026-04-25.md) - no today file exists yet - Spawned subagent to send welcome message to Trading Alerts group (120363423602228635@g.us) - Subagent session didn't return in time (poll timeout), same pattern as yesterday - Message was: \"Buenos días, gente ☀️ El que madrugó... sí, yo, porque a las 6 AM nadie pidió un bot. ¿Qué hacemos hoy?\" ## Notes - Subagent spawning works but poll times out - this is a known issue - Yesterday's notes confirm subagent DID send the message successfully - The spawn completes but result polling fails to get session state - Will continu",
+      "recallCount": 1,
+      "dailyCount": 0,
+      "groundedCount": 0,
+      "totalScore": 0.48156075477600097,
+      "maxScore": 0.48156075477600097,
+      "firstRecalledAt": "2026-08-07T13:05:11.320Z",
+      "lastRecalledAt": "2026-08-07T13:05:11.320Z",
+      "queryHashes": [
+        "2516e145fe67"
+      ],
+      "recallDays": [
+        "2026-08-07"
+      ],
+      "conceptTags": [
+        "soul.md",
+        "user.md",
+        "g.us",
+        "context",
+        "reset",
+        "6am",
+        "chile",
+        "ejecutado"
+      ]
+    }
+  }
+}

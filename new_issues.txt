@@ -1,0 +1,40 @@
+1371|tests: process.env leaks across suites, making 'pnpm test' order-dependent and intermittently red on master|https://github.com/francovp/cabros-bot/issues/1371|2026-10-06T05:16:54Z
+1369|perf(tradingview): MCP cold start exceeds the per-alert enrichment envelope, so alert enrichment cannot recover on a free-tier host|https://github.com/francovp/cabros-bot/issues/1369|2026-10-05T21:55:03Z
+1358|Gemini quota cooldown honours an uncapped provider-supplied delay and has no operator override (21.3h active in production)|https://github.com/francovp/cabros-bot/issues/1358|2026-10-05T00:03:38Z
+1355|Production liveness tooling probes a dead Railway host while production is live on OpenClaw — uptime monitor reports false DOWN, paging never configured|https://github.com/francovp/cabros-bot/issues/1355|2026-10-04T19:06:40Z
+1354|Admin console does not surface enrichment.confluence.* counters (tradingViewMcp dependency card)|https://github.com/francovp/cabros-bot/issues/1354|2026-10-04T17:52:41Z
+1344|chore(render): boolean envVar values fail the public Render JSON schema|https://github.com/francovp/cabros-bot/issues/1344|2026-10-04T14:30:03Z
+1343|fix(render): hardcode NOTIFICATION_REDRIVE_WORKER_ROLE and USER_PRICE_ALERT_WORKER_ROLE in the jobs worker instead of inheriting them|https://github.com/francovp/cabros-bot/issues/1343|2026-10-04T14:29:42Z
+1341|Contract files cause the conflicts: Postman collection 11/22 DIRTY PRs, openapi.json 10/22, AGENTS.md only 5/22|https://github.com/francovp/cabros-bot/issues/1341|2026-10-04T14:02:32Z
+1339|Every PR edits AGENTS.md, so every merge re-dirties the queue — the conflict is one shared file, not merge cadence|https://github.com/francovp/cabros-bot/issues/1339|2026-10-04T12:50:34Z
+1338|CI: pnpm/action-setup version conflict blocks Langfuse sync, Remote Config publish, and Firestore backup|https://github.com/francovp/cabros-bot/issues/1338|2026-10-04T12:43:13Z
+1337|multi_timeframe_analysis reuses combined_analysis's deadline, so it is starved by the enrichment budget|https://github.com/francovp/cabros-bot/issues/1337|2026-10-04T12:39:48Z
+1334|Give 11 mergeable green PRs an owner and a verdict (#989 #1014 #1016 #1017 #1019 #1026 #1028 #1036 #1066 #1074 #1273)|https://github.com/francovp/cabros-bot/issues/1334|2026-10-04T11:50:01Z
+1328|required_linear_history permanently blocks 4 QA-passed PRs whose conflicts were resolved by merging master|https://github.com/francovp/cabros-bot/issues/1328|2026-10-04T09:51:37Z
+1324|Merge cadence re-dirties every open PR and invalidates author rebases (#1312 lost two QA rounds)|https://github.com/francovp/cabros-bot/issues/1324|2026-10-04T08:49:40Z
+1319|chatgpt-codex-connector leaves unresolved review threads, blocking every PR it opens (33 stuck)|https://github.com/francovp/cabros-bot/issues/1319|2026-10-04T06:50:58Z
+1314|Land or close the five QA-passed PRs stuck at the merge gate: #1279, #1298, #1299, #1300, #1311|https://github.com/francovp/cabros-bot/issues/1314|2026-10-04T05:49:34Z
+1308|fix(admin): console index.html hardcodes root-absolute /admin/ asset paths, 404ing on any sub-path deployment|https://github.com/francovp/cabros-bot/issues/1308|2026-10-04T04:20:16Z
+1303|Remote Config template load failing continuously for ~56h in production (225 consecutive failures) — all remote overrides silently inert|https://github.com/francovp/cabros-bot/issues/1303|2026-10-04T02:48:18Z
+1302|TradingView MCP enrichment at 0% success in production — client timeout (12s) is shorter than the upstream Render cold start (~31s)|https://github.com/francovp/cabros-bot/issues/1302|2026-10-04T02:46:04Z
+1301|NewsAnalysisStorageService leaves query.get() unwrapped — read failures return 500 instead of 503 STORAGE_UNAVAILABLE|https://github.com/francovp/cabros-bot/issues/1301|2026-10-04T02:37:04Z
+1297|refactor(admin): collapse the duplicated Overview and Status views into one status dashboard|https://github.com/francovp/cabros-bot/issues/1297|2026-10-04T01:54:39Z
+1296|PR preview deployments share production credentials (BOT_TOKEN, TELEGRAM_CHAT_ID, WEBHOOK_API_KEY) — scope of blast radius not bounded|https://github.com/francovp/cabros-bot/issues/1296|2026-10-04T01:54:26Z
+1295|feat(admin): Symbol analysis history and summary view|https://github.com/francovp/cabros-bot/issues/1295|2026-10-04T01:54:24Z
+1293|fix(admin): wide tables overflow the phone viewport, rows are not keyboard reachable and columns do not sort|https://github.com/francovp/cabros-bot/issues/1293|2026-10-04T01:54:24Z
+1292|feat(admin): Trader feedback analytics view for GET /api/alerts/feedback/summary|https://github.com/francovp/cabros-bot/issues/1292|2026-10-04T01:53:48Z
+1289|feat(admin): Analytics view — alert volume over time, per-channel delivery and risk-metadata coverage|https://github.com/francovp/cabros-bot/issues/1289|2026-10-04T01:53:48Z
+1286|P0: /ready returns 503 since process start — Telegram polling conflict (409 getUpdates) from a second bot instance|https://github.com/francovp/cabros-bot/issues/1286|2026-10-04T01:37:46Z
+1285|P0: stored-alert reads return 503 STORAGE_UNAVAILABLE in production while writes succeed and dependencies.firestore reports ready|https://github.com/francovp/cabros-bot/issues/1285|2026-10-04T01:37:21Z
+1380|feat: deduplicate TradingView symbols in expanded-analysis requests|https://github.com/francovp/cabros-bot/pull/1380|2026-10-07T02:30:16Z
+1378|feat(outcomes): persist TradingView MCP risk metadata from webhook alerts (#832)|https://github.com/francovp/cabros-bot/pull/1378|2026-10-06T12:30:47Z
+1367|feat(remote-config): make Firestore storage gates remotely toggleable (#721)|https://github.com/francovp/cabros-bot/pull/1367|2026-10-05T15:43:25Z
+1365|docs(learnings): log corrections from @francovp on PR #1356 and PR #1352|https://github.com/francovp/cabros-bot/pull/1365|2026-10-05T04:54:53Z
+1345|fix(render): inherit LLM provider config and scheduler role in Render worker blueprint|https://github.com/francovp/cabros-bot/pull/1345|2026-10-04T14:30:37Z
+1329|feat(status): expose ENABLE_FIREBASE_ADMIN_AUTH gate and proven readiness|https://github.com/francovp/cabros-bot/pull/1329|2026-10-04T10:09:16Z
+1320|fix(status): stop cloudflareAig from reporting ready when it is not routed (#1115)|https://github.com/francovp/cabros-bot/pull/1320|2026-10-04T07:26:31Z
+1312|feat(status): document ENABLE_BINANCE_ORDER_AUDIT in the capabilities contract|https://github.com/francovp/cabros-bot/pull/1312|2026-10-04T05:34:28Z
+1311|fix(admin): hide same-key retry after definitive job errors|https://github.com/francovp/cabros-bot/pull/1311|2026-10-04T05:15:16Z
+1310|fix(firestore): make the composite-index deploy step runnable and auditable (#1285)|https://github.com/francovp/cabros-bot/pull/1310|2026-10-04T04:57:20Z
+1300|fix(ci): check out repository before Production Smoke Probe|https://github.com/francovp/cabros-bot/pull/1300|2026-10-04T02:35:11Z
+1299|feat(alerts): collapse cross-timeframe duplicate signals (#1103)|https://github.com/francovp/cabros-bot/pull/1299|2026-10-04T02:19:00Z

@@ -1,0 +1,60 @@
+1404|fix(sse): evict clients that apply persistent backpressure in AdminSseService (#1244)
+1403|fix(notifications): suppress redrive claims in admin messages for probe failures (#1155)
+1402|fix(redrive): persist and return reconciled pending counts in worker telemetry (#1172)
+1401|fix(cost): return distributed alert promise from _triggerThresholdAlert (#1234)
+1400|fix(scanner): distinguish absent indicators from zero in scanner scoring (#1197)
+1399|fix(news-cache): recheck delivery-lock presence after eviction pass before capacity check (#1252)
+1398|fix(trading): record clientOrderId and normalize status to rejected on Binance cancel audits (#1243)
+1397|fix(news-monitor): fail open to neutral analysis on TOKEN_BUDGET_EXCEEDED (#1235)
+1396|fix(selftest): update dependencies on existing singleton to prevent starvation (GH-1248)
+1395|feat(status): expose ENABLE_ALERT_HTF_RENDER in capabilities featureFlags (GH-1181)
+1390|feat(outcomes): add bounded result breakdowns
+1389|fix(telegram): bound callback query responses and track post-persistence keyboard attachment (#1251)
+1388|fix(webhook): configure message limit
+1387|fix(alert-replay): reject invalid dryRun values before delivery (#1153)
+1386|fix(outcomes): block scanner score confidence
+1385|feat(webhooks): tag equity alerts with trading session state (#804)
+1382|fix(news-dedup): make persistent persistence-state transitions race-safe
+1381|fix(deps): remediate runtime dependency advisories — audit gate green
+1380|feat: deduplicate TradingView symbols in expanded-analysis requests
+1378|feat(outcomes): persist TradingView MCP risk metadata from webhook alerts (#832)
+1377|feat(whatsapp-bridge): add !analisis, !scanner, !noticias, !outcomes command parity with Telegram
+1373|feat(admin): make result tables accessible and readable on mobile
+1365|docs(learnings): log corrections from @francovp on PR #1356 and PR #1352
+1345|fix(render): inherit LLM provider config and scheduler role in Render worker blueprint
+1329|feat(status): expose ENABLE_FIREBASE_ADMIN_AUTH gate and proven readiness
+1320|fix(status): stop cloudflareAig from reporting ready when it is not routed (#1115)
+1312|feat(status): document ENABLE_BINANCE_ORDER_AUDIT in the capabilities contract
+1311|fix(admin): hide same-key retry after definitive job errors
+1310|fix(firestore): make the composite-index deploy step runnable and auditable (#1285)
+1300|fix(ci): check out repository before Production Smoke Probe
+i1394|security(ci): preserve secret scanning for documentation-only changes
+i1393|fix(enrichment): enforce bidirectional setup_type and setup_evidence pairing at final merge boundary
+i1392|docs(tradingview): update confluence multi-timeframe deadline model in operator docs
+i1391|test(postman): assign unique idempotency keys to negative replay request variants
+i1371|tests: process.env leaks across suites, making 'pnpm test' order-dependent and intermittently red on master
+i1369|perf(tradingview): MCP cold start exceeds the per-alert enrichment envelope, so alert enrichment cannot recover on a free-tier host
+i1344|chore(render): boolean envVar values fail the public Render JSON schema
+i1343|fix(render): hardcode NOTIFICATION_REDRIVE_WORKER_ROLE and USER_PRICE_ALERT_WORKER_ROLE in the jobs worker instead of inheriting them
+i1296|PR preview deployments share production credentials (BOT_TOKEN, TELEGRAM_CHAT_ID, WEBHOOK_API_KEY) — scope of blast radius not bounded
+i1290|feat(admin): News monitor operations view — status, pause/resume kill switch and delivery analytics
+i1285|P0: stored-alert reads return 503 STORAGE_UNAVAILABLE in production while writes succeed and dependencies.firestore reports ready
+i1275|feat(trading): durable trade ledger + positions / P&L / ROI API
+i1274|feat(trading): read-only Binance balances endpoint to size SELL / close-position safely
+i1252|fix(news-cache): recheck delivery-lock presence after eviction pass before capacity check
+i1251|fix(telegram): bound callback query responses and track post-persistence keyboard attachment
+i1248|fix(selftest): prevent uninitialized singleton from starving diagnostic check dependencies
+i1244|fix(sse): evict clients that apply persistent backpressure in AdminSseService
+i1243|fix(trading): record clientOrderId and normalize status to rejected on Binance cancel audits
+i1238|fix(signal-outcome): do not normalize market-scanner technical metrics as confidence scores
+i1235|fix(news-monitor): fail open to neutral analysis when TOKEN_BUDGET_EXCEEDED is thrown
+i1234|fix(cost): return distributed alert promise from _triggerThresholdAlert to avoid TypeError
+i1231|feat(api): adopt errorEnvelope.js across all remaining /api/* endpoints for contract parity
+i1197|Scanner ranking treats missing indicator data as RSI 0 and awards squeeze bonus to absent BBW
+i1181|Expose ENABLE_ALERT_HTF_RENDER in /api/capabilities featureFlags
+i1172|Persist reconciled notification redrive pending counts
+i1156|Use configured URL shortener in test-alert dry-run previews
+i1155|Do not report redrive for ineligible probe failures
+i1153|fix(alert-replay): reject invalid dryRun values before delivery
+i1144|fix(admin): hide same-key retry after definitive job errors
+i1109|Enable TradingView confluence enrichment in production (ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true)

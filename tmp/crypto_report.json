@@ -1,0 +1,38 @@
+{
+  "BTCUSDT": {
+    "price": 78206,
+    "changePct": -1.077,
+    "rsi": 78.3343322313954,
+    "sma20": 68943.006,
+    "macdBullish": true,
+    "volume": 7627.96274,
+    "avg10": 22892.499808,
+    "atr14": 2560.6221428571444,
+    "trend": "Alcista",
+    "volumeLabel": "Normal"
+  },
+  "ETHUSDT": {
+    "price": 2452.41,
+    "changePct": -0.902,
+    "rsi": 75.60386755171355,
+    "sma20": 2104.7429999999995,
+    "macdBullish": true,
+    "volume": 105919.2644,
+    "avg10": 425041.18408000004,
+    "atr14": 107.74928571428572,
+    "trend": "Alcista",
+    "volumeLabel": "Normal"
+  },
+  "BNBUSDT": {
+    "price": 700.58,
+    "changePct": 0.378,
+    "rsi": 79.42143251453001,
+    "sma20": 636.3660000000001,
+    "macdBullish": true,
+    "volume": 76195.931,
+    "avg10": 200759.77510000003,
+    "atr14": 21.579285714285707,
+    "trend": "Alcista",
+    "volumeLabel": "Normal"
+  }
+}

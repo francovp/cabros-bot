@@ -221,6 +221,11 @@ function buildExpandedAnalysisAlertReport(items = [], options = {}) {
 		groups[categorizeRsi(row.rsi)].push(row);
 	});
 
+	// Sort groups by RSI ascending
+	Object.keys(groups).forEach((key) => {
+		groups[key].sort((a, b) => (a.rsi ?? 0) - (b.rsi ?? 0));
+	});
+
 	const now = options.now || new Date();
 	const lines = [
 		`📊 *ANÁLISIS AMPLIADO — ${formatReportDate(now)}*`,
@@ -316,15 +321,15 @@ function formatGroupRows(rows) {
 
 	return rows.flatMap((row, index) => {
 		const lines = [
-			`${row.symbol} ${formatCurrency(row.price)} (${formatPercent(row.changePercent)}) | RSI ${formatNumber(row.rsi, 1)}`,
-			`- *Tendencia (SMA20):* ${row.trend} | *MACD:* ${row.macdDirection}`,
+			`*${row.symbol}* ${formatCurrency(row.price)} (${formatPercent(row.changePercent)}) | RSI: ${formatNumber(row.rsi, 1)}`,
+			`•⁠ ⁠Tendencia (SMA20): ${row.trend} | MACD: *_${row.macdDirection}_*`,
 			formatVolumeAtrLine(row),
 			formatStopLossLine(row),
 			formatTargetLine(row),
 			formatRiskRewardLine(row),
 			formatInvalidationLine(row),
 			formatPlanQualityLine(row),
-			`- *Sugerencia:* ${row.suggestion}`,
+			`•⁠ ⁠*Sugerencia: ${row.suggestion}*`,
 		].filter(Boolean);
 
 		if (row.sentiment) {

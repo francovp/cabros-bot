@@ -1,0 +1,141 @@
+{
+  "symbol": "BINANCE:ETHUSDT",
+  "exchange": "binance",
+  "timeframe": "1D",
+  "timestamp": "real-time",
+  "price_data": {
+    "current_price": 1637.05,
+    "open": 1622.18,
+    "high": 1660.54,
+    "low": 1614.69,
+    "close": 1637.05,
+    "change_percent": 0.917,
+    "volume": 147196.2733
+  },
+  "timeframe_context": {
+    "timeframe": "1D",
+    "bias": "Bearish",
+    "bias_reasons": [
+      "Death Cross: EMA50 < EMA200"
+    ],
+    "key_indicators_for_timeframe": [
+      "50 EMA",
+      "200 EMA",
+      "RSI(14)",
+      "Volume",
+      "MACD"
+    ],
+    "advice": "Trade pullbacks in trend (not extremes). Look for confluence: EMA + support + RSI."
+  },
+  "rsi": {
+    "value": 35.86,
+    "signal": "Bearish",
+    "direction": "Rising",
+    "previous": 33.91
+  },
+  "macd": {
+    "macd_line": -69.006557,
+    "signal_line": -76.937236,
+    "histogram": 7.930678,
+    "crossover": "Bullish"
+  },
+  "sma": {
+    "sma10": 1706.845,
+    "sma20": 1691.1525,
+    "sma30": 1764.519,
+    "sma50": 1937.9986,
+    "sma100": 2079.2334,
+    "sma200": 2336.974,
+    "signals": [
+      "Price below SMA50 (bearish)",
+      "Price below SMA200 (long-term bearish)",
+      "Death Cross (SMA50 < SMA200)"
+    ]
+  },
+  "ema": {
+    "ema9": null,
+    "ema10": 1688.009,
+    "ema20": 1731.8947,
+    "ema30": 1786.365,
+    "ema50": 1880.8628,
+    "ema100": 2048.0191,
+    "ema200": 2325.7434,
+    "signals": [
+      "Price below EMA20 (short-term bearish)",
+      "Price below EMA50 (mid-term bearish)",
+      "Price below EMA200 (long-term bearish)",
+      "Death Cross (EMA50 < EMA200)"
+    ]
+  },
+  "bollinger_bands": {
+    "upper": 1803.0212,
+    "middle": 1691.1525,
+    "lower": 1579.2838,
+    "width": 0.1323,
+    "squeeze": false,
+    "position": "Lower Half"
+  },
+  "atr": {
+    "value": null,
+    "percent_of_price": null,
+    "volatility": "Low"
+  },
+  "volume_analysis": {
+    "current": 147196,
+    "average_20": null,
+    "ratio": null,
+    "signal": "Normal"
+  },
+  "obv": {
+    "current_volume": 147196,
+    "direction": "accumulation",
+    "note": "OBV direction inferred from current candle (close vs open)"
+  },
+  "support_resistance": {
+    "pivot": 2132.5833,
+    "resistance_1": 2298.1667,
+    "resistance_2": 2589.3233,
+    "resistance_3": 3046.0633,
+    "support_1": 1841.4267,
+    "support_2": 1675.8433,
+    "support_3": 1219.1033,
+    "nearest_resistance": 2298.1667,
+    "distance_to_resistance_pct": 40.38,
+    "nearest_support": 1219.1033,
+    "distance_to_support_pct": 25.53
+  },
+  "stochastic": {
+    "k": 25.86,
+    "d": 32.9,
+    "signal": "Neutral"
+  },
+  "adx": {
+    "value": 32.58,
+    "trend_strength": "Strong Trend",
+    "plus_di": 15.8,
+    "minus_di": 30.35,
+    "di_signal": "Bearish (-DI > +DI)"
+  },
+  "market_structure": {
+    "trend": "Bearish",
+    "trend_score": -3,
+    "trend_strength": "Strong",
+    "momentum_aligned": false,
+    "trend_signals": [
+      "Below 200 EMA (bearish structure)"
+    ],
+    "candle": {
+      "type": "Bullish",
+      "body_ratio": 0.32,
+      "strength": "Weak",
+      "upper_wick_pct": 51.2,
+      "lower_wick_pct": 16.3
+    }
+  },
+  "market_sentiment": {
+    "overall_rating": -1,
+    "buy_sell_signal": "NEUTRAL",
+    "volatility": "High",
+    "momentum": "Bullish"
+  }
+}
