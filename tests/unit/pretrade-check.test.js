@@ -179,7 +179,7 @@ describe('pretradeCheck helpers', () => {
 		});
 
 		it('produces valid MarkdownV2 without unescaped reserved characters', () => {
-			const { findPotentialInvalidLines } = require('../../src/services/notification/formatters/MarkdownV2Formatter');
+			const { findPotentialInvalidLines } = require('../../src/services/notification/formatters/markdownV2Formatter');
 			const message = formatPretradeCheckMessage({
 				symbol: 'BINANCE:BTCUSDT',
 				price: { available: true, price: 50000.5, percentChange: 1.25, assetClass: 'crypto' },
