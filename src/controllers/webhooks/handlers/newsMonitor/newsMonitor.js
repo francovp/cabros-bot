@@ -5,6 +5,7 @@
  * 003-news-monitor: User Story 1 (endpoint & analysis), User Story 2 (alert delivery)
  */
 
+const { resolveRemoteOverride } = require('../../../../services/remoteConfig/resolveRemoteOverride');
 const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const { getAnalyzer, setNotificationManager } = require('./analyzer');
 const { getCacheInstance } = require('./cache');
@@ -518,7 +519,7 @@ class NewsMonitorHandler {
 	}
 
 	getSymbolsFromEnv(name) {
-		return (process.env[name] || '').split(',').map(s => s.trim()).filter(Boolean);
+		return (resolveRemoteOverride(name) ?? process.env[name] ?? '').split(',').map(s => s.trim()).filter(Boolean);
 	}
 
 	getAssetClassBySymbol(crypto, stocks, useDefaults) {

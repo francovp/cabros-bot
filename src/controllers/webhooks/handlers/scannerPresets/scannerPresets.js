@@ -2,6 +2,7 @@
 
 /* global AbortController */
 
+const { resolveRemoteOverride } = require('../../../../services/remoteConfig/resolveRemoteOverride');
 const {
 	scannerPresetService,
 	parseIfMatchHeader,
@@ -133,6 +134,10 @@ function hasTimedOut(results) {
 }
 
 function getScannerTimeoutMs() {
+	const remoteTimeout = resolveRemoteOverride('MARKET_SCANNER_TIMEOUT_MS');
+	if (remoteTimeout !== undefined) {
+		return remoteTimeout;
+	}
 	const parsedTimeout = parseInt(process.env.MARKET_SCANNER_TIMEOUT_MS || `${DEFAULT_SCANNER_TIMEOUT_MS}`, 10);
 	if (!Number.isFinite(parsedTimeout) || parsedTimeout <= 0) {
 		return DEFAULT_SCANNER_TIMEOUT_MS;

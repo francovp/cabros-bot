@@ -522,8 +522,8 @@ The endpoint tiers use separate per-endpoint buckets keyed by the existing API-k
 
 - `ENABLE_NEWS_MONITOR` - Enable news monitoring endpoint (`true` or `false`, default: `false`)
 - `ENABLE_NEWS_MONITOR_CLASSIFIER` - Re-check Gemini `none` headlines with classifier.dev (`true` or `false`, default: `false`). Sends the symbol and generated headline externally; this privacy gate is environment-only and excluded from Firebase Remote Config.
-- `NEWS_SYMBOLS_CRYPTO` - Default crypto symbols if not provided in request (comma-separated, e.g., `BTCUSDT,ETHUSD`)
-- `NEWS_SYMBOLS_STOCKS` - Default stock symbols if not provided in request (comma-separated)
+- `NEWS_SYMBOLS_CRYPTO` - Default crypto symbols if not provided in request (comma-separated, e.g., `BTCUSDT,ETHUSD`). Fresh published Remote Config overrides the environment for webhook and scheduler; an empty published string clears the list.
+- `NEWS_SYMBOLS_STOCKS` - Default stock symbols if not provided in request (comma-separated). Fresh published Remote Config overrides the environment for webhook and scheduler; an empty published string clears the list.
 - `NEWS_ALERT_THRESHOLD` - Confidence score threshold for sending alerts (default: `0.7`, range 0.0-1.0)
 - `NEWS_CACHE_TTL_HOURS` - Cache time-to-live for deduplication (default: `6` hours)
 - `NEWS_CACHE_MAX_ENTRIES` - Maximum in-memory news-cache entries before LRU eviction (default: `5000`, range `1`-`1000000`; Remote Config supported)
@@ -634,8 +634,8 @@ Audit writes are fail-open: a failed audit write is logged as a warning and neve
 #### TradingView Market Scanner Alerts
 
 - `ENABLE_MARKET_SCANNER` - Enable market scanner endpoint (`true` or `false`, default: `false`)
-- `MARKET_SCANNER_DEFAULT_EXCHANGE` - Default exchange when not provided in request (default: `BINANCE`)
-- `MARKET_SCANNER_TIMEOUT_MS` - Timeout in milliseconds for scanner webhook process (default: `90000`, max `120000`)
+- `MARKET_SCANNER_DEFAULT_EXCHANGE` - Default exchange when not provided in request (default: `BINANCE`). Remote Config supports any non-empty TradingView identifier; requests and saved presets retain their explicit exchange.
+- `MARKET_SCANNER_TIMEOUT_MS` - Timeout in milliseconds for scanner webhook and synchronous preset runs (default: `90000`, max `120000`). Published Remote Config values must be integers `1000`–`120000`; invalid or stale values preserve legacy environment parsing. These four news/scanner template keys use `useInAppDefault: true` until explicitly configured.
 
 #### Scanner Preset Storage
 
