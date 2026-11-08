@@ -2,10 +2,9 @@ const {
 	GROUNDING_MAX_SOURCES,
 	GROUNDING_TIMEOUT_MS,
 	GROUNDING_MAX_LENGTH,
-	GROUNDING_MODEL_NAME,
 	NEWS_ANALYSIS_SYSTEM_PROMPT,
-	GEMINI_MODEL_NAME,
 } = require('./config');
+const { getGroundingModelName, getGeminiModelName } = require('./runtimeModels');
 const gemini = require('./gemini');
 const genaiClient = require('./genaiClient');
 const { getPromptService, PromptKeys } = require('../prompts');
@@ -13,6 +12,7 @@ const metrics = require('./metrics');
 const sentryService = require('../monitoring/SentryService');
 const { deriveAssetContext, deriveCleanSearchQuery } = require('../tradingview/parseTradingViewSignal');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { registerGlobalUsage, tokenCostBudgetService } = require('../../lib/tokenUsage');
 const { CircuitBreaker } = require('../../lib/circuitBreaker');
 
 const geminiCircuitBreaker = new CircuitBreaker({ name: 'gemini' });
@@ -22,7 +22,7 @@ const coalescedSearches = new Map();
 function startSearch({ searchQuery, maxSources, signal, timeoutMs }) {
 	return genaiClient.search({
 		query: searchQuery,
-		model: GROUNDING_MODEL_NAME,
+		model: getGroundingModelName(),
 		maxResults: maxSources,
 		signal,
 		timeoutMs,
@@ -39,7 +39,7 @@ function getCoalescedSearch({ assetContext, searchQuery, maxSources, signal, tim
 
 	const normalizedQuery = (searchQuery || '').trim().toLowerCase();
 	const symbol = (assetContext?.symbol || '').trim().toUpperCase();
-	const key = `${GROUNDING_MODEL_NAME}:${maxSources}:stock:${symbol || 'query'}:${normalizedQuery}`;
+	const key = `${getGroundingModelName()}:${maxSources}:stock:${symbol || 'query'}:${normalizedQuery}`;
 	const now = Date.now();
 	const existing = coalescedSearches.get(key);
 	if (existing && now - existing.createdAt <= coalesceWindowMs) {
@@ -91,6 +91,11 @@ async function deriveSearchQuery(alertText, opts = {}) {
 		return alertText;
 	}
 
+	if (tokenCostBudgetService.isBudgetExceeded()) {
+		console.warn('[Grounding] Daily token cost budget exceeded, returning raw alert text as search query');
+		return alertText;
+	}
+
 	try {
 		const { systemPrompt, userPrompt } = await promptService.getChatPrompt(
 			PromptKeys.SEARCH_QUERY_DERIVATION,
@@ -103,8 +108,12 @@ async function deriveSearchQuery(alertText, opts = {}) {
 			opts: { temperature: opts.temperature, signal: opts.signal },
 		});
 
-		if (opts.tokenUsage && response.usage) {
-			opts.tokenUsage.addUsage(response.usage, GEMINI_MODEL_NAME);
+		if (response && response.usage) {
+			const effectiveModel = response.modelUsed || getGeminiModelName() || 'gemini';
+			registerGlobalUsage(response.usage, effectiveModel);
+			if (opts.tokenUsage) {
+				opts.tokenUsage.addUsage(response.usage, effectiveModel);
+			}
 		}
 
 		if (!response || !response.text) {
@@ -134,6 +143,19 @@ function getEffectiveGroundingMaxLength() {
  * @returns {Promise<GeminiResponse>} Summary with citations
  */
 async function groundAlert({ text, options = {} }) {
+	if (tokenCostBudgetService.isBudgetExceeded()) {
+		console.warn('[Grounding] Daily token cost budget exceeded, returning ungrounded alert fallback');
+		return {
+			text,
+			sentiment: 'NEUTRAL',
+			sentiment_score: 0,
+			insights: [],
+			sources: [],
+			confidence: 0.5,
+			budgetExceeded: true,
+		};
+	}
+
 	const runtimeConfig = getRuntimeConfig();
 	const {
 		maxSources = runtimeConfig.GROUNDING_MAX_SOURCES,
@@ -196,10 +218,14 @@ async function groundAlert({ text, options = {} }) {
 			ownsSearchUsage = true;
 		}
 
-		const { results: searchResults, totalResults, searchResultText, usage: searchUsage } = searchResponse;
+		const { results: searchResults, totalResults, searchResultText, usage: searchUsage, modelUsed: searchModelUsed } = searchResponse;
 
-		if (ownsSearchUsage && tokenUsage && searchUsage) {
-			tokenUsage.addUsage(searchUsage, GROUNDING_MODEL_NAME);
+		if (ownsSearchUsage && searchUsage) {
+			const effectiveSearchModel = searchModelUsed || getGroundingModelName() || 'gemini';
+			registerGlobalUsage(searchUsage, effectiveSearchModel);
+			if (tokenUsage) {
+				tokenUsage.addUsage(searchUsage, effectiveSearchModel);
+			}
 		}
 		console.debug(`[Grounding] Retrieved ${searchResults.length}/${totalResults} search results for query: ${searchQuery}`);
 
@@ -248,7 +274,6 @@ async function groundAlert({ text, options = {} }) {
 		if (error && error.category === 'circuit_breaker_open') {
 			throw error;
 		}
-
 		const isTimeout = error.message === 'Grounding timeout' ||
 			error.name === 'AbortError' ||
 			signal.aborted ||

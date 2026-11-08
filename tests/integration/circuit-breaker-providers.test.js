@@ -18,6 +18,7 @@ describe('Circuit Breakers for External API Providers', () => {
 		originalFetch = global.fetch;
 		groundingService._resetForTesting();
 		equityMarketDataService._resetCircuitBreakerForTesting();
+		equityMarketDataService._resetReadinessForTesting();
 		tradingViewMcpService._resetForTesting();
 		tradingViewMcpService.runtimeStatus = {
 			status: 'ready',
@@ -53,6 +54,7 @@ describe('Circuit Breakers for External API Providers', () => {
 		global.fetch = originalFetch;
 		groundingService._resetForTesting();
 		equityMarketDataService._resetCircuitBreakerForTesting();
+		equityMarketDataService._resetReadinessForTesting();
 		tradingViewMcpService._resetForTesting();
 		delete process.env.CIRCUIT_BREAKER_THRESHOLD;
 		delete process.env.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD;
@@ -69,11 +71,11 @@ describe('Circuit Breakers for External API Providers', () => {
 				return Promise.reject(new Error('Twelve Data gateway timeout'));
 			});
 
-			// Initial status should be ready
+			// Initial status is unverified (no provider call observed yet, #1116)
 			let res = await request(app).get('/api/status').set('x-api-key', 'test-key');
 			expect(res.status).toBe(200);
-			expect(res.body.dependencies.equityMarketData.status).toBe('ready');
-			expect(res.body.dependencies.equityMarketData.ready).toBe(true);
+			expect(res.body.dependencies.equityMarketData.status).toBe('unverified');
+			expect(res.body.dependencies.equityMarketData.ready).toBe(false);
 			expect(res.body.dependencies.equityMarketData.circuitBreaker.state).toBe('closed');
 
 			// Trigger 2 failures to trip the threshold

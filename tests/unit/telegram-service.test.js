@@ -591,4 +591,63 @@ describe('TelegramService', () => {
 		expect(result.attemptCount).toBe(1);
 		expect(bot.telegram.sendMessage).toHaveBeenCalledTimes(1);
 	});
+
+	describe('isConfigured and isAdminDeliveryEligible', () => {
+		const originalEnv = { ...process.env };
+
+		afterEach(() => {
+			process.env = { ...originalEnv };
+		});
+
+		it('isConfigured returns true only when ENABLE_TELEGRAM_BOT, botToken, and chatId are present', () => {
+			process.env.ENABLE_TELEGRAM_BOT = 'true';
+			process.env.BOT_TOKEN = 'bot-token';
+			process.env.TELEGRAM_CHAT_ID = 'chat-id';
+
+			const configuredService = new TelegramService();
+			expect(configuredService.isConfigured()).toBe(true);
+
+			process.env.ENABLE_TELEGRAM_BOT = 'false';
+			expect(configuredService.isConfigured()).toBe(false);
+
+			process.env.ENABLE_TELEGRAM_BOT = 'true';
+			delete process.env.TELEGRAM_CHAT_ID;
+			const missingChat = new TelegramService();
+			expect(missingChat.isConfigured()).toBe(false);
+		});
+
+		it('isAdminDeliveryEligible returns true when bot instance has sendMessage', () => {
+			const eligibleService = new TelegramService({
+				bot: { telegram: { sendMessage: jest.fn() } },
+			});
+			expect(eligibleService.isAdminDeliveryEligible()).toBe(true);
+
+			const directBotService = new TelegramService({
+				bot: { sendMessage: jest.fn() },
+			});
+			expect(directBotService.isAdminDeliveryEligible()).toBe(true);
+
+			const ineligibleService = new TelegramService({ bot: null });
+			expect(ineligibleService.isAdminDeliveryEligible()).toBe(false);
+		});
+
+		it('forwards session and signalClass to formatter.format and formatEnriched', async () => {
+			const mockFormatter = {
+				format: jest.fn().mockReturnValue('formatted text'),
+				formatEnriched: jest.fn().mockReturnValue('formatted enriched'),
+			};
+			const svc = new TelegramService({
+				bot: { telegram: { sendMessage: jest.fn().mockResolvedValue({ message_id: 1 }) } },
+				chatId: 'chat-1',
+				formatter: mockFormatter,
+			});
+
+			await svc.send({ text: 'plain alert', session: 'regular', signalClass: 'A' });
+			expect(mockFormatter.format).toHaveBeenCalledWith('plain alert', { signalClass: 'A', session: 'regular' });
+
+			await svc.send({ text: 'enriched alert', enriched: { summary: 'data' }, session: 'pre', signalClass: 'B' });
+			expect(mockFormatter.formatEnriched).toHaveBeenCalledWith({ summary: 'data' }, { signalClass: 'B', session: 'pre' });
+		});
+	});
 });
+
