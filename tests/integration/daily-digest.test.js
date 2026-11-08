@@ -24,21 +24,17 @@ describe('Daily digest integration', () => {
 					delivery: { byChannel: { telegram: { total: 12, success: 12, failure: 0 }, whatsapp: { total: 5, success: 5, failure: 0 } } },
 					enrichment: { tokenUsage: { totalCost: 0.0123 } },
 				})),
-				listAlerts: jest.fn(async () => ({
-					alerts: [
-						{ source: 'market-scanner', symbol: 'BTCUSDT', exchange: 'BINANCE', score: 95, receivedAt: '2026-11-07T09:00:00.000Z' },
-						{ source: 'market-scanner', symbol: 'ETHUSDT', exchange: 'BINANCE', score: 88, receivedAt: '2026-11-07T10:00:00.000Z' },
-						{ source: 'market-scanner', symbol: 'SOLUSDT', exchange: 'BINANCE', score: 77, receivedAt: '2026-11-07T11:00:00.000Z' },
-					],
-				})),
 			}),
 			getOutcomeStorage: () => ({
 				summarizeOutcomes: jest.fn(async () => ({ windows: { '1D': { hitRatePercent: 60 } }, totalSignalsEligible: 20, totalSignalsEvaluated: 15, totalSignalsPending: 5 })),
 				listOutcomes: jest.fn(async () => ({
 					outcomes: [
-						{ symbol: 'BTCUSDT', exchange: 'BINANCE', outcomes: { '1D': { status: 'evaluated', rMultiple: 2.5 } } },
-						{ symbol: 'ETHUSDT', exchange: 'BINANCE', outcomes: { '1D': { status: 'evaluated', rMultiple: 1.9 } } },
+						{ source: 'market-scanner', symbol: 'BTCUSDT', exchange: 'BINANCE', score: 95, outcomes: { '1D': { status: 'evaluated', rMultiple: 0.5 } } },
+						{ source: 'market-scanner', symbol: 'ETHUSDT', exchange: 'BINANCE', score: 88, outcomes: { '1D': { status: 'evaluated', rMultiple: 0.4 } } },
+						{ source: 'market-scanner', symbol: 'SOLUSDT', exchange: 'BINANCE', score: 77, outcomes: { '1D': { status: 'evaluated', rMultiple: 0.3 } } },
+						{ symbol: 'BTCUSDT', exchange: 'BINANCE', outcomes: { '1D': { status: 'evaluated', rMultiple: 2.5, return: 5 } } },
 						{ symbol: 'NVDA', exchange: 'NASDAQ', outcomes: { '1D': { status: 'evaluated', rMultiple: 2.1 } } },
+						{ symbol: 'FAKE', exchange: 'NASDAQ', outcomes: { '1D': { status: 'evaluated', return: 5 } } },
 					],
 				})),
 			}),

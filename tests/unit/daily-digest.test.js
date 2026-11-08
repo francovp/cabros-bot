@@ -33,13 +33,6 @@ describe('DailyDigestService', () => {
 					delivery: { byChannel: { telegram: { total: 12, success: 12, failure: 0 } } },
 					enrichment: { tokenUsage: { totalCost: 51 } },
 				})),
-				listAlerts: jest.fn(async () => ({
-					alerts: [
-						{ source: 'market-scanner', symbol: 'BTCUSDT', exchange: 'BINANCE', score: 90, receivedAt: '2026-11-07T10:00:00.000Z' },
-						{ source: 'market-scanner', symbol: 'ETHUSDT', exchange: 'BINANCE', score: 80, receivedAt: '2026-11-07T11:00:00.000Z' },
-						{ source: 'webhook', symbol: 'SOLUSDT', receivedAt: '2026-11-07T12:00:00.000Z' },
-					],
-				})),
 			}),
 			getOutcomeStorage: () => ({
 				summarizeOutcomes: jest.fn(async () => ({
@@ -50,7 +43,9 @@ describe('DailyDigestService', () => {
 				})),
 				listOutcomes: jest.fn(async () => ({
 					outcomes: [
-						{ symbol: 'NVDA', exchange: 'NASDAQ', outcomes: { '1D': { status: 'evaluated', rMultiple: 2.1 } } },
+						{ source: 'market-scanner', symbol: 'BTCUSDT', exchange: 'BINANCE', score: 90, outcomes: { '1D': { status: 'evaluated', rMultiple: 0.5 } } },
+						{ source: 'market-scanner', symbol: 'ETHUSDT', exchange: 'BINANCE', score: 80, outcomes: { '1D': { status: 'evaluated', rMultiple: 0.4 } } },
+						{ symbol: 'NVDA', exchange: 'NASDAQ', score: 95, outcomes: { '1D': { status: 'evaluated', rMultiple: 2.1 } } },
 						{ symbol: 'AAPL', exchange: 'NASDAQ', outcomes: { '1D': { status: 'evaluated', rMultiple: 1.1 } } },
 						{ symbol: 'TSLA', exchange: 'NASDAQ', outcomes: { '1D': { status: 'pending' } } },
 					],
@@ -257,5 +252,34 @@ describe('DailyDigestService Codex fixes', () => {
 		// Scheduled key is different destination, so already-sent shortcut must not fire.
 		const check = await svc.runScheduledCheck(new Date('2026-11-08T13:30:00Z'));
 		expect(check.skipped).not.toBe(true);
+	});
+});
+
+describe('DailyDigestService ranking units', () => {
+	const savedEnv = { ...process.env };
+	beforeEach(() => {
+		process.env.ENABLE_DAILY_DIGEST = 'true';
+		process.env.ENABLE_FIRESTORE_DIGEST_RUNS = 'true';
+		process.env.TELEGRAM_DIGEST_CHAT_ID = '-100123';
+	});
+	afterEach(() => { process.env = { ...savedEnv }; jest.clearAllMocks(); });
+
+	test('percentage return alone never ranks as R winner or scanner hit', async () => {
+		const svc = new DailyDigestService({
+			getAlertStorage: () => ({ summarizeAlerts: jest.fn(async () => ({ totalAlerts: 0, bySource: {}, delivery: { byChannel: {} } })) }),
+			getOutcomeStorage: () => ({
+				summarizeOutcomes: jest.fn(async () => ({ windows: { '1D': { hitRatePercent: 0 } } })),
+				listOutcomes: jest.fn(async () => ({
+					outcomes: [
+						{ source: 'market-scanner', symbol: 'FAKE', exchange: 'NASDAQ', outcomes: { '1D': { status: 'evaluated', return: 5 } } },
+						{ source: 'webhook', symbol: 'REAL', exchange: 'BINANCE', score: 99, outcomes: { '1D': { status: 'evaluated', rMultiple: 1.5 } } },
+					],
+				})),
+			}),
+		});
+		const agg = await svc.aggregateForDay(previousUtcDay(new Date('2026-11-08T13:30:00Z')));
+		// FAKE has no score and no rMultiple: excluded from both lists.
+		expect(agg.topScannerHits.map((o) => o.symbol)).not.toContain('FAKE');
+		expect(agg.topWinners.map((o) => o.symbol)).toEqual(['REAL']);
 	});
 });

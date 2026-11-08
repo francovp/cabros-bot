@@ -50,8 +50,9 @@ function topByScore(items, n = 3, pickScore) {
 function outcomeRMultiple(outcome) {
 	const win = outcome && outcome.outcomes && outcome.outcomes['1D'];
 	if (!win || win.status !== 'evaluated') return null;
+	// Only genuine risk multiples rank as R winners. `return` is a percentage
+	// for stop-less signals and must never be ranked/labelled as R.
 	if (typeof win.rMultiple === 'number' && Number.isFinite(win.rMultiple)) return win.rMultiple;
-	if (typeof win.return === 'number' && Number.isFinite(win.return)) return win.return;
 	return null;
 }
 
@@ -126,7 +127,6 @@ class DailyDigestService {
 		let alertSummary = null;
 		let outcomeSummary = null;
 		let outcomes = [];
-		let scannerAlerts = [];
 
 		try {
 			if (typeof alertStorage.summarizeAlerts === 'function') {
@@ -144,17 +144,9 @@ class DailyDigestService {
 				outcomes = Array.isArray(listed?.outcomes) ? listed.outcomes : (Array.isArray(listed) ? listed : []);
 			}
 		} catch (err) { console.warn('[DailyDigest] listOutcomes failed:', err.message); }
-		try {
-			if (typeof alertStorage.listAlerts === 'function') {
-				const listed = await alertStorage.listAlerts({ limit: 1000 });
-				const arr = Array.isArray(listed?.alerts) ? listed.alerts : (Array.isArray(listed) ? listed : []);
-				scannerAlerts = arr.filter((a) => {
-					const t = a && a.receivedAt ? new Date(a.receivedAt).getTime() : NaN;
-					const inWindow = Number.isFinite(t) && t >= day.from.getTime() && t < day.to.getTime();
-					return inWindow && SCANNER_SOURCES.has(a.source);
-				});
-			}
-		} catch (err) { console.warn('[DailyDigest] listAlerts failed:', err.message); }
+		// Scanner hits come from persisted outcome records, not alert docs.
+		// Market-scanner alerts persist enrichmentData:null with no score; the
+		// per-signal outcomes are what recordMarketScannerOutcomes actually writes.
 
 		const bySource = alertSummary?.bySource || {};
 		const deliveryByChannel = alertSummary?.delivery?.byChannel || {};
@@ -176,11 +168,11 @@ class DailyDigestService {
 			}
 		}
 
-		const topScannerHits = topByScore(scannerAlerts, 3, (a) => {
-			const s = a?.enrichmentData?.score ?? a?.score ?? a?.confidence;
-			const n = Number(s);
-			return Number.isFinite(n) ? n : null;
-		});
+		const topScannerHits = topByScore(
+			outcomes.filter((o) => SCANNER_SOURCES.has(o.source)),
+			3,
+			(o) => (typeof o.score === 'number' && Number.isFinite(o.score) ? o.score : null),
+		);
 		const topWinners = topByScore(outcomes.filter((o) => outcomeRMultiple(o) !== null), 3, outcomeRMultiple);
 
 		return {
