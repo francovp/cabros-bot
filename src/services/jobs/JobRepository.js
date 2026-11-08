@@ -3,6 +3,8 @@
 const admin = require('firebase-admin');
 const alertStorageService = require('../storage/AlertStorageService');
 const { firestoreWriteMetricsService } = require('../storage/FirestoreWriteMetricsService');
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
+const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
 
 const WRITE_METRICS_DOMAIN_JOBS = 'jobs';
 
@@ -54,8 +56,16 @@ function mergeCallbackStatus(currentStatus, incomingStatus) {
 }
 
 function isFirestoreEnabled() {
-	return process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true'
-		|| process.env.ENABLE_FIRESTORE_ALERT_STORAGE === 'true';
+	// Issue #721: `remote ?? env`, resolved per gate. Both flags feed this
+	// predicate, so each must be resolved independently — combining the two sources
+	// with `remote || env` would let a `true` `render.yaml` pin mask a published
+	// `false` and make the gate impossible to switch off in production. A gate with
+	// no published value is not evidence, so the environment decides for that gate
+	// alone.
+	return ['ENABLE_FIRESTORE_JOB_STORAGE', 'ENABLE_FIRESTORE_ALERT_STORAGE'].some((key) => {
+		const remote = resolveRemoteOverride(key);
+		return typeof remote === 'boolean' ? remote : process.env[key] === 'true';
+	});
 }
 
 // Whether a durable execution record counts as queued backlog depth: never started,
@@ -106,7 +116,8 @@ function getLocalTerminalJob(jobId) {
 }
 
 function getClaimLeaseMs() {
-	const configured = Number(process.env.JOB_QUEUE_CLAIM_LEASE_MS);
+	const remote = resolveRemoteOverride('JOB_QUEUE_CLAIM_LEASE_MS');
+	const configured = Number(remote !== undefined ? remote : process.env.JOB_QUEUE_CLAIM_LEASE_MS);
 	return Number.isInteger(configured) && configured > 0 ? configured : DEFAULT_CLAIM_LEASE_MS;
 }
 
@@ -171,6 +182,10 @@ class JobRepository {
 
 		const version = (saveVersions.get(sanitized.jobId)?.version || 0) + 1;
 		saveVersions.set(sanitized.jobId, { version, job: cloneJob(sanitized) });
+
+		if (!sanitized.deployment) {
+			sanitized.deployment = getDeploymentIdentity();
+		}
 
 		let persistedJob = sanitized;
 		const durableJob = addTerminalExpiry(sanitized);
@@ -1037,6 +1052,10 @@ class JobRepository {
 		};
 	}
 
+	getClaimLeaseMs() {
+		return getClaimLeaseMs();
+	}
+
 	_getFirestore() {
 		if (!isFirestoreEnabled()) {
 			return null;
@@ -1051,6 +1070,10 @@ module.exports = {
 	JobRepository,
 	jobRepository,
 	COLLECTION_NAME,
+	getClaimLeaseMs,
+	// Exported so the durable-storage gate can be asserted directly (issue #721).
+	// The gate is resolved per call, not cached, so the export stays truthful.
+	isFirestoreEnabled,
 	_resetForTesting() {
 		memoryJobs.clear();
 		saveVersions.clear();

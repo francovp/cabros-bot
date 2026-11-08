@@ -3,7 +3,7 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { alertModeration } = require('../../src/services/alerts/alertModeration');
 
 function saveEnv() {
@@ -45,6 +45,7 @@ describe('Alert moderation endpoint behavior', () => {
 			},
 		};
 
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 		app.use('/api', getRoutes(mockBot));
 	});

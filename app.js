@@ -7,11 +7,16 @@ const helmet = require('helmet');
 const { getOpenApiDocsRouter } = require('./src/openapi/docs');
 const { createCompressionMiddleware } = require('./src/lib/compression');
 const bootstrapReadiness = require('./src/lib/bootstrapReadiness');
+const { buildEnvironmentBannerMiddleware } = require('./src/lib/environmentBanner');
 const { getPublicStatus } = require('./src/controllers/publicStatus');
 const { getStatus: getAdminStatus } = require('./src/controllers/status');
 const requestDeadline = require('./src/lib/requestDeadline');
 const requestLogger = require('./src/lib/requestLogger');
 const { buildWebhookBodySize } = require('./src/lib/webhookBodySize');
+
+function captureRawBody(req, _res, buffer) {
+	req.rawBody = Buffer.from(buffer);
+}
 
 // Configure trusted proxies (e.g. Render reverse proxy or TRUST_PROXY setting)
 setupTrustProxy(app);
@@ -25,6 +30,7 @@ setupTrustProxy(app);
 // The logger reuses `req.requestId` when the request deadline already stamped
 // one, so a logged line and the 408 payload always share the same id.
 app.use(requestLogger);
+app.use(buildEnvironmentBannerMiddleware());
 
 // Apply CORS before body parsers so parser errors, including structured 413
 // responses, retain the same browser-visible headers as successful requests.
@@ -41,14 +47,17 @@ const webhookBodyPaths = ['/api/webhook', /^\/api\/news-monitor\/?$/];
 
 // Apply the configurable limit only to webhook-style request bodies. Other API
 // routes retain Express' existing parser behavior and limit.
-app.use(webhookBodyPaths, express.urlencoded({ extended: false, limit: webhookBodySize.jsonLimit }));
-app.use(webhookBodyPaths, express.text({ type: 'text/plain', limit: webhookBodySize.textLimit }));
-app.use(webhookBodyPaths, express.json({ limit: webhookBodySize.jsonLimit }));
+app.use(webhookBodyPaths, express.urlencoded({ extended: false, limit: webhookBodySize.jsonLimit, verify: captureRawBody }));
+app.use(webhookBodyPaths, express.text({ type: 'text/plain', limit: webhookBodySize.textLimit, verify: captureRawBody }));
+app.use(webhookBodyPaths, express.json({ limit: webhookBodySize.jsonLimit, verify: captureRawBody }));
 app.use(webhookBodyPaths, webhookBodySize.middleware);
-// Preserve the existing default parsers for non-webhook routes.
-app.use(express.urlencoded({ extended: false }));
-app.use(express.text({ type: 'text/plain' }));
-app.use(express.json());
+// Fallback parsers for non-webhook routes. The limit is set explicitly rather
+// than relying on body-parser's implicit 100kb default, so an oversized payload
+// is rejected deterministically instead of tracking an undocumented value.
+const BODY_PARSER_LIMIT = '100kb';
+app.use(express.urlencoded({ extended: false, limit: BODY_PARSER_LIMIT, verify: captureRawBody }));
+app.use(express.text({ type: 'text/plain', limit: BODY_PARSER_LIMIT, verify: captureRawBody }));
+app.use(express.json({ limit: BODY_PARSER_LIMIT, verify: captureRawBody }));
 
 // Use helmet for improved security
 const contentSecurityPolicy = helmet.contentSecurityPolicy.getDefaultDirectives();
@@ -68,6 +77,7 @@ app.use(requestDeadline.guard);
 
 const { getDeepHealthcheckHandler } = require('./src/controllers/healthcheck');
 const { handleDependencyReadiness } = require('./src/controllers/readiness');
+const { getLiveness, getWebReadiness } = require('./src/controllers/webProbes');
 
 // `depth=readiness` runs external provider probes; bare requests keep the
 // legacy liveness / `?deep=true` channel contract from master. The deep
@@ -77,8 +87,10 @@ const { handleDependencyReadiness } = require('./src/controllers/readiness');
 // `?depth=dependencies` on /healthcheck and `?depth=readiness` on /ready both
 // fall through to the master contract instead of cross-hijacking.
 const deepHealthcheckHandler = getDeepHealthcheckHandler();
-// HTTP response compression for payloads exceeding 1KB (skips streaming responses)
-app.use(createCompressionMiddleware());
+// Compression is enabled unless explicitly disabled at process startup.
+if (process.env.ENABLE_RESPONSE_COMPRESSION !== 'false') {
+	app.use(createCompressionMiddleware());
+}
 
 app.use('/healthcheck', (req, res, next) => {
 	if (req.query.depth === 'readiness') {
@@ -100,6 +112,17 @@ app.get('/ready', (req, res) => {
 	const status = bootstrapReadiness.getStatus();
 	return res.status(status.ready ? 200 : 503).json(status);
 });
+
+app.get('/livez', getLiveness);
+app.get('/readyz', getWebReadiness);
+
+// The performance harness needs process-local diagnostics during local test runs.
+// Keep the endpoint unavailable in development and production, and retain API-key auth.
+if (process.env.NODE_ENV === 'test' && process.env.ENABLE_API_ONLY_MODE === 'true') {
+	const { validateApiKey } = require('./src/lib/auth');
+	const { performanceDiagnosticsHandler } = require('./src/lib/performanceDiagnostics');
+	app.get('/diag', validateApiKey, performanceDiagnosticsHandler);
+}
 
 // Public, unauthenticated, read-only status snapshot. Mounted before the
 // rate limiter so monitoring traffic and embedded status widgets never hit

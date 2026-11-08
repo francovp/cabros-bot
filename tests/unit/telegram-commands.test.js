@@ -30,16 +30,24 @@ jest.mock('../../src/services/storage/SignalOutcomeService', () => ({
 	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
 }));
 
+jest.mock('../../src/services/storage/AlertStorageService', () => ({
+	isEnabled: jest.fn(),
+	listAlerts: jest.fn(),
+	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
+}));
+
 const { captureRuntimeError } = require('../../src/services/monitoring/SentryService');
 const { jobService } = require('../../src/services/jobs/JobService');
 const { getNewsMonitor } = require('../../src/controllers/webhooks/handlers/newsMonitor/newsMonitor');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
+const alertStorageService = require('../../src/services/storage/AlertStorageService');
 const {
 	cryptoBotCmd,
 	expandedAnalysisCmd,
 	marketScannerCmd,
 	jobsCommand,
+	alertHistoryCommand,
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
@@ -95,6 +103,14 @@ describe('Telegram TradingView commands', () => {
 		expect(next).toHaveBeenCalledTimes(4);
 	});
 
+	it('limits public /start enrollments to five per chat each minute', async () => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 6 }, () => buildContext('/start enroll'));
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+		expect(next).toHaveBeenCalledTimes(5);
+		expect(contexts[5].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+	});
+
 	it.each(['/analysis', '/news'])('applies canonical limits to the %s alias', async (command) => {
 		const next = jest.fn();
 		const contexts = Array.from({ length: 4 }, () => buildContext(command));
@@ -103,6 +119,24 @@ describe('Telegram TradingView commands', () => {
 
 		expect(next).toHaveBeenCalledTimes(3);
 		expect(contexts[3].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes'));
+	});
+
+	it('applies canonical rate limits to /history and /alertas alias', async () => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 11 }, () => buildContext('/alertas'));
+
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+
+		expect(next).toHaveBeenCalledTimes(10);
+		expect(contexts[10].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes para /history'));
+	});
+
+	it('limits watchlist commands per chat before they reach storage', async () => {
+		const next = jest.fn();
+		const contexts = Array.from({ length: 21 }, () => buildContext('/watchlist add BTCUSDT'));
+		for (const context of contexts) await telegramCommandRateLimiter(context, next);
+		expect(next).toHaveBeenCalledTimes(20);
+		expect(contexts[20].reply).toHaveBeenCalledWith(expect.stringContaining('demasiadas solicitudes para /watchlist'));
 	});
 
 	it.each(['/preferences', '/filter', '/quiet', '/threshold', '/categories'])('applies canonical limits to the %s preference alias', async (command) => {
@@ -294,6 +328,23 @@ describe('Telegram TradingView commands', () => {
 			{ telegram: context.telegram },
 		);
 		expect(context.reply).toHaveBeenCalledWith('Job job-2 creado para market-scanner. Estado: pending.');
+	});
+
+	it.each([
+		['/scanner limit=abc', marketScannerCmd, 'limit debe ser un número entero'],
+		['/scanner limit=1.5', marketScannerCmd, 'limit debe ser un número entero'],
+		['/scanner bbw_threshold=abc', marketScannerCmd, 'bbw_threshold debe ser un número'],
+		['/scanner timeoutMs=abc', marketScannerCmd, 'timeoutMs debe ser un número entero'],
+		['/analisis BINANCE:BTCUSDT timeoutMs=abc', expandedAnalysisCmd, 'timeoutMs debe ser un número entero'],
+	])('rejects invalid numeric options before job validation: %s', async (command, handler, expectedMessage) => {
+		const context = buildContext(command);
+		jobService.createJob.mockResolvedValue({ jobId: 'job-invalid', status: 'pending' });
+
+		await handler(context);
+
+		expect(context.reply).toHaveBeenCalledWith(`Comando inválido: ${expectedMessage}`);
+		expect(jobService.validateJobRequest).not.toHaveBeenCalled();
+		expect(jobService.createJob).not.toHaveBeenCalled();
 	});
 
 	describe('jobsCommand', () => {
@@ -658,6 +709,167 @@ describe('Telegram TradingView commands', () => {
 		expect(context.reply).toHaveBeenCalledWith('Noticias listas. Analizados: 2, cache: 1, alertas: 1.');
 	});
 
+	describe('alertHistoryCommand', () => {
+		beforeEach(() => {
+			process.env.TELEGRAM_ALLOWED_CHAT_IDS = '123';
+		});
+
+		afterEach(() => {
+			delete process.env.TELEGRAM_ALLOWED_CHAT_IDS;
+		});
+
+		it('rejects unauthorized chats', async () => {
+			process.env.TELEGRAM_ALLOWED_CHAT_IDS = '999';
+			const context = buildContext('/history');
+
+			await alertHistoryCommand(context);
+
+			expect(alertStorageService.listAlerts).not.toHaveBeenCalled();
+			expect(context.reply).toHaveBeenCalledWith(
+				'No tienes autorización para consultar el historial de alertas.',
+			);
+		});
+
+		it('reports when alert storage is disabled', async () => {
+			alertStorageService.isEnabled.mockReturnValue(false);
+			const context = buildContext('/history');
+
+			await alertHistoryCommand(context);
+
+			expect(alertStorageService.listAlerts).not.toHaveBeenCalled();
+			expect(context.reply).toHaveBeenCalledWith(
+				'El historial de alertas está desactivado — pide a un operador que active ENABLE_FIRESTORE_ALERT_STORAGE',
+			);
+		});
+
+		it('filters by symbol and formats delivery status as MarkdownV2 with escaped characters', async () => {
+			alertStorageService.isEnabled.mockReturnValue(true);
+			alertStorageService.listAlerts.mockResolvedValue({
+				alerts: [
+					{
+						symbol: 'BTCUSDT',
+						receivedAt: '2026-08-31T12:34:00.000Z',
+						enriched: true,
+						enrichmentData: { sentiment: 'BULLISH' },
+						deliveryResults: [
+							{ channel: 'telegram', success: true },
+							{ channel: 'whatsapp', success: false },
+						],
+					},
+					{ symbol: 'ETHUSDT', receivedAt: '2026-08-31T12:30:00.000Z' },
+				],
+			});
+			const context = buildContext('/history BTCUSDT limit=10');
+
+			await alertHistoryCommand(context);
+
+			expect(alertStorageService.listAlerts).toHaveBeenCalledWith({ limit: 100 });
+			expect(context.reply).toHaveBeenCalledWith(
+				expect.stringContaining('BTCUSDT'),
+				{ parse_mode: 'MarkdownV2' },
+			);
+			const message = context.reply.mock.calls[0][0];
+			expect(message).toContain('12:34 UTC');
+			expect(message).toContain('BULLISH');
+			expect(message).toContain('telegram OK');
+			expect(message).toContain('whatsapp FALLÓ');
+			// Verify MarkdownV2 pipe is escaped
+			expect(message).toContain('\\| Enriquecida: sí');
+			expect(message).not.toContain('ETHUSDT');
+		});
+
+		it('honors positional limit argument when symbol is provided', async () => {
+			alertStorageService.isEnabled.mockReturnValue(true);
+			alertStorageService.listAlerts.mockResolvedValue({
+				alerts: Array.from({ length: 15 }, (_, i) => ({
+					symbol: 'BTCUSDT',
+					receivedAt: '2026-08-31T12:34:00.000Z',
+					deliveryResults: [{ channel: 'telegram', success: true }],
+				})),
+			});
+			const context = buildContext('/history BTCUSDT 10');
+
+			await alertHistoryCommand(context);
+
+			const message = context.reply.mock.calls[0][0];
+			expect(message).toContain('últimas 10');
+			// 10 alerts rendered
+			expect(message).toContain('10\\.');
+			expect(message).not.toContain('11\\.');
+		});
+
+		it('handles skipped channel delivery results and filters by status=skipped', async () => {
+			alertStorageService.isEnabled.mockReturnValue(true);
+			alertStorageService.listAlerts.mockResolvedValue({
+				alerts: [
+					{
+						symbol: 'SOLUSDT',
+						receivedAt: '2026-08-31T12:34:00.000Z',
+						deliveryResults: [
+							{ channel: 'telegram', success: true, skipped: true },
+						],
+					},
+					{
+						symbol: 'BTCUSDT',
+						receivedAt: '2026-08-31T12:30:00.000Z',
+						deliveryResults: [
+							{ channel: 'telegram', success: true },
+							{ channel: 'whatsapp', success: true, skipped: true },
+						],
+					},
+				],
+			});
+			const context = buildContext('/history status skipped');
+
+			await alertHistoryCommand(context);
+
+			const message = context.reply.mock.calls[0][0];
+			expect(message).toContain('SOLUSDT');
+			expect(message).toContain('telegram OMITIDO');
+			// BTCUSDT had a successful non-skipped delivery, so its deliveryStatus is 'delivered', not 'skipped'
+			expect(message).not.toContain('BTCUSDT');
+		});
+
+		it('escapes trailing dot in empty-state MarkdownV2 reply', async () => {
+			alertStorageService.isEnabled.mockReturnValue(true);
+			alertStorageService.listAlerts.mockResolvedValue({ alerts: [] });
+			const context = buildContext('/history XRPUSDT');
+
+			await alertHistoryCommand(context);
+
+			expect(context.reply).toHaveBeenCalledWith(
+				'No hay alertas recientes para XRPUSDT\\.',
+				{ parse_mode: 'MarkdownV2' },
+			);
+		});
+
+		it('filters failed deliveries and clamps the requested limit', async () => {
+			alertStorageService.isEnabled.mockReturnValue(true);
+			alertStorageService.listAlerts.mockResolvedValue({
+				alerts: [
+					{
+						symbol: 'BTCUSDT',
+						receivedAt: '2026-08-31T12:34:00.000Z',
+						deliveryResults: [{ channel: 'telegram', success: false }],
+					},
+					{
+						symbol: 'ETHUSDT',
+						receivedAt: '2026-08-31T12:30:00.000Z',
+						deliveryResults: [{ channel: 'telegram', success: true }],
+					},
+				],
+			});
+			const context = buildContext('/alertas estado failed limit=99');
+
+			await alertHistoryCommand(context);
+
+			const message = context.reply.mock.calls[0][0];
+			expect(message).toContain('BTCUSDT');
+			expect(message).not.toContain('ETHUSDT');
+			expect(message).toContain('últimas 20');
+		});
+	});
+
 	describe('helpCmd and buildHelpMessage', () => {
 		it('builds a Telegram command menu from the same inventory as help', () => {
 			const menu = getTelegramCommandMenu();
@@ -666,11 +878,15 @@ describe('Telegram TradingView commands', () => {
 				{ command: 'precio', description: 'Consulta el precio en Binance o Twelve Data' },
 				{ command: 'alerta', description: 'Configura o gestiona alertas de precio' },
 				{ command: 'cryptobot', description: 'Muestra el Chat ID actual de Telegram' },
+				{ command: 'resolve', description: 'Resuelve un ticker amigable a EXCHANGE:SYMBOL' },
 				{ command: 'analisis', description: 'Crea un análisis técnico en TradingView' },
 				{ command: 'scanner', description: 'Escaneo de mercado en TradingView' },
 				{ command: 'noticias', description: 'Monitor y análisis de noticias con IA' },
 				{ command: 'outcomes', description: 'Rendimiento reciente de señales evaluadas' },
+				{ command: 'history', description: 'Consulta alertas recientes' },
 				{ command: 'preferencias', description: 'Preferencias de alertas para este chat' },
+				{ command: 'watchlist', description: 'Gestiona símbolos de interés para este chat' },
+				{ command: 'version', description: 'Confirma la versión, commit y uptime del bot' },
 				{ command: 'help', description: 'Muestra este mensaje de ayuda' },
 				{ command: 'start', description: 'Muestra este mensaje de ayuda' },
 			]);
@@ -698,6 +914,8 @@ describe('Telegram TradingView commands', () => {
 			expect(message).toContain('/rendimiento');
 			expect(message).toContain('/jobs');
 			expect(message).toContain('/trabajos');
+			expect(message).toContain('/history');
+			expect(message).toContain('/alertas');
 			expect(message).toContain('/help');
 			expect(message).toContain('/start');
 
@@ -1010,5 +1228,147 @@ describe('Telegram TradingView commands', () => {
 			expect(receivedSignal.aborted).toBe(true);
 			expect(captureRuntimeError).not.toHaveBeenCalled();
 		}, 12000);
+
+		it('replies with trend summary when /outcomes trend is invoked', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.getOutcomesTrend = jest.fn().mockResolvedValue({
+				success: true,
+				window: '1D',
+				bucket: 'all',
+				trend: [
+					{
+						date: '2026-08-20',
+						window: '1D',
+						bucket: 'all',
+						sampleSize: 10,
+						wins: 7,
+						losses: 3,
+						hitRatePercent: 70.0,
+						avgMfe: 2.5,
+						avgMae: -0.8,
+						finalized: true,
+					},
+				],
+			});
+			const context = buildContext('/outcomes trend');
+
+			await outcomesCommand(context);
+
+			expect(signalOutcomeService.getOutcomesTrend).toHaveBeenCalledWith(
+				expect.objectContaining({ window: '1D', bucket: 'all' }),
+			);
+			expect(context.reply).toHaveBeenCalledTimes(1);
+			const reply = context.reply.mock.calls[0][0];
+			expect(reply).toContain('Tendencia de resultados');
+			expect(reply).toContain('2026\\-08\\-20');
+			expect(reply).toContain('70\\.0% acierto');
+			expect(reply).toContain('7/10');
+		});
+
+		it('supports requesting 14 or 30 days via /outcomes trend 14', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.getOutcomesTrend = jest.fn().mockResolvedValue({
+				success: true,
+				window: '1D',
+				bucket: 'all',
+				trend: [
+					{
+						date: '2026-08-15',
+						window: '1D',
+						bucket: 'all',
+						sampleSize: 8,
+						wins: 6,
+						losses: 2,
+						hitRatePercent: 75.0,
+						avgMfe: 3.0,
+						avgMae: -0.5,
+						finalized: true,
+					},
+				],
+			});
+			const context = buildContext('/outcomes trend 14');
+
+			await outcomesCommand(context);
+
+			expect(signalOutcomeService.getOutcomesTrend).toHaveBeenCalledWith(
+				expect.objectContaining({ window: '1D', bucket: 'all' }),
+			);
+			expect(context.reply).toHaveBeenCalledTimes(1);
+			const reply = context.reply.mock.calls[0][0];
+			expect(reply).toContain('últimos 14 días');
+			expect(reply).toContain('2026\\-08\\-15');
+			expect(reply).toContain('75\\.0% acierto');
+		});
+
+		it('splits long trend responses across multiple messages to stay within Telegram character limits', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const points = Array.from({ length: 100 }, (_, i) => ({
+				date: `2026-0${Math.floor(i / 28) + 1}-${String((i % 28) + 1).padStart(2, '0')}`,
+				window: '1D',
+				bucket: 'all',
+				sampleSize: 10,
+				wins: 7,
+				losses: 3,
+				hitRatePercent: 70.0,
+				avgMfe: 2.5,
+				avgMae: -0.8,
+				finalized: true,
+			}));
+			signalOutcomeService.getOutcomesTrend = jest.fn().mockResolvedValue({
+				success: true,
+				window: '1D',
+				bucket: 'all',
+				trend: points,
+			});
+			const context = buildContext('/outcomes trend 100');
+
+			await outcomesCommand(context);
+
+			expect(context.reply.mock.calls.length).toBeGreaterThan(1);
+			for (const call of context.reply.mock.calls) {
+				const message = call[0];
+				expect(message.length).toBeLessThanOrEqual(4096);
+				expect(call[1]).toEqual({ parse_mode: 'MarkdownV2' });
+			}
+		});
+
+		it('replies with friendly empty state when /outcomes trend has no snapshots', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.getOutcomesTrend = jest.fn().mockResolvedValue({
+				success: true,
+				window: '1D',
+				bucket: 'all',
+				trend: [],
+			});
+			const context = buildContext('/outcomes trend');
+
+			await outcomesCommand(context);
+
+			expect(context.reply).toHaveBeenCalledTimes(1);
+			expect(context.reply.mock.calls[0][0]).toContain('Sin snapshots diarios de resultados todavía');
+		});
+	});
+});
+
+
+describe('registered start command monitoring', () => {
+	it('keeps the Sentry receiver when onboarding fails', async () => {
+		const service = require('../../src/services/enrollments/ChatEnrollmentsService');
+		const sentry = require('../../src/services/monitoring/SentryService');
+		const previous = process.env.ENABLE_CHAT_ENROLLMENTS;
+		process.env.ENABLE_CHAT_ENROLLMENTS = 'true';
+		const read = jest.spyOn(service, 'getByChatId').mockRejectedValue(new Error('storage unavailable'));
+		sentry.captureRuntimeError.mockImplementation(function () { expect(this).toBe(sentry); });
+		try {
+			const { startCmd } = require('../../src/controllers/commands');
+			const ctx = { chat: { id: 42, type: 'private' }, payload: 'enroll', reply: jest.fn().mockResolvedValue() };
+			await startCmd(ctx);
+			expect(ctx.reply).toHaveBeenCalledTimes(1);
+		} finally {
+			read.mockRestore();
+			sentry.captureRuntimeError.mockReset();
+			if (previous === undefined) delete process.env.ENABLE_CHAT_ENROLLMENTS;
+			else process.env.ENABLE_CHAT_ENROLLMENTS = previous;
+		}
 	});
 });

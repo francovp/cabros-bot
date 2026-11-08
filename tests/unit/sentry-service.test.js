@@ -9,7 +9,7 @@
  */
 
 const Sentry = require('@sentry/node');
-const { SentryService, FEATURE_NAMES } = require('../../src/services/monitoring/SentryService');
+const { SentryService, FEATURE_NAMES, shouldSendAlertContent } = require('../../src/services/monitoring/SentryService');
 
 describe('SentryService', () => {
 	let service;
@@ -191,6 +191,33 @@ describe('SentryService', () => {
 
 				const config = service._buildConfiguration();
 				expect(config.sendAlertContent).toBe(true);
+			});
+		});
+
+		describe('shouldSendAlertContent (module export)', () => {
+			it('returns true when SENTRY_SEND_ALERT_CONTENT is unset (matches docs default true)', () => {
+				delete process.env.SENTRY_SEND_ALERT_CONTENT;
+				expect(shouldSendAlertContent()).toBe(true);
+			});
+
+			it('returns false when SENTRY_SEND_ALERT_CONTENT=false', () => {
+				process.env.SENTRY_SEND_ALERT_CONTENT = 'false';
+				expect(shouldSendAlertContent()).toBe(false);
+			});
+
+			it('returns true when SENTRY_SEND_ALERT_CONTENT=true', () => {
+				process.env.SENTRY_SEND_ALERT_CONTENT = 'true';
+				expect(shouldSendAlertContent()).toBe(true);
+			});
+
+			it('returns true when SENTRY_SEND_ALERT_CONTENT is an arbitrary non-false value', () => {
+				process.env.SENTRY_SEND_ALERT_CONTENT = 'YES';
+				expect(shouldSendAlertContent()).toBe(true);
+			});
+
+			it('returns true when SENTRY_SEND_ALERT_CONTENT is the empty string', () => {
+				process.env.SENTRY_SEND_ALERT_CONTENT = '';
+				expect(shouldSendAlertContent()).toBe(true);
 			});
 		});
 
@@ -419,6 +446,28 @@ describe('SentryService', () => {
 
 			expect(result.captured).toBe(false);
 			expect(result.skippedReason).toContain('Capture error');
+		});
+	});
+
+	describe('captureInfo()', () => {
+		it('captures a sanitized info message with structured timer drain metrics', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			service.init();
+			expect(typeof service.captureInfo).toBe('function');
+
+			const result = service.captureInfo({
+				message: 'shutdown.timer_drain',
+				feature: 'shutdown.timer_drain',
+				extra: { registered: 2, drained: 1, failed: 1 },
+			});
+
+			expect(result).toMatchObject({ captured: true, eventId: 'mock-event-id' });
+			expect(Sentry.captureMessage).toHaveBeenCalledWith('shutdown.timer_drain', expect.objectContaining({
+				level: 'info',
+				tags: expect.objectContaining({ feature: 'shutdown.timer_drain', channel: 'process' }),
+				extra: { registered: 2, drained: 1, failed: 1 },
+			}));
 		});
 	});
 
@@ -967,6 +1016,48 @@ describe('profiling configuration', () => {
 				provider_status_code: '500',
 				trace_id: 'trace-12345',
 				span_id: 'span-67890',
+			});
+		});
+
+		it('should promote http.requestId and extra.requestId to request_id tag when available', () => {
+			process.env.ENABLE_SENTRY = 'true';
+			process.env.SENTRY_DSN = 'https://key@sentry.io/123';
+			service.init();
+
+			service.captureRuntimeError({
+				channel: 'http-alert',
+				error: new Error('Alert handling failed'),
+				http: {
+					endpoint: '/api/webhook/alert',
+					method: 'POST',
+					statusCode: 500,
+					requestId: 'req-http-tag-123',
+				},
+			});
+
+			expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+			const [, scopeHttp] = Sentry.captureException.mock.calls[0];
+			expect(scopeHttp.tags).toMatchObject({
+				channel: 'http-alert',
+				endpoint: '/api/webhook/alert',
+				request_id: 'req-http-tag-123',
+			});
+
+			Sentry.captureException.mockClear();
+
+			service.captureRuntimeError({
+				channel: 'http-alert',
+				error: new Error('Alert extra failed'),
+				extra: {
+					requestId: 'req-extra-tag-456',
+				},
+			});
+
+			expect(Sentry.captureException).toHaveBeenCalledTimes(1);
+			const [, scopeExtra] = Sentry.captureException.mock.calls[0];
+			expect(scopeExtra.tags).toMatchObject({
+				channel: 'http-alert',
+				request_id: 'req-extra-tag-456',
 			});
 		});
 	});

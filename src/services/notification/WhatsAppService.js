@@ -7,6 +7,7 @@ const NotificationChannel = require('./NotificationChannel');
 const { splitMessageIntoChunks } = require('../../lib/messageHelper');
 const WhatsAppMarkdownFormatter = require('./formatters/whatsappMarkdownFormatter');
 const { isPreviewEnvironment } = require('../../lib/deploymentEnvironment');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const GREEN_API_MESSAGE_LIMIT = 20000;
 
@@ -257,7 +258,7 @@ class WhatsAppService extends NotificationChannel {
 	 * @returns {Array<{default: string}>} GreenAPI params array
 	 */
 	_extractTemplateParams(alert) {
-		const rawOrder = process.env.WHATSAPP_TEMPLATE_PARAM_ORDER || 'symbol,price,action,setup,timeframe,source';
+		const rawOrder = getRuntimeConfig().WHATSAPP_TEMPLATE_PARAM_ORDER;
 		const paramOrder = rawOrder.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
 
 		const enriched = alert && typeof alert.enriched === 'object' ? alert.enriched : {};
@@ -625,12 +626,13 @@ class WhatsAppService extends NotificationChannel {
 		// Format message for WhatsApp.
 		// If enriched is an object, use formatEnriched (async with URL shortening), otherwise format the text.
 		const signalClass = alert.signalClass || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.signalClass : undefined);
+		const session = alert.session || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.session : undefined);
 		let formattedText;
 		if (alert.enriched && typeof alert.enriched === 'object') {
-			formattedText = await this.formatter.formatEnriched(alert.enriched, { signalClass });
+			formattedText = await this.formatter.formatEnriched(alert.enriched, { signalClass, session });
 			console.debug('Formatted enriched WhatsApp message length:', formattedText.length);
 		} else {
-			formattedText = this.formatter.format(alert.enriched || alert.text, { signalClass });
+			formattedText = this.formatter.format(alert.enriched || alert.text, { signalClass, session });
 			console.debug('Formatted WhatsApp message length:', formattedText.length);
 		}
 

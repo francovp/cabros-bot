@@ -10,7 +10,7 @@ name: External Uptime Monitor
 #
 # Configuration — repository variables (all optional, all defaulted):
 #   UPTIME_MONITOR_BASE_URL     canonical production origin
-#                               (default: https://cabros-bot-production.up.railway.app)
+#                               (default: https://cabros-crypto-bot-telegram.onrender.com)
 #   UPTIME_MONITOR_CHECK_DOCS   also probe the public /docs contract (default: true)
 #   UPTIME_MONITOR_TIMEOUT_MS   per-request deadline in ms (default: 10000)
 #
@@ -93,7 +93,7 @@ jobs:
 
       - name: Run the external uptime monitor
         env:
-          UPTIME_MONITOR_BASE_URL: ${{ inputs.base_url || vars.UPTIME_MONITOR_BASE_URL || 'https://cabros-bot-production.up.railway.app' }}
+          UPTIME_MONITOR_BASE_URL: ${{ inputs.base_url || vars.UPTIME_MONITOR_BASE_URL || 'https://cabros-crypto-bot-telegram.onrender.com' }}
           UPTIME_MONITOR_CHECK_DOCS: ${{ vars.UPTIME_MONITOR_CHECK_DOCS || 'true' }}
           UPTIME_MONITOR_TIMEOUT_MS: ${{ vars.UPTIME_MONITOR_TIMEOUT_MS || '10000' }}
           UPTIME_MONITOR_PREVIOUS_CONCLUSION: ${{ steps.prev.outputs.conclusion }}

@@ -81,12 +81,71 @@ describe('ScannerPresetService', () => {
 		expect(service.getStorageStatus()).toEqual(DISABLED_STORAGE);
 	});
 
+	it('defaults new presets to inherit while preserving explicit destination arrays through updates', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const inherited = await service.createPreset({ name: 'Inherited preset' });
+		expect(inherited.mode).toBe('inherit');
+
+		const configured = await service.createPreset({
+			name: 'Bound preset',
+			mode: 'preset',
+			destinations: { telegramChatIds: ['-1001234567890'] },
+		});
+		expect(configured).toMatchObject({
+			mode: 'preset',
+			destinations: { telegramChatIds: ['-1001234567890'] },
+		});
+
+		const updated = await service.updatePreset(configured.id, {
+			destinations: { telegramChatIds: ['-1009876543210'], discordWebhookUrls: [] },
+		});
+		expect(updated).toMatchObject({
+			mode: 'preset',
+			destinations: { telegramChatIds: ['-1009876543210'], discordWebhookUrls: [] },
+		});
+		updated.destinations.telegramChatIds.push('-1001111111111');
+		expect((await service.getPreset(configured.id)).destinations.telegramChatIds)
+			.toEqual(['-1009876543210']);
+	});
+
+	it('rejects malformed preset destinations with INVALID_DESTINATIONS', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+
+		await expect(service.createPreset({
+			name: 'Invalid route',
+			mode: 'preset',
+			destinations: { telegramChatIds: ['not-numeric'] },
+		})).rejects.toMatchObject({
+			code: 'INVALID_DESTINATIONS',
+			statusCode: 400,
+		});
+	});
+
+	it('keeps mode-less legacy destinations compatible', async () => {
+		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
+		const service = new ScannerPresetService();
+		const preset = await service.createPreset({
+			name: 'Legacy route',
+			channels: ['telegram'],
+			telegramChatId: '@legacy-chat',
+		});
+
+		expect(preset).not.toHaveProperty('mode');
+		expect(preset).toMatchObject({ channels: ['telegram'], telegramChatId: '@legacy-chat' });
+	});
+
 	it('persists a preset across service instances with the dedicated scanner storage flag', async () => {
 		process.env.ENABLE_FIRESTORE_SCANNER_PRESETS = 'true';
 
 		const { ScannerPresetService } = require('../../src/services/scannerPresets/ScannerPresetService');
 		const serviceA = new ScannerPresetService();
-		const created = await serviceA.createPreset({ name: 'Dedicated storage preset' });
+		const created = await serviceA.createPreset({
+			name: 'Dedicated storage preset',
+			mode: 'preset',
+			destinations: { telegramChatIds: ['-1001234567890'], whatsappChatIds: ['56912345678@c.us'] },
+		});
 
 		jest.resetModules();
 		const {
@@ -97,6 +156,8 @@ describe('ScannerPresetService', () => {
 		expect(fetched).toMatchObject({
 			id: created.id,
 			name: 'Dedicated storage preset',
+			mode: 'preset',
+			destinations: { telegramChatIds: ['-1001234567890'], whatsappChatIds: ['56912345678@c.us'] },
 		});
 	});
 

@@ -26,9 +26,7 @@ jobs:
           ref: master
 
       - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -92,8 +90,9 @@ jobs:
       - name: Notify on failure
         if: failure()
         env:
-          NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL || 'https://cabros-bot-production.up.railway.app/api/webhook/message' }}
+          NOTIFY_WEBHOOK_URL: ${{ secrets.NOTIFY_WEBHOOK_URL || 'https://cabros-crypto-bot-telegram.onrender.com/api/webhook/message' }}
           NOTIFY_API_KEY: ${{ secrets.WEBHOOK_API_KEY || secrets.NOTIFY_API_KEY || '' }}
+          NOTIFY_WHATSAPP_CHAT_ID: ${{ vars.NOTIFY_WHATSAPP_CHAT_ID || '120363422033474991@g.us' }}
         run: |
           if [ -n "$NOTIFY_API_KEY" ]; then
             curl --connect-timeout 10 --max-time 30 --silent --show-error -X POST "$NOTIFY_WEBHOOK_URL" \
@@ -102,6 +101,6 @@ jobs:
               -d '{
                 "message": "[ALERT] Firestore scheduled backup failed on GitHub Actions! Check workflow run: '"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"'",
                 "channels": ["whatsapp"],
-                "whatsappChatId": "120363422033474991@g.us"
+                "whatsappChatId": "'"${NOTIFY_WHATSAPP_CHAT_ID:-120363422033474991@g.us}"'"
               }' || true
           fi

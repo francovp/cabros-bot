@@ -87,8 +87,11 @@ describe('issue-automator deployment URL resolver (issue #1131)', () => {
 		expect(script).toMatch(/Falls? back to the Railway URL pattern/i);
 		expect(script).toContain('Falling back to Railway URL');
 
-		// Production is a fixed endpoint, resolved from an explicit alias.
-		expect(script).toContain('cabros-bot-production.up.railway.app');
+		// Production is a fixed endpoint, resolved from an explicit alias. The
+		// default must be the live host: the retired Railway origin answers 404, so
+		// leaving it here made every production verification target a dead host.
+		expect(script).toContain('cabros-crypto-bot-telegram.onrender.com');
+		expect(script).not.toContain('cabros-bot-production.up.railway.app');
 		expect(script).toContain('PRODUCTION_URL');
 		expect(script).toMatch(/\[ "\$PR_NUMBER" = "production" \] \|\| \[ "\$PR_NUMBER" = "prod" \]/);
 	});
@@ -151,9 +154,11 @@ describe('issue-automator preview verification docs resolve URLs dynamically (#1
 		expect(previewSection).toContain('get-pr-deployment-url.sh');
 		expect(previewSection).toContain('verify-preview.sh');
 
-		// Railway survives only as the documented fallback plus the production host.
+		// Railway survives only as the documented preview fallback; the production
+		// host it used to name is retired and answers 404.
 		expect(previewSection).toMatch(HOST_IS_FALLBACK);
-		expect(previewSection).toContain('cabros-bot-production.up.railway.app');
+		expect(previewSection).toContain('cabros-crypto-bot-telegram.onrender.com');
+		expect(previewSection).not.toContain('cabros-bot-production.up.railway.app');
 		expect(hardcodedHostLines(previewSection)).toEqual([]);
 	});
 

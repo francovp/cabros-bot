@@ -251,14 +251,133 @@ describe('AdminSseService', () => {
 				ADMIN_SSE_HEARTBEAT_MS: 15000,
 				ADMIN_SSE_MAX_CLIENT_CONNECTIONS: 10,
 				ADMIN_SSE_MAX_TOTAL_CONNECTIONS: 200,
+				ADMIN_SSE_DRAIN_TIMEOUT_MS: 5000,
 			});
 
 			const dynamicService = new AdminSseService();
 			expect(dynamicService.getEffectiveHeartbeatIntervalMs()).toBe(15000);
 			expect(dynamicService.getEffectiveMaxClientConnections()).toBe(10);
 			expect(dynamicService.getEffectiveMaxTotalConnections()).toBe(200);
+			expect(dynamicService.getEffectiveDrainTimeoutMs()).toBe(5000);
 		} finally {
 			RemoteConfigService.getRuntimeConfig = originalGetRuntimeConfig;
+		}
+	});
+
+	it('evicts a client that experiences persistent write backpressure and fails to drain in time', () => {
+		jest.useFakeTimers();
+		try {
+			const sseWithBackpressure = new AdminSseService({ drainTimeoutMs: 10000 });
+			const req = new MockRequest();
+			const res = new MockResponse();
+
+			// Simulate write returning false (backpressure)
+			res.write = jest.fn((chunk) => {
+				res.chunks.push(chunk);
+				return false;
+			});
+
+			sseWithBackpressure.addClient(req, res, 'user:slow');
+			expect(sseWithBackpressure.getClientCount()).toBe(1);
+
+			// Broadcast event - triggers res.write returning false
+			sseWithBackpressure.broadcast('job-progress', { jobId: 'job-slow' });
+
+			// Client should still be registered while waiting for drain within timeout
+			expect(sseWithBackpressure.getClientCount()).toBe(1);
+
+			// Advance time past the drain timeout
+			jest.advanceTimersByTime(10000);
+
+			// Client should be evicted and closed due to persistent backpressure
+			expect(sseWithBackpressure.getClientCount()).toBe(0);
+			expect(res.writableEnded).toBe(true);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	it('clears backpressure timeout and keeps client when drain event fires before timeout', () => {
+		jest.useFakeTimers();
+		try {
+			const sseWithBackpressure = new AdminSseService({ drainTimeoutMs: 10000 });
+			const req = new MockRequest();
+			const res = new MockResponse();
+
+			let backpressured = true;
+			res.write = jest.fn((chunk) => {
+				res.chunks.push(chunk);
+				return !backpressured;
+			});
+
+			sseWithBackpressure.addClient(req, res, 'user:recovered');
+			expect(sseWithBackpressure.getClientCount()).toBe(1);
+
+			// Broadcast triggers backpressure
+			sseWithBackpressure.broadcast('job-progress', { jobId: 'job-rec' });
+			expect(sseWithBackpressure.getClientCount()).toBe(1);
+
+			// Fast-forward partially
+			jest.advanceTimersByTime(5000);
+
+			// Socket drains!
+			backpressured = false;
+			res.emit('drain');
+
+			// Fast-forward past original 10000ms mark
+			jest.advanceTimersByTime(6000);
+
+			// Client should NOT be evicted because drain resolved the backpressure
+			expect(sseWithBackpressure.getClientCount()).toBe(1);
+			expect(res.writableEnded).toBe(false);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	it('handles backpressure on sendHeartbeat as well', () => {
+		jest.useFakeTimers();
+		try {
+			const sseWithBackpressure = new AdminSseService({ drainTimeoutMs: 10000 });
+			const req = new MockRequest();
+			const res = new MockResponse();
+
+			res.write = jest.fn((chunk) => {
+				res.chunks.push(chunk);
+				return false;
+			});
+
+			sseWithBackpressure.addClient(req, res, 'user:slow-heartbeat');
+			expect(sseWithBackpressure.getClientCount()).toBe(1);
+
+			sseWithBackpressure.sendHeartbeat();
+
+			jest.advanceTimersByTime(10000);
+			expect(sseWithBackpressure.getClientCount()).toBe(0);
+			expect(res.writableEnded).toBe(true);
+		} finally {
+			jest.useRealTimers();
+		}
+	});
+
+	it('cleans up drain timers when closeAll is invoked with backpressured clients', () => {
+		jest.useFakeTimers();
+		try {
+			const sseWithBackpressure = new AdminSseService({ drainTimeoutMs: 10000 });
+			const req = new MockRequest();
+			const res = new MockResponse();
+
+			res.write = jest.fn(() => false);
+			sseWithBackpressure.addClient(req, res, 'user:closing-backpressure');
+			sseWithBackpressure.broadcast('test', { data: 123 });
+
+			expect(sseWithBackpressure.getClientCount()).toBe(1);
+			sseWithBackpressure.closeAll();
+
+			expect(sseWithBackpressure.getClientCount()).toBe(0);
+			expect(res.writableEnded).toBe(true);
+		} finally {
+			jest.useRealTimers();
 		}
 	});
 });

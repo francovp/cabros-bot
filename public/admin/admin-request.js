@@ -19,6 +19,8 @@
 		'POST /api/jobs/{jobId}/cancel': 'Cancel this job?',
 		'POST /api/jobs/{jobId}/retry': 'Retry this job?',
 		'POST /api/jobs/{jobId}/retry-failed': 'Retry failed items for this job?',
+		'DELETE /api/alert-subscribers/{id}': 'Delete this alert subscriber webhook?',
+		'POST /api/alert-subscribers/{id}/test': 'Send test webhook ping to this subscriber?',
 	};
 
 	const hasJsonBody = (body) => body !== undefined && body !== null
@@ -43,6 +45,14 @@
 		return [...new Set([raw, escaped])]
 			.sort((left, right) => right.length - left.length)
 			.reduce((redacted, variant) => redacted.split(variant).join('[REDACTED]'), String(value));
+	};
+
+	const sanitizeForHistory = (text) => {
+		if (!text || typeof text !== 'string') return text;
+		return text
+			.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization|discordWebhookUrl|webhookUrl)['"]?\s*[:=]\s*)(['"])(?:(?!\2).)*\2/gi, '$1$2[REDACTED]$2')
+			.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization|discordWebhookUrl|webhookUrl)['"]?\s*[:=]\s*)(?!['"])[^'"\s,}\]&]+/gi, '$1[REDACTED]')
+			.replace(/(https?:\/\/(?:[a-zA-Z0-9-]+\.)?discord(?:app)?\.com\/api\/webhooks\/)\d+(?:\/(?!\[REDACTED\])[^'"?\s/]*)?/gi, '$1[REDACTED]/[REDACTED]');
 	};
 
 	const operationDefinitions = (contract) => Object.entries(contract.paths)
@@ -228,6 +238,7 @@
 		getBatchReplayTimeout,
 		operationDefinitions,
 		redactSecret,
+		sanitizeForHistory,
 		validateQuery,
 	};
 }));

@@ -97,6 +97,30 @@ services:
   - key: ENABLE_FIRESTORE_SCANNER_PRESETS
     value: true
     previewValue: false
+# Durable news-monitor analysis records (#1180): web service only, previews off.
+  # Only the web service mounts /api/news-monitor, so a worker declaration would be
+  # a mirror of a value the web service never set. Previews stay off so a throwaway
+  # PR deploy cannot write into the production news_analysis collection.
+  # Environment-only: this gate decides where a collection lives, so it is
+  # deliberately absent from firebase-remote-config-template.json. A template
+  # parameter's defaultValue is reported with source `remote` and would otherwise
+  # override this env var and silently disable persistence.
+  - key: ENABLE_FIRESTORE_NEWS_ANALYSIS
+    value: true
+    previewValue: false
+  - key: NEWS_ANALYSIS_RETENTION_DAYS
+    value: 30
+  # Durable symbol-analysis history for /api/symbol-analyses: web service only,
+  # previews off. The writer is the HTTP route layer in
+  # src/controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis.js, and
+  # worker.js never mounts routes, so the worker stays off rather than becoming a
+  # second writer. Declared at the code default so an operator can see and change
+  # the TTL horizon without leaving the blueprint.
+  - key: ENABLE_SYMBOL_ANALYSIS_STORAGE
+    value: true
+    previewValue: false
+  - key: SYMBOL_ANALYSIS_RETENTION_DAYS
+    value: 7
   # Server-side Remote Config. Enabled on every compute service that starts the
   # loader so they cannot evaluate different effective configs. Previews stay off.
   - key: ENABLE_FIREBASE_REMOTE_CONFIG
@@ -129,6 +153,36 @@ services:
   - key: ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME
     value: true
     previewValue: false
+  # Job execution environment controls (#855). Declared on web and mirrored to
+  # cabros-crypto-bot-telegram-worker so worker cutover cannot silently diverge.
+  - key: TRADINGVIEW_MCP_DEFAULT_EXCHANGE
+    value: BINANCE
+  - key: MARKET_SCANNER_DEFAULT_EXCHANGE
+    value: BINANCE
+  - key: EXPANDED_ANALYSIS_ALERT_SYMBOLS
+    value: BINANCE:BTCUSDT,BINANCE:ETHUSDT,BINANCE:SOLUSDT
+  - key: ZERO_CHANNEL_ALERT_COOLDOWN_MS
+    value: 300000
+  - key: ENABLE_API_ONLY_MODE
+    value: false
+    previewValue: false
+  - key: FIREBASE_REMOTE_CONFIG_REFRESH_INTERVAL_MS
+    value: 300000
+  - key: FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS
+    value: 10000
+  - key: FIREBASE_REMOTE_CONFIG_MAX_AGE_MS
+    value: 3600000
+  - key: ENABLE_NOTIFICATION_REDRIVE
+    value: true
+    previewValue: false
+  - key: NOTIFICATION_REDRIVE_INTERVAL_MS
+    value: 60000
+  - key: NOTIFICATION_REDRIVE_BATCH_LIMIT
+    value: 50
+  - key: NOTIFICATION_REDRIVE_MAX_ATTEMPTS
+    value: 5
+  - key: NOTIFICATION_REDRIVE_MAX_AGE_MS
+    value: 3600000
   - key: REDIS_URL
     fromService:
       name: cabros-crypto-bot-telegram-queue
@@ -487,6 +541,48 @@ services:
       name: cabros-crypto-bot-telegram-iac
       type: web
       envVarKey: ENABLE_MESSAGE_FOOTER_METADATA
+  # Job execution environment controls (#855). Mirrored from web so worker cutover
+  # cannot silently diverge from web-local execution.
+  - key: TRADINGVIEW_MCP_DEFAULT_EXCHANGE
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: TRADINGVIEW_MCP_DEFAULT_EXCHANGE
+  - key: MARKET_SCANNER_DEFAULT_EXCHANGE
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: MARKET_SCANNER_DEFAULT_EXCHANGE
+  - key: EXPANDED_ANALYSIS_ALERT_SYMBOLS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: EXPANDED_ANALYSIS_ALERT_SYMBOLS
+  - key: ZERO_CHANNEL_ALERT_COOLDOWN_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ZERO_CHANNEL_ALERT_COOLDOWN_MS
+  - key: ENABLE_API_ONLY_MODE
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: ENABLE_API_ONLY_MODE
+  - key: FIREBASE_REMOTE_CONFIG_REFRESH_INTERVAL_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: FIREBASE_REMOTE_CONFIG_REFRESH_INTERVAL_MS
+  - key: FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: FIREBASE_REMOTE_CONFIG_LOAD_TIMEOUT_MS
+  - key: FIREBASE_REMOTE_CONFIG_MAX_AGE_MS
+    fromService:
+      name: cabros-crypto-bot-telegram-iac
+      type: web
+      envVarKey: FIREBASE_REMOTE_CONFIG_MAX_AGE_MS
 - type: keyvalue
   plan: starter
   region: frankfurt

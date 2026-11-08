@@ -73,7 +73,9 @@ const validateAlert = (text, metadata = null, signalClass) => {
 	const validatedSignalClass = validateSignalClass(targetSignalClass);
 
 	// Truncate text if needed
-	if (text.length > 4000) {
+	const originalLength = text.length;
+	const truncated = originalLength > 4000;
+	if (truncated) {
 		text = text.substring(0, 4000) + '...';
 	}
 
@@ -81,6 +83,11 @@ const validateAlert = (text, metadata = null, signalClass) => {
 		text,
 		metadata,
 		signalClass: validatedSignalClass,
+		...(truncated ? {
+			truncated: true,
+			originalLength,
+			deliveredLength: text.length,
+		} : {}),
 	};
 };
 

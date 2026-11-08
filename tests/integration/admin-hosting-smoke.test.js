@@ -13,6 +13,7 @@ describe('Admin Console Hosting Smoke & Security', () => {
 		expect(res.headers['content-security-policy']).toContain('https://identitytoolkit.googleapis.com');
 		expect(res.headers['content-security-policy']).toContain('https://openclaw.tail5e4271.ts.net');
 		expect(res.text).toContain('/admin/admin.js');
+		expect(res.text).toContain('/admin/i18n.js');
 		expect(res.text).toContain('/admin/admin-request.js');
 		expect(res.text).toContain('/admin/admin.css');
 		expect(res.text).toContain('/admin/vue.runtime.global.prod.js');
@@ -45,7 +46,7 @@ describe('Admin Console Hosting Smoke & Security', () => {
 		expect(reqJsRes.status).toBe(200);
 		expect(reqJsRes.headers['content-type']).toContain('javascript');
 
-		for (const asset of ['vue.runtime.global.prod.js', 'admin-components.js']) {
+		for (const asset of ['vue.runtime.global.prod.js', 'admin-components.js', 'i18n.js']) {
 			const assetRes = await request(app).get(`/admin/${asset}`);
 			expect(assetRes.status).toBe(200);
 			expect(assetRes.headers['content-type']).toContain('javascript');

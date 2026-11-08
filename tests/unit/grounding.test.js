@@ -1,6 +1,12 @@
 /* global describe, it, expect, jest */
 
-const { groundAlert, _resetForTesting } = require('../../src/services/grounding/grounding');
+const {
+	groundAlert,
+	deriveSearchQuery,
+	getCircuitBreakerStatus,
+	_getCircuitBreakerForTesting,
+	_resetForTesting,
+} = require('../../src/services/grounding/grounding');
 const { generateEnrichedAlert } = require('../../src/services/grounding/gemini');
 const genaiClient = require('../../src/services/grounding/genaiClient');
 const sentryService = require('../../src/services/monitoring/SentryService');
@@ -12,6 +18,12 @@ jest.mock('../../src/services/grounding/genaiClient');
 jest.mock('../../src/services/monitoring/SentryService');
 
 describe('Grounding Service', () => {
+	beforeEach(() => {
+		jest.clearAllMocks();
+		_resetForTesting();
+		delete process.env.CIRCUIT_BREAKER_THRESHOLD;
+		delete process.env.CIRCUIT_BREAKER_COOLDOWN_MS;
+	});
 	describe('groundAlert', () => {
 		it('should enrich alert with search results and summary', async () => {
 			// Mock search results
@@ -345,6 +357,89 @@ describe('Grounding Service', () => {
 			expect(result.symbol).toBe('BTCUSDT');
 			expect(result.exchange).toBe('BINANCE');
 			expect(result.assetClass).toBe('crypto');
+		});
+	});
+
+	describe('Circuit Breaker', () => {
+		it('initializes circuit breaker in closed state', () => {
+			const status = getCircuitBreakerStatus();
+			expect(status).toEqual(expect.objectContaining({
+				state: 'closed',
+				consecutiveFailures: 0,
+				openedAt: null,
+			}));
+		});
+
+		it('trips circuit breaker after consecutive failures and fast-fails groundAlert without calling search', async () => {
+			process.env.CIRCUIT_BREAKER_THRESHOLD = '2';
+			genaiClient.search.mockRejectedValue(new Error('Gemini quota exceeded'));
+
+			// 2 failures to trip the breaker
+			await expect(groundAlert({ text: 'alert 1' })).rejects.toThrow('Grounding failed: Gemini quota exceeded');
+			await expect(groundAlert({ text: 'alert 2' })).rejects.toThrow('Grounding failed: Gemini quota exceeded');
+
+			const status = getCircuitBreakerStatus();
+			expect(status.state).toBe('open');
+			expect(status.consecutiveFailures).toBe(2);
+
+			// 3rd call should fast-fail with circuit_breaker_open
+			genaiClient.search.mockClear();
+			generateEnrichedAlert.mockClear();
+
+			await expect(groundAlert({ text: 'alert 3' })).rejects.toMatchObject({
+				message: expect.stringContaining('Gemini circuit breaker is OPEN'),
+				category: 'circuit_breaker_open',
+			});
+
+			expect(genaiClient.search).not.toHaveBeenCalled();
+			expect(generateEnrichedAlert).not.toHaveBeenCalled();
+		});
+
+		it('falls back to raw alert text immediately in deriveSearchQuery when breaker is open', async () => {
+			process.env.CIRCUIT_BREAKER_THRESHOLD = '1';
+			genaiClient.search.mockRejectedValue(new Error('Service Unavailable'));
+
+			await expect(groundAlert({ text: 'trip breaker' })).rejects.toThrow();
+			expect(getCircuitBreakerStatus().state).toBe('open');
+
+			genaiClient.llmCallv2.mockClear();
+			const derived = await deriveSearchQuery('Raw alert text without LLM');
+			expect(derived).toBe('Raw alert text without LLM');
+			expect(genaiClient.llmCallv2).not.toHaveBeenCalled();
+		});
+
+		it('transitions to half-open after cooldown and recovers to closed on successful probe', async () => {
+			process.env.CIRCUIT_BREAKER_THRESHOLD = '1';
+			process.env.CIRCUIT_BREAKER_COOLDOWN_MS = '1000';
+
+			genaiClient.search.mockRejectedValue(new Error('Network error'));
+			await expect(groundAlert({ text: 'test' })).rejects.toThrow();
+			expect(getCircuitBreakerStatus().state).toBe('open');
+
+			// Fast-forward openedAt
+			const pastTime = Date.now() - 1500;
+			_getCircuitBreakerForTesting().openedAt = new Date(pastTime).toISOString();
+
+			expect(getCircuitBreakerStatus().state).toBe('half-open');
+
+			// Successful probe
+			genaiClient.search.mockResolvedValueOnce({
+				results: [{ title: 'OK', snippet: 'snippet', url: 'https://test.com', sourceDomain: 'test.com' }],
+				totalResults: 1,
+			});
+			generateEnrichedAlert.mockResolvedValueOnce({
+				sentiment: 'BULLISH',
+				sentiment_score: 0.9,
+				insights: ['Recovered'],
+				sources: [],
+			});
+
+			const result = await groundAlert({ text: 'probe' });
+			expect(result.insights[0]).toBe('Recovered');
+
+			const recovered = getCircuitBreakerStatus();
+			expect(recovered.state).toBe('closed');
+			expect(recovered.consecutiveFailures).toBe(0);
 		});
 	});
 });
