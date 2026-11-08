@@ -483,6 +483,27 @@ describe('Postman collection contract', () => {
 		}));
 	});
 
+	it('documents marketCalendarGating feature flag and marketCalendar dependency in Get Status and Get Capabilities', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		for (const name of ['Get Status', 'Get Capabilities']) {
+			const item = findItem(collection.item, name);
+			expect(item).toBeDefined();
+			const responseBody = JSON.parse(item.response[0].body);
+			expect(responseBody.featureFlags.marketCalendarGating).toBe(false);
+			expect(responseBody.dependencies.marketCalendar).toEqual({
+				enabled: false,
+				gatesDelivery: false,
+				dataset: {
+					version: '2026.01',
+					lastUpdated: '2026-08-28',
+					timezone: 'America/New_York',
+					venues: ['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'NYSE_ARCA', 'ARCA', 'CBOE'],
+					yearsCovered: ['2025', '2026', '2027'],
+				},
+			});
+		}
+	});
+
 	it('documents entry price source chains in status and capabilities examples', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');

@@ -677,6 +677,7 @@ function postAlert(botOrGetter) {
 				text,
 				source,
 				signalClass,
+				...(parsedSignal && parsedSignal.exchange ? { exchange: parsedSignal.exchange } : {}),
 				...(session ? { session } : {}),
 				...(traderIntent ? { traderIntent } : {}),
 				...truncation,

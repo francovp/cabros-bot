@@ -10632,7 +10632,8 @@
                 "langfusePrompts": true,
                 "symbolAnalysisMultiAgent": false,
                 "apiOnlyMode": false,
-                "telegramCommandRateLimiting": true
+                "telegramCommandRateLimiting": true,
+                "marketCalendarGating": false
               },
               "dependencies": {
                 "watchlist": {
@@ -11033,6 +11034,30 @@
                   "registered": 0,
                   "drained": 0,
                   "failed": 0
+                },
+                "marketCalendar": {
+                  "enabled": false,
+                  "gatesDelivery": false,
+                  "dataset": {
+                    "version": "2026.01",
+                    "lastUpdated": "2026-08-28",
+                    "timezone": "America/New_York",
+                    "venues": [
+                      "BATS",
+                      "NASDAQ",
+                      "NYSE",
+                      "AMEX",
+                      "NYSE ARCA",
+                      "NYSE_ARCA",
+                      "ARCA",
+                      "CBOE"
+                    ],
+                    "yearsCovered": [
+                      "2025",
+                      "2026",
+                      "2027"
+                    ]
+                  }
                 }
               }
             }
@@ -20416,6 +20441,36 @@
               "presetBoundDestinations": {
                 "$ref": "#/components/schemas/PresetBoundDestinationsDependency"
               },
+              "marketCalendar": {
+                "type": "object",
+                "description": "Static U.S. equity market holiday schedule and delivery gating status.",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "Whether market calendar delivery gating is enabled."
+                  },
+                  "gatesDelivery": {
+                    "type": "boolean",
+                    "description": "Whether market calendar delivery gating suppresses deliveries."
+                  },
+                  "dataset": {
+                    "type": "object",
+                    "properties": {
+                      "version": { "type": "string" },
+                      "lastUpdated": { "type": "string" },
+                      "timezone": { "type": "string" },
+                      "venues": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                      },
+                      "yearsCovered": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                      }
+                    }
+                  }
+                }
+              },
               "chatEnrollments": {
                 "type": "object",
                 "description": "Telegram enrollment storage state and process-local count.",
@@ -24114,6 +24169,10 @@
               "chatEnrollments": {
                 "type": "boolean",
                 "description": "Whether opt-in Telegram chat enrollment is enabled."
+              },
+              "marketCalendarGating": {
+                "type": "boolean",
+                "description": "Whether opt-in U.S. equity market holiday and half-day delivery gating is enabled via ENABLE_MARKET_CALENDAR_GATING."
               }
             }
           }

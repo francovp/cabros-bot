@@ -801,5 +801,25 @@ describe('alert request ID resolution and echo', () => {
 				side: 'BUY',
 			}));
 		});
+
+		it('propagates the parsed exchange into the notification payload for gate resolution', async () => {
+			const response = buildResponse();
+			const handler = postAlert({});
+			await handler({
+				headers: {},
+				body: { text: 'NASDAQ:NVDA (1h) BUY' },
+				query: {},
+			}, response);
+
+			const manager = NotificationManager.mock.results
+				.map((r) => r.value)
+				.filter(Boolean)
+				.find((m) => m.sendToAll && m.sendToAll.mock.calls.length > 0);
+			expect(manager).toBeDefined();
+			expect(manager.sendToAll).toHaveBeenCalledWith(
+				expect.objectContaining({ exchange: 'NASDAQ' }),
+				expect.any(Object),
+			);
+		});
 	});
 });

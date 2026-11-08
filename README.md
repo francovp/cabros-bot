@@ -829,6 +829,16 @@ Ranked scanner output includes an optional ATR sizing hint when ATR and price ar
 - `DISABLE_SYMBOL_ALIAS_RESOLVER=true` opt-out flag (escape hatch — keeps the route mounted but reports `enabled: false` so production can roll back without code changes). The flag is `environment-only` (operator opt-out toggle, not Remote-Config eligible).
 - The existing `/api/webhook/expanded-analysis-alert`, `/api/webhook/market-scanner-alert`, `/api/webhook/volume-confirmation`, `/api/webhook/symbol-analysis`, and `/api/jobs/tradingview-analysis` endpoints keep their strict `EXCHANGE:SYMBOL` validation — the resolver is a new lookup surface, not a parser override. Un-mapped tickers still surface `INVALID_REQUEST` to preserve current behavior.
 
+### Market-Calendar Holiday and Half-Day Delivery Gating
+
+`ENABLE_MARKET_CALENDAR_GATING=true` gates alert delivery against the static U.S. equity market schedule (`src/services/marketCalendar/data/usMarketHolidays.json`). When enabled and the resolved exchange is closed (full-day holiday, half-day outside the early-close window, weekend, or weekday outside any session window), alert delivery is suppressed and routed to `NotificationRedriveService` with a structured dead-letter reason (`market_holiday`, `market_half_day_outside_window`, or `market_closed`). Crypto venues (Binance, Coinbase, Kraken, etc.) are 24/7 and never suppressed. The gate is fail-open: classifier errors or unknown venues permit delivery.
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `ENABLE_MARKET_CALENDAR_GATING` | `false` | Master gate for U.S. equity calendar suppression. Environment-only. |
+
+`/api/status` and `/api/capabilities` report `featureFlags.marketCalendarGating` and `dependencies.marketCalendar` (`enabled`, `gatesDelivery`, `dataset`).
+
 ---
 
 ## Running Tests

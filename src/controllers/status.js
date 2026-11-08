@@ -48,6 +48,7 @@ const { burstAggregator } = require('../services/alerts/burstAggregator');
 const { userPriceAlertService } = require('../services/alerts/UserPriceAlertService');
 const { alertModeration } = require('../services/alerts/alertModeration');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
+const { isFeatureEnabled: isMarketCalendarGatingEnabled, getDatasetMetadata: getMarketCalendarMetadata } = require('../services/marketCalendar/notificationGate');
 const aliasResolver = require('../services/symbols/aliasResolver');
 const { getPromptReadiness } = require('../services/prompts/promptReadiness');
 const newsAnalysisStorageService = require('../services/storage/NewsAnalysisStorageService');
@@ -680,6 +681,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			alertHtfRender: runtimeConfig.ENABLE_ALERT_HTF_RENDER,
 			alertModeration: alertModeration.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			marketCalendarGating: isMarketCalendarGatingEnabled(env),
 			environmentBanner: isEnvironmentBannerEnabled(),
 			symbolAliasResolver: aliasResolver.isEnabled(),
 			userPriceAlerts: userPriceAlertService.isEnabled(),
@@ -940,6 +942,11 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			selfTest: getSelfTestService().getStatus(),
 			telegramCommandAuth: telegramCommandAuth.getStatus(),
 			adminAuth: adminAuthStatus,
+			marketCalendar: {
+				enabled: isMarketCalendarGatingEnabled(env),
+				gatesDelivery: isMarketCalendarGatingEnabled(env),
+				dataset: getMarketCalendarMetadata(),
+			},
 		},
 	};
 }
