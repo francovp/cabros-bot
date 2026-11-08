@@ -3112,3 +3112,13 @@ Adds an opt-in delivery gate that classifies U.S. equity venues against a static
 - Suppressed alerts skip Telegram/WhatsApp/Discord dispatch but stay persisted in the dead-letter queue, so audit and replay remain complete.
 
 This change adds a focused new module without expanding the env-var, OpenAPI, Postman, or Remote Config contracts beyond the documented opt-in flag.
+
+## Daily Trader Digest (Issue #790)
+
+Opt-in `ENABLE_DAILY_DIGEST=true` delivers a previous-UTC-day MarkdownV2 digest once per UTC day at `DIGEST_DELIVERY_HOUR_UTC` (default 13). Aggregation reuses `summarizeAlerts` (bySource, delivery.byChannel, enrichment.tokenUsage.totalCost) and `summarizeOutcomes`/`listOutcomes` scoped to the previous day + `1D` window, showing only matured outcomes with eligible/evaluated/pending coverage.
+
+**Send requires durable reservation.** `ENABLE_FIRESTORE_DIGEST_RUNS=true` must be on and Firestore reachable; otherwise the send is omitted and `dependencies.dailyDigest.status` is `degraded`. The `digestRuns` document id is `<date>__<sha256(chatId).slice(0,16)>` with `reserved`/`sent`/`ambiguous`/`failed` states. An `ambiguous` outcome (send attempted, success unproven) is never auto-retried. Multi-replica `already-sent`/`reserved-elsewhere` skips are logged as "digest already sent, skipping". `TELEGRAM_DIGEST_CHAT_ID` is the destination and stays environment-only, as do `ENABLE_DAILY_DIGEST`, `ENABLE_FIRESTORE_DIGEST_RUNS`, `DIGEST_DELIVERY_HOUR_UTC`, and `DIGEST_MAX_PREVIOUS_DAY_SPEND_USD` (default 50; exceeding it flags the footer ⚠️ but still ships).
+
+`/digest` Telegram command (admin allowlist + 5-min per-chat rate limit) runs on demand to the requesting chat; `/digest --dry-run` returns the formatted MarkdownV2 without sending or persisting. `/api/status` exposes `featureFlags.dailyDigest` and `dependencies.dailyDigest` (`enabled/configured/ready/status/backend/deliveryHourUtc/maxSpendUsd/running/lastRunAt/lastRunStatus/lastRunDateStr/lastRunDigestMessageId/lastRunError/dailyChats/leaseState`); `dailyChats` holds hashed prefixes only, never chat IDs.
+
+**Coverage**: `tests/unit/daily-digest.test.js` (day boundaries, aggregation, dry-run, degraded when durable runs disabled, already-sent lease contention, ambiguous no-retry, before-hour skip, no chat-id leakage), `tests/integration/daily-digest.test.js` (full previous-day sections in order, Telegram length bound, status projection), `src/openapi/openapi.json` (`DailyDigestDependency` + sample payload), `CabrosBot.postman_collection.json` ("Get Status - daily digest").

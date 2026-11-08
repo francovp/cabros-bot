@@ -275,6 +275,64 @@ describe('chart attachments — WhatsApp upload', () => {
 		warn.mockRestore();
 	});
 
+	it('falls back to the text message when the upload returns invalid JSON', async () => {
+		const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+		await withChartFlag(true, async () => {
+			const fetchMock = jest.fn()
+				.mockResolvedValueOnce({
+					ok: true,
+					status: 200,
+					json: async () => { throw new Error('Unexpected token < in JSON at position 0'); },
+					text: async () => '<html>Error</html>',
+				})
+				.mockResolvedValueOnce({ ok: true, json: async () => ({ idMessage: 'm-fallback' }), text: async () => '' });
+			global.fetch = fetchMock;
+			const service = makeWhatsAppService();
+
+			const result = await service.send({
+				text: 'BTC breakout', symbol: 'BTCUSDT', chartBars: makeBars(6),
+			});
+
+			expect(result.success).toBe(true);
+			expect(fetchMock.mock.calls[0][0]).toContain('sendFileByUpload');
+			expect(fetchMock.mock.calls[1][0]).toContain('sendMessage');
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining('file upload failed'),
+				expect.anything(),
+			);
+		});
+		warn.mockRestore();
+	});
+
+	it('falls back to the text message when the upload response lacks delivery acknowledgement', async () => {
+		const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+		await withChartFlag(true, async () => {
+			const fetchMock = jest.fn()
+				.mockResolvedValueOnce({
+					ok: true,
+					status: 200,
+					json: async () => ({ error: 'Upload quota exceeded' }),
+					text: async () => '{"error":"Upload quota exceeded"}',
+				})
+				.mockResolvedValueOnce({ ok: true, json: async () => ({ idMessage: 'm-fallback' }), text: async () => '' });
+			global.fetch = fetchMock;
+			const service = makeWhatsAppService();
+
+			const result = await service.send({
+				text: 'BTC breakout', symbol: 'BTCUSDT', chartBars: makeBars(6),
+			});
+
+			expect(result.success).toBe(true);
+			expect(fetchMock.mock.calls[0][0]).toContain('sendFileByUpload');
+			expect(fetchMock.mock.calls[1][0]).toContain('sendMessage');
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining('file upload failed'),
+				expect.anything(),
+			);
+		});
+		warn.mockRestore();
+	});
+
 	it('makes no upload call when the flag is off', async () => {
 		await withChartFlag(false, async () => {
 			const fetchMock = jest.fn().mockResolvedValue({

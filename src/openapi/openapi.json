@@ -22123,6 +22123,9 @@
               },
               "environmentBanner": {
                 "$ref": "#/components/schemas/EnvironmentBanner"
+              },
+              "dailyDigest": {
+                "$ref": "#/components/schemas/DailyDigestDependency"
               }
             }
           }
@@ -25769,6 +25772,10 @@
                 "type": "boolean",
                 "description": "Whether opt-in U.S. equity market holiday and half-day delivery gating is enabled via ENABLE_MARKET_CALENDAR_GATING."
               },
+              "dailyDigest": {
+                "type": "boolean",
+                "description": "Whether the opt-in daily trader digest scheduler is enabled via ENABLE_DAILY_DIGEST. The /digest Telegram command sends the previous-UTC-day digest to TELEGRAM_DIGEST_CHAT_ID (or --dry-run preview); this is a Telegram command, not an HTTP route."
+              },
               "globalAlertBudget": {
                 "type": "boolean",
                 "description": "Whether the rolling 24-hour alert-delivery budget is active (GLOBAL_ALERT_BUDGET_PER_24H > 0)."
@@ -25887,6 +25894,45 @@
             },
             "additionalProperties": false
           }
+        },
+        "additionalProperties": false
+      },
+      "DailyDigestDependency": {
+        "type": "object",
+        "description": "Daily trader digest scheduler (Issue #790). dependencies.dailyDigest reports enabled/configured/ready plus non-sensitive run metadata (deliveryHourUtc, maxSpendUsd, lastRunAt, lastRunStatus, lastRunDateStr, lastRunDigestMessageId, dailyChats as hashed prefixes, leaseState). Durable sends require ENABLE_FIRESTORE_DIGEST_RUNS and TELEGRAM_DIGEST_CHAT_ID; otherwise status is degraded and the send is omitted. No chat ID or token is exposed. The /digest Telegram command (not an HTTP route) runs the previous-UTC-day digest on demand; /digest --dry-run returns the formatted MarkdownV2 without sending or persisting. Sample digest payload: \"*📊 Daily Digest — 2026-11-07*\\n\\n*Alertas:* 12\\n*Por fuente:* webhook 9 · market-scanner 3\\n*Por canal:* telegram 12/12\\n*Outcomes (maduros 1D):* hit-rate 55.0% | elegibles 10 / evaluados 8 / pendientes 2\\n\\n*Top scanner hits:*\\n1. BINANCE:BTCUSDT\\n\\n*Top outcome winners:*\\n1. NASDAQ:NVDA R=2.10\\n\\n*Gasto LLM:* $0.0123\"",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "backend",
+          "deliveryHourUtc",
+          "maxSpendUsd",
+          "running",
+          "lastRunAt",
+          "lastRunStatus",
+          "lastRunDateStr",
+          "lastRunDigestMessageId",
+          "lastRunError",
+          "dailyChats",
+          "leaseState"
+        ],
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "configured": { "type": "boolean" },
+          "ready": { "type": "boolean" },
+          "status": { "type": "string", "enum": ["disabled", "degraded", "ready"] },
+          "backend": { "type": "string", "enum": ["firestore", "memory"] },
+          "deliveryHourUtc": { "type": "integer", "minimum": 0, "maximum": 23 },
+          "maxSpendUsd": { "type": "number", "minimum": 0 },
+          "running": { "type": "boolean" },
+          "lastRunAt": { "type": ["string", "null"], "format": "date-time" },
+          "lastRunStatus": { "type": "string" },
+          "lastRunDateStr": { "type": ["string", "null"] },
+          "lastRunDigestMessageId": { "type": ["string", "null"] },
+          "lastRunError": { "type": ["string", "null"] },
+          "dailyChats": { "type": "array", "items": { "type": "string" } },
+          "leaseState": { "type": "string" }
         },
         "additionalProperties": false
       },

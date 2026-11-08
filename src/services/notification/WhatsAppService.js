@@ -552,11 +552,47 @@ class WhatsAppService extends NotificationChannel {
 						statusCode: response.status,
 					};
 				}
-				const data = await response.json().catch(() => null);
+				let data;
+				try {
+					data = await response.json();
+				} catch {
+					this.logger?.error?.('GreenAPI file upload returned non-JSON response');
+					return {
+						success: false,
+						channel: 'whatsapp',
+						error: 'WhatsApp provider returned non-JSON response',
+						category: 'INVALID_RESPONSE',
+						statusCode: response.status,
+					};
+				}
+
+				if (data && (data.idFile || data.idMessage || data.messageId)) {
+					return {
+						success: true,
+						channel: 'whatsapp',
+						messageId: data.idFile || data.idMessage || data.messageId,
+					};
+				}
+
+				const rawErr = data?.error || data?.errorMessage || data?.message;
+				if (rawErr) {
+					const errorMsg = this._sanitizeText(String(rawErr));
+					this.logger?.error?.(`GreenAPI file upload response contained error: ${errorMsg}`);
+					return {
+						success: false,
+						channel: 'whatsapp',
+						error: errorMsg,
+						category: 'PROVIDER_ERROR',
+						statusCode: response.status,
+					};
+				}
+
 				return {
-					success: true,
+					success: false,
 					channel: 'whatsapp',
-					messageId: data?.idFile || data?.messageId || undefined,
+					error: 'WhatsApp provider returned unexpected upload response structure (missing delivery acknowledgement)',
+					category: 'AMBIGUOUS_OUTCOME',
+					statusCode: response.status,
 				};
 			} finally {
 				clearTimeout(timeoutId);
