@@ -187,6 +187,9 @@ class McpToolInventory {
 		const timeoutId = setTimeout(() => {
 			controller.abort(new Error(`TradingView MCP tools/list discovery timeout after ${this._discoveryTimeoutMs}ms`));
 		}, this._discoveryTimeoutMs);
+		if (typeof timeoutId.unref === 'function') {
+			timeoutId.unref();
+		}
 		const initializeRequest = {
 			jsonrpc: '2.0',
 			id: `discover-initialize-${this._now()}`,
@@ -235,6 +238,9 @@ class McpToolInventory {
 			const notifyTimeoutId = setTimeout(() => {
 				notifyController.abort(new Error(`TradingView MCP tools/list notify timeout after ${this._discoveryTimeoutMs}ms`));
 			}, this._discoveryTimeoutMs);
+			if (typeof notifyTimeoutId.unref === 'function') {
+				notifyTimeoutId.unref();
+			}
 			try {
 				await this._fetch(this._url, {
 					method: 'POST',
@@ -259,6 +265,9 @@ class McpToolInventory {
 			const listTimeoutId = setTimeout(() => {
 				listController.abort(new Error(`TradingView MCP tools/list list timeout after ${this._discoveryTimeoutMs}ms`));
 			}, this._discoveryTimeoutMs);
+			if (typeof listTimeoutId.unref === 'function') {
+				listTimeoutId.unref();
+			}
 			const listRequestId = `discover-list-${this._now()}`;
 			let listResponse;
 			let bodyText;
@@ -430,6 +439,49 @@ class McpToolInventory {
 			};
 		}
 		return wired;
+	}
+
+	snapshotSync() {
+		let discovery;
+		if (this._discoveredNames && this._discoveredAt) {
+			discovery = this._getCachedDiscovery() || {
+				names: this._discoveredNames.slice(),
+				discoveredAt: new Date(this._discoveredAt).toISOString(),
+				source: this._discoveredSource || 'fallback-static-catalog',
+			};
+		} else {
+			discovery = {
+				names: this._fallbackCatalog.slice(),
+				discoveredAt: new Date(this._now()).toISOString(),
+				source: 'fallback-static-catalog',
+			};
+			if (this._url && !this._discoverInFlight && process.env.NODE_ENV !== 'test') {
+				this.discover().catch(() => {});
+			}
+		}
+
+		const discoveredNames = discovery.names;
+		const wired = this._buildWiredSnapshot(discoveredNames);
+
+		for (const discoveredName of discoveredNames) {
+			if (wired[discoveredName]) {
+				continue;
+			}
+			wired[discoveredName] = {
+				wired: false,
+				callers: [],
+				lastSuccessAt: null,
+				lastFailureAt: null,
+				lastCategory: null,
+			};
+		}
+
+		return {
+			discovered: discoveredNames,
+			wired,
+			discoveredAt: discovery.discoveredAt,
+			discoveredSource: discovery.source,
+		};
 	}
 
 	async snapshot({ discover = true } = {}) {

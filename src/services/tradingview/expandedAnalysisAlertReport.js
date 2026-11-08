@@ -1,7 +1,9 @@
 const {
 	normalizeTradingViewTimeframe,
+	resolveMcpExchange,
 	SUPPORTED_MCP_TIMEFRAMES,
 } = require('./parseTradingViewSignal');
+const { hasConfluenceEvidence } = require('./confluenceEvidence');
 
 const MAX_SYMBOLS = 50;
 const SUPPORTED_TIMEFRAME_ALIASES = new Set([
@@ -35,24 +37,70 @@ class ExpandedAnalysisAlertRequestError extends Error {
 function parseExpandedAnalysisAlertRequest(req = {}) {
 	const body = getRequestBody(req);
 	const rawSymbols = getRequestSymbols(body);
-	const symbols = rawSymbols.map(parseSymbolIdentifier);
+	const parsedSymbols = rawSymbols.map(parseSymbolIdentifier);
 	validateTimeframeType(body);
 	const timeframe = parseTimeframe(body.timeframe);
 	const includeMultiTimeframe = parseIncludeMultiTimeframe(body);
 	const analysisMode = parseAnalysisMode(body);
 
-	if (symbols.length === 0) {
+	if (parsedSymbols.length === 0) {
 		throw new ExpandedAnalysisAlertRequestError(
 			'No expanded analysis symbols provided. Pass body.symbols or set EXPANDED_ANALYSIS_ALERT_SYMBOLS.',
 			'NO_SYMBOLS',
 		);
 	}
 
+	// Deduplicate BEFORE the cap: the budget is shared serially across symbols, so
+	// N copies of one symbol are one unit of work, not N. Capping the raw list would
+	// reject a request that only names a handful of distinct markets.
+	const { symbols, duplicatesRemoved } = dedupeSymbolIdentifiers(parsedSymbols);
+
 	if (symbols.length > MAX_SYMBOLS) {
 		throw new ExpandedAnalysisAlertRequestError(`Too many symbols requested (max: ${MAX_SYMBOLS})`);
 	}
 
-	return { symbols, timeframe, includeMultiTimeframe, analysisMode };
+	return { symbols, timeframe, includeMultiTimeframe, analysisMode, duplicatesRemoved };
+}
+
+/**
+ * Two identifiers that produce the same outbound MCP call are the same unit of work,
+ * so the later occurrence is collapsed instead of re-spending an MCP budget slot and
+ * shrinking the shared deadline left for the symbols that are not duplicates.
+ *
+ * The comparison key is the venue the MCP server would actually be asked for, so the
+ * probe-verified aliases in `MCP_EXCHANGE_ALIASES` (BATS/NASDAQ_DLY -> NASDAQ) collapse
+ * too. Only that closed table is consulted — never suffix-shape or fuzzy inference,
+ * which would merge venues the server keeps distinct (issue #591).
+ *
+ * The retained entry keeps the caller's own exchange: alias resolution stays
+ * outbound-only and never rewrites the symbol reported or stored. First occurrence
+ * wins, so report ordering is the request's first-occurrence order.
+ *
+ * @param {Array<{raw: string, exchange: string, symbol: string}>} parsedSymbols
+ * @returns {{symbols: Array<object>, duplicatesRemoved: number}}
+ */
+function dedupeSymbolIdentifiers(parsedSymbols = []) {
+	const seenKeys = new Set();
+	const symbols = [];
+	let duplicatesRemoved = 0;
+
+	for (const parsedSymbol of parsedSymbols) {
+		const key = buildSymbolDedupeKey(parsedSymbol);
+		if (seenKeys.has(key)) {
+			duplicatesRemoved += 1;
+			continue;
+		}
+
+		seenKeys.add(key);
+		symbols.push(parsedSymbol);
+	}
+
+	return { symbols, duplicatesRemoved };
+}
+
+function buildSymbolDedupeKey({ exchange, symbol } = {}) {
+	const { mappedExchange } = resolveMcpExchange(exchange);
+	return `${mappedExchange || exchange}:${symbol}`;
 }
 
 function parseIncludeMultiTimeframe(body = {}) {
@@ -193,7 +241,7 @@ function buildExpandedAnalysisAlertReport(items = [], options = {}) {
 	return lines.join('\n');
 }
 
-function buildReportRow({ input = {}, analysis = {}, multiTimeframe, side = 'BUY' }) {
+function buildReportRow({ input = {}, analysis = {}, multiTimeframe, side = 'BUY', risk = null }) {
 	const techData = analysis.technical || analysis || {};
 	const priceData = techData.price_data || {};
 	const indicators = techData.technical_indicators || {};
@@ -210,18 +258,31 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe, side = 'BUY
 	const macdDirection = getMacdDirection(macd, macdSignal);
 	const volume = getVolumeLabel(techData);
 	const stopLossMeta = side ? getStopLossMeta(price, atr, bollinger, currentBollinger, side) : { value: null, source: 'missing' };
-	const stopLoss = stopLossMeta.value;
+	let stopLoss = stopLossMeta.value;
 	const isOverbought = rsi !== null && rsi > 70;
-	const takeProfit = !side
+	let takeProfit = !side
 		? null
 		: isOverbought && side !== 'SELL'
 			? null
 			: getTakeProfitTarget(price, atr, bollinger, currentBollinger, techData, side);
 	const invalidationDistance = getInvalidationDistance(price, stopLoss, stopLossMeta.source, side);
-	const riskRewardRatio = getRiskRewardRatio(price, stopLoss, takeProfit, side);
+	let riskRewardRatio = getRiskRewardRatio(price, stopLoss, takeProfit, side);
+
+	// Honor the controller's plan-quality gate: if the controller already picked
+	// an upgraded target or flagged a rejection, mirror it so the markdown report
+	// matches the structured `analysis.risk` payload exactly.
+	if (risk && Number.isFinite(risk.stop_loss)) {
+		stopLoss = risk.stop_loss;
+	}
+	if (risk && Number.isFinite(risk.target)) {
+		takeProfit = risk.target;
+	}
+	if (risk && Number.isFinite(risk.risk_reward_ratio)) {
+		riskRewardRatio = risk.risk_reward_ratio;
+	}
 
 	const sentiment = analysis.sentiment || null;
-	const confluence = analysis.confluence || null;
+	const confluence = hasConfluenceEvidence(analysis) ? analysis.confluence || null : null;
 	const news = analysis.news || null;
 
 	return {
@@ -243,6 +304,8 @@ function buildReportRow({ input = {}, analysis = {}, multiTimeframe, side = 'BUY
 		sentiment,
 		confluence,
 		news,
+		rejectionReason: risk && risk.rejectionReason ? risk.rejectionReason : null,
+		minRiskRewardRatio: risk && Number.isFinite(risk.minRiskRewardRatio) ? risk.minRiskRewardRatio : null,
 	};
 }
 
@@ -260,6 +323,7 @@ function formatGroupRows(rows) {
 			formatTargetLine(row),
 			formatRiskRewardLine(row),
 			formatInvalidationLine(row),
+			formatPlanQualityLine(row),
 			`- *Sugerencia:* ${row.suggestion}`,
 		].filter(Boolean);
 
@@ -567,6 +631,104 @@ function getTakeProfitTarget(price, atr, bollinger, currentBollinger = {}, techD
 	return null;
 }
 
+/**
+ * Select a take-profit target that satisfies a minimum risk/reward ratio.
+ *
+ * Selection order (documented):
+ *  1. Nearest S/R level (nearest_resistance / nearest_support).
+ *  2. Additional S/R levels (resistance_1, resistance_2 / support_1, support_2).
+ *  3. Bollinger opposite band (upper for BUY, lower for SELL) and Bollinger mid
+ *     as a balanced fallback.
+ *  4. ATR-derived target (3 * ATR from entry).
+ *
+ * Each candidate is rejected if it fails the minimum R:R floor or its side
+ * constraint (BUY target must be > entry, SELL target must be < entry). The
+ * first candidate that satisfies the floor is returned. If none qualify, the
+ * function returns null so callers can mark the plan invalid.
+ */
+function selectTakeProfitWithMinRatio({
+	price,
+	stopLoss,
+	atr,
+	bollinger = {},
+	currentBollinger = {},
+	techData = {},
+	side = 'BUY',
+	minRatio,
+}) {
+	if (price === null || stopLoss === null || stopLoss <= 0) {
+		return null;
+	}
+	if (!Number.isFinite(minRatio) || minRatio <= 0) {
+		return null;
+	}
+
+	const isShort = side === 'SELL';
+	const srBlock = techData.support_resistance || {};
+
+	// Order documented above: nearest first, then progressively farther S/R.
+	const srCandidates = isShort
+		? [
+			srBlock.nearest_support,
+			srBlock.support_1,
+			srBlock.support_2,
+			srBlock.support_3,
+			techData.support?.nearest,
+			techData.support?.next,
+		]
+		: [
+			srBlock.nearest_resistance,
+			srBlock.resistance_1,
+			srBlock.resistance_2,
+			srBlock.resistance_3,
+			techData.resistance?.nearest,
+			techData.resistance?.next,
+		];
+
+	for (const candidate of srCandidates) {
+		const target = numberOrNull(candidate);
+		if (target === null || target <= 0) continue;
+		// Reject targets on the wrong side of price.
+		if (isShort ? target >= price : target <= price) continue;
+		const ratio = getRiskRewardRatio(price, stopLoss, target, side);
+		if (ratio !== null && ratio >= minRatio) {
+			return target;
+		}
+	}
+
+	// Bollinger opposite band then mid band — only considered if S/R candidates
+	// fail the floor.
+	const oppositeBand = numberOrNull(isShort
+		? bollinger.bb_lower ?? currentBollinger.lower
+		: bollinger.bb_upper ?? currentBollinger.upper);
+	if (oppositeBand !== null && oppositeBand > 0 && (isShort ? oppositeBand < price : oppositeBand > price)) {
+		const ratio = getRiskRewardRatio(price, stopLoss, oppositeBand, side);
+		if (ratio !== null && ratio >= minRatio) {
+			return oppositeBand;
+		}
+	}
+	const midBand = numberOrNull(bollinger.bb_mid ?? currentBollinger.mid ?? bollinger.mid ?? currentBollinger.middle);
+	if (midBand !== null && midBand > 0 && (isShort ? midBand < price : midBand > price)) {
+		const ratio = getRiskRewardRatio(price, stopLoss, midBand, side);
+		if (ratio !== null && ratio >= minRatio) {
+			return midBand;
+		}
+	}
+
+	// ATR fallback (3 * ATR from entry).
+	if (atr !== null) {
+		const atrTarget = isShort ? price - (atr * 3) : price + (atr * 3);
+		if (atrTarget > 0 && (isShort ? atrTarget < price : atrTarget > price)) {
+			const ratio = getRiskRewardRatio(price, stopLoss, atrTarget, side);
+			if (ratio !== null && ratio >= minRatio) {
+				return atrTarget;
+			}
+		}
+	}
+
+	return null;
+}
+
 function getInvalidationDistance(price, stopLoss, stopLossSource, side = 'BUY') {
 	if (price === null || stopLoss === null || stopLossSource === 'fallback') {
 		return null;
@@ -609,6 +771,14 @@ function formatRiskRewardLine(row) {
 	}
 
 	return `- *Risk/Reward:* ${formatNumber(row.riskRewardRatio, 2)}x · Setup ${classifyRiskReward(row.riskRewardRatio)}`;
+}
+
+function formatPlanQualityLine(row) {
+	if (row.rejectionReason !== 'risk_reward_below_minimum' || row.riskRewardRatio === null) {
+		return null;
+	}
+	const minRatio = Number.isFinite(row.minRiskRewardRatio) ? row.minRiskRewardRatio : 1.5;
+	return `- ⚠️ *R/R por debajo del mínimo ${formatNumber(minRatio, 2)}:* plan descartado (R/R actual ${formatNumber(row.riskRewardRatio, 2)})`;
 }
 
 function formatInvalidationLine(row) {
@@ -703,6 +873,91 @@ function numberOrNull(value) {
 	return Number.isFinite(number) ? number : null;
 }
 
+function deriveItemSide(analysis = {}) {
+	const sentiment = String(analysis?.sentiment || analysis?.market_sentiment?.overall_sentiment || '').toUpperCase();
+	const confluence = hasConfluenceEvidence(analysis)
+		? String(analysis?.confluence?.recommendation || analysis?.confluence?.action || '').toUpperCase()
+		: '';
+	if (confluence.includes('SELL') || sentiment.includes('BEARISH') || sentiment.includes('BAJISTA')) {
+		return 'SELL';
+	}
+	return 'BUY';
+}
+
+/**
+ * Records signal outcomes for analyzed items in a fail-open manner.
+ * @param {Array<Object>} analyzedItems - Array of { input, analysis, multiTimeframe, side? }
+ * @param {Object} [parsed] - { timeframe, ... }
+ * @param {Object} [options] - { requestId, startTime, receivedAt, source, jobId }
+ * @returns {void}
+ */
+function recordExpandedAnalysisOutcomes(analyzedItems, parsed = {}, options = {}) {
+	try {
+		const signalOutcomeService = require('../storage/SignalOutcomeService');
+		if (!signalOutcomeService.isEnabled() || !Array.isArray(analyzedItems)) {
+			return;
+		}
+
+		const requestId = options.requestId || null;
+		const source = options.source || 'expanded-analysis';
+		const endTime = options.receivedAt ? new Date(options.receivedAt).getTime() : Date.now();
+		const processingTimeMs = Number.isFinite(options.startTime) && Number.isFinite(endTime) && endTime >= options.startTime
+			? endTime - options.startTime : null;
+		const timeframe = parsed?.timeframe || null;
+
+		for (const [index, item] of analyzedItems.entries()) {
+			if (!item || !item.input) continue;
+			const itemSide = item.side || deriveItemSide(item.analysis);
+			const row = buildReportRow({ ...item, side: itemSide });
+			const tech = item.analysis?.technical || item.analysis || {};
+			const closePrice = row.price ?? tech.price_data?.current_price ?? tech.price_data?.close ?? null;
+			const rawRating = item.analysis?.market_sentiment?.overall_rating ?? tech.market_sentiment?.overall_rating ?? null;
+			let normalizedScore = null;
+			if (typeof rawRating === 'number' && Number.isFinite(rawRating)) {
+				const absRating = Math.abs(rawRating);
+				const magnitude = absRating <= 1
+					? absRating
+					: absRating <= 5
+						? absRating / 5
+						: absRating <= 10
+							? absRating / 10
+							: Math.min(1, absRating / 100);
+				normalizedScore = (itemSide === 'SELL' ? -1 : 1) * Math.min(1, Math.max(0, magnitude));
+			}
+			const rawConfidence = item.analysis?.confidence ?? item.confidence ?? (normalizedScore !== null ? Math.abs(normalizedScore) : null);
+			const validConfidence = typeof rawConfidence === 'number' && Number.isFinite(rawConfidence) && rawConfidence >= 0 && rawConfidence <= 1
+				? rawConfidence
+				: (normalizedScore !== null ? Math.abs(normalizedScore) : null);
+
+			signalOutcomeService.recordSignal({
+				idempotencyKey: options.jobId ? `job:${options.jobId}:expanded-analysis:${index}` : null,
+				requestId,
+				receivedAt: options.receivedAt,
+				source,
+				symbol: item.input.symbol,
+				exchange: item.input.exchange,
+				timeframe,
+				setupType: 'expanded-analysis',
+				score: normalizedScore,
+				confidenceScore: validConfidence,
+				side: itemSide,
+				price: typeof closePrice === 'number' ? closePrice : null,
+				priceSource: typeof closePrice === 'number' ? 'tradingview-mcp' : null,
+				stop: typeof row.stopLoss === 'number' ? row.stopLoss : null,
+				target: typeof row.takeProfit === 'number' ? row.takeProfit : null,
+				invalidationLevel: typeof row.stopLoss === 'number' ? row.stopLoss : null,
+				targetLevel: typeof row.takeProfit === 'number' ? row.takeProfit : null,
+				riskRewardRatio: typeof row.riskRewardRatio === 'number' ? row.riskRewardRatio : null,
+				sources: [],
+				tokenUsage: null,
+				processingTimeMs,
+			}).catch(() => {});
+		}
+	} catch (err) {
+		// Fail-open: signal-outcome tracking failure must never block callers or throw
+	}
+}
+
 module.exports = {
 	ExpandedAnalysisAlertRequestError,
 	parseExpandedAnalysisAlertRequest,
@@ -712,4 +967,7 @@ module.exports = {
 	getStopLossMeta,
 	getTakeProfitTarget,
 	getRiskRewardRatio,
+	deriveItemSide,
+	recordExpandedAnalysisOutcomes,
+	selectTakeProfitWithMinRatio,
 };
