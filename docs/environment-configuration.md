@@ -73,6 +73,7 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 - Firestore-backed `notificationDeadLetters` records use `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` once per project to enable native TTL and optionally backfill legacy records.
 - `ZERO_CHANNEL_ALERT_COOLDOWN_MS` - Cooldown between admin notifications when all channels are disabled in milliseconds (default: `300000`, Remote Config supported)
 - `ADMIN_PAGE_DEDUP_TTL_MS` - TTL for admin paging deduplication in milliseconds (default: `300000`, 0 disables deduplication, Remote Config supported)
+- `GLOBAL_ALERT_BUDGET_PER_24H` - In-process rolling 24h cap on successful per-channel alert deliveries (default: `500`, 0 disables cap, Remote Config supported, range: `0`–`1000000`)
 - `ENABLE_API_ONLY_MODE` - Declare intentional API-only mode without notification delivery, suppressing zero-channel alerts and dead-letters (default: `false`, Remote Config supported)
 - `ENABLE_MAINTENANCE_MODE` - Remotely toggleable incident response kill switch (`true` or `false`, default: `false`, Remote Config supported). When active, gates incoming webhook alerts and bot commands with HTTP 503 while preserving `/healthcheck` and `/api/status`.
 
