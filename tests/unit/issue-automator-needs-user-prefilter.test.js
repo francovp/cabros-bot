@@ -100,7 +100,7 @@ describe('decision reconciliation without queue starvation', () => {
 		expect(survivingNumbers([issue(1, ['brainstorm', 'NEEDS_USER']), issue(2, ['automation/skip'])], true)).toEqual([2]);
 	});
 
-	it('orders numeric priorities first, then named priorities without inventing a numeric mapping', () => {
+	it('orders numeric priorities first, then named priorities (critical, high, medium, low)', () => {
 		expect(survivingNumbers([
 			issue(1, ['priority/medium']), issue(2, ['priority/critical']),
 			issue(3, ['priority/7-build']), issue(4, ['priority/1-roi']),
