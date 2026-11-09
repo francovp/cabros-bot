@@ -1345,6 +1345,19 @@ function batchReplayAlerts(botOrGetter) {
 				}
 			}
 
+			auditLog(
+				AUDIT_CATEGORIES.ADMIN_ACTION,
+				null,
+				'batch_alert_replay',
+				{
+					count: uniqueAlertIds.length,
+					channels,
+					dryRun: Boolean(dryRun),
+				},
+				'success',
+				req,
+			);
+
 			if (dryRun) {
 				return res.status(200).json({
 					success: true,

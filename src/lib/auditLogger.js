@@ -49,7 +49,7 @@ function shouldEmitAuditLogs() {
 	if (!isAuditLoggingEnabled()) {
 		return false;
 	}
-	if (process.env.NODE_ENV === 'test' && !testOverrideEnabled && !testListener) {
+	if (process.env.NODE_ENV === 'test' && !testOverrideEnabled) {
 		return false;
 	}
 	return true;

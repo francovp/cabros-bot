@@ -1,7 +1,8 @@
 'use strict';
 
-const { replayAlert } = require('../../src/controllers/alerts/alerts');
+const { replayAlert, batchReplayAlerts } = require('../../src/controllers/alerts/alerts');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const alertHandler = require('../../src/controllers/webhooks/handlers/alert/alert');
 const {
 	_setAuditLogListenerForTest,
 	_resetAuditLoggerForTest,
@@ -13,6 +14,8 @@ describe('Alert Replay Audit Logging (GH-740)', () => {
 	let auditEvents;
 	let origIsEnabled;
 	let origGetAlertById;
+	let origSaveReplayAttempt;
+	let origGetNotificationManager;
 
 	beforeEach(() => {
 		originalEnv = { ...process.env };
@@ -20,6 +23,9 @@ describe('Alert Replay Audit Logging (GH-740)', () => {
 		_setAuditLogListenerForTest((evt) => auditEvents.push(evt));
 		origIsEnabled = alertStorageService.isEnabled;
 		origGetAlertById = alertStorageService.getAlertById;
+		origSaveReplayAttempt = alertStorageService.saveReplayAttempt;
+		origGetNotificationManager = alertHandler.getNotificationManager;
+
 		alertStorageService.isEnabled = jest.fn(() => true);
 	});
 
@@ -28,6 +34,8 @@ describe('Alert Replay Audit Logging (GH-740)', () => {
 		_resetAuditLoggerForTest();
 		alertStorageService.isEnabled = origIsEnabled;
 		alertStorageService.getAlertById = origGetAlertById;
+		alertStorageService.saveReplayAttempt = origSaveReplayAttempt;
+		alertHandler.getNotificationManager = origGetNotificationManager;
 	});
 
 	it('audits ADMIN_ACTION on dry-run alert replay', async () => {
@@ -61,7 +69,7 @@ describe('Alert Replay Audit Logging (GH-740)', () => {
 		expect(res.status).toHaveBeenCalledWith(200);
 		expect(auditEvents.length).toBeGreaterThanOrEqual(1);
 
-		const replayAudit = auditEvents.find((e) => e.category === AUDIT_CATEGORIES.ADMIN_ACTION);
+		const replayAudit = auditEvents.find((e) => e.category === AUDIT_CATEGORIES.ADMIN_ACTION && e.action === 'alert_replay');
 		expect(replayAudit).toMatchObject({
 			stream: 'audit',
 			category: 'ADMIN_ACTION',
@@ -73,6 +81,60 @@ describe('Alert Replay Audit Logging (GH-740)', () => {
 				alertId: 'alert-123',
 				channels: ['telegram'],
 				dryRun: true,
+			}),
+		});
+	});
+
+	it('audits ADMIN_ACTION on live (non-dry-run) alert replay', async () => {
+		alertStorageService.getAlertById = jest.fn().mockResolvedValue({
+			id: 'alert-456',
+			text: 'ETH Breakout alert',
+			channels: ['telegram'],
+		});
+		alertStorageService.saveReplayAttempt = jest.fn().mockResolvedValue('replay-doc-789');
+
+		const mockNotificationManager = {
+			sendToChannels: jest.fn().mockResolvedValue([{ channel: 'telegram', success: true }]),
+		};
+		alertHandler.getNotificationManager = jest.fn(() => mockNotificationManager);
+
+		const req = {
+			params: { alertId: 'alert-456' },
+			body: {
+				channels: ['telegram'],
+				dryRun: false,
+			},
+			headers: {
+				'x-idempotency-key': 'idemp-replay-live-1',
+				'x-api-key': 'admin-key',
+			},
+			requestId: 'req-replay-live-1',
+			ip: '127.0.0.1',
+		};
+		const res = {
+			status: jest.fn().mockReturnThis(),
+			json: jest.fn(),
+		};
+
+		const handler = replayAlert();
+		await handler(req, res);
+
+		expect(res.status).toHaveBeenCalledWith(200);
+		expect(auditEvents.length).toBeGreaterThanOrEqual(1);
+
+		const replayAudit = auditEvents.find((e) => e.category === AUDIT_CATEGORIES.ADMIN_ACTION && e.action === 'alert_replay');
+		expect(replayAudit).toMatchObject({
+			stream: 'audit',
+			category: 'ADMIN_ACTION',
+			action: 'alert_replay',
+			actor: 'api_key_shared',
+			result: 'success',
+			requestId: 'req-replay-live-1',
+			details: expect.objectContaining({
+				alertId: 'alert-456',
+				channels: ['telegram'],
+				dryRun: false,
+				replayId: 'replay-doc-789',
 			}),
 		});
 	});
@@ -104,7 +166,7 @@ describe('Alert Replay Audit Logging (GH-740)', () => {
 		expect(res.status).toHaveBeenCalledWith(404);
 		expect(auditEvents.length).toBeGreaterThanOrEqual(1);
 
-		const replayAudit = auditEvents.find((e) => e.category === AUDIT_CATEGORIES.ADMIN_ACTION);
+		const replayAudit = auditEvents.find((e) => e.category === AUDIT_CATEGORIES.ADMIN_ACTION && e.action === 'alert_replay');
 		expect(replayAudit).toMatchObject({
 			stream: 'audit',
 			category: 'ADMIN_ACTION',
@@ -115,6 +177,50 @@ describe('Alert Replay Audit Logging (GH-740)', () => {
 			details: expect.objectContaining({
 				alertId: 'missing-alert',
 				reason: 'alert_not_found',
+			}),
+		});
+	});
+
+	it('audits ADMIN_ACTION on batch alert replay', async () => {
+		alertStorageService.getAlertById = jest.fn().mockResolvedValue({
+			id: 'alert-b1',
+			text: 'SOL Alert',
+			channels: ['telegram'],
+		});
+
+		const req = {
+			body: {
+				alertIds: ['alert-b1'],
+				channels: ['telegram'],
+				dryRun: true,
+			},
+			headers: {
+				'x-idempotency-key': 'idemp-batch-1',
+				'x-api-key': 'admin-key',
+			},
+			requestId: 'req-batch-1',
+			ip: '127.0.0.1',
+		};
+		const res = {
+			status: jest.fn().mockReturnThis(),
+			json: jest.fn(),
+		};
+
+		const handler = batchReplayAlerts();
+		await handler(req, res);
+
+		expect(res.status).toHaveBeenCalledWith(200);
+		const batchAudit = auditEvents.find((e) => e.action === 'batch_alert_replay');
+		expect(batchAudit).toMatchObject({
+			stream: 'audit',
+			category: 'ADMIN_ACTION',
+			action: 'batch_alert_replay',
+			result: 'success',
+			requestId: 'req-batch-1',
+			details: expect.objectContaining({
+				count: 1,
+				channels: ['telegram'],
+				dryRun: true,
 			}),
 		});
 	});

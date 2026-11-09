@@ -46,9 +46,11 @@ function sendTradingControlError(res, error) {
 }
 
 function readActor(req) {
-	if (req.adminRole) return String(req.adminRole);
-	if (req.headers['x-api-key']) return 'api-key';
-	if (req.headers && req.headers.authorization) return 'firebase-bearer';
+	if (req?.adminUser?.email) return String(req.adminUser.email);
+	if (req?.adminUser?.uid) return String(req.adminUser.uid);
+	if (req?.adminRole) return String(req.adminRole);
+	if (req?.headers?.['x-api-key']) return 'api_key_shared';
+	if (req?.headers && req.headers.authorization) return 'firebase-bearer';
 	return 'unknown';
 }
 
@@ -78,7 +80,7 @@ async function postBinancePause(req, res) {
 		});
 		auditLog(
 			AUDIT_CATEGORIES.CONFIG_CHANGE,
-			actor,
+			null,
 			'pause_binance_trading',
 			{ reason },
 			'success',
@@ -104,7 +106,7 @@ async function postBinanceResume(req, res) {
 		});
 		auditLog(
 			AUDIT_CATEGORIES.CONFIG_CHANGE,
-			actor,
+			null,
 			'resume_binance_trading',
 			{ reason },
 			'success',

@@ -160,6 +160,16 @@ describe('auditLogger (GH-740)', () => {
 			expect(event.details.url).toBe('/api/admin/events');
 			expect(event.details.normal).toBe('keep?this');
 		});
+
+		it('masks personal destination segments in path and url fields', () => {
+			const details = {
+				path: '/api/preferences/telegram/123456789?api-key=test',
+				url: '/api/preferences/whatsapp/120363422033474991@g.us',
+			};
+			const event = auditLog(AUDIT_CATEGORIES.AUTH_FAILURE, 'actor', 'action', details, 'failure');
+			expect(event.details.path).toBe('/api/preferences/telegram/:redacted');
+			expect(event.details.url).toBe('/api/preferences/whatsapp/:redacted');
+		});
 	});
 
 	describe('feature gating & environment controls', () => {
@@ -179,6 +189,17 @@ describe('auditLogger (GH-740)', () => {
 			process.env.NODE_ENV = 'test';
 			const consoleSpy = jest.spyOn(console, 'info').mockImplementation(() => {});
 			auditLog(AUDIT_CATEGORIES.ORDER_SUBMITTED, 'actor', 'action', {}, 'success');
+			expect(consoleSpy).not.toHaveBeenCalled();
+			consoleSpy.mockRestore();
+		});
+
+		it('does not emit to console during NODE_ENV=test even if listener is registered', () => {
+			process.env.NODE_ENV = 'test';
+			const listener = jest.fn();
+			_setAuditLogListenerForTest(listener);
+			const consoleSpy = jest.spyOn(console, 'info').mockImplementation(() => {});
+			auditLog(AUDIT_CATEGORIES.ORDER_SUBMITTED, 'actor', 'action', {}, 'success');
+			expect(listener).toHaveBeenCalled();
 			expect(consoleSpy).not.toHaveBeenCalled();
 			consoleSpy.mockRestore();
 		});

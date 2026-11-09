@@ -377,8 +377,24 @@ function validateBinanceTradingAccess(req, res, next) {
 		return requestDeadline.guard(req, res, next);
 	}
 	if (suppliedApiKey === undefined || suppliedApiKey === '') {
+		auditLog(
+			AUDIT_CATEGORIES.AUTH_FAILURE,
+			'anonymous',
+			'validate_binance_trading_api_key',
+			{ reason: 'missing_api_key', path: req.originalUrl || req.url },
+			'failure',
+			req,
+		);
 		return sendErrorFrom(res, 401, { error: 'Unauthorized: Missing API key' });
 	}
+	auditLog(
+		AUDIT_CATEGORIES.AUTH_FAILURE,
+		'anonymous',
+		'validate_binance_trading_api_key',
+		{ reason: 'invalid_api_key', path: req.originalUrl || req.url },
+		'failure',
+		req,
+	);
 	return sendErrorFrom(res, 403, { error: 'Forbidden: Invalid API key' });
 }
 
