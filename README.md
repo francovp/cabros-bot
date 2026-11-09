@@ -961,6 +961,17 @@ Every protected `/api` response (success and throttled) carries the standard `X-
 
 Dedicated limits use independent per-endpoint buckets keyed by the existing API-key hash and trusted client IP. Heavy routes are expanded analysis, market scanner, symbol analysis, and news monitor; trading covers Binance order reads, writes, and previews; standard covers volume-confirmation; light covers `/api/status` and `/api/capabilities`. All webhook and news-monitor ingest requests also share an aggregate 1,000-request bucket per `RATE_LIMIT_WINDOW_MS`; mapped webhook tiers enforce both limits. Alert and message ingest use the aggregate bucket without an additional tier. Other routes use `RATE_LIMIT_WINDOW_MS` and `RATE_LIMIT_MAX`. Throttled (`429`) responses include the `Retry-After` header and the positive `retryAfterSeconds` field in the standard retryable `RATE_LIMITED` error envelope. `/healthcheck`, `/ready`, `/livez`, `/readyz`, `/openapi.json`, `/docs`, and static assets are mounted before the rate limiter in `app.js` and are exempt.
 
+### Structured audit logging (#740)
+
+Structured audit logging emits compliance and operational audit records for security-sensitive operations (authentication failures, order placement/lifecycle mutations, operator config changes, and alert replays) through structured JSON logging with `stream: 'audit'`.
+
+| Variable | Default | Accepted values | Classification | Purpose |
+|---|---|---|---|---|
+| `ENABLE_AUDIT_LOGGING` | `true` | `true`, `false` | Environment-only (security control) | Master switch for structured security audit events. Set strictly to `'false'` to disable. Excluded from Remote Config. |
+| `AUDIT_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` | Environment-only | Console log level at which audit events are emitted (defaults to `info`). |
+
+Audit records preserve sensitive data hygiene by masking client IPs (`a.b.c.x`, `loopback`, `ipv6-redacted`), redacting API keys and bearer tokens, stripping URL query strings containing credentials, and masking personal destination segments (`/api/preferences/:channel/:chatId`).
+
 ## Architecture Overview
 
 ```
