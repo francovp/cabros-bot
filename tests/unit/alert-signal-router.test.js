@@ -16,6 +16,11 @@ jest.mock('../../src/services/trading/BinanceOrderService', () => ({
 	getConfig: () => mockConfig,
 }));
 
+const mockRecordOutcome = jest.fn();
+jest.mock('../../src/services/trading/autoTradeOutcomeRecorder', () => ({
+	recordAutoTradeOutcome: (...args) => mockRecordOutcome(...args),
+}));
+
 jest.mock('../../src/services/monitoring/SentryService', () => ({
 	captureRuntimeError: jest.fn(),
 	captureExternalFailure: jest.fn(),
@@ -65,6 +70,8 @@ beforeEach(() => {
 	mockPlaceOrder.mockReset();
 	mockReserveAutoTrade.mockReset();
 	mockFinishAutoTrade.mockReset();
+	mockRecordOutcome.mockReset();
+	mockRecordOutcome.mockResolvedValue(undefined);
 	mockReserveAutoTrade.mockResolvedValue({ state: 'reserved' });
 	mockFinishAutoTrade.mockResolvedValue(true);
 	mockPlaceOrder.mockResolvedValue({
@@ -482,5 +489,38 @@ describe('routeAlertToOrder', () => {
 				errorCode: 'BINANCE_ORDER_STATUS_UNKNOWN',
 			}),
 		);
+	});
+	describe('post-submit outcome recording (#1494)', () => {
+		it('records a submitted outcome after the reservation is finished', async () => {
+			enableLiveAutoTrade();
+			const reservation = { state: 'reserved', id: 'res-1' };
+			mockReserveAutoTrade.mockResolvedValueOnce(reservation);
+			mockPlaceOrder.mockResolvedValue({ success: true, dryRun: false, environment: 'live', order: { orderId: 9 } });
+			await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), signalId: 'sig-1', requestId: 'r' });
+			await waitForBackgroundTasks();
+			expect(mockRecordOutcome).toHaveBeenCalledTimes(1);
+			expect(mockRecordOutcome).toHaveBeenCalledWith(expect.objectContaining({
+				status: 'submitted', reservation, signalId: 'sig-1',
+			}));
+		});
+
+		it.each([
+			['BINANCE_ORDER_STATUS_UNKNOWN', 'unknown'],
+			['BINANCE_ORDER_REJECTED', 'failed'],
+		])('records %s as %s', async (code, status) => {
+			enableLiveAutoTrade();
+			mockPlaceOrder.mockRejectedValueOnce(Object.assign(new Error('e'), { code }));
+			await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), signalId: 'sig-2', requestId: 'r' });
+			await waitForBackgroundTasks();
+			expect(mockRecordOutcome).toHaveBeenCalledTimes(1);
+			expect(mockRecordOutcome).toHaveBeenCalledWith(expect.objectContaining({ status }));
+		});
+
+		it('does not record anything for dry-run orders', async () => {
+			process.env.ENABLE_AUTO_TRADE = 'true';
+			await routeAlertToOrder({ alert: buyAlert(), parsed: buyParsed(), requestId: 'r' });
+			await waitForBackgroundTasks();
+			expect(mockRecordOutcome).not.toHaveBeenCalled();
+		});
 	});
 });
