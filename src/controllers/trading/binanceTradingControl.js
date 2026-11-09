@@ -8,6 +8,7 @@ const {
 const {
 	BinanceOrderServiceError,
 } = require('../../services/trading/BinanceOrderService');
+const { auditLog, AUDIT_CATEGORIES } = require('../../lib/auditLogger');
 
 function sendTradingControlError(res, error) {
 	if (error instanceof TradingControlError) {
@@ -45,9 +46,11 @@ function sendTradingControlError(res, error) {
 }
 
 function readActor(req) {
-	if (req.adminRole) return String(req.adminRole);
-	if (req.headers['x-api-key']) return 'api-key';
-	if (req.headers && req.headers.authorization) return 'firebase-bearer';
+	if (req?.adminUser?.email) return String(req.adminUser.email);
+	if (req?.adminUser?.uid) return String(req.adminUser.uid);
+	if (req?.adminRole) return String(req.adminRole);
+	if (req?.headers?.['x-api-key']) return 'api_key_shared';
+	if (req?.headers && req.headers.authorization) return 'firebase-bearer';
 	return 'unknown';
 }
 
@@ -69,10 +72,20 @@ function buildStatePayload(snapshot) {
 
 async function postBinancePause(req, res) {
 	try {
+		const reason = tradingControlService.readReason(req.body);
+		const actor = readActor(req);
 		const snapshot = await tradingControlService.pause({
-			actor: readActor(req),
-			reason: tradingControlService.readReason(req.body),
+			actor,
+			reason,
 		});
+		auditLog(
+			AUDIT_CATEGORIES.CONFIG_CHANGE,
+			null,
+			'pause_binance_trading',
+			{ reason },
+			'success',
+			req,
+		);
 		return res.status(200).json({
 			success: true,
 			action: 'pause',
@@ -85,10 +98,20 @@ async function postBinancePause(req, res) {
 
 async function postBinanceResume(req, res) {
 	try {
+		const reason = tradingControlService.readReason(req.body);
+		const actor = readActor(req);
 		const snapshot = await tradingControlService.resume({
-			actor: readActor(req),
-			reason: tradingControlService.readReason(req.body),
+			actor,
+			reason,
 		});
+		auditLog(
+			AUDIT_CATEGORIES.CONFIG_CHANGE,
+			null,
+			'resume_binance_trading',
+			{ reason },
+			'success',
+			req,
+		);
 		return res.status(200).json({
 			success: true,
 			action: 'resume',
