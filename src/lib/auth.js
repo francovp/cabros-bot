@@ -4,6 +4,7 @@ const API_KEY_COMPARISON_LENGTH = 4096;
 const sentryService = require('../services/monitoring/SentryService');
 const { isProductionLikeEnvironment, isPreviewEnvironment } = require('./deploymentEnvironment');
 const { sendErrorFrom } = require('./errorEnvelope');
+const { auditLog, AUDIT_CATEGORIES, stripQueryFromPath } = require('./auditLogger');
 
 const QUERY_DEPRECATION_FLAG_KEY = '__cabrosApiKeyQueryDeprecationWarned';
 
@@ -121,10 +122,26 @@ function validateApiKey(req, res, next) {
 	const apiKey = req.headers['x-api-key'] || req.query['api-key'];
 
 	if (!apiKey) {
+		auditLog(
+			AUDIT_CATEGORIES.AUTH_FAILURE,
+			'anonymous',
+			'validate_api_key',
+			{ reason: 'missing_api_key', path: stripQueryFromPath(req.originalUrl || req.url) },
+			'failure',
+			req,
+		);
 		return sendErrorFrom(res, 401, { error: 'Unauthorized: Missing API key' });
 	}
 
 	if (!isValidApiKey(req)) {
+		auditLog(
+			AUDIT_CATEGORIES.AUTH_FAILURE,
+			'anonymous',
+			'validate_api_key',
+			{ reason: 'invalid_api_key', path: stripQueryFromPath(req.originalUrl || req.url) },
+			'failure',
+			req,
+		);
 		return sendErrorFrom(res, 403, { error: 'Forbidden: Invalid API key' });
 	}
 

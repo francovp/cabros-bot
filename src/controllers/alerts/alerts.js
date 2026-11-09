@@ -12,6 +12,7 @@ const { VALID_SIGNAL_CLASSES } = require('../../lib/validation');
 const { sendError } = require('../../lib/errorEnvelope');
 const { isFirestoreErrorCategory } = require('../../services/storage/firestoreErrorCategories');
 const { isRecognisedDryRunValue, resolveDryRun } = require('../../lib/dryRunRequest');
+const { auditLog, AUDIT_CATEGORIES } = require('../../lib/auditLogger');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -965,6 +966,14 @@ function replayAlert(botOrGetter) {
 
 			const storedAlert = await alertStorageService.getAlertById(alertId);
 			if (!storedAlert) {
+				auditLog(
+					AUDIT_CATEGORIES.ADMIN_ACTION,
+					null,
+					'alert_replay',
+					{ alertId, reason: 'alert_not_found' },
+					'failure',
+					req,
+				);
 				return sendErrorFrom(res, 404, {
 					error: 'Alert not found',
 					code: 'NOT_FOUND',
@@ -984,6 +993,9 @@ function replayAlert(botOrGetter) {
 
 			const storedChannelRouting = buildStoredChannelRouting(storedAlert, storedTelegramThreadId);
 
+			const reEnrichRequested = (req.query && (req.query.reEnrich === 'true' || req.query.reEnrich === true))
+				|| (req.body && typeof req.body === 'object' && (req.body.reEnrich === 'true' || req.body.reEnrich === true));
+
 			if (dryRun) {
 				console.debug('[AlertsController] Replay dry-run: skipping delivery and persistence for alert', alertId);
 				const channelRouting = buildDryRunChannelRouting(storedAlert, storedTelegramThreadId, channels);
@@ -992,6 +1004,19 @@ function replayAlert(botOrGetter) {
 					.update(idempotencyKey.trim())
 					.digest('hex')
 					.slice(0, 12);
+				auditLog(
+					AUDIT_CATEGORIES.ADMIN_ACTION,
+					null,
+					'alert_replay',
+					{
+						alertId,
+						channels,
+						dryRun: true,
+						reEnrich: Boolean(reEnrichRequested),
+					},
+					'success',
+					req,
+				);
 				return res.status(200).json({
 					success: true,
 					dryRun: true,
@@ -1012,9 +1037,6 @@ function replayAlert(botOrGetter) {
 				const bot = typeof botOrGetter === 'function' ? botOrGetter() : botOrGetter || null;
 				notificationManager = await alertHandler.getOrInitializeNotificationManager(bot);
 			}
-
-			const reEnrichRequested = (req.query && (req.query.reEnrich === 'true' || req.query.reEnrich === true))
-				|| (req.body && typeof req.body === 'object' && (req.body.reEnrich === 'true' || req.body.reEnrich === true));
 
 			let reEnriched = false;
 			let newEnrichmentData = null;
@@ -1103,6 +1125,30 @@ function replayAlert(botOrGetter) {
 				responseBody.originalEnrichment = storedAlert.enrichmentData || null;
 				responseBody.reEnrichedData = reEnriched ? newEnrichmentData : null;
 			}
+
+			const successCount = Array.isArray(results) ? results.filter((r) => r && r.success === true).length : 0;
+			const totalChannels = Array.isArray(results) ? results.length : channels.length;
+			const failureCount = totalChannels - successCount;
+			const auditResult = successCount === totalChannels && totalChannels > 0
+				? 'success'
+				: (successCount > 0 ? 'partial_success' : 'failure');
+
+			auditLog(
+				AUDIT_CATEGORIES.ADMIN_ACTION,
+				null,
+				'alert_replay',
+				{
+					alertId,
+					channels,
+					dryRun: false,
+					reEnrich: Boolean(reEnrichRequested),
+					replayId,
+					successCount,
+					failureCount,
+				},
+				auditResult,
+				req,
+			);
 
 			return res.status(200).json(responseBody);
 		});
@@ -1307,6 +1353,27 @@ function batchReplayAlerts(botOrGetter) {
 					}
 				}
 			}
+
+			const successCount = alertResults.filter((r) => r.success).length;
+			const failureCount = alertResults.length - successCount;
+			const auditResult = successCount === alertResults.length
+				? 'success'
+				: (successCount > 0 ? 'partial_success' : 'failure');
+
+			auditLog(
+				AUDIT_CATEGORIES.ADMIN_ACTION,
+				null,
+				'batch_alert_replay',
+				{
+					count: uniqueAlertIds.length,
+					successCount,
+					failureCount,
+					channels,
+					dryRun: Boolean(dryRun),
+				},
+				auditResult,
+				req,
+			);
 
 			if (dryRun) {
 				return res.status(200).json({
