@@ -15,6 +15,7 @@ const {
 } = require('./auth');
 const requestDeadline = require('./requestDeadline');
 const { sendErrorFrom } = require('./errorEnvelope');
+const { auditLog, AUDIT_CATEGORIES } = require('./auditLogger');
 
 const ADMIN_VIEWER = 'admin.viewer';
 const ADMIN_OPERATOR = 'admin.operator';
@@ -240,8 +241,24 @@ async function validateAdminAccess(req, res, next) {
 			return requestDeadline.guard(req, res, next);
 		}
 		if (suppliedApiKey !== undefined) {
+			auditLog(
+				AUDIT_CATEGORIES.AUTH_FAILURE,
+				'anonymous',
+				'validate_admin_api_key',
+				{ reason: 'invalid_api_key', path: req.originalUrl || req.url },
+				'failure',
+				req,
+			);
 			return sendErrorFrom(res, 403, { error: 'Forbidden: Invalid API key' });
 		}
+		auditLog(
+			AUDIT_CATEGORIES.AUTH_FAILURE,
+			'anonymous',
+			'validate_admin_access',
+			{ reason: 'missing_api_key', path: req.originalUrl || req.url },
+			'failure',
+			req,
+		);
 		return sendErrorFrom(res, 401, { error: 'Unauthorized: Missing API key' });
 	}
 	const expiredLegacyQueryKey = !isAdminApiKeyScoped()
@@ -291,16 +308,48 @@ async function validateAdminAccess(req, res, next) {
 			};
 			req.user = req.adminUser;
 			if (req.adminRole) return requestDeadline.guard(req, res, next);
+			auditLog(
+				AUDIT_CATEGORIES.AUTH_FAILURE,
+				req.adminUser?.email || req.adminUser?.uid || 'anonymous',
+				'verify_admin_role',
+				{ reason: 'admin_role_required', path: req.originalUrl || req.url },
+				'failure',
+				req,
+			);
 			return sendErrorFrom(res, 403, { error: 'Forbidden', code: 'ADMIN_ROLE_REQUIRED' });
 		} catch (error) {
+			auditLog(
+				AUDIT_CATEGORIES.AUTH_FAILURE,
+				'anonymous',
+				'verify_firebase_token',
+				{ reason: 'invalid_token', path: req.originalUrl || req.url },
+				'failure',
+				req,
+			);
 			return sendErrorFrom(res, 401, { error: 'Unauthorized', code: 'ADMIN_AUTH_INVALID' });
 		}
 	}
 
 	if (suppliedApiKey !== undefined) {
+		auditLog(
+			AUDIT_CATEGORIES.AUTH_FAILURE,
+			'anonymous',
+			'validate_admin_api_key',
+			{ reason: 'invalid_api_key', path: req.originalUrl || req.url },
+			'failure',
+			req,
+		);
 		return sendErrorFrom(res, 403, { error: 'Forbidden: Invalid API key' });
 	}
 
+	auditLog(
+		AUDIT_CATEGORIES.AUTH_FAILURE,
+		'anonymous',
+		'validate_admin_access',
+		{ reason: 'missing_credentials', path: req.originalUrl || req.url },
+		'failure',
+		req,
+	);
 	return sendErrorFrom(res, 401, { error: 'Unauthorized', code: 'ADMIN_AUTH_REQUIRED' });
 }
 

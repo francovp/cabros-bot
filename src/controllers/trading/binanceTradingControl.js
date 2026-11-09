@@ -8,6 +8,7 @@ const {
 const {
 	BinanceOrderServiceError,
 } = require('../../services/trading/BinanceOrderService');
+const { auditLog, AUDIT_CATEGORIES } = require('../../lib/auditLogger');
 
 function sendTradingControlError(res, error) {
 	if (error instanceof TradingControlError) {
@@ -69,10 +70,20 @@ function buildStatePayload(snapshot) {
 
 async function postBinancePause(req, res) {
 	try {
+		const reason = tradingControlService.readReason(req.body);
+		const actor = readActor(req);
 		const snapshot = await tradingControlService.pause({
-			actor: readActor(req),
-			reason: tradingControlService.readReason(req.body),
+			actor,
+			reason,
 		});
+		auditLog(
+			AUDIT_CATEGORIES.CONFIG_CHANGE,
+			actor,
+			'pause_binance_trading',
+			{ reason },
+			'success',
+			req,
+		);
 		return res.status(200).json({
 			success: true,
 			action: 'pause',
@@ -85,10 +96,20 @@ async function postBinancePause(req, res) {
 
 async function postBinanceResume(req, res) {
 	try {
+		const reason = tradingControlService.readReason(req.body);
+		const actor = readActor(req);
 		const snapshot = await tradingControlService.resume({
-			actor: readActor(req),
-			reason: tradingControlService.readReason(req.body),
+			actor,
+			reason,
 		});
+		auditLog(
+			AUDIT_CATEGORIES.CONFIG_CHANGE,
+			actor,
+			'resume_binance_trading',
+			{ reason },
+			'success',
+			req,
+		);
 		return res.status(200).json({
 			success: true,
 			action: 'resume',

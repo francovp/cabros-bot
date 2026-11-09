@@ -3,6 +3,7 @@
 const admin = require('firebase-admin');
 const { initializeFirebaseAdminApp } = require('../../../../services/storage/firebaseAdminCredentials');
 const { isFirestoreConfigured } = require('../../../../services/storage/firestoreConfig');
+const { auditLog, AUDIT_CATEGORIES } = require('../../../../lib/auditLogger');
 
 const COLLECTION_NAME = 'newsMonitorPause';
 const DOC_ID = 'state';
@@ -229,6 +230,15 @@ async function postPauseNewsMonitor(req, res) {
 
 	const state = await pauseNewsMonitor({ reason });
 
+	auditLog(
+		AUDIT_CATEGORIES.CONFIG_CHANGE,
+		null,
+		'pause_news_monitor',
+		{ reason: state.reason },
+		'success',
+		req,
+	);
+
 	return res.status(200).json({
 		message: 'News monitor analysis paused',
 		paused: state.paused,
@@ -239,6 +249,15 @@ async function postPauseNewsMonitor(req, res) {
 
 async function postResumeNewsMonitor(req, res) {
 	const result = await resumeNewsMonitor();
+
+	auditLog(
+		AUDIT_CATEGORIES.CONFIG_CHANGE,
+		null,
+		'resume_news_monitor',
+		{},
+		'success',
+		req,
+	);
 
 	return res.status(200).json({
 		message: 'News monitor analysis resumed',

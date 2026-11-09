@@ -13,10 +13,27 @@ const { binanceOrderAuditService } = require('../../services/trading/BinanceOrde
 const { tradeLedgerService } = require('../../services/trading/TradeLedgerService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const autoTradeReservationService = require('../../services/trading/AutoTradeReservationService');
+const { auditLog, AUDIT_CATEGORIES } = require('../../lib/auditLogger');
 
 async function postBinanceOrder(req, res) {
 	const startTime = Date.now();
 	const idempotencyKey = getIdempotencyKey(req);
+	auditLog(
+		AUDIT_CATEGORIES.ORDER_SUBMITTED,
+		null,
+		'binance_order',
+		{
+			symbol: req.body?.symbol,
+			side: req.body?.side,
+			type: req.body?.type,
+			quantity: req.body?.quantity ?? null,
+			quoteOrderQty: req.body?.quoteOrderQty ?? null,
+			price: req.body?.price ?? null,
+			dryRun: Boolean(req.body?.dryRun),
+		},
+		'submitted',
+		req,
+	);
 	try {
 		const result = await binanceOrderService.placeOrder(req.body, {
 			idempotencyKey,
@@ -35,6 +52,24 @@ async function postBinanceOrder(req, res) {
 		} catch {
 			// Audit logging is best effort; never turn a confirmed order into a false failure.
 		}
+
+		auditLog(
+			AUDIT_CATEGORIES.ORDER_COMPLETED,
+			null,
+			'binance_order',
+			{
+				symbol: resultOrder?.symbol || resultOrderList?.symbol || req.body?.symbol,
+				side: resultOrder?.side || req.body?.side,
+				type: resultOrder?.type || req.body?.type,
+				status: result.dryRun ? 'dry_run' : (resultOrder?.status || resultOrderList?.listOrderStatus || 'COMPLETED'),
+				binanceOrderId: resultOrder?.orderId ?? resultOrderList?.orderListId ?? null,
+				clientOrderId: resultOrder?.clientOrderId ?? resultOrderList?.listClientOrderId ?? null,
+				dryRun: Boolean(result.dryRun),
+				processingMs,
+			},
+			'success',
+			req,
+		);
 
 		binanceOrderAuditService.recordMutation({
 			req,
@@ -98,6 +133,23 @@ async function postBinanceOrder(req, res) {
 			|| error.listClientOrderId
 			|| req.body?.clientOrderId
 			|| (req.body?.type !== 'BRACKET_LIMIT' && idempotencyKey ? deriveClientOrderId(idempotencyKey, req.body) : null);
+
+		auditLog(
+			AUDIT_CATEGORIES.ORDER_REJECTED,
+			null,
+			'binance_order',
+			{
+				symbol: req.body?.symbol,
+				side: req.body?.side || null,
+				type: req.body?.type || null,
+				errorCode: error.code || 'BINANCE_ORDER_FAILED',
+				error: error.message || String(error),
+				dryRun: Boolean(req.body?.dryRun),
+				processingMs,
+			},
+			'rejected',
+			req,
+		);
 
 		if (error instanceof BinanceOrderRequestError || error instanceof BinanceOrderServiceError) {
 			console.warn('[BinanceOrdersController] order rejected', { code: error.code });
