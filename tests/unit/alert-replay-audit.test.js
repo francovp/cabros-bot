@@ -219,6 +219,50 @@ describe('Alert Replay Audit Logging (GH-740)', () => {
 			requestId: 'req-batch-1',
 			details: expect.objectContaining({
 				count: 1,
+				successCount: 1,
+				failureCount: 0,
+				channels: ['telegram'],
+				dryRun: true,
+			}),
+		});
+	});
+
+	it('audits batch_alert_replay with failure when all requested alerts fail or are missing', async () => {
+		alertStorageService.getAlertById = jest.fn().mockResolvedValue(null);
+
+		const req = {
+			body: {
+				alertIds: ['missing-alert-1', 'missing-alert-2'],
+				channels: ['telegram'],
+				dryRun: true,
+			},
+			headers: {
+				'x-idempotency-key': 'idemp-batch-2',
+				'x-api-key': 'admin-key',
+			},
+			requestId: 'req-batch-2',
+			ip: '127.0.0.1',
+		};
+		const res = {
+			status: jest.fn().mockReturnThis(),
+			json: jest.fn(),
+		};
+
+		const handler = batchReplayAlerts();
+		await handler(req, res);
+
+		expect(res.status).toHaveBeenCalledWith(200);
+		const batchAudit = auditEvents.find((e) => e.requestId === 'req-batch-2');
+		expect(batchAudit).toMatchObject({
+			stream: 'audit',
+			category: 'ADMIN_ACTION',
+			action: 'batch_alert_replay',
+			result: 'failure',
+			requestId: 'req-batch-2',
+			details: expect.objectContaining({
+				count: 2,
+				successCount: 0,
+				failureCount: 2,
 				channels: ['telegram'],
 				dryRun: true,
 			}),

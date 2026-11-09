@@ -60,7 +60,7 @@ describe('auditLogger (GH-740)', () => {
 				details: { symbol: 'BTCUSDT', side: 'BUY', type: 'MARKET', dryRun: false },
 				result: 'success',
 				requestId: 'req-test-123',
-				ip: '192.168.1.50',
+				ip: '192.168.1.x',
 			});
 			expect(typeof event.timestamp).toBe('string');
 			expect(new Date(event.timestamp).toISOString()).toBe(event.timestamp);
@@ -87,8 +87,17 @@ describe('auditLogger (GH-740)', () => {
 				details: { alertId: 'alert-abc' },
 				result: 'success',
 				requestId: 'req-xyz-987',
-				ip: '10.0.0.1',
+				ip: '10.0.0.x',
 			});
+		});
+
+		it('masks client IP addresses according to privacy invariants', () => {
+			expect(auditLog(AUDIT_CATEGORIES.ADMIN_ACTION, null, 'act', {}, 'ok', { ip: '203.0.113.42' }).ip).toBe('203.0.113.x');
+			expect(auditLog(AUDIT_CATEGORIES.ADMIN_ACTION, null, 'act', {}, 'ok', { ip: '::1' }).ip).toBe('loopback');
+			expect(auditLog(AUDIT_CATEGORIES.ADMIN_ACTION, null, 'act', {}, 'ok', { ip: '2001:db8::1' }).ip).toBe('ipv6-redacted');
+			expect(auditLog(AUDIT_CATEGORIES.ADMIN_ACTION, null, 'act', {}, 'ok', { ip: '::ffff:192.168.1.1' }).ip).toBe('192.168.1.x');
+			expect(auditLog(AUDIT_CATEGORIES.ADMIN_ACTION, null, 'act', {}, 'ok', { ip: '' }).ip).toBeNull();
+			expect(auditLog(AUDIT_CATEGORIES.ADMIN_ACTION, null, 'act', {}, 'ok', {}).ip).toBeNull();
 		});
 	});
 

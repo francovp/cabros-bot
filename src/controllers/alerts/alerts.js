@@ -1345,16 +1345,24 @@ function batchReplayAlerts(botOrGetter) {
 				}
 			}
 
+			const successCount = alertResults.filter((r) => r.success).length;
+			const failureCount = alertResults.length - successCount;
+			const auditResult = successCount === alertResults.length
+				? 'success'
+				: (successCount > 0 ? 'partial_success' : 'failure');
+
 			auditLog(
 				AUDIT_CATEGORIES.ADMIN_ACTION,
 				null,
 				'batch_alert_replay',
 				{
 					count: uniqueAlertIds.length,
+					successCount,
+					failureCount,
 					channels,
 					dryRun: Boolean(dryRun),
 				},
-				'success',
+				auditResult,
 				req,
 			);
 

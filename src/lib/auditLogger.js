@@ -133,10 +133,31 @@ function resolveRequestId(req) {
 	return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
 }
 
+const IPV4_PATTERN = /^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/;
+
+function sanitizeClientIp(ip) {
+	if (typeof ip !== 'string' || ip.trim().length === 0) {
+		return null;
+	}
+	const candidate = ip.trim();
+	const stripped = candidate.replace(/^::ffff:/, '');
+	const match = stripped.match(IPV4_PATTERN);
+	if (match) {
+		return `${match[1]}.x`;
+	}
+	if (stripped === '::1') {
+		return 'loopback';
+	}
+	if (stripped.includes(':')) {
+		return 'ipv6-redacted';
+	}
+	return 'unknown';
+}
+
 function resolveIp(req) {
 	if (!req || typeof req !== 'object') return null;
 	const candidate = req.ip || (req.socket && req.socket.remoteAddress) || (req.connection && req.connection.remoteAddress);
-	return typeof candidate === 'string' && candidate.trim() ? candidate.trim() : null;
+	return sanitizeClientIp(candidate);
 }
 
 /**
@@ -240,6 +261,7 @@ module.exports = {
 	AUDIT_CATEGORIES,
 	isAuditLoggingEnabled,
 	stripQueryFromPath,
+	sanitizeClientIp,
 	_setAuditLoggingEnabledForTest,
 	_setAuditLogListenerForTest,
 	_resetAuditLoggerForTest,
