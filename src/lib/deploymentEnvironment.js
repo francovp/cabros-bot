@@ -3,10 +3,34 @@ function isRailwayPreviewEnvironment(env) {
 		|| /(?:^|[-_ ])pr(?:[-_ ]|$)/i.test(env.RAILWAY_ENVIRONMENT_NAME || '');
 }
 
+// OpenClaw PR previews (host openclaw.tail5e4271.ts.net) are not Render PR
+// previews: they carry their own preview markers and IS_PULL_REQUEST without
+// RENDER. They previously classified as production-like, so previews started
+// Telegram polling and shared the production WEBHOOK_API_KEY (#1296/#1286).
+function isOpenClawPreviewEnvironment(env) {
+	const name = env.OPENCLAW_PREVIEW_NAME || env.OPENCLAW_BRANCH_NAME || '';
+	if (typeof name === 'string' && /(?:^|[-_ ])pr[-_ ]?\d+/i.test(name)) {
+		return true;
+	}
+	if (env.OPENCLAW_PREVIEW === 'true' || env.OPENCLAW_IS_PREVIEW === 'true') {
+		return true;
+	}
+	// OpenClaw deployments set a service/host marker alongside the generic
+	// pull-request flag. A bare IS_PULL_REQUEST without any platform marker
+	// is deliberately not treated as OpenClaw evidence (avoid classifying a
+	// misconfigured production host as preview).
+	const hasOpenClawMarker = typeof env.OPENCLAW_HOST === 'string' && env.OPENCLAW_HOST.length > 0;
+	if (env.IS_PULL_REQUEST === 'true' && env.RENDER !== 'true' && hasOpenClawMarker) {
+		return true;
+	}
+	return false;
+}
+
 function isPreviewEnvironment(env = process.env) {
 	return env.VERCEL_ENV === 'preview'
 		|| (env.RENDER === 'true' && env.IS_PULL_REQUEST === 'true')
-		|| isRailwayPreviewEnvironment(env);
+		|| isRailwayPreviewEnvironment(env)
+		|| isOpenClawPreviewEnvironment(env);
 }
 
 function isProductionLikeEnvironment(env = process.env) {

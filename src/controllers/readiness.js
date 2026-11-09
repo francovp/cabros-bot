@@ -1,7 +1,6 @@
 'use strict';
 
 const { createReadinessService } = require('../lib/readiness');
-const { redactString } = require('../lib/logging');
 
 let cachedService = null;
 let cachedOverrides = undefined;
@@ -55,6 +54,7 @@ async function handleDependencyReadiness(req, res, options) {
 			status: bootstrap.status,
 			components: bootstrap.components,
 			bootstrapReady: bootstrap.ready === true,
+			errorCode: bootstrap.errorCode || null,
 		}, body)
 		: body);
 
@@ -67,17 +67,72 @@ async function handleDependencyReadiness(req, res, options) {
 			failClosed,
 			checkedAt: new Date(startedAt).toISOString(),
 			latencyMs: Date.now() - startedAt,
-			dependencies: report.dependencies,
+			dependencies: projectDependenciesForPublic(report.dependencies),
 		}));
 	} catch (error) {
+		console.error('[readiness] collect failed:', error && error.message ? error.message : error);
 		respond(failClosed ? 503 : 200, withBootstrap({
 			ready: false,
 			failClosed,
 			checkedAt: new Date(startedAt).toISOString(),
 			latencyMs: Date.now() - startedAt,
-			error: redactString(error && error.message ? error.message : String(error)),
+			errorCode: 'READINESS_PROBE_FAILED',
 		}));
 	}
+}
+
+// Public `/ready` and `/healthcheck?depth=readiness` are unauthenticated:
+// dependency error strings become stable machine codes; raw provider text
+// (which can embed URLs, tokens, or Telegram descriptions) stays in logs (#1296).
+const PUBLIC_ERROR_TOKEN_KEYWORDS = new Set([
+	'timeout', 'http', 'not', 'missing', 'invalid', 'unavailable', 'unconfigured',
+	'disabled', 'failed', 'unsupported', 'uninitialized', 'precondition', 'denied',
+	'exhausted', 'circuit', 'auth', 'config', 'configured', 'key', 'model',
+	'endpoint', 'firestore', 'gemini', 'binance', 'tradingview', 'telegram',
+	'azure', 'openrouter', 'cloudflare', 'brave', 'search', 'gateway', 'provider',
+	'quota', 'connection', 'ready', 'degraded', 'skipped', 'unsuccessful',
+]);
+
+function toPublicErrorCode(errorValue) {
+	const text = typeof errorValue === 'string' ? errorValue.trim() : '';
+	if (!text) {
+		return null;
+	}
+	if (/getUpdates|terminated by other/i.test(text)) {
+		return 'TELEGRAM_POLLING_CONFLICT';
+	}
+	// Timeout markers are emitted by the probe itself and contain no provider
+	// text; pass them through verbatim.
+	if (/^timeout_after_\d+ms$/i.test(text)) {
+		return text;
+	}
+	// Only dependency-scoped tokens pass through verbatim. A bare word that is
+	// not a known token (e.g. 'boom') is provider text and must not leak.
+	if (/^[a-z0-9_]+$/i.test(text)
+		&& text.toLowerCase().split('_').some((segment) => PUBLIC_ERROR_TOKEN_KEYWORDS.has(segment))) {
+		return text;
+	}
+	return 'DEPENDENCY_PROBE_FAILED';
+}
+
+function projectDependenciesForPublic(dependencies) {
+	const sanitized = {};
+	for (const [name, dependency] of Object.entries(dependencies || {})) {
+		if (!dependency || typeof dependency !== 'object') {
+			sanitized[name] = dependency;
+			continue;
+		}
+		const projected = { ...dependency };
+		if (projected.error !== undefined) {
+			delete projected.error;
+		}
+		const errorCode = toPublicErrorCode(dependency.error);
+		if (errorCode) {
+			projected.errorCode = errorCode;
+		}
+		sanitized[name] = projected;
+	}
+	return sanitized;
 }
 
 function attachReadinessOverrides(app, overrides) {
@@ -94,4 +149,6 @@ module.exports = {
 	attachReadinessOverrides,
 	getReadinessService,
 	resetReadinessService,
+	toPublicErrorCode,
+	projectDependenciesForPublic,
 };
