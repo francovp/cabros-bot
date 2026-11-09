@@ -1,6 +1,7 @@
 'use strict';
 
 const { getChartRendererService } = require('./chartRenderer');
+const { parseTradingViewSignal } = require('../../tradingview/parseTradingViewSignal');
 
 /**
  * Resolve the chart request an alert (or direct chart request) describes.
@@ -30,6 +31,16 @@ function pickTimeframe(alert = {}) {
 	const candidates = [alert.timeframe, alert.enriched?.timeframe, alert.signalMeta?.timeframe];
 	for (const candidate of candidates) {
 		if (typeof candidate === 'string' && candidate.trim()) return candidate.trim();
+	}
+	if (typeof alert.text === 'string' && alert.text.trim()) {
+		try {
+			const parsed = parseTradingViewSignal(alert.text);
+			if (typeof parsed?.timeframe === 'string' && parsed.timeframe.trim()) {
+				return parsed.timeframe.trim();
+			}
+		} catch {
+			// Fail-open: ignore parsing failures and use fallback
+		}
 	}
 	return '1h';
 }

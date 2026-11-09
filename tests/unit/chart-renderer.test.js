@@ -262,6 +262,7 @@ describe('chartAttachment', () => {
 		expect(pickSymbol({ enriched: { symbol: 'ETHUSDT' } })).toBe('ETHUSDT');
 		expect(pickSymbol({})).toBeNull();
 		expect(pickTimeframe({ timeframe: '4h' })).toBe('4h');
+		expect(pickTimeframe({ text: 'BINANCE:BTCUSDT (4h) COMPRA' })).toBe('4h');
 		expect(pickTimeframe({})).toBe('1h');
 	});
 

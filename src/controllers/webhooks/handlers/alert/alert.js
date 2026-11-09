@@ -804,6 +804,9 @@ function postAlert(botOrGetter) {
 					const dryRunPersistence = alertStorageService.saveAlert({
 						requestId,
 						text: alert.text,
+						chartBars: alert.chartBars || null,
+						chartSymbol: alert.chartSymbol || null,
+						timeframe: alert.timeframe || parsedSignal?.timeframe || null,
 						enriched,
 						enrichmentData: alert.enriched || null,
 						tokenUsage: tokenUsageJSON,
