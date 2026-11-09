@@ -707,6 +707,114 @@ describe('EquityMarketDataService', () => {
 			expect(breakerStatus.consecutiveFailures).toBe(0);
 		});
 
+		it.each([400, 404])('does not open the provider breaker after a request-specific %i response', async (status) => {
+			configure();
+			global.fetch = jest.fn().mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				json: async () => ({ status: 'ok', close: '155.00' }),
+			}).mockImplementation(async () => ({
+				ok: false,
+				status,
+				headers: new Map(),
+				json: async () => ({ status: 'error', code: status, message: 'Symbol not found' }),
+			}));
+			await expect(EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' }))
+				.resolves.toBe(155);
+
+			for (let index = 0; index < 5; index += 1) {
+				await expect(EquityMarketDataService.getEntryPrice({ symbol: 'BADSYMBOL', exchange: 'NASDAQ' }))
+					.rejects.toMatchObject({ reason: EquityMarketDataService.REASONS.INVALID_RESPONSE });
+			}
+
+			expect(EquityMarketDataService.getCircuitBreakerStatus()).toMatchObject({
+				state: 'closed',
+				consecutiveFailures: 0,
+			});
+			expect(EquityMarketDataService.getStatus()).toMatchObject({
+				status: 'ready',
+				consecutiveFailures: 0,
+				requestsFailed: 5,
+			});
+		});
+
+		it('releases a half-open probe when local pacing times out', async () => {
+			configure();
+			process.env.CIRCUIT_BREAKER_THRESHOLD = '1';
+			process.env.CIRCUIT_BREAKER_COOLDOWN_MS = '1000';
+			global.fetch = jest.fn().mockResolvedValueOnce({
+				ok: false,
+				status: 429,
+				headers: { get: () => '60' },
+				json: async () => ({ status: 'error', code: 429, message: 'quota exceeded' }),
+			});
+
+			await expect(EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' }))
+				.rejects.toMatchObject({ reason: EquityMarketDataService.REASONS.RATE_LIMITED });
+
+			const breaker = EquityMarketDataService._getCircuitBreakerForTesting();
+			breaker.openedAt = new Date(Date.now() - 1500).toISOString();
+			await expect(EquityMarketDataService.getEntryPrice({
+				symbol: 'AAPL', exchange: 'NASDAQ', timeoutMs: 100,
+			})).rejects.toMatchObject({ reason: EquityMarketDataService.REASONS.TIMEOUT });
+
+			EquityMarketDataService._resetPacerForTesting();
+			global.fetch.mockResolvedValueOnce({
+				ok: true,
+				status: 200,
+				json: async () => ({ status: 'ok', close: '155.00' }),
+			});
+
+			await expect(EquityMarketDataService.getEntryPrice({ symbol: 'AAPL', exchange: 'NASDAQ' }))
+				.resolves.toBe(155.00);
+		});
+
+		it('does not release a half-open probe lock when a stale request admitted while closed completes with 400', async () => {
+			configure();
+			process.env.CIRCUIT_BREAKER_THRESHOLD = '1';
+			process.env.CIRCUIT_BREAKER_COOLDOWN_MS = '1000';
+
+			let resolveRequest1;
+			const request1Promise = new Promise((resolve) => {
+				resolveRequest1 = resolve;
+			});
+
+			global.fetch = jest.fn()
+				.mockImplementationOnce(() => request1Promise)
+				.mockImplementationOnce(async () => ({
+					ok: false,
+					status: 500,
+					json: async () => ({ status: 'error', code: 500, message: 'outage' }),
+				}))
+				.mockImplementationOnce(() => new Promise(() => {}));
+
+			const pendingRequest1 = EquityMarketDataService.getEntryPrice({ symbol: 'SLOW', exchange: 'NASDAQ' });
+
+			await expect(EquityMarketDataService.getEntryPrice({ symbol: 'FAIL', exchange: 'NASDAQ' }))
+				.rejects.toMatchObject({ reason: EquityMarketDataService.REASONS.UNAVAILABLE });
+
+			const breaker = EquityMarketDataService._getCircuitBreakerForTesting();
+			breaker.openedAt = new Date(Date.now() - 1500).toISOString();
+			expect(breaker.getState()).toBe('half-open');
+
+			EquityMarketDataService.getEntryPrice({ symbol: 'PROBE', exchange: 'NASDAQ' });
+			expect(breaker.isProbeInFlight).toBe(true);
+
+			resolveRequest1({
+				ok: false,
+				status: 400,
+				json: async () => ({ status: 'error', code: 400, message: 'Bad symbol' }),
+			});
+			await expect(pendingRequest1).rejects.toMatchObject({
+				reason: EquityMarketDataService.REASONS.INVALID_RESPONSE,
+			});
+
+			expect(breaker.isProbeInFlight).toBe(true);
+
+			await expect(EquityMarketDataService.getEntryPrice({ symbol: 'CONCURRENT', exchange: 'NASDAQ' }))
+				.rejects.toMatchObject({ reason: EquityMarketDataService.REASONS.CIRCUIT_BREAKER_OPEN });
+		});
+
 		it('transitions from open to half-open after cooldown and recovers to closed on successful probe', async () => {
 			configure();
 			process.env.CIRCUIT_BREAKER_THRESHOLD = '1';

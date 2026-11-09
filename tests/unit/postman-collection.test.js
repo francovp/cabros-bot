@@ -439,6 +439,27 @@ describe('Postman collection contract', () => {
 		}));
 	});
 
+	it('documents all external provider circuit breakers in the Get Status response example', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const example = JSON.parse(status.response.find((response) => response.code === 200).body);
+
+		for (const [dependency, cooldownMs] of [
+			['gemini', 60000],
+			['equityMarketData', 60000],
+			['tradingViewMcp', 600000],
+		]) {
+			expect(example.dependencies[dependency].circuitBreaker).toEqual({
+				state: 'closed',
+				consecutiveFailures: 0,
+				openedAt: null,
+				lastStateChangeAt: null,
+				failureThreshold: 5,
+				cooldownMs,
+			});
+		}
+	});
+
 	it('documents bounded startup jitter in the Get Status response example', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const status = findItem(collection.item, 'Get Status');

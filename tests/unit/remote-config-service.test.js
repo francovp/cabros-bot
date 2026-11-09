@@ -87,6 +87,21 @@ describe('RemoteConfigService', () => {
 		return { template, initServerTemplate };
 	}
 
+	it('keeps circuit breaker defaults in app code so only explicit remote values override them', () => {
+		const template = JSON.parse(fs.readFileSync(path.join(__dirname, '../../firebase-remote-config-template.json'), 'utf8'));
+		const defaults = {
+			TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD: 5,
+			TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS: 600000,
+			CIRCUIT_BREAKER_THRESHOLD: 5,
+			CIRCUIT_BREAKER_COOLDOWN_MS: 60000,
+		};
+
+		for (const [key, defaultValue] of Object.entries(defaults)) {
+			expect(remoteConfigService.PARAMETER_SCHEMA[key].defaultValue).toBe(defaultValue);
+			expect(template.parameters[key].defaultValue).toEqual({ useInAppDefault: true });
+		}
+	});
+
 	it('loads news/scanner runtime defaults without publishing startup or worker gates', async () => {
 		const template = JSON.parse(fs.readFileSync(path.join(__dirname, '../../firebase-remote-config-template.json'), 'utf8'));
 		const values = {

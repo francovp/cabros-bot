@@ -364,6 +364,7 @@ class TradingViewMcpService {
 		this.strategyResearchRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
 		this.consecutiveFailures = 0;
 		this.breakerState = 'closed';
+		this.breakerProbeInFlight = false;
 		this.breakerOpenedAt = null;
 		this.lastBreakerStateChangeAt = null;
 		this.lastAdminPageSentAt = null;
@@ -399,6 +400,7 @@ class TradingViewMcpService {
 		this.strategyResearchRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
 		this.consecutiveFailures = 0;
 		this.breakerState = 'closed';
+		this.breakerProbeInFlight = false;
 		this.breakerOpenedAt = null;
 		this.lastBreakerStateChangeAt = null;
 		this.lastAdminPageSentAt = null;
@@ -439,18 +441,32 @@ class TradingViewMcpService {
 			rawEnrichmentBudget,
 			10,
 		);
+		const getExplicitBreakerSetting = (key) => {
+			const remoteValue = remoteConfigService.getRemoteOverride?.(key);
+			if (remoteValue !== undefined) return remoteValue;
+
+			const rawEnvironmentValue = process.env[key];
+			if (rawEnvironmentValue === undefined) return undefined;
+			const parsedEnvironmentValue = Number(rawEnvironmentValue);
+			if (!Number.isSafeInteger(parsedEnvironmentValue)
+				|| parsedEnvironmentValue <= 0
+				|| runtimeConfig[key] !== parsedEnvironmentValue) {
+				return undefined;
+			}
+			return runtimeConfig[key];
+		};
 		const breakerThreshold = parseInt(
-			this.config.breakerThreshold ||
-				runtimeConfig.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD ||
-				runtimeConfig.CIRCUIT_BREAKER_THRESHOLD ||
-				process.env.CIRCUIT_BREAKER_THRESHOLD,
+			this.config.breakerThreshold
+				?? getExplicitBreakerSetting('TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD')
+				?? getExplicitBreakerSetting('CIRCUIT_BREAKER_THRESHOLD')
+				?? runtimeConfig.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD,
 			10,
 		);
 		const breakerCooldownMs = parseInt(
-			this.config.breakerCooldownMs ||
-				runtimeConfig.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS ||
-				runtimeConfig.CIRCUIT_BREAKER_COOLDOWN_MS ||
-				process.env.CIRCUIT_BREAKER_COOLDOWN_MS,
+			this.config.breakerCooldownMs
+				?? getExplicitBreakerSetting('TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS')
+				?? getExplicitBreakerSetting('CIRCUIT_BREAKER_COOLDOWN_MS')
+				?? runtimeConfig.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS,
 			10,
 		);
 		const pageCooldownMs = parseInt(
@@ -491,6 +507,7 @@ class TradingViewMcpService {
 			const openedTime = this.breakerOpenedAt ? new Date(this.breakerOpenedAt).getTime() : 0;
 			if (Date.now() - openedTime >= breakerCooldownMs) {
 				this.breakerState = 'half-open';
+				this.breakerProbeInFlight = false;
 				this.lastBreakerStateChangeAt = new Date().toISOString();
 				this._resetToolMetricsLastErrorCategory();
 			}
@@ -620,6 +637,7 @@ class TradingViewMcpService {
 
 			if (this.breakerState === 'open' || this.breakerState === 'half-open') {
 				this.breakerState = 'closed';
+				this.breakerProbeInFlight = false;
 				this.breakerOpenedAt = null;
 				this.lastBreakerStateChangeAt = new Date().toISOString();
 				this.consecutiveFailures = 0;
@@ -2392,7 +2410,10 @@ class TradingViewMcpService {
 	async _withRuntimeStatus(operation, { signal, runtimeStatusKey, shouldRecordSuccess, toolName } = {}) {
 		const runtimeStatusKeys = runtimeStatusKey ? ['runtimeStatus', runtimeStatusKey] : ['runtimeStatus'];
 
-		if (this.isBreakerOpen()) {
+		const breakerState = this.getBreakerState();
+		const canExecute = breakerState === 'closed'
+			|| (breakerState === 'half-open' && !this.breakerProbeInFlight);
+		if (!canExecute) {
 			const error = new Error('TradingView MCP circuit breaker is OPEN');
 			error.category = 'circuit_breaker_open';
 			if (toolName) {
@@ -2400,10 +2421,14 @@ class TradingViewMcpService {
 			}
 			throw error;
 		}
+		if (breakerState === 'half-open') this.breakerProbeInFlight = true;
 
 		try {
 			const result = await operation();
-			if (shouldRecordSuccess && !shouldRecordSuccess()) return result;
+			if (shouldRecordSuccess && !shouldRecordSuccess()) {
+				this.breakerProbeInFlight = false;
+				return result;
+			}
 			const timestamp = new Date().toISOString();
 			this._recordSuccess();
 			if (toolName) {
@@ -2427,6 +2452,7 @@ class TradingViewMcpService {
 		} catch (error) {
 			if (error?.category === 'request_cancelled'
 				|| (signal && signal.aborted && getAbortMessage(signal, '') === 'Job cancelled by user')) {
+				this.breakerProbeInFlight = false;
 				throw error;
 			}
 
@@ -2479,6 +2505,7 @@ class TradingViewMcpService {
 
 	_recordSuccess() {
 		this.consecutiveFailures = 0;
+		this.breakerProbeInFlight = false;
 		if (this.breakerState !== 'closed') {
 			this.breakerState = 'closed';
 			this.breakerOpenedAt = null;
@@ -2494,8 +2521,10 @@ class TradingViewMcpService {
 
 	_recordFailure(error) {
 		if (error && error.category === 'circuit_breaker_open') {
+			this.breakerProbeInFlight = false;
 			return;
 		}
+		this.breakerProbeInFlight = false;
 		this.consecutiveFailures += 1;
 		const { breakerThreshold, pageCooldownMs } = this.getConfig();
 		if (this.consecutiveFailures >= breakerThreshold) {
