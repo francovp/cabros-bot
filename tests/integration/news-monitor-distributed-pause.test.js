@@ -44,6 +44,7 @@ describe('Distributed News Monitor Pause (GH-1198 Regression)', () => {
 		process.env.ENABLE_NEWS_MONITOR = 'true';
 		process.env.ENABLE_NEWS_MONITOR_SCHEDULER = 'true';
 		process.env.NEWS_MONITOR_SCHEDULER_WORKER_ROLE = 'worker';
+		process.env.NEWS_SYMBOLS_CRYPTO = 'BTCUSDT';
 		process.env.ENABLE_FIRESTORE_NEWS_MONITOR_PAUSE = 'true';
 		process.env.NEWS_MONITOR_PAUSE_CACHE_TTL_MS = '100';
 
