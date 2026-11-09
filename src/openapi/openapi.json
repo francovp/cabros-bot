@@ -9158,7 +9158,24 @@
                 "telegram"
               ],
               "telegramChatId": "-1001234567890",
-              "requireWatchlistMatch": true
+              "requireWatchlistMatch": true,
+              "chartBars": [
+                {
+                  "open": 100,
+                  "high": 102,
+                  "low": 99,
+                  "close": 101,
+                  "volume": 10
+                },
+                {
+                  "open": 101,
+                  "high": 103,
+                  "low": 100,
+                  "close": 102,
+                  "volume": 12
+                }
+              ],
+              "chartSymbol": "BTCUSDT"
             }
           },
           "text/plain": {
@@ -13451,7 +13468,9 @@
           },
           "provider": {
             "type": "string",
-            "enum": ["builtin-raster"],
+            "enum": [
+              "builtin-raster"
+            ],
             "description": "Chart rendering backend."
           },
           "timeoutMs": {
@@ -13491,12 +13510,23 @@
             "description": "Count of chart requests skipped because the feature flag was off."
           },
           "lastErrorCategory": {
-            "type": ["string", "null"],
-            "enum": ["timeout", "render_error", "insufficient_data", null],
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "timeout",
+              "render_error",
+              "insufficient_data",
+              null
+            ],
             "description": "Sanitized category of the most recent failure."
           },
           "lastRenderedAt": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time",
             "description": "Timestamp of the most recent successful render."
           },
@@ -13504,9 +13534,15 @@
             "type": "object",
             "description": "Per-channel inline image delivery support. Discord webhooks accept only remote image URLs, so Discord always falls back to text.",
             "properties": {
-              "telegram": { "type": "boolean" },
-              "whatsapp": { "type": "boolean" },
-              "discord": { "type": "boolean" }
+              "telegram": {
+                "type": "boolean"
+              },
+              "whatsapp": {
+                "type": "boolean"
+              },
+              "discord": {
+                "type": "boolean"
+              }
             },
             "additionalProperties": false
           },
@@ -16302,6 +16338,13 @@
               "null"
             ]
           },
+          "timeframe": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Parsed chart timeframe (e.g. \"4h\") persisted alongside chartBars/chartSymbol so replay re-renders the chart with the same label instead of the 1h default."
+          },
           "signalClass": {
             "type": "string",
             "enum": [
@@ -17755,6 +17798,50 @@
           },
           "traderIntent": {
             "$ref": "#/components/schemas/TraderIntent"
+          },
+          "chartBars": {
+            "type": "array",
+            "maxItems": 60,
+            "items": {
+              "type": "object",
+              "required": [
+                "open",
+                "high",
+                "low",
+                "close"
+              ],
+              "properties": {
+                "open": {
+                  "type": "number"
+                },
+                "high": {
+                  "type": "number"
+                },
+                "low": {
+                  "type": "number"
+                },
+                "close": {
+                  "type": "number"
+                },
+                "volume": {
+                  "type": "number"
+                }
+              },
+              "additionalProperties": false
+            },
+            "description": "Optional OHLCV bars for an opt-in chart PNG attachment (ENABLE_CHART_ATTACHMENTS=true). At least 2 valid bars plus chartSymbol/symbol are required; malformed entries are dropped and the alert still delivers text-only."
+          },
+          "chartSymbol": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 20,
+            "description": "Optional symbol label for the chart PNG. Falls back to symbol, then the parsed alert symbol."
+          },
+          "symbol": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 20,
+            "description": "Optional explicit alert symbol. Also used as the chart label when chartSymbol is absent."
           }
         }
       },

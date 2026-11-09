@@ -1912,7 +1912,7 @@
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA — dry-run after budget exhausted\"\n}"
+          "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA \u2014 dry-run after budget exhausted\"\n}"
         },
         "description": "Dry-run alert delivery that does not consume the rolling 24h alert-delivery budget. Used to inspect the budget state via /api/status without sending further deliveries."
       },
@@ -1922,6 +1922,67 @@
           "status": "OK",
           "code": 200,
           "body": "{\"success\":true,\"dryRun\":true,\"results\":[],\"requestedChannels\":[\"telegram\"],\"deliveredChannels\":[],\"requestId\":\"abc-123\"}"
+        }
+      ]
+    },
+    {
+      "name": "Webhook Alert - chart attachments (opt-in)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/webhook/alert?dryRun=true",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "webhook",
+            "alert"
+          ],
+          "query": [
+            {
+              "key": "dryRun",
+              "value": "true",
+              "description": "Run validation and analysis without notification delivery, dedup mutation, or signal-outcome persistence. Does not consume the global alert budget."
+            }
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"text\": \"BINANCE:BTCUSDT broke resistance\",\n  \"chartBars\": [\n    {\n      \"open\": 100,\n      \"high\": 102,\n      \"low\": 99,\n      \"close\": 101,\n      \"volume\": 10\n    },\n    {\n      \"open\": 101,\n      \"high\": 103,\n      \"low\": 100,\n      \"close\": 102,\n      \"volume\": 12\n    }\n  ],\n  \"chartSymbol\": \"BTCUSDT\"\n}"
+        },
+        "description": "GH-799: with ENABLE_CHART_ATTACHMENTS=true, chartBars (>=2 OHLCV bars) plus chartSymbol/symbol attach a chart PNG on Telegram/WhatsApp. Malformed bars fall back to text-only delivery."
+      },
+      "response": [
+        {
+          "name": "200 OK - dryRun response",
+          "status": "OK",
+          "code": 200,
+          "body": "{\"success\":true,\"dryRun\":true,\"results\":[],\"requestedChannels\":[\"telegram\"],\"deliveredChannels\":[],\"requestId\":\"abc-123\"}"
+        }
+      ],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 OK', () => pm.response.to.have.status(200));",
+              "pm.test('delivered or dry-run ok', () => { const b = pm.response.json(); pm.expect(b.success).to.be.true; });"
+            ]
+          }
         }
       ]
     },
@@ -1954,7 +2015,7 @@
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA — budget exhausted example\"\n}"
+          "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA \u2014 budget exhausted example\"\n}"
         },
         "description": "When the rolling 24h alert-delivery budget is exhausted, alert endpoints return 200 OK with success=true (fail-open) and per-channel results carrying success=false, statusCode=429, errorCode=ALERT_BUDGET_EXCEEDED, and a budget object with the current usage. deliveredChannels is empty."
       },

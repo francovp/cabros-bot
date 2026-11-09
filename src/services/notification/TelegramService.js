@@ -413,9 +413,12 @@ class TelegramService extends NotificationChannel {
 		if (typeof this.bot.telegram.callApi !== 'function') {
 			return { success: false, error: new Error('Telegram callApi unavailable'), attemptCount: 0 };
 		}
+		// Telegraf sendPhoto uploads only InputFile-shaped values ({source}).
+		// A raw Buffer is JSON-serialized and rejected by Telegram, so wrap it.
+		const inputFile = Buffer.isBuffer(photo) ? { source: photo, filename: 'chart.png' } : photo;
 		const buildPayload = (text) => ({
 			chat_id: chatId,
-			photo,
+			photo: inputFile,
 			...(text ? { caption: text } : {}),
 			parse_mode: 'MarkdownV2',
 			...(enriched ? { disable_web_page_preview: true } : {}),

@@ -262,6 +262,7 @@ describe('chartAttachment', () => {
 		expect(pickSymbol({ enriched: { symbol: 'ETHUSDT' } })).toBe('ETHUSDT');
 		expect(pickSymbol({})).toBeNull();
 		expect(pickTimeframe({ timeframe: '4h' })).toBe('4h');
+		expect(pickTimeframe({ text: 'BINANCE:BTCUSDT (4h) COMPRA' })).toBe('4h');
 		expect(pickTimeframe({})).toBe('1h');
 	});
 
@@ -308,5 +309,46 @@ describe('chart renderer singleton', () => {
 		expect(getChartRendererService()).toBe(first);
 		resetChartRendererService();
 		expect(getChartRendererService()).not.toBe(first);
+	});
+});
+
+describe('Codex review regressions (P1/P2)', () => {
+	it('uses sparkline up to 5 bars and candlestick from 6 (not 24)', () => {
+		expect(resolveChartRequest({ symbol: 'BTCUSDT', chartBars: makeBars(6) }).category).toBe('candlestick');
+		expect(resolveChartRequest({ symbol: 'BTCUSDT', chartBars: makeBars(5) }).category).toBe('sparkline');
+	});
+
+	it('maps enriched current_price to entry and invalidation_level to stop', () => {
+		const req = resolveChartRequest({
+			symbol: 'BTCUSDT', chartBars: makeBars(30),
+			enriched: { current_price: 101, invalidation_level: 95, target_level: 120 },
+		});
+		expect(req.entry).toBe(101);
+		expect(req.stop).toBe(95);
+		expect(req.target).toBe(120);
+	});
+
+	it('produces different rangeKeys for same-count updated prices', () => {
+		const base = makeBars(10);
+		const updated = base.map((b, i) => ({ ...b, close: b.close + 10 + i }));
+		const a = resolveChartRequest({ symbol: 'BTCUSDT', chartBars: base });
+		const b = resolveChartRequest({ symbol: 'BTCUSDT', chartBars: updated });
+		expect(a.rangeKey).not.toBe(b.rangeKey);
+	});
+
+	it('reflects Remote Config enablement at request time', async () => {
+		const svc = new ChartRendererService();
+		// getRuntimeConfig reads env-backed config; default disabled
+		expect(svc.isEnabled()).toBe(false);
+		const prev = process.env.ENABLE_CHART_ATTACHMENTS;
+		process.env.ENABLE_CHART_ATTACHMENTS = 'true';
+		try {
+			// resolveConfig via process.env when RemoteConfigService gate off; verify refresh works
+			svc.refreshConfig();
+			expect(svc.isEnabled()).toBe(true);
+		} finally {
+			if (prev === undefined) delete process.env.ENABLE_CHART_ATTACHMENTS;
+			else process.env.ENABLE_CHART_ATTACHMENTS = prev;
+		}
 	});
 });

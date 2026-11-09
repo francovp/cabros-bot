@@ -423,6 +423,9 @@ function formatAlertDocument(doc, options = {}) {
 	if (data.traderIntent && typeof data.traderIntent === 'object') {
 		docObj.traderIntent = data.traderIntent;
 	}
+	if (Array.isArray(data.chartBars)) docObj.chartBars = data.chartBars;
+	if (typeof data.chartSymbol === 'string' && data.chartSymbol.trim()) docObj.chartSymbol = data.chartSymbol;
+	if (typeof data.timeframe === 'string' && data.timeframe.trim()) docObj.timeframe = data.timeframe;
 	if (includeEnrichmentSummary) {
 		docObj.enrichmentSummary = docObj.enrichmentData;
 	}
@@ -2301,6 +2304,9 @@ async function saveAlertInternal(params = {}) {
 		session,
 		decision,
 		traderIntent,
+		chartBars,
+		chartSymbol,
+		timeframe: chartTimeframe,
 		alertId: providedAlertId,
 	} = params;
 	if (!isEnabled()) {
@@ -2363,6 +2369,29 @@ async function saveAlertInternal(params = {}) {
 		};
 		const sanitizedTraderIntent = validateTraderIntent(traderIntent);
 		if (sanitizedTraderIntent) document.traderIntent = sanitizedTraderIntent;
+		// Chart inputs are bounded and normalized so replay can re-render the
+		// same PNG instead of silently falling back to text-only delivery.
+		if (Array.isArray(chartBars)) {
+			const sanitizedBars = chartBars
+				.filter((bar) => bar && typeof bar === 'object'
+					&& [bar.open, bar.high, bar.low, bar.close].every((v) => Number.isFinite(Number(v))))
+				.map((bar) => {
+					const entry = {
+						open: Number(bar.open), high: Number(bar.high), low: Number(bar.low), close: Number(bar.close),
+					};
+					const volume = Number(bar.volume);
+					if (Number.isFinite(volume) && volume >= 0) entry.volume = volume;
+					return entry;
+				})
+				.slice(-60);
+			if (sanitizedBars.length >= 2) document.chartBars = sanitizedBars;
+		}
+		if (typeof chartSymbol === 'string' && chartSymbol.trim()) {
+			document.chartSymbol = chartSymbol.trim().toUpperCase().slice(0, 20);
+		}
+		if (typeof chartTimeframe === 'string' && chartTimeframe.trim()) {
+			document.timeframe = chartTimeframe.trim().slice(0, 20);
+		}
 		const collectedTelegramMessageIds = new Set();
 		if (Array.isArray(params.telegramMessageIds)) {
 			for (const mid of params.telegramMessageIds) {
