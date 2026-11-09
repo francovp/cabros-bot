@@ -1191,6 +1191,8 @@ function postAlert(botOrGetter) {
 				suppressedRepeat,
 				suppressionReason,
 				signalClass: alert.signalClass,
+				chartBars: alert.chartBars || null,
+				chartSymbol: alert.chartSymbol || null,
 				source: body.source || 'webhook-alert',
 				telegramChatId: routing.telegramChatId,
 				telegramThreadId: routing.telegramThreadId,
