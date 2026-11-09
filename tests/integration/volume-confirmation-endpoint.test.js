@@ -2,10 +2,13 @@ const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
+const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
+const requestDeadline = require('../../src/lib/requestDeadline');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
 		callVolumeConfirmation: jest.fn(),
+		callMultiTimeframeAnalysis: jest.fn(),
 	},
 }));
 
@@ -13,6 +16,7 @@ describe('Volume confirmation endpoint', () => {
 	const originalEnv = process.env;
 
 	beforeEach(() => {
+		idempotencyService.clear();
 		process.env = {
 			...originalEnv,
 			WEBHOOK_API_KEY: 'test-key',
@@ -24,6 +28,8 @@ describe('Volume confirmation endpoint', () => {
 	});
 
 	afterEach(() => {
+		jest.restoreAllMocks();
+		requestDeadline.resetForTests();
 		process.env = originalEnv;
 		if (app._router && app._router.stack && app._router.stack.length > 0) {
 			app._router.stack.pop();
@@ -62,11 +68,14 @@ describe('Volume confirmation endpoint', () => {
 		}));
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(tradingViewMcpService.callVolumeConfirmation).toHaveBeenCalledWith({
 			symbol: 'BTCUSDT',
 			exchange: 'BINANCE',
 			timeframe: '4h',
+			signal: expect.any(AbortSignal),
 		});
 	});
 
@@ -82,6 +91,8 @@ describe('Volume confirmation endpoint', () => {
 		}));
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body.error).toContain('EXCHANGE:SYMBOL');
 		expect(tradingViewMcpService.callVolumeConfirmation).not.toHaveBeenCalled();
@@ -103,6 +114,8 @@ describe('Volume confirmation endpoint', () => {
 		}));
 		expect(res.body.processingTimeMs).toBeGreaterThanOrEqual(0);
 		expect(Number.isInteger(res.body.processingTimeMs)).toBe(true);
+		// CB-219: the legacy field must be gone, not merely shadowed.
+		expect(res.body).not.toHaveProperty('totalDurationMs');
 		expect(res.body).not.toHaveProperty('totalDurationMs');
 	});
 
@@ -143,5 +156,316 @@ describe('Volume confirmation endpoint', () => {
 			decision: 'unknown',
 			volumeRatio: null,
 		}));
+	});
+
+	it('includes multi-timeframe analysis and alignment when requested and enabled', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = 'true';
+		tradingViewMcpService.callVolumeConfirmation.mockResolvedValueOnce({
+			volume_analysis: { volume_ratio: 1.8 },
+		});
+		tradingViewMcpService.callMultiTimeframeAnalysis.mockResolvedValueOnce({
+			alignment: { status: 'ALIGNED', confidence: 0.9 },
+			recommendation: { action: 'BUY' },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT', includeMultiTimeframe: true })
+			.expect(200);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			success: true,
+			confirmed: true,
+			decision: 'confirm',
+			volumeRatio: 1.8,
+			htfAlignment: 'aligned',
+			multiTimeframeAnalysis: expect.objectContaining({ alignment: { status: 'ALIGNED', confidence: 0.9 } }),
+			volumeConfirmation: expect.objectContaining({ confirmed: true, decision: 'confirm', volumeRatio: 1.8 }),
+		}));
+		expect(tradingViewMcpService.callMultiTimeframeAnalysis).toHaveBeenCalledWith({
+			symbol: 'BTCUSDT',
+			exchange: 'BINANCE',
+			signal: expect.any(AbortSignal),
+		});
+	});
+
+	it('reports counter-trend when the requested side opposes the higher-timeframe trend', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = 'true';
+		tradingViewMcpService.callVolumeConfirmation.mockResolvedValueOnce({
+			volume_analysis: { volume_ratio: 1.8 },
+		});
+		tradingViewMcpService.callMultiTimeframeAnalysis.mockResolvedValueOnce({
+			direction: 'bullish',
+			confidence: 0.8,
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT', side: 'SELL', includeMultiTimeframe: true })
+			.expect(200);
+
+		expect(res.body.htfAlignment).toBe('counter-trend');
+	});
+
+	it('fails open when multi-timeframe analysis throws', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = 'true';
+		const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+		tradingViewMcpService.callVolumeConfirmation.mockResolvedValueOnce({
+			volume_analysis: { volume_ratio: 1.6 },
+		});
+		tradingViewMcpService.callMultiTimeframeAnalysis.mockRejectedValueOnce(
+			new Error('MCP multi-timeframe timeout'),
+		);
+
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT', includeMultiTimeframe: true })
+			.expect(200);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			confirmed: true,
+			decision: 'confirm',
+			volumeRatio: 1.6,
+			multiTimeframeAnalysis: null,
+			htfAlignment: 'unknown',
+		}));
+		expect(warnSpy).toHaveBeenCalledWith(
+			'[VolumeConfirmation] Multi-timeframe analysis failed:',
+			{ symbol: 'BINANCE:BTCUSDT', errorMessage: 'MCP multi-timeframe timeout' },
+		);
+	});
+
+	it('bounds optional multi-timeframe analysis before the request deadline', async () => {
+		requestDeadline.setTestOverrides({ timeoutMs: 1500 });
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = 'true';
+		tradingViewMcpService.callVolumeConfirmation.mockResolvedValueOnce({
+			volume_analysis: { volume_ratio: 1.6 },
+		});
+		let mtfSignal;
+		tradingViewMcpService.callMultiTimeframeAnalysis.mockImplementation(({ signal }) => {
+			mtfSignal = signal;
+			return new Promise(() => {});
+		});
+		const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT', includeMultiTimeframe: true })
+			.expect(200);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			confirmed: true,
+			multiTimeframeAnalysis: null,
+			htfAlignment: 'unknown',
+		}));
+		expect(mtfSignal.aborted).toBe(true);
+		expect(warnSpy).toHaveBeenCalledWith(
+			'[VolumeConfirmation] Multi-timeframe analysis failed:',
+			expect.objectContaining({ errorMessage: 'Optional multi-timeframe analysis exceeded the request budget' }),
+		);
+	});
+
+	it('does not call multi-timeframe analysis when its feature flag is disabled', async () => {
+		process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME = 'false';
+		tradingViewMcpService.callVolumeConfirmation.mockResolvedValueOnce({
+			volume_analysis: { volume_ratio: 1.6 },
+		});
+
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT', includeMultiTimeframe: true })
+			.expect(200);
+
+		expect(res.body.multiTimeframeAnalysis).toBeUndefined();
+		expect(res.body.htfAlignment).toBeUndefined();
+		expect(tradingViewMcpService.callMultiTimeframeAnalysis).not.toHaveBeenCalled();
+	});
+
+	it('rejects a non-boolean includeMultiTimeframe value before calling MCP', async () => {
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT', includeMultiTimeframe: 'invalid' })
+			.expect(400);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			code: 'INVALID_REQUEST',
+			error: 'includeMultiTimeframe must be a boolean',
+		}));
+		expect(tradingViewMcpService.callVolumeConfirmation).not.toHaveBeenCalled();
+		expect(tradingViewMcpService.callMultiTimeframeAnalysis).not.toHaveBeenCalled();
+	});
+
+	describe('Idempotency handling', () => {
+		it('replays cached volume confirmation response on identical request with Idempotency-Key without re-calling MCP service', async () => {
+			tradingViewMcpService.callVolumeConfirmation.mockResolvedValue({
+				symbol: 'BINANCE:BTCUSDT',
+				volume_analysis: {
+					volume_ratio: 1.7,
+					volume_strength: 'HIGH',
+				},
+				confidence: 0.91,
+			});
+
+			const payload = { symbol: 'BINANCE:BTCUSDT', timeframe: '4h' };
+
+			const first = await request(app)
+				.post('/api/webhook/volume-confirmation')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'vol-key-1')
+				.send(payload)
+				.expect(200);
+
+			expect(first.headers['idempotency-replay']).toBe('false');
+			expect(first.body.success).toBe(true);
+			expect(tradingViewMcpService.callVolumeConfirmation).toHaveBeenCalledTimes(1);
+
+			const second = await request(app)
+				.post('/api/webhook/volume-confirmation')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'vol-key-1')
+				.send(payload)
+				.expect(200);
+
+			// The replay is a distinct HTTP request, so its correlation id is the
+			// replaying request's own — the deadline, the X-Request-Id header, and
+			// the structured access log all agree. Everything else is replayed
+			// verbatim from the cached record.
+			expect(second.headers['idempotency-replay']).toBe('true');
+			expect(second.body).toEqual({
+				...first.body,
+				idempotencyReplayed: true,
+				requestId: second.body.requestId,
+			});
+			expect(second.body.requestId).toBe(second.headers['x-request-id']);
+			expect(tradingViewMcpService.callVolumeConfirmation).toHaveBeenCalledTimes(1);
+		});
+
+		it('returns 409 IDEMPOTENCY_CONFLICT when Idempotency-Key is reused with a different payload', async () => {
+			tradingViewMcpService.callVolumeConfirmation.mockResolvedValue({
+				symbol: 'BINANCE:BTCUSDT',
+				volume_analysis: {
+					volume_ratio: 1.7,
+					volume_strength: 'HIGH',
+				},
+				confidence: 0.91,
+			});
+
+			await request(app)
+				.post('/api/webhook/volume-confirmation')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'vol-key-conflict')
+				.send({ symbol: 'BINANCE:BTCUSDT', timeframe: '4h' })
+				.expect(200);
+
+			const conflictRes = await request(app)
+				.post('/api/webhook/volume-confirmation')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'vol-key-conflict')
+				.send({ symbol: 'BINANCE:ETHUSDT', timeframe: '4h' })
+				.expect(409);
+
+			expect(conflictRes.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+				error: 'Idempotency key was reused with a different payload',
+				code: 'IDEMPOTENCY_CONFLICT',
+			}));
+		});
+
+		it('returns 400 INVALID_REQUEST when Idempotency-Key is invalid', async () => {
+			const res = await request(app)
+				.post('/api/webhook/volume-confirmation')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', '   ')
+				.send({ symbol: 'BINANCE:BTCUSDT' })
+				.expect(400);
+
+			expect(res.body).toEqual(expect.objectContaining({
+				success: false,
+				retryable: false,
+				requestId: expect.any(String),
+				error: 'Idempotency key must be a non-empty string',
+				code: 'INVALID_REQUEST',
+			}));
+			expect(tradingViewMcpService.callVolumeConfirmation).not.toHaveBeenCalled();
+		});
+
+		it('executes MCP service on every request when no Idempotency-Key is provided', async () => {
+			tradingViewMcpService.callVolumeConfirmation.mockResolvedValue({
+				symbol: 'BINANCE:BTCUSDT',
+				volume_analysis: {
+					volume_ratio: 1.5,
+					volume_strength: 'NORMAL',
+				},
+				confidence: 0.8,
+			});
+
+			await request(app)
+				.post('/api/webhook/volume-confirmation')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BINANCE:BTCUSDT' })
+				.expect(200);
+
+			await request(app)
+				.post('/api/webhook/volume-confirmation')
+				.set('x-api-key', 'test-key')
+				.send({ symbol: 'BINANCE:BTCUSDT' })
+				.expect(200);
+
+			expect(tradingViewMcpService.callVolumeConfirmation).toHaveBeenCalledTimes(2);
+		});
+	});
+	it('short-circuits to a dryRun response without calling TradingView MCP when dryRun query is set', async () => {
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation?dryRun=true')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT', timeframe: '1h' })
+			.expect(200);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			success: true,
+			dryRun: true,
+			symbol: 'BINANCE:BTCUSDT',
+			exchange: 'BINANCE',
+			asset: 'BTCUSDT',
+			timeframe: '1h',
+			confirmed: null,
+			decision: 'unknown',
+			volumeRatio: null,
+			analysis: null,
+		}));
+		expect(tradingViewMcpService.callVolumeConfirmation).not.toHaveBeenCalled();
+	});
+	it('short-circuits to a dryRun response when dryRun body field is true', async () => {
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BINANCE:BTCUSDT', dryRun: true })
+			.expect(200);
+
+		expect(res.body).toEqual(expect.objectContaining({
+			success: true,
+			dryRun: true,
+			decision: 'unknown',
+			analysis: null,
+		}));
+		expect(tradingViewMcpService.callVolumeConfirmation).not.toHaveBeenCalled();
+	});
+	it('still rejects malformed symbols on the dryRun path before any MCP call', async () => {
+		const res = await request(app)
+			.post('/api/webhook/volume-confirmation?dryRun=true')
+			.set('x-api-key', 'test-key')
+			.send({ symbol: 'BTCUSDT' })
+			.expect(400);
+
+		expect(res.body).toEqual(expect.objectContaining({ code: 'INVALID_REQUEST' }));
+		expect(tradingViewMcpService.callVolumeConfirmation).not.toHaveBeenCalled();
 	});
 });

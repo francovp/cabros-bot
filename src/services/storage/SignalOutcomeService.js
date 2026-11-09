@@ -1,16 +1,25 @@
 'use strict';
 
+const crypto = require('crypto');
 const admin = require('firebase-admin');
+const { createHash } = require('node:crypto');
 const AlertStorageService = require('./AlertStorageService');
+const dailyRollupService = require('./SignalOutcomeDailyRollupService');
 const equityMarketDataService = require('./EquityMarketDataService');
 const geminiPriceService = require('../grounding/geminiPriceService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
+const { fireAndForget } = require('../../lib/fireAndForget');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
 const { MainClient } = require('binance');
+const tradingViewMcpService = require('../tradingview/TradingViewMcpService');
 const {
 	parseEntryPriceSources,
 	getEntryPriceSourceChains: buildEntryPriceSourceChains,
 } = require('../../lib/signalOutcomeEntryPriceSources');
+const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
+const { validateTraderIntent, isCompleteTraderIntent } = require('../../lib/traderIntent');
 
 const { encodeAlertPaginationCursor, parseAlertPaginationCursor } = require('./alertPaginationCursor');
 
@@ -18,11 +27,66 @@ const COLLECTION_NAME = 'tradingSignalOutcomes';
 const HEARTBEAT_COLLECTION_NAME = 'workerHeartbeats';
 const HEARTBEAT_DOCUMENT_ID = 'signal-outcome';
 const HEARTBEAT_WRITE_TIMEOUT_MS = 5000;
+// Exactly one evaluator may sweep at a time; see acquireSweepLease() (GH-1110).
+const LOCK_COLLECTION_NAME = 'signalOutcomeLocks';
+const LOCK_DOCUMENT_ID = 'singleton';
+const CALIBRATION_NON_SCANNER_SOURCES = ['expanded-analysis', 'news-monitor', 'unknown', 'webhook-alert'];
+const CALIBRATION_SCANNER_SOURCES = ['market-scanner', 'scanner-preset'];
+const CALIBRATION_RECOVERY_NON_SCANNER_SCAN_LIMIT = 1000;
+const CALIBRATION_RECOVERY_EXPLICIT_SCANNER_SCAN_LIMIT = 2000;
+const CALIBRATION_RECOVERY_LEGACY_SCANNER_SCAN_LIMIT = 2105;
+const CALIBRATION_SOURCE_RECOVERY_QUERIES = [
+	...CALIBRATION_NON_SCANNER_SOURCES.map(source => ({
+		applySourceFilters: query => query.where('source', '==', source),
+		maxScannedDocs: CALIBRATION_RECOVERY_NON_SCANNER_SCAN_LIMIT,
+	})),
+	...CALIBRATION_SCANNER_SOURCES.map(source => ({
+		applySourceFilters: query => query.where('source', '==', source).where('confidenceScoreOrigin', '==', 'explicit'),
+		maxScannedDocs: CALIBRATION_RECOVERY_EXPLICIT_SCANNER_SCAN_LIMIT,
+	})),
+	...CALIBRATION_SCANNER_SOURCES.map(source => ({
+		applySourceFilters: query => query.where('source', '==', source),
+		maxScannedDocs: CALIBRATION_RECOVERY_LEGACY_SCANNER_SCAN_LIMIT,
+	})),
+];
+const CALIBRATION_RECOVERY_TOTAL_SCAN_LIMIT = CALIBRATION_SOURCE_RECOVERY_QUERIES
+	.reduce((total, query) => total + query.maxScannedDocs, 0);
+const CALIBRATION_SCAN_BATCH_SIZE_FLOOR = 50;
+const CALIBRATION_SCAN_BATCH_SIZE_CEILING = 100;
+
+function computeCalibrationBatchSize(targetLimit) {
+	const numericLimit = Number(targetLimit);
+	const parsedLimit = Number.isFinite(numericLimit) && numericLimit > 0 ? numericLimit : CALIBRATION_SCAN_BATCH_SIZE_CEILING;
+	return Math.min(
+		Math.max(parsedLimit, CALIBRATION_SCAN_BATCH_SIZE_FLOOR),
+		CALIBRATION_SCAN_BATCH_SIZE_CEILING
+	);
+}
+
+const DEFAULT_LEASE_MS = 120000;
+const MIN_LEASE_MS = 10000;
+const MAX_LEASE_MS = 600000;
+// Renewal cadence floor, and the fallback for an invalid explicit override.
+// `options.leaseRenewIntervalMs` exists so a test can drive a renewal inside a
+// sweep without waiting out the production cadence.
+const MIN_LEASE_RENEW_INTERVAL_MS = 1000;
+const LEASE_RENEWAL = Object.freeze({
+	ACQUIRED: 'acquired',
+	LOST: 'lost',
+	UNDETERMINED: 'undetermined',
+});
+const LEASE_WRITE_TIMEOUT_MS = 5000;
+// Lease ownership identity. Not a secret; never log it.
+const LEASE_WORKER_ID = crypto.randomUUID();
 const MAX_WORKER_DRAIN_TIMEOUT_MS = 30000;
 const MAX_TIMER_DELAY_MS = 2147483647;
 const MAX_CONFIGURED_INTERVAL_MS = 3600000;
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
+const DEFAULT_EXPORT_LIMIT = 100;
+const MAX_EXPORT_LIMIT = 1000;
+const MAX_EXPORT_WINDOW_DAYS = 31;
+const MAX_EXPORT_SCAN_DOCS = 10000;
 const STORAGE_UNAVAILABLE_CODE = 'STORAGE_UNAVAILABLE';
 const INVALID_CURSOR_MESSAGE = 'Invalid before cursor. Use an ISO-8601 timestamp or the nextBefore cursor from a previous response.';
 const WORKER_ROLES = new Set(['web', 'worker', 'disabled']);
@@ -31,6 +95,10 @@ const REASON_BINANCE_UNAVAILABLE = 'binance_unavailable';
 const REASON_BINANCE_REGION_BLOCKED = 'binance_region_blocked';
 const REASON_GEMINI_UNAVAILABLE = 'gemini_unavailable';
 const REASON_MARKET_DATA_REGION_BLOCKED = 'market_data_region_blocked';
+const REASON_MCP_PRICE_FAILED = 'mcp_price_failed';
+const REASON_MCP_BREAKER_OPEN = 'mcp_breaker_open';
+const ENTRY_PRICE_SOURCE_MCP = 'tradingview_mcp';
+const MCP_ENTRY_PRICE_TIMEOUT_MS = 5000;
 const REGION_BLOCK_MESSAGE_PATTERNS = [
 	'restricted location',
 	'service unavailable from restricted',
@@ -38,15 +106,23 @@ const REGION_BLOCK_MESSAGE_PATTERNS = [
 ];
 const DEFAULT_SIGNAL_OUTCOME_RETENTION_DAYS = 365;
 const MAX_SIGNAL_OUTCOME_RETENTION_DAYS = 3650;
+const MAX_OUTCOME_BREAKDOWN_BUCKETS = 100;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const SESSION_TIME_ZONE = 'America/New_York';
 const SESSION_ANCHOR_VERSION = 'v1';
 const REGULAR_EQUITY_EXCHANGES = new Set(['AMEX', 'BATS', 'NASDAQ', 'NYSE', 'NYSE ARCA']);
+const DEFAULT_OUTCOME_WINDOWS = Object.freeze(['1h', '4h', '1D', '1W']);
+const SUPPORTED_OUTCOME_WINDOWS = Object.freeze(['1m', '5m', '15m', '30m', '1h', '4h', '1D', '1W', '1M']);
+const DEFAULT_OUTCOME_WINDOW_LABELS = Object.freeze({ '1h': '1h', '4h': '4h', '1D': '1D', '1W': '1W' });
 
 let binanceClient = null;
 let isEvaluating = false;
 let workerTimer = null;
+let workerStartupPending = false;
+let workerStartupGeneration = 0;
+let workerStartupAbortController = null;
 let activeEvaluationPromise = null;
+let activeSweepPromise = null;
 let shutdownRequested = false;
 let activeIntervalMs = null;
 let lastRunAt = null;
@@ -56,9 +132,14 @@ let lastRunEvaluatedCount = 0;
 let lastRunPendingCount = 0;
 let lastRunErrorCount = 0;
 let lastRunRegionBlockedCount = 0;
+let lastRunLeaseHeld = false;
+let leaseHeldSkipCount = 0;
 let lastEvaluatedDoc = null;
 let lastRetentionWarningValue = null;
 let lastEntryPriceSourcesWarningValue = null;
+let lastBreakdownBucketCount = 0;
+let lastBreakdownTruncated = false;
+let breakdownTruncationCount = 0;
 
 function getEntryPriceSourceChains() {
 	const rawValue = getRuntimeConfig?.().SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES;
@@ -78,6 +159,77 @@ function getEntryPriceSourceChains() {
 function getEntryPriceSourceChain(exchange, assetClass) {
 	const chains = getEntryPriceSourceChains();
 	return exchange === 'BINANCE' || assetClass === 'crypto' ? chains.crypto : chains.equity;
+}
+
+let lastWindowsWarningValue = null;
+let lastWindowLabelsWarningValue = null;
+
+function warnInvalidWindowConfig(name, rawValue) {
+	const lastValue = name === 'SIGNAL_OUTCOME_WINDOWS' ? lastWindowsWarningValue : lastWindowLabelsWarningValue;
+	if (lastValue !== rawValue) {
+		console.warn(`[SignalOutcomeService] Invalid ${name} configuration, using default`);
+		if (name === 'SIGNAL_OUTCOME_WINDOWS') {
+			lastWindowsWarningValue = rawValue;
+		} else {
+			lastWindowLabelsWarningValue = rawValue;
+		}
+	}
+}
+
+function defaultOutcomeWindowLabels(windows) {
+	return Object.fromEntries(windows.map(window => [window, DEFAULT_OUTCOME_WINDOW_LABELS[window] || window]));
+}
+
+function getConfiguredOutcomeWindows(runtimeConfig = getRuntimeConfig()) {
+	const rawValue = runtimeConfig.SIGNAL_OUTCOME_WINDOWS;
+	if (rawValue === undefined || rawValue === null) {
+		return [...DEFAULT_OUTCOME_WINDOWS];
+	}
+	if (String(rawValue).trim() === '') {
+		warnInvalidWindowConfig('SIGNAL_OUTCOME_WINDOWS', rawValue);
+		return [...DEFAULT_OUTCOME_WINDOWS];
+	}
+
+	const values = String(rawValue).split(',').map(value => value.trim());
+	const isValid = values.length > 0
+		&& values.every(value => SUPPORTED_OUTCOME_WINDOWS.includes(value))
+		&& new Set(values).size === values.length;
+	if (!isValid) {
+		warnInvalidWindowConfig('SIGNAL_OUTCOME_WINDOWS', rawValue);
+		return [...DEFAULT_OUTCOME_WINDOWS];
+	}
+
+	lastWindowsWarningValue = null;
+	return values;
+}
+
+function getOutcomeWindowLabels(windows = getConfiguredOutcomeWindows(), runtimeConfig = getRuntimeConfig()) {
+	const labels = defaultOutcomeWindowLabels(windows);
+	const rawValue = runtimeConfig.SIGNAL_OUTCOME_WINDOW_LABELS;
+	if (rawValue === undefined || rawValue === null || String(rawValue).trim() === '') {
+		lastWindowLabelsWarningValue = null;
+		return labels;
+	}
+
+	let parsed;
+	try {
+		parsed = JSON.parse(String(rawValue));
+	} catch (error) {
+		parsed = null;
+	}
+	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+		|| Object.entries(parsed).some(([window, label]) => !SUPPORTED_OUTCOME_WINDOWS.includes(window) || typeof label !== 'string' || !label.trim() || label.length > 80)) {
+		warnInvalidWindowConfig('SIGNAL_OUTCOME_WINDOW_LABELS', rawValue);
+		return labels;
+	}
+
+	lastWindowLabelsWarningValue = null;
+	for (const window of windows) {
+		if (typeof parsed[window] === 'string' && parsed[window].trim()) {
+			labels[window] = parsed[window].trim();
+		}
+	}
+	return labels;
 }
 
 function getSignalOutcomeRetentionDays() {
@@ -424,6 +576,61 @@ function resolveBinanceBaseUrl() {
 	return DEFAULT_BINANCE_DATA_BASE_URL;
 }
 
+function isMcpOutcomePriceEnabled() {
+	return process.env.ENABLE_MCP_OUTCOME_PRICES === 'true';
+}
+
+function parseCoinAnalysisPrice(analysis) {
+	if (!analysis || typeof analysis !== 'object') {
+		return null;
+	}
+	const priceData = analysis.price_data && typeof analysis.price_data === 'object' ? analysis.price_data : null;
+	const candidates = [];
+	if (priceData) {
+		candidates.push(priceData.current_price, priceData.close);
+	}
+	candidates.push(analysis.current_price, analysis.close, analysis.price);
+	for (const candidate of candidates) {
+		if (candidate === null || candidate === undefined) continue;
+		const parsed = typeof candidate === 'number' ? candidate : parseFloat(candidate);
+		if (Number.isFinite(parsed) && parsed > 0) {
+			return parsed;
+		}
+	}
+	return null;
+}
+
+async function fetchEntryPriceFromMcp({ symbol, exchange, timeframe }) {
+	if (!tradingViewMcpService || typeof tradingViewMcpService.callCoinAnalysis !== 'function') {
+		return { price: null, reason: REASON_MCP_PRICE_FAILED };
+	}
+	if (typeof tradingViewMcpService.isBreakerOpen === 'function' && tradingViewMcpService.isBreakerOpen()) {
+		return { price: null, reason: REASON_MCP_BREAKER_OPEN };
+	}
+	const safeTimeframe = typeof timeframe === 'string' && timeframe.trim() !== '' ? timeframe : '1D';
+	const abortController = new AbortController();
+	const timerId = setTimeout(() => abortController.abort(), MCP_ENTRY_PRICE_TIMEOUT_MS);
+	try {
+		const analysis = await tradingViewMcpService.callCoinAnalysis({
+			symbol,
+			exchange,
+			timeframe: safeTimeframe,
+			signal: abortController.signal,
+		});
+		const price = parseCoinAnalysisPrice(analysis);
+		if (price === null) {
+			return { price: null, reason: REASON_MCP_PRICE_FAILED };
+		}
+		return { price, reason: null };
+	} catch (err) {
+		const category = err && err.category === 'circuit_breaker_open' ? REASON_MCP_BREAKER_OPEN : REASON_MCP_PRICE_FAILED;
+		console.warn(`[SignalOutcomeService] Failed to fetch entry price from TradingView MCP for ${exchange}:${symbol}: ${err.message}`);
+		return { price: null, reason: category };
+	} finally {
+		clearTimeout(timerId);
+	}
+}
+
 function isRegionBlockedError(err) {
 	if (!err) {
  return false;
@@ -502,6 +709,147 @@ function parseTimerInterval(val, defaultVal) {
 	return parsed <= MAX_TIMER_DELAY_MS ? parsed : defaultVal;
 }
 
+function parseBoundedInteger(val, defaultVal, minVal, maxVal) {
+	const parsed = parsePositiveInteger(val, defaultVal);
+	if (parsed < minVal || parsed > maxVal) {
+		return defaultVal;
+	}
+	return parsed;
+}
+
+function getLeaseMs() {
+	return parseBoundedInteger(
+		process.env.SIGNAL_OUTCOME_EVALUATION_LEASE_MS,
+		DEFAULT_LEASE_MS,
+		MIN_LEASE_MS,
+		MAX_LEASE_MS,
+	);
+}
+
+function getLeaseFirestore() {
+	try {
+		return AlertStorageService.getFirestore();
+	} catch {
+		return null;
+	}
+}
+
+async function acquireSweepLease(nowMs, leaseMs) {
+	// `render.yaml` declares two candidate evaluators: the web service
+	// (SIGNAL_OUTCOME_WORKER_ROLE=web) and the dedicated worker
+	// (SIGNAL_OUTCOME_WORKER_ROLE=worker). startWorker() only compares a
+	// process's own role, so without a shared lock two enabled replicas both
+	// sweep and re-price every pending signal, doubling Binance / Gemini /
+	// Twelve Data quota spend. The lease makes the winner a function of live
+	// lock ownership instead of a per-service dashboard flag.
+	const firestore = getLeaseFirestore();
+	if (!firestore || typeof firestore.runTransaction !== 'function') {
+		return true;
+	}
+
+	const durationMs = parseBoundedInteger(leaseMs, DEFAULT_LEASE_MS, MIN_LEASE_MS, MAX_LEASE_MS);
+
+	try {
+		const acquired = await awaitWithTimeout(
+			firestore.runTransaction(async (tx) => {
+				const docRef = firestore.collection(LOCK_COLLECTION_NAME).doc(LOCK_DOCUMENT_ID);
+				const doc = await tx.get(docRef);
+				const data = doc.exists ? (doc.data() || {}) : {};
+				const lockedUntilMs = data.lockedUntil ? new Date(data.lockedUntil).getTime() : 0;
+				const lockedBy = data.lockedBy || null;
+
+				if (lockedUntilMs > nowMs && lockedBy && lockedBy !== LEASE_WORKER_ID) {
+					return false;
+				}
+
+				tx.set(docRef, {
+					lockedUntil: new Date(nowMs + durationMs).toISOString(),
+					lockedBy: LEASE_WORKER_ID,
+					updatedAt: new Date(nowMs).toISOString(),
+				}, { merge: true });
+				return true;
+			}),
+			LEASE_WRITE_TIMEOUT_MS,
+			`Signal outcome lease acquire timed out after ${LEASE_WRITE_TIMEOUT_MS}ms`,
+		);
+		return Boolean(acquired);
+	} catch (error) {
+		console.warn('[SignalOutcomeService] Lease acquire failed:', error.message);
+		// Fail open: a lease write blip must never disable outcome evaluation.
+		return true;
+	}
+}
+
+async function renewSweepLease(nowMs, leaseMs) {
+	// Renewal answers two different questions, and they must not collapse into one
+	// boolean: LOST means this process provably does not own the sweep and must stop
+	// acting, while UNDETERMINED means the lease could not be checked at all, which
+	// stays fail-open so a Firestore blip cannot disable outcome evaluation.
+	const firestore = getLeaseFirestore();
+	if (!firestore || typeof firestore.runTransaction !== 'function') {
+		return LEASE_RENEWAL.UNDETERMINED;
+	}
+
+	const durationMs = parseBoundedInteger(leaseMs, DEFAULT_LEASE_MS, MIN_LEASE_MS, MAX_LEASE_MS);
+
+	try {
+		const renewal = await awaitWithTimeout(
+			firestore.runTransaction(async (tx) => {
+				const docRef = firestore.collection(LOCK_COLLECTION_NAME).doc(LOCK_DOCUMENT_ID);
+				const doc = await tx.get(docRef);
+				if (!doc.exists) return LEASE_RENEWAL.LOST;
+				const data = doc.data() || {};
+				if (data.lockedBy && data.lockedBy !== LEASE_WORKER_ID) {
+					return LEASE_RENEWAL.LOST;
+				}
+				tx.set(docRef, {
+					lockedUntil: new Date(nowMs + durationMs).toISOString(),
+					updatedAt: new Date(nowMs).toISOString(),
+				}, { merge: true });
+				return LEASE_RENEWAL.ACQUIRED;
+			}),
+			LEASE_WRITE_TIMEOUT_MS,
+			`Signal outcome lease renew timed out after ${LEASE_WRITE_TIMEOUT_MS}ms`,
+		);
+		return renewal;
+	} catch (error) {
+		console.warn('[SignalOutcomeService] Lease renew failed:', error.message);
+		return LEASE_RENEWAL.UNDETERMINED;
+	}
+}
+
+async function releaseSweepLease(completedAtMs) {
+	const firestore = getLeaseFirestore();
+	if (!firestore || typeof firestore.runTransaction !== 'function') {
+		return;
+	}
+
+	try {
+		await awaitWithTimeout(
+			firestore.runTransaction(async (tx) => {
+				const docRef = firestore.collection(LOCK_COLLECTION_NAME).doc(LOCK_DOCUMENT_ID);
+				const doc = await tx.get(docRef);
+				if (!doc.exists) return;
+				const data = doc.data() || {};
+				// Never clear a lease a different replica has taken over.
+				if (data.lockedBy && data.lockedBy !== LEASE_WORKER_ID) {
+					return;
+				}
+				tx.set(docRef, {
+					lockedUntil: null,
+					lockedBy: null,
+					lastCompletedAt: new Date(completedAtMs).toISOString(),
+					updatedAt: new Date().toISOString(),
+				}, { merge: true });
+			}),
+			LEASE_WRITE_TIMEOUT_MS,
+			`Signal outcome lease release timed out after ${LEASE_WRITE_TIMEOUT_MS}ms`,
+		);
+	} catch (error) {
+		console.warn('[SignalOutcomeService] Lease release failed:', error.message);
+	}
+}
+
 function getConfiguredInterval(defaultVal) {
 	const intervalMs = parseTimerInterval(
 		process.env.SIGNAL_OUTCOME_EVALUATION_INTERVAL_MS || process.env.SIGNAL_OUTCOME_EVALUATION_CADENCE_MS,
@@ -543,12 +891,18 @@ function normalizeAssetClass(rawAssetClass) {
 const DEFAULT_MAX_RETRY_ATTEMPTS = 3;
 const DEFAULT_MAX_RETRY_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProviderName = null, entryPriceReason = null) {
+function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProviderName = null, entryPriceReason = null, resolvedEntryPriceSource = null) {
 	const isClassifiedBareStock = normSymbolInfo.exchange === 'UNKNOWN' && assetClass === 'stock';
 	if (normSymbolInfo.symbol === 'UNKNOWN' || (normSymbolInfo.exchange === 'UNKNOWN' && !isClassifiedBareStock)) {
 		return {
 			state: 'unparseable_symbol',
 			reason: 'Symbol or exchange unparseable or unknown',
+		};
+	}
+	if (resolvedEntryPriceSource === ENTRY_PRICE_SOURCE_MCP && entryPrice !== null && entryPrice !== undefined) {
+		return {
+			state: 'supported_provider',
+			reason: 'TradingView MCP market data supported',
 		};
 	}
 	if (normSymbolInfo.exchange !== 'BINANCE'
@@ -567,12 +921,15 @@ function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProv
 	}
 	if (entryPrice === null || entryPrice === undefined) {
 		const isTransient = equityMarketDataService.isTransientReason(entryPriceReason)
+			|| entryPriceReason === 'historical_entry_price_unavailable'
 			|| entryPriceReason === REASON_BINANCE_UNAVAILABLE
 			|| entryPriceReason === REASON_BINANCE_REGION_BLOCKED
 			|| entryPriceReason === REASON_GEMINI_UNAVAILABLE
 			|| entryPriceReason === 'twelve_data_unavailable'
 			|| entryPriceReason === 'twelve_data_rate_limited'
-			|| entryPriceReason === 'twelve_data_timeout';
+			|| entryPriceReason === 'twelve_data_timeout'
+			|| entryPriceReason === REASON_MCP_PRICE_FAILED
+			|| entryPriceReason === REASON_MCP_BREAKER_OPEN;
 		if (isTransient) {
 			return {
 				state: 'pending_entry_price',
@@ -593,32 +950,87 @@ function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProv
 }
 
 const WINDOW_CONFIGS = {
+	'1m': { durationMs: 1 * 60 * 1000, interval: '1m' },
+	'5m': { durationMs: 5 * 60 * 1000, interval: '5m' },
+	'15m': { durationMs: 15 * 60 * 1000, interval: '15m' },
+	'30m': { durationMs: 30 * 60 * 1000, interval: '30m' },
 	'1h': { durationMs: 1 * 60 * 60 * 1000, interval: '5m' },
 	'4h': { durationMs: 4 * 60 * 60 * 1000, interval: '15m' },
 	'1D': { durationMs: 24 * 60 * 60 * 1000, interval: '1h' },
 	'1W': { durationMs: 7 * 24 * 60 * 60 * 1000, interval: '4h' },
+	'1M': { durationMs: 30 * DAY_MS, interval: '1D' },
 };
+
+function evaluateTraderPlan(sortedKlines, intent) {
+	let exitPrice = parseFloat(sortedKlines[sortedKlines.length - 1][4]);
+	let firstHit = null;
+	let firstHitTime = null;
+	for (const kline of sortedKlines) {
+		const timestamp = Number(kline[0]);
+		const high = parseFloat(kline[2]);
+		const low = parseFloat(kline[3]);
+		const stopHit = intent.side === 'BUY' ? low <= intent.invalidation : high >= intent.invalidation;
+		const targetHit = intent.side === 'BUY' ? high >= intent.target : low <= intent.target;
+		if (stopHit || targetHit) {
+			firstHit = stopHit ? 'stop' : 'target';
+			exitPrice = stopHit ? intent.invalidation : intent.target;
+			firstHitTime = Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
+			break;
+		}
+	}
+	const realizedGain = intent.side === 'BUY' ? exitPrice - intent.entry : intent.entry - exitPrice;
+	const initialRisk = Math.abs(intent.entry - intent.invalidation);
+	return {
+		price: exitPrice,
+		return: parseFloat(((realizedGain / intent.entry) * 100).toFixed(4)),
+		firstHit,
+		targetHit: firstHit === 'target',
+		stopHit: firstHit === 'stop',
+		firstHitTime,
+		rMultiple: parseFloat((realizedGain / initialRisk).toFixed(4)),
+	};
+}
+
+function normalizeConfidenceScore(val) {
+	if (typeof val !== 'number' || !Number.isFinite(val)) return null;
+	if (val >= 0 && val <= 1) return val;
+	if (val >= -1 && val < 0) return Math.abs(val);
+	return null;
+}
 
 /**
  * Persist signal metadata to Firestore.
  */
 async function recordSignalInternal({
+	idempotencyKey,
 	requestId,
+	receivedAt,
 	source,
 	symbol,
 	exchange,
 	timeframe,
 	setupType,
+	setup_type,
 	score,
+	confidenceScore,
 	side,
 	price,
 	priceSource,
 	stop,
 	target,
+	barriers,
+	invalidationLevel,
+	invalidation_level,
+	targetLevel,
+	target_level,
+	riskRewardRatio,
+	risk_reward_ratio,
 	sources,
 	tokenUsage,
 	processingTimeMs,
 	assetClass,
+	session,
+	traderIntent,
 } = {}) {
 	if (!isEnabled()) {
 		return null;
@@ -633,7 +1045,8 @@ async function recordSignalInternal({
 		const normSymbolInfo = normalizeSymbolAndExchange(symbol, exchange);
 		const normAssetClass = normalizeAssetClass(assetClass);
 		const normSide = normalizeSide(side);
-		const now = new Date();
+		const suppliedTime = receivedAt == null ? NaN : new Date(receivedAt).getTime();
+		const now = Number.isFinite(suppliedTime) ? new Date(suppliedTime) : new Date();
 		const sessionContext = getSessionContext({
 			exchange: normSymbolInfo.exchange,
 			assetClass: normAssetClass,
@@ -674,6 +1087,12 @@ async function recordSignalInternal({
 			} else {
 				entryPriceProvidersToTry = [];
 			}
+		}
+
+		// A persisted delivery anchor must not be paired with a current quote.
+		if (Number.isFinite(suppliedTime)) {
+			entryPriceProvidersToTry = [];
+			if (entryPrice === null) entryPriceReason = 'historical_entry_price_unavailable';
 		}
 
 		for (const provider of entryPriceProvidersToTry) {
@@ -765,11 +1184,33 @@ async function recordSignalInternal({
 			entryPriceReason = null;
 		}
 
-		const eligibility = determineEligibility(normSymbolInfo, normAssetClass, entryPrice, equityProviderName, entryPriceReason);
-		const isEligible = eligibility.state === 'supported_provider' || eligibility.state === 'pending_entry_price';
+		if (entryPrice === null && entryPriceReason !== 'binance_invalid_symbol' && isMcpOutcomePriceEnabled()) {
+			const mcpResult = await fetchEntryPriceFromMcp({
+				symbol: normSymbolInfo.symbol,
+				exchange: normSymbolInfo.exchange,
+				timeframe,
+			});
+			if (mcpResult.price !== null) {
+				entryPrice = mcpResult.price;
+				entryPriceSource = ENTRY_PRICE_SOURCE_MCP;
+				entryPriceReason = null;
+			} else if (entryPriceReason === null || entryPriceReason === equityMarketDataService.REASONS.UNAVAILABLE) {
+				entryPriceReason = mcpResult.reason || REASON_MCP_PRICE_FAILED;
+			}
+		}
 
+		const eligibility = determineEligibility(normSymbolInfo, normAssetClass, entryPrice, equityProviderName, entryPriceReason, entryPriceSource);
+		const isEligible = eligibility.state === 'supported_provider' || eligibility.state === 'pending_entry_price';
+		const normalizedConfidenceScore = normalizeConfidenceScore(confidenceScore);
+		const isScannerSource = CALIBRATION_SCANNER_SOURCES.includes(source);
+		const confidenceScoreFromLegacyScore = isScannerSource ? null : normalizeConfidenceScore(score);
+
+		const runtimeConfig = getRuntimeConfig();
+		const outcomeWindows = getConfiguredOutcomeWindows(runtimeConfig);
+		const outcomeWindowLabels = getOutcomeWindowLabels(outcomeWindows, runtimeConfig);
 		const outcomes = {};
-		for (const [winKey, config] of Object.entries(WINDOW_CONFIGS)) {
+		for (const winKey of outcomeWindows) {
+			const config = WINDOW_CONFIGS[winKey];
 			outcomes[winKey] = {
 				status: isEligible ? 'pending' : 'unavailable',
 				reason: isEligible ? null : eligibility.state,
@@ -784,8 +1225,68 @@ async function recordSignalInternal({
 			};
 		}
 
+		const rawSetupType = setupType !== undefined ? setupType : setup_type;
+		const cleanTraderIntent = traderIntent === undefined ? undefined : validateTraderIntent(traderIntent);
+		const cleanSetupType = typeof rawSetupType === 'string' && rawSetupType.trim()
+			? rawSetupType.trim().toLowerCase()
+			: null;
+
+		const rawInvalidation = invalidationLevel !== undefined
+			? invalidationLevel
+			: (invalidation_level !== undefined ? invalidation_level : stop);
+		const cleanInvalidation = typeof rawInvalidation === 'number' && Number.isFinite(rawInvalidation) && rawInvalidation > 0
+			? rawInvalidation
+			: (typeof rawInvalidation === 'string' && rawInvalidation.trim() && Number.isFinite(Number(rawInvalidation)) && Number(rawInvalidation) > 0
+				? Number(rawInvalidation)
+				: null);
+
+		const rawTarget = targetLevel !== undefined
+			? targetLevel
+			: (target_level !== undefined ? target_level : target);
+		const cleanTarget = typeof rawTarget === 'number' && Number.isFinite(rawTarget) && rawTarget > 0
+			? rawTarget
+			: (typeof rawTarget === 'string' && rawTarget.trim() && Number.isFinite(Number(rawTarget)) && Number(rawTarget) > 0
+				? Number(rawTarget)
+				: null);
+
+		const rawRrr = riskRewardRatio !== undefined ? riskRewardRatio : risk_reward_ratio;
+		let cleanRrr = null;
+		if (typeof rawRrr === 'number' && Number.isFinite(rawRrr) && rawRrr > 0) {
+			cleanRrr = rawRrr;
+		} else if (typeof rawRrr === 'string' && rawRrr.trim()) {
+			const cleaned = rawRrr.replace(/:1$/, '').trim();
+			const num = Number(cleaned);
+			if (Number.isFinite(num) && num > 0) {
+				cleanRrr = num;
+			}
+		}
+
+		let cleanBarriers = null;
+		if (barriers && typeof barriers === 'object' && typeof barriers.source === 'string' && barriers.source.trim()) {
+			cleanBarriers = { source: barriers.source.trim() };
+			if (typeof barriers.stop === 'number' && Number.isFinite(barriers.stop)) {
+				cleanBarriers.stop = barriers.stop;
+			}
+			if (typeof barriers.target === 'number' && Number.isFinite(barriers.target)) {
+				cleanBarriers.target = barriers.target;
+			}
+			if (typeof barriers.side === 'string' && barriers.side.trim()) {
+				cleanBarriers.side = barriers.side.trim();
+			}
+			if (typeof barriers.stopPct === 'number' && Number.isFinite(barriers.stopPct)) {
+				cleanBarriers.stopPct = barriers.stopPct;
+			}
+			if (typeof barriers.rewardMultiplier === 'number' && Number.isFinite(barriers.rewardMultiplier)) {
+				cleanBarriers.rewardMultiplier = barriers.rewardMultiplier;
+			}
+			if (typeof barriers.timeHorizon === 'string' && barriers.timeHorizon.trim()) {
+				cleanBarriers.timeHorizon = barriers.timeHorizon.trim();
+			}
+		}
+
 		const document = {
 			receivedAt: admin.firestore.Timestamp.fromDate(now),
+			...(Number.isFinite(suppliedTime) ? { requiresHistoricalEntryPrice: true } : {}),
 			observedAt: admin.firestore.Timestamp.fromDate(now),
 			decisionBarClosedAt: sessionContext.decisionBarClosedAt
 				? admin.firestore.Timestamp.fromDate(new Date(sessionContext.decisionBarClosedAt))
@@ -798,6 +1299,11 @@ async function recordSignalInternal({
 			calendarId: sessionContext.calendarId,
 			calendarTimeZone: sessionContext.calendarTimeZone,
 			sessionContext: sessionContext.sessionContext,
+			session: typeof session === 'string' && session.trim()
+				? session.trim()
+				: (normSymbolInfo.exchange && require('./EquitySessionService').isEquityExchange(normSymbolInfo.exchange)
+					? require('./EquitySessionService').classifySession({ exchange: normSymbolInfo.exchange, symbol: normSymbolInfo.symbol, timestamp: now })
+					: '24/7'),
 			measurementCohort: sessionContext.measurementCohort,
 			expiresAt: buildRetentionExpiryTimestamp(now),
 			requestId: typeof requestId === 'string' ? requestId : 'unknown',
@@ -806,8 +1312,12 @@ async function recordSignalInternal({
 			exchange: normSymbolInfo.exchange,
 			assetClass: normAssetClass || null,
 			timeframe: timeframe ? String(timeframe).toLowerCase() : null,
-			setupType: setupType ? String(setupType).toLowerCase() : null,
+			setupType: cleanSetupType,
 			score: typeof score === 'number' && Number.isFinite(score) ? score : null,
+			confidenceScore: normalizedConfidenceScore ?? confidenceScoreFromLegacyScore,
+			...(isScannerSource && normalizedConfidenceScore !== null
+				? { confidenceScoreOrigin: 'explicit' }
+				: {}),
 			side: normSide,
 			price: entryPrice,
 			observedPrice: entryPrice,
@@ -815,19 +1325,45 @@ async function recordSignalInternal({
 				? entryPrice
 				: null,
 			entryPriceSource: entryPriceSource || null,
-			stop: typeof stop === 'number' && Number.isFinite(stop) ? stop : null,
-			target: typeof target === 'number' && Number.isFinite(target) ? target : null,
+			stop: cleanInvalidation,
+			target: cleanTarget,
+			invalidationLevel: cleanInvalidation,
+			targetLevel: cleanTarget,
+			riskRewardRatio: cleanRrr,
+			barriers: cleanBarriers,
 			sources: Array.isArray(sources) ? sources : [],
 			tokenUsage: tokenUsage || null,
 			processingTimeMs: typeof processingTimeMs === 'number' && Number.isFinite(processingTimeMs) ? processingTimeMs : null,
+			...(cleanTraderIntent ? { traderIntent: cleanTraderIntent } : {}),
 			marketDataProvider: normSymbolInfo.exchange === 'BINANCE' ? 'binance' : (equityProviderName || null),
+			outcomeWindows,
+			outcomeWindowLabels,
 			eligibilityState: eligibility.state,
 			eligibilityReason: eligibility.reason || null,
 			outcomeEvaluated: !isEligible,
 			outcomes,
+			deployment: getDeploymentIdentity(),
 		};
 
-		const docRef = await firestore.collection(COLLECTION_NAME).add(document);
+		let docRef;
+		if (idempotencyKey) {
+			const id = createHash('sha256').update(idempotencyKey).digest('hex');
+			docRef = firestore.collection(COLLECTION_NAME).doc(id);
+			const write = await fireAndForget('signalOutcomes', async () => {
+				try {
+					return await docRef.create(document);
+				} catch (error) {
+					if (error.code !== 6) throw error;
+					// Already recorded: never overwrite a concurrently evaluated outcome.
+					return null;
+				}
+			});
+			if (!write.ok) throw write.error;
+		} else {
+			const write = await fireAndForget('signalOutcomes', () => firestore.collection(COLLECTION_NAME).add(document));
+			if (!write.ok) throw write.error;
+			docRef = write.value;
+		}
 		console.debug(`[SignalOutcomeService] Signal outcome recorded with ID: ${docRef.id}`);
 		return docRef.id;
 	} catch (error) {
@@ -860,6 +1396,10 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 	let pendingCount = 0;
 	let errorCount = 0;
 	let regionBlockedCount = 0;
+	let leaseRenewHandle = null;
+	let leaseRenewPromise = Promise.resolve();
+	let leaseAcquired = false;
+	let leaseLost = false;
 
 	try {
 		const firestore = AlertStorageService.getFirestore();
@@ -886,6 +1426,43 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 			options.maxRetryAgeMs !== undefined ? options.maxRetryAgeMs : getRuntimeConfig().SIGNAL_OUTCOME_MAX_RETRY_AGE_MS,
 			DEFAULT_MAX_RETRY_AGE_MS
 		);
+
+		const leaseMs = options.leaseMs !== undefined && options.leaseMs !== null
+			? parseBoundedInteger(options.leaseMs, DEFAULT_LEASE_MS, MIN_LEASE_MS, MAX_LEASE_MS)
+			: getLeaseMs();
+		leaseAcquired = await acquireSweepLease(startTime, leaseMs);
+		if (!leaseAcquired) {
+			leaseHeldSkipCount++;
+			lastRunLeaseHeld = true;
+			return { scannedCount: 0, evaluatedCount: 0, skipped: true, reason: 'lease-held' };
+		}
+		lastRunLeaseHeld = false;
+
+		const renewIntervalMs = options.leaseRenewIntervalMs !== undefined && options.leaseRenewIntervalMs !== null
+			? parsePositiveInteger(options.leaseRenewIntervalMs, MIN_LEASE_RENEW_INTERVAL_MS)
+			: Math.max(MIN_LEASE_RENEW_INTERVAL_MS, Math.floor(leaseMs / 2));
+		// The renewal verdict is the only proof this process still owns the sweep,
+		// so it is recorded instead of discarded. Renewals are serialized on one
+		// chain, and `finally` awaits it, so ownership is never classified while a
+		// renewal is still in flight.
+		leaseRenewHandle = createManagedInterval('signal-outcome-lease-renewal', () => {
+			leaseRenewPromise = leaseRenewPromise
+				.then(() => renewSweepLease(Date.now(), leaseMs))
+				.then((renewal) => {
+					if (renewal !== LEASE_RENEWAL.LOST) {
+						return;
+					}
+					leaseLost = true;
+					console.warn('[SignalOutcomeService] Lost signal outcome sweep lease ownership mid-sweep. Halting sweep so only one replica prices signals.');
+				})
+				.catch((error) => {
+					console.warn('[SignalOutcomeService] Lease renewal sweep failed:', error.message);
+				});
+			return leaseRenewPromise;
+		}, renewIntervalMs);
+		if (leaseRenewHandle && typeof leaseRenewHandle.unref === 'function') {
+			leaseRenewHandle.unref();
+		}
 
 		let query = firestore.collection(COLLECTION_NAME).where('outcomeEvaluated', '==', false);
 		if (lastEvaluatedDoc) {
@@ -914,6 +1491,9 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 		let sweepDeadlineExceeded = false;
 
 		for (const doc of snapshot.docs) {
+			if (leaseLost) {
+				break;
+			}
 			if (Date.now() - startTime >= effectiveMaxDurationMs || sweepDeadlineExceeded) {
 				console.warn(`[SignalOutcomeService] Outcome evaluation sweep max duration budget (${effectiveMaxDurationMs}ms) exceeded. Halting sweep.`);
 				break;
@@ -1017,7 +1597,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 									resolvedPriceSource = 'binance';
 								}
 							}
-							if (!resolvedPrice) {
+							if (!resolvedPrice && !data.requiresHistoricalEntryPrice) {
 								const remainingAfterKlines = effectiveMaxDurationMs - (Date.now() - startTime);
 								if (remainingAfterKlines <= 0) throw new Error(`Signal outcome sweep deadline exceeded (${effectiveMaxDurationMs}ms)`);
 								const avgRes = await Promise.race([sweepClient.getAvgPrice({ symbol: data.symbol }), timeoutPromise]);
@@ -1037,7 +1617,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 						continue;
 					}
 
-					if (source === 'gemini' && data.exchange === 'BINANCE'
+					if (source === 'gemini' && data.exchange === 'BINANCE' && !data.requiresHistoricalEntryPrice
 						&& geminiPriceService.isGeminiGroundingEnabled({ requireGroundingFlag: true })) {
 						try {
 							const geminiResult = await geminiPriceService.fetchGeminiPrice(data.symbol, {
@@ -1077,7 +1657,7 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 						} catch (err) {
 							entryPriceError = err;
 						}
-						if (!resolvedPrice) {
+						if (!resolvedPrice && !data.requiresHistoricalEntryPrice) {
 							try {
 								const quotePrice = await equityMarketDataService.getEntryPrice({
 									symbol: data.symbol,
@@ -1169,6 +1749,12 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 				}
 
 				const config = WINDOW_CONFIGS[winKey];
+				if (!config) {
+					outcome.status = 'unavailable';
+					outcome.reason = 'unsupported_outcome_window';
+					docUpdated = true;
+					continue;
+				}
 
 				let abortController = null;
 				let timerId = null;
@@ -1332,6 +1918,9 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 					if (rMultiple !== null) {
 						outcome.rMultiple = rMultiple;
 					}
+					if (isCompleteTraderIntent(data.traderIntent) && data.traderIntent.horizon === winKey) {
+						outcome.traderPlanOutcome = evaluateTraderPlan(sortedKlines, data.traderIntent);
+					}
 					docUpdated = true;
 				} catch (error) {
 					if (abortController) {
@@ -1466,6 +2055,20 @@ async function evaluatePendingOutcomesInternal(options = {}) {
 		console.warn('[SignalOutcomeService] Failed to evaluate pending outcomes:', error.message);
 		return { scannedCount, evaluatedCount, error: error.message };
 	} finally {
+		if (leaseRenewHandle) {
+			await leaseRenewHandle.stop();
+			leaseRenewHandle = null;
+		}
+		// Settle the renewal already in flight before deciding whether this sweep
+		// ran as the lease holder; renewSweepLease never rejects.
+		await leaseRenewPromise;
+		if (leaseAcquired) {
+			if (leaseLost) {
+				leaseHeldSkipCount++;
+				lastRunLeaseHeld = true;
+			}
+			await releaseSweepLease(Date.now());
+		}
 		isEvaluating = false;
 		lastRunAt = new Date();
 		lastRunDurationMs = Date.now() - startTime;
@@ -1494,14 +2097,65 @@ function evaluatePendingOutcomes(options = {}) {
 
 function runScheduledSweep() {
 	if (shutdownRequested) {
-		return;
+		return undefined;
 	}
 
-	evaluatePendingOutcomes()
-		.then(() => persistWorkerHeartbeat())
+	if (activeSweepPromise) {
+		return activeSweepPromise;
+	}
+
+	const sweepPromise = (async () => {
+		const sweepStartTime = Date.now();
+		const maxDurationMs = parseTimerInterval(getRuntimeConfig().SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 30000);
+		const sweepResult = await evaluatePendingOutcomes({ maxDurationMs });
+		if (sweepResult && sweepResult.skipped && sweepResult.reason === 'already_evaluating') {
+			return sweepResult;
+		}
+		try {
+			const firestore = AlertStorageService.getFirestore();
+			if (firestore && dailyRollupService.isOutcomeRollupEnabled()) {
+				const elapsed = Date.now() - sweepStartTime;
+				const remainingBudgetMs = Math.max(0, maxDurationMs - elapsed);
+				if (remainingBudgetMs > 0) {
+					await dailyRollupService.rollupOutcomesDaily({
+						firestore,
+						maxDurationMs: remainingBudgetMs,
+						deadline: sweepStartTime + maxDurationMs,
+					});
+				}
+			}
+		} catch (rollupErr) {
+			console.warn('[SignalOutcomeService] Daily outcome rollup failed:', rollupErr.message);
+		}
+		await persistWorkerHeartbeat();
+		return sweepResult;
+	})()
 		.catch((err) => {
 			console.warn('[SignalOutcomeService] Scheduled worker sweep failed:', err.message);
+		})
+		.finally(() => {
+			if (activeSweepPromise === sweepPromise) {
+				activeSweepPromise = null;
+			}
 		});
+
+	activeSweepPromise = sweepPromise;
+	return sweepPromise;
+}
+
+/**
+ * A sweep that outlives its own lease can be legitimately taken over mid-run, which
+ * is the only way two replicas both price the same pending signal. Neither value is
+ * validated against the other anywhere, and the sweep budget is Remote Config
+ * eligible while the lease is environment-only, so warn rather than clamp.
+ */
+function warnIfLeaseDoesNotOutliveSweepBudget() {
+	const leaseMs = getLeaseMs();
+	const maxDurationMs = parseTimerInterval(getRuntimeConfig().SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 30000);
+	if (leaseMs > maxDurationMs) {
+		return;
+	}
+	console.warn(`[SignalOutcomeService] SIGNAL_OUTCOME_EVALUATION_LEASE_MS (${leaseMs}ms) does not exceed the sweep duration budget (${maxDurationMs}ms). A sweep can outlive its lease and be taken over mid-run.`);
 }
 
 /**
@@ -1517,7 +2171,10 @@ function startWorker(options = {}) {
 		return false;
 	}
 
-	if (workerTimer) {
+	const outcomeWindows = getConfiguredOutcomeWindows();
+	getOutcomeWindowLabels(outcomeWindows);
+
+	if (workerTimer || workerStartupPending) {
 		return true;
 	}
 
@@ -1533,17 +2190,55 @@ function startWorker(options = {}) {
 
 	activeIntervalMs = intervalMs;
 
-	// Trigger initial sweep non-blockingly after server readiness
-	Promise.resolve().then(() => {
-		runScheduledSweep();
+	warnIfLeaseDoesNotOutliveSweepBudget();
+	const startupJitterMs = resolveStartupJitterMs({
+		envVar: 'SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS',
+		runtimeKey: 'SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS',
+		globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+		globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
 	});
-
-	workerTimer = setInterval(runScheduledSweep, intervalMs);
-
-	if (workerTimer && options.unref !== false && typeof workerTimer.unref === 'function') {
-		workerTimer.unref();
+	if (startupJitterMs > 0) {
+		console.info(`[SignalOutcomeService] Applying startup jitter (${startupJitterMs}ms max)`);
 	}
-	void persistWorkerHeartbeat();
+	workerStartupPending = true;
+	const startupGeneration = ++workerStartupGeneration;
+	const startupAbortController = new AbortController();
+	workerStartupAbortController = startupAbortController;
+	const scheduleSweeps = () => {
+		if (startupGeneration !== workerStartupGeneration || shutdownRequested) {
+			return;
+		}
+		if (workerStartupAbortController === startupAbortController) {
+			workerStartupAbortController = null;
+		}
+		workerStartupPending = false;
+		workerTimer = createManagedInterval('signal-outcome-worker-sweep', runScheduledSweep, intervalMs);
+		if (workerTimer && options.unref !== false && typeof workerTimer.unref === 'function') {
+			workerTimer.unref();
+		}
+		void persistWorkerHeartbeat();
+		// Trigger the initial sweep non-blockingly after server readiness and jitter.
+		Promise.resolve().then(() => {
+			runScheduledSweep();
+		});
+	};
+	if (startupJitterMs > 0) {
+		applyStartupJitter(startupJitterMs, {
+			unref: options.unref !== false,
+			signal: startupAbortController.signal,
+		}).then(scheduleSweeps).catch((error) => {
+			if (workerStartupAbortController === startupAbortController) {
+				workerStartupAbortController = null;
+			}
+			if (!startupAbortController.signal.aborted) {
+				console.warn('[SignalOutcomeService] Startup jitter failed:', error.message);
+			}
+			scheduleSweeps();
+		});
+	} else {
+		workerStartupAbortController = null;
+		scheduleSweeps();
+	}
 
 	return true;
 }
@@ -1553,21 +2248,28 @@ function startWorker(options = {}) {
  */
 function stopWorker(options = {}) {
 	shutdownRequested = true;
+	workerStartupGeneration += 1;
+	if (workerStartupAbortController) {
+		workerStartupAbortController.abort();
+		workerStartupAbortController = null;
+	}
+	workerStartupPending = false;
 	if (workerTimer) {
-		clearInterval(workerTimer);
+		workerTimer.clear();
 		workerTimer = null;
 	}
 	activeIntervalMs = null;
 	lastEvaluatedDoc = null;
 
-	if (options.drain !== true || !activeEvaluationPromise) {
+	const activeDrainPromise = activeSweepPromise || activeEvaluationPromise;
+	if (options.drain !== true || !activeDrainPromise) {
 		isEvaluating = false;
 		return persistWorkerHeartbeat();
 	}
 
 	const drainTimeoutMs = Math.min(getWorkerStatus().maxDurationMs, MAX_WORKER_DRAIN_TIMEOUT_MS);
 	return awaitWithTimeout(
-		activeEvaluationPromise,
+		activeDrainPromise,
 		drainTimeoutMs,
 		`Dedicated worker drain timed out after ${drainTimeoutMs}ms`,
 	)
@@ -1597,7 +2299,7 @@ function getWorkerStatus() {
 	return {
 		enabled: isEnabled(),
 		role: getWorkerRole(),
-		running: workerTimer !== null,
+		running: workerTimer !== null || workerStartupPending,
 		shutdownRequested,
 		intervalMs,
 		batchLimit,
@@ -1613,8 +2315,23 @@ function getWorkerStatus() {
 		lastRunPendingCount,
 		lastRunErrorCount,
 		lastRunRegionBlockedCount,
+		lastRunLeaseHeld,
+		leaseHeldSkipCount,
+		leaseMs: getLeaseMs(),
+		breakdownBucketCap: MAX_OUTCOME_BREAKDOWN_BUCKETS,
+		lastBreakdownBucketCount,
+		lastBreakdownTruncated,
+		breakdownTruncationCount,
 		timerId: workerTimer ? true : null,
 	};
+}
+
+function recordBreakdownRuntimeMetrics(bucketCount, truncated) {
+	lastBreakdownBucketCount = bucketCount;
+	lastBreakdownTruncated = truncated;
+	if (truncated) {
+		breakdownTruncationCount++;
+	}
 }
 
 function createCoverageBucket() {
@@ -1627,8 +2344,8 @@ function createCoverageBucket() {
 	};
 }
 
-function createEmptyMetricsSummary() {
-	return {
+function createEmptyMetricsSummary(breakdownTypes = []) {
+	const summary = {
 		available: false,
 		totalSignalsReceived: 0,
 		totalSignalsEligible: 0,
@@ -1640,11 +2357,18 @@ function createEmptyMetricsSummary() {
 		targetHitRatePercent: 0,
 		stopHitRatePercent: 0,
 		expectancyR: null,
+		byTraderPlan: { samples: 0, hitRatePercent: 0, averageRMultiple: null },
 		populationNote: 'No outcome measurements found for the requested criteria.',
 		exchangeBreakdown: {},
 		providerBreakdown: {},
 		entryPriceSourceBreakdown: {},
 		eligibilityBreakdown: {},
+		bySession: {},
+		barrierSourceBreakdown: {
+			derived: { received: 0, eligible: 0, targetEligible: 0, stopEligible: 0, targetHits: 0, stopHits: 0, targetHitRatePercent: 0, stopHitRatePercent: 0 },
+			marketContext: { received: 0, eligible: 0, targetEligible: 0, stopEligible: 0, targetHits: 0, stopHits: 0, targetHitRatePercent: 0, stopHitRatePercent: 0 },
+			none: { received: 0, eligible: 0, targetEligible: 0, stopEligible: 0, targetHits: 0, stopHits: 0, targetHitRatePercent: 0, stopHitRatePercent: 0 },
+		},
 		windows: {},
 		drawdownProxy: {
 			averageMaxAdverseExcursionPercent: 0,
@@ -1652,15 +2376,190 @@ function createEmptyMetricsSummary() {
 		},
 		falsePositiveCandidatesCount: 0,
 		falsePositiveCandidates: [],
+		reactions: {
+			total: 0,
+			approve: 0,
+			reject: 0,
+			approveRate: 0,
+			weightedScore: null,
+		},
 		latencyCostMetadata: {
 			averageProcessingTimeMs: null,
 			tokenUsage: {
 				inputTokens: 0,
 				outputTokens: 0,
 				totalCost: 0,
+				pricing: {
+					unknownModelPricing: false,
+					unknownModels: [],
+				},
 			},
 		},
 	};
+	if (breakdownTypes.includes('symbol')) {
+		summary.symbolBreakdown = [];
+	}
+	if (breakdownTypes.includes('setup')) {
+		summary.setupBreakdown = [];
+	}
+	if (breakdownTypes.length > 0) {
+		summary.truncated = false;
+		recordBreakdownRuntimeMetrics(0, false);
+	}
+	return summary;
+}
+
+function createOutcomeBreakdownBucket(dimensions) {
+	return {
+		...dimensions,
+		...createCoverageBucket(),
+		dimensions,
+		targetHits: 0,
+		targetEligibleWindows: 0,
+		stopHits: 0,
+		stopEligibleWindows: 0,
+		windows: {},
+	};
+}
+
+function getOutcomeBreakdownBucket(buckets, key, dimensions, state) {
+	const existing = buckets.get(key);
+	if (existing) {
+		return existing;
+	}
+	if (buckets.size >= MAX_OUTCOME_BREAKDOWN_BUCKETS) {
+		state.truncated = true;
+		return null;
+	}
+	const bucket = createOutcomeBreakdownBucket(dimensions);
+	buckets.set(key, bucket);
+	return bucket;
+}
+
+function normalizeBreakdownTypes(breakdown) {
+	if (!Array.isArray(breakdown)) {
+		return [];
+	}
+	return [...new Set(breakdown
+		.filter((value) => typeof value === 'string')
+		.map((value) => value.trim().toLowerCase())
+		.filter((value) => value === 'symbol' || value === 'setup'))];
+}
+
+function getOutcomeBreakdownIdentity(type, signal) {
+	const exchange = typeof signal.exchange === 'string' && signal.exchange.trim()
+		? signal.exchange.trim().toUpperCase()
+		: 'UNKNOWN';
+	if (type === 'symbol') {
+		const symbol = typeof signal.symbol === 'string' && signal.symbol.trim()
+			? signal.symbol.trim().toUpperCase()
+			: 'UNKNOWN';
+		return {
+			key: JSON.stringify([symbol, exchange]),
+			dimensions: { symbol, exchange },
+		};
+	}
+	const setupType = typeof signal.setupType === 'string' && signal.setupType.trim()
+		? signal.setupType.trim().toLowerCase()
+		: 'UNKNOWN';
+	return {
+		key: JSON.stringify([setupType, exchange]),
+		dimensions: { setupType, exchange },
+	};
+}
+
+function accumulateBreakdownWindow(bucket, signal, outcome, windowKey) {
+	if (!bucket.windows[windowKey]) {
+		bucket.windows[windowKey] = {
+			evaluatedWindows: 0,
+			targetHits: 0,
+			targetEligibleWindows: 0,
+			stopHits: 0,
+			stopEligibleWindows: 0,
+			barrierEligibleWindows: 0,
+			totalMfe: 0,
+			mfeCount: 0,
+			totalMae: 0,
+			maeCount: 0,
+		};
+	}
+	const windowBucket = bucket.windows[windowKey];
+	windowBucket.evaluatedWindows++;
+	const hasTargetBarrier = typeof signal.target === 'number' && Number.isFinite(signal.target) && signal.target > 0;
+	const hasStopBarrier = typeof signal.stop === 'number' && Number.isFinite(signal.stop) && signal.stop > 0;
+	if (hasTargetBarrier) {
+		windowBucket.targetEligibleWindows++;
+		bucket.targetEligibleWindows++;
+		if (outcome.targetHit === true || outcome.firstHit === 'target') {
+			windowBucket.targetHits++;
+			bucket.targetHits++;
+		}
+	}
+	if (hasStopBarrier) {
+		windowBucket.stopEligibleWindows++;
+		bucket.stopEligibleWindows++;
+		if (outcome.stopHit === true || outcome.firstHit === 'stop') {
+			windowBucket.stopHits++;
+			bucket.stopHits++;
+		}
+	}
+	if (hasTargetBarrier || hasStopBarrier) {
+		windowBucket.barrierEligibleWindows++;
+		if (typeof outcome.maxFavorableExcursion === 'number' && Number.isFinite(outcome.maxFavorableExcursion)) {
+			windowBucket.totalMfe += outcome.maxFavorableExcursion;
+			windowBucket.mfeCount++;
+		}
+		if (typeof outcome.maxAdverseExcursion === 'number' && Number.isFinite(outcome.maxAdverseExcursion)) {
+			windowBucket.totalMae += outcome.maxAdverseExcursion;
+			windowBucket.maeCount++;
+		}
+	}
+}
+
+function formatOutcomeBreakdownBucket(bucket) {
+	const windows = Object.fromEntries(Object.entries(bucket.windows).map(([windowKey, windowBucket]) => ([windowKey, {
+		evaluatedWindows: windowBucket.evaluatedWindows,
+		targetEligibleWindows: windowBucket.targetEligibleWindows,
+		stopEligibleWindows: windowBucket.stopEligibleWindows,
+		targetHitRate: windowBucket.targetEligibleWindows > 0
+			? parseFloat((windowBucket.targetHits / windowBucket.targetEligibleWindows).toFixed(4))
+			: 0,
+		stopHitRate: windowBucket.stopEligibleWindows > 0
+			? parseFloat((windowBucket.stopHits / windowBucket.stopEligibleWindows).toFixed(4))
+			: 0,
+		barrierEligibleWindows: windowBucket.barrierEligibleWindows,
+		averageMfePercent: windowBucket.mfeCount > 0
+			? parseFloat((windowBucket.totalMfe / windowBucket.mfeCount).toFixed(4))
+			: null,
+		averageMaePercent: windowBucket.maeCount > 0
+			? parseFloat((windowBucket.totalMae / windowBucket.maeCount).toFixed(4))
+			: null,
+	}])));
+	return {
+		...bucket.dimensions,
+		received: bucket.received,
+		eligible: bucket.eligible,
+		evaluated: bucket.evaluated,
+		pending: bucket.pending,
+		unavailable: bucket.unavailable,
+		targetEligibleWindows: bucket.targetEligibleWindows,
+		stopEligibleWindows: bucket.stopEligibleWindows,
+		targetHitRate: bucket.targetEligibleWindows > 0
+			? parseFloat((bucket.targetHits / bucket.targetEligibleWindows).toFixed(4))
+			: 0,
+		stopHitRate: bucket.stopEligibleWindows > 0
+			? parseFloat((bucket.stopHits / bucket.stopEligibleWindows).toFixed(4))
+			: 0,
+		windows,
+	};
+}
+
+function sortOutcomeBreakdown(buckets, dimension) {
+	return [...buckets.values()]
+		.sort((left, right) => right.received - left.received
+			|| left[dimension].localeCompare(right[dimension])
+			|| left.exchange.localeCompare(right.exchange))
+		.map(formatOutcomeBreakdownBucket);
 }
 
 function createWindowAccumulator() {
@@ -1685,6 +2584,8 @@ function createWindowBucket() {
 		maxMae: 0,
 		totalR: 0,
 		rCount: 0,
+		totalRiskRewardRatio: 0,
+		riskRewardRatioCount: 0,
 	};
 }
 
@@ -1715,6 +2616,15 @@ function accumulateWindowBucket(accumulator, signal, outcome, key) {
 		bucket.totalR += outcome.rMultiple;
 		bucket.rCount++;
 	}
+	const rrr = typeof signal.riskRewardRatio === 'number' && Number.isFinite(signal.riskRewardRatio) && signal.riskRewardRatio > 0
+		? signal.riskRewardRatio
+		: (typeof signal.risk_reward_ratio === 'number' && Number.isFinite(signal.risk_reward_ratio) && signal.risk_reward_ratio > 0
+			? signal.risk_reward_ratio
+			: null);
+	if (rrr !== null) {
+		bucket.totalRiskRewardRatio += rrr;
+		bucket.riskRewardRatioCount++;
+	}
 	bucket.totalReturn += outcome.return;
 	bucket.totalMfe += outcome.maxFavorableExcursion;
 	bucket.totalMae += outcome.maxAdverseExcursion;
@@ -1737,6 +2647,12 @@ function buildWindowStatsShape(bucket) {
 			? parseFloat(((bucket.stopHits / bucket.stopEligibleWindows) * 100).toFixed(2))
 			: 0,
 		expectancyR: bucket.rCount > 0 ? parseFloat((bucket.totalR / bucket.rCount).toFixed(4)) : null,
+		averageRiskRewardRatio: bucket.riskRewardRatioCount > 0
+			? parseFloat((bucket.totalRiskRewardRatio / bucket.riskRewardRatioCount).toFixed(2))
+			: null,
+		avgRrr: bucket.riskRewardRatioCount > 0
+			? parseFloat((bucket.totalRiskRewardRatio / bucket.riskRewardRatioCount).toFixed(2))
+			: null,
 		averageReturnPercent: parseFloat((bucket.totalReturn / total).toFixed(4)),
 		averageMfePercent: parseFloat((bucket.totalMfe / total).toFixed(4)),
 		averageMaePercent: parseFloat((bucket.totalMae / total).toFixed(4)),
@@ -1747,11 +2663,12 @@ function buildWindowStatsShape(bucket) {
 /**
  * Compute aggregated metrics.
  */
-async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, window } = {}) {
+async function summarizeOutcomes({ from, to, limit, symbol, exchange, setupType, status, window, breakdown, signal: abortSignal } = {}) {
 	const firestore = AlertStorageService.getFirestore();
 	if (!firestore) {
 		throw createStorageUnavailableError();
 	}
+	const requestedBreakdowns = normalizeBreakdownTypes(breakdown);
 
 	const parsedFrom = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 	const parsedTo = to ? new Date(to) : new Date();
@@ -1762,7 +2679,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		? parsedFrom.getTime()
 		: Math.max(parsedFrom.getTime(), retentionCutoffMs);
 	if (effectiveFromMs > parsedTo.getTime()) {
-		return createEmptyMetricsSummary();
+		return createEmptyMetricsSummary(requestedBreakdowns);
 	}
 	const effectiveFrom = new Date(effectiveFromMs);
 
@@ -1771,9 +2688,16 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 	const matchedDocs = [];
 	let lastDoc = null;
 
-	const hasFilters = Boolean(symbol || exchange || status || window);
+	const hasFilters = Boolean(symbol || exchange || setupType || status || window);
 
 	while (matchedDocs.length < targetLimit) {
+		if (abortSignal && abortSignal.aborted) {
+			const abortError = abortSignal.reason instanceof Error
+				? abortSignal.reason
+				: new Error('Outcome query aborted');
+			throw abortError;
+		}
+
 		let query = firestore
 			.collection(COLLECTION_NAME)
 			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))
@@ -1805,7 +2729,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 					id: doc.id,
 					receivedAt: getDocTimestamp(doc.data()),
 				};
-				if (!matchesOutcomeFilters(formatted, { symbol, exchange, status, window, from, to })) {
+				if (!matchesOutcomeFilters(formatted, { symbol, exchange, setupType, status, window, from, to })) {
 					continue;
 				}
 			}
@@ -1822,7 +2746,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 	}
 
 	if (matchedDocs.length === 0) {
-		return createEmptyMetricsSummary();
+		return createEmptyMetricsSummary(requestedBreakdowns);
 	}
 
 	const docs = matchedDocs.map(doc => ({
@@ -1832,7 +2756,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 	}));
 
 	if (docs.length === 0) {
-		return createEmptyMetricsSummary();
+		return createEmptyMetricsSummary(requestedBreakdowns);
 	}
 
 	let totalSignalsReceived = docs.length;
@@ -1845,6 +2769,21 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 	const providerBreakdown = {};
 	const entryPriceSourceBreakdown = {};
 	const eligibilityBreakdown = {};
+	const bySession = {};
+	const symbolBreakdownBuckets = new Map();
+	const setupBreakdownBuckets = new Map();
+	const breakdownState = { truncated: false };
+
+	// Barrier provenance breakdown (issue #809 / CB-???). Mirrors the
+	// entryPriceSourceBreakdown shape so operators can see whether
+	// target/stop outcomes came from a provider (marketContext) or the
+	// NewsAnalyzer.deriveBarriers() heuristic, and how many signals had
+	// no barrier provenance recorded at all.
+	const barrierSourceBreakdown = {
+		derived: { received: 0, eligible: 0, targetHits: 0, stopHits: 0, targetEligible: 0, stopEligible: 0 },
+		marketContext: { received: 0, eligible: 0, targetHits: 0, stopHits: 0, targetEligible: 0, stopEligible: 0 },
+		none: { received: 0, eligible: 0, targetHits: 0, stopHits: 0, targetEligible: 0, stopEligible: 0 },
+	};
 
 	const evaluatedSignals = [];
 
@@ -1853,6 +2792,41 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		const docSymbol = doc.symbol || 'UNKNOWN';
 		const marketDataProvider = doc.marketDataProvider || (docExchange === 'BINANCE' ? 'binance' : 'none');
 		const entryPriceSource = doc.entryPriceSource || (doc.price !== null && doc.price !== undefined ? (doc.marketDataProvider || 'unknown') : 'none');
+
+		let docSession = doc.session;
+		if (!docSession || typeof docSession !== 'string') {
+			if (doc.sessionContext) {
+				const map = {
+					regular: 'regular',
+					pre_open: 'pre',
+					after_hours: 'post',
+					market_holiday: 'closed',
+					crypto_24_7: '24/7',
+				};
+				docSession = map[doc.sessionContext] || 'unknown';
+			} else {
+				docSession = 'unknown';
+			}
+		} else {
+			docSession = docSession.toLowerCase();
+		}
+
+		if (docSymbol !== 'UNKNOWN') {
+			if (!bySession[docSymbol]) {
+				bySession[docSymbol] = { regular: 0, pre: 0, post: 0, closed: 0, total: 0 };
+			}
+			if (Object.prototype.hasOwnProperty.call(bySession[docSymbol], docSession)) {
+				bySession[docSymbol][docSession]++;
+			}
+			bySession[docSymbol].total++;
+		}
+
+		const barrierSource = (doc.barriers && typeof doc.barriers.source === 'string')
+			? doc.barriers.source
+			: 'none';
+		if (!barrierSourceBreakdown[barrierSource]) {
+			barrierSourceBreakdown[barrierSource] = { received: 0, eligible: 0, targetHits: 0, stopHits: 0, targetEligible: 0, stopEligible: 0 };
+		}
 
 		let eligibilityState = doc.eligibilityState;
 		if (!eligibilityState) {
@@ -1871,9 +2845,28 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		if (isEligible) {
 			totalSignalsEligible++;
 		}
+		const breakdownBuckets = [];
+		if (requestedBreakdowns.includes('symbol')) {
+			const identity = getOutcomeBreakdownIdentity('symbol', doc);
+			const bucket = getOutcomeBreakdownBucket(symbolBreakdownBuckets, identity.key, identity.dimensions, breakdownState);
+			if (bucket) breakdownBuckets.push(bucket);
+		}
+		if (requestedBreakdowns.includes('setup')) {
+			const identity = getOutcomeBreakdownIdentity('setup', doc);
+			const bucket = getOutcomeBreakdownBucket(setupBreakdownBuckets, identity.key, identity.dimensions, breakdownState);
+			if (bucket) breakdownBuckets.push(bucket);
+		}
+		for (const bucket of breakdownBuckets) {
+			bucket.received++;
+			if (isEligible) bucket.eligible++;
+		}
 
 		eligibilityBreakdown[eligibilityState] = (eligibilityBreakdown[eligibilityState] || 0) + 1;
 		entryPriceSourceBreakdown[entryPriceSource] = (entryPriceSourceBreakdown[entryPriceSource] || 0) + 1;
+		barrierSourceBreakdown[barrierSource].received++;
+		if (isEligible) {
+			barrierSourceBreakdown[barrierSource].eligible++;
+		}
 
 		if (!exchangeBreakdown[docExchange]) {
 			exchangeBreakdown[docExchange] = createCoverageBucket();
@@ -1902,21 +2895,25 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 			exchangeBreakdown[docExchange].evaluated++;
 			providerBreakdown[marketDataProvider].evaluated++;
 			evaluatedSignals.push(doc);
+			for (const bucket of breakdownBuckets) bucket.evaluated++;
 		} else if (hasPending) {
 			totalSignalsPending++;
 			exchangeBreakdown[docExchange].pending++;
 			providerBreakdown[marketDataProvider].pending++;
+			for (const bucket of breakdownBuckets) bucket.pending++;
 		} else {
 			totalSignalsUnavailable++;
 			exchangeBreakdown[docExchange].unavailable++;
 			providerBreakdown[marketDataProvider].unavailable++;
+			for (const bucket of breakdownBuckets) bucket.unavailable++;
 		}
 	}
 
+	const configuredWindows = getConfiguredOutcomeWindows();
 	const windowStats = {};
 	const windowKeysToAggregate = window
-		? [Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window]
-		: Object.keys(WINDOW_CONFIGS);
+		? [configuredWindows.find(k => k.toLowerCase() === window.toLowerCase()) || window]
+		: configuredWindows;
 	if (evaluatedSignals.length > 0) {
 		for (const winKey of windowKeysToAggregate) {
 			const accumulator = createWindowAccumulator();
@@ -1924,6 +2921,16 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 			for (const signal of evaluatedSignals) {
 				const outcome = signal.outcomes ? signal.outcomes[winKey] : null;
 				if (outcome && outcome.status === 'evaluated') {
+					if (requestedBreakdowns.includes('symbol')) {
+						const identity = getOutcomeBreakdownIdentity('symbol', signal);
+						const bucket = symbolBreakdownBuckets.get(identity.key);
+						if (bucket) accumulateBreakdownWindow(bucket, signal, outcome, winKey);
+					}
+					if (requestedBreakdowns.includes('setup')) {
+						const identity = getOutcomeBreakdownIdentity('setup', signal);
+						const bucket = setupBreakdownBuckets.get(identity.key);
+						if (bucket) accumulateBreakdownWindow(bucket, signal, outcome, winKey);
+					}
 					accumulateWindowBucket(accumulator, signal, outcome, 'ALL');
 					const side = signal.side === 'SELL' ? 'SELL' : 'BUY';
 					accumulateWindowBucket(accumulator, signal, outcome, side);
@@ -1932,6 +2939,37 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 						: null;
 					if (setupKey) {
 						accumulateWindowBucket(accumulator, signal, outcome, setupKey);
+					}
+					// Barrier provenance (issue #809 / CB-???). Aggregate
+					// target/stop hits and eligible-window counts per source so
+					// summarizeOutcomes() can compare derived vs supplied
+					// barriers without flattening the populations.
+					const sourceForSignal = (signal.barriers && typeof signal.barriers.source === 'string')
+						? signal.barriers.source
+						: 'none';
+					if (!barrierSourceBreakdown[sourceForSignal]) {
+						barrierSourceBreakdown[sourceForSignal] = {
+							received: 0,
+							eligible: 0,
+							targetHits: 0,
+							stopHits: 0,
+							targetEligible: 0,
+							stopEligible: 0,
+						};
+					}
+					const hasTargetBarrier = typeof signal.target === 'number' && Number.isFinite(signal.target) && signal.target > 0;
+					const hasStopBarrier = typeof signal.stop === 'number' && Number.isFinite(signal.stop) && signal.stop > 0;
+					if (hasTargetBarrier) {
+						barrierSourceBreakdown[sourceForSignal].targetEligible++;
+						if (outcome.targetHit === true || outcome.firstHit === 'target') {
+							barrierSourceBreakdown[sourceForSignal].targetHits++;
+						}
+					}
+					if (hasStopBarrier) {
+						barrierSourceBreakdown[sourceForSignal].stopEligible++;
+						if (outcome.stopHit === true || outcome.firstHit === 'stop') {
+							barrierSourceBreakdown[sourceForSignal].stopHits++;
+						}
 					}
 				}
 			}
@@ -1967,6 +3005,8 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 	let totalTokenCost = 0;
 	let totalInputTokens = 0;
 	let totalOutputTokens = 0;
+	let unknownModelPricing = false;
+	const unknownModelsSet = new Set();
 	let totalProcessingTime = 0;
 	let processingTimeCount = 0;
 
@@ -1977,6 +3017,18 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 			totalTokenCost += signal.tokenUsage.totalCost || 0;
 			totalInputTokens += signal.tokenUsage.inputTokens || signal.tokenUsage.promptTokens || 0;
 			totalOutputTokens += signal.tokenUsage.outputTokens || signal.tokenUsage.completionTokens || 0;
+			if (signal.tokenUsage.pricing) {
+				if (signal.tokenUsage.pricing.unknownModelPricing) {
+					unknownModelPricing = true;
+				}
+				if (Array.isArray(signal.tokenUsage.pricing.unknownModels)) {
+					for (const model of signal.tokenUsage.pricing.unknownModels) {
+						if (typeof model === 'string' && model.trim()) {
+							unknownModelsSet.add(model.trim());
+						}
+					}
+				}
+			}
 		}
 		if (typeof signal.processingTimeMs === 'number') {
 			totalProcessingTime += signal.processingTimeMs;
@@ -1988,7 +3040,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		let resolvedReturn = null;
 
 		for (const winKey of windowKeysToAggregate) {
-			const outcome = signal.outcomes ? signal.outcomes[winKey] : null;
+			const outcome = signal.outcomes && signal.outcomes[winKey];
 			if (outcome && outcome.status === 'evaluated') {
 				if (outcome.maxAdverseExcursion < worstMae) {
 					worstMae = outcome.maxAdverseExcursion;
@@ -2006,14 +3058,28 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 			absoluteMaxMae = worstMae;
 		}
 
-		const isHighConfidence = (Math.abs(signal.score) >= 0.75 || (signal.source === 'news-monitor' && Math.abs(signal.score) >= 0.7));
-		if (isHighConfidence && (resolvedReturn < -1 || worstMae < -3)) {
+		const rawScore = typeof signal.score === 'number' && Number.isFinite(signal.score) ? signal.score : null;
+		const confidence = rawScore !== null ? Math.abs(rawScore) : null;
+		const isHighConfidence = (confidence !== null && confidence >= 0.75)
+			|| (signal.source === 'news-monitor' && confidence !== null && confidence >= 0.7);
+		// Backward compatibility: Historical records (e.g. news-monitor before score signing)
+		// stored unsigned scores (rawScore > 0) for SELL signals. Treat positive SELL scores as legacy
+		// unversioned records rather than dropping them as sign-incoherent.
+		const isLegacyUnsignedSell = signal.side === 'SELL' && rawScore !== null && rawScore > 0;
+		const hasSideSignCoherence = isLegacyUnsignedSell
+			|| (signal.side === 'BUY' ? (rawScore === null || rawScore >= 0)
+				: signal.side === 'SELL' ? (rawScore === null || rawScore <= 0)
+					: true);
+		if (isHighConfidence && !hasSideSignCoherence) {
+			console.warn(`[signal-outcome] dropping false-positive candidate for ${signal.symbol} (${signal.side}) due to sign-coherence mismatch (score=${rawScore})`);
+		} else if (isHighConfidence && (resolvedReturn < -1 || worstMae < -3)) {
 			falsePositiveCandidates.push({
 				symbol: signal.symbol,
 				source: signal.source,
 				side: signal.side,
-				score: signal.score,
+				score: rawScore,
 				price: signal.price,
+				confidence,
 				worstReturn: resolvedReturn,
 				worstMae,
 			});
@@ -2022,6 +3088,26 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 
 	const averageWorstMae = maeCount > 0 ? parseFloat((totalAllMae / maeCount).toFixed(4)) : 0;
 	const averageProcessingTimeMs = processingTimeCount > 0 ? Math.round(totalProcessingTime / processingTimeCount) : null;
+	let traderPlanSamples = 0;
+	let traderPlanHits = 0;
+	let traderPlanTotalR = 0;
+	let traderPlanRCount = 0;
+	for (const signal of evaluatedSignals) {
+		if (!isCompleteTraderIntent(signal.traderIntent)) continue;
+		const traderOutcome = signal.outcomes?.[signal.traderIntent.horizon]?.traderPlanOutcome;
+		if (!traderOutcome) continue;
+		traderPlanSamples++;
+		if (traderOutcome.targetHit === true) traderPlanHits++;
+		if (typeof traderOutcome.rMultiple === 'number' && Number.isFinite(traderOutcome.rMultiple)) {
+			traderPlanTotalR += traderOutcome.rMultiple;
+			traderPlanRCount++;
+		}
+	}
+	const byTraderPlan = {
+		samples: traderPlanSamples,
+		hitRatePercent: traderPlanSamples > 0 ? parseFloat(((traderPlanHits / traderPlanSamples) * 100).toFixed(2)) : 0,
+		averageRMultiple: traderPlanRCount > 0 ? parseFloat((traderPlanTotalR / traderPlanRCount).toFixed(4)) : null,
+	};
 	const coveragePercent = totalSignalsReceived > 0 ? parseFloat(((totalSignalsEvaluated / totalSignalsReceived) * 100).toFixed(2)) : 0;
 	const isCoverageComplete = totalSignalsEvaluated === totalSignalsReceived;
 
@@ -2037,7 +3123,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		const hasTargetBarrier = typeof signal.target === 'number' && Number.isFinite(signal.target) && signal.target > 0;
 		const hasStopBarrier = typeof signal.stop === 'number' && Number.isFinite(signal.stop) && signal.stop > 0;
 		for (const winKey of windowKeysToAggregate) {
-			const outcome = signal.outcomes ? signal.outcomes[winKey] : null;
+			const outcome = signal.outcomes && signal.outcomes[winKey];
 			if (outcome && outcome.status === 'evaluated') {
 				allEvaluatedWindows++;
 				if (hasTargetBarrier) {
@@ -2070,7 +3156,42 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		? parseFloat((allTotalR / allRCount).toFixed(4))
 		: null;
 
-	return {
+	let totalReactionApprove = 0;
+	let totalReactionReject = 0;
+	let confidenceSum = 0;
+	let confidenceCount = 0;
+
+	for (const doc of docs) {
+		const rawScore = typeof doc.score === 'number' && Number.isFinite(doc.score) ? Math.abs(doc.score) : null;
+		if (rawScore !== null) {
+			confidenceSum += rawScore;
+			confidenceCount++;
+		}
+		if (doc.reactions && typeof doc.reactions === 'object') {
+			for (const r of Object.values(doc.reactions)) {
+				if (!r || typeof r !== 'object') continue;
+				if (r.weight > 0) totalReactionApprove++;
+				else if (r.weight < 0) totalReactionReject++;
+			}
+		}
+	}
+
+	const totalReactions = totalReactionApprove + totalReactionReject;
+	const avgConfidence = confidenceCount > 0 ? (confidenceSum / confidenceCount) : 0.5;
+	const prior = avgConfidence;
+	const weightedReactionScore = totalReactions > 0
+		? Math.max(0, Math.min(1, parseFloat(((totalReactionApprove + 4 * prior) / (totalReactions + 4)).toFixed(4))))
+		: null;
+
+	const reactionsSummary = {
+		total: totalReactions,
+		approve: totalReactionApprove,
+		reject: totalReactionReject,
+		approveRate: totalReactions > 0 ? parseFloat((totalReactionApprove / totalReactions).toFixed(4)) : 0,
+		weightedScore: weightedReactionScore,
+	};
+
+	const summary = {
 		available: true,
 		totalSignalsReceived,
 		totalSignalsEligible,
@@ -2082,6 +3203,7 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		targetHitRatePercent: overallTargetHitRatePercent,
 		stopHitRatePercent: overallStopHitRatePercent,
 		expectancyR: overallExpectancyR,
+		byTraderPlan,
 		populationNote: !isCoverageComplete
 			? `Metrics represent ${totalSignalsEvaluated} evaluated signals out of ${totalSignalsReceived} total received signals (${coveragePercent}% coverage).`
 			: 'Metrics represent 100% of received signals.',
@@ -2089,6 +3211,26 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		providerBreakdown,
 		entryPriceSourceBreakdown,
 		eligibilityBreakdown,
+		bySession,
+		barrierSourceBreakdown: Object.fromEntries(
+			Object.entries(barrierSourceBreakdown).map(([key, val]) => [
+				key,
+				{
+					received: val.received,
+					eligible: val.eligible,
+					targetEligible: val.targetEligible || 0,
+					stopEligible: val.stopEligible || 0,
+					targetHits: val.targetHits || 0,
+					stopHits: val.stopHits || 0,
+					targetHitRatePercent: (val.targetEligible || 0) > 0
+						? parseFloat(((val.targetHits / val.targetEligible) * 100).toFixed(2))
+						: 0,
+					stopHitRatePercent: (val.stopEligible || 0) > 0
+						? parseFloat(((val.stopHits / val.stopEligible) * 100).toFixed(2))
+						: 0,
+				},
+			]),
+		),
 		windows: windowStats,
 		drawdownProxy: {
 			averageMaxAdverseExcursionPercent: averageWorstMae,
@@ -2096,24 +3238,43 @@ async function summarizeOutcomes({ from, to, limit, symbol, exchange, status, wi
 		},
 		falsePositiveCandidatesCount: falsePositiveCandidates.length,
 		falsePositiveCandidates: falsePositiveCandidates.slice(0, 5),
+		reactions: reactionsSummary,
 		latencyCostMetadata: {
 			averageProcessingTimeMs,
 			tokenUsage: {
 				inputTokens: totalInputTokens,
 				outputTokens: totalOutputTokens,
 				totalCost: parseFloat(totalTokenCost.toFixed(6)),
+				pricing: {
+					unknownModelPricing,
+					unknownModels: Array.from(unknownModelsSet),
+				},
 			},
 		},
 	};
+	if (requestedBreakdowns.includes('symbol')) {
+		summary.symbolBreakdown = sortOutcomeBreakdown(symbolBreakdownBuckets, 'symbol');
+	}
+	if (requestedBreakdowns.includes('setup')) {
+		summary.setupBreakdown = sortOutcomeBreakdown(setupBreakdownBuckets, 'setupType');
+	}
+	if (requestedBreakdowns.length > 0) {
+		summary.truncated = breakdownState.truncated;
+		recordBreakdownRuntimeMetrics(
+			(symbolBreakdownBuckets.size + setupBreakdownBuckets.size),
+			breakdownState.truncated,
+		);
+	}
+	return summary;
 }
 
-async function getMetricsSummary({ from, to, limit } = {}) {
+async function getMetricsSummary({ from, to, limit, breakdown } = {}) {
 	if (!isEnabled()) {
 		return 'No measurements found';
 	}
 
 	try {
-		const summary = await summarizeOutcomes({ from, to, limit });
+		const summary = await summarizeOutcomes({ from, to, limit, breakdown });
 		if (!summary || !summary.available || summary.totalSignalsReceived === 0) {
 			return 'No measurements found';
 		}
@@ -2134,6 +3295,13 @@ function createStorageUnavailableError(cause) {
 	return error;
 }
 
+function createExportAbortedError() {
+	const error = new Error('Signal outcome export query was aborted');
+	error.name = 'AbortError';
+	error.code = 'ABORTED';
+	return error;
+}
+
 function clampOutcomeLimit(limit) {
 	if (!Number.isInteger(limit) || limit < 1) {
 		return DEFAULT_LIMIT;
@@ -2150,12 +3318,23 @@ function summarizeTokenUsage(tokenUsage) {
 		return null;
 	}
 
-	return {
+	const result = {
 		inputTokens: getNumericValue(tokenUsage.inputTokens || tokenUsage.promptTokens),
 		outputTokens: getNumericValue(tokenUsage.outputTokens || tokenUsage.completionTokens),
 		totalTokens: getNumericValue(tokenUsage.totalTokens || tokenUsage.total),
 		totalCost: getNumericValue(tokenUsage.totalCost),
 	};
+
+	if (tokenUsage.pricing && typeof tokenUsage.pricing === 'object') {
+		result.pricing = {
+			unknownModelPricing: Boolean(tokenUsage.pricing.unknownModelPricing),
+			unknownModels: Array.isArray(tokenUsage.pricing.unknownModels)
+				? [...tokenUsage.pricing.unknownModels]
+				: [],
+		};
+	}
+
+	return result;
 }
 
 function getDocTimestamp(data) {
@@ -2223,6 +3402,15 @@ function formatOutcomeDocument(doc) {
 		entryPriceSource: typeof data.entryPriceSource === 'string' ? data.entryPriceSource : null,
 		stop: typeof data.stop === 'number' && Number.isFinite(data.stop) ? data.stop : null,
 		target: typeof data.target === 'number' && Number.isFinite(data.target) ? data.target : null,
+		invalidationLevel: typeof data.invalidationLevel === 'number' && Number.isFinite(data.invalidationLevel)
+			? data.invalidationLevel
+			: (typeof data.stop === 'number' && Number.isFinite(data.stop) ? data.stop : null),
+		targetLevel: typeof data.targetLevel === 'number' && Number.isFinite(data.targetLevel)
+			? data.targetLevel
+			: (typeof data.target === 'number' && Number.isFinite(data.target) ? data.target : null),
+		riskRewardRatio: typeof data.riskRewardRatio === 'number' && Number.isFinite(data.riskRewardRatio)
+			? data.riskRewardRatio
+			: null,
 		marketDataProvider: typeof data.marketDataProvider === 'string' ? data.marketDataProvider : null,
 		eligibilityState: typeof data.eligibilityState === 'string' ? data.eligibilityState : null,
 		eligibilityReason: typeof data.eligibilityReason === 'string' ? data.eligibilityReason : null,
@@ -2231,6 +3419,7 @@ function formatOutcomeDocument(doc) {
 		sources: Array.isArray(data.sources) ? data.sources : [],
 		tokenUsage: summarizeTokenUsage(data.tokenUsage),
 		processingTimeMs: typeof data.processingTimeMs === 'number' && Number.isFinite(data.processingTimeMs) ? data.processingTimeMs : null,
+		...(data.traderIntent && typeof data.traderIntent === 'object' ? { traderIntent: data.traderIntent } : {}),
 	};
 
 	if (Object.prototype.hasOwnProperty.call(data, 'sessionContext')) {
@@ -2249,10 +3438,19 @@ function formatOutcomeDocument(doc) {
 		});
 	}
 
+	if (data.deployment && typeof data.deployment === 'object') {
+		formatted.deployment = {
+			platform: typeof data.deployment.platform === 'string' ? data.deployment.platform : null,
+			gitSha: typeof data.deployment.gitSha === 'string' ? data.deployment.gitSha : null,
+			service: typeof data.deployment.service === 'string' ? data.deployment.service : null,
+			runtimeVersion: typeof data.deployment.runtimeVersion === 'string' ? data.deployment.runtimeVersion : null,
+		};
+	}
+
 	return formatted;
 }
 
-function matchesOutcomeFilters(outcome, { symbol, exchange, status, window, from, to }) {
+function matchesOutcomeFilters(outcome, { symbol, exchange, setupType, status, window, from, to }) {
 	if (from && outcome.receivedAt && new Date(outcome.receivedAt) < new Date(from)) {
 		return false;
 	}
@@ -2276,14 +3474,19 @@ function matchesOutcomeFilters(outcome, { symbol, exchange, status, window, from
 			return false;
 		}
 	}
+	if (typeof setupType === 'string' && setupType.trim()) {
+		if ((outcome.setupType || '').trim().toLowerCase() !== setupType.trim().toLowerCase()) {
+			return false;
+		}
+	}
 	if (window && status) {
-		const winKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window;
+		const winKey = window === '1M' ? '1M' : Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window;
 		const winOutcome = outcome.outcomes && outcome.outcomes[winKey];
 		if (!winOutcome || winOutcome.status !== status) {
 			return false;
 		}
 	} else if (window) {
-		const winKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window;
+		const winKey = window === '1M' ? '1M' : Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === window.toLowerCase()) || window;
 		if (!outcome.outcomes || !outcome.outcomes[winKey]) {
 			return false;
 		}
@@ -2425,13 +3628,572 @@ async function listOutcomes({
 	};
 }
 
+async function getOutcomeById(outcomeId) {
+	if (!isEnabled() || typeof outcomeId !== 'string' || !outcomeId.trim()) {
+		return null;
+	}
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+	let snapshot;
+	try {
+		snapshot = await firestore.collection(COLLECTION_NAME).doc(outcomeId.trim()).get();
+	} catch (error) {
+		console.warn('[SignalOutcomeService] Failed to read signal outcome from Firestore:', error.message);
+		throw createStorageUnavailableError(error);
+	}
+	if (!snapshot || !snapshot.exists || isRetentionExpired(snapshot.data() || {})) {
+		return null;
+	}
+	return formatOutcomeDocument(snapshot);
+}
+
+function buildOutcomeExportWindow({ from, to, limit } = {}) {
+	if (!from || !to) {
+		const error = new Error('Export requests require bounded from and to ISO-8601 timestamps.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+	const parsedFrom = new Date(from);
+	const parsedTo = new Date(to);
+	if (Number.isNaN(parsedFrom.getTime()) || Number.isNaN(parsedTo.getTime())) {
+		const error = new Error('Invalid export window. Use ISO-8601 timestamps.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+	if (parsedFrom.getTime() > parsedTo.getTime()) {
+		const error = new Error('Invalid export window. from must be before or equal to to.');
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+	if (parsedTo.getTime() - parsedFrom.getTime() > MAX_EXPORT_WINDOW_DAYS * 24 * 60 * 60 * 1000) {
+		const error = new Error(`Invalid export window. Maximum export window is ${MAX_EXPORT_WINDOW_DAYS} days.`);
+		error.code = 'INVALID_REQUEST';
+		throw error;
+	}
+	const normalizedLimit = Number.isInteger(limit) && limit >= 1
+		? Math.min(limit, MAX_EXPORT_LIMIT)
+		: DEFAULT_EXPORT_LIMIT;
+	return {
+		from: parsedFrom.toISOString(),
+		to: parsedTo.toISOString(),
+		limit: normalizedLimit,
+		maxDays: MAX_EXPORT_WINDOW_DAYS,
+	};
+}
+
+function formatOutcomeExportRecord(doc) {
+	const outcome = formatOutcomeDocument(doc);
+	return {
+		id: outcome.id,
+		receivedAt: outcome.receivedAt,
+		source: outcome.source,
+		symbol: outcome.symbol,
+		exchange: outcome.exchange,
+		side: outcome.side,
+		price: outcome.price,
+		setupType: outcome.setupType,
+		score: outcome.score,
+		traderIntent: outcome.traderIntent,
+		outcomes: outcome.outcomes,
+	};
+}
+
+async function exportOutcomes({ from, to, limit, symbol, exchange, setupType, signal, maxScanDocs } = {}) {
+	if (!isEnabled()) {
+		return null;
+	}
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError();
+	}
+	const window = buildOutcomeExportWindow({ from, to, limit });
+	const scanLimit = Math.max(window.limit, MAX_LIMIT);
+	const scanBudget = Number.isSafeInteger(maxScanDocs) && maxScanDocs > 0
+		? Math.min(maxScanDocs, MAX_EXPORT_SCAN_DOCS)
+		: MAX_EXPORT_SCAN_DOCS;
+	const outcomes = [];
+	let totalScanned = 0;
+	let pageCursor = null;
+	while (outcomes.length < window.limit) {
+		if (signal && signal.aborted) {
+			throw createExportAbortedError();
+		}
+		const remainingScanBudget = scanBudget - totalScanned;
+		const queryLimit = Math.min(scanLimit, remainingScanBudget);
+		let query = firestore
+			.collection(COLLECTION_NAME)
+			.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(new Date(window.from)))
+			.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(new Date(window.to)))
+			.orderBy('receivedAt', 'desc')
+			.orderBy(admin.firestore.FieldPath.documentId(), 'desc');
+		if (pageCursor) {
+			query = query.startAfter(buildParsedCursorTimestamp(pageCursor), pageCursor.documentId);
+		}
+		let snapshot;
+		try {
+			snapshot = await query.limit(queryLimit).get();
+		} catch (error) {
+			if (signal && signal.aborted) {
+				throw createExportAbortedError();
+			}
+			console.warn('[SignalOutcomeService] Failed to export signal outcomes from Firestore:', error.message);
+			throw createStorageUnavailableError(error);
+		}
+		if (signal && signal.aborted) {
+			throw createExportAbortedError();
+		}
+		if (!snapshot || !Array.isArray(snapshot.docs) || snapshot.docs.length === 0) {
+			break;
+		}
+		totalScanned += snapshot.docs.length;
+		for (const doc of snapshot.docs) {
+			if (isRetentionExpired(doc.data() || {})) {
+				continue;
+			}
+			const outcome = formatOutcomeExportRecord(doc);
+			if (!matchesOutcomeFilters(outcome, {
+				symbol,
+				exchange,
+				setupType,
+				from: window.from,
+				to: window.to,
+			})) {
+				continue;
+			}
+			outcomes.push(outcome);
+			if (outcomes.length >= window.limit) {
+				break;
+			}
+		}
+		if (outcomes.length >= window.limit) {
+			break;
+		}
+		if (snapshot.docs.length < queryLimit) {
+			break;
+		}
+		if (totalScanned >= scanBudget) {
+			const error = new Error(`Outcome export could not complete within the ${scanBudget}-document scan limit. Narrow the time range or add a filter and retry.`);
+			error.code = 'INVALID_REQUEST';
+			throw error;
+		}
+		pageCursor = getDocCursorValues(snapshot.docs[snapshot.docs.length - 1]);
+		if (!pageCursor) {
+			const error = new Error(`Outcome export could not complete within the ${scanBudget}-document scan limit. Narrow the time range or add a filter and retry.`);
+			error.code = 'INVALID_REQUEST';
+			throw error;
+		}
+	}
+	return { window, outcomes };
+}
+
+const CALIBRATION_DEFAULT_BUCKETS = [
+	{ range: '0.70-0.75', min: 0.70, max: 0.75 },
+	{ range: '0.75-0.80', min: 0.75, max: 0.80 },
+	{ range: '0.80-0.85', min: 0.80, max: 0.85 },
+	{ range: '0.85-0.90', min: 0.85, max: 0.90 },
+	{ range: '0.90-1.00', min: 0.90, max: 1.00 },
+];
+
+function getSignalConfidenceScore(doc) {
+	const conf = normalizeConfidenceScore(doc?.confidenceScore);
+	if (CALIBRATION_SCANNER_SOURCES.includes(doc?.source)) {
+		if (doc?.confidenceScoreOrigin === 'explicit') return conf;
+		if (doc?.confidenceScoreOrigin !== undefined && doc?.confidenceScoreOrigin !== null) return null;
+
+		// Legacy rows with a different or unusable score could only have an explicit confidence value.
+		const legacyScore = normalizeConfidenceScore(doc?.score);
+		return conf !== null && (legacyScore === null || legacyScore !== conf) ? conf : null;
+	}
+	if (conf !== null) return conf;
+	const sc = normalizeConfidenceScore(doc?.score);
+	if (sc !== null) return sc;
+	return null;
+}
+
+/**
+ * Computes confidence calibration buckets, hit rates, and threshold suggestion from evaluated signal outcome docs.
+ */
+function computeCalibration(docs = [], options = {}) {
+	const targetWindow = (options.window && typeof options.window === 'string' ? options.window.toLowerCase() : '4h');
+	const targetWindowKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === targetWindow) || targetWindow;
+	const minOutcomes = options.minOutcomes !== undefined ? options.minOutcomes : 20;
+
+	const scoredDocs = [];
+	let hasSub70 = false;
+	for (const doc of docs) {
+		if (!doc) continue;
+		const targetOutcome = doc.outcomes && doc.outcomes[targetWindowKey];
+		if (!targetOutcome || targetOutcome.status !== 'evaluated') continue;
+		const score = getSignalConfidenceScore(doc);
+		if (score === null) continue;
+		if (score < 0.70) hasSub70 = true;
+		scoredDocs.push({ doc, score });
+	}
+
+	function isTargetHit(doc) {
+		const outcome = doc.outcomes && doc.outcomes[targetWindowKey];
+		if (!outcome) return false;
+		if (outcome.targetHit === true || outcome.firstHit === 'target') return true;
+		const hasTargetBarrier = typeof doc.target === 'number' && Number.isFinite(doc.target) && doc.target > 0;
+		if (!hasTargetBarrier && typeof outcome.return === 'number' && outcome.return > 0) return true;
+		return false;
+	}
+
+	const bucketDefs = hasSub70
+		? [{ range: '<0.70', min: 0.00, max: 0.70 }, ...CALIBRATION_DEFAULT_BUCKETS]
+		: CALIBRATION_DEFAULT_BUCKETS.map(b => ({ ...b }));
+
+	const buckets = bucketDefs.map(def => {
+		const matching = scoredDocs.filter(({ score }) => {
+			if (def.max === 1.00) {
+				return score >= def.min && score <= def.max;
+			}
+			return score >= def.min && score < def.max;
+		});
+
+		const bucketDocs = matching.map(m => m.doc);
+		const count = bucketDocs.length;
+
+		// 1h returns
+		const docs1h = bucketDocs.filter(d => d.outcomes && d.outcomes['1h'] && d.outcomes['1h'].status === 'evaluated' && typeof d.outcomes['1h'].return === 'number' && Number.isFinite(d.outcomes['1h'].return));
+		const avgReturn1h = docs1h.length > 0
+			? parseFloat((docs1h.reduce((acc, d) => acc + d.outcomes['1h'].return, 0) / docs1h.length).toFixed(2))
+			: null;
+
+		// 4h returns
+		const docs4h = bucketDocs.filter(d => d.outcomes && d.outcomes['4h'] && d.outcomes['4h'].status === 'evaluated' && typeof d.outcomes['4h'].return === 'number' && Number.isFinite(d.outcomes['4h'].return));
+		const avgReturn4h = docs4h.length > 0
+			? parseFloat((docs4h.reduce((acc, d) => acc + d.outcomes['4h'].return, 0) / docs4h.length).toFixed(2))
+			: null;
+
+		// Target hit rate for targetWindowKey
+		const targetHits = bucketDocs.filter(d => isTargetHit(d)).length;
+		const targetHitRate = bucketDocs.length > 0
+			? parseFloat((targetHits / bucketDocs.length).toFixed(2))
+			: 0;
+
+		return {
+			range: def.range,
+			count,
+			avgReturn1h,
+			avgReturn4h,
+			targetHitRate,
+			_min: def.min,
+			_max: def.max,
+		};
+	});
+
+	const totalScoredAlerts = scoredDocs.length;
+	const cleanBuckets = buckets.map(({ _min, _max, ...rest }) => rest);
+
+	if (totalScoredAlerts < minOutcomes) {
+		return {
+			available: false,
+			totalScoredAlerts,
+			buckets: cleanBuckets,
+			suggestedThreshold: null,
+			suggestedThresholdRationale: `Insufficient data: fewer than ${minOutcomes} evaluated outcomes with confidence scores (found ${totalScoredAlerts})`,
+		};
+	}
+
+	// Evaluate candidate thresholds (bucket minimums) based on cumulative population (score >= threshold)
+	const candidates = buckets.map(b => {
+		const cumulativeDocs = scoredDocs.filter(d => d.score >= b._min);
+		const cumulativeHits = cumulativeDocs.filter(d => isTargetHit(d.doc)).length;
+		const cumulativeHitRate = cumulativeDocs.length > 0
+			? parseFloat((cumulativeHits / cumulativeDocs.length).toFixed(4))
+			: 0;
+		return {
+			bucket: b,
+			threshold: b._min,
+			cumulativeCount: cumulativeDocs.length,
+			cumulativeHitRate,
+		};
+	});
+
+	const minCandidateSample = options.minCandidateSample !== undefined ? options.minCandidateSample : Math.min(minOutcomes, 5);
+
+	// Find the lowest candidate threshold where both the individual bucket and cumulative population achieve >= 50% hit rate with sufficient sample
+	const qualifyingIndex = candidates.findIndex(c =>
+		c.cumulativeCount >= minCandidateSample &&
+		c.cumulativeHitRate >= 0.50 &&
+		c.bucket.targetHitRate >= 0.50
+	);
+	if (qualifyingIndex === -1) {
+		return {
+			available: true,
+			totalScoredAlerts,
+			buckets: cleanBuckets,
+			suggestedThreshold: null,
+			suggestedThresholdRationale: `No confidence threshold achieved ≥50% cumulative target hit rate at ${targetWindowKey} window`,
+		};
+	}
+
+	const qualifyingCandidate = candidates[qualifyingIndex];
+	let suggestedThreshold = qualifyingCandidate.threshold;
+
+	// Linearly interpolate if a preceding bucket with data had < 50% hit rate
+	if (qualifyingIndex > 0) {
+		const prevCandidate = candidates[qualifyingIndex - 1];
+		if (prevCandidate && prevCandidate.bucket.count > 0 && prevCandidate.bucket.targetHitRate < 0.50 && qualifyingCandidate.bucket.targetHitRate > prevCandidate.bucket.targetHitRate) {
+			const interpolated = qualifyingCandidate.threshold +
+				((0.50 - prevCandidate.bucket.targetHitRate) / (qualifyingCandidate.bucket.targetHitRate - prevCandidate.bucket.targetHitRate)) *
+				(qualifyingCandidate.bucket._max - qualifyingCandidate.bucket._min);
+			const roundedInterpolated = parseFloat(interpolated.toFixed(2));
+
+			// Verify cumulative performance and sample size at the interpolated threshold
+			const atOrAboveDocs = scoredDocs.filter(d => d.score >= roundedInterpolated);
+			const atOrAboveHits = atOrAboveDocs.filter(d => isTargetHit(d.doc)).length;
+			const atOrAboveHitRate = atOrAboveDocs.length > 0 ? (atOrAboveHits / atOrAboveDocs.length) : 0;
+			if (atOrAboveDocs.length >= minCandidateSample && atOrAboveHitRate >= 0.50) {
+				suggestedThreshold = roundedInterpolated;
+			}
+		}
+	}
+
+	const finalAtOrAboveDocs = scoredDocs.filter(d => d.score >= suggestedThreshold);
+	if (finalAtOrAboveDocs.length < minCandidateSample) {
+		return {
+			available: true,
+			totalScoredAlerts,
+			buckets: cleanBuckets,
+			suggestedThreshold: null,
+			suggestedThresholdRationale: `No confidence threshold achieved ≥50% cumulative target hit rate at ${targetWindowKey} window`,
+		};
+	}
+	const finalAtOrAboveHits = finalAtOrAboveDocs.filter(d => isTargetHit(d.doc)).length;
+	const finalHitRate = finalAtOrAboveDocs.length > 0 ? (finalAtOrAboveHits / finalAtOrAboveDocs.length) : qualifyingCandidate.cumulativeHitRate;
+	const hitRatePct = Math.round(finalHitRate * 100);
+	const suggestedThresholdRationale = `Alerts at ${suggestedThreshold}+ show ${hitRatePct}%+ target hit rate at ${targetWindowKey} window`;
+
+	return {
+		available: true,
+		totalScoredAlerts,
+		buckets: cleanBuckets,
+		suggestedThreshold,
+		suggestedThresholdRationale,
+	};
+}
+
+/**
+ * Retrieve calibration data and threshold recommendation for evaluated signal outcomes.
+ */
+async function getOutcomesCalibration({
+	symbol,
+	exchange,
+	window,
+	from,
+	to,
+	limit,
+	signal,
+} = {}) {
+	if (!isEnabled()) {
+		const err = new Error('Signal outcome tracking feature is disabled. Set ENABLE_SIGNAL_OUTCOME_TRACKING=true to enable.');
+		err.code = 'FEATURE_DISABLED';
+		throw err;
+	}
+
+	const firestore = AlertStorageService.getFirestore();
+	if (!firestore) {
+		throw createStorageUnavailableError(new Error('Firestore is unavailable'));
+	}
+
+	const parsedFrom = from ? new Date(from) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+	const parsedTo = to ? new Date(to) : new Date();
+
+	const retentionDays = getSignalOutcomeRetentionDays();
+	const retentionCutoffMs = Date.now() - (retentionDays * DAY_MS);
+	const effectiveFromMs = from
+		? parsedFrom.getTime()
+		: Math.max(parsedFrom.getTime(), retentionCutoffMs);
+	if (effectiveFromMs > parsedTo.getTime()) {
+		return computeCalibration([], { window, minOutcomes: 20 });
+	}
+	const effectiveFrom = new Date(effectiveFromMs);
+
+	const targetWindow = (window && typeof window === 'string' ? window.toLowerCase() : '4h');
+	const targetWindowKey = Object.keys(WINDOW_CONFIGS).find(k => k.toLowerCase() === targetWindow) || targetWindow;
+
+	const targetLimit = limit || 1000;
+	const batchSize = CALIBRATION_SCAN_BATCH_SIZE_CEILING;
+	const hasFilters = Boolean(symbol || exchange);
+	const maxScannedDocs = Math.max(targetLimit * 5, 2000);
+	const scanCalibrationQuery = async (applySourceFilters, scanLimit = maxScannedDocs) => {
+		const docs = [];
+		let lastDoc = null;
+		let totalScanned = 0;
+		let scanCapReached = false;
+
+		while (docs.length < targetLimit) {
+			if (signal && signal.aborted) {
+				break;
+			}
+			if (totalScanned >= scanLimit) {
+				scanCapReached = true;
+				break;
+			}
+
+			let query = firestore
+				.collection(COLLECTION_NAME)
+				.where('receivedAt', '>=', admin.firestore.Timestamp.fromDate(effectiveFrom))
+				.where('receivedAt', '<=', admin.firestore.Timestamp.fromDate(parsedTo));
+			if (applySourceFilters) {
+				query = applySourceFilters(query);
+			}
+			// Bound the first request and any pages after eligible rows have been
+			// found by the remaining result count, while ensuring a minimum floor of
+			// CALIBRATION_SCAN_BATCH_SIZE_FLOOR (50) via computeCalibrationBatchSize
+			// so small limit queries do not trigger one-by-one sequential Firestore RPCs.
+			const pageSize = totalScanned === 0 || docs.length > 0
+				? computeCalibrationBatchSize(targetLimit - docs.length)
+				: batchSize;
+			const pageLimit = Math.min(pageSize, scanLimit - totalScanned);
+			query = query.orderBy('receivedAt', 'desc').limit(pageLimit);
+
+			if (lastDoc) {
+				query = query.startAfter(lastDoc);
+			}
+
+			let snapshot;
+			try {
+				snapshot = await query.get();
+			} catch (error) {
+				throw createStorageUnavailableError(error);
+			}
+
+			if (!snapshot || snapshot.empty) {
+				break;
+			}
+
+			totalScanned += snapshot.docs.length;
+
+			for (const doc of snapshot.docs) {
+				const docData = doc.data() || {};
+				if (isRetentionExpired(docData)) {
+					continue;
+				}
+				if (hasFilters) {
+					const formatted = {
+						...docData,
+						id: doc.id,
+						receivedAt: getDocTimestamp(docData),
+					};
+					if (!matchesOutcomeFilters(formatted, { symbol, exchange, from, to })) {
+						continue;
+					}
+				}
+
+				// Apply limit after selecting calibration-eligible outcomes:
+				// 1. Requested window outcome must be present and evaluated
+				const targetOutcome = docData.outcomes && docData.outcomes[targetWindowKey];
+				if (!targetOutcome || targetOutcome.status !== 'evaluated') {
+					continue;
+				}
+
+				// 2. Must possess a valid normalized confidence score in [0, 1]
+				if (getSignalConfidenceScore(docData) === null) {
+					continue;
+				}
+
+				docs.push(doc);
+				if (docs.length >= targetLimit) {
+					break;
+				}
+			}
+
+			if (docs.length >= targetLimit) {
+				break;
+			}
+
+			if (snapshot.docs.length < pageLimit) {
+				break;
+			}
+			lastDoc = snapshot.docs[snapshot.docs.length - 1];
+			if (totalScanned >= scanLimit) {
+				scanCapReached = true;
+				break;
+			}
+		}
+
+		return { docs, scanCapReached, totalScanned };
+	};
+
+	const primaryScan = await scanCalibrationQuery(null);
+	const matchedDocs = new Map(primaryScan.docs.map(doc => [doc.id, doc]));
+	let recoveryIncomplete = false;
+
+	if (primaryScan.scanCapReached && matchedDocs.size < targetLimit && !(signal && signal.aborted)) {
+		let recoveryReadBudgetRemaining = CALIBRATION_RECOVERY_TOTAL_SCAN_LIMIT;
+		for (const recoveryQuery of CALIBRATION_SOURCE_RECOVERY_QUERIES) {
+			if (recoveryReadBudgetRemaining <= 0) {
+				recoveryIncomplete = true;
+				break;
+			}
+
+			const recoveryScan = await scanCalibrationQuery(
+				recoveryQuery.applySourceFilters,
+				Math.min(recoveryQuery.maxScannedDocs, recoveryReadBudgetRemaining),
+			);
+			recoveryReadBudgetRemaining -= recoveryScan.totalScanned;
+			for (const doc of recoveryScan.docs) {
+				matchedDocs.set(doc.id, doc);
+			}
+			if (recoveryScan.scanCapReached) {
+				recoveryIncomplete = true;
+			}
+		}
+		if (recoveryReadBudgetRemaining <= 0 && matchedDocs.size < targetLimit) {
+			recoveryIncomplete = true;
+		}
+	}
+	const docs = Array.from(matchedDocs.values()).map(doc => ({
+		...doc.data(),
+		id: doc.id,
+		receivedAt: getDocTimestamp(doc.data()),
+	}))
+		.sort((left, right) => {
+			const leftTime = Date.parse(left.receivedAt || '') || 0;
+			const rightTime = Date.parse(right.receivedAt || '') || 0;
+			const timeDifference = rightTime - leftTime;
+			return timeDifference || String(right.id).localeCompare(String(left.id));
+		})
+		.slice(0, targetLimit);
+
+	if (recoveryIncomplete) {
+		const partialCalibration = computeCalibration(docs, { window, minOutcomes: 20 });
+		return {
+			...partialCalibration,
+			available: false,
+			suggestedThreshold: null,
+			suggestedThresholdRationale: 'Calibration sample is incomplete because a source scan reached its safety limit; counts reflect a partial sample.',
+		};
+	}
+
+	return computeCalibration(docs, { window, minOutcomes: 20 });
+}
+
 function _resetForTesting() {
 	lastRetentionWarningValue = null;
 	lastEntryPriceSourcesWarningValue = null;
+	lastBreakdownBucketCount = 0;
+	lastBreakdownTruncated = false;
+	breakdownTruncationCount = 0;
+	lastWindowsWarningValue = null;
+	lastWindowLabelsWarningValue = null;
 	binanceClient = null;
 	lastEvaluatedDoc = null;
 	isEvaluating = false;
+	activeSweepPromise = null;
+	activeEvaluationPromise = null;
 	shutdownRequested = false;
+	workerStartupGeneration += 1;
+	if (workerStartupAbortController) {
+		workerStartupAbortController.abort();
+		workerStartupAbortController = null;
+	}
+	workerStartupPending = false;
 	activeIntervalMs = null;
 	lastRunAt = null;
 	lastRunDurationMs = null;
@@ -2440,6 +4202,18 @@ function _resetForTesting() {
 	lastRunPendingCount = 0;
 	lastRunErrorCount = 0;
 	lastRunRegionBlockedCount = 0;
+	lastRunLeaseHeld = false;
+	leaseHeldSkipCount = 0;
+}
+
+async function rollupOutcomesDaily(options = {}) {
+	const firestore = AlertStorageService.getFirestore();
+	return dailyRollupService.rollupOutcomesDaily({ firestore, ...options });
+}
+
+async function getOutcomesTrend(options = {}) {
+	const firestore = AlertStorageService.getFirestore();
+	return dailyRollupService.getOutcomesTrend({ firestore, ...options });
 }
 
 module.exports = {
@@ -2447,20 +4221,45 @@ module.exports = {
 	recordSignal,
 	getSessionContext,
 	evaluatePendingOutcomes,
+	rollupOutcomesDaily,
+	getOutcomesTrend,
+	dailyRollupService,
 	getMetricsSummary,
 	summarizeOutcomes,
 	listOutcomes,
+	getOutcomeById,
+	exportOutcomes,
+	computeCalibration,
+	getOutcomesCalibration,
+	computeCalibrationBatchSize,
+	CALIBRATION_SCAN_BATCH_SIZE_FLOOR,
+	CALIBRATION_SCAN_BATCH_SIZE_CEILING,
 	normalizeSide,
 	normalizeSymbolAndExchange,
 	startWorker,
 	stopWorker,
 	getWorkerStatus,
 	getWorkerRole,
+	isMcpOutcomePriceEnabled,
+	REASON_MCP_PRICE_FAILED,
+	REASON_MCP_BREAKER_OPEN,
+	ENTRY_PRICE_SOURCE_MCP,
+	getLeaseMs,
+	acquireSweepLease,
+	renewSweepLease,
+	releaseSweepLease,
+	LEASE_RENEWAL,
 	parseEntryPriceSources,
 	getEntryPriceSourceChains,
+	getConfiguredOutcomeWindows,
+	getOutcomeWindowLabels,
 	COLLECTION_NAME,
 	HEARTBEAT_COLLECTION_NAME,
+	LOCK_COLLECTION_NAME,
 	STORAGE_UNAVAILABLE_CODE,
 	INVALID_CURSOR_MESSAGE,
+	isUsMarketHalfDay,
+	isUsMarketHoliday,
 	_resetForTesting,
+	_runScheduledSweepForTesting: runScheduledSweep,
 };

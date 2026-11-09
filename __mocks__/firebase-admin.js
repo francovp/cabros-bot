@@ -14,6 +14,7 @@ const mockDocUpdate = jest.fn();
 const mockDocDelete = jest.fn();
 const mockServerTimestamp = jest.fn(() => ({ _type: 'serverTimestamp' }));
 const mockTimestampFromDate = jest.fn((date) => ({ _type: 'timestamp', toDate: () => date }));
+const mockTimestampFromMillis = jest.fn((millis) => ({ _type: 'timestamp', toMillis: () => millis }));
 const mockTimestampFromSeconds = jest.fn((seconds, nanoseconds = 0) => ({
 	_type: 'timestamp',
 	seconds,
@@ -122,6 +123,15 @@ function buildQuerySnapshot(collectionName, queryState = {}) {
 	for (const [field, op, val] of wheres) {
 		if (op === '==') {
 			docs = docs.filter(d => d.data() && getNestedValue(d.data(), field) === val);
+		} else if (op === 'array-contains') {
+			docs = docs.filter(d => {
+				const arr = d.data() && getNestedValue(d.data(), field);
+				return Array.isArray(arr) && arr.includes(val);
+			});
+		} else if (op === '>=') {
+			docs = docs.filter(d => d.data() && getNestedValue(d.data(), field) >= val);
+		} else if (op === '<=') {
+			docs = docs.filter(d => d.data() && getNestedValue(d.data(), field) <= val);
 		}
 	}
 
@@ -281,13 +291,24 @@ const mockBatch = jest.fn(() => {
 const mockCollection = jest.fn((collectionName) => createQueryApi(collectionName));
 const mockInitializeApp = jest.fn();
 const mockCert = jest.fn((sa) => ({ type: 'service_account_credential', sa }));
+const mockApplicationDefault = jest.fn(() => ({ type: 'application_default_credential' }));
 const mockDeleteFieldValue = jest.fn(() => ({ __deleteField: true }));
+
+const mockRunTransaction = jest.fn(async (updateFunction) => {
+	const transaction = {
+		get: async (docRef) => docRef.get(),
+		set: (docRef, data, options) => docRef.set(data, options),
+		update: (docRef, data) => docRef.update(data),
+		delete: (docRef) => docRef.delete(),
+	};
+	return updateFunction(transaction);
+});
 
 let apps = [];
 
 const firestore = jest.fn(() => ({ collection: mockCollection, batch: mockBatch }));
 firestore.FieldValue = { serverTimestamp: mockServerTimestamp, delete: mockDeleteFieldValue };
-firestore.Timestamp = { fromDate: mockTimestampFromDate, fromSeconds: mockTimestampFromSeconds };
+firestore.Timestamp = { fromDate: mockTimestampFromDate, fromMillis: mockTimestampFromMillis, fromSeconds: mockTimestampFromSeconds };
 firestore.FieldPath = { documentId: mockDocumentId };
 firestore.VectorValue = MockVectorValue;
 
@@ -296,7 +317,7 @@ const mock = {
 	set apps(val) { apps = val; },
 	initializeApp: mockInitializeApp,
 	firestore,
-	credential: { cert: mockCert },
+	credential: { cert: mockCert, applicationDefault: mockApplicationDefault },
 	// Test helpers to manipulate shared state
 	__mockAdd: mockAdd,
 	__mockCollection: mockCollection,
@@ -316,10 +337,12 @@ const mock = {
 	__mockStartAfter: mockStartAfter,
 	__mockServerTimestamp: mockServerTimestamp,
 	__mockTimestampFromDate: mockTimestampFromDate,
+	__mockTimestampFromMillis: mockTimestampFromMillis,
 	__mockTimestampFromSeconds: mockTimestampFromSeconds,
 	__mockDocumentId: mockDocumentId,
 	__mockInitializeApp: mockInitializeApp,
 	__mockCert: mockCert,
+	__mockApplicationDefault: mockApplicationDefault,
 	__resetApps() { apps = []; },
 	__setApps(val) { apps = val; },
 	__resetCollectionState: resetCollectionState,

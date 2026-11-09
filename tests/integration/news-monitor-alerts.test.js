@@ -432,7 +432,48 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 
 	describe('Grounding calibration surfaces in alert response', () => {
 		it('should suppress alert when calibrated confidence from weak grounding is below NEWS_ALERT_THRESHOLD', async () => {
+			// The module-level `require('../../app')` above already pulled the real
+			// analyzer into the registry, and `analyzer.js` destructures
+			// `analyzeNewsForSymbol` at module-init time. A plain re-require of
+			// the gemini module therefore returns the cached real module, so the
+			// mock installed in beforeEach is never wired into the cached analyzer
+			// used by the mounted route. Reset the registry, install the mock
+			// first, then load a fresh app/route/analyzer chain that binds it.
+			jest.resetModules();
+			jest.doMock('../../src/services/grounding/gemini', () => ({
+				analyzeNewsForSymbol: jest.fn(),
+			}));
+			jest.doMock('../../src/services/grounding/genaiClient', () => ({
+				llmCall: jest.fn().mockResolvedValue('test response'),
+				search: jest.fn().mockResolvedValue({
+					results: [
+						{ url: 'https://example.com/1', title: 'Source 1' },
+						{ url: 'https://example.com/2', title: 'Source 2' },
+					],
+					searchResultText: 'Market context from search',
+					totalResults: 2,
+				}),
+			}));
+
+			const calibrationApp = require('../../app');
+			const { getRoutes: getCalibrationRoutes } = require('../../src/routes');
+			const { getCacheInstance: getCalibrationCache } = require('../../src/controllers/webhooks/handlers/newsMonitor/cache');
 			const gemini = require('../../src/services/grounding/gemini');
+
+			const calibrationBot = {
+				launch: jest.fn().mockResolvedValue(true),
+				telegram: {
+					sendMessage: jest.fn().mockResolvedValue({ message_id: 'test-msg-calibration' }),
+				},
+			};
+			calibrationApp.use('/api', getCalibrationRoutes(calibrationBot));
+
+			// The shared cache is a module singleton: a warm entry for the same
+			// (symbol, event_category) would short-circuit the mock entirely and
+			// make the suppression assertion pass or fail for the wrong reason.
+			getCalibrationCache().clear();
+
+			process.env.NEWS_ALERT_THRESHOLD = '0.7';
 			gemini.analyzeNewsForSymbol.mockResolvedValueOnce({
 				event_category: 'price_surge',
 				event_significance: 0.85,
@@ -461,13 +502,22 @@ describe('News Monitor - Alert Delivery Response Structure (US2)', () => {
 			});
 
 			process.env.NEWS_ALERT_THRESHOLD = '0.7';
-			const response = await request(app)
-				.get('/api/news-monitor').set('x-api-key', 'test-key')
-				.query({ crypto: 'BTCUSDT' });
+			try {
+				const response = await request(calibrationApp)
+					.get('/api/news-monitor').set('x-api-key', 'test-key')
+					.query({ crypto: 'BTCUSDT' });
 
-			expect(response.status).toBe(200);
-			expect(response.body.results[0]).toBeDefined();
-			expect(response.body.results[0].alert).toBeFalsy();
+				expect(response.status).toBe(200);
+				expect(response.body.results[0]).toBeDefined();
+				// Guard against the vacuous pass: the suppression assertion is only
+				// meaningful when the configured mock actually produced the analysis.
+				expect(gemini.analyzeNewsForSymbol).toHaveBeenCalled();
+				expect(gemini.analyzeNewsForSymbol.mock.calls.length).toBeGreaterThan(0);
+				expect(response.body.results[0].alert).toBeFalsy();
+			} finally {
+				jest.dontMock('../../src/services/grounding/gemini');
+				jest.dontMock('../../src/services/grounding/genaiClient');
+			}
 		});
 	});
 });

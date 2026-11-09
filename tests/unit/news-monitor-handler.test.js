@@ -20,6 +20,7 @@ describe('NewsMonitorHandler', () => {
 		handler.analyzer = analyzer;
 		const req = {
 			method: 'POST',
+			headers: { 'x-request-id': 'news-request-id' },
 			query: {},
 			body: { crypto: ['BTCUSDT'], stocks: ['AAPL'] },
 		};
@@ -37,6 +38,7 @@ describe('NewsMonitorHandler', () => {
 
 			expect(withActiveSpan).toHaveBeenCalledWith(analysisSpan, expect.any(Function));
 			expect(analyzer.analyzeSymbols).toHaveBeenCalledTimes(1);
+			expect(analyzer.analyzeSymbols.mock.calls[0][1]).toBe('news-request-id');
 			expect(analyzer.analyzeSymbols.mock.calls[0][4]).toEqual(expect.objectContaining({
 				assetClassBySymbol: {
 					BTCUSDT: 'crypto',
@@ -110,5 +112,45 @@ describe('NewsMonitorHandler', () => {
 			if (previousFlag === undefined) delete process.env.ENABLE_NEWS_MONITOR;
 			else process.env.ENABLE_NEWS_MONITOR = previousFlag;
 		}
+	});
+
+	it('reports barrier provenance when at least one alert has derived or marketContext barriers', () => {
+		const handler = new NewsMonitorHandler();
+
+		const summary = handler.generateSummary([
+			{
+				status: 'analyzed',
+				alert: { barriers: { source: 'derived' } },
+			},
+			{
+				status: 'analyzed',
+				alert: { barriers: { source: 'derived' } },
+			},
+			{
+				status: 'analyzed',
+				alert: { barriers: { source: 'marketContext' } },
+			},
+			{
+				status: 'analyzed',
+				alert: null,
+			},
+		]);
+
+		expect(summary.barrierProvenance).toEqual({
+			derivedAlertsCount: 2,
+			marketContextAlertsCount: 1,
+			totalAlertsWithBarriers: 3,
+		});
+	});
+
+	it('omits barrierProvenance when no alerts carry barrier provenance', () => {
+		const handler = new NewsMonitorHandler();
+
+		const summary = handler.generateSummary([
+			{ status: 'analyzed', alert: { barriers: null } },
+			{ status: 'analyzed', alert: null },
+		]);
+
+		expect(summary.barrierProvenance).toBeUndefined();
 	});
 });

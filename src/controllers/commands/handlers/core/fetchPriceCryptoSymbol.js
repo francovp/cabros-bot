@@ -4,6 +4,7 @@ const { round10 } = require('../../../helpers');
 const { MainClient } = require('binance');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const equityMarketDataService = require('../../../../services/storage/EquityMarketDataService');
+const priceQuoteCache = require('../../../../services/cache/PriceQuoteCache');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 
 function resolveBinanceBaseUrl() {
@@ -20,16 +21,25 @@ function resolveBinanceBaseUrl() {
 	return 'https://api.binance.com';
 }
 
-const clientOptions = {
-	// Optional (default: false) - when true, response strings are parsed to floats (only for known keys).
-	beautifyResponses: true,
-};
-const baseUrl = resolveBinanceBaseUrl();
-if (baseUrl) {
-	clientOptions.baseUrl = baseUrl;
+function buildPriceClientOptions() {
+	const clientOptions = {
+		// Optional (default: false) - when true, response strings are parsed to floats (only for known keys).
+		beautifyResponses: true,
+	};
+	const baseUrl = resolveBinanceBaseUrl();
+	if (baseUrl) {
+		clientOptions.baseUrl = baseUrl;
+	}
+	return clientOptions;
 }
 
-const client = new MainClient(clientOptions);
+let priceClient;
+function getPriceClient() {
+	if (!priceClient) {
+		priceClient = new MainClient(buildPriceClientOptions());
+	}
+	return priceClient;
+}
 
 const CRYPTO_QUOTE_SUFFIXES = ['USDT', 'USDC', 'BUSD', 'FDUSD', 'TUSD', 'BTC', 'ETH', 'BNB'];
 const FOREX_PAIRS = new Set(['USDCLP', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD', 'USDCHF', 'NZDUSD']);
@@ -141,6 +151,12 @@ function classifyPriceQuery(rawInput) {
 
 async function fetchCryptoPrice(symbol, options = {}) {
 	const { parentSpan } = options;
+
+	const cached = options.useCache === true && priceQuoteCache.get(priceQuoteCache.PROVIDERS.CRYPTO, symbol);
+	if (cached) {
+		return cached;
+	}
+
 	const priceFetchSpan = sentryService.startInactiveSpan({
 		name: 'binance.get_avg_price',
 		op: 'http.client',
@@ -150,12 +166,13 @@ async function fetchCryptoPrice(symbol, options = {}) {
 			'provider.name': 'binance',
 			'provider.operation': 'getAvgPrice',
 			'crypto.symbol': symbol || 'missing',
+			'cache.hit': false,
 		},
 	});
 
 	try {
-		const data = await client.getAvgPrice({ symbol });
-		const price = data.price >= 1 ? round10(data.price, 0) : data.price;
+		const data = await getPriceClient().getAvgPrice({ symbol });
+		const price = data.price >= 1 ? round10(data.price, -2) : data.price;
 		let ticker;
 		const tickerSpan = sentryService.startInactiveSpan({
 			name: 'binance.get_24hr_change_statistics',
@@ -183,7 +200,7 @@ async function fetchCryptoPrice(symbol, options = {}) {
 		}
 
 		const baseMessage = `Precio de ${symbol} es ${price}`;
-		return {
+		const quote = {
 			symbol,
 			price,
 			assetClass: 'crypto',
@@ -195,6 +212,8 @@ async function fetchCryptoPrice(symbol, options = {}) {
 			} : {}),
 			message: ticker ? `${baseMessage}\n${ticker.message}` : baseMessage,
 		};
+		if (options.useCache === true) priceQuoteCache.set(priceQuoteCache.PROVIDERS.CRYPTO, symbol, quote);
+		return quote;
 	} catch (e) {
 		console.error('Error fetching symbol price from Binance:', e);
 		const isInvalidSymbol = (e && e.code === -1121) || (e && e.message && /invalid symbol/i.test(e.message));
@@ -227,6 +246,12 @@ async function fetchEquityPrice(symbol, exchange, options = {}) {
 		throw error;
 	}
 
+	const cacheKey = `${symbol}:${exchange || 'default'}`;
+	const cached = options.useCache === true && priceQuoteCache.get(priceQuoteCache.PROVIDERS.EQUITY, cacheKey);
+	if (cached) {
+		return cached;
+	}
+
 	const { parentSpan, timeoutMs } = options;
 	const priceFetchSpan = sentryService.startInactiveSpan({
 		name: 'twelve_data.get_quote',
@@ -238,6 +263,7 @@ async function fetchEquityPrice(symbol, exchange, options = {}) {
 			'provider.operation': 'getQuote',
 			'equity.symbol': symbol || 'missing',
 			'equity.exchange': exchange || 'default',
+			'cache.hit': false,
 		},
 	});
 
@@ -251,7 +277,7 @@ async function fetchEquityPrice(symbol, exchange, options = {}) {
 			changeStr = ` (${sign}${quote.percentChange.toFixed(2)}%)`;
 		}
 		const message = `Precio de ${quote.symbol} es ${price}${changeStr}`;
-		return {
+		const result = {
 			symbol: quote.symbol,
 			name: quote.name,
 			exchange: quote.exchange,
@@ -262,6 +288,8 @@ async function fetchEquityPrice(symbol, exchange, options = {}) {
 			assetClass: 'equity',
 			message,
 		};
+		if (options.useCache === true) priceQuoteCache.set(priceQuoteCache.PROVIDERS.EQUITY, cacheKey, result);
+		return result;
 	} catch (e) {
 		const durationMs = Date.now() - startTime;
 		console.error('Error fetching equity quote from Twelve Data:', e);
@@ -324,10 +352,10 @@ const fetchSymbolPrice = async (context, options = {}) => {
 	}
 
 	if (classification.assetClass === 'equity') {
-		return fetchEquityPrice(classification.symbol, classification.exchange, options);
+		return fetchEquityPrice(classification.symbol, classification.exchange, { ...options, useCache: true });
 	}
 
-	return fetchCryptoPrice(classification.symbol, options);
+	return fetchCryptoPrice(classification.symbol, { ...options, useCache: true });
 };
 
 module.exports = {
