@@ -26,6 +26,8 @@ const {
 const { enrichScannerItemsWithTrendConfluence } = require('../../../../services/tradingview/marketScannerConfluence');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const { resolveDryRunCost, hasUnrecognisedCostFlag } = require('../../../../lib/dryRunRequest');
+const costEstimationService = require('../../../../services/cost/CostEstimationService');
 const {
 	classifyScannerError,
 	emptyScannerErrorCategoryCounts,
@@ -68,6 +70,40 @@ function postMarketScannerAlert(botOrGetter) {
 			const requestSpan = sentryService.getActiveSpan();
 			const routing = parseNotificationRouting(req.body);
 			const parsed = parseMarketScannerRequest(req);
+			if (hasUnrecognisedCostFlag(req)) {
+				return sendErrorFrom(res, 400, {
+					code: 'INVALID_REQUEST',
+					error: 'Unrecognised dryRun/estimate value. Supported: true, false, cost, or estimate.',
+					requestId,
+				});
+			}
+			if (resolveDryRunCost(req) && !costEstimationService.isEnabled()) {
+				return sendErrorFrom(res, 404, {
+					code: 'FEATURE_DISABLED',
+					error: 'Cost estimation is disabled. Set ENABLE_DRY_RUN_COST=true to enable.',
+					requestId,
+				});
+			}
+			if (resolveDryRunCost(req) && costEstimationService.isEnabled()) {
+				const costEstimate = costEstimationService.estimate({
+					operation: 'market-scanner-alert',
+					symbols: parsed.scans,
+					body: req.body,
+				});
+				return res.status(200).json({
+					success: true,
+					dryRun: 'cost',
+					costEstimate,
+					tokensIn: costEstimate.tokensIn,
+					tokensOut: costEstimate.tokensOut,
+					estimatedTotalTokens: costEstimate.estimatedTotalTokens,
+					estimatedCostUsd: costEstimate.estimatedCostUsd,
+					scanResults: [],
+					summary: buildSummary([], []),
+					requestId,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
+				});
+			}
 			const timeoutMs = getMarketScannerTimeoutMs();
 			const mcpUnavailable = getMcpUnavailableReason();
 			if (mcpUnavailable) {

@@ -8487,6 +8487,64 @@
         ],
         "x-admin-role": "admin.operator"
       }
+    },
+    "/api/operations/estimate": {
+      "post": {
+        "operationId": "postOperationEstimate",
+        "summary": "Estimate cost for an operation with zero billable calls",
+        "description": "Issue #745: returns a costEstimate for the given operation without invoking Gemini, TradingView MCP, Brave Search, Firestore, or any billable provider. operation selects one of news-monitor, expanded-analysis-alert, market-scanner-alert, or tradingview-analysis; remaining body fields mirror that operation's request body.",
+        "tags": [
+          "Operations"
+        ],
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/OperationEstimate"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OperationEstimateResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -8634,9 +8692,20 @@
       "DryRun": {
         "name": "dryRun",
         "in": "query",
-        "description": "When true, analyze and return alerts without notification delivery, deduplication cache claims/writes, or signal-outcome persistence.",
+        "description": "When true, analyze and return alerts without notification delivery, deduplication cache claims/writes, or signal-outcome persistence. When 'cost' (or ?estimate=true), return only a costEstimate with zero billable calls (Issue #745).",
         "schema": {
-          "type": "boolean",
+          "type": [
+            "boolean",
+            "string"
+          ],
+          "enum": [
+            true,
+            false,
+            "true",
+            "false",
+            "cost",
+            "estimate"
+          ],
           "default": false
         }
       },
@@ -9984,6 +10053,22 @@
             "example": {
               "description": "Updated Discord webhook bridge",
               "enabled": false
+            }
+          }
+        }
+      },
+      "OperationEstimate": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OperationEstimateRequest"
+            },
+            "example": {
+              "operation": "news-monitor",
+              "crypto": [
+                "BTCUSDT",
+                "ETHUSD"
+              ]
             }
           }
         }
@@ -11912,63 +11997,82 @@
                     "wired": {
                       "coin_analysis": {
                         "wired": true,
-                        "callers": ["enrichFromSignal", "alert/grounding"],
+                        "callers": [
+                          "enrichFromSignal",
+                          "alert/grounding"
+                        ],
                         "lastSuccessAt": "2026-08-27T17:30:00.000Z",
                         "lastFailureAt": null,
                         "lastCategory": null
                       },
                       "combined_analysis": {
                         "wired": true,
-                        "callers": ["enrichFromSignal"],
+                        "callers": [
+                          "enrichFromSignal"
+                        ],
                         "lastSuccessAt": null,
                         "lastFailureAt": null,
                         "lastCategory": null
                       },
                       "multi_timeframe_analysis": {
                         "wired": true,
-                        "callers": ["enrichFromSignal"],
+                        "callers": [
+                          "enrichFromSignal"
+                        ],
                         "lastSuccessAt": null,
                         "lastFailureAt": null,
                         "lastCategory": null
                       },
                       "volume_confirmation_analysis": {
                         "wired": true,
-                        "callers": ["enrichFromSignal"],
+                        "callers": [
+                          "enrichFromSignal"
+                        ],
                         "lastSuccessAt": null,
                         "lastFailureAt": null,
                         "lastCategory": null
                       },
                       "top_gainers": {
                         "wired": true,
-                        "callers": ["marketScanner"],
+                        "callers": [
+                          "marketScanner"
+                        ],
                         "lastSuccessAt": null,
                         "lastFailureAt": null,
                         "lastCategory": null
                       },
                       "top_losers": {
                         "wired": true,
-                        "callers": ["marketScanner"],
+                        "callers": [
+                          "marketScanner"
+                        ],
                         "lastSuccessAt": null,
                         "lastFailureAt": null,
                         "lastCategory": null
                       },
                       "volume_breakout_scanner": {
                         "wired": true,
-                        "callers": ["marketScanner"],
+                        "callers": [
+                          "marketScanner"
+                        ],
                         "lastSuccessAt": null,
                         "lastFailureAt": null,
                         "lastCategory": null
                       },
                       "smart_volume_scanner": {
                         "wired": true,
-                        "callers": ["marketScanner"],
+                        "callers": [
+                          "marketScanner"
+                        ],
                         "lastSuccessAt": null,
                         "lastFailureAt": null,
                         "lastCategory": null
                       },
                       "bollinger_scan": {
                         "wired": true,
-                        "callers": ["marketScanner"],
+                        "callers": [
+                          "marketScanner"
+                        ],
                         "lastSuccessAt": null,
                         "lastFailureAt": null,
                         "lastCategory": null
@@ -12772,6 +12876,103 @@
                   }
                 }
               }
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
+      },
+      "CostEstimateResult": {
+        "description": "Cost estimate computed with zero billable calls",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CostEstimateResponse"
+            },
+            "example": {
+              "success": true,
+              "dryRun": "cost",
+              "costEstimate": {
+                "operation": "news-monitor",
+                "dryRun": "cost",
+                "estimate": true,
+                "noBillableCalls": true,
+                "model": "gemini-2.5-flash",
+                "tokensIn": 1032,
+                "tokensOut": 400,
+                "estimatedTotalTokens": 1432,
+                "estimatedCostUsd": 0.00131,
+                "providerBreakdown": [
+                  {
+                    "provider": "gemini",
+                    "model": "gemini-2.5-flash",
+                    "calls": 2,
+                    "tokensIn": 1032,
+                    "tokensOut": 400,
+                    "estimatedTotalTokens": 1432,
+                    "costUsd": 0.00131,
+                    "ratePer1m": {
+                      "input": 0.3,
+                      "output": 2.5
+                    }
+                  }
+                ],
+                "externalCosts": [
+                  {
+                    "kind": "brave-search",
+                    "calls": 1,
+                    "status": "unknown",
+                    "estimatedCostUsd": null,
+                    "reason": "no public price table"
+                  }
+                ],
+                "quotaImpact": {
+                  "dailyQuotaTokens": 1000000,
+                  "percent": 0.1432,
+                  "summary": "~0.1432% of configured daily quota (1000000 tokens)"
+                },
+                "perSymbol": [
+                  {
+                    "symbol": "BTCUSDT",
+                    "tokensIn": 1032,
+                    "tokensOut": 400,
+                    "estimatedTotalTokens": 1432,
+                    "costUsd": 0.00131
+                  }
+                ],
+                "callCount": 2,
+                "warnings": [],
+                "assumptions": {
+                  "tokenApprox": "rough upper bound: ceil(chars / 4) for input; output uses a configured budget ceiling",
+                  "outputBudgetKind": "COST_ESTIMATION_OUTPUT_TOKENS_NEWS",
+                  "outputTokensPerCall": 200,
+                  "ratesSource": "default",
+                  "estimateOnly": "Estimate only \u2014 actual rate may differ; MCP/search costs are unknown, not $0."
+                }
+              },
+              "tokensIn": 1032,
+              "tokensOut": 400,
+              "estimatedTotalTokens": 1432,
+              "estimatedCostUsd": 0.00131,
+              "requestId": "00000000-0000-4000-8000-000000000000"
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
+      },
+      "OperationEstimateResult": {
+        "description": "Cost estimate for the requested operation",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OperationEstimateResponse"
             }
           }
         },
@@ -19878,9 +20079,20 @@
             "description": "Optional list of alertable event categories to deliver. When specified, only detected news events matching one of these categories will trigger notifications. Omitted defaults to delivering all categories. Valid values: price_surge, price_decline, public_figure, regulatory."
           },
           "dryRun": {
-            "type": "boolean",
+            "type": [
+              "boolean",
+              "string"
+            ],
+            "enum": [
+              true,
+              false,
+              "true",
+              "false",
+              "cost",
+              "estimate"
+            ],
             "default": false,
-            "description": "When true, analyze without notification delivery or persistence. The query parameter form is supported for GET and POST."
+            "description": "When true, analyze without delivery. When 'cost', return only a costEstimate with zero billable calls (Issue #745)."
           },
           "channels": {
             "type": "array",
@@ -22154,7 +22366,12 @@
             "$ref": "#/components/schemas/BuildInfo"
           },
           "featureFlags": {
-            "$ref": "#/components/schemas/StatusFeatureFlags"
+            "$ref": "#/components/schemas/StatusFeatureFlags",
+            "properties": {
+              "costEstimation": {
+                "type": "boolean"
+              }
+            }
           },
           "deliveryChannels": {
             "$ref": "#/components/schemas/JsonObject"
@@ -22384,6 +22601,9 @@
               },
               "dailyDigest": {
                 "$ref": "#/components/schemas/DailyDigestDependency"
+              },
+              "costEstimation": {
+                "$ref": "#/components/schemas/CostEstimationDependency"
               }
             }
           }
@@ -26288,7 +26508,7 @@
       },
       "DailyDigestDependency": {
         "type": "object",
-        "description": "Daily trader digest scheduler (Issue #790). dependencies.dailyDigest reports enabled/configured/ready plus non-sensitive run metadata (deliveryHourUtc, maxSpendUsd, lastRunAt, lastRunStatus, lastRunDateStr, lastRunDigestMessageId, dailyChats as hashed prefixes, leaseState). Durable sends require ENABLE_FIRESTORE_DIGEST_RUNS and TELEGRAM_DIGEST_CHAT_ID; otherwise status is degraded and the send is omitted. No chat ID or token is exposed. The /digest Telegram command (not an HTTP route) runs the previous-UTC-day digest on demand; /digest --dry-run returns the formatted MarkdownV2 without sending or persisting. Sample digest payload: \"*📊 Daily Digest — 2026-11-07*\\n\\n*Alertas:* 12\\n*Por fuente:* webhook 9 · market-scanner 3\\n*Por canal:* telegram 12/12\\n*Outcomes (maduros 1D):* hit-rate 55.0% | elegibles 10 / evaluados 8 / pendientes 2\\n\\n*Top scanner hits:*\\n1. BINANCE:BTCUSDT\\n\\n*Top outcome winners:*\\n1. NASDAQ:NVDA R=2.10\\n\\n*Gasto LLM:* $0.0123\"",
+        "description": "Daily trader digest scheduler (Issue #790). dependencies.dailyDigest reports enabled/configured/ready plus non-sensitive run metadata (deliveryHourUtc, maxSpendUsd, lastRunAt, lastRunStatus, lastRunDateStr, lastRunDigestMessageId, dailyChats as hashed prefixes, leaseState). Durable sends require ENABLE_FIRESTORE_DIGEST_RUNS and TELEGRAM_DIGEST_CHAT_ID; otherwise status is degraded and the send is omitted. No chat ID or token is exposed. The /digest Telegram command (not an HTTP route) runs the previous-UTC-day digest on demand; /digest --dry-run returns the formatted MarkdownV2 without sending or persisting. Sample digest payload: \"*\ud83d\udcca Daily Digest \u2014 2026-11-07*\\n\\n*Alertas:* 12\\n*Por fuente:* webhook 9 \u00b7 market-scanner 3\\n*Por canal:* telegram 12/12\\n*Outcomes (maduros 1D):* hit-rate 55.0% | elegibles 10 / evaluados 8 / pendientes 2\\n\\n*Top scanner hits:*\\n1. BINANCE:BTCUSDT\\n\\n*Top outcome winners:*\\n1. NASDAQ:NVDA R=2.10\\n\\n*Gasto LLM:* $0.0123\"",
         "required": [
           "enabled",
           "configured",
@@ -26307,21 +26527,79 @@
           "leaseState"
         ],
         "properties": {
-          "enabled": { "type": "boolean" },
-          "configured": { "type": "boolean" },
-          "ready": { "type": "boolean" },
-          "status": { "type": "string", "enum": ["disabled", "degraded", "ready"] },
-          "backend": { "type": "string", "enum": ["firestore", "memory"] },
-          "deliveryHourUtc": { "type": "integer", "minimum": 0, "maximum": 23 },
-          "maxSpendUsd": { "type": "number", "minimum": 0 },
-          "running": { "type": "boolean" },
-          "lastRunAt": { "type": ["string", "null"], "format": "date-time" },
-          "lastRunStatus": { "type": "string" },
-          "lastRunDateStr": { "type": ["string", "null"] },
-          "lastRunDigestMessageId": { "type": ["string", "null"] },
-          "lastRunError": { "type": ["string", "null"] },
-          "dailyChats": { "type": "array", "items": { "type": "string" } },
-          "leaseState": { "type": "string" }
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "degraded",
+              "ready"
+            ]
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ]
+          },
+          "deliveryHourUtc": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 23
+          },
+          "maxSpendUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "lastRunAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastRunStatus": {
+            "type": "string"
+          },
+          "lastRunDateStr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastRunDigestMessageId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastRunError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dailyChats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "leaseState": {
+            "type": "string"
+          }
         },
         "additionalProperties": false
       },
@@ -26932,6 +27210,454 @@
               "null"
             ],
             "format": "date-time"
+          }
+        }
+      },
+      "CostEstimateProviderBreakdown": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider",
+          "model",
+          "calls",
+          "tokensIn",
+          "tokensOut",
+          "estimatedTotalTokens",
+          "costUsd"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "calls": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensIn": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOut": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimatedTotalTokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "costUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "inputCostUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "outputCostUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "ratePer1m": {
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "number"
+              },
+              "output": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      },
+      "CostEstimateExternalCost": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "calls",
+          "status",
+          "estimatedCostUsd"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tradingview-mcp",
+              "brave-search"
+            ]
+          },
+          "calls": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "unknown"
+            ]
+          },
+          "estimatedCostUsd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "CostEstimate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operation",
+          "dryRun",
+          "estimate",
+          "noBillableCalls",
+          "model",
+          "tokensIn",
+          "tokensOut",
+          "estimatedTotalTokens",
+          "estimatedCostUsd",
+          "providerBreakdown",
+          "externalCosts",
+          "quotaImpact",
+          "perSymbol",
+          "callCount",
+          "warnings",
+          "assumptions"
+        ],
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "news-monitor",
+              "expanded-analysis-alert",
+              "market-scanner-alert",
+              "tradingview-analysis"
+            ]
+          },
+          "dryRun": {
+            "type": "string",
+            "enum": [
+              "cost"
+            ]
+          },
+          "estimate": {
+            "type": "boolean",
+            "const": true
+          },
+          "noBillableCalls": {
+            "type": "boolean",
+            "const": true
+          },
+          "model": {
+            "type": "string"
+          },
+          "tokensIn": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOut": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimatedTotalTokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimatedCostUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "providerBreakdown": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CostEstimateProviderBreakdown"
+            }
+          },
+          "externalCosts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CostEstimateExternalCost"
+            }
+          },
+          "quotaImpact": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "dailyQuotaTokens",
+              "percent",
+              "summary"
+            ],
+            "properties": {
+              "dailyQuotaTokens": {
+                "type": "integer",
+                "minimum": 1000
+              },
+              "percent": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "summary": {
+                "type": "string"
+              }
+            }
+          },
+          "perSymbol": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "symbol",
+                "tokensIn",
+                "tokensOut",
+                "estimatedTotalTokens",
+                "costUsd"
+              ],
+              "properties": {
+                "symbol": {
+                  "type": "string"
+                },
+                "tokensIn": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "tokensOut": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "estimatedTotalTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "costUsd": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "mcpCalls": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "callCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "assumptions": {
+            "type": "object",
+            "properties": {
+              "tokenApprox": {
+                "type": "string"
+              },
+              "outputBudgetKind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "outputTokensPerCall": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ratesSource": {
+                "type": "string",
+                "enum": [
+                  "remote",
+                  "environment",
+                  "default"
+                ]
+              },
+              "estimateOnly": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "CostEstimateResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "dryRun",
+          "costEstimate",
+          "tokensIn",
+          "tokensOut",
+          "estimatedTotalTokens",
+          "estimatedCostUsd",
+          "requestId"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "dryRun": {
+            "type": "string",
+            "enum": [
+              "cost"
+            ]
+          },
+          "costEstimate": {
+            "$ref": "#/components/schemas/CostEstimate"
+          },
+          "tokensIn": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOut": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimatedTotalTokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimatedCostUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "requestId": {
+            "type": "string"
+          }
+        }
+      },
+      "OperationEstimateRequest": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "operation"
+        ],
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "news-monitor",
+              "expanded-analysis-alert",
+              "market-scanner-alert",
+              "tradingview-analysis",
+              "expanded-analysis",
+              "market-scanner",
+              "news",
+              "jobs",
+              "jobs-tradingview-analysis"
+            ]
+          },
+          "symbols": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "crypto": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "stocks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scans": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "OperationEstimateResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "operation",
+          "costEstimate"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "operation": {
+            "type": "string"
+          },
+          "costEstimate": {
+            "$ref": "#/components/schemas/CostEstimate"
+          }
+        }
+      },
+      "CostEstimationDependency": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "source",
+          "ratesSource",
+          "model",
+          "operations"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "disabled"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "ratesSource": {
+            "type": "string",
+            "enum": [
+              "remote",
+              "environment",
+              "default"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       }

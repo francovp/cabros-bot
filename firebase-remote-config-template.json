@@ -1117,6 +1117,48 @@
       },
       "description": "Scanner operation timeout in milliseconds (integer 1000-120000; application default 90000)",
       "valueType": "NUMBER"
+    },
+    "ENABLE_DRY_RUN_COST": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Pre-flight cost estimation for LLM-driven endpoints (dryRun=cost). Ships with useInAppDefault so publishing preserves env/default (true).",
+      "valueType": "BOOLEAN"
+    },
+    "COST_ESTIMATION_OUTPUT_TOKENS_NEWS": {
+      "defaultValue": {
+        "value": "400"
+      },
+      "description": "Output-token budget per news-monitor symbol for cost estimation (default: 400)",
+      "valueType": "NUMBER"
+    },
+    "COST_ESTIMATION_OUTPUT_TOKENS_ANALYSIS": {
+      "defaultValue": {
+        "value": "800"
+      },
+      "description": "Output-token budget per expanded-analysis symbol for cost estimation (default: 800)",
+      "valueType": "NUMBER"
+    },
+    "COST_ESTIMATION_OUTPUT_TOKENS_SCANNER": {
+      "defaultValue": {
+        "value": "600"
+      },
+      "description": "Output-token budget per scanner candidate for cost estimation (default: 600)",
+      "valueType": "NUMBER"
+    },
+    "COST_ESTIMATION_DAILY_QUOTA_TOKENS": {
+      "defaultValue": {
+        "value": "1000000"
+      },
+      "description": "Configured daily token quota denominator for cost-estimation quotaImpact (default: 1000000)",
+      "valueType": "NUMBER"
+    },
+    "LLM_COST_RATES_JSON": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Public per-model LLM rate overrides as JSON {model:{input,output}} per 1M tokens. Ships with useInAppDefault so publishing preserves env/default.",
+      "valueType": "STRING"
     }
   },
   "version": {

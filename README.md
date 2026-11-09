@@ -181,6 +181,7 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `GET` | `/api/jobs` | List recent background jobs with status & progress | [Jobs API](docs/jobs.md#get-apijobs) |
 | `GET` | `/api/jobs/:jobId` | Poll background job progress and retrieve result | [Jobs API](docs/jobs.md#get-apijobsjobid) |
 | `POST` | `/api/news-monitor` | Trigger symbol news scanning & event detection | [News Monitoring](docs/news-monitor.md) |
+| `POST` | `/api/operations/estimate` | Pre-flight cost estimate with zero billable calls (Issue #745) | [OpenAPI Spec](/openapi.json) |
 | `POST` | `/api/trading/binance/orders/preview` | Pre-trade Binance Spot cost & slippage preview | [API Reference](docs/api-reference.md#post-apitradingbinanceorderspreview) |
 | `POST` | `/api/trading/binance/orders` | Operator-gated Binance Spot market, limit, contingent, and native `BRACKET_LIMIT` OTOCO orders | [API Reference](docs/api-reference.md#post-apitradingbinanceorders) |
 | `GET`/`DELETE` | `/api/trading/binance/orders` | Read recent orders or reconcile order lists; cancel a single order | [API Reference](docs/api-reference.md#post-apitradingbinanceorders) |
@@ -210,6 +211,8 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `GET` | `/api/research/strategies` | Compare 6 TradingView MCP strategies (RSI, Bollinger, MACD, EMA Cross, Supertrend, Donchian) for one symbol | [OpenAPI Spec](/openapi.json) |
 | `POST` | `/api/research/walk-forward` | Run out-of-sample walk-forward validation for a strategy to detect overfitting | [OpenAPI Spec](/openapi.json) |
 | `POST` | `/api/research/backtest` | Run historical backtest for a strategy with commission and slippage | [OpenAPI Spec](/openapi.json) |
+
+Pre-flight cost estimation (Issue #745): pass `dryRun=cost` (or `?estimate=true`) on `/api/news-monitor`, `/api/jobs/tradingview-analysis`, `/api/webhook/expanded-analysis-alert`, `/api/webhook/market-scanner-alert`, or call `POST /api/operations/estimate` with `{ operation, ...operationBody }`, to receive a `costEstimate` with `tokensIn`, `tokensOut`, `estimatedTotalTokens`, `estimatedCostUsd`, `providerBreakdown`, `externalCosts`, and `quotaImpact`. The estimator makes zero billable calls (no Gemini, TradingView MCP, Brave Search, Firestore, or remote Langfuse). Input tokens use a rough upper bound (`ceil(chars / 4)`); output tokens use configured budgets. TradingView MCP and Brave costs are reported as `unknown` (null), never $0. Gated by `ENABLE_DRY_RUN_COST` (default `true`). Rates come from Remote Config `LLM_COST_RATES_JSON` with env fallback and bundled `PRICING_PER_1M` defaults; `/api/status` exposes `dependencies.costEstimation`.
 
 Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`. CI coverage guards (`tests/unit/postman-collection.test.js` and `tests/unit/openapi-contract.test.js`) enforce that every mounted `/api` route appears in both OpenAPI and `CabrosBot.postman_collection.json`, and that every unique endpoint path referenced in README API documentation exists in `src/openapi/openapi.json`.
 

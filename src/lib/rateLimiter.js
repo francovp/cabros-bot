@@ -42,6 +42,7 @@ const ENDPOINT_LIMITS = new Map([
 	['/api/webhook/market-scanner-alert', { tier: 'heavy', max: 5 }],
 	['/api/webhook/symbol-analysis', { tier: 'heavy', max: 5 }],
 	['/api/news-monitor', { tier: 'heavy', max: 5 }],
+	['/api/operations/estimate', { tier: 'standard', max: 30 }],
 	['/api/trading/binance/orders', { tier: 'trading', max: 10 }],
 	['/api/trading/binance/orders/preview', { tier: 'trading', max: 10 }],
 	['/api/webhook/volume-confirmation', { tier: 'standard', max: 30 }],
