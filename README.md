@@ -214,6 +214,15 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 
 Pre-flight cost estimation (Issue #745): pass `dryRun=cost` (or `?estimate=true`) on `/api/news-monitor`, `/api/jobs/tradingview-analysis`, `/api/webhook/expanded-analysis-alert`, `/api/webhook/market-scanner-alert`, or call `POST /api/operations/estimate` with `{ operation, ...operationBody }`, to receive a `costEstimate` with `tokensIn`, `tokensOut`, `estimatedTotalTokens`, `estimatedCostUsd`, `providerBreakdown`, `externalCosts`, and `quotaImpact`. The estimator makes zero billable calls (no Gemini, TradingView MCP, Brave Search, Firestore, or remote Langfuse). Input tokens use a rough upper bound (`ceil(chars / 4)`); output tokens use configured budgets. TradingView MCP and Brave costs are reported as `unknown` (null), never $0. Gated by `ENABLE_DRY_RUN_COST` (default `true`). Rates come from Remote Config `LLM_COST_RATES_JSON` with env fallback and bundled `PRICING_PER_1M` defaults; `/api/status` exposes `dependencies.costEstimation`.
 
+| Remote Config parameter | Environment/default fallback | Bounds | Purpose |
+| --- | --- | --- | --- |
+| `ENABLE_DRY_RUN_COST` | `true` | boolean | Opt-in gate for `dryRun=cost` and `POST /api/operations/estimate`. |
+| `COST_ESTIMATION_OUTPUT_TOKENS_NEWS` | `400` | integer `10`-`8000` | Output-token budget per news symbol for cost estimation. |
+| `COST_ESTIMATION_OUTPUT_TOKENS_ANALYSIS` | `800` | integer `10`-`8000` | Output-token budget per expanded-analysis symbol for cost estimation. |
+| `COST_ESTIMATION_OUTPUT_TOKENS_SCANNER` | `600` | integer `10`-`8000` | Output-token budget per scanner candidate for cost estimation. |
+| `COST_ESTIMATION_DAILY_QUOTA_TOKENS` | `1000000` | integer `1000`-`100000000` | Daily token quota denominator for `quotaImpact` percent. |
+| `LLM_COST_RATES_JSON` | empty | JSON `{model:{input,output}}` per 1M tokens | Public per-model LLM rate overrides; empty preserves bundled `PRICING_PER_1M`. |
+
 Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`. CI coverage guards (`tests/unit/postman-collection.test.js` and `tests/unit/openapi-contract.test.js`) enforce that every mounted `/api` route appears in both OpenAPI and `CabrosBot.postman_collection.json`, and that every unique endpoint path referenced in README API documentation exists in `src/openapi/openapi.json`.
 
 Protected `/api/status` and `/api/capabilities` responses include `dependencies.sentry.runtime`: initialization state, effective environment and release, trace sample rate, tracing-enabled state, and DSN host/project routing. Credentials, path prefixes, and query parameters are omitted. `tracingEnabled` means Sentry is initialized with a positive configured trace sample rate; it does not prove that a transaction was sampled or received by Sentry. Compare route traces and latency percentiles separately.

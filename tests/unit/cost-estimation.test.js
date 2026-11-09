@@ -23,6 +23,8 @@ describe('CostEstimationService (Issue #745)', () => {
 			expect(resolveDryRunCost({ query: { estimate: 'true' }, body: {} })).toBe(true);
 			expect(resolveDryRunCost({ query: {}, body: { dryRun: 'cost' } })).toBe(true);
 			expect(resolveDryRunCost({ query: {}, body: { estimate: true } })).toBe(true);
+			expect(resolveDryRunCost({ query: { estimate: 'cost' }, body: {} })).toBe(true);
+			expect(resolveDryRunCost({ query: { estimate: 'estimate' }, body: {} })).toBe(true);
 			expect(resolveDryRunCost({ query: { dryRun: 'true' }, body: {} })).toBe(false);
 		});
 	});

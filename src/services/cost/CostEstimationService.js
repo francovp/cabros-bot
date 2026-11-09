@@ -234,14 +234,14 @@ function resolveNumbers(runtimeConfig = resolveRuntimeConfig()) {
 	};
 }
 
-function normalizeSymbols(rawSymbols) {
+function normalizeSymbols(rawSymbols, maxSymbols = 50) {
 	if (!Array.isArray(rawSymbols)) {
 		return [];
 	}
 	return rawSymbols
 		.filter((entry) => typeof entry === 'string' && entry.trim() !== '')
 		.map((entry) => entry.trim())
-		.slice(0, 50);
+		.slice(0, maxSymbols);
 }
 
 function buildPerSymbol(items, inputTokensPerItem, outputTokensPerItem, pricing) {
@@ -311,9 +311,10 @@ function estimate(options = {}) {
 	let outputBudgetKind = null;
 
 	if (operation === 'news-monitor') {
-		const crypto = normalizeSymbols(body.crypto || options.crypto);
-		const stocks = normalizeSymbols(body.stocks || options.stocks);
-		const merged = symbols.length > 0 ? symbols : [...crypto, ...stocks].slice(0, 50);
+		// News handler validates up to 100 symbols; estimate the full accepted batch.
+		const crypto = normalizeSymbols(body.crypto || options.crypto, 100);
+		const stocks = normalizeSymbols(body.stocks || options.stocks, 100);
+		const merged = symbols.length > 0 ? symbols.slice(0, 100) : [...crypto, ...stocks].slice(0, 100);
 		const inputPerSymbol = estimateInputTokensForChars(NEWS_PROMPT_CHARS + NEWS_QUERY_CHARS);
 		const outputPerSymbol = numbers.newsOutputTokens;
 		calls = merged.length * 2;

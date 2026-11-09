@@ -47,7 +47,7 @@ function resolveDryRun(req) {
  * cost-probe alias at all?" so handlers reject typos instead of executing.
  */
 const DRY_RUN_COST_ENABLED_VALUES = new Set(['cost', 'estimate']);
-const ESTIMATE_ENABLED_VALUES = new Set(['true', true]);
+const ESTIMATE_ENABLED_VALUES = new Set(['true', true, 'cost', 'estimate']);
 
 function isDryRunCostValue(value) {
 	return typeof value === 'string' && DRY_RUN_COST_ENABLED_VALUES.has(value.trim().toLowerCase());

@@ -1912,7 +1912,7 @@
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA — dry-run after budget exhausted\"\n}"
+          "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA \u2014 dry-run after budget exhausted\"\n}"
         },
         "description": "Dry-run alert delivery that does not consume the rolling 24h alert-delivery budget. Used to inspect the budget state via /api/status without sending further deliveries."
       },
@@ -2015,7 +2015,7 @@
         },
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA — budget exhausted example\"\n}"
+          "raw": "{\n  \"text\": \"BINANCE:ETHUSDT (4h) COMPRA \u2014 budget exhausted example\"\n}"
         },
         "description": "When the rolling 24h alert-delivery budget is exhausted, alert endpoints return 200 OK with success=true (fail-open) and per-channel results carrying success=false, statusCode=429, errorCode=ALERT_BUDGET_EXCEEDED, and a budget object with the current usage. deliveredChannels is empty."
       },
@@ -42844,6 +42844,264 @@
       ]
     },
     {
+      "name": "POST operations estimate (invalid operation, negative)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{adminApiKey}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/operations/estimate",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "operations",
+            "estimate"
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"operation\": \"not-a-real-op\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Negative: invalid operation returns standardized 400 INVALID_REQUEST envelope."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('status is 400', function () { pm.response.to.have.status(400); });",
+              "pm.test('error envelope is standardized', function () { const b = pm.response.json(); pm.expect(b.success).to.eql(false); pm.expect(b.code).to.eql('INVALID_REQUEST'); pm.expect(b).to.have.property('requestId'); pm.expect(b).to.have.property('retryable'); });"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "Invalid operation (400)",
+          "status": "Bad Request",
+          "code": 400,
+          "body": "{\n  \"success\": false,\n  \"error\": \"Invalid operation. Supported: news-monitor, expanded-analysis-alert, market-scanner-alert, tradingview-analysis\",\n  \"code\": \"INVALID_REQUEST\"\n}",
+          "header": []
+        }
+      ]
+    },
+    {
+      "name": "POST News Monitor (estimate=true alias)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/news-monitor?estimate=true",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "news-monitor"
+          ],
+          "query": [
+            {
+              "key": "estimate",
+              "value": "true"
+            }
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"crypto\": [\n    \"BTCUSDT\"\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Alias: ?estimate=true is equivalent to dryRun=cost (zero billable calls)."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('costEstimate has noBillableCalls', function () { const b = pm.response.json(); pm.expect(b.costEstimate.noBillableCalls).to.eql(true); pm.expect(b.costEstimate.estimatedCostUsd).to.be.a(\"number\"); });",
+              "pm.test('no billable calls marker present', function () { const b = pm.response.json(); pm.expect(b.costEstimate.dryRun).to.eql(\"cost\"); });"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "Cost estimate",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"success\": true,\n  \"dryRun\": \"cost\",\n  \"costEstimate\": {\n    \"operation\": \"news-monitor\",\n    \"tokensIn\": 1032,\n    \"estimatedCostUsd\": 0.00131,\n    \"noBillableCalls\": true\n  }\n}",
+          "header": []
+        }
+      ]
+    },
+    {
+      "name": "POST News Monitor (dryRun typo rejected, negative)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{apiKey}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/news-monitor?dryRun=costt",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "news-monitor"
+          ],
+          "query": [
+            {
+              "key": "dryRun",
+              "value": "costt"
+            }
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"crypto\": [\n    \"BTCUSDT\"\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Negative: unrecognised dryRun spelling returns 400 instead of executing live."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('status is 400', function () { pm.response.to.have.status(400); });",
+              "pm.test('error envelope is standardized', function () { const b = pm.response.json(); pm.expect(b.success).to.eql(false); pm.expect(b.code).to.eql('INVALID_REQUEST'); });"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "Invalid dryRun (400)",
+          "status": "Bad Request",
+          "code": 400,
+          "body": "{\n  \"success\": false,\n  \"error\": \"Unrecognised dryRun/estimate value. Supported: true, false, cost, or estimate.\",\n  \"code\": \"INVALID_REQUEST\"\n}",
+          "header": []
+        }
+      ]
+    },
+    {
+      "name": "POST Jobs (dryRun=cost)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "x-api-key",
+            "value": "{{adminApiKey}}",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "url": {
+          "raw": "{{baseUrl}}/api/jobs/tradingview-analysis?dryRun=cost",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "jobs",
+            "tradingview-analysis"
+          ],
+          "query": [
+            {
+              "key": "dryRun",
+              "value": "cost"
+            }
+          ]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"type\": \"expanded-analysis\",\n  \"symbols\": [\n    \"BINANCE:BTCUSDT\"\n  ]\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "description": "Cost probe for async jobs: returns costEstimate without creating a job."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('costEstimate has noBillableCalls', function () { const b = pm.response.json(); pm.expect(b.costEstimate.noBillableCalls).to.eql(true); pm.expect(b.costEstimate.estimatedCostUsd).to.be.a(\"number\"); });",
+              "pm.test('no billable calls marker present', function () { const b = pm.response.json(); pm.expect(b.costEstimate.dryRun).to.eql(\"cost\"); });"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ],
+      "response": [
+        {
+          "name": "Cost estimate",
+          "status": "OK",
+          "code": 200,
+          "body": "{\n  \"success\": true,\n  \"dryRun\": \"cost\",\n  \"costEstimate\": {\n    \"operation\": \"expanded-analysis-alert\",\n    \"tokensIn\": 0,\n    \"estimatedCostUsd\": 0,\n    \"noBillableCalls\": true\n  }\n}",
+          "header": []
+        }
+      ]
+    },
+    {
       "name": "POST News Monitor (dryRun=cost)",
       "request": {
         "method": "POST",
@@ -42894,6 +43152,19 @@
           "body": "{\n  \"success\": true,\n  \"dryRun\": \"cost\",\n  \"costEstimate\": {\n    \"operation\": \"news-monitor\",\n    \"tokensIn\": 1032,\n    \"tokensOut\": 400,\n    \"estimatedCostUsd\": 0.00131,\n    \"noBillableCalls\": true\n  }\n}",
           "header": []
         }
+      ],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('costEstimate has noBillableCalls', function () { const b = pm.response.json(); pm.expect(b.costEstimate.noBillableCalls).to.eql(true); pm.expect(b.costEstimate.estimatedCostUsd).to.be.a(\"number\"); });",
+              "pm.test('no billable calls marker present', function () { const b = pm.response.json(); pm.expect(b.costEstimate.dryRun).to.eql(\"cost\"); });"
+            ],
+            "type": "text/javascript"
+          }
+        }
       ]
     },
     {
@@ -42941,6 +43212,19 @@
           "code": 200,
           "body": "{\n  \"success\": true,\n  \"dryRun\": \"cost\",\n  \"costEstimate\": {\n    \"operation\": \"expanded-analysis-alert\",\n    \"tokensIn\": 0,\n    \"externalCosts\": [\n      {\n        \"kind\": \"tradingview-mcp\",\n        \"status\": \"unknown\",\n        \"estimatedCostUsd\": null\n      }\n    ]\n  }\n}",
           "header": []
+        }
+      ],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('status is 200', function () { pm.response.to.have.status(200); });",
+              "pm.test('costEstimate has noBillableCalls', function () { const b = pm.response.json(); pm.expect(b.costEstimate.noBillableCalls).to.eql(true); pm.expect(b.costEstimate.estimatedCostUsd).to.be.a(\"number\"); });",
+              "pm.test('no billable calls marker present', function () { const b = pm.response.json(); pm.expect(b.costEstimate.dryRun).to.eql(\"cost\"); });"
+            ],
+            "type": "text/javascript"
+          }
         }
       ]
     },

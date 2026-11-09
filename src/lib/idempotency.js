@@ -10,6 +10,17 @@ const { resolveDryRun, resolveDryRunCost } = require('./dryRunRequest');
 // keeps its existing idempotent dry-run behaviour unchanged.
 const DRY_RUN_IDEMPOTENCY_BYPASS_PATHS = new Set(['/api/webhook/message']);
 
+// Issue #745: cost probes bypass idempotency only on the four endpoints that
+// actually implement dryRun=cost. A global flag bypass would let
+// ?estimate=true skip replay protection on unrelated routes (e.g. job
+// retry), allowing duplicate side effects under the same key.
+const COST_IDEMPOTENCY_BYPASS_PATHS = new Set([
+	'/api/news-monitor',
+	'/api/jobs/tradingview-analysis',
+	'/api/webhook/expanded-analysis-alert',
+	'/api/webhook/market-scanner-alert',
+]);
+
 function getRequestPath(req) {
 	if (typeof req.path === 'string' && req.path.length > 0) {
 		return req.path;
@@ -36,6 +47,15 @@ function matchesBypassPath(req) {
 	}
 	const baseUrl = typeof req.baseUrl === 'string' ? req.baseUrl : '';
 	return Boolean(baseUrl) && DRY_RUN_IDEMPOTENCY_BYPASS_PATHS.has(`${baseUrl}${relative}`);
+}
+
+function matchesCostBypassPath(req) {
+	const relative = getRequestPath(req);
+	if (COST_IDEMPOTENCY_BYPASS_PATHS.has(relative)) {
+		return true;
+	}
+	const baseUrl = typeof req.baseUrl === 'string' ? req.baseUrl : '';
+	return Boolean(baseUrl) && COST_IDEMPOTENCY_BYPASS_PATHS.has(`${baseUrl}${relative}`);
 }
 
 function buildRequestFingerprint(req) {
@@ -142,7 +162,7 @@ function idempotencyMiddleware(req, res, next) {
 	// Issue #745: a cost estimate dispatches nothing and makes zero billable
 	// calls, so it must never reserve or cache an idempotency key on any path.
 	// When the feature is disabled the probe is a live request and must not bypass.
-	if (resolveDryRunCost(req)) {
+	if (resolveDryRunCost(req) && matchesCostBypassPath(req)) {
 		try {
 			// Lazy require: cost module only lazily reads RemoteConfig, no cycle at load.
 			// eslint-disable-next-line global-require
