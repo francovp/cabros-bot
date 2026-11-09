@@ -9,12 +9,12 @@ const { getChartRendererService } = require('./chartRenderer');
  * malformed field simply yields `null` and the caller keeps the text-only path.
  */
 
-const TIMEFRAME_BAR_COUNTS = Object.freeze({ default: 24 });
+const TIMEFRAME_BAR_COUNTS = Object.freeze({ default: 5 });
 
 function pickSymbol(alert = {}) {
 	const candidates = [
-		alert.symbol,
 		alert.chartSymbol,
+		alert.symbol,
 		alert.enriched?.symbol,
 		alert.signalMeta?.symbol,
 	];
@@ -49,13 +49,21 @@ function resolveChartRequest(alert = {}) {
 	const category = isSparkline ? 'sparkline' : 'candlestick';
 	const timeframe = pickTimeframe(alert);
 
-	// Round the price so successive renders inside a candle refresh share a key.
-	const entry = alert.enriched?.invalidation_level;
-	const target = alert.enriched?.target_level;
-	const stop = alert.invalidation_level ?? alert.stopLoss ?? alert.stop_loss;
+	// Entry is the current price; invalidation is the stop. Mixing them up
+	// labels the stop line as entry and omits the real stop overlay.
+	const enriched = alert.enriched && typeof alert.enriched === 'object' ? alert.enriched : null;
+	const entry = enriched?.current_price ?? enriched?.price_data?.current_price ?? alert.currentPrice ?? alert.entry;
+	const target = enriched?.target_level ?? alert.target_level ?? alert.target;
+	const stop = enriched?.invalidation_level ?? alert.invalidation_level ?? alert.stopLoss ?? alert.stop_loss;
 	const rangeKey = [
 		category === 'candlestick' ? 'full' : 'spark',
-		entry ?? '', target ?? '', stop ?? '', bars.length,
+		bars.length,
+		// Data identity: same bar count with updated prices must not reuse a
+		// stale PNG for up to the TTL. Hash normalized OHLCV values.
+		require('node:crypto').createHash('sha256')
+			.update(bars.map((bar) => [bar.open, bar.high, bar.low, bar.close, bar.volume].map((v) => String(Number(v))).join(',')).join(';'))
+			.digest('base64url').slice(0, 22),
+		entry ?? '', target ?? '', stop ?? '',
 	].join(':');
 
 	return {
