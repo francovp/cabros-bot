@@ -87,6 +87,28 @@ describe('Authentication Audit Logging (GH-740)', () => {
 				}),
 			});
 		});
+
+		it('strips query strings from path before auditing auth failure', () => {
+			const req = {
+				headers: { 'x-api-key': 'wrong-key' },
+				query: { 'api-key': 'operator-password-123' },
+				url: '/api/webhook/alert?api%2Dkey=operator-password-123&foo=bar',
+				originalUrl: '/api/webhook/alert?api%2Dkey=operator-password-123&foo=bar',
+				requestId: 'req-auth-leak',
+				ip: '127.0.0.1',
+			};
+			const res = {
+				status: jest.fn().mockReturnThis(),
+				json: jest.fn(),
+			};
+			const next = jest.fn();
+
+			validateApiKey(req, res, next);
+
+			expect(auditEvents).toHaveLength(1);
+			expect(auditEvents[0].details.path).toBe('/api/webhook/alert');
+			expect(JSON.stringify(auditEvents[0])).not.toContain('operator-password-123');
+		});
 	});
 
 	describe('validateAdminAccess', () => {
@@ -119,6 +141,30 @@ describe('Authentication Audit Logging (GH-740)', () => {
 					reason: 'invalid_api_key',
 				}),
 			});
+		});
+
+		it('strips query strings from path before auditing admin auth failure', async () => {
+			process.env.ENABLE_FIREBASE_ADMIN_AUTH = 'false';
+			const req = {
+				headers: { 'x-api-key': 'bad-admin-key' },
+				query: { 'api-key': 'super-secret-token' },
+				url: '/api/admin/events?api-key=super-secret-token',
+				originalUrl: '/api/admin/events?api-key=super-secret-token',
+				requestId: 'req-auth-4',
+				ip: '127.0.0.1',
+			};
+			const res = {
+				status: jest.fn().mockReturnThis(),
+				json: jest.fn(),
+			};
+			const next = jest.fn();
+
+			await validateAdminAccess(req, res, next);
+
+			expect(auditEvents.length).toBeGreaterThanOrEqual(1);
+			const authFailure = auditEvents.find((e) => e.category === AUDIT_CATEGORIES.AUTH_FAILURE);
+			expect(authFailure.details.path).toBe('/api/admin/events');
+			expect(JSON.stringify(authFailure)).not.toContain('super-secret-token');
 		});
 	});
 });

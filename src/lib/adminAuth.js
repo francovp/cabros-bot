@@ -15,7 +15,7 @@ const {
 } = require('./auth');
 const requestDeadline = require('./requestDeadline');
 const { sendErrorFrom } = require('./errorEnvelope');
-const { auditLog, AUDIT_CATEGORIES } = require('./auditLogger');
+const { auditLog, AUDIT_CATEGORIES, stripQueryFromPath } = require('./auditLogger');
 
 const ADMIN_VIEWER = 'admin.viewer';
 const ADMIN_OPERATOR = 'admin.operator';
@@ -245,7 +245,7 @@ async function validateAdminAccess(req, res, next) {
 				AUDIT_CATEGORIES.AUTH_FAILURE,
 				'anonymous',
 				'validate_admin_api_key',
-				{ reason: 'invalid_api_key', path: req.originalUrl || req.url },
+				{ reason: 'invalid_api_key', path: stripQueryFromPath(req.originalUrl || req.url) },
 				'failure',
 				req,
 			);
@@ -255,7 +255,7 @@ async function validateAdminAccess(req, res, next) {
 			AUDIT_CATEGORIES.AUTH_FAILURE,
 			'anonymous',
 			'validate_admin_access',
-			{ reason: 'missing_api_key', path: req.originalUrl || req.url },
+			{ reason: 'missing_api_key', path: stripQueryFromPath(req.originalUrl || req.url) },
 			'failure',
 			req,
 		);
@@ -312,7 +312,7 @@ async function validateAdminAccess(req, res, next) {
 				AUDIT_CATEGORIES.AUTH_FAILURE,
 				req.adminUser?.email || req.adminUser?.uid || 'anonymous',
 				'verify_admin_role',
-				{ reason: 'admin_role_required', path: req.originalUrl || req.url },
+				{ reason: 'admin_role_required', path: stripQueryFromPath(req.originalUrl || req.url) },
 				'failure',
 				req,
 			);
@@ -322,7 +322,7 @@ async function validateAdminAccess(req, res, next) {
 				AUDIT_CATEGORIES.AUTH_FAILURE,
 				'anonymous',
 				'verify_firebase_token',
-				{ reason: 'invalid_token', path: req.originalUrl || req.url },
+				{ reason: 'invalid_token', path: stripQueryFromPath(req.originalUrl || req.url) },
 				'failure',
 				req,
 			);
@@ -335,7 +335,7 @@ async function validateAdminAccess(req, res, next) {
 			AUDIT_CATEGORIES.AUTH_FAILURE,
 			'anonymous',
 			'validate_admin_api_key',
-			{ reason: 'invalid_api_key', path: req.originalUrl || req.url },
+			{ reason: 'invalid_api_key', path: stripQueryFromPath(req.originalUrl || req.url) },
 			'failure',
 			req,
 		);
@@ -346,7 +346,7 @@ async function validateAdminAccess(req, res, next) {
 		AUDIT_CATEGORIES.AUTH_FAILURE,
 		'anonymous',
 		'validate_admin_access',
-		{ reason: 'missing_credentials', path: req.originalUrl || req.url },
+		{ reason: 'missing_credentials', path: stripQueryFromPath(req.originalUrl || req.url) },
 		'failure',
 		req,
 	);

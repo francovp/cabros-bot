@@ -21,6 +21,7 @@ const AUDIT_CATEGORIES = Object.freeze({
 	ORDER_SUBMITTED: 'ORDER_SUBMITTED',
 	ORDER_COMPLETED: 'ORDER_COMPLETED',
 	ORDER_REJECTED: 'ORDER_REJECTED',
+	ORDER_AMBIGUOUS: 'ORDER_AMBIGUOUS',
 	ADMIN_ACTION: 'ADMIN_ACTION',
 	CONFIG_CHANGE: 'CONFIG_CHANGE',
 });
@@ -29,6 +30,13 @@ const SENSITIVE_KEY_PATTERN = /(password|secret|token|api[-_]?key|authorization|
 
 let testOverrideEnabled = false;
 let testListener = null;
+
+function stripQueryFromPath(rawPath) {
+	if (typeof rawPath !== 'string' || rawPath.length === 0) return '';
+	const qIdx = rawPath.indexOf('?');
+	const pathOnly = qIdx >= 0 ? rawPath.slice(0, qIdx) : rawPath;
+	return pathOnly.replace(/\/+$/, '') || '/';
+}
 
 function isAuditLoggingEnabled() {
 	if (process.env.ENABLE_AUDIT_LOGGING === 'false') {
@@ -76,6 +84,8 @@ function sanitizeDetails(value, seen = new WeakSet()) {
 		}
 		if (val && typeof val === 'object') {
 			sanitized[key] = sanitizeDetails(val, seen);
+		} else if ((key === 'path' || key === 'url') && typeof val === 'string') {
+			sanitized[key] = stripQueryFromPath(val);
 		} else {
 			sanitized[key] = val;
 		}
@@ -96,8 +106,7 @@ function resolveActor(actor, req) {
 				return req.adminUser.uid.trim();
 			}
 		}
-		const hasApiKey = (req.headers && (req.headers['x-api-key'] || req.headers['X-API-Key']))
-			|| (req.query && req.query['api-key']);
+		const hasApiKey = Boolean(req.headers && (req.headers['x-api-key'] || req.headers['X-API-Key']));
 		if (hasApiKey) {
 			return 'api_key_shared';
 		}
@@ -217,6 +226,7 @@ module.exports = {
 	auditLog,
 	AUDIT_CATEGORIES,
 	isAuditLoggingEnabled,
+	stripQueryFromPath,
 	_setAuditLoggingEnabledForTest,
 	_setAuditLogListenerForTest,
 	_resetAuditLoggerForTest,

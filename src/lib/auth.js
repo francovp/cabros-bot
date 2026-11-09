@@ -4,7 +4,7 @@ const API_KEY_COMPARISON_LENGTH = 4096;
 const sentryService = require('../services/monitoring/SentryService');
 const { isProductionLikeEnvironment, isPreviewEnvironment } = require('./deploymentEnvironment');
 const { sendErrorFrom } = require('./errorEnvelope');
-const { auditLog, AUDIT_CATEGORIES } = require('./auditLogger');
+const { auditLog, AUDIT_CATEGORIES, stripQueryFromPath } = require('./auditLogger');
 
 const QUERY_DEPRECATION_FLAG_KEY = '__cabrosApiKeyQueryDeprecationWarned';
 
@@ -126,7 +126,7 @@ function validateApiKey(req, res, next) {
 			AUDIT_CATEGORIES.AUTH_FAILURE,
 			'anonymous',
 			'validate_api_key',
-			{ reason: 'missing_api_key', path: req.originalUrl || req.url },
+			{ reason: 'missing_api_key', path: stripQueryFromPath(req.originalUrl || req.url) },
 			'failure',
 			req,
 		);
@@ -138,7 +138,7 @@ function validateApiKey(req, res, next) {
 			AUDIT_CATEGORIES.AUTH_FAILURE,
 			'anonymous',
 			'validate_api_key',
-			{ reason: 'invalid_api_key', path: req.originalUrl || req.url },
+			{ reason: 'invalid_api_key', path: stripQueryFromPath(req.originalUrl || req.url) },
 			'failure',
 			req,
 		);

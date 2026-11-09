@@ -30,6 +30,7 @@ describe('auditLogger (GH-740)', () => {
 				ORDER_SUBMITTED: 'ORDER_SUBMITTED',
 				ORDER_COMPLETED: 'ORDER_COMPLETED',
 				ORDER_REJECTED: 'ORDER_REJECTED',
+				ORDER_AMBIGUOUS: 'ORDER_AMBIGUOUS',
 				ADMIN_ACTION: 'ADMIN_ACTION',
 				CONFIG_CHANGE: 'CONFIG_CHANGE',
 			});
@@ -146,6 +147,18 @@ describe('auditLogger (GH-740)', () => {
 			expect(event.details.nested.normalField).toBe('ok-value');
 			// original details was not mutated
 			expect(details.apiKey).toBe('super-secret-key');
+		});
+
+		it('strips query strings from path and url fields in details', () => {
+			const details = {
+				path: '/api/webhook/alert?api%2Dkey=operator-secret&test=1',
+				url: '/api/admin/events?token=abc',
+				normal: 'keep?this',
+			};
+			const event = auditLog(AUDIT_CATEGORIES.AUTH_FAILURE, 'actor', 'action', details, 'failure');
+			expect(event.details.path).toBe('/api/webhook/alert');
+			expect(event.details.url).toBe('/api/admin/events');
+			expect(event.details.normal).toBe('keep?this');
 		});
 	});
 
