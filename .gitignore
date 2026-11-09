@@ -129,6 +129,7 @@ docs/antigravity/
 
 docs/superpowers/
 .omo/
+.impeccable/
 
 # Local browser verification artifacts
 .playwright-cli/

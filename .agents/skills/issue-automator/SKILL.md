@@ -33,6 +33,8 @@ description: >-
 
 ## Progress Without False Blockers
 
+**Continue the work:** Merge conflicts, stale branches, large diffs, and suspected implementation gaps are work to investigate and resolve, not terminal outcomes by themselves. Reconcile the PR with its base, trace and fix actionable findings, run applicable tests and reviews, and continue toward merge. Do not abort or hand off merely because integration is complex or takes effort. Stop only when a concrete remaining constraint prevents safe progress after available paths have been tried; report evidence, preserve completed work, and release only this session’s claim. Do not waive security, required CI, branch protection, or unresolved actionable review feedback.
+
 Apply this section before routing a label to a terminal outcome. Labels and old blocker comments are leads, not proof of a current blocker. Re-read the issue, PR head, checks, mergeability, and unresolved feedback. Follow [progress-and-blocker-policy.md](references/progress-and-blocker-policy.md) for the decision matrix and evidence examples.
 
 1. **`NEEDS_USER`**: Check whether the owner already decided or a conservative, fail-closed, reversible choice satisfies the acceptance criteria. The operator authorizes the agent to recommend and choose that solution; record the decision and continue, clearing a stale label. Keep `NEEDS_USER` only when no safe choice fits the written criteria and the remaining decision would materially change security, live trading or monetary exposure, data loss, or another irreversible outcome. A failed WhatsApp attempt never creates or prolongs `NEEDS_USER`.
@@ -43,6 +45,10 @@ Apply this section before routing a label to a terminal outcome. Labels and old 
 ## Before Starting
 
 These rules override older deployment/label guidance in bundled references and helper scripts.
+
+**Run completion gate:** Inventory, a selected issue, a label, or a written plan is not a terminal outcome. After discovery, execute the next authorized step: inspect the current item's claim and canonical PR, attempt applicable recovery, then implement, skip, or hand off under the rules below. When asked to recover interrupted sessions, inspect available session records and their linked issue/PR state before selecting new work; record a concrete inaccessible source if session records cannot be read.
+
+Before ending a run, identify the applicable terminal outcome or verified queue exhaustion and its current evidence (including claim ownership, PR/check/review state when applicable, and attempted recovery where relevant). If no terminal outcome applies and an authorized next action is available, perform it instead of returning an incomplete status. A no-write skip advances the cursor when the skip-loop rules allow; retain the explicitly assigned issue exception. If execution is externally interrupted, record the exact unfinished action and evidence without representing it as a completed audit. Never claim a blocker merely because work remains or a label exists.
 
 1. Linear issue creation is unavailable. Use GitHub only; do not attempt Linear creation or treat its absence as a blocker.
 2. Add `<agent>/<actual-model>` to each PR when starting work or immediately after creation, and verify it remains when ready. Example: `codex/gpt-6.1-sol`. Create the repository label if missing. Use the actual session model; never infer it from this example. When model metadata is unavailable, record attribution as unavailable; ready, handoff, and shipped checks must accept that state. Apply `agent-working` only when ownership was acquired. Retain available attribution after releasing it.

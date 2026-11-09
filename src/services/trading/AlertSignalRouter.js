@@ -6,6 +6,7 @@ const { TIMEFRAME_MAP } = require('../tradingview/parseTradingViewSignal');
 const { reserveAutoTrade, finishAutoTrade } = require('./AutoTradeReservationService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const sentryService = require('../monitoring/SentryService');
+const { recordAutoTradeOutcome } = require('./autoTradeOutcomeRecorder');
 
 const DEFAULT_MAX_NOTIONAL = 100;
 const DEFAULT_MIN_ABS_SENTIMENT = 0.3;
@@ -246,15 +247,22 @@ async function routeAlertToOrder({ alert, parsed, requestId, signalId }) {
 		// The durable claim is committed before Binance work starts. The task is
 		// tracked for shutdown; retries see the claim even after a process crash.
 		const submission = (async () => {
+			const startedAt = Date.now();
 			try {
 				const result = await binanceOrderService.placeOrder(order, { idempotencyKey });
 				await finishAutoTrade(reservation, 'submitted', { orderId: result?.order?.orderId });
 				console.info('[AlertSignalRouter] live auto-trade submitted', { symbol, side, requestId, orderId: result?.order?.orderId });
+				await recordAutoTradeOutcome({
+					status: 'submitted', order, result, reservation, signalId, idempotencyKey, processingMs: Date.now() - startedAt,
+				});
 			} catch (error) {
 				const status = error?.code === 'BINANCE_ORDER_STATUS_UNKNOWN' ? 'unknown' : 'failed';
 				await finishAutoTrade(reservation, status, { errorCode: error?.code });
 				console.warn('[AlertSignalRouter] live auto-trade failed', { symbol, side, requestId, code: error?.code });
 				sentryService.captureRuntimeError({ channel: 'alert-signal-router', error });
+				await recordAutoTradeOutcome({
+					status, order, error, reservation, signalId, idempotencyKey, processingMs: Date.now() - startedAt,
+				});
 			}
 		})();
 		trackBackgroundTask(submission);

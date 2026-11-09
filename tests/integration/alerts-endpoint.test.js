@@ -1605,6 +1605,41 @@ describe('Alerts API Integration Tests', () => {
 		);
 	});
 
+	it('preserves chart inputs including timeframe when replaying a stored alert', async () => {
+		const chartBars = [
+			{ open: 100, high: 102, low: 99, close: 101 },
+			{ open: 101, high: 103, low: 100, close: 102 },
+		];
+		alertStorageService.getAlertById.mockResolvedValue({
+			id: 'alert-charted',
+			receivedAt: '2026-06-06T12:34:56.000Z',
+			text: 'BINANCE:BTCUSDT (4h) COMPRA',
+			signalClass: 'trend_continuation',
+			timeframe: '4h',
+			chartBars,
+			chartSymbol: 'BTCUSDT',
+			deliveryResults: [{ channel: 'telegram', success: false }],
+			source: 'webhook',
+		});
+
+		await request(app)
+			.post('/api/alerts/alert-charted/replay')
+			.set('x-api-key', 'test-key')
+			.set('idempotency-key', 'replay-charted-key')
+			.send({ channels: ['telegram'] })
+			.expect(200);
+
+		expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				text: 'BINANCE:BTCUSDT (4h) COMPRA',
+				timeframe: '4h',
+				chartBars,
+				chartSymbol: 'BTCUSDT',
+			}),
+			['telegram'],
+		);
+	});
+
 	it('accepts x-idempotency-key when replaying a stored alert', async () => {
 		alertStorageService.getAlertById.mockResolvedValue({
 			id: 'alert-123',
@@ -2558,6 +2593,37 @@ describe('Alerts API Integration Tests', () => {
 				expect.objectContaining({
 					text: 'Batch classified',
 					signalClass: 'reversal',
+				}),
+				['telegram'],
+			);
+		});
+
+		it('preserves chart inputs including timeframe across batch replay items', async () => {
+			const chartBars = [
+				{ open: 100, high: 102, low: 99, close: 101 },
+				{ open: 101, high: 103, low: 100, close: 102 },
+			];
+			alertStorageService.getAlertById.mockResolvedValueOnce({
+				id: 'alert-batch-chart',
+				text: 'BINANCE:BTCUSDT (4h) COMPRA',
+				timeframe: '4h',
+				chartBars,
+				chartSymbol: 'BTCUSDT',
+			});
+
+			await request(app)
+				.post('/api/alerts/batch/replay')
+				.set('x-api-key', 'test-key')
+				.set('idempotency-key', 'batch-chart-key')
+				.send({ alertIds: ['alert-batch-chart'], channels: ['telegram'] })
+				.expect(200);
+
+			expect(mockNotificationManager.sendToChannels).toHaveBeenCalledWith(
+				expect.objectContaining({
+					text: 'BINANCE:BTCUSDT (4h) COMPRA',
+					timeframe: '4h',
+					chartBars,
+					chartSymbol: 'BTCUSDT',
 				}),
 				['telegram'],
 			);

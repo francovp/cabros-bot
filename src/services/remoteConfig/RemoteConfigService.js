@@ -78,6 +78,10 @@ const PARAMETER_SCHEMA = Object.freeze({
 	URL_SHORTENER_CACHE_MAX_ENTRIES: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 100000 },
 	URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES: { type: 'number', defaultValue: 32, integer: true, min: 1, max: 1024 },
 	BINANCE_FETCH_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
+	// Strategy research (TradingView MCP backtest / compare / walk-forward).
+	// Default false: these endpoints call paid upstream MCP tools.
+	ENABLE_STRATEGY_RESEARCH: { type: 'boolean', defaultValue: false },
+	STRATEGY_RESEARCH_CACHE_TTL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 0, max: 86400000 },
 	BINANCE_BALANCE_CACHE_MS: { type: 'number', defaultValue: 3000, integer: true, min: 1000, max: 60000 },
 	TRADINGVIEW_MCP_DEFAULT_EXCHANGE: {
 		type: 'string',
@@ -114,6 +118,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	SIGNAL_OUTCOME_MAX_RETRY_AGE_MS: { type: 'number', defaultValue: 604800000, integer: true, min: 60000, max: 2592000000 },
 	SIGNAL_OUTCOME_RETENTION_DAYS: { type: 'number', defaultValue: 365, integer: true, min: 1, max: 3650 },
+	SIGNAL_OUTCOME_ROLLUP_ENABLED: { type: 'boolean', defaultValue: true },
+	SIGNAL_OUTCOME_ROLLUP_TTL_DAYS: { type: 'number', defaultValue: 180, integer: true, min: 30, max: 365 },
 	SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES: {
 		type: 'string',
 		defaultValue: '',
@@ -145,12 +151,17 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_MARKET_SCANNER: { type: 'boolean', defaultValue: false },
 	ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: { type: 'boolean', defaultValue: false },
 	ZERO_CHANNEL_ALERT_COOLDOWN_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1000, max: 86400000 },
+	ADMIN_PAGE_DEDUP_TTL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 0, max: 86400000 },
 	ENABLE_API_ONLY_MODE: { type: 'boolean', defaultValue: false },
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 	ENABLE_SIGNAL_CLASS_MARKER: { type: 'boolean', defaultValue: true },
+	ENABLE_CHART_ATTACHMENTS: { type: 'boolean', defaultValue: false },
+	CHART_RENDER_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 100, max: 60000 },
+	CHART_CACHE_TTL_SECONDS: { type: 'number', defaultValue: 300, integer: true, min: 0, max: 86400 },
 	ENABLE_EQUITY_SESSION_TAG: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	GLOBAL_ALERT_BUDGET_PER_24H: { type: 'number', defaultValue: 500, integer: true, min: 0, max: 1000000 },
 	PRICE_CACHE_TTL_MS_CRYPTO: { type: 'number', defaultValue: 15000, integer: true, min: 1000, max: 600000 },
 	PRICE_CACHE_TTL_MS_EQUITY: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 600000 },
 	PRICE_CACHE_MAX_ENTRIES_PER_BUCKET: { type: 'number', defaultValue: 256, integer: true, min: 1, max: 10000 },
@@ -216,6 +227,43 @@ const PARAMETER_SCHEMA = Object.freeze({
 	TOKEN_COST_DAILY_BUDGET_USD: { type: 'number', defaultValue: 5.0, min: 0.01, max: 10000 },
 	TOKEN_COST_WARN_THRESHOLD_PCT: { type: 'number', defaultValue: 80, integer: true, min: 1, max: 100 },
 	ENABLE_MAINTENANCE_MODE: { type: 'boolean', defaultValue: false },
+	// Issue #745 — pre-flight cost estimation. Non-secret runtime tuning; the
+	// rate table is public pricing data and ships useInAppDefault in the
+	// Firebase template so publishing preserves env/default fallbacks.
+	ENABLE_DRY_RUN_COST: { type: 'boolean', defaultValue: true },
+	COST_ESTIMATION_OUTPUT_TOKENS_NEWS: { type: 'number', defaultValue: 400, integer: true, min: 10, max: 8000 },
+	COST_ESTIMATION_OUTPUT_TOKENS_ANALYSIS: { type: 'number', defaultValue: 800, integer: true, min: 10, max: 8000 },
+	COST_ESTIMATION_OUTPUT_TOKENS_SCANNER: { type: 'number', defaultValue: 600, integer: true, min: 10, max: 8000 },
+	COST_ESTIMATION_DAILY_QUOTA_TOKENS: { type: 'number', defaultValue: 1000000, integer: true, min: 1000, max: 100000000 },
+	LLM_COST_RATES_JSON: {
+		type: 'string',
+		defaultValue: '',
+		allowEmpty: true,
+		validate: (value) => {
+			if (value === '') {
+				return true;
+			}
+			try {
+				const parsed = JSON.parse(value);
+				if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+					return false;
+				}
+				for (const rate of Object.values(parsed)) {
+					if (!rate || typeof rate !== 'object') {
+						return false;
+					}
+					const input = Number(rate.input);
+					const output = Number(rate.output);
+					if (!Number.isFinite(input) || !Number.isFinite(output) || input < 0 || output < 0 || input > 1000 || output > 1000) {
+						return false;
+					}
+				}
+				return true;
+			} catch (error) {
+				return false;
+			}
+		},
+	},
 	// Issue #721 — Firestore storage gates. Each is resolved per call (the gate is
 	// checked before the cached `db` handle), so a remote value flips it at runtime
 	// rather than only at process start. Consumers must read `remote ?? env`, never

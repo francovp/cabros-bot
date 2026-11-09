@@ -400,6 +400,19 @@ describe('Postman collection contract', () => {
 		});
 	});
 
+	it('documents Sentry runtime diagnostics in request-ID status examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const sentry = JSON.parse(status.response[0].body).dependencies.sentry;
+
+		for (const name of ['Get Status (request ID echo)', 'Get Status (request ID omitted)']) {
+			const item = findItem(collection.item, name);
+			const response = item.response.find(({ name: responseName }) => responseName === 'Success');
+			expect(item.request.description).toBe(status.request.description);
+			expect(JSON.parse(response.body).dependencies.sentry).toEqual(sentry);
+		}
+	});
+
 	it('documents bounded Gemini quota telemetry and only reachable quota states', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const statusBody = JSON.parse(findItem(collection.item, 'Get Status').response[0].body);
@@ -502,6 +515,27 @@ describe('Postman collection contract', () => {
 			role: 'web',
 			running: false,
 		}));
+	});
+
+	it('documents marketCalendarGating feature flag and marketCalendar dependency in Get Status and Get Capabilities', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		for (const name of ['Get Status', 'Get Capabilities']) {
+			const item = findItem(collection.item, name);
+			expect(item).toBeDefined();
+			const responseBody = JSON.parse(item.response[0].body);
+			expect(responseBody.featureFlags.marketCalendarGating).toBe(false);
+			expect(responseBody.dependencies.marketCalendar).toEqual({
+				enabled: false,
+				gatesDelivery: false,
+				dataset: {
+					version: '2026.01',
+					lastUpdated: '2026-08-28',
+					timezone: 'America/New_York',
+					venues: ['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'NYSE_ARCA', 'ARCA', 'CBOE'],
+					yearsCovered: ['2025', '2026', '2027'],
+				},
+			});
+		}
 	});
 
 	it('documents entry price source chains in status and capabilities examples', () => {

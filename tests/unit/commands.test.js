@@ -20,6 +20,7 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		getScannerErrorCategoryCounts: jest.fn(() => ({})),
 		getToolMetrics: jest.fn(() => ({})),
 		getVolumeConfirmationStatus: jest.fn(() => ({ status: 'ready' })),
+		getStrategyResearchStatus: jest.fn(() => ({ status: 'disabled' })),
 	},
 }));
 
@@ -28,6 +29,14 @@ jest.mock('../../src/services/monitoring/SentryService', () => ({
 	endSpan: jest.fn(),
 	captureRuntimeError: jest.fn(),
 	isProfilingEnabled: jest.fn(() => false),
+	getRuntimeDiagnostics: jest.fn(() => ({
+		initialized: false,
+		environment: null,
+		release: null,
+		tracesSampleRate: null,
+		tracingEnabled: false,
+		dsnRouting: { configured: false, host: null, projectId: null },
+	})),
 }));
 
 jest.mock('../../src/services/storage/SignalOutcomeService', () => ({

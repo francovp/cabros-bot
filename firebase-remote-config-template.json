@@ -441,6 +441,20 @@
       "description": "Retention window in days for tradingSignalOutcomes documents before expiration and cleanup",
       "valueType": "NUMBER"
     },
+    "SIGNAL_OUTCOME_ROLLUP_ENABLED": {
+      "defaultValue": {
+        "value": "true"
+      },
+      "description": "Enable daily outcome snapshot rollups for trend analytics",
+      "valueType": "BOOLEAN"
+    },
+    "SIGNAL_OUTCOME_ROLLUP_TTL_DAYS": {
+      "defaultValue": {
+        "value": "180"
+      },
+      "description": "Retention window in days for tradingSignalOutcomesDaily snapshot documents before expiration",
+      "valueType": "NUMBER"
+    },
     "SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES": {
       "defaultValue": {
         "value": ""
@@ -595,6 +609,13 @@
       "description": "Cooldown between admin notifications when all channels are disabled in milliseconds",
       "valueType": "NUMBER"
     },
+    "ADMIN_PAGE_DEDUP_TTL_MS": {
+      "defaultValue": {
+        "value": "300000"
+      },
+      "description": "TTL for admin paging deduplication in milliseconds (0 to disable)",
+      "valueType": "NUMBER"
+    },
     "ENABLE_API_ONLY_MODE": {
       "defaultValue": {
         "value": "false"
@@ -616,6 +637,27 @@
       "description": "Enable rendering signal classification marker prefix on alert notifications",
       "valueType": "BOOLEAN"
     },
+    "ENABLE_CHART_ATTACHMENTS": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable attaching a rendered chart PNG to alert notifications on channels that support inline image delivery",
+      "valueType": "BOOLEAN"
+    },
+    "CHART_RENDER_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Wall-clock budget for a single chart render before falling back to text-only delivery",
+      "valueType": "NUMBER"
+    },
+    "CHART_CACHE_TTL_SECONDS": {
+      "defaultValue": {
+        "value": "300"
+      },
+      "description": "TTL for the in-process chart render cache keyed by symbol, timeframe and range key",
+      "valueType": "NUMBER"
+    },
     "ENABLE_EQUITY_SESSION_TAG": {
       "defaultValue": {
         "value": "true"
@@ -635,6 +677,13 @@
         "value": "1"
       },
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
+      "valueType": "NUMBER"
+    },
+    "GLOBAL_ALERT_BUDGET_PER_24H": {
+      "defaultValue": {
+        "value": "500"
+      },
+      "description": "Rolling 24-hour alert-delivery budget capacity (0 disables budget)",
       "valueType": "NUMBER"
     },
     "ENABLE_MIN_ALERT_CONTEXT": {
@@ -931,6 +980,20 @@
       "description": "Maintenance mode toggle to pause webhooks and commands during incidents",
       "valueType": "BOOLEAN"
     },
+    "ENABLE_STRATEGY_RESEARCH": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable TradingView MCP strategy research endpoints (compare_strategies, walk_forward_backtest_strategy, backtest_strategy)",
+      "valueType": "BOOLEAN"
+    },
+    "STRATEGY_RESEARCH_CACHE_TTL_MS": {
+      "defaultValue": {
+        "value": "300000"
+      },
+      "description": "In-memory cache TTL for TradingView MCP strategy research results",
+      "valueType": "NUMBER"
+    },
     "JOB_BACKLOG_ALERT_THRESHOLD_MS": {
       "defaultValue": {
         "value": "900000"
@@ -1054,6 +1117,48 @@
       },
       "description": "Scanner operation timeout in milliseconds (integer 1000-120000; application default 90000)",
       "valueType": "NUMBER"
+    },
+    "ENABLE_DRY_RUN_COST": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Pre-flight cost estimation for LLM-driven endpoints (dryRun=cost). Ships with useInAppDefault so publishing preserves env/default (true).",
+      "valueType": "BOOLEAN"
+    },
+    "COST_ESTIMATION_OUTPUT_TOKENS_NEWS": {
+      "defaultValue": {
+        "value": "400"
+      },
+      "description": "Output-token budget per news-monitor symbol for cost estimation (default: 400)",
+      "valueType": "NUMBER"
+    },
+    "COST_ESTIMATION_OUTPUT_TOKENS_ANALYSIS": {
+      "defaultValue": {
+        "value": "800"
+      },
+      "description": "Output-token budget per expanded-analysis symbol for cost estimation (default: 800)",
+      "valueType": "NUMBER"
+    },
+    "COST_ESTIMATION_OUTPUT_TOKENS_SCANNER": {
+      "defaultValue": {
+        "value": "600"
+      },
+      "description": "Output-token budget per scanner candidate for cost estimation (default: 600)",
+      "valueType": "NUMBER"
+    },
+    "COST_ESTIMATION_DAILY_QUOTA_TOKENS": {
+      "defaultValue": {
+        "value": "1000000"
+      },
+      "description": "Configured daily token quota denominator for cost-estimation quotaImpact (default: 1000000)",
+      "valueType": "NUMBER"
+    },
+    "LLM_COST_RATES_JSON": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Public per-model LLM rate overrides as JSON {model:{input,output}} per 1M tokens. Ships with useInAppDefault so publishing preserves env/default.",
+      "valueType": "STRING"
     }
   },
   "version": {

@@ -142,7 +142,8 @@ describe('healthcheck + dependency readiness', () => {
 				expect(response.body.ready).toBe(false);
 				expect(response.body.failClosed).toBe(false);
 				expect(response.body.dependencies.firestore.ready).toBe(false);
-				expect(response.body.dependencies.firestore.error).toMatch(/timeout_after_/);
+				expect(response.body.dependencies.firestore.error).toBeUndefined();
+				expect(response.body.dependencies.firestore.errorCode).toMatch(/timeout_after_/);
 			} finally {
 				restoreFlags();
 				applyOverrides(app);
@@ -240,7 +241,8 @@ describe('healthcheck + dependency readiness', () => {
 				expect(response.status).toBe(503);
 				expect(response.body.ready).toBe(false);
 				expect(response.body.dependencies.firestore.ready).toBe(false);
-				expect(response.body.dependencies.firestore.error).toMatch(/requires an index/i);
+				expect(response.body.dependencies.firestore.error).toBeUndefined();
+				expect(response.body.dependencies.firestore.errorCode).toBe('DEPENDENCY_PROBE_FAILED');
 			} finally {
 				restoreFlags();
 				applyOverrides(app);

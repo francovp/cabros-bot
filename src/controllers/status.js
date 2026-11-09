@@ -8,6 +8,7 @@ const {
 const { MAX_DESTINATIONS_PER_CHANNEL } = require('../services/scannerPresets/scannerPresetRouting');
 const { newsMonitorSchedulerService } = require('../services/newsMonitorScheduler');
 const { alertSchedulerService } = require('../services/scheduler');
+const { dailyDigestService } = require('../services/digest');
 const { alertSubscriberService } = require('../services/subscribers/AlertSubscriberService');
 const idempotencyStorageService = require('../services/storage/IdempotencyStorageService');
 const alertFeedbackStorageService = require('../services/storage/AlertFeedbackStorageService');
@@ -17,6 +18,25 @@ const SignalOutcomeService = require('../services/storage/SignalOutcomeService')
 const { jobQueue } = require('../services/jobs/JobQueue');
 const equityMarketDataService = require('../services/storage/EquityMarketDataService');
 const remoteConfigService = require('../services/remoteConfig/RemoteConfigService');
+const { ChartRendererService } = require('../services/notification/charts/chartRenderer');
+
+/**
+ * Non-sensitive chart-renderer readiness for `/api/status` and `/api/capabilities`.
+ *
+ * The shared delivery singleton is used so counters reflect real traffic.
+ * `enabled` tracks the Remote-Config-resolved runtime value.
+ */
+function getChartRendererStatus() {
+	const enabled = remoteConfigService.getRuntimeConfig().ENABLE_CHART_ATTACHMENTS === true;
+	const { getChartRendererService } = require('../services/notification/charts/chartRenderer');
+	const shared = getChartRendererService();
+	return {
+		...shared.getStatus(),
+		enabled,
+		channels: { telegram: true, whatsapp: true, discord: false },
+		note: 'Discord webhooks have no inline image upload path; Discord always falls back to text.',
+	};
+}
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
 const { binanceOrderAuditService } = require('../services/trading/BinanceOrderAuditService');
@@ -35,10 +55,13 @@ const { getPromptService } = require('../services/prompts');
 const { promptDriftService } = require('../services/prompts/PromptDriftService');
 const { signalClassMetrics } = require('../services/alerts/signalClassifier');
 const { whatsAppCommandBridgeService } = require('../services/notification/WhatsAppCommandBridgeService');
+const { globalAlertBudget } = require('../services/notifications/globalAlertBudget');
+const { adminPagingDeduplicator } = require('../services/notification/adminPagingDeduplicator');
 const { getWhatsAppTemplateStatus } = require('../services/notification/WhatsAppService');
 const geminiQuotaManager = require('../services/grounding/geminiQuotaManager');
 const groundingMetrics = require('../services/grounding/metrics');
 const { signalRepeatCooldown } = require('../services/alerts/signalRepeatCooldown');
+const portfolioAnalyticsService = require('../services/portfolio/PortfolioAnalyticsService');
 const priceQuoteCache = require('../services/cache/PriceQuoteCache');
 const { resolveStartupJitterMs } = require('../lib/startupJitter');
 const { getBackgroundTimerStats } = require('../lib/backgroundTimerRegistry');
@@ -48,12 +71,14 @@ const { burstAggregator } = require('../services/alerts/burstAggregator');
 const { userPriceAlertService } = require('../services/alerts/UserPriceAlertService');
 const { alertModeration } = require('../services/alerts/alertModeration');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
+const { isFeatureEnabled: isMarketCalendarGatingEnabled, getDatasetMetadata: getMarketCalendarMetadata } = require('../services/marketCalendar/notificationGate');
 const aliasResolver = require('../services/symbols/aliasResolver');
 const { getPromptReadiness } = require('../services/prompts/promptReadiness');
 const newsAnalysisStorageService = require('../services/storage/NewsAnalysisStorageService');
 const {
 	isNewsMonitorPaused,
 	getNewsMonitorPauseState,
+	syncNewsMonitorPauseState,
 } = require('./webhooks/handlers/newsMonitor/pauseState');
 const { getVolumeTracker } = require('./webhooks/handlers/newsMonitor/volumeTracker');
 const { getSelfTestService } = require('./diagnostics/selftest');
@@ -79,6 +104,7 @@ const {
 	isTestAlertEnabled,
 } = require('./admin/testAlert');
 const { tokenCostBudgetService } = require('../lib/tokenUsage');
+const costEstimationService = require('../services/cost/CostEstimationService');
 const { isMaintenanceModeEnabled } = require('../lib/maintenanceMode');
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
 const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.0-flash-001';
@@ -372,10 +398,12 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 	const tradingViewMcpEnrichmentEnabled = runtimeConfig.ENABLE_TRADINGVIEW_MCP_ENRICHMENT;
 	const tradingViewVolumeConfirmationFlagEnabled = runtimeConfig.ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION;
 	const tradingViewVolumeConfirmationEnabled = tradingViewVolumeConfirmationFlagEnabled && tradingViewMcpEnrichmentEnabled;
+	const strategyResearchEnabled = runtimeConfig.ENABLE_STRATEGY_RESEARCH;
 	const observedTradingViewMcpStatus = tradingViewMcpService.getStatus({ enabled: true });
 	const tradingViewMcpEnabled =
 		tradingViewMcpEnrichmentEnabled
 		|| marketScannerEnabled
+		|| strategyResearchEnabled
 		|| observedTradingViewMcpStatus.lastCheckedAt !== null;
 	// Issue #721: report the gate that actually runs, not the raw environment value.
 	// These gates are runtime-resolved, so a published remote value is what the
@@ -393,9 +421,11 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 	const binanceTradingStatus = binanceOrderService.getStatus();
 	const binanceTradingKillSwitchEnabled = binanceTradingEnabled;
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
+	const canaryAlertEnabled = Boolean(runtimeConfig.ENABLE_CANARY_ALERT) || isEnabled(process.env.ENABLE_CANARY_ALERT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
 	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
 	const signalClassMarkerEnabled = runtimeConfig.ENABLE_SIGNAL_CLASS_MARKER;
+	const chartAttachmentsEnabled = runtimeConfig.ENABLE_CHART_ATTACHMENTS === true;
 	const remoteConfigStatus = remoteConfigService.getStatus();
 	const signalOutcomeTrackingEnabled = isEnabled(process.env.ENABLE_SIGNAL_OUTCOME_TRACKING);
 	const equityMarketDataStatus = equityMarketDataService.getStatus();
@@ -494,6 +524,14 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 	const tradingViewVolumeConfirmation = tradingViewMcpService.getVolumeConfirmationStatus({
 		enabled: tradingViewVolumeConfirmationEnabled,
 	});
+	const tradingViewStrategyResearch = typeof tradingViewMcpService.getStrategyResearchStatus === 'function'
+		? tradingViewMcpService.getStrategyResearchStatus({
+			enabled: strategyResearchEnabled,
+		})
+		: dependencyStatus({
+			enabled: strategyResearchEnabled,
+			configured: false,
+		});
 	const firestore = withFirestoreReadHealth(dependencyStatus({
 		enabled: firestoreEnabled,
 		configured: isFirestoreConfigured(),
@@ -502,14 +540,13 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 		enabled: firestoreJobStorageEnabled,
 		configured: firestore.configured,
 	});
-	const sentryProfilingEnabled = sentryEnabled
-		&& hasValue(process.env.SENTRY_DSN)
-		&& hasValue(process.env.SENTRY_TRACES_SAMPLE_RATE);
+	const sentryProfilingEnabled = sentryService.isProfilingEnabled();
 	const sentry = {
 		...dependencyStatus({
 			enabled: sentryEnabled,
 			configured: hasValue(process.env.SENTRY_DSN),
 		}),
+		runtime: sentryService.getRuntimeDiagnostics(),
 		profiling: dependencyStatus({
 			enabled: sentryProfilingEnabled,
 			configured: hasValue(process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE),
@@ -644,6 +681,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			tradingViewVolumeConfirmation: tradingViewVolumeConfirmationFlagEnabled,
 			tradingViewConfluenceEnrichment: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT),
 			tradingViewConfluenceMultiTimeframe: isEnabled(process.env.ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME),
+			strategyResearch: strategyResearchEnabled,
 			firestoreAlertStorage: firestoreEnabled,
 			firestoreScannerPresets: firestoreScannerPresetsEnabled,
 			firestoreAlertSubscribers: firestoreAlertSubscribersEnabled,
@@ -654,6 +692,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			presetBoundDestinations: true,
 			newsMonitorScheduler: newsMonitorSchedulerService.isEnabled(),
 			alertScheduler: alertSchedulerService.isEnabled(),
+			dailyDigest: dailyDigestService.isEnabled(),
 			sentryMonitoring: sentryEnabled,
 			sentryProfiling: sentryService.isProfilingEnabled(),
 			langfusePrompts: langfusePromptsEnabled,
@@ -663,10 +702,12 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			binanceOrderAudit: binanceOrderAuditService.isEnabled(),
 			tradeLedger: tradeLedgerService.isEnabled(),
 			binanceTradingKillSwitch: binanceTradingKillSwitchEnabled,
+			canaryAlert: canaryAlertEnabled,
 			llmAlertEnrichment: llmAlertEnrichmentEnabled,
 			cloudflareAig: cloudflareAigEnabled,
 			messageFooterMetadata: messageFooterMetadataEnabled,
 			signalOutcomeTracking: signalOutcomeTrackingEnabled,
+			mcpOutcomePrices: isEnabled(process.env.ENABLE_MCP_OUTCOME_PRICES),
 			equityMarketData: equityMarketDataStatus.enabled,
 			firestoreIdempotency: idempotencyStorageService.isEnabled(),
 			firebaseRemoteConfig: remoteConfigStatus.enabled,
@@ -680,6 +721,9 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			alertHtfRender: runtimeConfig.ENABLE_ALERT_HTF_RENDER,
 			alertModeration: alertModeration.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			globalAlertBudget: globalAlertBudget.isEnabled(),
+			portfolioAnalytics: portfolioAnalyticsService.isEnabled(),
+			marketCalendarGating: isMarketCalendarGatingEnabled(env),
 			environmentBanner: isEnvironmentBannerEnabled(),
 			symbolAliasResolver: aliasResolver.isEnabled(),
 			userPriceAlerts: userPriceAlertService.isEnabled(),
@@ -690,7 +734,9 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			whatsappTemplateMode: !!process.env.WHATSAPP_TEMPLATE_NAME,
 			testAlert: isTestAlertEnabled(),
 			tokenCostBudget: tokenCostBudgetService.isEnabled(),
+			costEstimation: costEstimationService.isEnabled(),
 			signalClassMarker: signalClassMarkerEnabled,
+			chartAttachments: chartAttachmentsEnabled,
 			equitySessionTag: runtimeConfig.ENABLE_EQUITY_SESSION_TAG,
 			maintenanceMode: isMaintenanceModeEnabled(),
 			telegramCommandAuth: telegramCommandAuth.getStatus().enabled,
@@ -746,6 +792,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 		dependencies: {
 			watchlist: watchlistService.getStatus(),
 			telegram,
+			chartRenderer: getChartRendererStatus(),
 			whatsapp,
 			discord,
 			discordSourceRouting,
@@ -760,6 +807,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			...(grounding ? { grounding } : {}),
 			tradingViewMcp,
 			tradingViewVolumeConfirmation,
+			tradingViewStrategyResearch,
 			firestore,
 			firestoreJobStorage,
 			...(firestoreWriteMetricsService.getSnapshot()
@@ -818,6 +866,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			userPriceAlertWorker: userPriceAlertService.getStatus(),
 			newsMonitorScheduler: newsMonitorSchedulerService.getStatus(),
 			alertScheduler: alertSchedulerService.getStatus(),
+			dailyDigest: dailyDigestService.getStatus(),
 			equityMarketData: equityMarketDataStatus,
 			signalOutcomeWorker: {
 				...signalOutcomeWorkerDependency,
@@ -848,6 +897,8 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 				enabled: signalRepeatCooldown.isEnabled(),
 				...signalRepeatCooldown.getStats(),
 			},
+			globalAlertBudget: globalAlertBudget.getStatus(),
+			telegramAdminPaging: adminPagingDeduplicator.getStatus(),
 			priceQuoteCache: priceQuoteCache.getStatus(),
 			symbolAliasResolver: {
 				enabled: aliasResolver.isEnabled(),
@@ -893,6 +944,15 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 				ambiguousCount: autoTradeReservationService.getAmbiguousCount(),
 				ambiguousReservationsCount: autoTradeReservationService.getAmbiguousCount(),
 			},
+			portfolioAnalytics: {
+				enabled: portfolioAnalyticsService.isEnabled(),
+				ready: portfolioAnalyticsService.isEnabled() && firestore.configured,
+				status: portfolioAnalyticsService.isEnabled()
+					? (firestore.configured ? 'ready' : 'storage_unavailable')
+					: 'disabled',
+				storage: firestore.configured ? 'firestore' : 'memory',
+				alertStorageEnabled: firestore.enabled,
+			},
 			startupJitter: (() => {
 				const global = resolveStartupJitterMs({
 					globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
@@ -937,9 +997,15 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 				rateLimitState: getTestAlertRateLimitState(),
 			},
 			tokenCostBudget: tokenCostBudgetService.getBudgetStatus(),
+			costEstimation: costEstimationService.getStatus(),
 			selfTest: getSelfTestService().getStatus(),
 			telegramCommandAuth: telegramCommandAuth.getStatus(),
 			adminAuth: adminAuthStatus,
+			marketCalendar: {
+				enabled: isMarketCalendarGatingEnabled(env),
+				gatesDelivery: isMarketCalendarGatingEnabled(env),
+				dataset: getMarketCalendarMetadata(),
+			},
 		},
 	};
 }
@@ -972,6 +1038,13 @@ async function getApiStatus(req, res) {
 		if (typeof binanceOrderService?.getPauseState === 'function') {
 			try {
 				await binanceOrderService.getPauseState();
+			} catch (_) {
+				// Fail-open for status endpoint
+			}
+		}
+		if (typeof syncNewsMonitorPauseState === 'function') {
+			try {
+				await syncNewsMonitorPauseState();
 			} catch (_) {
 				// Fail-open for status endpoint
 			}

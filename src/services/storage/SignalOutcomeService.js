@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const admin = require('firebase-admin');
 const { createHash } = require('node:crypto');
 const AlertStorageService = require('./AlertStorageService');
+const dailyRollupService = require('./SignalOutcomeDailyRollupService');
 const equityMarketDataService = require('./EquityMarketDataService');
 const geminiPriceService = require('../grounding/geminiPriceService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
@@ -12,6 +13,7 @@ const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
 const { MainClient } = require('binance');
+const tradingViewMcpService = require('../tradingview/TradingViewMcpService');
 const {
 	parseEntryPriceSources,
 	getEntryPriceSourceChains: buildEntryPriceSourceChains,
@@ -93,6 +95,10 @@ const REASON_BINANCE_UNAVAILABLE = 'binance_unavailable';
 const REASON_BINANCE_REGION_BLOCKED = 'binance_region_blocked';
 const REASON_GEMINI_UNAVAILABLE = 'gemini_unavailable';
 const REASON_MARKET_DATA_REGION_BLOCKED = 'market_data_region_blocked';
+const REASON_MCP_PRICE_FAILED = 'mcp_price_failed';
+const REASON_MCP_BREAKER_OPEN = 'mcp_breaker_open';
+const ENTRY_PRICE_SOURCE_MCP = 'tradingview_mcp';
+const MCP_ENTRY_PRICE_TIMEOUT_MS = 5000;
 const REGION_BLOCK_MESSAGE_PATTERNS = [
 	'restricted location',
 	'service unavailable from restricted',
@@ -116,6 +122,7 @@ let workerStartupPending = false;
 let workerStartupGeneration = 0;
 let workerStartupAbortController = null;
 let activeEvaluationPromise = null;
+let activeSweepPromise = null;
 let shutdownRequested = false;
 let activeIntervalMs = null;
 let lastRunAt = null;
@@ -569,6 +576,61 @@ function resolveBinanceBaseUrl() {
 	return DEFAULT_BINANCE_DATA_BASE_URL;
 }
 
+function isMcpOutcomePriceEnabled() {
+	return process.env.ENABLE_MCP_OUTCOME_PRICES === 'true';
+}
+
+function parseCoinAnalysisPrice(analysis) {
+	if (!analysis || typeof analysis !== 'object') {
+		return null;
+	}
+	const priceData = analysis.price_data && typeof analysis.price_data === 'object' ? analysis.price_data : null;
+	const candidates = [];
+	if (priceData) {
+		candidates.push(priceData.current_price, priceData.close);
+	}
+	candidates.push(analysis.current_price, analysis.close, analysis.price);
+	for (const candidate of candidates) {
+		if (candidate === null || candidate === undefined) continue;
+		const parsed = typeof candidate === 'number' ? candidate : parseFloat(candidate);
+		if (Number.isFinite(parsed) && parsed > 0) {
+			return parsed;
+		}
+	}
+	return null;
+}
+
+async function fetchEntryPriceFromMcp({ symbol, exchange, timeframe }) {
+	if (!tradingViewMcpService || typeof tradingViewMcpService.callCoinAnalysis !== 'function') {
+		return { price: null, reason: REASON_MCP_PRICE_FAILED };
+	}
+	if (typeof tradingViewMcpService.isBreakerOpen === 'function' && tradingViewMcpService.isBreakerOpen()) {
+		return { price: null, reason: REASON_MCP_BREAKER_OPEN };
+	}
+	const safeTimeframe = typeof timeframe === 'string' && timeframe.trim() !== '' ? timeframe : '1D';
+	const abortController = new AbortController();
+	const timerId = setTimeout(() => abortController.abort(), MCP_ENTRY_PRICE_TIMEOUT_MS);
+	try {
+		const analysis = await tradingViewMcpService.callCoinAnalysis({
+			symbol,
+			exchange,
+			timeframe: safeTimeframe,
+			signal: abortController.signal,
+		});
+		const price = parseCoinAnalysisPrice(analysis);
+		if (price === null) {
+			return { price: null, reason: REASON_MCP_PRICE_FAILED };
+		}
+		return { price, reason: null };
+	} catch (err) {
+		const category = err && err.category === 'circuit_breaker_open' ? REASON_MCP_BREAKER_OPEN : REASON_MCP_PRICE_FAILED;
+		console.warn(`[SignalOutcomeService] Failed to fetch entry price from TradingView MCP for ${exchange}:${symbol}: ${err.message}`);
+		return { price: null, reason: category };
+	} finally {
+		clearTimeout(timerId);
+	}
+}
+
 function isRegionBlockedError(err) {
 	if (!err) {
  return false;
@@ -829,12 +891,18 @@ function normalizeAssetClass(rawAssetClass) {
 const DEFAULT_MAX_RETRY_ATTEMPTS = 3;
 const DEFAULT_MAX_RETRY_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProviderName = null, entryPriceReason = null) {
+function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProviderName = null, entryPriceReason = null, resolvedEntryPriceSource = null) {
 	const isClassifiedBareStock = normSymbolInfo.exchange === 'UNKNOWN' && assetClass === 'stock';
 	if (normSymbolInfo.symbol === 'UNKNOWN' || (normSymbolInfo.exchange === 'UNKNOWN' && !isClassifiedBareStock)) {
 		return {
 			state: 'unparseable_symbol',
 			reason: 'Symbol or exchange unparseable or unknown',
+		};
+	}
+	if (resolvedEntryPriceSource === ENTRY_PRICE_SOURCE_MCP && entryPrice !== null && entryPrice !== undefined) {
+		return {
+			state: 'supported_provider',
+			reason: 'TradingView MCP market data supported',
 		};
 	}
 	if (normSymbolInfo.exchange !== 'BINANCE'
@@ -859,7 +927,9 @@ function determineEligibility(normSymbolInfo, assetClass, entryPrice, equityProv
 			|| entryPriceReason === REASON_GEMINI_UNAVAILABLE
 			|| entryPriceReason === 'twelve_data_unavailable'
 			|| entryPriceReason === 'twelve_data_rate_limited'
-			|| entryPriceReason === 'twelve_data_timeout';
+			|| entryPriceReason === 'twelve_data_timeout'
+			|| entryPriceReason === REASON_MCP_PRICE_FAILED
+			|| entryPriceReason === REASON_MCP_BREAKER_OPEN;
 		if (isTransient) {
 			return {
 				state: 'pending_entry_price',
@@ -1114,7 +1184,22 @@ async function recordSignalInternal({
 			entryPriceReason = null;
 		}
 
-		const eligibility = determineEligibility(normSymbolInfo, normAssetClass, entryPrice, equityProviderName, entryPriceReason);
+		if (entryPrice === null && entryPriceReason !== 'binance_invalid_symbol' && isMcpOutcomePriceEnabled()) {
+			const mcpResult = await fetchEntryPriceFromMcp({
+				symbol: normSymbolInfo.symbol,
+				exchange: normSymbolInfo.exchange,
+				timeframe,
+			});
+			if (mcpResult.price !== null) {
+				entryPrice = mcpResult.price;
+				entryPriceSource = ENTRY_PRICE_SOURCE_MCP;
+				entryPriceReason = null;
+			} else if (entryPriceReason === null || entryPriceReason === equityMarketDataService.REASONS.UNAVAILABLE) {
+				entryPriceReason = mcpResult.reason || REASON_MCP_PRICE_FAILED;
+			}
+		}
+
+		const eligibility = determineEligibility(normSymbolInfo, normAssetClass, entryPrice, equityProviderName, entryPriceReason, entryPriceSource);
 		const isEligible = eligibility.state === 'supported_provider' || eligibility.state === 'pending_entry_price';
 		const normalizedConfidenceScore = normalizeConfidenceScore(confidenceScore);
 		const isScannerSource = CALIBRATION_SCANNER_SOURCES.includes(source);
@@ -2015,11 +2100,47 @@ function runScheduledSweep() {
 		return undefined;
 	}
 
-	return evaluatePendingOutcomes()
-		.then(() => persistWorkerHeartbeat())
+	if (activeSweepPromise) {
+		return activeSweepPromise;
+	}
+
+	const sweepPromise = (async () => {
+		const sweepStartTime = Date.now();
+		const maxDurationMs = parseTimerInterval(getRuntimeConfig().SIGNAL_OUTCOME_EVALUATION_MAX_DURATION_MS, 30000);
+		const sweepResult = await evaluatePendingOutcomes({ maxDurationMs });
+		if (sweepResult && sweepResult.skipped && sweepResult.reason === 'already_evaluating') {
+			return sweepResult;
+		}
+		try {
+			const firestore = AlertStorageService.getFirestore();
+			if (firestore && dailyRollupService.isOutcomeRollupEnabled()) {
+				const elapsed = Date.now() - sweepStartTime;
+				const remainingBudgetMs = Math.max(0, maxDurationMs - elapsed);
+				if (remainingBudgetMs > 0) {
+					await dailyRollupService.rollupOutcomesDaily({
+						firestore,
+						maxDurationMs: remainingBudgetMs,
+						deadline: sweepStartTime + maxDurationMs,
+					});
+				}
+			}
+		} catch (rollupErr) {
+			console.warn('[SignalOutcomeService] Daily outcome rollup failed:', rollupErr.message);
+		}
+		await persistWorkerHeartbeat();
+		return sweepResult;
+	})()
 		.catch((err) => {
 			console.warn('[SignalOutcomeService] Scheduled worker sweep failed:', err.message);
+		})
+		.finally(() => {
+			if (activeSweepPromise === sweepPromise) {
+				activeSweepPromise = null;
+			}
 		});
+
+	activeSweepPromise = sweepPromise;
+	return sweepPromise;
 }
 
 /**
@@ -2140,14 +2261,15 @@ function stopWorker(options = {}) {
 	activeIntervalMs = null;
 	lastEvaluatedDoc = null;
 
-	if (options.drain !== true || !activeEvaluationPromise) {
+	const activeDrainPromise = activeSweepPromise || activeEvaluationPromise;
+	if (options.drain !== true || !activeDrainPromise) {
 		isEvaluating = false;
 		return persistWorkerHeartbeat();
 	}
 
 	const drainTimeoutMs = Math.min(getWorkerStatus().maxDurationMs, MAX_WORKER_DRAIN_TIMEOUT_MS);
 	return awaitWithTimeout(
-		activeEvaluationPromise,
+		activeDrainPromise,
 		drainTimeoutMs,
 		`Dedicated worker drain timed out after ${drainTimeoutMs}ms`,
 	)
@@ -4063,6 +4185,8 @@ function _resetForTesting() {
 	binanceClient = null;
 	lastEvaluatedDoc = null;
 	isEvaluating = false;
+	activeSweepPromise = null;
+	activeEvaluationPromise = null;
 	shutdownRequested = false;
 	workerStartupGeneration += 1;
 	if (workerStartupAbortController) {
@@ -4082,11 +4206,24 @@ function _resetForTesting() {
 	leaseHeldSkipCount = 0;
 }
 
+async function rollupOutcomesDaily(options = {}) {
+	const firestore = AlertStorageService.getFirestore();
+	return dailyRollupService.rollupOutcomesDaily({ firestore, ...options });
+}
+
+async function getOutcomesTrend(options = {}) {
+	const firestore = AlertStorageService.getFirestore();
+	return dailyRollupService.getOutcomesTrend({ firestore, ...options });
+}
+
 module.exports = {
 	isEnabled,
 	recordSignal,
 	getSessionContext,
 	evaluatePendingOutcomes,
+	rollupOutcomesDaily,
+	getOutcomesTrend,
+	dailyRollupService,
 	getMetricsSummary,
 	summarizeOutcomes,
 	listOutcomes,
@@ -4103,6 +4240,10 @@ module.exports = {
 	stopWorker,
 	getWorkerStatus,
 	getWorkerRole,
+	isMcpOutcomePriceEnabled,
+	REASON_MCP_PRICE_FAILED,
+	REASON_MCP_BREAKER_OPEN,
+	ENTRY_PRICE_SOURCE_MCP,
 	getLeaseMs,
 	acquireSweepLease,
 	renewSweepLease,
@@ -4120,4 +4261,5 @@ module.exports = {
 	isUsMarketHalfDay,
 	isUsMarketHoliday,
 	_resetForTesting,
+	_runScheduledSweepForTesting: runScheduledSweep,
 };

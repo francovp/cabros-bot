@@ -9,6 +9,7 @@ const sentryService = require('../../../../services/monitoring/SentryService');
 const { TokenUsageTracker, tokenCostBudgetService } = require('../../../../lib/tokenUsage');
 const { trackBackgroundTask } = require('../../../../lib/backgroundTaskTracker');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const alertAcknowledgementService = require('../../../../services/storage/AlertAcknowledgementService');
 const { getCalibratedRiskMetadata } = require('../../../../services/prompts/promptRiskMetadata');
 const {
 	NotificationRoutingValidationError,
@@ -673,12 +674,27 @@ function postAlert(botOrGetter) {
 			const parsedSignal = parseTradingViewSignal(text);
 			const session = parsedSignal?.session
 				|| (parsedSignal?.exchange && isEquityExchange(parsedSignal.exchange) ? classifySession({ exchange: parsedSignal.exchange, symbol: parsedSignal.symbol }) : undefined);
+			// Chart attachments (GH-799) need the validated bars to reach delivery.
+			// Only finite OHLCV-shaped bars are forwarded; malformed data falls
+			// back to text-only delivery in the renderer. Bounded to 60 bars.
+			const chartBars = Array.isArray(body?.chartBars)
+				? body.chartBars.filter((bar) => bar && typeof bar === 'object'
+					&& [bar.open, bar.high, bar.low, bar.close].every((v) => Number.isFinite(Number(v)))).slice(-60)
+				: [];
+			const chartSymbol = typeof body?.chartSymbol === 'string' && body.chartSymbol.trim()
+				? body.chartSymbol.trim().toUpperCase()
+				: (typeof body?.symbol === 'string' && body.symbol.trim() ? body.symbol.trim().toUpperCase()
+					: (typeof parsedSignal?.symbol === 'string' && parsedSignal.symbol.trim() ? parsedSignal.symbol.trim().toUpperCase() : undefined));
 			alert = {
 				text,
 				source,
 				signalClass,
+				...(parsedSignal && parsedSignal.exchange ? { exchange: parsedSignal.exchange } : {}),
+				...(parsedSignal?.symbol ? { symbol: parsedSignal.symbol } : {}),
+				...(parsedSignal?.timeframe ? { timeframe: parsedSignal.timeframe } : {}),
 				...(session ? { session } : {}),
 				...(traderIntent ? { traderIntent } : {}),
+				...(chartBars.length >= 2 && chartSymbol ? { chartBars, chartSymbol } : {}),
 				...truncation,
 			};
 
@@ -788,6 +804,9 @@ function postAlert(botOrGetter) {
 					const dryRunPersistence = alertStorageService.saveAlert({
 						requestId,
 						text: alert.text,
+						chartBars: alert.chartBars || null,
+						chartSymbol: alert.chartSymbol || null,
+						timeframe: alert.timeframe || parsedSignal?.timeframe || null,
 						enriched,
 						enrichmentData: alert.enriched || null,
 						tokenUsage: tokenUsageJSON,
@@ -932,12 +951,15 @@ function postAlert(botOrGetter) {
 				const telegramEnabled = process.env.ENABLE_TELEGRAM_BOT === 'true';
 				const telegramRequested = requestedChannels.length === 0
 					|| requestedChannels.includes('telegram');
+				const ackEnabled = typeof alertAcknowledgementService.isEnabled === 'function'
+					&& alertAcknowledgementService.isEnabled();
 				if (storageEnabled && telegramEnabled && telegramRequested && !suppressedRepeat) {
 					inlineAlertId = uuidv4();
 					const replyMarkup = buildReplyMarkup({
 						alertId: inlineAlertId,
 						hasEnrichment: Boolean(alert.enriched),
 						includeReplay: true,
+						includeAcknowledgements: ackEnabled,
 					});
 					if (replyMarkup) {
 						inlineReplyMarkup = replyMarkup;
@@ -1172,6 +1194,9 @@ function postAlert(botOrGetter) {
 				suppressedRepeat,
 				suppressionReason,
 				signalClass: alert.signalClass,
+				chartBars: alert.chartBars || null,
+				chartSymbol: alert.chartSymbol || null,
+				timeframe: alert.timeframe || null,
 				source: body.source || 'webhook-alert',
 				telegramChatId: routing.telegramChatId,
 				telegramThreadId: routing.telegramThreadId,

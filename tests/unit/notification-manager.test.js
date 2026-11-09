@@ -4,6 +4,7 @@ const sentryService = require('../../src/services/monitoring/SentryService');
 const { notificationRedriveService } = require('../../src/services/notification/NotificationRedriveService');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
 const { waitForBackgroundTasks, resetForTesting } = require('../../src/lib/backgroundTaskTracker');
+const { adminPagingDeduplicator } = require('../../src/services/notification/adminPagingDeduplicator');
 
 describe('NotificationManager admin failure notifications', () => {
 	const originalAdminChatId = process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
@@ -12,6 +13,7 @@ describe('NotificationManager admin failure notifications', () => {
 	const originalFetch = global.fetch;
 
 	afterEach(() => {
+		adminPagingDeduplicator.reset();
 		resetForTesting();
 		jest.restoreAllMocks();
 		if (originalFetch === undefined) {
@@ -615,6 +617,91 @@ describe('NotificationManager admin failure notifications', () => {
 			expect(recordSpy).not.toHaveBeenCalled();
 			recordSpy.mockRestore();
 			notificationRedriveService.resetForTesting();
+		});
+
+		describe('market-calendar delivery gate', () => {
+			const originalCalendarFlag = process.env.ENABLE_MARKET_CALENDAR_GATING;
+			const FIXED_HOLIDAY = new Date(Date.UTC(2026, 6, 3, 18, 0)); // 14:00 ET observed Independence Day
+
+			afterEach(() => {
+				if (originalCalendarFlag === undefined) {
+					delete process.env.ENABLE_MARKET_CALENDAR_GATING;
+				} else {
+					process.env.ENABLE_MARKET_CALENDAR_GATING = originalCalendarFlag;
+				}
+			});
+
+			it('sendToChannels suppresses on a holiday and records one dead letter', async () => {
+				process.env.ENABLE_MARKET_CALENDAR_GATING = 'true';
+				process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+				process.env.BOT_TOKEN = 'configured-token';
+
+				const recordSpy = jest.spyOn(notificationRedriveService, 'recordDeliveryResults');
+				const telegramService = {
+					name: 'telegram',
+					isEnabled: jest.fn(() => true),
+					send: jest.fn(),
+				};
+
+				const manager = new NotificationManager(telegramService);
+				notificationRedriveService.resetForTesting();
+
+				const results = await manager.sendToChannels(
+					{ text: 'NASDAQ:NVDA BUY', exchange: 'NASDAQ' },
+					['telegram'],
+					{ timestamp: FIXED_HOLIDAY },
+				);
+				await waitForBackgroundTasks();
+
+				expect(results).toEqual([{
+					channel: 'telegram',
+					success: false,
+					error: 'market_holiday',
+					errorCode: 'market_holiday',
+					skipped: true,
+				}]);
+				expect(telegramService.send).not.toHaveBeenCalled();
+				expect(recordSpy).toHaveBeenCalledTimes(1);
+				recordSpy.mockRestore();
+				notificationRedriveService.resetForTesting();
+			});
+
+			it('does not re-record a dead letter when a redrive replay is suppressed', async () => {
+				process.env.ENABLE_MARKET_CALENDAR_GATING = 'true';
+				process.env.ENABLE_NOTIFICATION_REDRIVE = 'true';
+				process.env.BOT_TOKEN = 'configured-token';
+
+				const recordSpy = jest.spyOn(notificationRedriveService, 'recordDeliveryResults');
+				const telegramService = {
+					name: 'telegram',
+					isEnabled: jest.fn(() => true),
+					send: jest.fn(),
+				};
+
+				const manager = new NotificationManager(telegramService);
+				notificationRedriveService.resetForTesting();
+
+				const results = await manager.sendToChannels(
+					{ text: 'NASDAQ:NVDA BUY', enriched: true, enrichmentData: { exchange: 'NASDAQ' } },
+					['telegram'],
+					{ timestamp: FIXED_HOLIDAY, isRedrive: true },
+				);
+				await waitForBackgroundTasks();
+
+				// The gate must still evaluate on replay (holding the alert) but
+				// must not write a fresh dead letter / reset backoff.
+				expect(results).toEqual([{
+					channel: 'telegram',
+					success: false,
+					error: 'market_holiday',
+					errorCode: 'market_holiday',
+					skipped: true,
+				}]);
+				expect(telegramService.send).not.toHaveBeenCalled();
+				expect(recordSpy).not.toHaveBeenCalled();
+				recordSpy.mockRestore();
+				notificationRedriveService.resetForTesting();
+			});
 		});
 
 		it('sends admin alert when telegram broadcast channel is disabled but bot is eligible for admin delivery', async () => {

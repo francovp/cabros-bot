@@ -13,6 +13,7 @@ const {
 } = require('../controllers/webhooks/handlers/scannerPresets/scannerPresets');
 const { postVolumeConfirmation } = require('../controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation');
 const { postSymbolAnalysis } = require('../controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis');
+const { postCanaryAlert } = require('../controllers/webhooks/handlers/canaryAlert/canaryAlert');
 const {
 	postCreateJob,
 	getJobList,
@@ -21,6 +22,7 @@ const {
 	postRetryJob,
 	postRetryFailedJob,
 } = require('../controllers/webhooks/handlers/jobs/jobs');
+const { postOperationEstimate } = require('../controllers/operations/estimate');
 const {
 	listAlerts,
 	getAlertById,
@@ -33,6 +35,8 @@ const {
 	listReplays,
 	submitFeedback,
 	getFeedbackSummary,
+	acknowledgeAlert,
+	getAcknowledgementBreakdown,
 } = require('../controllers/alerts/alerts');
 const {
 	postResolveSymbol,
@@ -42,12 +46,19 @@ const {
 	listOutcomes,
 	summarizeOutcomes,
 	getOutcomesCalibration,
+	getOutcomesTrend,
 	getOutcomeById,
 	exportOutcomes,
 } = require('../controllers/outcomes/outcomes');
+const { getPortfolioSnapshot } = require('../controllers/portfolio/portfolio');
 const { listSymbolAnalyses, summarizeSymbolAnalyses } = require('../controllers/symbolAnalyses/symbolAnalyses');
 const { listEnrollments } = require('../controllers/webhooks/handlers/enrollments/enrollments');
 const { getPreferencesHandler, putPreferencesHandler, deletePreferencesHandler } = require('../controllers/preferences/preferences');
+const {
+	getCompareStrategies,
+	postWalkForward,
+	postBacktest,
+} = require('../controllers/research/strategyResearch');
 const {
 	listSubscribers,
 	postSubscriber,
@@ -56,8 +67,9 @@ const {
 	deleteSubscriber,
 	testSubscriber,
 } = require('../controllers/subscribers/alertSubscribers');
-const { validateApiKey } = require('../lib/auth');
+const { validateApiKey, validateWebhookSignature } = require('../lib/auth');
 const { validateRequest } = require('../lib/requestValidator');
+const { getPretradeCheckHandler } = require('../controllers/pretradeCheck/pretradeCheck');
 const { getApiStatus } = require('../controllers/status');
 const { getMetrics } = require('../controllers/observability/metrics');
 const {
@@ -105,17 +117,18 @@ function getRoutes(botOrGetter) {
 	const sseRead = [requireConfiguredSseAccess, requireAdminRole(ADMIN_VIEWER)];
 	const binanceOrderRead = [requireConfiguredBinanceTradingAccess, requireAdminRole(ADMIN_VIEWER)];
 	const binanceOrderWrite = [requireConfiguredBinanceTradingAccess, requireAdminRole(ADMIN_OPERATOR)];
-	router.post('/webhook/alert', validateApiKey, maintenanceModeMiddleware, validateRequest('/api/webhook/alert'), idempotencyMiddleware, postAlert(botOrGetter));
-	router.post('/webhook/message', validateApiKey, maintenanceModeMiddleware, validateRequest('/api/webhook/message'), idempotencyMiddleware, postMessage(botOrGetter));
-	router.post('/webhook/expanded-analysis-alert', validateApiKey, maintenanceModeMiddleware, validateRequest('/api/webhook/expanded-analysis-alert'), idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
-	router.post('/webhook/market-scanner-alert', validateApiKey, maintenanceModeMiddleware, validateRequest('/api/webhook/market-scanner-alert'), idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
+	router.post('/webhook/alert', validateApiKey, validateWebhookSignature, maintenanceModeMiddleware, validateRequest('/api/webhook/alert'), idempotencyMiddleware, postAlert(botOrGetter));
+	router.post('/webhook/message', validateApiKey, validateWebhookSignature, maintenanceModeMiddleware, validateRequest('/api/webhook/message'), idempotencyMiddleware, postMessage(botOrGetter));
+	router.post('/webhook/expanded-analysis-alert', validateApiKey, validateWebhookSignature, maintenanceModeMiddleware, validateRequest('/api/webhook/expanded-analysis-alert'), idempotencyMiddleware, postExpandedAnalysisAlert(botOrGetter));
+	router.post('/webhook/market-scanner-alert', validateApiKey, validateWebhookSignature, maintenanceModeMiddleware, validateRequest('/api/webhook/market-scanner-alert'), idempotencyMiddleware, postMarketScannerAlert(botOrGetter));
 	// Rate limited by the app-wide src/lib/rateLimiter (app.use): volume confirmation
 	// uses the standard tier (30/minute), and symbol analysis uses the heavy tier (5/minute).
 	// CodeQL's js/missing-rate-limiting cannot see the app-level middleware.
 	/* codeql[js/missing-rate-limiting] */
-	router.post('/webhook/volume-confirmation', validateApiKey, maintenanceModeMiddleware, validateRequest('/api/webhook/volume-confirmation'), idempotencyMiddleware, postVolumeConfirmation());
+	router.post('/webhook/volume-confirmation', validateApiKey, validateWebhookSignature, maintenanceModeMiddleware, validateRequest('/api/webhook/volume-confirmation'), idempotencyMiddleware, postVolumeConfirmation());
 	/* codeql[js/missing-rate-limiting] */
-	router.post('/webhook/symbol-analysis', validateApiKey, maintenanceModeMiddleware, validateRequest('/api/webhook/symbol-analysis'), idempotencyMiddleware, postSymbolAnalysis());
+	router.post('/webhook/symbol-analysis', validateApiKey, validateWebhookSignature, maintenanceModeMiddleware, validateRequest('/api/webhook/symbol-analysis'), idempotencyMiddleware, postSymbolAnalysis());
+	router.post('/webhook/canary-alert', validateApiKey, postCanaryAlert(botOrGetter));
 	router.get('/alerts', ...adminRead, listAlerts);
 	router.get('/alerts/replays', ...adminRead, listReplays);
 	router.get('/alerts/summary', ...adminRead, summarizeAlerts);
@@ -127,10 +140,15 @@ function getRoutes(botOrGetter) {
 	router.get('/alerts/:alertId', ...adminRead, getAlertById);
 	router.post('/alerts/feedback', ...adminWrite, idempotencyMiddleware, submitFeedback);
 	router.get('/alerts/feedback/summary', ...adminRead, getFeedbackSummary);
+	router.post('/alerts/:alertId/acknowledge', ...adminWrite, idempotencyMiddleware, acknowledgeAlert);
+	router.get('/alerts/:alertId/acknowledgements/breakdown', ...adminRead, getAcknowledgementBreakdown);
 	router.post('/admin/test-alert', ...adminWrite, idempotencyMiddleware, postTestAlert(botOrGetter));
 	router.get('/admin/events', ...sseRead, handleSseStream);
 	router.get('/outcomes', ...adminRead, listOutcomes);
 	router.get('/outcomes/summary', ...adminRead, summarizeOutcomes);
+	router.get('/pretrade-check', ...adminRead, getPretradeCheckHandler());
+	router.get('/portfolio/snapshot', ...adminRead, getPortfolioSnapshot);
+	router.get('/outcomes/trend', ...adminRead, getOutcomesTrend);
 	router.get('/enrollments', ...adminRead, listEnrollments);
 	router.get('/outcomes/calibration', ...adminRead, getOutcomesCalibration);
 	router.get('/outcomes/export', ...adminRead, exportOutcomes);
@@ -143,6 +161,23 @@ function getRoutes(botOrGetter) {
 	router.put('/scanner-presets/:id', ...adminWrite, updatePreset);
 	router.delete('/scanner-presets/:id', ...adminWrite, deletePreset);
 	router.post('/scanner-presets/:id/run', ...adminWrite, idempotencyMiddleware, postRunPreset(botOrGetter));
+
+	// Issue #745 — pre-flight cost estimate. validateApiKey keeps admin tier; no idempotency (probes mutate nothing).
+	router.post('/operations/estimate', validateApiKey, postOperationEstimate);
+
+	// Strategy research (TradingView MCP backtest / compare / walk-forward).
+	// Gated by validateApiKey plus the ENABLE_STRATEGY_RESEARCH feature flag:
+	// read-only analytics over upstream MCP results, not operator data, so
+	// adminRead would be the wrong tier. Each handler is a factory that
+	// returns the express handler.
+	// Rate limited by the app-wide src/lib/rateLimiter (app.use).
+	// CodeQL's js/missing-rate-limiting cannot see the app-level middleware.
+	/* codeql[js/missing-rate-limiting] */
+	router.get('/research/strategies', validateApiKey, getCompareStrategies());
+	/* codeql[js/missing-rate-limiting] */
+	router.post('/research/walk-forward', validateApiKey, postWalkForward());
+	/* codeql[js/missing-rate-limiting] */
+	router.post('/research/backtest', validateApiKey, postBacktest());
 
 	// Symbol alias resolver (issue #845) — operator-only lookup endpoints.
 	router.post('/symbols/resolve', ...adminWrite, postResolveSymbol());

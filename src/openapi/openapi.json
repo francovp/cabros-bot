@@ -3,7 +3,7 @@
   "info": {
     "title": "Cabros Bot API",
     "version": "0.1.0",
-    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter is deprecated and exists only for legacy compatibility — it may leak through reverse-proxy access logs. A one-time per-process deprecation warning is emitted on use; setting API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) rejects query-parameter auth with 401 API_KEY_QUERY_REMOVED after the date. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true. HTTP 429 responses include Retry-After and retryAfterSeconds. Dedicated per-endpoint limits default to heavy 5, trading 10, standard 30, and light 100 requests per 60 seconds. All webhook/news ingest paths share an aggregate 1,000-request bucket per RATE_LIMIT_WINDOW_MS; tiered webhook routes enforce both the aggregate and per-endpoint limits, while alert/message use only the aggregate. Other routes use RATE_LIMIT_WINDOW_MS and RATE_LIMIT_MAX."
+    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter is deprecated and exists only for legacy compatibility \u2014 it may leak through reverse-proxy access logs. A one-time per-process deprecation warning is emitted on use; setting API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) rejects query-parameter auth with 401 API_KEY_QUERY_REMOVED after the date. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true. HTTP 429 responses include Retry-After and retryAfterSeconds. Dedicated per-endpoint limits default to heavy 5, trading 10, standard 30, and light 100 requests per 60 seconds. All webhook/news ingest paths share an aggregate 1,000-request bucket per RATE_LIMIT_WINDOW_MS; tiered webhook routes enforce both the aggregate and per-endpoint limits, while alert/message use only the aggregate. Other routes use RATE_LIMIT_WINDOW_MS and RATE_LIMIT_MAX."
   },
   "servers": [
     {
@@ -249,6 +249,12 @@
               }
             }
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/ExpressFallthroughError"
+          },
           "503": {
             "description": "Chat enrollment storage is enabled but unavailable.",
             "content": {
@@ -270,12 +276,6 @@
                 "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
-          },
-          "408": {
-            "$ref": "#/components/responses/RequestTimeout"
-          },
-          "500": {
-            "$ref": "#/components/responses/ExpressFallthroughError"
           }
         },
         "security": [
@@ -427,7 +427,7 @@
                 },
                 "examples": {
                   "depthReadiness": {
-                    "summary": "?depth=readiness — always 200; degradation is reported in the body",
+                    "summary": "?depth=readiness \u2014 always 200; degradation is reported in the body",
                     "value": {
                       "ready": true,
                       "failClosed": false,
@@ -463,7 +463,7 @@
                     }
                   },
                   "depthReadinessDegraded": {
-                    "summary": "?depth=readiness with a degraded provider — still 200 (advisory)",
+                    "summary": "?depth=readiness with a degraded provider \u2014 still 200 (advisory)",
                     "value": {
                       "ready": false,
                       "failClosed": false,
@@ -478,7 +478,7 @@
                         "gemini": {
                           "ready": false,
                           "latencyMs": 3001,
-                          "error": "timeout_after_3000ms"
+                          "errorCode": "timeout_after_3000ms"
                         },
                         "tradingViewMcp": {
                           "ready": true,
@@ -545,7 +545,7 @@
                 },
                 "examples": {
                   "dependenciesHealthy": {
-                    "summary": "/ready?depth=dependencies — bootstrap ready AND every considered dependency healthy",
+                    "summary": "/ready?depth=dependencies \u2014 bootstrap ready AND every considered dependency healthy",
                     "value": {
                       "ready": true,
                       "failClosed": true,
@@ -594,14 +594,14 @@
                     }
                   },
                   "bootstrapReady": {
-                    "summary": "Bare /ready — bootstrap gate only, no provider probes",
+                    "summary": "Bare /ready \u2014 bootstrap gate only, no provider probes",
                     "value": {
                       "status": "ready",
                       "ready": true,
                       "startedAt": "2026-08-31T02:29:52.000Z",
                       "completedAt": "2026-08-31T02:29:53.000Z",
                       "failedAt": null,
-                      "error": null,
+                      "errorCode": null,
                       "components": {
                         "telegramBot": {
                           "status": "disabled"
@@ -639,14 +639,14 @@
                 },
                 "examples": {
                   "bootstrapPending": {
-                    "summary": "Bare /ready — bootstrap still pending (503)",
+                    "summary": "Bare /ready \u2014 bootstrap still pending (503)",
                     "value": {
                       "status": "pending",
                       "ready": false,
                       "startedAt": "2026-08-31T02:29:50.000Z",
                       "completedAt": null,
                       "failedAt": null,
-                      "error": null,
+                      "errorCode": null,
                       "components": {
                         "telegramBot": {
                           "status": "pending"
@@ -661,7 +661,7 @@
                     }
                   },
                   "dependenciesDegraded": {
-                    "summary": "/ready?depth=dependencies — dependency degraded (503)",
+                    "summary": "/ready?depth=dependencies \u2014 dependency degraded (503)",
                     "value": {
                       "ready": false,
                       "failClosed": true,
@@ -688,7 +688,7 @@
                         },
                         "gemini": {
                           "ready": false,
-                          "error": "timeout_after_3000ms",
+                          "errorCode": "timeout_after_3000ms",
                           "latencyMs": 3000
                         },
                         "tradingViewMcp": {
@@ -698,7 +698,7 @@
                         },
                         "binance": {
                           "ready": false,
-                          "error": "binance_http_451",
+                          "errorCode": "binance_http_451",
                           "latencyMs": 124
                         },
                         "telegram": {
@@ -711,7 +711,7 @@
                     }
                   },
                   "bootstrapPendingBlocksDependencies": {
-                    "summary": "/ready?depth=dependencies — bootstrap still pending, so the gate stays 503 even though every dependency is healthy",
+                    "summary": "/ready?depth=dependencies \u2014 bootstrap still pending, so the gate stays 503 even though every dependency is healthy",
                     "value": {
                       "ready": false,
                       "failClosed": true,
@@ -807,6 +807,12 @@
             "$ref": "#/components/parameters/XRequestIdHeader"
           },
           {
+            "$ref": "#/components/parameters/WebhookTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignature"
+          },
+          {
             "$ref": "#/components/parameters/WebhookSignalClass"
           }
         ],
@@ -822,6 +828,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
@@ -880,6 +889,12 @@
             "$ref": "#/components/parameters/IdempotencyKeyQuerySnake"
           },
           {
+            "$ref": "#/components/parameters/WebhookTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignature"
+          },
+          {
             "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
@@ -895,6 +910,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
@@ -946,6 +964,12 @@
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
           },
           {
+            "$ref": "#/components/parameters/WebhookTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignature"
+          },
+          {
             "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
@@ -961,6 +985,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
@@ -1018,6 +1045,12 @@
             "$ref": "#/components/parameters/XIdempotencyKeyHeader"
           },
           {
+            "$ref": "#/components/parameters/WebhookTimestamp"
+          },
+          {
+            "$ref": "#/components/parameters/WebhookSignature"
+          },
+          {
             "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ],
@@ -1030,6 +1063,9 @@
           },
           "400": {
             "$ref": "#/components/responses/WebhookRequestValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
             "$ref": "#/components/responses/Error"
@@ -1079,6 +1115,11 @@
         ],
         "summary": "Check TradingView volume confirmation",
         "operationId": "postVolumeConfirmation",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
         "requestBody": {
           "$ref": "#/components/requestBodies/VolumeConfirmation"
         },
@@ -1088,6 +1129,12 @@
           },
           "400": {
             "$ref": "#/components/responses/WebhookRequestValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
@@ -1121,11 +1168,6 @@
           {
             "ApiKeyQuery": []
           }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/XRequestIdHeader"
-          }
         ]
       }
     },
@@ -1137,6 +1179,11 @@
         "summary": "Analyze one TradingView symbol without delivery",
         "description": "Runs TradingView MCP `coin_analysis` (and optionally `combined_analysis` / `multi_timeframe_analysis`) for a single EXCHANGE:SYMBOL identifier and returns decision-ready structured analysis plus a Spanish markdown report. Plans below SYMBOL_ANALYSIS_MIN_RISK_REWARD_RATIO (default 1.5) are downgraded to NO_TRADE with an explicit Spanish warning and `risk.rejectionReason: 'risk_reward_below_minimum'`; when a higher S/R level, Bollinger band, or ATR target clears the floor, the controller upgrades the take-profit automatically before flagging the plan.",
         "operationId": "postSymbolAnalysis",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
         "requestBody": {
           "$ref": "#/components/requestBodies/SymbolAnalysis"
         },
@@ -1146,6 +1193,12 @@
           },
           "400": {
             "$ref": "#/components/responses/WebhookRequestValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
           },
           "408": {
             "$ref": "#/components/responses/RequestTimeout"
@@ -1181,11 +1234,6 @@
           },
           {
             "ApiKeyQuery": []
-          }
-        ],
-        "parameters": [
-          {
-            "$ref": "#/components/parameters/XRequestIdHeader"
           }
         ]
       }
@@ -1598,7 +1646,7 @@
         "tags": [
           "Alerts"
         ],
-        "summary": "Record a trader verdict (👍 / 👎) for a stored alert",
+        "summary": "Record a trader verdict (\ud83d\udc4d / \ud83d\udc4e) for a stored alert",
         "operationId": "submitAlertFeedback",
         "description": "Persists a single trader verdict per (alertId, chatId) tuple. Re-clicks update the verdict instead of appending a new row. Bounded by ALERT_FEEDBACK_RETENTION_DAYS and a SHA-256 chat hash; raw chat ids are never returned through this surface.",
         "requestBody": {
@@ -2085,6 +2133,222 @@
           }
         ],
         "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/alerts/{alertId}/acknowledge": {
+      "post": {
+        "tags": [
+          "Alerts"
+        ],
+        "summary": "Record a trader acknowledgement for a stored alert",
+        "operationId": "acknowledgeAlert",
+        "description": "Persists a single acknowledgement record per (alertId, chatId) pair. Re-acknowledgements update the action/notes instead of appending. The chatId is never returned in any response. Requires ENABLE_FIRESTORE_ALERT_STORAGE=true.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AlertId"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertAcknowledgementSubmission"
+              },
+              "examples": {
+                "tookTrade": {
+                  "summary": "Trader entered the trade",
+                  "value": {
+                    "chatId": "-1001234567890",
+                    "action": "took_trade",
+                    "notes": "Entered at 100.5, stop 99.0"
+                  }
+                },
+                "skipped": {
+                  "summary": "Trader skipped the alert",
+                  "value": {
+                    "chatId": "-1001234567890",
+                    "action": "skipped",
+                    "notes": "Wait for confirmation"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Acknowledgement created or updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertAcknowledgement"
+                },
+                "examples": {
+                  "created": {
+                    "summary": "First acknowledgement for this (alert, chat) pair",
+                    "value": {
+                      "success": true,
+                      "ackId": "alert-123__9a6a7f8b1c2d3e4f5a6b7c8d9e0f1a2b",
+                      "alertId": "alert-123",
+                      "action": "took_trade",
+                      "notes": "Entered at 100.5, stop 99.0",
+                      "acknowledgedAt": "2026-09-02T22:00:00.000Z",
+                      "updatedAt": "2026-09-02T22:00:00.000Z",
+                      "storage": "firestore"
+                    }
+                  },
+                  "updated": {
+                    "summary": "Subsequent acknowledgement for the same pair",
+                    "value": {
+                      "success": true,
+                      "ackId": "alert-123__9a6a7f8b1c2d3e4f5a6b7c8d9e0f1a2b",
+                      "alertId": "alert-123",
+                      "action": "skipped",
+                      "notes": "Wait for confirmation",
+                      "acknowledgedAt": "2026-09-02T22:00:00.000Z",
+                      "updatedAt": "2026-09-02T22:30:00.000Z",
+                      "storage": "firestore"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/alerts/{alertId}/acknowledgements/breakdown": {
+      "get": {
+        "tags": [
+          "Alerts"
+        ],
+        "summary": "Zero-safe acknowledgement action counts for a stored alert",
+        "operationId": "getAcknowledgementBreakdown",
+        "description": "Returns per-action counts for one stored alert. Every action key is always present, even at zero. Requires ENABLE_FIRESTORE_ALERT_STORAGE=true.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AlertId"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Breakdown computed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertAcknowledgementBreakdownResponse"
+                },
+                "example": {
+                  "success": true,
+                  "alertId": "alert-123",
+                  "total": 3,
+                  "breakdown": {
+                    "took_trade": 2,
+                    "skipped": 1,
+                    "no_trade_no_signal": 0,
+                    "snoozed": 0
+                  },
+                  "storage": "firestore"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
       }
     },
     "/api/alerts/{alertId}": {
@@ -3986,7 +4250,7 @@
           "Signal outcomes"
         ],
         "summary": "Retrieve confidence calibration analysis for signal outcomes",
-        "description": "Calculates empirical target-hit rates and average returns grouped by confidence score buckets (e.g. 0.70–0.75, 0.75–0.80, 0.80–0.85, 0.85–0.90, 0.90–1.00) over evaluated signals, suggesting an optimal confidence threshold.",
+        "description": "Calculates empirical target-hit rates and average returns grouped by confidence score buckets (e.g. 0.70\u20130.75, 0.75\u20130.80, 0.80\u20130.85, 0.85\u20130.90, 0.90\u20131.00) over evaluated signals, suggesting an optimal confidence threshold.",
         "operationId": "getOutcomesCalibration",
         "parameters": [
           {
@@ -4057,7 +4321,7 @@
           "Signal outcomes"
         ],
         "summary": "Summarize signal outcomes metrics",
-        "description": "Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, setupType, status, window, and date range. Add breakdown=symbol,setup to opt into bounded per-symbol and per-setup hit-rate rollups.",
+        "description": "Query aggregated performance and coverage metrics for recorded signal outcomes, with optional filtering by symbol, exchange, setupType, status, window, and date range. Add breakdown=symbol,setup to opt into bounded per-symbol and per-setup hit-rate rollups. Add includeAcknowledgments=true to include the acknowledgementBreakdown (zero-safe trader action counts joined by stored symbol/exchange).",
         "operationId": "summarizeOutcomes",
         "parameters": [
           {
@@ -4089,11 +4353,172 @@
           },
           {
             "$ref": "#/components/parameters/XRequestIdHeader"
+          },
+          {
+            "name": "includeAcknowledgments",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "description": "When true, include the acknowledgementBreakdown (zero-safe trader action counts joined by stored symbol/exchange). Omitted when false or absent. Any other value returns 400 INVALID_REQUEST."
           }
         ],
         "responses": {
           "200": {
             "$ref": "#/components/responses/OutcomesSummaryResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/pretrade-check": {
+      "get": {
+        "tags": [
+          "Operations"
+        ],
+        "summary": "Compose a pre-trade decision-support snapshot for a single symbol",
+        "description": "Aggregates current price (Binance for crypto, Twelve Data for supported equity venues), recent (last 7 days) hit-rate from evaluated signal outcomes, and provenance metadata into a single response so a trader can decide whether to act without leaving the chat or running multiple commands. The endpoint is fail-open: missing price or outcome data is reported under `price.reason` / `hitRate.reason` rather than failing the whole call. Supports TradingView-style `BINANCE:BTCUSDT` symbols, bare crypto tickers (`BTCUSDT`), and supported equity exchanges (NASDAQ, NYSE, BATS, AMEX, NYSE ARCA).",
+        "operationId": "getPretradeCheck",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": true,
+            "description": "TradingView-style symbol (BINANCE:BTCUSDT), bare crypto ticker (BTCUSDT), or supported equity symbol (NVDA with NASDAQ exchange via `symbol=NASDAQ:NVDA`).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Maximum number of evaluated outcomes to read when computing the 7-day hit-rate (1-1000, default 200).",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 200
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pre-trade snapshot successfully composed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PretradeCheckResult"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/outcomes/trend": {
+      "get": {
+        "tags": [
+          "Signal outcomes"
+        ],
+        "summary": "Query signal outcomes daily trend series",
+        "description": "Query daily outcome snapshot metrics (hit rate, wins, losses, MFE, MAE) over time for a given evaluation window (1h, 4h, 1D, 1W) and date range (up to 180 days).",
+        "operationId": "getOutcomesTrend",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/TrendWindow"
+          },
+          {
+            "$ref": "#/components/parameters/TrendBucket"
+          },
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OutcomesTrendResult"
           },
           "400": {
             "$ref": "#/components/responses/Error"
@@ -4477,7 +4902,7 @@
           "Trading"
         ],
         "summary": "Preview a Binance Spot order without submitting it",
-        "description": "Accepts only MARKET and LIMIT order types. Returns a BINANCE_ORDER_PREVIEW response with the LOT_SIZE-adjusted quantity, projected notional, estimated maker/taker fees, slippage estimate from a fail-open depth probe (4-second AbortController deadline), and a 5-second expiresAt token. The endpoint is read-only and never calls submitNewOrder. Preview-time validation reuses the same exchange-info filters and Binance order-test filters as POST /api/trading/binance/orders, but cannot be replayed after expiresAt. maxSlippageBps is honored for MARKET BUY orders that include a depth snapshot; wouldExceedBudget is reported when the slippageBps estimate exceeds the supplied budget but no order is rejected. BINANCE_TRADING_MAX_NOTIONAL is enforced — previews above the cap return 403 MAX_NOTIONAL_EXCEEDED. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
+        "description": "Accepts only MARKET and LIMIT order types. Returns a BINANCE_ORDER_PREVIEW response with the LOT_SIZE-adjusted quantity, projected notional, estimated maker/taker fees, slippage estimate from a fail-open depth probe (4-second AbortController deadline), and a 5-second expiresAt token. The endpoint is read-only and never calls submitNewOrder. Preview-time validation reuses the same exchange-info filters and Binance order-test filters as POST /api/trading/binance/orders, but cannot be replayed after expiresAt. maxSlippageBps is honored for MARKET BUY orders that include a depth snapshot; wouldExceedBudget is reported when the slippageBps estimate exceeds the supplied budget but no order is rejected. BINANCE_TRADING_MAX_NOTIONAL is enforced \u2014 previews above the cap return 403 MAX_NOTIONAL_EXCEEDED. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
         "operationId": "postBinanceSpotOrderPreview",
         "requestBody": {
           "required": true,
@@ -4584,7 +5009,7 @@
                         "makerFeeBps": 10,
                         "appliedFeeBps": 10,
                         "estimatedFeeQuote": "0.65",
-                        "label": "estimate — not a Binance fill guarantee"
+                        "label": "estimate \u2014 not a Binance fill guarantee"
                       },
                       "slippage": {
                         "slippageBudgetBps": 75,
@@ -5075,7 +5500,7 @@
                     }
                   },
                   "tradingUnavailable": {
-                    "summary": "Authoritative pause state could not be read — failing closed",
+                    "summary": "Authoritative pause state could not be read \u2014 failing closed",
                     "value": {
                       "success": false,
                       "error": "Binance Spot order submission is unavailable (control state cannot be read; failing closed)",
@@ -5554,7 +5979,7 @@
             "$ref": "#/components/responses/Error"
           },
           "503": {
-            "description": "Authoritative pause storage is unavailable — refusing to mutate state",
+            "description": "Authoritative pause storage is unavailable \u2014 refusing to mutate state",
             "headers": {
               "X-Request-Id": {
                 "$ref": "#/components/headers/XRequestIdResponseHeader"
@@ -5706,7 +6131,7 @@
             "$ref": "#/components/responses/Error"
           },
           "503": {
-            "description": "Authoritative pause storage is unavailable — refusing to mutate state",
+            "description": "Authoritative pause storage is unavailable \u2014 refusing to mutate state",
             "headers": {
               "X-Request-Id": {
                 "$ref": "#/components/headers/XRequestIdResponseHeader"
@@ -6956,6 +7381,12 @@
               }
             }
           },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
           "500": {
             "description": "Internal server error.",
             "content": {
@@ -6970,12 +7401,6 @@
                 "$ref": "#/components/headers/XRequestIdResponseHeader"
               }
             }
-          },
-          "408": {
-            "$ref": "#/components/responses/RequestTimeout"
-          },
-          "429": {
-            "$ref": "#/components/responses/RateLimitExceeded"
           }
         },
         "security": [
@@ -7006,7 +7431,7 @@
           "Operations"
         ],
         "summary": "Get deployment banner snapshot",
-        "description": "Returns the public, unauthenticated deployment banner snapshot. Mirrors the X-Cabros-* response headers (when ENABLE_ENVIRONMENT_BANNER is enabled). The endpoint is auth-free and exposes only environment/commit/name/deployedAt — never credentials or webhook secrets. Use it for external status pages and badge generators that cannot read response headers.",
+        "description": "Returns the public, unauthenticated deployment banner snapshot. Mirrors the X-Cabros-* response headers (when ENABLE_ENVIRONMENT_BANNER is enabled). The endpoint is auth-free and exposes only environment/commit/name/deployedAt \u2014 never credentials or webhook secrets. Use it for external status pages and badge generators that cannot read response headers.",
         "operationId": "getBanner",
         "security": [],
         "responses": {
@@ -7203,6 +7628,9 @@
               }
             }
           },
+          "500": {
+            "$ref": "#/components/responses/ExpressFallthroughError"
+          },
           "503": {
             "description": "Bootstrap pending/failed, draining, dependency failure or no considered dependency.",
             "content": {
@@ -7297,11 +7725,942 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/portfolio/snapshot": {
+      "get": {
+        "tags": [
+          "Portfolio analytics"
+        ],
+        "summary": "Build the implied-paper portfolio snapshot from recent alerts",
+        "description": "Aggregates the bot's own emitted alerts within the configured window (default 168h) into an implied-paper portfolio snapshot. No real broker/position integration. The response is always labeled `mode: \"implied_paper\"`. Requires ENABLE_PORTFOLIO_ANALYTICS=true and ENABLE_FIRESTORE_ALERT_STORAGE=true.",
+        "operationId": "getPortfolioSnapshot",
+        "responses": {
+          "200": {
+            "description": "Implied-paper portfolio snapshot",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortfolioSnapshotResult"
+                },
+                "examples": {
+                  "populated": {
+                    "summary": "Snapshot with top symbols and risk flags",
+                    "value": {
+                      "success": true,
+                      "snapshot": {
+                        "mode": "implied_paper",
+                        "window": {
+                          "from": "2026-08-26T00:00:00Z",
+                          "to": "2026-09-02T00:00:00Z",
+                          "hours": 168
+                        },
+                        "config": {
+                          "paperNotional": 1000,
+                          "concentrationThreshold": 0.25,
+                          "maxSymbols": 25,
+                          "maxAlerts": 200
+                        },
+                        "totals": {
+                          "totalAlerts": 50,
+                          "openCount": 5,
+                          "netSide": "long",
+                          "notional": 5000,
+                          "unrealizedPnl": 250,
+                          "concentrationIndex": 0.4
+                        },
+                        "symbols": [
+                          {
+                            "symbol": "BTCUSDT",
+                            "exchange": "BINANCE",
+                            "openCount": 3,
+                            "buyCount": 4,
+                            "sellCount": 1,
+                            "netSide": "long",
+                            "notional": 3000,
+                            "averageEntry": 50500,
+                            "currentPrice": 55000,
+                            "unrealizedReturnPct": 8.91,
+                            "unrealizedPnl": 267,
+                            "setupTypeBreakdown": {
+                              "breakout": 4
+                            },
+                            "lastSignalAt": "2026-09-01T12:00:00Z"
+                          }
+                        ],
+                        "topSymbols": [
+                          "BTCUSDT"
+                        ],
+                        "riskFlags": [
+                          "concentration_high"
+                        ],
+                        "generatedAt": "2026-09-02T00:00:00Z"
+                      }
+                    }
+                  },
+                  "empty": {
+                    "summary": "Empty snapshot when no alerts match the window",
+                    "value": {
+                      "success": true,
+                      "snapshot": {
+                        "mode": "implied_paper",
+                        "window": {
+                          "from": "2026-08-26T00:00:00Z",
+                          "to": "2026-09-02T00:00:00Z",
+                          "hours": 168
+                        },
+                        "config": {
+                          "paperNotional": 1000,
+                          "concentrationThreshold": 0.25,
+                          "maxSymbols": 25,
+                          "maxAlerts": 200
+                        },
+                        "totals": {
+                          "totalAlerts": 0,
+                          "openCount": 0,
+                          "netSide": "neutral",
+                          "notional": 0,
+                          "unrealizedPnl": 0,
+                          "concentrationIndex": 0
+                        },
+                        "symbols": [],
+                        "topSymbols": [],
+                        "riskFlags": [],
+                        "generatedAt": "2026-09-02T00:00:00Z"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "description": "Portfolio analytics is disabled.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "description": "Alert storage is not enabled or unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "AdminApiKeyHeader": []
+          },
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          },
+          {
+            "FirebaseBearerAuth": []
+          }
+        ],
+        "x-admin-role": "admin.viewer",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
+      }
+    },
+    "/api/research/strategies": {
+      "get": {
+        "tags": [
+          "Research"
+        ],
+        "summary": "Compare multiple technical strategies using TradingView MCP",
+        "description": "Evaluates multiple strategies across historical data for a given asset and returns comparative performance metrics.",
+        "operationId": "getCompareStrategies",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": true,
+            "description": "TradingView symbol (e.g. BTCUSDT or BINANCE:BTCUSDT)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": false,
+            "description": "Exchange identifier (e.g. BINANCE)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "interval",
+            "in": "query",
+            "required": false,
+            "description": "Bar interval (1h or 1d; 4h is mapped to 1h)",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1h",
+                "1d"
+              ],
+              "default": "1h"
+            }
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "description": "Historical lookback period (e.g. 1y, 6m, 30d)",
+            "schema": {
+              "type": "string",
+              "default": "1y"
+            }
+          },
+          {
+            "name": "initial_capital",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 10000
+            }
+          },
+          {
+            "name": "commission_pct",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 0.001
+            }
+          },
+          {
+            "name": "slippage_pct",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "default": 0.0005
+            }
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Strategy comparison results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "tool",
+                    "symbol",
+                    "exchange",
+                    "cached",
+                    "result",
+                    "requestId",
+                    "processingTimeMs"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "tool": {
+                      "type": "string",
+                      "example": "compare_strategies"
+                    },
+                    "symbol": {
+                      "type": "string",
+                      "example": "BTCUSDT"
+                    },
+                    "exchange": {
+                      "type": "string",
+                      "example": "BINANCE"
+                    },
+                    "interval": {
+                      "type": "string",
+                      "example": "1h"
+                    },
+                    "period": {
+                      "type": "string",
+                      "example": "1y"
+                    },
+                    "cached": {
+                      "type": "boolean"
+                    },
+                    "result": {
+                      "type": "object"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "processingTimeMs": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ],
+        "x-admin-role": "admin.viewer"
+      }
+    },
+    "/api/research/walk-forward": {
+      "post": {
+        "tags": [
+          "Research"
+        ],
+        "summary": "Execute walk-forward strategy backtest using TradingView MCP",
+        "description": "Performs out-of-sample walk-forward validation across rolling train/test splits for a specified strategy.",
+        "operationId": "postWalkForward",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "symbol",
+                  "strategy"
+                ],
+                "properties": {
+                  "symbol": {
+                    "type": "string",
+                    "example": "BINANCE:BTCUSDT"
+                  },
+                  "exchange": {
+                    "type": "string",
+                    "example": "BINANCE"
+                  },
+                  "strategy": {
+                    "type": "string",
+                    "enum": [
+                      "rsi",
+                      "bollinger",
+                      "macd",
+                      "ema_cross",
+                      "supertrend",
+                      "donchian"
+                    ],
+                    "example": "rsi"
+                  },
+                  "interval": {
+                    "type": "string",
+                    "enum": [
+                      "1h",
+                      "1d"
+                    ],
+                    "default": "1h"
+                  },
+                  "period": {
+                    "type": "string",
+                    "default": "1y"
+                  },
+                  "n_splits": {
+                    "type": "integer",
+                    "minimum": 2,
+                    "maximum": 10,
+                    "default": 5
+                  },
+                  "train_ratio": {
+                    "type": "number",
+                    "minimum": 0.5,
+                    "maximum": 0.9,
+                    "default": 0.7
+                  },
+                  "initial_capital": {
+                    "type": "number",
+                    "default": 10000
+                  },
+                  "commission_pct": {
+                    "type": "number",
+                    "default": 0.001
+                  },
+                  "slippage_pct": {
+                    "type": "number",
+                    "default": 0.0005
+                  },
+                  "include_trade_log": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Walk forward backtest results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "tool",
+                    "symbol",
+                    "exchange",
+                    "strategy",
+                    "cached",
+                    "result",
+                    "requestId",
+                    "processingTimeMs"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "tool": {
+                      "type": "string",
+                      "example": "walk_forward_backtest_strategy"
+                    },
+                    "symbol": {
+                      "type": "string",
+                      "example": "BTCUSDT"
+                    },
+                    "exchange": {
+                      "type": "string",
+                      "example": "BINANCE"
+                    },
+                    "strategy": {
+                      "type": "string",
+                      "example": "rsi"
+                    },
+                    "interval": {
+                      "type": "string",
+                      "example": "1h"
+                    },
+                    "period": {
+                      "type": "string",
+                      "example": "1y"
+                    },
+                    "cached": {
+                      "type": "boolean"
+                    },
+                    "result": {
+                      "type": "object"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "processingTimeMs": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/research/backtest": {
+      "post": {
+        "tags": [
+          "Research"
+        ],
+        "summary": "Execute single technical strategy backtest using TradingView MCP",
+        "description": "Runs a backtest for a chosen indicator-based strategy over historical price data.",
+        "operationId": "postBacktest",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XIdempotencyKeyHeader"
+          },
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "symbol",
+                  "strategy"
+                ],
+                "properties": {
+                  "symbol": {
+                    "type": "string",
+                    "example": "BINANCE:BTCUSDT"
+                  },
+                  "exchange": {
+                    "type": "string",
+                    "example": "BINANCE"
+                  },
+                  "strategy": {
+                    "type": "string",
+                    "enum": [
+                      "rsi",
+                      "bollinger",
+                      "macd",
+                      "ema_cross",
+                      "supertrend",
+                      "donchian"
+                    ],
+                    "example": "ema_cross"
+                  },
+                  "interval": {
+                    "type": "string",
+                    "enum": [
+                      "1h",
+                      "1d"
+                    ],
+                    "default": "1h"
+                  },
+                  "period": {
+                    "type": "string",
+                    "default": "1y"
+                  },
+                  "initial_capital": {
+                    "type": "number",
+                    "default": 10000
+                  },
+                  "commission_pct": {
+                    "type": "number",
+                    "default": 0.001
+                  },
+                  "slippage_pct": {
+                    "type": "number",
+                    "default": 0.0005
+                  },
+                  "include_trade_log": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Backtest results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "tool",
+                    "symbol",
+                    "exchange",
+                    "strategy",
+                    "cached",
+                    "result",
+                    "requestId",
+                    "processingTimeMs"
+                  ],
+                  "properties": {
+                    "success": {
+                      "type": "boolean"
+                    },
+                    "tool": {
+                      "type": "string",
+                      "example": "backtest_strategy"
+                    },
+                    "symbol": {
+                      "type": "string",
+                      "example": "BTCUSDT"
+                    },
+                    "exchange": {
+                      "type": "string",
+                      "example": "BINANCE"
+                    },
+                    "strategy": {
+                      "type": "string",
+                      "example": "ema_cross"
+                    },
+                    "interval": {
+                      "type": "string",
+                      "example": "1h"
+                    },
+                    "period": {
+                      "type": "string",
+                      "example": "1y"
+                    },
+                    "cached": {
+                      "type": "boolean"
+                    },
+                    "result": {
+                      "type": "object"
+                    },
+                    "requestId": {
+                      "type": "string"
+                    },
+                    "processingTimeMs": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            },
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "409": {
+            "$ref": "#/components/responses/IdempotencyConflict"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ],
+        "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/operations/estimate": {
+      "post": {
+        "operationId": "postOperationEstimate",
+        "summary": "Estimate cost for an operation with zero billable calls",
+        "description": "Issue #745: returns a costEstimate for the given operation without invoking Gemini, TradingView MCP, Brave Search, Firestore, or any billable provider. operation selects one of news-monitor, expanded-analysis-alert, market-scanner-alert, or tradingview-analysis; remaining body fields mirror that operation's request body.",
+        "tags": [
+          "Operations"
+        ],
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/OperationEstimate"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OperationEstimateResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
+      }
+    },
+    "/api/webhook/canary-alert": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Execute synthetic canary alert validation probe",
+        "description": "Executes an end-to-end synthetic canary alert pipeline validation probe across validation, enrichment, notification readiness, and database storage without persisting test alert records. When ENABLE_CANARY_ALERT=false, returns 404 Not Found.",
+        "operationId": "postCanaryAlert",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "requestBody": {
+          "description": "Optional canary alert payload parameters",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Optional custom alert text"
+                  },
+                  "symbol": {
+                    "type": "string",
+                    "description": "Optional custom symbol to extract"
+                  },
+                  "deliver": {
+                    "type": "boolean",
+                    "description": "Whether to actually deliver notifications to configured channels",
+                    "default": false
+                  },
+                  "channels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Optional channels list"
+                  },
+                  "telegramChatId": {
+                    "type": "string"
+                  },
+                  "whatsappChatId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Canary alert validation probe result (healthy or degraded)",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanaryAlertResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
           },
           "500": {
             "$ref": "#/components/responses/ExpressFallthroughError"
+          },
+          "503": {
+            "description": "Canary alert validation probe failure (unhealthy)",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanaryAlertResponse"
+                }
+              }
+            }
           }
-        }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ]
       }
     }
   },
@@ -7317,7 +8676,7 @@
         "type": "apiKey",
         "in": "query",
         "name": "api-key",
-        "description": "Deprecated (GH-756): legacy compatibility only — query strings may be logged by reverse proxies and access logs. Prefer the x-api-key header. Admin routes accept query credentials only through the WEBHOOK_API_KEY fallback when ADMIN_API_KEY is unset. Binance routes accept query credentials only when BINANCE_TRADING_API_KEY is unset and the admin-auth fallback also accepts the query. A process-scoped deprecation warning is logged on first use, and API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) can reject query auth with 401 API_KEY_QUERY_REMOVED.",
+        "description": "Deprecated (GH-756): legacy compatibility only \u2014 query strings may be logged by reverse proxies and access logs. Prefer the x-api-key header. Admin routes accept query credentials only through the WEBHOOK_API_KEY fallback when ADMIN_API_KEY is unset. Binance routes accept query credentials only when BINANCE_TRADING_API_KEY is unset and the admin-auth fallback also accepts the query. A process-scoped deprecation warning is logged on first use, and API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) can reject query auth with 401 API_KEY_QUERY_REMOVED.",
         "x-deprecated": true
       },
       "AdminApiKeyHeader": {
@@ -7427,12 +8786,43 @@
         },
         "description": "Optional legacy-compatible replay key query parameter."
       },
+      "WebhookTimestamp": {
+        "name": "x-webhook-timestamp",
+        "in": "header",
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "example": "1700000000000",
+        "description": "Required when WEBHOOK_SIGNING_SECRET is configured. Unix timestamp in milliseconds used to prevent replay attacks."
+      },
+      "WebhookSignature": {
+        "name": "x-webhook-signature",
+        "in": "header",
+        "schema": {
+          "type": "string",
+          "pattern": "^sha256=[a-f0-9]{64}$"
+        },
+        "example": "sha256=8f8b7d6c5b4a39281716151413121110ffeeddccbbaa99887766554433221100",
+        "description": "Required when WEBHOOK_SIGNING_SECRET is configured. HMAC-SHA256 of timestamp + '\\n' + method + '\\n' + request path/query + '\\n' + raw request body."
+      },
       "DryRun": {
         "name": "dryRun",
         "in": "query",
-        "description": "When true, analyze and return alerts without notification delivery, deduplication cache claims/writes, or signal-outcome persistence.",
+        "description": "When true, analyze and return alerts without notification delivery, deduplication cache claims/writes, or signal-outcome persistence. When 'cost' (or ?estimate=true), return only a costEstimate with zero billable calls (Issue #745).",
         "schema": {
-          "type": "boolean",
+          "type": [
+            "boolean",
+            "string"
+          ],
+          "enum": [
+            true,
+            false,
+            "true",
+            "false",
+            "cost",
+            "estimate"
+          ],
           "default": false
         }
       },
@@ -7560,6 +8950,30 @@
           ]
         },
         "description": "Filter by measurement window."
+      },
+      "TrendWindow": {
+        "name": "window",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "enum": [
+            "1h",
+            "4h",
+            "1D",
+            "1W"
+          ],
+          "default": "1D"
+        },
+        "description": "Evaluation window for daily outcome trend series. Defaults to 1D."
+      },
+      "TrendBucket": {
+        "name": "bucket",
+        "in": "query",
+        "schema": {
+          "type": "string",
+          "default": "all"
+        },
+        "description": "Aggregation bucket identifier. Defaults to all."
       },
       "JobListLimit": {
         "name": "limit",
@@ -7930,7 +9344,24 @@
                 "telegram"
               ],
               "telegramChatId": "-1001234567890",
-              "requireWatchlistMatch": true
+              "requireWatchlistMatch": true,
+              "chartBars": [
+                {
+                  "open": 100,
+                  "high": 102,
+                  "low": 99,
+                  "close": 101,
+                  "volume": 10
+                },
+                {
+                  "open": 101,
+                  "high": 103,
+                  "low": 100,
+                  "close": 102,
+                  "volume": 12
+                }
+              ],
+              "chartSymbol": "BTCUSDT"
             }
           },
           "text/plain": {
@@ -8739,6 +10170,22 @@
             "example": {
               "description": "Updated Discord webhook bridge",
               "enabled": false
+            }
+          }
+        }
+      },
+      "OperationEstimate": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OperationEstimateRequest"
+            },
+            "example": {
+              "operation": "news-monitor",
+              "crypto": [
+                "BTCUSDT",
+                "ETHUSD"
+              ]
             }
           }
         }
@@ -10137,6 +11584,72 @@
           }
         }
       },
+      "OutcomesTrendResult": {
+        "description": "Signal outcomes daily trend series",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "required": [
+                "success",
+                "window",
+                "bucket",
+                "from",
+                "to",
+                "points",
+                "totalPoints"
+              ],
+              "properties": {
+                "success": {
+                  "type": "boolean",
+                  "example": true
+                },
+                "window": {
+                  "type": "string",
+                  "example": "1D"
+                },
+                "bucket": {
+                  "type": "string",
+                  "example": "all"
+                },
+                "from": {
+                  "type": "string",
+                  "example": "2026-08-01"
+                },
+                "to": {
+                  "type": "string",
+                  "example": "2026-08-31"
+                },
+                "points": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OutcomeTrendPoint"
+                  }
+                },
+                "trend": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/OutcomeTrendPoint"
+                  }
+                },
+                "totalPoints": {
+                  "type": "integer",
+                  "example": 31
+                },
+                "totalDays": {
+                  "type": "integer",
+                  "example": 31
+                }
+              }
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
+      },
       "NewsMonitorAnalysisResult": {
         "description": "News monitor analysis and delivery result",
         "content": {
@@ -10379,6 +11892,7 @@
                 "watchlist": true,
                 "firestoreWatchlist": false,
                 "alertScheduler": false,
+                "chartAttachments": false,
                 "alertHtfRender": true,
                 "binanceOrderAudit": false,
                 "equityMarketData": false,
@@ -10390,7 +11904,8 @@
                 "langfusePrompts": true,
                 "symbolAnalysisMultiAgent": false,
                 "apiOnlyMode": false,
-                "telegramCommandRateLimiting": true
+                "telegramCommandRateLimiting": true,
+                "marketCalendarGating": false
               },
               "dependencies": {
                 "watchlist": {
@@ -10575,7 +12090,170 @@
                     "failureThreshold": 5,
                     "cooldownMs": 600000
                   },
-                  "toolMetrics": {}
+                  "toolMetrics": {},
+                  "mcpTools": {
+                    "discovered": [
+                      "coin_analysis",
+                      "combined_analysis",
+                      "multi_timeframe_analysis",
+                      "volume_confirmation_analysis",
+                      "top_gainers",
+                      "top_losers",
+                      "volume_breakout_scanner",
+                      "smart_volume_scanner",
+                      "bollinger_scan",
+                      "backtest_strategy",
+                      "compare_strategies",
+                      "walk_forward_backtest_strategy",
+                      "multi_agent_analysis",
+                      "market_snapshot",
+                      "rating_filter",
+                      "consecutive_candles_scan",
+                      "advanced_candle_pattern"
+                    ],
+                    "wired": {
+                      "coin_analysis": {
+                        "wired": true,
+                        "callers": [
+                          "enrichFromSignal",
+                          "alert/grounding"
+                        ],
+                        "lastSuccessAt": "2026-08-27T17:30:00.000Z",
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "combined_analysis": {
+                        "wired": true,
+                        "callers": [
+                          "enrichFromSignal"
+                        ],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "multi_timeframe_analysis": {
+                        "wired": true,
+                        "callers": [
+                          "enrichFromSignal"
+                        ],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "volume_confirmation_analysis": {
+                        "wired": true,
+                        "callers": [
+                          "enrichFromSignal"
+                        ],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "top_gainers": {
+                        "wired": true,
+                        "callers": [
+                          "marketScanner"
+                        ],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "top_losers": {
+                        "wired": true,
+                        "callers": [
+                          "marketScanner"
+                        ],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "volume_breakout_scanner": {
+                        "wired": true,
+                        "callers": [
+                          "marketScanner"
+                        ],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "smart_volume_scanner": {
+                        "wired": true,
+                        "callers": [
+                          "marketScanner"
+                        ],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "bollinger_scan": {
+                        "wired": true,
+                        "callers": [
+                          "marketScanner"
+                        ],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "backtest_strategy": {
+                        "wired": false,
+                        "callers": [],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "compare_strategies": {
+                        "wired": false,
+                        "callers": [],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "walk_forward_backtest_strategy": {
+                        "wired": false,
+                        "callers": [],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "multi_agent_analysis": {
+                        "wired": false,
+                        "callers": [],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "market_snapshot": {
+                        "wired": false,
+                        "callers": [],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "rating_filter": {
+                        "wired": false,
+                        "callers": [],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "consecutive_candles_scan": {
+                        "wired": false,
+                        "callers": [],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      },
+                      "advanced_candle_pattern": {
+                        "wired": false,
+                        "callers": [],
+                        "lastSuccessAt": null,
+                        "lastFailureAt": null,
+                        "lastCategory": null
+                      }
+                    },
+                    "discoveredAt": "2026-08-27T17:00:00.000Z",
+                    "discoveredSource": "tools/list"
+                  }
                 },
                 "equityMarketData": {
                   "provider": null,
@@ -10791,6 +12469,54 @@
                   "registered": 0,
                   "drained": 0,
                   "failed": 0
+                },
+                "marketCalendar": {
+                  "enabled": false,
+                  "gatesDelivery": false,
+                  "dataset": {
+                    "version": "2026.01",
+                    "lastUpdated": "2026-08-28",
+                    "timezone": "America/New_York",
+                    "venues": [
+                      "BATS",
+                      "NASDAQ",
+                      "NYSE",
+                      "AMEX",
+                      "NYSE ARCA",
+                      "NYSE_ARCA",
+                      "ARCA",
+                      "CBOE"
+                    ],
+                    "yearsCovered": [
+                      "2025",
+                      "2026",
+                      "2027"
+                    ]
+                  }
+                },
+                "sentry": {
+                  "enabled": true,
+                  "configured": true,
+                  "ready": true,
+                  "status": "ready",
+                  "runtime": {
+                    "initialized": true,
+                    "environment": "production",
+                    "release": "cabros-bot@abc1234",
+                    "tracesSampleRate": 0.1,
+                    "tracingEnabled": true,
+                    "dsnRouting": {
+                      "configured": true,
+                      "host": "o123.ingest.sentry.io",
+                      "projectId": "4510434640330752"
+                    }
+                  },
+                  "profiling": {
+                    "enabled": true,
+                    "configured": true,
+                    "ready": true,
+                    "status": "ready"
+                  }
                 }
               }
             }
@@ -11086,7 +12812,7 @@
                 },
                 "message": {
                   "type": "string",
-                  "example": "Preferencias eliminadas. Se usarán valores por defecto."
+                  "example": "Preferencias eliminadas. Se usar\u00e1n valores por defecto."
                 }
               },
               "required": [
@@ -11267,6 +12993,103 @@
                   }
                 }
               }
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
+      },
+      "CostEstimateResult": {
+        "description": "Cost estimate computed with zero billable calls",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CostEstimateResponse"
+            },
+            "example": {
+              "success": true,
+              "dryRun": "cost",
+              "costEstimate": {
+                "operation": "news-monitor",
+                "dryRun": "cost",
+                "estimate": true,
+                "noBillableCalls": true,
+                "model": "gemini-2.5-flash",
+                "tokensIn": 1032,
+                "tokensOut": 400,
+                "estimatedTotalTokens": 1432,
+                "estimatedCostUsd": 0.00131,
+                "providerBreakdown": [
+                  {
+                    "provider": "gemini",
+                    "model": "gemini-2.5-flash",
+                    "calls": 2,
+                    "tokensIn": 1032,
+                    "tokensOut": 400,
+                    "estimatedTotalTokens": 1432,
+                    "costUsd": 0.00131,
+                    "ratePer1m": {
+                      "input": 0.3,
+                      "output": 2.5
+                    }
+                  }
+                ],
+                "externalCosts": [
+                  {
+                    "kind": "brave-search",
+                    "calls": 1,
+                    "status": "unknown",
+                    "estimatedCostUsd": null,
+                    "reason": "no public price table"
+                  }
+                ],
+                "quotaImpact": {
+                  "dailyQuotaTokens": 1000000,
+                  "percent": 0.1432,
+                  "summary": "~0.1432% of configured daily quota (1000000 tokens)"
+                },
+                "perSymbol": [
+                  {
+                    "symbol": "BTCUSDT",
+                    "tokensIn": 1032,
+                    "tokensOut": 400,
+                    "estimatedTotalTokens": 1432,
+                    "costUsd": 0.00131
+                  }
+                ],
+                "callCount": 2,
+                "warnings": [],
+                "assumptions": {
+                  "tokenApprox": "rough upper bound: ceil(chars / 4) for input; output uses a configured budget ceiling",
+                  "outputBudgetKind": "COST_ESTIMATION_OUTPUT_TOKENS_NEWS",
+                  "outputTokensPerCall": 200,
+                  "ratesSource": "default",
+                  "estimateOnly": "Estimate only \u2014 actual rate may differ; MCP/search costs are unknown, not $0."
+                }
+              },
+              "tokensIn": 1032,
+              "tokensOut": 400,
+              "estimatedTotalTokens": 1432,
+              "estimatedCostUsd": 0.00131,
+              "requestId": "00000000-0000-4000-8000-000000000000"
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
+      },
+      "OperationEstimateResult": {
+        "description": "Cost estimate for the requested operation",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OperationEstimateResponse"
             }
           }
         },
@@ -11956,6 +13779,122 @@
           }
         }
       },
+      "ChartRendererDependency": {
+        "type": "object",
+        "description": "Non-sensitive readiness and counters for the opt-in chart attachment renderer. Rendered in-process by a built-in zlib PNG encoder, so no native canvas dependency is installed. Counters reset on process restart and expose no alert content or credentials.",
+        "required": [
+          "enabled",
+          "ready",
+          "provider",
+          "timeoutMs",
+          "cacheTtlSeconds",
+          "cacheEntries",
+          "renders",
+          "cacheHits",
+          "cacheMisses",
+          "failures",
+          "timeouts",
+          "skippedDisabled",
+          "lastErrorCategory",
+          "lastRenderedAt",
+          "channels"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Effective ENABLE_CHART_ATTACHMENTS flag after Remote Config resolution."
+          },
+          "ready": {
+            "type": "boolean",
+            "description": "True when the feature is enabled and the most recent render did not fail with render_error."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "builtin-raster"
+            ],
+            "description": "Chart rendering backend."
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "description": "Effective CHART_RENDER_TIMEOUT_MS render budget in milliseconds."
+          },
+          "cacheTtlSeconds": {
+            "type": "integer",
+            "description": "Effective CHART_CACHE_TTL_SECONDS buffer cache TTL; 0 disables caching."
+          },
+          "cacheEntries": {
+            "type": "integer",
+            "description": "Number of currently cached chart buffers."
+          },
+          "renders": {
+            "type": "integer",
+            "description": "Count of completed chart renders."
+          },
+          "cacheHits": {
+            "type": "integer",
+            "description": "Count of renders served from the buffer cache."
+          },
+          "cacheMisses": {
+            "type": "integer",
+            "description": "Count of renders that required a draw."
+          },
+          "failures": {
+            "type": "integer",
+            "description": "Count of renders that failed and fell back to text-only delivery."
+          },
+          "timeouts": {
+            "type": "integer",
+            "description": "Count of renders aborted by the render budget."
+          },
+          "skippedDisabled": {
+            "type": "integer",
+            "description": "Count of chart requests skipped because the feature flag was off."
+          },
+          "lastErrorCategory": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "timeout",
+              "render_error",
+              "insufficient_data",
+              null
+            ],
+            "description": "Sanitized category of the most recent failure."
+          },
+          "lastRenderedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Timestamp of the most recent successful render."
+          },
+          "channels": {
+            "type": "object",
+            "description": "Per-channel inline image delivery support. Discord webhooks accept only remote image URLs, so Discord always falls back to text.",
+            "properties": {
+              "telegram": {
+                "type": "boolean"
+              },
+              "whatsapp": {
+                "type": "boolean"
+              },
+              "discord": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "note": {
+            "type": "string",
+            "description": "Human-readable explanation of the Discord text-only fallback."
+          }
+        },
+        "additionalProperties": false
+      },
       "DeliveryMetrics": {
         "type": "object",
         "description": "Aggregate in-memory delivery SLA counters exposed through /api/status and /api/capabilities. Reset on process restart. Omitted when no channel has recorded any delivery.",
@@ -12147,7 +14086,7 @@
       },
       "SignalClassClassification": {
         "type": "object",
-        "description": "In-memory counters for signal classification on the webhook ingest path. `featureFlags.signalClassMarker` only states that the badge marker is allowed to render; this block states whether alerts are actually being classified, so a silent regression back to 100% `unknown` is detectable instead of looking healthy. Counters reset on process restart, never block delivery or persistence, and the field is omitted entirely from /api/status when no alert has been classified yet. Contains only enum class names and counts — never alert text, symbols, or chat ids.",
+        "description": "In-memory counters for signal classification on the webhook ingest path. `featureFlags.signalClassMarker` only states that the badge marker is allowed to render; this block states whether alerts are actually being classified, so a silent regression back to 100% `unknown` is detectable instead of looking healthy. Counters reset on process restart, never block delivery or persistence, and the field is omitted entirely from /api/status when no alert has been classified yet. Contains only enum class names and counts \u2014 never alert text, symbols, or chat ids.",
         "required": [
           "window",
           "totalAlerts",
@@ -12727,7 +14666,7 @@
           },
           "ready": {
             "type": "boolean",
-            "description": "True when the audit trail is enabled and Firestore credentials are present (credential readiness only, equivalent to `enabled && configured`); it does not prove a write has succeeded — audit writes are fail-open and a failed write is dropped with a warning."
+            "description": "True when the audit trail is enabled and Firestore credentials are present (credential readiness only, equivalent to `enabled && configured`); it does not prove a write has succeeded \u2014 audit writes are fail-open and a failed write is dropped with a warning."
           },
           "status": {
             "type": "string",
@@ -12790,6 +14729,95 @@
           }
         }
       },
+      "GlobalAlertBudgetStatus": {
+        "type": "object",
+        "description": "Rolling 24-hour alert-delivery budget snapshot exposed through /api/status and /api/capabilities. Counts only successful per-channel deliveries; failed attempts do not consume budget. Counters reset on process restart. When GLOBAL_ALERT_BUDGET_PER_24H is 0, enabled is false and capacity/used/remaining are zero.",
+        "required": [
+          "enabled",
+          "used",
+          "capacity",
+          "remaining",
+          "resetAt"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "used": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "capacity": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "remaining": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "resetAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AlertBudgetExceededResult": {
+        "type": "object",
+        "description": "Per-channel rejection returned by alert endpoints when the rolling 24h delivery budget is exhausted. The endpoint still returns 200 OK with overall success=true (fail-open), but the per-channel result carries statusCode=429, errorCode=ALERT_BUDGET_EXCEEDED, and a budget object describing current usage.",
+        "required": [
+          "success",
+          "channel",
+          "error",
+          "statusCode",
+          "errorCode",
+          "budget"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "telegram",
+              "whatsapp",
+              "discord"
+            ]
+          },
+          "error": {
+            "type": "string"
+          },
+          "statusCode": {
+            "type": "integer",
+            "enum": [
+              429
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "ALERT_BUDGET_EXCEEDED"
+            ]
+          },
+          "attemptCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "durationMs": {
+            "type": "number",
+            "minimum": 0
+          },
+          "budget": {
+            "$ref": "#/components/schemas/GlobalAlertBudgetStatus"
+          }
+        }
+      },
       "BootstrapReadiness": {
         "type": "object",
         "required": [
@@ -12830,11 +14858,12 @@
             ],
             "format": "date-time"
           },
-          "error": {
+          "errorCode": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Stable machine code for the bootstrap failure (e.g. TELEGRAM_POLLING_CONFLICT, TELEGRAM_BOOTSTRAP_FAILED, BOOTSTRAP_TIMEOUT, BOOTSTRAP_FAILED). Raw provider error text is never exposed on this public surface (#1296); full detail is logged server-side."
           },
           "components": {
             "type": "object",
@@ -13440,6 +15469,81 @@
           }
         }
       },
+      "OutcomeTrendPoint": {
+        "type": "object",
+        "required": [
+          "date",
+          "bucket",
+          "evaluationWindow",
+          "signals",
+          "wins",
+          "losses",
+          "hitRatePercent",
+          "avgMfe",
+          "avgMae",
+          "avgReturnPercent",
+          "finalized"
+        ],
+        "properties": {
+          "date": {
+            "type": "string",
+            "example": "2026-08-20"
+          },
+          "bucket": {
+            "type": "string",
+            "example": "all"
+          },
+          "evaluationWindow": {
+            "type": "string",
+            "example": "1D"
+          },
+          "signals": {
+            "type": "integer",
+            "example": 12
+          },
+          "wins": {
+            "type": "integer",
+            "example": 8
+          },
+          "losses": {
+            "type": "integer",
+            "example": 4
+          },
+          "invalidated": {
+            "type": "integer",
+            "example": 0
+          },
+          "pending": {
+            "type": "integer",
+            "example": 0
+          },
+          "hitRatePercent": {
+            "type": "number",
+            "example": 66.67
+          },
+          "avgMfe": {
+            "type": "number",
+            "example": 1.452
+          },
+          "avgMae": {
+            "type": "number",
+            "example": -0.621
+          },
+          "avgReturnPercent": {
+            "type": "number",
+            "example": 0.831
+          },
+          "finalized": {
+            "type": "boolean",
+            "example": true
+          },
+          "updatedAt": {
+            "type": "string",
+            "nullable": true,
+            "example": "2026-08-22T00:05:00.000Z"
+          }
+        }
+      },
       "OutcomesSummary": {
         "type": "object",
         "required": [
@@ -13544,6 +15648,9 @@
             "type": "string",
             "example": "Metrics represent 40 evaluated signals out of 50 total received signals (80% coverage)."
           },
+          "acknowledgementBreakdown": {
+            "$ref": "#/components/schemas/AcknowledgementBreakdown"
+          },
           "exchangeBreakdown": {
             "type": "object",
             "additionalProperties": {
@@ -13643,6 +15750,138 @@
             "$ref": "#/components/schemas/LatencyCostMetadata"
           }
         }
+      },
+      "PretradeCheckResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "pretradeCheck"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "pretradeCheck": {
+            "type": "object",
+            "required": [
+              "symbol",
+              "normalized",
+              "price",
+              "hitRate",
+              "generatedAt",
+              "durationMs"
+            ],
+            "properties": {
+              "symbol": {
+                "type": "string",
+                "example": "BINANCE:BTCUSDT"
+              },
+              "normalized": {
+                "type": "object",
+                "properties": {
+                  "symbol": {
+                    "type": "string",
+                    "example": "BTCUSDT"
+                  },
+                  "exchange": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "example": "BINANCE"
+                  },
+                  "assetClass": {
+                    "type": "string",
+                    "enum": [
+                      "crypto",
+                      "equity",
+                      "unsupported"
+                    ]
+                  }
+                }
+              },
+              "price": {
+                "type": "object",
+                "required": [
+                  "available"
+                ],
+                "properties": {
+                  "available": {
+                    "type": "boolean"
+                  },
+                  "price": {
+                    "type": "number"
+                  },
+                  "change": {
+                    "type": "number"
+                  },
+                  "percentChange": {
+                    "type": "number"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "assetClass": {
+                    "type": "string"
+                  },
+                  "symbol": {
+                    "type": "string"
+                  },
+                  "exchange": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              },
+              "hitRate": {
+                "type": "object",
+                "required": [
+                  "available"
+                ],
+                "properties": {
+                  "available": {
+                    "type": "boolean"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "evaluatedWindows": {
+                    "type": "integer"
+                  },
+                  "winWindows": {
+                    "type": "integer"
+                  },
+                  "hitRatePercent": {
+                    "type": "number"
+                  },
+                  "sampleSize": {
+                    "type": "integer"
+                  },
+                  "windowDays": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "requestId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "generatedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "durationMs": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "description": "Pre-trade decision-support snapshot aggregating current price and evaluated outcome hit-rate for a single symbol."
       },
       "OutcomesReactionsSummary": {
         "type": "object",
@@ -14441,6 +16680,13 @@
               "string",
               "null"
             ]
+          },
+          "timeframe": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Parsed chart timeframe (e.g. \"4h\") persisted alongside chartBars/chartSymbol so replay re-renders the chart with the same label instead of the 1h default."
           },
           "signalClass": {
             "type": "string",
@@ -15449,6 +17695,208 @@
           }
         }
       },
+      "AlertAcknowledgementSubmission": {
+        "type": "object",
+        "required": [
+          "chatId",
+          "action"
+        ],
+        "properties": {
+          "chatId": {
+            "type": "string",
+            "description": "Telegram chat id. Sensitive - never returned in any response.",
+            "example": "-1001234567890"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "took_trade",
+              "skipped",
+              "no_trade_no_signal",
+              "snoozed"
+            ],
+            "example": "took_trade"
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 280,
+            "example": "Entered at 100.5, stop 99.0"
+          }
+        }
+      },
+      "AlertAcknowledgement": {
+        "type": "object",
+        "description": "Sanitized acknowledgement record. The chatId is never returned in any response payload.",
+        "required": [
+          "success",
+          "ackId",
+          "alertId",
+          "action",
+          "notes",
+          "acknowledgedAt",
+          "updatedAt",
+          "storage"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "ackId": {
+            "type": "string",
+            "description": "Stable document id (<alertId>__<sha256(chatId) prefix>). The same (alert, chat) pair always returns the same ackId.",
+            "example": "alert-123__9a6a7f8b1c2d3e4f5a6b7c8d9e0f1a2b"
+          },
+          "alertId": {
+            "type": "string",
+            "example": "alert-123"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "took_trade",
+              "skipped",
+              "no_trade_no_signal",
+              "snoozed"
+            ],
+            "example": "took_trade"
+          },
+          "notes": {
+            "type": "string",
+            "nullable": true,
+            "maxLength": 280,
+            "example": "Entered at 100.5, stop 99.0"
+          },
+          "acknowledgedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Set on the first acknowledgement for the pair; preserved across updates."
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "Refreshed on every write to the acknowledgement record."
+          },
+          "storage": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ],
+            "description": "firestore when the durable collection accepted the write, memory when the fail-open fallback is in use."
+          }
+        }
+      },
+      "AlertAcknowledgementBreakdown": {
+        "type": "object",
+        "description": "Zero-safe action counts. Every VALID_ACTIONS key is always present, even when the value is 0.",
+        "required": [
+          "took_trade",
+          "skipped",
+          "no_trade_no_signal",
+          "snoozed"
+        ],
+        "properties": {
+          "took_trade": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "skipped": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "no_trade_no_signal": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "snoozed": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "AlertAcknowledgementBreakdownResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "alertId",
+          "total",
+          "breakdown",
+          "storage"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "alertId": {
+            "type": "string",
+            "nullable": true,
+            "example": "alert-123"
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "breakdown": {
+            "$ref": "#/components/schemas/AlertAcknowledgementBreakdown"
+          },
+          "storage": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ]
+          }
+        }
+      },
+      "AcknowledgementBreakdown": {
+        "type": "object",
+        "description": "Aggregate acknowledgement counts for the summary window, joined by stored symbol/exchange.",
+        "required": [
+          "total",
+          "breakdown"
+        ],
+        "properties": {
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "breakdown": {
+            "$ref": "#/components/schemas/AlertAcknowledgementBreakdown"
+          },
+          "bySymbol": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "byExchange": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "storage": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ]
+          },
+          "window": {
+            "type": "object",
+            "additionalProperties": true,
+            "example": {
+              "from": null,
+              "to": null,
+              "limit": 1000
+            }
+          }
+        }
+      },
       "AlertFeedbackBlock": {
         "type": "object",
         "required": [
@@ -15693,6 +18141,50 @@
           },
           "traderIntent": {
             "$ref": "#/components/schemas/TraderIntent"
+          },
+          "chartBars": {
+            "type": "array",
+            "maxItems": 60,
+            "items": {
+              "type": "object",
+              "required": [
+                "open",
+                "high",
+                "low",
+                "close"
+              ],
+              "properties": {
+                "open": {
+                  "type": "number"
+                },
+                "high": {
+                  "type": "number"
+                },
+                "low": {
+                  "type": "number"
+                },
+                "close": {
+                  "type": "number"
+                },
+                "volume": {
+                  "type": "number"
+                }
+              },
+              "additionalProperties": false
+            },
+            "description": "Optional OHLCV bars for an opt-in chart PNG attachment (ENABLE_CHART_ATTACHMENTS=true). At least 2 valid bars plus chartSymbol/symbol are required; malformed entries are dropped and the alert still delivers text-only."
+          },
+          "chartSymbol": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 20,
+            "description": "Optional symbol label for the chart PNG. Falls back to symbol, then the parsed alert symbol."
+          },
+          "symbol": {
+            "type": "string",
+            "minLength": 2,
+            "maxLength": 20,
+            "description": "Optional explicit alert symbol. Also used as the chart label when chartSymbol is absent."
           }
         }
       },
@@ -16398,7 +18890,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Spanish warnings surfaced from the plan-quality gate (e.g. R/R por debajo del mínimo)."
+            "description": "Spanish warnings surfaced from the plan-quality gate (e.g. R/R por debajo del m\u00ednimo)."
           }
         }
       },
@@ -16672,7 +19164,7 @@
               "firestore_unavailable",
               null
             ],
-            "description": "Closed enum so a Firestore error message — which embeds the project and database path — can never reach a status response."
+            "description": "Closed enum so a Firestore error message \u2014 which embeds the project and database path \u2014 can never reach a status response."
           }
         }
       },
@@ -16792,7 +19284,7 @@
               "unknown_error",
               null
             ],
-            "description": "Closed enum so a Firestore error message — which embeds the fully-qualified project/database path — can never reach a status response."
+            "description": "Closed enum so a Firestore error message \u2014 which embeds the fully-qualified project/database path \u2014 can never reach a status response."
           },
           "lastMissingIndex": {
             "type": "boolean",
@@ -17144,7 +19636,7 @@
       },
       "ScannerPresetStorage": {
         "type": "object",
-        "description": "Scanner-preset persistence state. `mode` and `backend` are intent-derived: they report the configured target and must not flip to `memory` while ENABLE_FIRESTORE_SCANNER_PRESETS=true and credentials are present, because an operator reading `memory` concludes the feature is off. `status` separates the three causes that need different action — `disabled` (ENABLE_FIRESTORE_SCANNER_PRESETS is not true), `misconfigured` (credentials genuinely absent or rejected), and `degraded` (a durable operation failed and nothing has answered since). `unverified` means no durable operation has been observed yet: neither healthy nor broken, and the normal state immediately after a restart.",
+        "description": "Scanner-preset persistence state. `mode` and `backend` are intent-derived: they report the configured target and must not flip to `memory` while ENABLE_FIRESTORE_SCANNER_PRESETS=true and credentials are present, because an operator reading `memory` concludes the feature is off. `status` separates the three causes that need different action \u2014 `disabled` (ENABLE_FIRESTORE_SCANNER_PRESETS is not true), `misconfigured` (credentials genuinely absent or rejected), and `degraded` (a durable operation failed and nothing has answered since). `unverified` means no durable operation has been observed yet: neither healthy nor broken, and the normal state immediately after a restart.",
         "required": [
           "enabled",
           "configured",
@@ -17349,7 +19841,7 @@
           },
           "writesAttempted": {
             "type": "integer",
-            "description": "Durable write attempts, including those where Firebase initialization was rejected — asking for durable storage and not getting it is the event an operator needs to see. A rejected initialization is charged to the operation that triggered it, so browsing the collection never increments this counter."
+            "description": "Durable write attempts, including those where Firebase initialization was rejected \u2014 asking for durable storage and not getting it is the event an operator needs to see. A rejected initialization is charged to the operation that triggered it, so browsing the collection never increments this counter."
           },
           "writesSucceeded": {
             "type": "integer"
@@ -17389,7 +19881,7 @@
               "firestore_unavailable"
             ],
             "nullable": true,
-            "description": "Closed enum so a Firestore error message — which embeds the fully-qualified project and database path — can never leak into a status response."
+            "description": "Closed enum so a Firestore error message \u2014 which embeds the fully-qualified project and database path \u2014 can never leak into a status response."
           }
         }
       },
@@ -17705,9 +20197,20 @@
             "description": "Optional list of alertable event categories to deliver. When specified, only detected news events matching one of these categories will trigger notifications. Omitted defaults to delivering all categories. Valid values: price_surge, price_decline, public_figure, regulatory."
           },
           "dryRun": {
-            "type": "boolean",
+            "type": [
+              "boolean",
+              "string"
+            ],
+            "enum": [
+              true,
+              false,
+              "true",
+              "false",
+              "cost",
+              "estimate"
+            ],
             "default": false,
-            "description": "When true, analyze without notification delivery or persistence. The query parameter form is supported for GET and POST."
+            "description": "When true, analyze without delivery. When 'cost', return only a costEstimate with zero billable calls (Issue #745)."
           },
           "channels": {
             "type": "array",
@@ -19969,7 +22472,7 @@
           "dependencies",
           "deliveryHealth"
         ],
-        "description": "Runtime status. featureFlags.maintenanceMode reports whether incident response maintenance mode is enabled (ENABLE_MAINTENANCE_MODE or Remote Config); readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, per-tool latency and success metrics (callCount, successCount, failureCount, timeoutCount, totalDurationMs, averageDurationMs, lastCallAt, lastErrorCategory), and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports scanner-preset persistence, where mode/backend are intent-derived and must not flip to memory while the gate and credentials are present (#1342): scannerPresetStorage.configured is credential shape only, scannerPresetStorage.ready is true only after an observed durable read or write and is proven on this endpoint by a bounded durable read, and scannerPresetStorage.status is disabled, misconfigured when credentials are genuinely absent, unverified before any durable attempt, ready, or degraded after a failure that nothing has answered since, with readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps, closed-enum lastErrorReason, and the pendingWrites/inFlightWrites/pendingDeletes/oldestPendingWriteAt unsynced-workload fields exposing the process-local observed window, which resets on process restart; a transient failure downgrades the verdict only until the next success; dependencies.scannerPresetScheduler reports the effective 60-second per-preset floor and lastRunDeferredByFloorCount, the process-local count of due presets deferred by that floor; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters, plus the distributed sweep lease observability that identifies the winning evaluator: leaseMs (SIGNAL_OUTCOME_EVALUATION_LEASE_MS, default 120000, valid range 10000-600000, environment-only), lastRunLeaseHeld and leaseHeldSkipCount, where lastRunLeaseHeld is true whenever the most recent sweep did not run to completion as the lease holder and leaseHeldSkipCount counts those sweeps cumulatively since process start; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.newsMonitorClassifier reports ENABLE_NEWS_MONITOR_CLASSIFIER and defaults to false; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway readiness, including whether the gateway is actually in the runtime request path: dependencies.cloudflareAig.provider is the selected MODEL_PROVIDER and dependencies.cloudflareAig.routed reports whether that provider is cloudflare. ENABLE_CLOUDFLARE_AIG alone does not route LLM traffic, so credentials present while another provider are selected report ready false with status inactive; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation. equityMarketData.configured reports credential shape only (gate on, provider selected, key present) and must not be read as proof the feature works: equityMarketData.ready is true only after an observed successful provider call, and equityMarketData.status is disabled, misconfigured, unverified before any call is observed, ready, or degraded after a failed call. equityMarketData.readiness plus the requestsAttempted/requestsSucceeded/requestsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and sanitized lastErrorReason expose the observed provider outcome window, which resets on process restart. featureFlags.firestoreIdempotency reports ENABLE_FIRESTORE_IDEMPOTENCY and dependencies.idempotencyStorage reports durable webhook idempotency state; idempotencyStorage.configured is credential shape only and must not be read as proof that duplicates are suppressed, because every Firestore failure in this layer falls open to in-memory idempotency: idempotencyStorage.ready is true only after an observed successful durable operation and idempotencyStorage.status is disabled, misconfigured, unverified before any durable attempt, ready, or degraded after a failure, with mode/backend reporting configured intent and failOpen always true. idempotencyStorage.readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and closed-enum lastErrorReason expose the observed durable outcome window, which resets on process restart. featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). featureFlags.alertBurstAggregation reports ENABLE_ALERT_SYNTH_BURST_AGGREGATION and dependencies.alertBurstAggregation reports the effective window and minimum plus non-secret aggregation counters (openWindows, aggregatedBurstCount, aggregatedSignalCount, aggregatedFailoverCount, releasedSignalCount, lastAggregatedAt, lastWindowClosedAt); these counters are process-local, so enabled true with every counter at 0 is expected right after a deploy. dependencies.firestoreWriteMetrics reports in-memory per-domain Firestore write counters (alerts, alertReplays, jobs) with overall success/failure and per-domain breakdown when at least one write has been recorded; the field is omitted entirely when nothing has been recorded yet and is reset on process restart. Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports scanner-preset persistence, where mode/backend are intent-derived and must not flip to memory while the gate and credentials are present (#1342): scannerPresetStorage.configured is credential shape only, scannerPresetStorage.ready is true only after an observed durable read or write and is proven on this endpoint by a bounded durable read, and scannerPresetStorage.status is disabled, misconfigured when credentials are genuinely absent, unverified before any durable attempt, ready, or degraded after a failure that nothing has answered since, with readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps, closed-enum lastErrorReason, and the pendingWrites/inFlightWrites/pendingDeletes/oldestPendingWriteAt unsynced-workload fields exposing the process-local observed window, which resets on process restart; a transient failure downgrades the verdict only until the next success; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters, plus the distributed sweep lease observability that identifies the winning evaluator: leaseMs (SIGNAL_OUTCOME_EVALUATION_LEASE_MS, default 120000, valid range 10000-600000, environment-only), lastRunLeaseHeld and leaseHeldSkipCount, where lastRunLeaseHeld is true whenever the most recent sweep did not run to completion as the lease holder and leaseHeldSkipCount counts those sweeps cumulatively since process start; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway readiness, including whether the gateway is actually in the runtime request path: dependencies.cloudflareAig.provider is the selected MODEL_PROVIDER and dependencies.cloudflareAig.routed reports whether that provider is cloudflare. ENABLE_CLOUDFLARE_AIG alone does not route LLM traffic, so credentials present while another provider are selected report ready false with status inactive; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation. equityMarketData.configured reports credential shape only (gate on, provider selected, key present) and must not be read as proof the feature works: equityMarketData.ready is true only after an observed successful provider call, and equityMarketData.status is disabled, misconfigured, unverified before any call is observed, ready, or degraded after a failed call. equityMarketData.readiness plus the requestsAttempted/requestsSucceeded/requestsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and sanitized lastErrorReason expose the observed provider outcome window, which resets on process restart. featureFlags.firestoreIdempotency reports ENABLE_FIRESTORE_IDEMPOTENCY and dependencies.idempotencyStorage reports durable webhook idempotency state; idempotencyStorage.configured is credential shape only and must not be read as proof that duplicates are suppressed, because every Firestore failure in this layer falls open to in-memory idempotency: idempotencyStorage.ready is true only after an observed successful durable operation and idempotencyStorage.status is disabled, misconfigured, unverified before any durable attempt, ready, or degraded after a failure, with mode/backend reporting configured intent and failOpen always true. idempotencyStorage.readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and closed-enum lastErrorReason expose the observed durable outcome window, which resets on process restart. featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). featureFlags.alertCrossTimeframeSuppression reports ENABLE_ALERT_CROSS_TF_SUPPRESSION and dependencies.alertCrossTimeframeSuppression reports the enabled state, the effective ALERT_CROSS_TF_WINDOW_MS window, plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). featureFlags.alertHtfRender reports ENABLE_ALERT_HTF_RENDER. featureFlags.symbolAnalysisMultiAgent reports ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT. featureFlags.apiOnlyMode reports ENABLE_API_ONLY_MODE. dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts. featureFlags.alertModeration reports ENABLE_ALERT_MODERATION and dependencies.alertModeration reports the enabled state plus non-sensitive accepted/rejected/regexMatches/lastRejectedAt counters (no payload content). notificationChannelIntent reports the operator-intent view of notification channel configuration (telegram, whatsapp, discord), mirroring NotificationChannel.isConfigured() (enable flag plus required credentials) so the zero-channel admin page can be reconciled from the status response alone; a channel with credentials present but its enable flag off reports as not configured, and only channel names are exposed, never credentials or destinations. featureFlags.whatsappCommands reports ENABLE_WHATSAPP_COMMANDS and dependencies.whatsappCommandBridge reports the inbound WhatsApp command bridge: the gate, credential shape, running state, and the receipt-acknowledgement counters that show whether unacknowledged GreenAPI receipts are being re-executed (duplicateSkippedCount for receipts absorbed by the seen-receipt suppression window, deleteFailureCount/deleteRetryCount/deleteAbortedCount for acknowledgements that failed, were retried, or hit their own deadline, and trackedReceiptCount for the bounded suppression window itself); counters are process-local and reset on restart, and no chat id, api key, or message content is exposed. featureFlags.firebaseAdminAuth reports the ENABLE_FIREBASE_ADMIN_AUTH gate and dependencies.adminAuth reports the browser-console Firebase ID-token trust domain; verifierConfigured reports credential shape only, so adminAuth.ready is true only after an observed successful token verification and adminAuth.status is disabled, misconfigured, unverified, ready, or degraded. A rejected bearer token never records a failure, because any unauthenticated caller could otherwise force a false degraded verdict. dependencies.adminAuth carries booleans and counters only and never the Firebase Web configuration served by /admin/auth-config. featureFlags.outcomeInformedDelivery reports ENABLE_OUTCOME_INFORMED_DELIVERY and dependencies.outcomeInformedDelivery reports the bounded lookup counters (lookups, annotated, disabled, errors, lastAnnotatedAt) without exposing prompt text or provider credentials. featureFlags.binanceOrderAudit reports ENABLE_BINANCE_ORDER_AUDIT (environment or Remote Config override) and dependencies.binanceOrderAudit reports the audit trail's enabled/configured/ready state, Firestore collection, and retention days; its configured field reflects credential readiness independently of the gate, so an operator can tell credentials-present-but-audit-off from audit-on-but-storage-unconfigured, its ready field is credential readiness only (enabled && configured) and does not prove a write has succeeded since audit writes are fail-open, and no operator identifier or exchange credential is ever returned. featureFlags.discordSourceRouting reports ENABLE_DISCORD_SOURCE_ROUTING and dependencies.discordSourceRouting reports the configured key list, default-key presence, and aggregate resolution/fallback counters without webhook URLs. featureFlags.telegramCommandRateLimiting reports ENABLE_TELEGRAM_COMMAND_RATE_LIMITING.",
+        "description": "Runtime status. featureFlags.maintenanceMode reports whether incident response maintenance mode is enabled (ENABLE_MAINTENANCE_MODE or Remote Config); readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, per-tool latency and success metrics (callCount, successCount, failureCount, timeoutCount, totalDurationMs, averageDurationMs, lastCallAt, lastErrorCategory), and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.tradingViewMcp.mcpTools exposes the upstream TradingView MCP tool inventory (discovered list, wired vs. unwired mapping, callers, last success/failure timestamps, last error category) discovered via tools/list with a static fallback catalog, used by operators to plan roadmap work without code archaeology. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports scanner-preset persistence, where mode/backend are intent-derived and must not flip to memory while the gate and credentials are present (#1342): scannerPresetStorage.configured is credential shape only, scannerPresetStorage.ready is true only after an observed durable read or write and is proven on this endpoint by a bounded durable read, and scannerPresetStorage.status is disabled, misconfigured when credentials are genuinely absent, unverified before any durable attempt, ready, or degraded after a failure that nothing has answered since, with readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps, closed-enum lastErrorReason, and the pendingWrites/inFlightWrites/pendingDeletes/oldestPendingWriteAt unsynced-workload fields exposing the process-local observed window, which resets on process restart; a transient failure downgrades the verdict only until the next success; dependencies.scannerPresetScheduler reports the effective 60-second per-preset floor and lastRunDeferredByFloorCount, the process-local count of due presets deferred by that floor; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters, plus the distributed sweep lease observability that identifies the winning evaluator: leaseMs (SIGNAL_OUTCOME_EVALUATION_LEASE_MS, default 120000, valid range 10000-600000, environment-only), lastRunLeaseHeld and leaseHeldSkipCount, where lastRunLeaseHeld is true whenever the most recent sweep did not run to completion as the lease holder and leaseHeldSkipCount counts those sweeps cumulatively since process start; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.newsMonitorClassifier reports ENABLE_NEWS_MONITOR_CLASSIFIER and defaults to false; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway readiness, including whether the gateway is actually in the runtime request path: dependencies.cloudflareAig.provider is the selected MODEL_PROVIDER and dependencies.cloudflareAig.routed reports whether that provider is cloudflare. ENABLE_CLOUDFLARE_AIG alone does not route LLM traffic, so credentials present while another provider are selected report ready false with status inactive; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation. equityMarketData.configured reports credential shape only (gate on, provider selected, key present) and must not be read as proof the feature works: equityMarketData.ready is true only after an observed successful provider call, and equityMarketData.status is disabled, misconfigured, unverified before any call is observed, ready, or degraded after a failed call. equityMarketData.readiness plus the requestsAttempted/requestsSucceeded/requestsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and sanitized lastErrorReason expose the observed provider outcome window, which resets on process restart. featureFlags.firestoreIdempotency reports ENABLE_FIRESTORE_IDEMPOTENCY and dependencies.idempotencyStorage reports durable webhook idempotency state; idempotencyStorage.configured is credential shape only and must not be read as proof that duplicates are suppressed, because every Firestore failure in this layer falls open to in-memory idempotency: idempotencyStorage.ready is true only after an observed successful durable operation and idempotencyStorage.status is disabled, misconfigured, unverified before any durable attempt, ready, or degraded after a failure, with mode/backend reporting configured intent and failOpen always true. idempotencyStorage.readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and closed-enum lastErrorReason expose the observed durable outcome window, which resets on process restart. featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). featureFlags.alertBurstAggregation reports ENABLE_ALERT_SYNTH_BURST_AGGREGATION and dependencies.alertBurstAggregation reports the effective window and minimum plus non-secret aggregation counters (openWindows, aggregatedBurstCount, aggregatedSignalCount, aggregatedFailoverCount, releasedSignalCount, lastAggregatedAt, lastWindowClosedAt); these counters are process-local, so enabled true with every counter at 0 is expected right after a deploy. dependencies.firestoreWriteMetrics reports in-memory per-domain Firestore write counters (alerts, alertReplays, jobs) with overall success/failure and per-domain breakdown when at least one write has been recorded; the field is omitted entirely when nothing has been recorded yet and is reset on process restart. Runtime status. readiness reports one-time bootstrap completion for the Telegram bot, notification services, and news monitor without provider credentials. TradingView dependencies expose configured endpoint metadata plus runtime status (unknown before an MCP operation, ready after success, degraded after failure), timestamps, sanitized error categories, success/failure counters, and dependencies.tradingViewMcp.enrichment.alertPath rolling 24-hour alert-path outcome rates without provider response bodies. dependencies.geminiQuota reports Gemini quota cooldown state, remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters without exposing prompt text or provider credentials. dependencies.groundingCoalescing reports the bounded equity-alert search sharing window and hit/miss/failure counters. featureFlags.firestoreJobStorage reports the ENABLE_FIRESTORE_JOB_STORAGE gate or the legacy ENABLE_FIRESTORE_ALERT_STORAGE gate; featureFlags.jobExecutionWorker reports JOB_EXECUTION_MODE=render-worker or firestore-poller; dependencies.jobExecutionQueue reports queue readiness and safe operational counters without broker credentials; featureFlags.firestoreScannerPresets reports ENABLE_FIRESTORE_SCANNER_PRESETS; dependencies.scannerPresetStorage reports scanner-preset persistence, where mode/backend are intent-derived and must not flip to memory while the gate and credentials are present (#1342): scannerPresetStorage.configured is credential shape only, scannerPresetStorage.ready is true only after an observed durable read or write and is proven on this endpoint by a bounded durable read, and scannerPresetStorage.status is disabled, misconfigured when credentials are genuinely absent, unverified before any durable attempt, ready, or degraded after a failure that nothing has answered since, with readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps, closed-enum lastErrorReason, and the pendingWrites/inFlightWrites/pendingDeletes/oldestPendingWriteAt unsynced-workload fields exposing the process-local observed window, which resets on process restart; a transient failure downgrades the verdict only until the next success; dependencies.signalOutcomeWorker reports the scheduler role (web, worker, or disabled), graceful-shutdown state, cadence, heartbeat, and scanned/pending/evaluated/error counters, plus the distributed sweep lease observability that identifies the winning evaluator: leaseMs (SIGNAL_OUTCOME_EVALUATION_LEASE_MS, default 120000, valid range 10000-600000, environment-only), lastRunLeaseHeld and leaseHeldSkipCount, where lastRunLeaseHeld is true whenever the most recent sweep did not run to completion as the lease holder and leaseHeldSkipCount counts those sweeps cumulatively since process start; a disabled local scheduler reports ready false and status disabled because it is not the process evaluating outcomes; dependencies.firestoreJobStorage reports Firestore credential readiness for that runtime path; featureFlags.newsMonitorTestMode reports ENABLE_NEWS_MONITOR_TEST_MODE without changing news monitor behavior; featureFlags.messageFooterMetadata reports ENABLE_MESSAGE_FOOTER_METADATA and defaults to true unless explicitly set to false; featureFlags.cloudflareAig reports ENABLE_CLOUDFLARE_AIG and dependencies.cloudflareAig reports Cloudflare AI Gateway readiness, including whether the gateway is actually in the runtime request path: dependencies.cloudflareAig.provider is the selected MODEL_PROVIDER and dependencies.cloudflareAig.routed reports whether that provider is cloudflare. ENABLE_CLOUDFLARE_AIG alone does not route LLM traffic, so credentials present while another provider are selected report ready false with status inactive; featureFlags.equityMarketData reports ENABLE_EQUITY_MARKET_DATA and dependencies.equityMarketData reports non-sensitive Twelve Data readiness for BATS/NASDAQ/NYSE/AMEX/NYSE ARCA outcome evaluation. equityMarketData.configured reports credential shape only (gate on, provider selected, key present) and must not be read as proof the feature works: equityMarketData.ready is true only after an observed successful provider call, and equityMarketData.status is disabled, misconfigured, unverified before any call is observed, ready, or degraded after a failed call. equityMarketData.readiness plus the requestsAttempted/requestsSucceeded/requestsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and sanitized lastErrorReason expose the observed provider outcome window, which resets on process restart. featureFlags.firestoreIdempotency reports ENABLE_FIRESTORE_IDEMPOTENCY and dependencies.idempotencyStorage reports durable webhook idempotency state; idempotencyStorage.configured is credential shape only and must not be read as proof that duplicates are suppressed, because every Firestore failure in this layer falls open to in-memory idempotency: idempotencyStorage.ready is true only after an observed successful durable operation and idempotencyStorage.status is disabled, misconfigured, unverified before any durable attempt, ready, or degraded after a failure, with mode/backend reporting configured intent and failOpen always true. idempotencyStorage.readiness plus the operationsAttempted/operationsSucceeded/operationsFailed/consecutiveFailures counters, lastSuccessAt/lastFailureAt timestamps and closed-enum lastErrorReason expose the observed durable outcome window, which resets on process restart. featureFlags.firebaseRemoteConfig reports ENABLE_FIREBASE_REMOTE_CONFIG and dependencies.firebaseRemoteConfig reports only bounded loader metadata, source, template version, last successful load, last error category, and consecutive failures without remote values or credentials; featureFlags.notificationRedrive reports ENABLE_NOTIFICATION_REDRIVE and dependencies.notificationRedrive reports dead-letter redrive worker role, configuration, running state, and safe operational counters. featureFlags.alertScheduler reports ENABLE_ALERT_SCHEDULER and dependencies.alertScheduler reports built-in cron alert scheduler role, configuration, running state, and schedule execution status. featureFlags.alertSignalRepeatSuppression reports ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION and dependencies.alertSignalRepeatSuppression reports the enabled state plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). featureFlags.alertCrossTimeframeSuppression reports ENABLE_ALERT_CROSS_TF_SUPPRESSION and dependencies.alertCrossTimeframeSuppression reports the enabled state, the effective ALERT_CROSS_TF_WINDOW_MS window, plus non-sensitive suppression counters (suppressedCount, lastSuppressedAt, activeTrackedSignals). featureFlags.alertHtfRender reports ENABLE_ALERT_HTF_RENDER. featureFlags.symbolAnalysisMultiAgent reports ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT. featureFlags.apiOnlyMode reports ENABLE_API_ONLY_MODE. dependencies.newsMonitorDedup reports persistent deduplication readiness, storage mode, backend, and cacheSize bounded in-memory cache and URL shortener entries, limits, and eviction counts. featureFlags.alertModeration reports ENABLE_ALERT_MODERATION and dependencies.alertModeration reports the enabled state plus non-sensitive accepted/rejected/regexMatches/lastRejectedAt counters (no payload content). notificationChannelIntent reports the operator-intent view of notification channel configuration (telegram, whatsapp, discord), mirroring NotificationChannel.isConfigured() (enable flag plus required credentials) so the zero-channel admin page can be reconciled from the status response alone; a channel with credentials present but its enable flag off reports as not configured, and only channel names are exposed, never credentials or destinations. featureFlags.whatsappCommands reports ENABLE_WHATSAPP_COMMANDS and dependencies.whatsappCommandBridge reports the inbound WhatsApp command bridge: the gate, credential shape, running state, and the receipt-acknowledgement counters that show whether unacknowledged GreenAPI receipts are being re-executed (duplicateSkippedCount for receipts absorbed by the seen-receipt suppression window, deleteFailureCount/deleteRetryCount/deleteAbortedCount for acknowledgements that failed, were retried, or hit their own deadline, and trackedReceiptCount for the bounded suppression window itself); counters are process-local and reset on restart, and no chat id, api key, or message content is exposed. featureFlags.firebaseAdminAuth reports the ENABLE_FIREBASE_ADMIN_AUTH gate and dependencies.adminAuth reports the browser-console Firebase ID-token trust domain; verifierConfigured reports credential shape only, so adminAuth.ready is true only after an observed successful token verification and adminAuth.status is disabled, misconfigured, unverified, ready, or degraded. A rejected bearer token never records a failure, because any unauthenticated caller could otherwise force a false degraded verdict. dependencies.adminAuth carries booleans and counters only and never the Firebase Web configuration served by /admin/auth-config. featureFlags.outcomeInformedDelivery reports ENABLE_OUTCOME_INFORMED_DELIVERY and dependencies.outcomeInformedDelivery reports the bounded lookup counters (lookups, annotated, disabled, errors, lastAnnotatedAt) without exposing prompt text or provider credentials. featureFlags.binanceOrderAudit reports ENABLE_BINANCE_ORDER_AUDIT (environment or Remote Config override) and dependencies.binanceOrderAudit reports the audit trail's enabled/configured/ready state, Firestore collection, and retention days; its configured field reflects credential readiness independently of the gate, so an operator can tell credentials-present-but-audit-off from audit-on-but-storage-unconfigured, its ready field is credential readiness only (enabled && configured) and does not prove a write has succeeded since audit writes are fail-open, and no operator identifier or exchange credential is ever returned. featureFlags.discordSourceRouting reports ENABLE_DISCORD_SOURCE_ROUTING and dependencies.discordSourceRouting reports the configured key list, default-key presence, and aggregate resolution/fallback counters without webhook URLs. featureFlags.telegramCommandRateLimiting reports ENABLE_TELEGRAM_COMMAND_RATE_LIMITING. featureFlags.globalAlertBudget reflects the effective GLOBAL_ALERT_BUDGET_PER_24H; dependencies.globalAlertBudget reports non-sensitive rolling 24-hour usage (used, capacity, remaining, resetAt) without exposing alert content or destinations. When the cap is reached, alert endpoints return 200 with results[].errorCode='ALERT_BUDGET_EXCEEDED', statusCode=429, and a budget object describing the current usage and reset time.",
         "properties": {
           "readiness": {
             "$ref": "#/components/schemas/BootstrapReadiness"
@@ -19981,7 +22484,12 @@
             "$ref": "#/components/schemas/BuildInfo"
           },
           "featureFlags": {
-            "$ref": "#/components/schemas/StatusFeatureFlags"
+            "$ref": "#/components/schemas/StatusFeatureFlags",
+            "properties": {
+              "costEstimation": {
+                "type": "boolean"
+              }
+            }
           },
           "deliveryChannels": {
             "$ref": "#/components/schemas/JsonObject"
@@ -20006,6 +22514,9 @@
               "backgroundTimers"
             ],
             "properties": {
+              "chartRenderer": {
+                "$ref": "#/components/schemas/ChartRendererDependency"
+              },
               "watchlist": {
                 "$ref": "#/components/schemas/WatchlistDependency"
               },
@@ -20030,6 +22541,9 @@
               "notificationRedrive": {
                 "$ref": "#/components/schemas/NotificationRedriveDependency"
               },
+              "telegramAdminPaging": {
+                "$ref": "#/components/schemas/TelegramAdminPagingDependency"
+              },
               "telegramCommandAuth": {
                 "$ref": "#/components/schemas/TelegramCommandAuthStatus"
               },
@@ -20044,6 +22558,9 @@
               },
               "tokenCostBudget": {
                 "$ref": "#/components/schemas/TokenCostBudgetDependency"
+              },
+              "globalAlertBudget": {
+                "$ref": "#/components/schemas/GlobalAlertBudgetStatus"
               },
               "selfTest": {
                 "$ref": "#/components/schemas/SelfTestStatus"
@@ -20098,6 +22615,49 @@
               },
               "presetBoundDestinations": {
                 "$ref": "#/components/schemas/PresetBoundDestinationsDependency"
+              },
+              "sentry": {
+                "$ref": "#/components/schemas/SentryDependency"
+              },
+              "marketCalendar": {
+                "type": "object",
+                "description": "Static U.S. equity market holiday schedule and delivery gating status.",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "Whether market calendar delivery gating is enabled."
+                  },
+                  "gatesDelivery": {
+                    "type": "boolean",
+                    "description": "Whether market calendar delivery gating suppresses deliveries."
+                  },
+                  "dataset": {
+                    "type": "object",
+                    "properties": {
+                      "version": {
+                        "type": "string"
+                      },
+                      "lastUpdated": {
+                        "type": "string"
+                      },
+                      "timezone": {
+                        "type": "string"
+                      },
+                      "venues": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "yearsCovered": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
               },
               "chatEnrollments": {
                 "type": "object",
@@ -20156,10 +22716,147 @@
               },
               "environmentBanner": {
                 "$ref": "#/components/schemas/EnvironmentBanner"
+              },
+              "dailyDigest": {
+                "$ref": "#/components/schemas/DailyDigestDependency"
+              },
+              "costEstimation": {
+                "$ref": "#/components/schemas/CostEstimationDependency"
               }
             }
           }
         }
+      },
+      "SentryRuntimeDiagnostics": {
+        "type": "object",
+        "description": "Effective Sentry environment, release, trace sample rate, tracing state, and sanitized DSN routing. DSN credentials, path prefixes, and query parameters are omitted.",
+        "required": [
+          "initialized",
+          "environment",
+          "release",
+          "tracesSampleRate",
+          "tracingEnabled",
+          "dsnRouting"
+        ],
+        "properties": {
+          "initialized": {
+            "type": "boolean"
+          },
+          "environment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "release": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tracesSampleRate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1
+          },
+          "tracingEnabled": {
+            "type": "boolean"
+          },
+          "dsnRouting": {
+            "type": "object",
+            "required": [
+              "configured",
+              "host",
+              "projectId"
+            ],
+            "properties": {
+              "configured": {
+                "type": "boolean"
+              },
+              "host": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "projectId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "SentryDependency": {
+        "type": "object",
+        "description": "Sentry dependency readiness with a non-secret effective runtime configuration projection.",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "runtime",
+          "profiling"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "misconfigured",
+              "ready"
+            ]
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/SentryRuntimeDiagnostics"
+          },
+          "profiling": {
+            "type": "object",
+            "required": [
+              "enabled",
+              "configured",
+              "ready",
+              "status"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "configured": {
+                "type": "boolean"
+              },
+              "ready": {
+                "type": "boolean"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "disabled",
+                  "misconfigured",
+                  "ready"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
       },
       "TradingViewMcpRuntimeStatus": {
         "type": "object",
@@ -21756,7 +24453,7 @@
           },
           "bySymbol": {
             "type": "object",
-            "description": "Per-symbol analysis volume. The count key is `totalAnalyses` here and `total` in `byEventCategory`, and the service does not emit a per-row alert rate — derive it as `alertsSent / totalAnalyses`.",
+            "description": "Per-symbol analysis volume. The count key is `totalAnalyses` here and `total` in `byEventCategory`, and the service does not emit a per-row alert rate \u2014 derive it as `alertsSent / totalAnalyses`.",
             "additionalProperties": {
               "type": "object",
               "required": [
@@ -22100,7 +24797,7 @@
               "boolean",
               "null"
             ],
-            "description": "Result of the bounded broker readiness probe: true once a probe has proven connectivity, false when the last probe ran and the broker did not answer, and null when no probe has produced a verdict — which includes queue mode being disabled, a missing broker URL (misconfigured), and an enabled+configured queue whose probe has not settled yet. Unlike `configured`, this is evidence rather than configuration shape."
+            "description": "Result of the bounded broker readiness probe: true once a probe has proven connectivity, false when the last probe ran and the broker did not answer, and null when no probe has produced a verdict \u2014 which includes queue mode being disabled, a missing broker URL (misconfigured), and an enabled+configured queue whose probe has not settled yet. Unlike `configured`, this is evidence rather than configuration shape."
           },
           "lastBrokerProbeAt": {
             "type": [
@@ -22253,7 +24950,7 @@
       },
       "ReadinessDependencyStatus": {
         "type": "object",
-        "description": "Per-dependency status block. Disabled dependencies are reported as `skipped: true`; failing dependencies include a sanitized `error` string and the per-dep latency.",
+        "description": "Per-dependency status block. Disabled dependencies are reported as `skipped: true`; failing dependencies include a stable machine-readable `errorCode` (never raw provider text) and the per-dep latency. Stable codes include `TELEGRAM_POLLING_CONFLICT`, `timeout_after_<ms>`, and dependency-specific tokens (#1296).",
         "properties": {
           "ready": {
             "type": "boolean"
@@ -22273,8 +24970,9 @@
           "latencyMs": {
             "type": "number"
           },
-          "error": {
-            "type": "string"
+          "errorCode": {
+            "type": "string",
+            "description": "Stable machine code (e.g. TELEGRAM_POLLING_CONFLICT). Free-text provider messages are never returned on public surfaces."
           }
         }
       },
@@ -23797,6 +26495,18 @@
               "chatEnrollments": {
                 "type": "boolean",
                 "description": "Whether opt-in Telegram chat enrollment is enabled."
+              },
+              "marketCalendarGating": {
+                "type": "boolean",
+                "description": "Whether opt-in U.S. equity market holiday and half-day delivery gating is enabled via ENABLE_MARKET_CALENDAR_GATING."
+              },
+              "dailyDigest": {
+                "type": "boolean",
+                "description": "Whether the opt-in daily trader digest scheduler is enabled via ENABLE_DAILY_DIGEST. The /digest Telegram command sends the previous-UTC-day digest to TELEGRAM_DIGEST_CHAT_ID (or --dry-run preview); this is a Telegram command, not an HTTP route."
+              },
+              "globalAlertBudget": {
+                "type": "boolean",
+                "description": "Whether the rolling 24-hour alert-delivery budget is active (GLOBAL_ALERT_BUDGET_PER_24H > 0)."
               }
             }
           }
@@ -23911,6 +26621,103 @@
               }
             },
             "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "DailyDigestDependency": {
+        "type": "object",
+        "description": "Daily trader digest scheduler (Issue #790). dependencies.dailyDigest reports enabled/configured/ready plus non-sensitive run metadata (deliveryHourUtc, maxSpendUsd, lastRunAt, lastRunStatus, lastRunDateStr, lastRunDigestMessageId, dailyChats as hashed prefixes, leaseState). Durable sends require ENABLE_FIRESTORE_DIGEST_RUNS and TELEGRAM_DIGEST_CHAT_ID; otherwise status is degraded and the send is omitted. No chat ID or token is exposed. The /digest Telegram command (not an HTTP route) runs the previous-UTC-day digest on demand; /digest --dry-run returns the formatted MarkdownV2 without sending or persisting. Sample digest payload: \"*\ud83d\udcca Daily Digest \u2014 2026-11-07*\\n\\n*Alertas:* 12\\n*Por fuente:* webhook 9 \u00b7 market-scanner 3\\n*Por canal:* telegram 12/12\\n*Outcomes (maduros 1D):* hit-rate 55.0% | elegibles 10 / evaluados 8 / pendientes 2\\n\\n*Top scanner hits:*\\n1. BINANCE:BTCUSDT\\n\\n*Top outcome winners:*\\n1. NASDAQ:NVDA R=2.10\\n\\n*Gasto LLM:* $0.0123\"",
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "backend",
+          "deliveryHourUtc",
+          "maxSpendUsd",
+          "running",
+          "lastRunAt",
+          "lastRunStatus",
+          "lastRunDateStr",
+          "lastRunDigestMessageId",
+          "lastRunError",
+          "dailyChats",
+          "leaseState"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "disabled",
+              "degraded",
+              "ready"
+            ]
+          },
+          "backend": {
+            "type": "string",
+            "enum": [
+              "firestore",
+              "memory"
+            ]
+          },
+          "deliveryHourUtc": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 23
+          },
+          "maxSpendUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "lastRunAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "lastRunStatus": {
+            "type": "string"
+          },
+          "lastRunDateStr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastRunDigestMessageId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "lastRunError": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dailyChats": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "leaseState": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -24253,6 +27060,798 @@
             ],
             "description": "Host-provided commit timestamp, normalized to ISO 8601, or null when unavailable. Deployment IDs are not timestamps.",
             "format": "date-time"
+          }
+        }
+      },
+      "PortfolioSnapshot": {
+        "type": "object",
+        "required": [
+          "mode",
+          "window",
+          "config",
+          "totals",
+          "symbols",
+          "topSymbols",
+          "riskFlags",
+          "generatedAt"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "implied_paper"
+            ],
+            "description": "Always `implied_paper`; this endpoint never reads real broker positions."
+          },
+          "window": {
+            "type": "object",
+            "required": [
+              "from",
+              "to",
+              "hours"
+            ],
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "hours": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 8760
+              }
+            }
+          },
+          "config": {
+            "type": "object",
+            "required": [
+              "paperNotional",
+              "concentrationThreshold",
+              "maxSymbols",
+              "maxAlerts"
+            ],
+            "properties": {
+              "paperNotional": {
+                "type": "number",
+                "minimum": 0.01,
+                "maximum": 1000000
+              },
+              "concentrationThreshold": {
+                "type": "number",
+                "minimum": 0.01,
+                "maximum": 1
+              },
+              "maxSymbols": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "maxAlerts": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000
+              }
+            }
+          },
+          "totals": {
+            "type": "object",
+            "required": [
+              "totalAlerts",
+              "openCount",
+              "netSide",
+              "notional",
+              "unrealizedPnl",
+              "concentrationIndex"
+            ],
+            "properties": {
+              "totalAlerts": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "openCount": {
+                "type": "integer"
+              },
+              "netSide": {
+                "type": "string",
+                "enum": [
+                  "long",
+                  "short",
+                  "neutral"
+                ]
+              },
+              "notional": {
+                "type": "number",
+                "minimum": 0
+              },
+              "unrealizedPnl": {
+                "type": "number"
+              },
+              "concentrationIndex": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          },
+          "symbols": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PortfolioSymbol"
+            }
+          },
+          "topSymbols": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "riskFlags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "concentration_high",
+                "open_sells_overweight",
+                "no_market_data",
+                "stale_signals"
+              ]
+            }
+          },
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PortfolioSymbol": {
+        "type": "object",
+        "required": [
+          "symbol",
+          "openCount",
+          "buyCount",
+          "sellCount",
+          "netSide",
+          "notional",
+          "setupTypeBreakdown"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "exchange": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "openCount": {
+            "type": "integer"
+          },
+          "buyCount": {
+            "type": "integer"
+          },
+          "sellCount": {
+            "type": "integer"
+          },
+          "netSide": {
+            "type": "string",
+            "enum": [
+              "long",
+              "short",
+              "neutral"
+            ]
+          },
+          "notional": {
+            "type": "number",
+            "minimum": 0
+          },
+          "averageEntry": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "currentPrice": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "unrealizedReturnPct": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "unrealizedPnl": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "setupTypeBreakdown": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer"
+            }
+          },
+          "lastSignalAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "PortfolioSnapshotResult": {
+        "type": "object",
+        "required": [
+          "success",
+          "snapshot"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "snapshot": {
+            "$ref": "#/components/schemas/PortfolioSnapshot"
+          }
+        }
+      },
+      "TelegramAdminPagingDependency": {
+        "type": "object",
+        "description": "Safe runtime metadata for Telegram admin paging deduplication without exposing message content or chat identifiers.",
+        "required": [
+          "enabled",
+          "dedupHits",
+          "dedupWindowMs",
+          "lastDedupAt"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "dedupHits": {
+            "type": "integer"
+          },
+          "dedupWindowMs": {
+            "type": "integer"
+          },
+          "lastDedupAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "CostEstimateProviderBreakdown": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider",
+          "model",
+          "calls",
+          "tokensIn",
+          "tokensOut",
+          "estimatedTotalTokens",
+          "costUsd"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "calls": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensIn": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOut": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimatedTotalTokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "costUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "inputCostUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "outputCostUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "ratePer1m": {
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "number"
+              },
+              "output": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      },
+      "CostEstimateExternalCost": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "calls",
+          "status",
+          "estimatedCostUsd"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tradingview-mcp",
+              "brave-search"
+            ]
+          },
+          "calls": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "unknown"
+            ]
+          },
+          "estimatedCostUsd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "CostEstimate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operation",
+          "dryRun",
+          "estimate",
+          "noBillableCalls",
+          "model",
+          "tokensIn",
+          "tokensOut",
+          "estimatedTotalTokens",
+          "estimatedCostUsd",
+          "providerBreakdown",
+          "externalCosts",
+          "quotaImpact",
+          "perSymbol",
+          "callCount",
+          "warnings",
+          "assumptions"
+        ],
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "news-monitor",
+              "expanded-analysis-alert",
+              "market-scanner-alert",
+              "tradingview-analysis"
+            ]
+          },
+          "dryRun": {
+            "type": "string",
+            "enum": [
+              "cost"
+            ]
+          },
+          "estimate": {
+            "type": "boolean",
+            "const": true
+          },
+          "noBillableCalls": {
+            "type": "boolean",
+            "const": true
+          },
+          "model": {
+            "type": "string"
+          },
+          "tokensIn": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOut": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimatedTotalTokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimatedCostUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "providerBreakdown": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CostEstimateProviderBreakdown"
+            }
+          },
+          "externalCosts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CostEstimateExternalCost"
+            }
+          },
+          "quotaImpact": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "dailyQuotaTokens",
+              "percent",
+              "summary"
+            ],
+            "properties": {
+              "dailyQuotaTokens": {
+                "type": "integer",
+                "minimum": 1000
+              },
+              "percent": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "summary": {
+                "type": "string"
+              }
+            }
+          },
+          "perSymbol": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "symbol",
+                "tokensIn",
+                "tokensOut",
+                "estimatedTotalTokens",
+                "costUsd"
+              ],
+              "properties": {
+                "symbol": {
+                  "type": "string"
+                },
+                "tokensIn": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "tokensOut": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "estimatedTotalTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "costUsd": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "mcpCalls": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "callCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "assumptions": {
+            "type": "object",
+            "properties": {
+              "tokenApprox": {
+                "type": "string"
+              },
+              "outputBudgetKind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "outputTokensPerCall": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ratesSource": {
+                "type": "string",
+                "enum": [
+                  "remote",
+                  "environment",
+                  "default"
+                ]
+              },
+              "estimateOnly": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "CostEstimateResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "dryRun",
+          "costEstimate",
+          "tokensIn",
+          "tokensOut",
+          "estimatedTotalTokens",
+          "estimatedCostUsd",
+          "requestId"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "dryRun": {
+            "type": "string",
+            "enum": [
+              "cost"
+            ]
+          },
+          "costEstimate": {
+            "$ref": "#/components/schemas/CostEstimate"
+          },
+          "tokensIn": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOut": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimatedTotalTokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimatedCostUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "requestId": {
+            "type": "string"
+          }
+        }
+      },
+      "OperationEstimateRequest": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "operation"
+        ],
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "news-monitor",
+              "expanded-analysis-alert",
+              "market-scanner-alert",
+              "tradingview-analysis",
+              "expanded-analysis",
+              "market-scanner",
+              "news",
+              "jobs",
+              "jobs-tradingview-analysis"
+            ]
+          },
+          "symbols": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "crypto": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "stocks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scans": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "OperationEstimateResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "operation",
+          "costEstimate"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "operation": {
+            "type": "string"
+          },
+          "costEstimate": {
+            "$ref": "#/components/schemas/CostEstimate"
+          }
+        }
+      },
+      "CostEstimationDependency": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "source",
+          "ratesSource",
+          "model",
+          "operations"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "disabled"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "ratesSource": {
+            "type": "string",
+            "enum": [
+              "remote",
+              "environment",
+              "default"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "CanaryAlertResponse": {
+        "type": "object",
+        "required": [
+          "canary",
+          "success",
+          "overall",
+          "mode",
+          "stages",
+          "executionTimeMs",
+          "timestamp"
+        ],
+        "properties": {
+          "canary": {
+            "type": "boolean",
+            "example": true
+          },
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "overall": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "degraded",
+              "unhealthy"
+            ],
+            "example": "healthy"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "dry_run",
+              "delivery"
+            ],
+            "example": "dry_run"
+          },
+          "stages": {
+            "type": "object",
+            "required": [
+              "validation",
+              "enrichment",
+              "notification",
+              "storage"
+            ],
+            "properties": {
+              "validation": {
+                "type": "object"
+              },
+              "enrichment": {
+                "type": "object"
+              },
+              "notification": {
+                "type": "object"
+              },
+              "storage": {
+                "type": "object"
+              }
+            }
+          },
+          "totalMs": {
+            "type": "integer",
+            "example": 45
+          },
+          "executionTimeMs": {
+            "type": "integer",
+            "example": 45
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-09-04T08:00:00.000Z"
           }
         }
       }

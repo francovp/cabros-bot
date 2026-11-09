@@ -40,7 +40,8 @@ describe('GET /ready', () => {
 		expect(response.status).toBe(503);
 		expect(response.body.status).toBe('failed');
 		expect(response.body.components.telegramBot).toEqual({ status: 'failed' });
-		expect(response.body.error).toBe('launch failed');
+		expect(response.body.error).toBeUndefined();
+		expect(response.body.errorCode).toBe('TELEGRAM_BOOTSTRAP_FAILED');
 	});
 
 	it('returns 503 when bootstrap exceeds the bounded wait', async () => {
@@ -52,7 +53,8 @@ describe('GET /ready', () => {
 
 		expect(response.status).toBe(503);
 		expect(response.body.status).toBe('failed');
-		expect(response.body.error).toContain('25ms');
+		expect(response.body.error).toBeUndefined();
+		expect(response.body.errorCode).toBe('BOOTSTRAP_TIMEOUT');
 		jest.useRealTimers();
 	});
 
@@ -66,13 +68,14 @@ describe('GET /ready', () => {
 		expect(initialResponse.body.status).toBe('ready');
 		expect(initialResponse.body.ready).toBe(true);
 
-		bootstrapReadiness.markFailed('telegramBot', new Error('late polling failure'));
+		bootstrapReadiness.markFailed('telegramBot', new Error('late telegram polling failure'));
 
 		const response = await request(app).get('/ready');
 		expect(response.status).toBe(503);
 		expect(response.body.status).toBe('failed');
 		expect(response.body.ready).toBe(false);
 		expect(response.body.components.telegramBot).toEqual({ status: 'failed' });
-		expect(response.body.error).toBe('late polling failure');
+		expect(response.body.error).toBeUndefined();
+		expect(response.body.errorCode).toBe('TELEGRAM_BOOTSTRAP_FAILED');
 	});
 });

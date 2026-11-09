@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const { sendErrorFrom } = require('../../lib/errorEnvelope');
 const alertStorageService = require('../../services/storage/AlertStorageService');
+const alertAcknowledgementService = require('../../services/storage/AlertAcknowledgementService');
 const alertFeedbackStorageService = require('../../services/storage/AlertFeedbackStorageService');
 const sentryService = require('../../services/monitoring/SentryService');
 const signalOutcomeService = require('../../services/storage/SignalOutcomeService');
@@ -11,6 +12,7 @@ const { VALID_SIGNAL_CLASSES } = require('../../lib/validation');
 const { sendError } = require('../../lib/errorEnvelope');
 const { isFirestoreErrorCategory } = require('../../services/storage/firestoreErrorCategories');
 const { isRecognisedDryRunValue, resolveDryRun } = require('../../lib/dryRunRequest');
+const { auditLog, AUDIT_CATEGORIES } = require('../../lib/auditLogger');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -964,6 +966,14 @@ function replayAlert(botOrGetter) {
 
 			const storedAlert = await alertStorageService.getAlertById(alertId);
 			if (!storedAlert) {
+				auditLog(
+					AUDIT_CATEGORIES.ADMIN_ACTION,
+					null,
+					'alert_replay',
+					{ alertId, reason: 'alert_not_found' },
+					'failure',
+					req,
+				);
 				return sendErrorFrom(res, 404, {
 					error: 'Alert not found',
 					code: 'NOT_FOUND',
@@ -983,6 +993,9 @@ function replayAlert(botOrGetter) {
 
 			const storedChannelRouting = buildStoredChannelRouting(storedAlert, storedTelegramThreadId);
 
+			const reEnrichRequested = (req.query && (req.query.reEnrich === 'true' || req.query.reEnrich === true))
+				|| (req.body && typeof req.body === 'object' && (req.body.reEnrich === 'true' || req.body.reEnrich === true));
+
 			if (dryRun) {
 				console.debug('[AlertsController] Replay dry-run: skipping delivery and persistence for alert', alertId);
 				const channelRouting = buildDryRunChannelRouting(storedAlert, storedTelegramThreadId, channels);
@@ -991,6 +1004,19 @@ function replayAlert(botOrGetter) {
 					.update(idempotencyKey.trim())
 					.digest('hex')
 					.slice(0, 12);
+				auditLog(
+					AUDIT_CATEGORIES.ADMIN_ACTION,
+					null,
+					'alert_replay',
+					{
+						alertId,
+						channels,
+						dryRun: true,
+						reEnrich: Boolean(reEnrichRequested),
+					},
+					'success',
+					req,
+				);
 				return res.status(200).json({
 					success: true,
 					dryRun: true,
@@ -1011,9 +1037,6 @@ function replayAlert(botOrGetter) {
 				const bot = typeof botOrGetter === 'function' ? botOrGetter() : botOrGetter || null;
 				notificationManager = await alertHandler.getOrInitializeNotificationManager(bot);
 			}
-
-			const reEnrichRequested = (req.query && (req.query.reEnrich === 'true' || req.query.reEnrich === true))
-				|| (req.body && typeof req.body === 'object' && (req.body.reEnrich === 'true' || req.body.reEnrich === true));
 
 			let reEnriched = false;
 			let newEnrichmentData = null;
@@ -1065,6 +1088,9 @@ function replayAlert(botOrGetter) {
 				signalClass: storedAlert.signalClass || undefined,
 				session: storedAlert.session || undefined,
 				traderIntent: storedAlert.traderIntent || undefined,
+				chartBars: storedAlert.chartBars || undefined,
+				chartSymbol: storedAlert.chartSymbol || undefined,
+				timeframe: storedAlert.timeframe || undefined,
 				replay: {
 					originalAlertId: alertId,
 					idempotencyKey: idempotencyKey.trim(),
@@ -1099,6 +1125,30 @@ function replayAlert(botOrGetter) {
 				responseBody.originalEnrichment = storedAlert.enrichmentData || null;
 				responseBody.reEnrichedData = reEnriched ? newEnrichmentData : null;
 			}
+
+			const successCount = Array.isArray(results) ? results.filter((r) => r && r.success === true).length : 0;
+			const totalChannels = Array.isArray(results) ? results.length : channels.length;
+			const failureCount = totalChannels - successCount;
+			const auditResult = successCount === totalChannels && totalChannels > 0
+				? 'success'
+				: (successCount > 0 ? 'partial_success' : 'failure');
+
+			auditLog(
+				AUDIT_CATEGORIES.ADMIN_ACTION,
+				null,
+				'alert_replay',
+				{
+					alertId,
+					channels,
+					dryRun: false,
+					reEnrich: Boolean(reEnrichRequested),
+					replayId,
+					successCount,
+					failureCount,
+				},
+				auditResult,
+				req,
+			);
 
 			return res.status(200).json(responseBody);
 		});
@@ -1248,6 +1298,9 @@ function batchReplayAlerts(botOrGetter) {
 						source: storedAlert.source || 'alert-replay',
 						signalClass: storedAlert.signalClass || undefined,
 						session: storedAlert.session || undefined,
+						chartBars: storedAlert.chartBars || undefined,
+						chartSymbol: storedAlert.chartSymbol || undefined,
+						timeframe: storedAlert.timeframe || undefined,
 						replay: {
 							originalAlertId: alertId,
 							idempotencyKey: alertIdempotencyKey,
@@ -1300,6 +1353,27 @@ function batchReplayAlerts(botOrGetter) {
 					}
 				}
 			}
+
+			const successCount = alertResults.filter((r) => r.success).length;
+			const failureCount = alertResults.length - successCount;
+			const auditResult = successCount === alertResults.length
+				? 'success'
+				: (successCount > 0 ? 'partial_success' : 'failure');
+
+			auditLog(
+				AUDIT_CATEGORIES.ADMIN_ACTION,
+				null,
+				'batch_alert_replay',
+				{
+					count: uniqueAlertIds.length,
+					successCount,
+					failureCount,
+					channels,
+					dryRun: Boolean(dryRun),
+				},
+				auditResult,
+				req,
+			);
 
 			if (dryRun) {
 				return res.status(200).json({
@@ -1546,6 +1620,90 @@ function getFeedbackSummary(req, res) {
 	});
 }
 
+function acknowledgeAlert(req, res) {
+	return handleAsync(req, res, `/api/alerts/${req.params.alertId}/acknowledge`, async () => {
+		if (!alertStorageService.isEnabled() || !alertAcknowledgementService.isEnabled()) {
+			return sendErrorFrom(res, 403, {
+				error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+
+		const { alertId } = req.params;
+		if (!alertId) {
+			return sendErrorFrom(res, 400, {
+				error: 'Missing alertId parameter',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const body = req.body || {};
+		const chatId = typeof body.chatId === 'string' ? body.chatId.trim() : '';
+		if (!chatId) {
+			return sendErrorFrom(res, 400, {
+				error: 'chatId is required in the request body.',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const storedAlert = await alertStorageService.getAlertById(alertId);
+		if (!storedAlert) {
+			return sendErrorFrom(res, 404, {
+				error: 'Alert not found',
+				code: 'NOT_FOUND',
+			});
+		}
+
+		const record = await alertAcknowledgementService.saveAcknowledgement({
+			alertId,
+			chatId,
+			action: body.action,
+			notes: body.notes,
+			symbol: storedAlert.symbol,
+			exchange: storedAlert.exchange,
+		});
+
+		return res.status(201).json({
+			success: true,
+			ackId: record.ackId,
+			alertId: record.alertId,
+			action: record.action,
+			notes: record.notes,
+			acknowledgedAt: record.acknowledgedAt,
+			updatedAt: record.updatedAt,
+			storage: record.storage,
+		});
+	});
+}
+
+function getAcknowledgementBreakdown(req, res) {
+	return handleAsync(req, res, `/api/alerts/${req.params.alertId}/acknowledgements/breakdown`, async () => {
+		if (!alertStorageService.isEnabled() || !alertAcknowledgementService.isEnabled()) {
+			return sendErrorFrom(res, 403, {
+				error: 'Alert storage feature is disabled. Set ENABLE_FIRESTORE_ALERT_STORAGE=true to enable.',
+				code: 'FEATURE_DISABLED',
+			});
+		}
+
+		const { alertId } = req.params;
+		if (!alertId) {
+			return sendErrorFrom(res, 400, {
+				error: 'Missing alertId parameter',
+				code: 'INVALID_REQUEST',
+			});
+		}
+
+		const breakdown = await alertAcknowledgementService.getAcknowledgementBreakdown(alertId);
+		return res.status(200).json({
+			success: true,
+			alertId: breakdown.alertId,
+			total: breakdown.total,
+			breakdown: breakdown.breakdown,
+			storage: breakdown.storage,
+		});
+	});
+}
+
 module.exports = {
 	listAlerts,
 	getAlertById,
@@ -1558,5 +1716,7 @@ module.exports = {
 	exportAlerts,
 	submitFeedback,
 	getFeedbackSummary,
+	acknowledgeAlert,
+	getAcknowledgementBreakdown,
 	VALID_SUMMARY_INTERVALS,
 };

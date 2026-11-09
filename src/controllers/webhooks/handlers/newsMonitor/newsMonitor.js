@@ -29,8 +29,9 @@ const newsAnalysisStorageService = require('../../../../services/storage/NewsAna
 const { isFirestoreErrorCategory } = require('../../../../services/storage/firestoreErrorCategories');
 const { isNewsMonitorPaused, getNewsMonitorPauseState } = require('./pauseState');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
-const { resolveDryRun } = require('../../../../lib/dryRunRequest');
+const { resolveDryRun, resolveDryRunCost, hasUnrecognisedCostFlag } = require('../../../../lib/dryRunRequest');
 const { trackBackgroundTask } = require('../../../../lib/backgroundTaskTracker');
+const costEstimationService = require('../../../../services/cost/CostEstimationService');
 
 class NewsMonitorHandler {
 	constructor() {
@@ -70,6 +71,62 @@ class NewsMonitorHandler {
 				return sendErrorFrom(res, 403, {
 					error: 'News monitor feature is disabled. Set ENABLE_NEWS_MONITOR=true to enable.',
 					code: 'FEATURE_DISABLED',
+					requestId,
+				});
+			}
+
+			// Issue #745: pre-flight cost estimation makes zero billable calls.
+			if (hasUnrecognisedCostFlag(req)) {
+				return sendErrorFrom(res, 400, {
+					error: 'Unrecognised dryRun/estimate value. Supported: true, false, cost, or estimate.',
+					code: 'INVALID_REQUEST',
+					requestId,
+				});
+			}
+			if (resolveDryRunCost(req) && !costEstimationService.isEnabled()) {
+				return sendErrorFrom(res, 404, {
+					error: 'Cost estimation is disabled. Set ENABLE_DRY_RUN_COST=true to enable.',
+					code: 'FEATURE_DISABLED',
+					requestId,
+				});
+			}
+			if (resolveDryRunCost(req) && costEstimationService.isEnabled()) {
+				const { crypto, stocks, categories } = this.parseRequest(req);
+				const categoriesError = this.validateCategories(categories);
+				if (categoriesError) {
+					return sendErrorFrom(res, 400, {
+						error: categoriesError,
+						code: 'INVALID_REQUEST',
+						requestId,
+					});
+				}
+				const allSymbols = [...(crypto || []), ...(stocks || [])];
+				const symbolsToAnalyze = allSymbols.length === 0 ? this.getDefaultSymbols() : allSymbols;
+				const validationError = this.validateRequest(symbolsToAnalyze);
+				if (validationError) {
+					return sendErrorFrom(res, 400, {
+						error: validationError,
+						code: 'INVALID_REQUEST',
+						requestId,
+					});
+				}
+				const costEstimate = costEstimationService.estimate({
+					operation: 'news-monitor',
+					symbols: symbolsToAnalyze,
+					body: { crypto, stocks },
+				});
+				return res.status(200).json({
+					success: true,
+					dryRun: 'cost',
+					costEstimate,
+					tokensIn: costEstimate.tokensIn,
+					tokensOut: costEstimate.tokensOut,
+					estimatedTotalTokens: costEstimate.estimatedTotalTokens,
+					estimatedCostUsd: costEstimate.estimatedCostUsd,
+					results: [],
+					summary: { total: symbolsToAnalyze.length, analyzed: 0, cached: 0, throttled: 0, timeout: 0, error: 0, quota_exhausted: 0, alerts_sent: 0 },
+					requestedChannels: [],
+					deliveredChannels: [],
 					requestId,
 				});
 			}

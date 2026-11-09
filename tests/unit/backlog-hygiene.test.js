@@ -4,6 +4,9 @@ const {
 	findDuplicates,
 	findStaleAgentWorking,
 	fetchSentryEventCount,
+	findImplementedOnMaster,
+	findSupersededDependabotPrs,
+	findBotNoiseSuggestions,
 	generateBacklogReport,
 	parseArgs,
 	runBacklogHygiene,
@@ -30,6 +33,11 @@ describe('backlog-hygiene script (scripts/backlog-hygiene.js)', () => {
 			const options = parseArgs(['--repo', 'owner/repo', '--report', 'custom-report.md']);
 			expect(options.repo).toBe('owner/repo');
 			expect(options.reportPath).toBe('custom-report.md');
+		});
+
+		test('parses --close-verified flag', () => {
+			const options = parseArgs(['--close-verified']);
+			expect(options.closeVerified).toBe(true);
 		});
 	});
 
@@ -244,6 +252,126 @@ describe('backlog-hygiene script (scripts/backlog-hygiene.js)', () => {
 		});
 	});
 
+	describe('findImplementedOnMaster', () => {
+		test('identifies issues and PRs mentioned in git commit log by #number or GH-number', () => {
+			const items = [
+				{ number: 1338, title: 'CI pnpm version conflict' },
+				{ number: 859, title: 'Request deadline middleware' },
+				{ number: 9999, title: 'Unrelated still open issue' },
+				{ number: 1106, title: 'Burst aggregator', isPr: true },
+			];
+			const commitLogs = [
+				'4fd9e0001 ci: align workflows to single pnpm version source (#1472) closes #1338',
+				'994a52af feat: add request deadline middleware (GH-859)',
+				'cca996a7 feat(alerts): aggregate same-direction alert bursts (#1104) (#1362) closes #1106',
+			];
+
+			const result = findImplementedOnMaster(items, { commitLogs });
+			expect(result).toHaveLength(3);
+			expect(result.map((r) => r.number)).toEqual([1338, 859, 1106]);
+			expect(result.find((r) => r.number === 1106).type).toBe('pr');
+			expect(result.find((r) => r.number === 1338).type).toBe('issue');
+		});
+
+		test('returns empty array when no items match commit logs', () => {
+			const items = [{ number: 9999, title: 'Open issue' }];
+			const commitLogs = ['abcdef1 feat: unrelated commit (#1234)'];
+			const result = findImplementedOnMaster(items, { commitLogs });
+			expect(result).toEqual([]);
+		});
+	});
+
+	describe('findSupersededDependabotPrs', () => {
+		test('flags older Dependabot PRs when newer open PR bumps the same dependency', () => {
+			const openPrs = [
+				{
+					number: 518,
+					headRefName: 'dependabot/npm_and_yarn/prettier-3.9.6',
+					title: 'build(deps-dev): bump prettier from 3.8.3 to 3.9.6',
+				},
+				{
+					number: 1196,
+					headRefName: 'dependabot/npm_and_yarn/prettier-3.9.9',
+					title: 'chore(deps-dev): bump prettier from 3.8.3 to 3.9.9',
+				},
+				{
+					number: 999,
+					headRefName: 'feature/unrelated',
+					title: 'feat: regular PR',
+				},
+			];
+
+			const superseded = findSupersededDependabotPrs(openPrs, { enforceShaPinning: false });
+			expect(superseded).toHaveLength(1);
+			expect(superseded[0].number).toBe(518);
+			expect(superseded[0].reason).toContain('Superseded by newer open PR #1196');
+		});
+
+		test('flags tag-based GitHub Action bumps when 40-char SHA pinning policy is enforced', () => {
+			const openPrs = [
+				{
+					number: 1206,
+					headRefName: 'dependabot/github_actions/actions/cache-6',
+					title: 'build(deps): bump actions/cache from 4.3.0 to 6.1.0',
+				},
+			];
+
+			const superseded = findSupersededDependabotPrs(openPrs, { enforceShaPinning: true });
+			expect(superseded).toHaveLength(1);
+			expect(superseded[0].number).toBe(1206);
+			expect(superseded[0].reason).toContain('40-char commit SHA');
+		});
+	});
+
+	describe('findBotNoiseSuggestions', () => {
+		test('flags virgin-trainee bot greeting comments', () => {
+			const issues = [
+				{
+					number: 1486,
+					title: "Unaddressed suggestion: Hello! I'm the Virgin Trainee bot...",
+					body: "<!-- source-suggestion-id=6470870748 -->\nHello! I'm the Virgin Trainee bot. I've noticed this updated PR...",
+				},
+				{
+					number: 1485,
+					title: 'Unaddressed suggestion: Hi @francovp and @gigachad-senior-dev!',
+					body: '<!-- source-suggestion-id=6460162250 -->\nHi @francovp and @gigachad-senior-dev! 🤖 This PR looks super cool...',
+				},
+			];
+
+			const noise = findBotNoiseSuggestions(issues);
+			expect(noise).toHaveLength(2);
+			expect(noise.map((n) => n.number)).toEqual([1486, 1485]);
+		});
+
+		test('flags SHIPPED merge summary issues', () => {
+			const issues = [
+				{
+					number: 1484,
+					title: 'Unaddressed suggestion: SHIPPED: PR #1480 was squash-merged',
+					body: '<!-- source-suggestion-id=6458439302 -->\nSHIPPED: PR #1480 was squash-merged as 1c3cccc43...',
+				},
+			];
+
+			const noise = findBotNoiseSuggestions(issues);
+			expect(noise).toHaveLength(1);
+			expect(noise[0].number).toBe(1484);
+			expect(noise[0].reason).toContain('SHIPPED summary');
+		});
+
+		test('ignores legitimate code suggestions', () => {
+			const issues = [
+				{
+					number: 1500,
+					title: 'Unaddressed suggestion: handle Redis connection retry',
+					body: '<!-- source-suggestion-id=123 -->\nConsider wrapping Redis reconnect with exponential backoff:\n```js\nconst delay = Math.min(1000 * 2 ** attempt, 30000);\n```',
+				},
+			];
+
+			const noise = findBotNoiseSuggestions(issues);
+			expect(noise).toHaveLength(0);
+		});
+	});
+
 	describe('generateBacklogReport', () => {
 		test('produces markdown report summarizing status counts, duplicates, and triage queue', () => {
 			const report = generateBacklogReport({
@@ -263,6 +391,15 @@ describe('backlog-hygiene script (scripts/backlog-hygiene.js)', () => {
 				],
 				staleAgentWorking: [{ number: 501, title: 'Old abandoned task' }],
 				needsTriageQueue: [{ number: 601, title: 'Unlabeled feature request' }],
+				implementedOnMaster: [
+					{ number: 1338, type: 'issue', title: 'pnpm setup fix', matchedCommit: '4fd9e0001 (#1472)' },
+				],
+				supersededDependabotPrs: [
+					{ number: 518, title: 'bump prettier', reason: 'Superseded by PR #1196' },
+				],
+				botNoiseSuggestions: [
+					{ number: 1486, title: 'Virgin trainee greeting', reason: 'Bot greeting' },
+				],
 			});
 
 			expect(report).toContain('# Backlog Hygiene Report');
@@ -271,6 +408,12 @@ describe('backlog-hygiene script (scripts/backlog-hygiene.js)', () => {
 			expect(report).toContain('Possible duplicate of #101');
 			expect(report).toContain('#501');
 			expect(report).toContain('#601');
+			expect(report).toContain('## Implemented on `master` (Ready to Close)');
+			expect(report).toContain('#1338 (issue)');
+			expect(report).toContain('## Superseded Dependabot PRs');
+			expect(report).toContain('PR #518');
+			expect(report).toContain('## Bot Noise / Unactionable Suggestions');
+			expect(report).toContain('#1486');
 		});
 	});
 
@@ -367,6 +510,52 @@ describe('backlog-hygiene script (scripts/backlog-hygiene.js)', () => {
 			expect(bodyEditCall).toBeDefined();
 			const bodyArg = bodyEditCall[0][bodyEditCall[0].indexOf('--body') + 1];
 			expect(bodyArg).toContain('Production: 27 events in last 30d');
+		});
+
+		test('closes verified items when closeVerified is true and dryRun is false', async () => {
+			const mockExecGh = jest.fn((args) => {
+				if (args[0] === 'auth' && args[1] === 'status') return 'Logged in';
+				if (args[0] === 'issue' && args[1] === 'list' && args[3] === 'open') {
+					return JSON.stringify([
+						{
+							number: 1486,
+							title: "Unaddressed suggestion: Hello! I'm the Virgin Trainee bot...",
+							body: "<!-- source-suggestion-id=123 -->\nHello! I'm the Virgin Trainee bot.",
+							labels: [{ name: 'status/needs-triage' }],
+							comments: [],
+							updatedAt: new Date().toISOString(),
+						},
+					]);
+				}
+				if (args[0] === 'issue' && args[1] === 'list' && args[3] === 'closed') {
+					return JSON.stringify([]);
+				}
+				if (args[0] === 'pr' && args[1] === 'list') {
+					return JSON.stringify([
+						{
+							number: 1206,
+							headRefName: 'dependabot/github_actions/actions/cache-6',
+							title: 'build(deps): bump actions/cache from 4.3.0 to 6.1.0',
+							body: '',
+						},
+					]);
+				}
+				return '';
+			});
+
+			const result = await runBacklogHygiene({
+				dryRun: false,
+				closeVerified: true,
+				reportPath: '',
+				commitLogs: ['4fd9e0001 ci: fix stuff (#1486)'],
+				execGh: mockExecGh,
+			});
+
+			expect(result.closedVerifiedCount).toBeGreaterThan(0);
+			const closeCalls = mockExecGh.mock.calls.filter(
+				(c) => (c[0][0] === 'issue' || c[0][0] === 'pr') && c[0][1] === 'close'
+			);
+			expect(closeCalls.length).toBeGreaterThan(0);
 		});
 	});
 });

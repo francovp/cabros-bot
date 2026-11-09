@@ -72,6 +72,8 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 - `NOTIFICATION_REDRIVE_MAX_AGE_MS` - Maximum lifespan of dead-letter records before expiration (default: `3600000`, Remote Config supported)
 - Firestore-backed `notificationDeadLetters` records use `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` once per project to enable native TTL and optionally backfill legacy records.
 - `ZERO_CHANNEL_ALERT_COOLDOWN_MS` - Cooldown between admin notifications when all channels are disabled in milliseconds (default: `300000`, Remote Config supported)
+- `ADMIN_PAGE_DEDUP_TTL_MS` - TTL for admin paging deduplication in milliseconds (default: `300000`, 0 disables deduplication, Remote Config supported)
+- `GLOBAL_ALERT_BUDGET_PER_24H` - In-process rolling 24h cap on successful per-channel alert deliveries (default: `500`, 0 disables cap, Remote Config supported, range: `0`–`1000000`)
 - `ENABLE_API_ONLY_MODE` - Declare intentional API-only mode without notification delivery, suppressing zero-channel alerts and dead-letters (default: `false`, Remote Config supported)
 - `ENABLE_MAINTENANCE_MODE` - Remotely toggleable incident response kill switch (`true` or `false`, default: `false`, Remote Config supported). When active, gates incoming webhook alerts and bot commands with HTTP 503 while preserving `/healthcheck` and `/api/status`.
 
@@ -107,6 +109,12 @@ The Remote Config model-selector defaults use the deployment's in-app values, pr
 - `ENABLE_TOKEN_COST_BUDGET` - Enable daily LLM token cost tracking and budget limits (`true` or `false`, default: `false`; Remote Config supported)
 - `TOKEN_COST_DAILY_BUDGET_USD` - Maximum daily spend in USD before LLM calls fail open safely (default: `5.00`, range `0.01`-`10000.00`; Remote Config supported)
 - `TOKEN_COST_WARN_THRESHOLD_PCT` - Percentage of daily budget that triggers an admin Telegram alert (default: `80`, range `1`-`100`; Remote Config supported)
+- `ENABLE_DRY_RUN_COST` - Enable pre-flight cost estimation (`dryRun=cost`) and `POST /api/operations/estimate` (default: `true`; Remote Config supported)
+- `COST_ESTIMATION_OUTPUT_TOKENS_NEWS` - Output-token budget per news symbol for cost estimation (default: `400`, range `10`-`8000`; Remote Config supported)
+- `COST_ESTIMATION_OUTPUT_TOKENS_ANALYSIS` - Output-token budget per expanded-analysis symbol (default: `800`, range `10`-`8000`; Remote Config supported)
+- `COST_ESTIMATION_OUTPUT_TOKENS_SCANNER` - Output-token budget per scanner candidate (default: `600`, range `10`-`8000`; Remote Config supported)
+- `COST_ESTIMATION_DAILY_QUOTA_TOKENS` - Daily token quota denominator for quotaImpact (default: `1000000`, range `1000`-`100000000`; Remote Config supported)
+- `LLM_COST_RATES_JSON` - Public per-model LLM rate overrides as JSON `{model:{input,output}}` per 1M tokens (default: empty; Remote Config supported)
 
 #### Cloudflare AI Gateway
 
@@ -209,6 +217,8 @@ Unlike equity market data, this feature **does** run a bounded startup probe (5s
 - `SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES` - Optional comma-separated first-success provider chain (`mcp`, `binance`, `twelve-data`, `gemini`); empty preserves the existing crypto (`mcp,binance,gemini`) and equity (`twelve-data`) defaults. Active chains are reported under `dependencies.signalOutcomeWorker.entryPriceSources`.
 - `SIGNAL_OUTCOME_WINDOWS` - Ordered comma-separated evaluation windows (`1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1D`, `1W`, or `1M`; default: `1h,4h,1D,1W`). Invalid, duplicate, or empty values fall back to the default. Remote Config eligible.
 - `SIGNAL_OUTCOME_WINDOW_LABELS` - Optional JSON object mapping configured window keys to display labels (default: empty; omitted labels use the window key). Remote Config eligible.
+- `SIGNAL_OUTCOME_ROLLUP_ENABLED` - Enable automatic daily outcome rollup computation during scheduled worker sweeps (`true` or `false`, default: `true`). Remote Config eligible.
+- `SIGNAL_OUTCOME_ROLLUP_TTL_DAYS` - Retention for `tradingSignalOutcomesDaily` records in days (`30`-`365`, default: `180`). Remote Config eligible.
 - `ENABLE_EQUITY_MARKET_DATA` - Opt in to equity/forex/index outcome evaluation for `NASDAQ`, `BATS`, `NYSE`, `AMEX`, `NYSE ARCA`, `FX_IDC`, and `SPCFD` signals (`true` or `false`, default: `false`)
 - `EQUITY_MARKET_DATA_PROVIDER` - Equity provider name; currently `twelve-data`
 - `TWELVE_DATA_API_KEY` - Twelve Data API key; sent in the `Authorization` header and never returned by status endpoints
@@ -516,6 +526,8 @@ Real-time administrative events (job progress, scanner results, alert delivery e
 
 The endpoint tiers use separate per-endpoint buckets keyed by the existing API-key hash and trusted client IP; URL query strings, trailing slashes, and case do not change the bucket. All webhook and news-monitor ingest paths share a finite aggregate bucket of 1,000 requests per `RATE_LIMIT_WINDOW_MS`; mapped webhook tiers are applied in addition to this aggregate ceiling. These request-rate limits are security controls, remain environment-only, and are intentionally excluded from Firebase Remote Config. `/healthcheck`, `/ready`, `/openapi.json`, `/docs`, `/admin`, and associated static assets are mounted before the rate limiter and remain exempt.
 - `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production). The logger automatically masks sensitive plain-object keys, bare-scalar secrets preceded by sensitive labels, URL query secrets, embedded JSON strings, Authorization/Bearer credentials, Telegram bot tokens, Discord webhook tokens, OpenAI keys, and dynamically registered request-scoped secrets via `registerSecretValue` / `clearSecretValue`.
+- `ENABLE_AUDIT_LOGGING` - Enable structured audit logging for security-sensitive operations (default: `true`; set exactly `false` to disable). Emits structured audit events (`AUTH_FAILURE`, `ORDER_SUBMITTED`, `ORDER_COMPLETED`, `ORDER_REJECTED`, `ADMIN_ACTION`, `CONFIG_CHANGE`) with logical stream `audit`. This is an environment-only security and compliance control, excluded from Firebase Remote Config per the documented policy that security gates stay environment-only.
+- `AUDIT_LOG_LEVEL` - Console log level for audit events (default: `info`; allowed: `debug`, `info`, `warn`, `error`).
 - `SERVICE_NAME` - Optional service name included in JSON logs (default: package name or `cabros-bot`)
 
 #### News Monitoring (003-news-monitor)

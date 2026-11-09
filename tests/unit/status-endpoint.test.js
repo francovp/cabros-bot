@@ -33,7 +33,17 @@ describe('status endpoint build metadata (issue #753)', () => {
 		expect(build.uptimeSeconds).toBeGreaterThanOrEqual(0);
 
 		const status = getStatus({ env });
-		expect(status.build).toEqual(build);
+		expect(status.build).toMatchObject({
+			name: build.name,
+			commit: build.commit,
+			full: build.full,
+			repo: build.repo,
+			platform: build.platform,
+			environment: build.environment,
+			startedAt: build.startedAt,
+			version: build.version,
+		});
+		expect(Math.abs(status.build.uptimeSeconds - build.uptimeSeconds)).toBeLessThanOrEqual(1);
 		expect(status.service.commit).toBe('abcdef1234567890abcdef1234567890abcdef12');
 	});
 
@@ -60,7 +70,17 @@ describe('status endpoint build metadata (issue #753)', () => {
 		expect(build.uptimeSeconds).toBeGreaterThanOrEqual(0);
 
 		const status = getStatus({ env });
-		expect(status.build).toEqual(build);
+		expect(status.build).toMatchObject({
+			name: build.name,
+			commit: build.commit,
+			full: build.full,
+			repo: build.repo,
+			platform: build.platform,
+			environment: build.environment,
+			startedAt: build.startedAt,
+			version: build.version,
+		});
+		expect(Math.abs(status.build.uptimeSeconds - build.uptimeSeconds)).toBeLessThanOrEqual(1);
 		expect(status.service.commit).toBe('9988776655443322110099887766554433221100');
 	});
 
@@ -87,7 +107,17 @@ describe('status endpoint build metadata (issue #753)', () => {
 		expect(build.uptimeSeconds).toBeGreaterThanOrEqual(0);
 
 		const status = getStatus({ env });
-		expect(status.build).toEqual(build);
+		expect(status.build).toMatchObject({
+			name: build.name,
+			commit: build.commit,
+			full: build.full,
+			repo: build.repo,
+			platform: build.platform,
+			environment: build.environment,
+			startedAt: build.startedAt,
+			version: build.version,
+		});
+		expect(Math.abs(status.build.uptimeSeconds - build.uptimeSeconds)).toBeLessThanOrEqual(1);
 		expect(status.service.commit).toBe('1122334455667788990011223344556677889900');
 	});
 

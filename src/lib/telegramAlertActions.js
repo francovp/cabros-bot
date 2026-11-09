@@ -15,13 +15,14 @@
 
 const { parseCallbackData, getActionCodes } = require('../services/alerts/telegramAlertKeyboard');
 const alertStorageService = require('../services/storage/AlertStorageService');
+const alertAcknowledgementService = require('../services/storage/AlertAcknowledgementService');
 const alertFeedbackStorageService = require('../services/storage/AlertFeedbackStorageService');
 const { idempotencyService } = require('../services/storage/IdempotencyService');
 const sentryService = require('../services/monitoring/SentryService');
 const alertModule = require('../controllers/webhooks/handlers/alert/alert');
 const { escapeRiskFieldValue } = require('../services/notification/formatters/markdownV2Formatter');
 
-const ACTION_CALLBACK_REGEX = /^(r|d|x|vu|vd):([A-Za-z0-9_-]{1,60})$/;
+const ACTION_CALLBACK_REGEX = /^(r|d|x|vu|vd|kt|ks|kn|kz):([A-Za-z0-9_-]{1,60})$/;
 const REPLY_MESSAGE_TRUNCATE = 3500;
 const VOTE_RECORD_LIMIT = 5;
 const REPLAY_OPERATOR_IDS_ENV = 'TELEGRAM_ACTION_OPERATOR_USER_IDS';
@@ -498,6 +499,63 @@ async function handleVote(context, parsed, storeEntry) {
 	await answerCallback(context, side === 'up' ? '👍 Gracias por tu feedback' : '👎 Gracias por tu feedback');
 }
 
+const ACK_ACTION_MAP = {
+	kt: 'took_trade',
+	ks: 'skipped',
+	kn: 'no_trade_no_signal',
+	kz: 'snoozed',
+};
+
+const ACK_TOAST_MAP = {
+	took_trade: '✅ Registrado: tomaste esta señal',
+	skipped: '⏭ Registrado: omitiste esta señal',
+	no_trade_no_signal: '❓ Registrado: sin trade',
+	snoozed: '🔕 Registrado: snoozed',
+};
+
+async function handleAcknowledgement(context, parsed, storeEntry) {
+	const actionCode = parsed?.action;
+	const action = ACK_ACTION_MAP[actionCode];
+	if (!action) {
+		await answerCallback(context, 'Acción no reconocida');
+		return;
+	}
+	const chatId = context?.update?.callbackQuery?.message?.chat?.id
+		?? context?.update?.callbackQuery?.from?.id;
+	if (chatId === undefined || chatId === null) {
+		await answerCallback(context, 'Chat no identificado');
+		return;
+	}
+	let storedAlert = null;
+	try {
+		storedAlert = await withCallbackTimeout(() => alertStorageService.getAlertById(storeEntry.alertId));
+	} catch (error) {
+		console.warn('[telegramAlertActions] Failed to read alert for acknowledgement:', error.message);
+	}
+	if (!storedAlert) {
+		await replyToUser(context, 'Alerta no encontrada o ya expirada');
+		return;
+	}
+	try {
+		const record = await withCallbackTimeout(() => alertAcknowledgementService.saveAcknowledgement({
+			alertId: storeEntry.alertId,
+			chatId: String(chatId),
+			action,
+			symbol: storedAlert.symbol,
+			exchange: storedAlert.exchange,
+		}));
+		await answerCallback(context, ACK_TOAST_MAP[action]);
+		return record;
+	} catch (error) {
+		if (error && error.code === 'INVALID_REQUEST') {
+			await answerCallback(context, error.message);
+			return;
+		}
+		console.warn('[telegramAlertActions] Failed to persist acknowledgement:', error.message);
+		await answerCallback(context, 'No se pudo registrar tu respuesta');
+	}
+}
+
 async function handleAlertAction(context) {
 	const callbackData = context?.update?.callbackQuery?.data ?? null;
 	if (!callbackData) {
@@ -529,6 +587,10 @@ async function handleAlertAction(context) {
 		await handleVote(context, parsed, { alertId: parsed.alertId });
 		return;
 	}
+	if (ACK_ACTION_MAP[parsed.action]) {
+		await handleAcknowledgement(context, parsed, { alertId: parsed.alertId });
+		return;
+	}
 	await answerCallback(context, 'Acción no soportada');
 }
 
@@ -554,6 +616,8 @@ function getRecordedQualityFeedback() {
 module.exports = {
 	registerAlertActionHandlers,
 	handleAlertAction,
+	handleAcknowledgement,
+	ACK_ACTION_MAP,
 	ACTION_CALLBACK_REGEX,
 	CALLBACK_STORAGE_TIMEOUT_MS,
 	recordQualityFeedback,

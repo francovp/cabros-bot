@@ -36,12 +36,18 @@ jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	STORAGE_UNAVAILABLE_CODE: 'STORAGE_UNAVAILABLE',
 }));
 
+jest.mock('../../src/services/storage/AlertAcknowledgementService', () => ({
+	isEnabled: jest.fn(),
+	summarizeAcknowledgements: jest.fn(),
+}));
+
 const { captureRuntimeError } = require('../../src/services/monitoring/SentryService');
 const { jobService } = require('../../src/services/jobs/JobService');
 const { getNewsMonitor } = require('../../src/controllers/webhooks/handlers/newsMonitor/newsMonitor');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
+const alertAcknowledgementService = require('../../src/services/storage/AlertAcknowledgementService');
 const {
 	cryptoBotCmd,
 	expandedAnalysisCmd,
@@ -51,6 +57,7 @@ const {
 	newsMonitorCmd,
 	helpCmd,
 	outcomesCommand,
+	pretradeCheckCommand,
 	buildHelpMessage,
 	getTelegramCommandMenu,
 	parseCommandArgs,
@@ -1033,6 +1040,7 @@ describe('Telegram TradingView commands', () => {
 
 		beforeEach(() => {
 			jest.clearAllMocks();
+			alertAcknowledgementService.isEnabled.mockReturnValue(false);
 		});
 
 		it('replies with a formatted summary of recent evaluated outcomes for the requested symbol', async () => {
@@ -1129,6 +1137,57 @@ describe('Telegram TradingView commands', () => {
 				}),
 			);
 			expect(context.reply.mock.calls[0][0]).toContain('No pude consultar los resultados');
+		});
+
+		it('adds a you-took footer when acknowledgements exist for the symbol', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.listOutcomes.mockResolvedValue({
+				outcomes: [evaluatedOutcome],
+				hasMore: false,
+				nextBefore: null,
+			});
+			alertAcknowledgementService.isEnabled.mockReturnValue(true);
+			alertAcknowledgementService.summarizeAcknowledgements.mockResolvedValue({
+				total: 10,
+				breakdown: { took_trade: 4, skipped: 5, no_trade_no_signal: 1, snoozed: 0 },
+				bySymbol: { BTCUSDT: 10 },
+				byExchange: { BINANCE: 10 },
+				storage: 'firestore',
+				window: { from: null, to: null, limit: 1000 },
+			});
+			const context = buildContext('/outcomes BINANCE:BTCUSDT');
+
+			await outcomesCommand(context);
+
+			expect(alertAcknowledgementService.summarizeAcknowledgements).toHaveBeenCalledWith(
+				expect.objectContaining({ symbol: 'BTCUSDT', exchange: 'BINANCE' }),
+			);
+			const reply = context.reply.mock.calls[0][0];
+			expect(reply).toContain('Tú tomaste 4 de 10 señales');
+		});
+
+		it('omits the acknowledgement footer when no acknowledgements exist', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.listOutcomes.mockResolvedValue({
+				outcomes: [evaluatedOutcome],
+				hasMore: false,
+				nextBefore: null,
+			});
+			alertAcknowledgementService.isEnabled.mockReturnValue(true);
+			alertAcknowledgementService.summarizeAcknowledgements.mockResolvedValue({
+				total: 0,
+				breakdown: { took_trade: 0, skipped: 0, no_trade_no_signal: 0, snoozed: 0 },
+				bySymbol: {},
+				byExchange: {},
+				storage: 'firestore',
+				window: { from: null, to: null, limit: 1000 },
+			});
+			const context = buildContext('/outcomes BINANCE:BTCUSDT');
+
+			await outcomesCommand(context);
+
+			const reply = context.reply.mock.calls[0][0];
+			expect(reply).not.toContain('Tú tomaste');
 		});
 
 		it('escapes MarkdownV2 special characters in generated outcome values', async () => {
@@ -1228,6 +1287,181 @@ describe('Telegram TradingView commands', () => {
 			expect(receivedSignal.aborted).toBe(true);
 			expect(captureRuntimeError).not.toHaveBeenCalled();
 		}, 12000);
+
+		it('replies with trend summary when /outcomes trend is invoked', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.getOutcomesTrend = jest.fn().mockResolvedValue({
+				success: true,
+				window: '1D',
+				bucket: 'all',
+				trend: [
+					{
+						date: '2026-08-20',
+						window: '1D',
+						bucket: 'all',
+						sampleSize: 10,
+						wins: 7,
+						losses: 3,
+						hitRatePercent: 70.0,
+						avgMfe: 2.5,
+						avgMae: -0.8,
+						finalized: true,
+					},
+				],
+			});
+			const context = buildContext('/outcomes trend');
+
+			await outcomesCommand(context);
+
+			expect(signalOutcomeService.getOutcomesTrend).toHaveBeenCalledWith(
+				expect.objectContaining({ window: '1D', bucket: 'all' }),
+			);
+			expect(context.reply).toHaveBeenCalledTimes(1);
+			const reply = context.reply.mock.calls[0][0];
+			expect(reply).toContain('Tendencia de resultados');
+			expect(reply).toContain('2026\\-08\\-20');
+			expect(reply).toContain('70\\.0% acierto');
+			expect(reply).toContain('7/10');
+		});
+
+		it('supports requesting 14 or 30 days via /outcomes trend 14', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.getOutcomesTrend = jest.fn().mockResolvedValue({
+				success: true,
+				window: '1D',
+				bucket: 'all',
+				trend: [
+					{
+						date: '2026-08-15',
+						window: '1D',
+						bucket: 'all',
+						sampleSize: 8,
+						wins: 6,
+						losses: 2,
+						hitRatePercent: 75.0,
+						avgMfe: 3.0,
+						avgMae: -0.5,
+						finalized: true,
+					},
+				],
+			});
+			const context = buildContext('/outcomes trend 14');
+
+			await outcomesCommand(context);
+
+			expect(signalOutcomeService.getOutcomesTrend).toHaveBeenCalledWith(
+				expect.objectContaining({ window: '1D', bucket: 'all' }),
+			);
+			expect(context.reply).toHaveBeenCalledTimes(1);
+			const reply = context.reply.mock.calls[0][0];
+			expect(reply).toContain('últimos 14 días');
+			expect(reply).toContain('2026\\-08\\-15');
+			expect(reply).toContain('75\\.0% acierto');
+		});
+
+		it('splits long trend responses across multiple messages to stay within Telegram character limits', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			const points = Array.from({ length: 100 }, (_, i) => ({
+				date: `2026-0${Math.floor(i / 28) + 1}-${String((i % 28) + 1).padStart(2, '0')}`,
+				window: '1D',
+				bucket: 'all',
+				sampleSize: 10,
+				wins: 7,
+				losses: 3,
+				hitRatePercent: 70.0,
+				avgMfe: 2.5,
+				avgMae: -0.8,
+				finalized: true,
+			}));
+			signalOutcomeService.getOutcomesTrend = jest.fn().mockResolvedValue({
+				success: true,
+				window: '1D',
+				bucket: 'all',
+				trend: points,
+			});
+			const context = buildContext('/outcomes trend 100');
+
+			await outcomesCommand(context);
+
+			expect(context.reply.mock.calls.length).toBeGreaterThan(1);
+			for (const call of context.reply.mock.calls) {
+				const message = call[0];
+				expect(message.length).toBeLessThanOrEqual(4096);
+				expect(call[1]).toEqual({ parse_mode: 'MarkdownV2' });
+			}
+		});
+
+		it('replies with friendly empty state when /outcomes trend has no snapshots', async () => {
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.getOutcomesTrend = jest.fn().mockResolvedValue({
+				success: true,
+				window: '1D',
+				bucket: 'all',
+				trend: [],
+			});
+			const context = buildContext('/outcomes trend');
+
+			await outcomesCommand(context);
+
+			expect(context.reply).toHaveBeenCalledTimes(1);
+			expect(context.reply.mock.calls[0][0]).toContain('Sin snapshots diarios de resultados todavía');
+		});
+	});
+
+	describe('pretradeCheckCommand', () => {
+		it('sends maintenance reply when maintenance mode is active', async () => {
+			const previous = process.env.ENABLE_MAINTENANCE_MODE;
+			process.env.ENABLE_MAINTENANCE_MODE = 'true';
+			try {
+				const context = buildContext('/check BTCUSDT');
+				await pretradeCheckCommand(context);
+				expect(context.reply).toHaveBeenCalled();
+			} finally {
+				if (previous === undefined) delete process.env.ENABLE_MAINTENANCE_MODE;
+				else process.env.ENABLE_MAINTENANCE_MODE = previous;
+			}
+		});
+
+		it('replies with usage hint when symbol is missing', async () => {
+			const context = buildContext('/check');
+			await pretradeCheckCommand(context);
+			expect(context.reply).toHaveBeenCalledWith(
+				'Uso: `/check <simbolo>` — por ejemplo `/check BTCUSDT` o `/check BINANCE:BTCUSDT`',
+				{ parse_mode: 'MarkdownV2' },
+			);
+		});
+
+		it('replies with pretrade check result on valid symbol', async () => {
+			const pretradeService = require('../../src/controllers/pretradeCheck/pretradeCheck');
+			const spy = jest.spyOn(pretradeService, 'composePretradeCheck').mockResolvedValueOnce({
+				symbol: 'BTCUSDT',
+				price: { available: true, price: 50000, percentChange: 1.5, assetClass: 'crypto' },
+				hitRate: { available: true, hitRatePercent: 80, winWindows: 4, evaluatedWindows: 5, windowDays: 7 },
+				durationMs: 25,
+			});
+			try {
+				const context = buildContext('/check BTCUSDT');
+				await pretradeCheckCommand(context);
+				expect(context.reply).toHaveBeenCalledTimes(1);
+				const replyMsg = context.reply.mock.calls[0][0];
+				expect(replyMsg).toContain('Pre\\-trade check');
+				expect(replyMsg).toContain('$50000');
+			} finally {
+				spy.mockRestore();
+			}
+		});
+
+		it('handles error gracefully and replies with fail-open message', async () => {
+			const pretradeService = require('../../src/controllers/pretradeCheck/pretradeCheck');
+			const spy = jest.spyOn(pretradeService, 'composePretradeCheck').mockRejectedValueOnce(new Error('service down'));
+			try {
+				const context = buildContext('/check BTCUSDT');
+				await pretradeCheckCommand(context);
+				expect(context.reply).toHaveBeenCalledWith('No pude generar el pre-trade check ahora mismo. Intenta nuevamente más tarde.');
+			} finally {
+				spy.mockRestore();
+			}
+		});
 	});
 });
 

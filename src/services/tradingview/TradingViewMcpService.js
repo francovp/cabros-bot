@@ -26,6 +26,7 @@ const {
 	getTakeProfitTarget,
 	getRiskRewardRatio,
 } = require('./expandedAnalysisAlertReport');
+const { McpToolInventory } = require('./mcpToolInventory');
 const { appendEnvironmentFooter } = require('../../lib/environmentBanner');
 
 const { normalizeUsageMetadata } = require('../../lib/tokenUsage');
@@ -360,6 +361,7 @@ class TradingViewMcpService {
 		this.requestCounter = 0;
 		this.runtimeStatus = createRuntimeStatus();
 		this.volumeRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
+		this.strategyResearchRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
 		this.consecutiveFailures = 0;
 		this.breakerState = 'closed';
 		this.breakerProbeInFlight = false;
@@ -383,6 +385,10 @@ class TradingViewMcpService {
 		this.warmupSchedulerTimer = null;
 		this.isWarmupSchedulerRunning = false;
 		this._warmupInFlightPromise = null;
+		this.mcpToolInventory = new McpToolInventory({
+			url: config.url || process.env.TRADINGVIEW_MCP_URL || DEFAULT_TRADINGVIEW_MCP_URL,
+			logger: this.logger,
+		});
 	}
 
 	_resetForTesting() {
@@ -391,6 +397,7 @@ class TradingViewMcpService {
 		this._warmupInFlightPromise = null;
 		this.runtimeStatus = createRuntimeStatus();
 		this.volumeRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
+		this.strategyResearchRuntimeStatus = createRuntimeStatus({ includeEnrichment: false });
 		this.consecutiveFailures = 0;
 		this.breakerState = 'closed';
 		this.breakerProbeInFlight = false;
@@ -406,6 +413,9 @@ class TradingViewMcpService {
 		this.toolInFlight.clear();
 		this.sharedToolFailureErrors = new WeakSet();
 		this.recordedSharedToolFailureErrors = new WeakSet();
+		if (this.mcpToolInventory && typeof this.mcpToolInventory._resetForTesting === 'function') {
+			this.mcpToolInventory._resetForTesting();
+		}
 	}
 
 	isEnabled() {
@@ -471,8 +481,13 @@ class TradingViewMcpService {
 			? this.config.cacheEnabled
 			: runtimeConfig.ENABLE_TRADINGVIEW_MCP_CACHE;
 
+		const url = this.config.url || process.env.TRADINGVIEW_MCP_URL || DEFAULT_TRADINGVIEW_MCP_URL;
+		if (this.mcpToolInventory) {
+			this.mcpToolInventory.setUrl(url);
+		}
+
 		return {
-			url: this.config.url || process.env.TRADINGVIEW_MCP_URL || DEFAULT_TRADINGVIEW_MCP_URL,
+			url,
 			timeoutMs: Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 12000,
 			maxRetries: Number.isFinite(maxRetries) && maxRetries >= 0 ? maxRetries : 3,
 			defaultExchange,
@@ -706,6 +721,7 @@ class TradingViewMcpService {
 			statusDetails.enrichmentBudgetMs = cfg.enrichmentBudgetMs;
 			statusDetails.enrichmentBudgetSource = this._getConfigParamSource('enrichmentBudgetMs');
 			statusDetails.warmup = this.getWarmupStatus();
+			statusDetails.mcpTools = this.getMcpToolsSync();
 		}
 		if (statusDetails.enrichment && runtimeStatus === this.runtimeStatus) {
 			statusDetails.enrichment = {
@@ -723,6 +739,34 @@ class TradingViewMcpService {
 
 	getVolumeConfirmationStatus({ enabled = this.isEnabled() } = {}) {
 		return this.getStatus({ enabled, runtimeStatus: this.volumeRuntimeStatus });
+	}
+
+	getStrategyResearchStatus({ enabled = this.isEnabled() } = {}) {
+		return this.getStatus({ enabled, runtimeStatus: this.strategyResearchRuntimeStatus });
+	}
+
+	async getMcpTools({ discover = true } = {}) {
+		if (!this.mcpToolInventory) {
+			return {
+				discovered: [],
+				wired: {},
+				discoveredAt: null,
+				discoveredSource: 'fallback-static-catalog',
+			};
+		}
+		return this.mcpToolInventory.snapshot({ discover });
+	}
+
+	getMcpToolsSync() {
+		if (!this.mcpToolInventory) {
+			return {
+				discovered: [],
+				wired: {},
+				discoveredAt: null,
+				discoveredSource: 'fallback-static-catalog',
+			};
+		}
+		return this.mcpToolInventory.snapshotSync();
 	}
 
 	getScannerErrorCategoryCounts() {
@@ -1282,7 +1326,7 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit });
+		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit, toolName: 'coin_analysis' });
 	}
 
 	async analyzeSymbolIdentifier({ raw, exchange, symbol, timeframe, analysisMode, signal }) {
@@ -1347,7 +1391,7 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit });
+		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit, toolName: 'combined_analysis' });
 	}
 
 	async callMultiTimeframeAnalysis({ symbol, exchange, signal }) {
@@ -1372,7 +1416,7 @@ class TradingViewMcpService {
 			}
 
 			return normalizedResult;
-		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit });
+		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit, toolName: 'multi_timeframe_analysis' });
 	}
 
 	async callMultiAgentAnalysis({ symbol, exchange, timeframe, signal }) {
@@ -1425,7 +1469,57 @@ class TradingViewMcpService {
 			signal,
 			runtimeStatusKey: 'volumeRuntimeStatus',
 			shouldRecordSuccess: () => !cacheOutcome.hit,
+			toolName: 'volume_confirmation_analysis',
 		});
+	}
+
+	async callStrategyResearch(toolName, args = {}, options = {}) {
+		const { signal } = options;
+
+		try {
+			const rpcResult = await this._callTool(toolName, args, { signal });
+
+			const timestamp = new Date().toISOString();
+			this.strategyResearchRuntimeStatus = {
+				...this.strategyResearchRuntimeStatus,
+				status: 'ready',
+				lastCheckedAt: timestamp,
+				lastSuccessAt: timestamp,
+				lastErrorCategory: null,
+				successCount: this.strategyResearchRuntimeStatus.successCount + 1,
+			};
+
+			return rpcResult && Object.prototype.hasOwnProperty.call(rpcResult, 'result')
+				? rpcResult.result
+				: rpcResult;
+		} catch (error) {
+			if (signal && signal.aborted && getAbortMessage(signal, '') === 'Job cancelled by user') {
+				throw error;
+			}
+
+			const timestamp = new Date().toISOString();
+			const errorCategory = this._getErrorCategory(error);
+			const prevCounts = this.strategyResearchRuntimeStatus.errorCategoryCounts
+				|| createEmptyErrorCategoryCounts();
+			const nextCounts = { ...prevCounts };
+			if (Object.prototype.hasOwnProperty.call(nextCounts, errorCategory)) {
+				nextCounts[errorCategory] += 1;
+			} else {
+				nextCounts.request_failed = (nextCounts.request_failed || 0) + 1;
+			}
+			this.strategyResearchRuntimeStatus = {
+				...this.strategyResearchRuntimeStatus,
+				status: 'degraded',
+				lastCheckedAt: timestamp,
+				lastFailureAt: timestamp,
+				lastErrorCategory: errorCategory,
+				failureCount: this.strategyResearchRuntimeStatus.failureCount + 1,
+				errorCategoryCounts: nextCounts,
+			};
+
+			error.message = `TradingView MCP strategy research ${toolName} failed: ${error.message}`;
+			throw error;
+		}
 	}
 
 	async callScanTool(toolName, args = {}, options = {}) {
@@ -1474,7 +1568,7 @@ class TradingViewMcpService {
 			}
 
 			return this._normalizeScanResult(result.data);
-		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit });
+		}, { signal, shouldRecordSuccess: () => !cacheOutcome.hit, toolName });
 	}
 
 	_normalizeScanResult(data) {
@@ -2313,7 +2407,7 @@ class TradingViewMcpService {
 		};
 	}
 
-	async _withRuntimeStatus(operation, { signal, runtimeStatusKey, shouldRecordSuccess } = {}) {
+	async _withRuntimeStatus(operation, { signal, runtimeStatusKey, shouldRecordSuccess, toolName } = {}) {
 		const runtimeStatusKeys = runtimeStatusKey ? ['runtimeStatus', runtimeStatusKey] : ['runtimeStatus'];
 
 		const breakerState = this.getBreakerState();
@@ -2322,6 +2416,9 @@ class TradingViewMcpService {
 		if (!canExecute) {
 			const error = new Error('TradingView MCP circuit breaker is OPEN');
 			error.category = 'circuit_breaker_open';
+			if (toolName) {
+				this.mcpToolInventory?.recordCall(toolName, { ok: false, category: 'circuit_breaker_open' });
+			}
 			throw error;
 		}
 		if (breakerState === 'half-open') this.breakerProbeInFlight = true;
@@ -2334,6 +2431,9 @@ class TradingViewMcpService {
 			}
 			const timestamp = new Date().toISOString();
 			this._recordSuccess();
+			if (toolName) {
+				this.mcpToolInventory?.recordCall(toolName, { ok: true, category: null });
+			}
 			runtimeStatusKeys.forEach((key) => {
 				this[key] = {
 					...this[key],
@@ -2369,6 +2469,9 @@ class TradingViewMcpService {
 				if (sharedToolFailure) this.recordedSharedToolFailureErrors.add(sharedToolFailure);
 			}
 			const errorCategory = this._getErrorCategory(error);
+			if (toolName) {
+				this.mcpToolInventory?.recordCall(toolName, { ok: false, category: errorCategory });
+			}
 			runtimeStatusKeys.forEach((key) => {
 				const prevCounts = (this[key] && this[key].errorCategoryCounts) || createEmptyErrorCategoryCounts();
 				const nextCounts = { ...prevCounts };

@@ -104,6 +104,15 @@ describe('public OpenAPI documentation', () => {
 		expect(client.text).not.toContain(process.env.WEBHOOK_API_KEY);
 	});
 
+	it('serves the public RUNBOOK.md without API-key authentication', async () => {
+		const response = await request(app).get('/RUNBOOK.md');
+
+		expect(response.status).toBe(200);
+		expect(response.headers['content-type']).toMatch(/text\/markdown/);
+		expect(response.text).toContain('# Cabros Bot Operator Runbook');
+		expect(response.text).not.toContain(process.env.WEBHOOK_API_KEY);
+	});
+
 	describe('hosting asset sync', () => {
 		const fs = require('fs');
 		const path = require('path');

@@ -309,6 +309,42 @@
           "order": "DESCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "tradingSignalOutcomesDaily",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "evaluationWindow",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "bucket",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "date",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "tradingSignalOutcomesDaily",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "evaluationWindow",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "bucket",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "date",
+          "order": "DESCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": [
@@ -326,6 +362,12 @@
     },
     {
       "collectionGroup": "binanceBracketOrders",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "tradingSignalOutcomesDaily",
       "fieldPath": "expiresAt",
       "ttl": true,
       "indexes": []
