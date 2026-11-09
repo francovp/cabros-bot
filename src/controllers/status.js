@@ -78,6 +78,7 @@ const newsAnalysisStorageService = require('../services/storage/NewsAnalysisStor
 const {
 	isNewsMonitorPaused,
 	getNewsMonitorPauseState,
+	syncNewsMonitorPauseState,
 } = require('./webhooks/handlers/newsMonitor/pauseState');
 const { getVolumeTracker } = require('./webhooks/handlers/newsMonitor/volumeTracker');
 const { getSelfTestService } = require('./diagnostics/selftest');
@@ -420,6 +421,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 	const binanceTradingStatus = binanceOrderService.getStatus();
 	const binanceTradingKillSwitchEnabled = binanceTradingEnabled;
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
+	const canaryAlertEnabled = Boolean(runtimeConfig.ENABLE_CANARY_ALERT) || isEnabled(process.env.ENABLE_CANARY_ALERT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
 	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
 	const signalClassMarkerEnabled = runtimeConfig.ENABLE_SIGNAL_CLASS_MARKER;
@@ -700,6 +702,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			binanceOrderAudit: binanceOrderAuditService.isEnabled(),
 			tradeLedger: tradeLedgerService.isEnabled(),
 			binanceTradingKillSwitch: binanceTradingKillSwitchEnabled,
+			canaryAlert: canaryAlertEnabled,
 			llmAlertEnrichment: llmAlertEnrichmentEnabled,
 			cloudflareAig: cloudflareAigEnabled,
 			messageFooterMetadata: messageFooterMetadataEnabled,
@@ -1035,6 +1038,13 @@ async function getApiStatus(req, res) {
 		if (typeof binanceOrderService?.getPauseState === 'function') {
 			try {
 				await binanceOrderService.getPauseState();
+			} catch (_) {
+				// Fail-open for status endpoint
+			}
+		}
+		if (typeof syncNewsMonitorPauseState === 'function') {
+			try {
+				await syncNewsMonitorPauseState();
 			} catch (_) {
 				// Fail-open for status endpoint
 			}

@@ -8545,6 +8545,123 @@
           }
         ]
       }
+    },
+    "/api/webhook/canary-alert": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Execute synthetic canary alert validation probe",
+        "description": "Executes an end-to-end synthetic canary alert pipeline validation probe across validation, enrichment, notification readiness, and database storage without persisting test alert records. When ENABLE_CANARY_ALERT=false, returns 404 Not Found.",
+        "operationId": "postCanaryAlert",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ],
+        "requestBody": {
+          "description": "Optional canary alert payload parameters",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Optional custom alert text"
+                  },
+                  "symbol": {
+                    "type": "string",
+                    "description": "Optional custom symbol to extract"
+                  },
+                  "deliver": {
+                    "type": "boolean",
+                    "description": "Whether to actually deliver notifications to configured channels",
+                    "default": false
+                  },
+                  "channels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Optional channels list"
+                  },
+                  "telegramChatId": {
+                    "type": "string"
+                  },
+                  "whatsappChatId": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Canary alert validation probe result (healthy or degraded)",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanaryAlertResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
+          "500": {
+            "$ref": "#/components/responses/ExpressFallthroughError"
+          },
+          "503": {
+            "description": "Canary alert validation probe failure (unhealthy)",
+            "headers": {
+              "X-Request-Id": {
+                "$ref": "#/components/headers/XRequestIdResponseHeader"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanaryAlertResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -27658,6 +27775,81 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "CanaryAlertResponse": {
+        "type": "object",
+        "required": [
+          "canary",
+          "success",
+          "overall",
+          "mode",
+          "stages",
+          "executionTimeMs",
+          "timestamp"
+        ],
+        "properties": {
+          "canary": {
+            "type": "boolean",
+            "example": true
+          },
+          "success": {
+            "type": "boolean",
+            "example": true
+          },
+          "overall": {
+            "type": "string",
+            "enum": [
+              "healthy",
+              "degraded",
+              "unhealthy"
+            ],
+            "example": "healthy"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "dry_run",
+              "delivery"
+            ],
+            "example": "dry_run"
+          },
+          "stages": {
+            "type": "object",
+            "required": [
+              "validation",
+              "enrichment",
+              "notification",
+              "storage"
+            ],
+            "properties": {
+              "validation": {
+                "type": "object"
+              },
+              "enrichment": {
+                "type": "object"
+              },
+              "notification": {
+                "type": "object"
+              },
+              "storage": {
+                "type": "object"
+              }
+            }
+          },
+          "totalMs": {
+            "type": "integer",
+            "example": 45
+          },
+          "executionTimeMs": {
+            "type": "integer",
+            "example": 45
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time",
+            "example": "2026-09-04T08:00:00.000Z"
           }
         }
       }

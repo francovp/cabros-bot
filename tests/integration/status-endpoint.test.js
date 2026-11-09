@@ -321,6 +321,7 @@ describe('Status endpoints', () => {
 		});
 		expect(response.body.service).not.toHaveProperty('timestamp');
 		expect(response.body.featureFlags.telegramBot).toBe(true);
+		expect(response.body.featureFlags.canaryAlert).toBe(false);
 		expect(response.body.featureFlags.priceQuoteCache).toBe(true);
 		expect(response.body.dependencies.priceQuoteCache).toMatchObject({
 			enabled: true, mode: 'in-memory', storage: 'memory',
@@ -561,6 +562,16 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.tradingViewConfluenceEnrichment).toBe(true);
+	});
+
+	it('reports canaryAlert as true when enabled', async () => {
+		process.env.ENABLE_CANARY_ALERT = 'true';
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.canaryAlert).toBe(true);
 	});
 
 	it('exposes deliveryHealth as an empty object when NotificationManager is not initialized', async () => {

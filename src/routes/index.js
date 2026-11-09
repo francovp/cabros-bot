@@ -13,6 +13,7 @@ const {
 } = require('../controllers/webhooks/handlers/scannerPresets/scannerPresets');
 const { postVolumeConfirmation } = require('../controllers/webhooks/handlers/volumeConfirmation/volumeConfirmation');
 const { postSymbolAnalysis } = require('../controllers/webhooks/handlers/symbolAnalysis/symbolAnalysis');
+const { postCanaryAlert } = require('../controllers/webhooks/handlers/canaryAlert/canaryAlert');
 const {
 	postCreateJob,
 	getJobList,
@@ -127,6 +128,7 @@ function getRoutes(botOrGetter) {
 	router.post('/webhook/volume-confirmation', validateApiKey, validateWebhookSignature, maintenanceModeMiddleware, validateRequest('/api/webhook/volume-confirmation'), idempotencyMiddleware, postVolumeConfirmation());
 	/* codeql[js/missing-rate-limiting] */
 	router.post('/webhook/symbol-analysis', validateApiKey, validateWebhookSignature, maintenanceModeMiddleware, validateRequest('/api/webhook/symbol-analysis'), idempotencyMiddleware, postSymbolAnalysis());
+	router.post('/webhook/canary-alert', validateApiKey, postCanaryAlert(botOrGetter));
 	router.get('/alerts', ...adminRead, listAlerts);
 	router.get('/alerts/replays', ...adminRead, listReplays);
 	router.get('/alerts/summary', ...adminRead, summarizeAlerts);
