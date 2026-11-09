@@ -91,10 +91,14 @@ async function deriveSearchQuery(alertText, opts = {}) {
 		return alertText;
 	}
 
-	if (!geminiCircuitBreaker.canExecute()) {
+	const attempt = typeof geminiCircuitBreaker.acquireAttempt === 'function'
+		? geminiCircuitBreaker.acquireAttempt()
+		: { allowed: geminiCircuitBreaker.canExecute(), token: geminiCircuitBreaker.isHalfOpen() ? Symbol('probe') : null };
+	if (!attempt.allowed) {
 		console.warn('[Grounding] Gemini circuit breaker is unavailable, falling back to raw alert text');
 		return alertText;
 	}
+	const probeToken = attempt.token;
 
 	try {
 		const { systemPrompt, userPrompt } = await promptService.getChatPrompt(
@@ -120,14 +124,14 @@ async function deriveSearchQuery(alertText, opts = {}) {
 			throw new Error('Invalid response from LLM');
 		}
 
-		geminiCircuitBreaker.recordSuccess();
+		geminiCircuitBreaker.recordSuccess(probeToken);
 		return response.text;
 	} catch (error) {
 		console.warn('[Grounding] Query derivation failed:', error.message);
 		if (!opts.signal?.aborted) {
-			geminiCircuitBreaker.recordFailure(error);
-		} else {
-			geminiCircuitBreaker.releaseProbe();
+			geminiCircuitBreaker.recordFailure(error, probeToken);
+		} else if (probeToken) {
+			geminiCircuitBreaker.releaseProbe(probeToken);
 		}
 		// Fall back to truncated alert text
 		return alertText;

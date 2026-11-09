@@ -395,10 +395,13 @@ async function requestJson(path, params, timeoutOverride) {
 		throw new EquityMarketDataError(REASONS.NOT_CONFIGURED);
 	}
 
-	if (!twelveDataCircuitBreaker.canExecute()) {
+	const attempt = typeof twelveDataCircuitBreaker.acquireAttempt === 'function'
+		? twelveDataCircuitBreaker.acquireAttempt()
+		: { allowed: twelveDataCircuitBreaker.canExecute(), token: twelveDataCircuitBreaker.isHalfOpen() ? Symbol('probe') : null };
+	if (!attempt.allowed) {
 		throw new EquityMarketDataError(REASONS.CIRCUIT_BREAKER_OPEN, { status: 503 });
 	}
-	const isHalfOpenProbe = twelveDataCircuitBreaker.isHalfOpen();
+	const probeToken = attempt.token;
 
 	const totalTimeoutMs = timeoutOverride === undefined ? config.timeoutMs : parseTimeout(timeoutOverride);
 	const startMs = Date.now();
@@ -406,7 +409,7 @@ async function requestJson(path, params, timeoutOverride) {
 	try {
 		await waitForPacing(totalTimeoutMs);
 	} catch (error) {
-		if (isHalfOpenProbe) twelveDataCircuitBreaker.releaseProbe();
+		if (probeToken) twelveDataCircuitBreaker.releaseProbe(probeToken);
 		throw error;
 	}
 
@@ -459,7 +462,7 @@ async function requestJson(path, params, timeoutOverride) {
 			throw new EquityMarketDataError(reason, { status: response.status });
 		}
 
-		twelveDataCircuitBreaker.recordSuccess();
+		twelveDataCircuitBreaker.recordSuccess(probeToken);
 		recordReadinessSafely(() => _recordProviderSuccess());
 		return body;
 	} catch (error) {
@@ -475,9 +478,9 @@ async function requestJson(path, params, timeoutOverride) {
 		if (normalized.reason !== REASONS.NO_DATA
 			&& normalized.reason !== REASONS.CIRCUIT_BREAKER_OPEN
 			&& !requestSpecificRejection) {
-			twelveDataCircuitBreaker.recordFailure(normalized);
-		} else {
-			twelveDataCircuitBreaker.releaseProbe();
+			twelveDataCircuitBreaker.recordFailure(normalized, probeToken);
+		} else if (probeToken) {
+			twelveDataCircuitBreaker.releaseProbe(probeToken);
 		}
 		recordReadinessSafely(() => _recordProviderFailure(normalized.reason, {
 			affectsReadiness: !requestSpecificRejection,

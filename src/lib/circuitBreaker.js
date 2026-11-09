@@ -41,6 +41,7 @@ class CircuitBreaker {
 		this.openedAt = null;
 		this.lastStateChangeAt = null;
 		this.isProbeInFlight = false;
+		this.currentProbeToken = null;
 	}
 
 	getThreshold() {
@@ -104,27 +105,49 @@ class CircuitBreaker {
 		return this.getState() === STATES.CLOSED;
 	}
 
-	canExecute() {
+	acquireAttempt() {
 		const state = this.getState();
 		if (state === STATES.CLOSED) {
-			return true;
+			return { allowed: true, isProbe: false, token: null };
 		}
 		if (state === STATES.HALF_OPEN) {
 			if (!this.isProbeInFlight) {
+				const token = Symbol('probe');
+				this.currentProbeToken = token;
 				this.isProbeInFlight = true;
-				return true;
+				return { allowed: true, isProbe: true, token };
 			}
-			return false;
+			return { allowed: false, isProbe: false, token: null };
 		}
-		return false;
+		return { allowed: false, isProbe: false, token: null };
 	}
 
-	releaseProbe() {
-		this.isProbeInFlight = false;
+	canExecute() {
+		return this.acquireAttempt().allowed;
 	}
 
-	recordSuccess() {
+	getProbeToken() {
+		return this.currentProbeToken;
+	}
+
+	releaseProbe(token) {
+		if (token === undefined) {
+			this.currentProbeToken = null;
+			this.isProbeInFlight = false;
+			return;
+		}
+		if (token && token === this.currentProbeToken) {
+			this.currentProbeToken = null;
+			this.isProbeInFlight = false;
+		}
+	}
+
+	recordSuccess(token) {
+		if (token && token !== this.currentProbeToken && this.state === STATES.HALF_OPEN) {
+			return;
+		}
 		this.consecutiveFailures = 0;
+		this.currentProbeToken = null;
 		this.isProbeInFlight = false;
 		if (this.state !== STATES.CLOSED) {
 			this.state = STATES.CLOSED;
@@ -133,7 +156,11 @@ class CircuitBreaker {
 		}
 	}
 
-	recordFailure(error) {
+	recordFailure(error, token) {
+		if (token && token !== this.currentProbeToken && this.state === STATES.HALF_OPEN) {
+			return;
+		}
+		this.currentProbeToken = null;
 		this.isProbeInFlight = false;
 		this.consecutiveFailures += 1;
 		const threshold = this.getThreshold();
@@ -182,6 +209,7 @@ class CircuitBreaker {
 		this.openedAt = null;
 		this.lastStateChangeAt = null;
 		this.isProbeInFlight = false;
+		this.currentProbeToken = null;
 	}
 }
 
