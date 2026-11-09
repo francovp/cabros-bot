@@ -104,6 +104,7 @@ const {
 	isTestAlertEnabled,
 } = require('./admin/testAlert');
 const { tokenCostBudgetService } = require('../lib/tokenUsage');
+const costEstimationService = require('../services/cost/CostEstimationService');
 const { isMaintenanceModeEnabled } = require('../lib/maintenanceMode');
 const DEFAULT_AZURE_LLM_ENDPOINT = 'https://models.github.ai/inference';
 const DEFAULT_OPENROUTER_MODEL = 'google/gemini-2.0-flash-001';
@@ -733,6 +734,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			whatsappTemplateMode: !!process.env.WHATSAPP_TEMPLATE_NAME,
 			testAlert: isTestAlertEnabled(),
 			tokenCostBudget: tokenCostBudgetService.isEnabled(),
+			costEstimation: costEstimationService.isEnabled(),
 			signalClassMarker: signalClassMarkerEnabled,
 			chartAttachments: chartAttachmentsEnabled,
 			equitySessionTag: runtimeConfig.ENABLE_EQUITY_SESSION_TAG,
@@ -995,6 +997,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 				rateLimitState: getTestAlertRateLimitState(),
 			},
 			tokenCostBudget: tokenCostBudgetService.getBudgetStatus(),
+			costEstimation: costEstimationService.getStatus(),
 			selfTest: getSelfTestService().getStatus(),
 			telegramCommandAuth: telegramCommandAuth.getStatus(),
 			adminAuth: adminAuthStatus,

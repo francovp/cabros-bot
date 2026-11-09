@@ -3,7 +3,7 @@
   "info": {
     "title": "Cabros Bot API",
     "version": "0.1.0",
-    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter is deprecated and exists only for legacy compatibility — it may leak through reverse-proxy access logs. A one-time per-process deprecation warning is emitted on use; setting API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) rejects query-parameter auth with 401 API_KEY_QUERY_REMOVED after the date. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true. HTTP 429 responses include Retry-After and retryAfterSeconds. Dedicated per-endpoint limits default to heavy 5, trading 10, standard 30, and light 100 requests per 60 seconds. All webhook/news ingest paths share an aggregate 1,000-request bucket per RATE_LIMIT_WINDOW_MS; tiered webhook routes enforce both the aggregate and per-endpoint limits, while alert/message use only the aggregate. Other routes use RATE_LIMIT_WINDOW_MS and RATE_LIMIT_MAX."
+    "description": "Protected alerting and market-analysis APIs. Machine clients use the x-api-key header; the api-key query parameter is deprecated and exists only for legacy compatibility \u2014 it may leak through reverse-proxy access logs. A one-time per-process deprecation warning is emitted on use; setting API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) rejects query-parameter auth with 401 API_KEY_QUERY_REMOVED after the date. The browser admin console can use Firebase ID tokens on documented admin operations when ENABLE_FIREBASE_ADMIN_AUTH=true. HTTP 429 responses include Retry-After and retryAfterSeconds. Dedicated per-endpoint limits default to heavy 5, trading 10, standard 30, and light 100 requests per 60 seconds. All webhook/news ingest paths share an aggregate 1,000-request bucket per RATE_LIMIT_WINDOW_MS; tiered webhook routes enforce both the aggregate and per-endpoint limits, while alert/message use only the aggregate. Other routes use RATE_LIMIT_WINDOW_MS and RATE_LIMIT_MAX."
   },
   "servers": [
     {
@@ -427,7 +427,7 @@
                 },
                 "examples": {
                   "depthReadiness": {
-                    "summary": "?depth=readiness — always 200; degradation is reported in the body",
+                    "summary": "?depth=readiness \u2014 always 200; degradation is reported in the body",
                     "value": {
                       "ready": true,
                       "failClosed": false,
@@ -463,7 +463,7 @@
                     }
                   },
                   "depthReadinessDegraded": {
-                    "summary": "?depth=readiness with a degraded provider — still 200 (advisory)",
+                    "summary": "?depth=readiness with a degraded provider \u2014 still 200 (advisory)",
                     "value": {
                       "ready": false,
                       "failClosed": false,
@@ -545,7 +545,7 @@
                 },
                 "examples": {
                   "dependenciesHealthy": {
-                    "summary": "/ready?depth=dependencies — bootstrap ready AND every considered dependency healthy",
+                    "summary": "/ready?depth=dependencies \u2014 bootstrap ready AND every considered dependency healthy",
                     "value": {
                       "ready": true,
                       "failClosed": true,
@@ -594,7 +594,7 @@
                     }
                   },
                   "bootstrapReady": {
-                    "summary": "Bare /ready — bootstrap gate only, no provider probes",
+                    "summary": "Bare /ready \u2014 bootstrap gate only, no provider probes",
                     "value": {
                       "status": "ready",
                       "ready": true,
@@ -639,7 +639,7 @@
                 },
                 "examples": {
                   "bootstrapPending": {
-                    "summary": "Bare /ready — bootstrap still pending (503)",
+                    "summary": "Bare /ready \u2014 bootstrap still pending (503)",
                     "value": {
                       "status": "pending",
                       "ready": false,
@@ -661,7 +661,7 @@
                     }
                   },
                   "dependenciesDegraded": {
-                    "summary": "/ready?depth=dependencies — dependency degraded (503)",
+                    "summary": "/ready?depth=dependencies \u2014 dependency degraded (503)",
                     "value": {
                       "ready": false,
                       "failClosed": true,
@@ -711,7 +711,7 @@
                     }
                   },
                   "bootstrapPendingBlocksDependencies": {
-                    "summary": "/ready?depth=dependencies — bootstrap still pending, so the gate stays 503 even though every dependency is healthy",
+                    "summary": "/ready?depth=dependencies \u2014 bootstrap still pending, so the gate stays 503 even though every dependency is healthy",
                     "value": {
                       "ready": false,
                       "failClosed": true,
@@ -1646,7 +1646,7 @@
         "tags": [
           "Alerts"
         ],
-        "summary": "Record a trader verdict (👍 / 👎) for a stored alert",
+        "summary": "Record a trader verdict (\ud83d\udc4d / \ud83d\udc4e) for a stored alert",
         "operationId": "submitAlertFeedback",
         "description": "Persists a single trader verdict per (alertId, chatId) tuple. Re-clicks update the verdict instead of appending a new row. Bounded by ALERT_FEEDBACK_RETENTION_DAYS and a SHA-256 chat hash; raw chat ids are never returned through this surface.",
         "requestBody": {
@@ -4250,7 +4250,7 @@
           "Signal outcomes"
         ],
         "summary": "Retrieve confidence calibration analysis for signal outcomes",
-        "description": "Calculates empirical target-hit rates and average returns grouped by confidence score buckets (e.g. 0.70–0.75, 0.75–0.80, 0.80–0.85, 0.85–0.90, 0.90–1.00) over evaluated signals, suggesting an optimal confidence threshold.",
+        "description": "Calculates empirical target-hit rates and average returns grouped by confidence score buckets (e.g. 0.70\u20130.75, 0.75\u20130.80, 0.80\u20130.85, 0.85\u20130.90, 0.90\u20131.00) over evaluated signals, suggesting an optimal confidence threshold.",
         "operationId": "getOutcomesCalibration",
         "parameters": [
           {
@@ -4902,7 +4902,7 @@
           "Trading"
         ],
         "summary": "Preview a Binance Spot order without submitting it",
-        "description": "Accepts only MARKET and LIMIT order types. Returns a BINANCE_ORDER_PREVIEW response with the LOT_SIZE-adjusted quantity, projected notional, estimated maker/taker fees, slippage estimate from a fail-open depth probe (4-second AbortController deadline), and a 5-second expiresAt token. The endpoint is read-only and never calls submitNewOrder. Preview-time validation reuses the same exchange-info filters and Binance order-test filters as POST /api/trading/binance/orders, but cannot be replayed after expiresAt. maxSlippageBps is honored for MARKET BUY orders that include a depth snapshot; wouldExceedBudget is reported when the slippageBps estimate exceeds the supplied budget but no order is rejected. BINANCE_TRADING_MAX_NOTIONAL is enforced — previews above the cap return 403 MAX_NOTIONAL_EXCEEDED. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
+        "description": "Accepts only MARKET and LIMIT order types. Returns a BINANCE_ORDER_PREVIEW response with the LOT_SIZE-adjusted quantity, projected notional, estimated maker/taker fees, slippage estimate from a fail-open depth probe (4-second AbortController deadline), and a 5-second expiresAt token. The endpoint is read-only and never calls submitNewOrder. Preview-time validation reuses the same exchange-info filters and Binance order-test filters as POST /api/trading/binance/orders, but cannot be replayed after expiresAt. maxSlippageBps is honored for MARKET BUY orders that include a depth snapshot; wouldExceedBudget is reported when the slippageBps estimate exceeds the supplied budget but no order is rejected. BINANCE_TRADING_MAX_NOTIONAL is enforced \u2014 previews above the cap return 403 MAX_NOTIONAL_EXCEEDED. Authentication is conditional: when BINANCE_TRADING_API_KEY is configured, only the BinanceTradingApiKeyHeader is accepted. When unset, the route uses admin auth, which accepts Firebase bearer tokens when enabled and API-key credentials under the ADMIN_API_KEY/WEBHOOK_API_KEY fallback rules. Legacy query authentication requires ADMIN_API_KEY to be unset.",
         "operationId": "postBinanceSpotOrderPreview",
         "requestBody": {
           "required": true,
@@ -5009,7 +5009,7 @@
                         "makerFeeBps": 10,
                         "appliedFeeBps": 10,
                         "estimatedFeeQuote": "0.65",
-                        "label": "estimate — not a Binance fill guarantee"
+                        "label": "estimate \u2014 not a Binance fill guarantee"
                       },
                       "slippage": {
                         "slippageBudgetBps": 75,
@@ -5500,7 +5500,7 @@
                     }
                   },
                   "tradingUnavailable": {
-                    "summary": "Authoritative pause state could not be read — failing closed",
+                    "summary": "Authoritative pause state could not be read \u2014 failing closed",
                     "value": {
                       "success": false,
                       "error": "Binance Spot order submission is unavailable (control state cannot be read; failing closed)",
@@ -5979,7 +5979,7 @@
             "$ref": "#/components/responses/Error"
           },
           "503": {
-            "description": "Authoritative pause storage is unavailable — refusing to mutate state",
+            "description": "Authoritative pause storage is unavailable \u2014 refusing to mutate state",
             "headers": {
               "X-Request-Id": {
                 "$ref": "#/components/headers/XRequestIdResponseHeader"
@@ -6131,7 +6131,7 @@
             "$ref": "#/components/responses/Error"
           },
           "503": {
-            "description": "Authoritative pause storage is unavailable — refusing to mutate state",
+            "description": "Authoritative pause storage is unavailable \u2014 refusing to mutate state",
             "headers": {
               "X-Request-Id": {
                 "$ref": "#/components/headers/XRequestIdResponseHeader"
@@ -7431,7 +7431,7 @@
           "Operations"
         ],
         "summary": "Get deployment banner snapshot",
-        "description": "Returns the public, unauthenticated deployment banner snapshot. Mirrors the X-Cabros-* response headers (when ENABLE_ENVIRONMENT_BANNER is enabled). The endpoint is auth-free and exposes only environment/commit/name/deployedAt — never credentials or webhook secrets. Use it for external status pages and badge generators that cannot read response headers.",
+        "description": "Returns the public, unauthenticated deployment banner snapshot. Mirrors the X-Cabros-* response headers (when ENABLE_ENVIRONMENT_BANNER is enabled). The endpoint is auth-free and exposes only environment/commit/name/deployedAt \u2014 never credentials or webhook secrets. Use it for external status pages and badge generators that cannot read response headers.",
         "operationId": "getBanner",
         "security": [],
         "responses": {
@@ -8063,13 +8063,13 @@
           "429": {
             "$ref": "#/components/responses/Error"
           },
-          "500": {
-            "$ref": "#/components/responses/Error"
-          },
           "502": {
             "$ref": "#/components/responses/Error"
           },
           "504": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
             "$ref": "#/components/responses/Error"
           }
         },
@@ -8262,22 +8262,22 @@
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
-          "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
-          },
-          "415": {
-            "$ref": "#/components/responses/ExpressParserError"
-          },
           "429": {
-            "$ref": "#/components/responses/Error"
-          },
-          "500": {
             "$ref": "#/components/responses/Error"
           },
           "502": {
             "$ref": "#/components/responses/Error"
           },
           "504": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
             "$ref": "#/components/responses/Error"
           }
         },
@@ -8458,22 +8458,22 @@
           "409": {
             "$ref": "#/components/responses/IdempotencyConflict"
           },
-          "413": {
-            "$ref": "#/components/responses/PayloadTooLarge"
-          },
-          "415": {
-            "$ref": "#/components/responses/ExpressParserError"
-          },
           "429": {
-            "$ref": "#/components/responses/Error"
-          },
-          "500": {
             "$ref": "#/components/responses/Error"
           },
           "502": {
             "$ref": "#/components/responses/Error"
           },
           "504": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          },
+          "500": {
             "$ref": "#/components/responses/Error"
           }
         },
@@ -8486,6 +8486,64 @@
           }
         ],
         "x-admin-role": "admin.operator"
+      }
+    },
+    "/api/operations/estimate": {
+      "post": {
+        "operationId": "postOperationEstimate",
+        "summary": "Estimate cost for an operation with zero billable calls",
+        "description": "Issue #745: returns a costEstimate for the given operation without invoking Gemini, TradingView MCP, Brave Search, Firestore, or any billable provider. operation selects one of news-monitor, expanded-analysis-alert, market-scanner-alert, or tradingview-analysis; remaining body fields mirror that operation's request body.",
+        "tags": [
+          "Operations"
+        ],
+        "security": [
+          {
+            "ApiKeyHeader": []
+          },
+          {
+            "ApiKeyQuery": []
+          }
+        ],
+        "requestBody": {
+          "$ref": "#/components/requestBodies/OperationEstimate"
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/OperationEstimateResult"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "408": {
+            "$ref": "#/components/responses/RequestTimeout"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimitExceeded"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/ExpressParserError"
+          }
+        },
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/XRequestIdHeader"
+          }
+        ]
       }
     },
     "/api/webhook/canary-alert": {
@@ -8618,7 +8676,7 @@
         "type": "apiKey",
         "in": "query",
         "name": "api-key",
-        "description": "Deprecated (GH-756): legacy compatibility only — query strings may be logged by reverse proxies and access logs. Prefer the x-api-key header. Admin routes accept query credentials only through the WEBHOOK_API_KEY fallback when ADMIN_API_KEY is unset. Binance routes accept query credentials only when BINANCE_TRADING_API_KEY is unset and the admin-auth fallback also accepts the query. A process-scoped deprecation warning is logged on first use, and API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) can reject query auth with 401 API_KEY_QUERY_REMOVED.",
+        "description": "Deprecated (GH-756): legacy compatibility only \u2014 query strings may be logged by reverse proxies and access logs. Prefer the x-api-key header. Admin routes accept query credentials only through the WEBHOOK_API_KEY fallback when ADMIN_API_KEY is unset. Binance routes accept query credentials only when BINANCE_TRADING_API_KEY is unset and the admin-auth fallback also accepts the query. A process-scoped deprecation warning is logged on first use, and API_KEY_QUERY_SUNSET (YYYY-MM-DD UTC) can reject query auth with 401 API_KEY_QUERY_REMOVED.",
         "x-deprecated": true
       },
       "AdminApiKeyHeader": {
@@ -8751,9 +8809,20 @@
       "DryRun": {
         "name": "dryRun",
         "in": "query",
-        "description": "When true, analyze and return alerts without notification delivery, deduplication cache claims/writes, or signal-outcome persistence.",
+        "description": "When true, analyze and return alerts without notification delivery, deduplication cache claims/writes, or signal-outcome persistence. When 'cost' (or ?estimate=true), return only a costEstimate with zero billable calls (Issue #745).",
         "schema": {
-          "type": "boolean",
+          "type": [
+            "boolean",
+            "string"
+          ],
+          "enum": [
+            true,
+            false,
+            "true",
+            "false",
+            "cost",
+            "estimate"
+          ],
           "default": false
         }
       },
@@ -10101,6 +10170,22 @@
             "example": {
               "description": "Updated Discord webhook bridge",
               "enabled": false
+            }
+          }
+        }
+      },
+      "OperationEstimate": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OperationEstimateRequest"
+            },
+            "example": {
+              "operation": "news-monitor",
+              "crypto": [
+                "BTCUSDT",
+                "ETHUSD"
+              ]
             }
           }
         }
@@ -12727,7 +12812,7 @@
                 },
                 "message": {
                   "type": "string",
-                  "example": "Preferencias eliminadas. Se usarán valores por defecto."
+                  "example": "Preferencias eliminadas. Se usar\u00e1n valores por defecto."
                 }
               },
               "required": [
@@ -12908,6 +12993,103 @@
                   }
                 }
               }
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
+      },
+      "CostEstimateResult": {
+        "description": "Cost estimate computed with zero billable calls",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CostEstimateResponse"
+            },
+            "example": {
+              "success": true,
+              "dryRun": "cost",
+              "costEstimate": {
+                "operation": "news-monitor",
+                "dryRun": "cost",
+                "estimate": true,
+                "noBillableCalls": true,
+                "model": "gemini-2.5-flash",
+                "tokensIn": 1032,
+                "tokensOut": 400,
+                "estimatedTotalTokens": 1432,
+                "estimatedCostUsd": 0.00131,
+                "providerBreakdown": [
+                  {
+                    "provider": "gemini",
+                    "model": "gemini-2.5-flash",
+                    "calls": 2,
+                    "tokensIn": 1032,
+                    "tokensOut": 400,
+                    "estimatedTotalTokens": 1432,
+                    "costUsd": 0.00131,
+                    "ratePer1m": {
+                      "input": 0.3,
+                      "output": 2.5
+                    }
+                  }
+                ],
+                "externalCosts": [
+                  {
+                    "kind": "brave-search",
+                    "calls": 1,
+                    "status": "unknown",
+                    "estimatedCostUsd": null,
+                    "reason": "no public price table"
+                  }
+                ],
+                "quotaImpact": {
+                  "dailyQuotaTokens": 1000000,
+                  "percent": 0.1432,
+                  "summary": "~0.1432% of configured daily quota (1000000 tokens)"
+                },
+                "perSymbol": [
+                  {
+                    "symbol": "BTCUSDT",
+                    "tokensIn": 1032,
+                    "tokensOut": 400,
+                    "estimatedTotalTokens": 1432,
+                    "costUsd": 0.00131
+                  }
+                ],
+                "callCount": 2,
+                "warnings": [],
+                "assumptions": {
+                  "tokenApprox": "rough upper bound: ceil(chars / 4) for input; output uses a configured budget ceiling",
+                  "outputBudgetKind": "COST_ESTIMATION_OUTPUT_TOKENS_NEWS",
+                  "outputTokensPerCall": 200,
+                  "ratesSource": "default",
+                  "estimateOnly": "Estimate only \u2014 actual rate may differ; MCP/search costs are unknown, not $0."
+                }
+              },
+              "tokensIn": 1032,
+              "tokensOut": 400,
+              "estimatedTotalTokens": 1432,
+              "estimatedCostUsd": 0.00131,
+              "requestId": "00000000-0000-4000-8000-000000000000"
+            }
+          }
+        },
+        "headers": {
+          "X-Request-Id": {
+            "$ref": "#/components/headers/XRequestIdResponseHeader"
+          }
+        }
+      },
+      "OperationEstimateResult": {
+        "description": "Cost estimate for the requested operation",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/OperationEstimateResponse"
             }
           }
         },
@@ -13904,7 +14086,7 @@
       },
       "SignalClassClassification": {
         "type": "object",
-        "description": "In-memory counters for signal classification on the webhook ingest path. `featureFlags.signalClassMarker` only states that the badge marker is allowed to render; this block states whether alerts are actually being classified, so a silent regression back to 100% `unknown` is detectable instead of looking healthy. Counters reset on process restart, never block delivery or persistence, and the field is omitted entirely from /api/status when no alert has been classified yet. Contains only enum class names and counts — never alert text, symbols, or chat ids.",
+        "description": "In-memory counters for signal classification on the webhook ingest path. `featureFlags.signalClassMarker` only states that the badge marker is allowed to render; this block states whether alerts are actually being classified, so a silent regression back to 100% `unknown` is detectable instead of looking healthy. Counters reset on process restart, never block delivery or persistence, and the field is omitted entirely from /api/status when no alert has been classified yet. Contains only enum class names and counts \u2014 never alert text, symbols, or chat ids.",
         "required": [
           "window",
           "totalAlerts",
@@ -14484,7 +14666,7 @@
           },
           "ready": {
             "type": "boolean",
-            "description": "True when the audit trail is enabled and Firestore credentials are present (credential readiness only, equivalent to `enabled && configured`); it does not prove a write has succeeded — audit writes are fail-open and a failed write is dropped with a warning."
+            "description": "True when the audit trail is enabled and Firestore credentials are present (credential readiness only, equivalent to `enabled && configured`); it does not prove a write has succeeded \u2014 audit writes are fail-open and a failed write is dropped with a warning."
           },
           "status": {
             "type": "string",
@@ -18707,7 +18889,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Spanish warnings surfaced from the plan-quality gate (e.g. R/R por debajo del mínimo)."
+            "description": "Spanish warnings surfaced from the plan-quality gate (e.g. R/R por debajo del m\u00ednimo)."
           }
         }
       },
@@ -18981,7 +19163,7 @@
               "firestore_unavailable",
               null
             ],
-            "description": "Closed enum so a Firestore error message — which embeds the project and database path — can never reach a status response."
+            "description": "Closed enum so a Firestore error message \u2014 which embeds the project and database path \u2014 can never reach a status response."
           }
         }
       },
@@ -19101,7 +19283,7 @@
               "unknown_error",
               null
             ],
-            "description": "Closed enum so a Firestore error message — which embeds the fully-qualified project/database path — can never reach a status response."
+            "description": "Closed enum so a Firestore error message \u2014 which embeds the fully-qualified project/database path \u2014 can never reach a status response."
           },
           "lastMissingIndex": {
             "type": "boolean",
@@ -19453,7 +19635,7 @@
       },
       "ScannerPresetStorage": {
         "type": "object",
-        "description": "Scanner-preset persistence state. `mode` and `backend` are intent-derived: they report the configured target and must not flip to `memory` while ENABLE_FIRESTORE_SCANNER_PRESETS=true and credentials are present, because an operator reading `memory` concludes the feature is off. `status` separates the three causes that need different action — `disabled` (ENABLE_FIRESTORE_SCANNER_PRESETS is not true), `misconfigured` (credentials genuinely absent or rejected), and `degraded` (a durable operation failed and nothing has answered since). `unverified` means no durable operation has been observed yet: neither healthy nor broken, and the normal state immediately after a restart.",
+        "description": "Scanner-preset persistence state. `mode` and `backend` are intent-derived: they report the configured target and must not flip to `memory` while ENABLE_FIRESTORE_SCANNER_PRESETS=true and credentials are present, because an operator reading `memory` concludes the feature is off. `status` separates the three causes that need different action \u2014 `disabled` (ENABLE_FIRESTORE_SCANNER_PRESETS is not true), `misconfigured` (credentials genuinely absent or rejected), and `degraded` (a durable operation failed and nothing has answered since). `unverified` means no durable operation has been observed yet: neither healthy nor broken, and the normal state immediately after a restart.",
         "required": [
           "enabled",
           "configured",
@@ -19658,7 +19840,7 @@
           },
           "writesAttempted": {
             "type": "integer",
-            "description": "Durable write attempts, including those where Firebase initialization was rejected — asking for durable storage and not getting it is the event an operator needs to see. A rejected initialization is charged to the operation that triggered it, so browsing the collection never increments this counter."
+            "description": "Durable write attempts, including those where Firebase initialization was rejected \u2014 asking for durable storage and not getting it is the event an operator needs to see. A rejected initialization is charged to the operation that triggered it, so browsing the collection never increments this counter."
           },
           "writesSucceeded": {
             "type": "integer"
@@ -19698,7 +19880,7 @@
               "firestore_unavailable"
             ],
             "nullable": true,
-            "description": "Closed enum so a Firestore error message — which embeds the fully-qualified project and database path — can never leak into a status response."
+            "description": "Closed enum so a Firestore error message \u2014 which embeds the fully-qualified project and database path \u2014 can never leak into a status response."
           }
         }
       },
@@ -20014,9 +20196,20 @@
             "description": "Optional list of alertable event categories to deliver. When specified, only detected news events matching one of these categories will trigger notifications. Omitted defaults to delivering all categories. Valid values: price_surge, price_decline, public_figure, regulatory."
           },
           "dryRun": {
-            "type": "boolean",
+            "type": [
+              "boolean",
+              "string"
+            ],
+            "enum": [
+              true,
+              false,
+              "true",
+              "false",
+              "cost",
+              "estimate"
+            ],
             "default": false,
-            "description": "When true, analyze without notification delivery or persistence. The query parameter form is supported for GET and POST."
+            "description": "When true, analyze without delivery. When 'cost', return only a costEstimate with zero billable calls (Issue #745)."
           },
           "channels": {
             "type": "array",
@@ -22290,7 +22483,12 @@
             "$ref": "#/components/schemas/BuildInfo"
           },
           "featureFlags": {
-            "$ref": "#/components/schemas/StatusFeatureFlags"
+            "$ref": "#/components/schemas/StatusFeatureFlags",
+            "properties": {
+              "costEstimation": {
+                "type": "boolean"
+              }
+            }
           },
           "deliveryChannels": {
             "$ref": "#/components/schemas/JsonObject"
@@ -22520,6 +22718,9 @@
               },
               "dailyDigest": {
                 "$ref": "#/components/schemas/DailyDigestDependency"
+              },
+              "costEstimation": {
+                "$ref": "#/components/schemas/CostEstimationDependency"
               }
             }
           }
@@ -24251,7 +24452,7 @@
           },
           "bySymbol": {
             "type": "object",
-            "description": "Per-symbol analysis volume. The count key is `totalAnalyses` here and `total` in `byEventCategory`, and the service does not emit a per-row alert rate — derive it as `alertsSent / totalAnalyses`.",
+            "description": "Per-symbol analysis volume. The count key is `totalAnalyses` here and `total` in `byEventCategory`, and the service does not emit a per-row alert rate \u2014 derive it as `alertsSent / totalAnalyses`.",
             "additionalProperties": {
               "type": "object",
               "required": [
@@ -24595,7 +24796,7 @@
               "boolean",
               "null"
             ],
-            "description": "Result of the bounded broker readiness probe: true once a probe has proven connectivity, false when the last probe ran and the broker did not answer, and null when no probe has produced a verdict — which includes queue mode being disabled, a missing broker URL (misconfigured), and an enabled+configured queue whose probe has not settled yet. Unlike `configured`, this is evidence rather than configuration shape."
+            "description": "Result of the bounded broker readiness probe: true once a probe has proven connectivity, false when the last probe ran and the broker did not answer, and null when no probe has produced a verdict \u2014 which includes queue mode being disabled, a missing broker URL (misconfigured), and an enabled+configured queue whose probe has not settled yet. Unlike `configured`, this is evidence rather than configuration shape."
           },
           "lastBrokerProbeAt": {
             "type": [
@@ -26424,7 +26625,7 @@
       },
       "DailyDigestDependency": {
         "type": "object",
-        "description": "Daily trader digest scheduler (Issue #790). dependencies.dailyDigest reports enabled/configured/ready plus non-sensitive run metadata (deliveryHourUtc, maxSpendUsd, lastRunAt, lastRunStatus, lastRunDateStr, lastRunDigestMessageId, dailyChats as hashed prefixes, leaseState). Durable sends require ENABLE_FIRESTORE_DIGEST_RUNS and TELEGRAM_DIGEST_CHAT_ID; otherwise status is degraded and the send is omitted. No chat ID or token is exposed. The /digest Telegram command (not an HTTP route) runs the previous-UTC-day digest on demand; /digest --dry-run returns the formatted MarkdownV2 without sending or persisting. Sample digest payload: \"*📊 Daily Digest — 2026-11-07*\\n\\n*Alertas:* 12\\n*Por fuente:* webhook 9 · market-scanner 3\\n*Por canal:* telegram 12/12\\n*Outcomes (maduros 1D):* hit-rate 55.0% | elegibles 10 / evaluados 8 / pendientes 2\\n\\n*Top scanner hits:*\\n1. BINANCE:BTCUSDT\\n\\n*Top outcome winners:*\\n1. NASDAQ:NVDA R=2.10\\n\\n*Gasto LLM:* $0.0123\"",
+        "description": "Daily trader digest scheduler (Issue #790). dependencies.dailyDigest reports enabled/configured/ready plus non-sensitive run metadata (deliveryHourUtc, maxSpendUsd, lastRunAt, lastRunStatus, lastRunDateStr, lastRunDigestMessageId, dailyChats as hashed prefixes, leaseState). Durable sends require ENABLE_FIRESTORE_DIGEST_RUNS and TELEGRAM_DIGEST_CHAT_ID; otherwise status is degraded and the send is omitted. No chat ID or token is exposed. The /digest Telegram command (not an HTTP route) runs the previous-UTC-day digest on demand; /digest --dry-run returns the formatted MarkdownV2 without sending or persisting. Sample digest payload: \"*\ud83d\udcca Daily Digest \u2014 2026-11-07*\\n\\n*Alertas:* 12\\n*Por fuente:* webhook 9 \u00b7 market-scanner 3\\n*Por canal:* telegram 12/12\\n*Outcomes (maduros 1D):* hit-rate 55.0% | elegibles 10 / evaluados 8 / pendientes 2\\n\\n*Top scanner hits:*\\n1. BINANCE:BTCUSDT\\n\\n*Top outcome winners:*\\n1. NASDAQ:NVDA R=2.10\\n\\n*Gasto LLM:* $0.0123\"",
         "required": [
           "enabled",
           "configured",
@@ -27126,6 +27327,454 @@
               "null"
             ],
             "format": "date-time"
+          }
+        }
+      },
+      "CostEstimateProviderBreakdown": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider",
+          "model",
+          "calls",
+          "tokensIn",
+          "tokensOut",
+          "estimatedTotalTokens",
+          "costUsd"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "calls": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensIn": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOut": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimatedTotalTokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "costUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "inputCostUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "outputCostUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "ratePer1m": {
+            "type": "object",
+            "properties": {
+              "input": {
+                "type": "number"
+              },
+              "output": {
+                "type": "number"
+              }
+            }
+          }
+        }
+      },
+      "CostEstimateExternalCost": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "calls",
+          "status",
+          "estimatedCostUsd"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "tradingview-mcp",
+              "brave-search"
+            ]
+          },
+          "calls": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "unknown"
+            ]
+          },
+          "estimatedCostUsd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "CostEstimate": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "operation",
+          "dryRun",
+          "estimate",
+          "noBillableCalls",
+          "model",
+          "tokensIn",
+          "tokensOut",
+          "estimatedTotalTokens",
+          "estimatedCostUsd",
+          "providerBreakdown",
+          "externalCosts",
+          "quotaImpact",
+          "perSymbol",
+          "callCount",
+          "warnings",
+          "assumptions"
+        ],
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "news-monitor",
+              "expanded-analysis-alert",
+              "market-scanner-alert",
+              "tradingview-analysis"
+            ]
+          },
+          "dryRun": {
+            "type": "string",
+            "enum": [
+              "cost"
+            ]
+          },
+          "estimate": {
+            "type": "boolean",
+            "const": true
+          },
+          "noBillableCalls": {
+            "type": "boolean",
+            "const": true
+          },
+          "model": {
+            "type": "string"
+          },
+          "tokensIn": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOut": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimatedTotalTokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimatedCostUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "providerBreakdown": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CostEstimateProviderBreakdown"
+            }
+          },
+          "externalCosts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CostEstimateExternalCost"
+            }
+          },
+          "quotaImpact": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "dailyQuotaTokens",
+              "percent",
+              "summary"
+            ],
+            "properties": {
+              "dailyQuotaTokens": {
+                "type": "integer",
+                "minimum": 1000
+              },
+              "percent": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "summary": {
+                "type": "string"
+              }
+            }
+          },
+          "perSymbol": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "symbol",
+                "tokensIn",
+                "tokensOut",
+                "estimatedTotalTokens",
+                "costUsd"
+              ],
+              "properties": {
+                "symbol": {
+                  "type": "string"
+                },
+                "tokensIn": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "tokensOut": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "estimatedTotalTokens": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "costUsd": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "mcpCalls": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "callCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "assumptions": {
+            "type": "object",
+            "properties": {
+              "tokenApprox": {
+                "type": "string"
+              },
+              "outputBudgetKind": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "outputTokensPerCall": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "ratesSource": {
+                "type": "string",
+                "enum": [
+                  "remote",
+                  "environment",
+                  "default"
+                ]
+              },
+              "estimateOnly": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "CostEstimateResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "dryRun",
+          "costEstimate",
+          "tokensIn",
+          "tokensOut",
+          "estimatedTotalTokens",
+          "estimatedCostUsd",
+          "requestId"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "dryRun": {
+            "type": "string",
+            "enum": [
+              "cost"
+            ]
+          },
+          "costEstimate": {
+            "$ref": "#/components/schemas/CostEstimate"
+          },
+          "tokensIn": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "tokensOut": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimatedTotalTokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "estimatedCostUsd": {
+            "type": "number",
+            "minimum": 0
+          },
+          "requestId": {
+            "type": "string"
+          }
+        }
+      },
+      "OperationEstimateRequest": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": [
+          "operation"
+        ],
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "news-monitor",
+              "expanded-analysis-alert",
+              "market-scanner-alert",
+              "tradingview-analysis",
+              "expanded-analysis",
+              "market-scanner",
+              "news",
+              "jobs",
+              "jobs-tradingview-analysis"
+            ]
+          },
+          "symbols": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "crypto": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "stocks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scans": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "OperationEstimateResponse": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "success",
+          "operation",
+          "costEstimate"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "operation": {
+            "type": "string"
+          },
+          "costEstimate": {
+            "$ref": "#/components/schemas/CostEstimate"
+          }
+        }
+      },
+      "CostEstimationDependency": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "enabled",
+          "configured",
+          "ready",
+          "status",
+          "source",
+          "ratesSource",
+          "model",
+          "operations"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "ready": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "disabled"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "ratesSource": {
+            "type": "string",
+            "enum": [
+              "remote",
+              "environment",
+              "default"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },

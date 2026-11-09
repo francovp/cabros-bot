@@ -9,6 +9,8 @@ const {
 } = require('../../../../services/jobs/JobService');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const { sendErrorFrom, STANDARD_ERROR_CODES } = require('../../../../lib/errorEnvelope');
+const { resolveDryRunCost, hasUnrecognisedCostFlag } = require('../../../../lib/dryRunRequest');
+const costEstimationService = require('../../../../services/cost/CostEstimationService');
 
 function postCreateJob(botOrGetter) {
 	return async (req, res) => {
@@ -22,6 +24,46 @@ function postCreateJob(botOrGetter) {
 		}
 
 		try {
+			if (hasUnrecognisedCostFlag(req)) {
+				return sendErrorFrom(res, 400, {
+					error: 'Unrecognised dryRun/estimate value. Supported: true, false, cost, or estimate.',
+					code: STANDARD_ERROR_CODES.INVALID_REQUEST,
+				});
+			}
+			if (resolveDryRunCost(req) && !costEstimationService.isEnabled()) {
+				return sendErrorFrom(res, 404, {
+					error: 'Cost estimation is disabled. Set ENABLE_DRY_RUN_COST=true to enable.',
+					code: 'FEATURE_DISABLED',
+				});
+			}
+			if (resolveDryRunCost(req) && costEstimationService.isEnabled()) {
+				const { parsed } = jobService.validateJobRequest(type, req.body);
+				const symbols = type === 'expanded-analysis' && Array.isArray(parsed?.symbols)
+					? parsed.symbols.map((s) => (typeof s === 'string' ? s : (s.raw || (s.exchange && s.symbol ? `${s.exchange}:${s.symbol}` : s.symbol || String(s)))))
+					: (Array.isArray(parsed?.scans) ? parsed.scans : (Array.isArray(req.body?.scans) ? req.body.scans : []));
+				const costEstimate = costEstimationService.estimate({
+					operation: 'tradingview-analysis',
+					symbols,
+					body: {
+						...req.body,
+						symbols,
+						scans: parsed?.scans || req.body?.scans,
+						includeMultiTimeframe: parsed?.includeMultiTimeframe ?? req.body?.includeMultiTimeframe,
+						analysisMode: parsed?.analysisMode ?? req.body?.analysisMode,
+						limit: parsed?.limit ?? req.body?.limit,
+					},
+				});
+				return res.status(200).json({
+					success: true,
+					dryRun: 'cost',
+					costEstimate,
+					tokensIn: costEstimate.tokensIn,
+					tokensOut: costEstimate.tokensOut,
+					estimatedTotalTokens: costEstimate.estimatedTotalTokens,
+					estimatedCostUsd: costEstimate.estimatedCostUsd,
+					type,
+				});
+			}
 			const result = await jobService.createJob(type, req.body, botOrGetter);
 			return res.status(201).json(result);
 		} catch (error) {

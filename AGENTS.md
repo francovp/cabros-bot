@@ -3149,3 +3149,17 @@ Opt-in `ENABLE_DAILY_DIGEST=true` delivers a previous-UTC-day MarkdownV2 digest 
 `/digest` Telegram command (admin allowlist + 5-min per-chat rate limit) runs on demand to the requesting chat; `/digest --dry-run` returns the formatted MarkdownV2 without sending or persisting. `/api/status` exposes `featureFlags.dailyDigest` and `dependencies.dailyDigest` (`enabled/configured/ready/status/backend/deliveryHourUtc/maxSpendUsd/running/lastRunAt/lastRunStatus/lastRunDateStr/lastRunDigestMessageId/lastRunError/dailyChats/leaseState`); `dailyChats` holds hashed prefixes only, never chat IDs.
 
 **Coverage**: `tests/unit/daily-digest.test.js` (day boundaries, aggregation, dry-run, degraded when durable runs disabled, already-sent lease contention, ambiguous no-retry, before-hour skip, no chat-id leakage), `tests/integration/daily-digest.test.js` (full previous-day sections in order, Telegram length bound, status projection), `src/openapi/openapi.json` (`DailyDigestDependency` + sample payload), `CabrosBot.postman_collection.json` ("Get Status - daily digest").
+
+## Pre-flight Cost Estimation (Issue #745)
+
+`dryRun=cost` (or `?estimate=true`) on `/api/news-monitor`, `/api/jobs/tradingview-analysis`, `/api/webhook/expanded-analysis-alert`, and `/api/webhook/market-scanner-alert`, plus `POST /api/operations/estimate` with `{ operation, ...operationBody }`, returns a `costEstimate` with `tokensIn`, `tokensOut`, `estimatedTotalTokens`, `estimatedCostUsd`, `providerBreakdown[]`, `externalCosts[]`, `quotaImpact`, `perSymbol[]`, and `assumptions`, without invoking Gemini, TradingView MCP, Brave Search, Firestore, or remote Langfuse. Owner decision (option 1): LLM costs are a documented rough upper bound (`ceil(chars / 4)` input + configured output budgets); TradingView MCP and Brave costs are `unknown` (null), never `$0`.
+
+- `src/services/cost/CostEstimationService.js` is pure and synchronous; `src/lib/dryRunRequest.js` owns `resolveDryRunCost` so the idempotency bypass and handlers agree on probes. Cost probes never reserve or cache idempotency keys.
+- Rates come from Remote Config `LLM_COST_RATES_JSON` (public `{model:{input,output}}` per 1M) with env fallback and bundled `PRICING_PER_1M` defaults (`ratesSource: remote|environment|default`). Malformed JSON degrades to defaults.
+- `/api/status` exposes `featureFlags.costEstimation` and `dependencies.costEstimation` (`enabled/configured/ready/status/source/ratesSource/model/operations`). No secrets are logged or returned.
+- The admin console Analysis view includes `POST /api/operations/estimate` ("Cost estimate (dryRun=cost)") with a renderer showing tokens, estimated cost, quota impact, and warnings; generated `public/admin/` assets are committed via `pnpm run build:hosting`.
+
+No public alert, notification, persistence, or analytics contract changed; `dryRun=true` behavior is byte-identical.
+
+**Coverage**: `tests/unit/cost-estimation.test.js` (zero-call guarantee, per-symbol math, per-model lookup, Remote Config fallback, quotaImpact, operation selector, status), `tests/integration/cost-estimation-endpoint.test.js` (operations/estimate + four dryRun=cost endpoints), `tests/unit/postman-collection.test.js`, `tests/unit/openapi-contract.test.js`, and `tests/unit/remote-config-service.test.js`.
+

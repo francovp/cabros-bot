@@ -109,6 +109,12 @@ The Remote Config model-selector defaults use the deployment's in-app values, pr
 - `ENABLE_TOKEN_COST_BUDGET` - Enable daily LLM token cost tracking and budget limits (`true` or `false`, default: `false`; Remote Config supported)
 - `TOKEN_COST_DAILY_BUDGET_USD` - Maximum daily spend in USD before LLM calls fail open safely (default: `5.00`, range `0.01`-`10000.00`; Remote Config supported)
 - `TOKEN_COST_WARN_THRESHOLD_PCT` - Percentage of daily budget that triggers an admin Telegram alert (default: `80`, range `1`-`100`; Remote Config supported)
+- `ENABLE_DRY_RUN_COST` - Enable pre-flight cost estimation (`dryRun=cost`) and `POST /api/operations/estimate` (default: `true`; Remote Config supported)
+- `COST_ESTIMATION_OUTPUT_TOKENS_NEWS` - Output-token budget per news symbol for cost estimation (default: `400`, range `10`-`8000`; Remote Config supported)
+- `COST_ESTIMATION_OUTPUT_TOKENS_ANALYSIS` - Output-token budget per expanded-analysis symbol (default: `800`, range `10`-`8000`; Remote Config supported)
+- `COST_ESTIMATION_OUTPUT_TOKENS_SCANNER` - Output-token budget per scanner candidate (default: `600`, range `10`-`8000`; Remote Config supported)
+- `COST_ESTIMATION_DAILY_QUOTA_TOKENS` - Daily token quota denominator for quotaImpact (default: `1000000`, range `1000`-`100000000`; Remote Config supported)
+- `LLM_COST_RATES_JSON` - Public per-model LLM rate overrides as JSON `{model:{input,output}}` per 1M tokens (default: empty; Remote Config supported)
 
 #### Cloudflare AI Gateway
 

@@ -25,6 +25,8 @@ const {
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { runWithConcurrency } = require('../../../../lib/runWithConcurrency');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const { resolveDryRunCost, hasUnrecognisedCostFlag } = require('../../../../lib/dryRunRequest');
+const costEstimationService = require('../../../../services/cost/CostEstimationService');
 
 const DEFAULT_ALERT_TIMEOUT_MS = 60000;
 const MAX_ALERT_TIMEOUT_MS = 120000;
@@ -55,6 +57,41 @@ function postExpandedAnalysisAlert(botOrGetter) {
 			const routing = parseNotificationRouting(req.body);
 			const parsed = parseExpandedAnalysisAlertRequest(req);
 			const duplicatesRemoved = parsed.duplicatesRemoved;
+			if (hasUnrecognisedCostFlag(req)) {
+				return sendErrorFrom(res, 400, {
+					code: 'INVALID_REQUEST',
+					error: 'Unrecognised dryRun/estimate value. Supported: true, false, cost, or estimate.',
+					requestId,
+				});
+			}
+			if (resolveDryRunCost(req) && !costEstimationService.isEnabled()) {
+				return sendErrorFrom(res, 404, {
+					code: 'FEATURE_DISABLED',
+					error: 'Cost estimation is disabled. Set ENABLE_DRY_RUN_COST=true to enable.',
+					requestId,
+				});
+			}
+			if (resolveDryRunCost(req) && costEstimationService.isEnabled()) {
+				const costEstimate = costEstimationService.estimate({
+					operation: 'expanded-analysis-alert',
+					symbols: parsed.symbols.map((entry) => entry.raw),
+					body: req.body,
+				});
+				return res.status(200).json({
+					success: true,
+					dryRun: 'cost',
+					costEstimate,
+					tokensIn: costEstimate.tokensIn,
+					tokensOut: costEstimate.tokensOut,
+					estimatedTotalTokens: costEstimate.estimatedTotalTokens,
+					estimatedCostUsd: costEstimate.estimatedCostUsd,
+					results: [],
+					summary: buildSummary([], []),
+					duplicatesRemoved,
+					requestId,
+					processingTimeMs: Math.max(0, Date.now() - startTime),
+				});
+			}
 			const timeoutMs = getAlertTimeoutMs();
 			const deadline = createAlertDeadline(timeoutMs, req.requestDeadlineSignal);
 			let results;
