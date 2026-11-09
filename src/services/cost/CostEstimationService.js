@@ -111,7 +111,24 @@ function isEnabled() {
 	return true;
 }
 
+function resolveProvider() {
+	const provider = typeof process.env.MODEL_PROVIDER === 'string' && process.env.MODEL_PROVIDER.trim() !== ''
+		? process.env.MODEL_PROVIDER.trim().toLowerCase()
+		: 'gemini';
+	return ['gemini', 'azure', 'openrouter', 'cloudflare'].includes(provider) ? provider : 'gemini';
+}
+
 function resolveModel(runtimeConfig = resolveRuntimeConfig()) {
+	const provider = resolveProvider();
+	if (provider === 'azure' && process.env.AZURE_LLM_MODEL) {
+		return process.env.AZURE_LLM_MODEL.trim();
+	}
+	if (provider === 'openrouter' && process.env.OPENROUTER_MODEL) {
+		return process.env.OPENROUTER_MODEL.trim();
+	}
+	if (provider === 'cloudflare' && process.env.CF_AIG_MODEL) {
+		return process.env.CF_AIG_MODEL.trim();
+	}
 	const candidates = [
 		runtimeConfig && runtimeConfig.GEMINI_MODEL_NAME,
 		process.env.GEMINI_MODEL_NAME,
@@ -126,6 +143,10 @@ function resolveModel(runtimeConfig = resolveRuntimeConfig()) {
 		}
 	}
 	return 'gemini-2.5-flash';
+}
+
+function resolveProviderName() {
+	return resolveProvider();
 }
 
 function parseRatesJson(raw) {
@@ -260,7 +281,7 @@ function buildPerSymbol(items, inputTokensPerItem, outputTokensPerItem, pricing)
 function buildModelBreakdown(model, calls, tokensIn, tokensOut, pricing) {
 	const cost = costForTokens(tokensIn, tokensOut, pricing);
 	return [{
-		provider: 'gemini',
+		provider: resolveProviderName(),
 		model,
 		calls,
 		tokensIn,
@@ -328,7 +349,7 @@ function estimate(options = {}) {
 		const outputPerSymbol = 0;
 		// Expanded analysis is an MCP analysis per symbol, not an LLM call.
 		perSymbol = symbols.map((symbol) => {
-			const mtf = body.includeMultiTimeframe === true || body.include_multi_timeframe === true ? 1 : 0;
+			const mtf = (body.includeMultiTimeframe === true || body.includeMultiTimeframe === 'true' || body.include_multi_timeframe === true || body.include_multi_timeframe === 'true') ? 1 : 0;
 			const combined = body.analysisMode === 'combined' ? 1 : 0;
 			return {
 				symbol,
@@ -345,9 +366,11 @@ function estimate(options = {}) {
 		outputBudgetKind = 'COST_ESTIMATION_OUTPUT_TOKENS_ANALYSIS';
 		externalCosts = unknownExternal('tradingview-mcp', calls, 'TradingView MCP has no bundled public price table, so external cost is unknown rather than zero.');
 	} else if (operation === 'market-scanner-alert') {
-		const scans = Array.isArray(body.scans) ? body.scans.filter((entry) => typeof entry === 'string') : ['top_gainers', 'top_losers', 'volume_breakout_scanner'];
+		const rawScans = Array.isArray(body.scans) ? body.scans.filter((entry) => typeof entry === 'string') : null;
+		const scans = rawScans && rawScans.length > 0 ? rawScans : ['top_gainers', 'top_losers', 'volume_breakout_scanner'];
 		const limit = Number.isInteger(Number(body.limit)) && Number(body.limit) > 0 ? Math.min(20, Math.max(1, Number(body.limit))) : 5;
-		const mtf = body.includeMultiTimeframe === true || body.include_multi_timeframe === true ? 1 : 0;
+		const isTruthyFlag = (value) => value === true || value === 'true';
+		const mtf = isTruthyFlag(body.includeMultiTimeframe) || isTruthyFlag(body.include_multi_timeframe) ? 1 : 0;
 		const baseCalls = scans.length;
 		const candidateMtfCalls = mtf * scans.length * limit;
 		calls = baseCalls + candidateMtfCalls;
@@ -446,6 +469,8 @@ module.exports = {
 	estimateTokensForText,
 	isEnabled,
 	resolveModel,
+	resolveProvider,
+	resolveProviderName,
 	resolveRates,
 	estimate,
 	getStatus,

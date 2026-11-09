@@ -30,8 +30,33 @@ function postOperationEstimate(req, res) {
 			requestId,
 		});
 	}
-	const symbols = Array.isArray(body.symbols) ? body.symbols : [];
-	const costEstimate = costEstimationService.estimate({ operation: canonical, symbols, body });
+	// Resolve environment defaults the live handlers would use, so an omitted
+	// symbol list estimates the configured workload instead of returning $0.
+	const getDefaultSymbols = (envName) => {
+		try {
+			// eslint-disable-next-line global-require
+			const { resolveRemoteOverride } = require('../../services/remoteConfig/resolveRemoteOverride');
+			return (resolveRemoteOverride(envName) ?? process.env[envName] ?? '').split(',').map((entry) => entry.trim()).filter(Boolean);
+		} catch (error) {
+			return (process.env[envName] ?? '').split(',').map((entry) => entry.trim()).filter(Boolean);
+		}
+	};
+	let symbols = Array.isArray(body.symbols) ? body.symbols : [];
+	const effectiveBody = { ...body };
+	if (canonical === 'news-monitor') {
+		const allProvided = [...(body.crypto || []), ...(body.stocks || []), ...symbols];
+		if (allProvided.length === 0) {
+			symbols = [...getDefaultSymbols('NEWS_SYMBOLS_CRYPTO'), ...getDefaultSymbols('NEWS_SYMBOLS_STOCKS')];
+			effectiveBody.crypto = getDefaultSymbols('NEWS_SYMBOLS_CRYPTO');
+			effectiveBody.stocks = getDefaultSymbols('NEWS_SYMBOLS_STOCKS');
+		}
+	} else if (canonical === 'expanded-analysis-alert') {
+		if (symbols.length === 0) {
+			symbols = getDefaultSymbols('EXPANDED_ANALYSIS_ALERT_SYMBOLS');
+			effectiveBody.symbols = symbols;
+		}
+	}
+	const costEstimate = costEstimationService.estimate({ operation: canonical, symbols, body: effectiveBody });
 	return res.status(200).json({
 		success: true,
 		operation: canonical,

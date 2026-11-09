@@ -88,7 +88,7 @@ function postMarketScannerAlert(botOrGetter) {
 				const costEstimate = costEstimationService.estimate({
 					operation: 'market-scanner-alert',
 					symbols: parsed.scans,
-					body: req.body,
+					body: { ...req.body, scans: parsed.scans, limit: parsed.limit, includeMultiTimeframe: parsed.includeMultiTimeframe },
 				});
 				return res.status(200).json({
 					success: true,
