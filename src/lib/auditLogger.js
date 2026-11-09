@@ -27,15 +27,28 @@ const AUDIT_CATEGORIES = Object.freeze({
 });
 
 const SENSITIVE_KEY_PATTERN = /(password|secret|token|api[-_]?key|authorization|cookie|dsn|webhookUrl|private[-_]?key)/i;
+const SENSITIVE_PATH_SEGMENTS = [
+	{ pattern: /(\/api\/preferences\/[^/]+\/)[^/]+(?=\/|$)/i, replacement: '$1:redacted' },
+];
 
 let testOverrideEnabled = false;
 let testListener = null;
+
+function maskSensitivePathSegments(path) {
+	if (typeof path !== 'string') return path;
+	let masked = path;
+	for (const { pattern, replacement } of SENSITIVE_PATH_SEGMENTS) {
+		masked = masked.replace(pattern, replacement);
+	}
+	return masked;
+}
 
 function stripQueryFromPath(rawPath) {
 	if (typeof rawPath !== 'string' || rawPath.length === 0) return '';
 	const qIdx = rawPath.indexOf('?');
 	const pathOnly = qIdx >= 0 ? rawPath.slice(0, qIdx) : rawPath;
-	return pathOnly.replace(/\/+$/, '') || '/';
+	const clean = pathOnly.replace(/\/+$/, '') || '/';
+	return maskSensitivePathSegments(clean);
 }
 
 function isAuditLoggingEnabled() {

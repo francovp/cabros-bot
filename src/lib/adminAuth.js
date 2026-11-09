@@ -381,7 +381,7 @@ function validateBinanceTradingAccess(req, res, next) {
 			AUDIT_CATEGORIES.AUTH_FAILURE,
 			'anonymous',
 			'validate_binance_trading_api_key',
-			{ reason: 'missing_api_key', path: req.originalUrl || req.url },
+			{ reason: 'missing_api_key', path: stripQueryFromPath(req.originalUrl || req.url) },
 			'failure',
 			req,
 		);
@@ -391,7 +391,7 @@ function validateBinanceTradingAccess(req, res, next) {
 		AUDIT_CATEGORIES.AUTH_FAILURE,
 		'anonymous',
 		'validate_binance_trading_api_key',
-		{ reason: 'invalid_api_key', path: req.originalUrl || req.url },
+		{ reason: 'invalid_api_key', path: stripQueryFromPath(req.originalUrl || req.url) },
 		'failure',
 		req,
 	);
