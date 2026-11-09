@@ -419,6 +419,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 	const binanceTradingStatus = binanceOrderService.getStatus();
 	const binanceTradingKillSwitchEnabled = binanceTradingEnabled;
 	const llmAlertEnrichmentEnabled = isEnabled(process.env.ENABLE_LLM_ALERT_ENRICHMENT);
+	const canaryAlertEnabled = Boolean(runtimeConfig.ENABLE_CANARY_ALERT) || isEnabled(process.env.ENABLE_CANARY_ALERT);
 	const cloudflareAigEnabled = isEnabled(process.env.ENABLE_CLOUDFLARE_AIG);
 	const messageFooterMetadataEnabled = runtimeConfig.ENABLE_MESSAGE_FOOTER_METADATA;
 	const signalClassMarkerEnabled = runtimeConfig.ENABLE_SIGNAL_CLASS_MARKER;
@@ -699,6 +700,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			binanceOrderAudit: binanceOrderAuditService.isEnabled(),
 			tradeLedger: tradeLedgerService.isEnabled(),
 			binanceTradingKillSwitch: binanceTradingKillSwitchEnabled,
+			canaryAlert: canaryAlertEnabled,
 			llmAlertEnrichment: llmAlertEnrichmentEnabled,
 			cloudflareAig: cloudflareAigEnabled,
 			messageFooterMetadata: messageFooterMetadataEnabled,
