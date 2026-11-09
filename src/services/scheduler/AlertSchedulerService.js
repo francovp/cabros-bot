@@ -11,7 +11,7 @@ const requestRoutingModule = require('../notification/requestRouting');
 const sentryService = require('../monitoring/SentryService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { getAnalyzer, setNotificationManager } = require('../../controllers/webhooks/handlers/newsMonitor/analyzer');
-const { isNewsMonitorPaused } = require('../../controllers/webhooks/handlers/newsMonitor/pauseState');
+const { isNewsMonitorPaused, syncNewsMonitorPauseState } = require('../../controllers/webhooks/handlers/newsMonitor/pauseState');
 const { alertStorageService } = require('../storage/AlertStorageService');
 const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 
@@ -750,6 +750,13 @@ class AlertSchedulerService {
 	}
 
 	async _executeNewsSchedule(schedule, parentSignal) {
+		if (typeof syncNewsMonitorPauseState === 'function') {
+			try {
+				await syncNewsMonitorPauseState();
+			} catch {
+				// Fail-open
+			}
+		}
 		if (!parseEnvBool(process.env.ENABLE_NEWS_MONITOR, false)) {
 			return { status: 'skipped', error: 'news-monitor-disabled' };
 		}
