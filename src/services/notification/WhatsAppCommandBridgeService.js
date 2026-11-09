@@ -4,6 +4,7 @@ const WhatsAppService = require('./WhatsAppService');
 const sentryService = require('../monitoring/SentryService');
 const retryHelper = require('../../lib/retryHelper');
 const { createWhatsAppCommandContext, TELEGRAM_COMMAND_DELEGATES } = require('./whatsappCommandContext');
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 
 const DEFAULT_POLL_INTERVAL_MS = 3000;
 const DEFAULT_MAX_COMMANDS_PER_MINUTE = 10;
@@ -101,7 +102,18 @@ class WhatsAppCommandBridgeService {
 	}
 
 	get pollIntervalMs() {
-		return Number(this._pollIntervalMs || process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS) || DEFAULT_POLL_INTERVAL_MS;
+		if (this._pollIntervalMs !== undefined && this._pollIntervalMs !== null) {
+			return Number(this._pollIntervalMs) || DEFAULT_POLL_INTERVAL_MS;
+		}
+		const remote = resolveRemoteOverride('WHATSAPP_COMMAND_POLL_INTERVAL_MS');
+		if (remote !== undefined && Number.isInteger(Number(remote)) && Number(remote) >= 500 && Number(remote) <= 60000) {
+			return Number(remote);
+		}
+		const envVal = Number(process.env.WHATSAPP_COMMAND_POLL_INTERVAL_MS);
+		if (Number.isInteger(envVal) && envVal >= 500 && envVal <= 60000) {
+			return envVal;
+		}
+		return DEFAULT_POLL_INTERVAL_MS;
 	}
 
 	_sleep(ms) {

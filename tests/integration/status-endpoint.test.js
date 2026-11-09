@@ -1,6 +1,15 @@
 /* global saveEnv, restoreEnv */
 const { mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('fs');
-const request = require('supertest');
+const realSupertest = require('supertest');
+const http = require('http');
+
+let persistentServer;
+let currentApp;
+
+const request = (app) => {
+	currentApp = app;
+	return realSupertest(persistentServer || app);
+};
 const express = require('express');
 const { generateKeyPairSync } = require('crypto');
 const { tmpdir } = require('os');
@@ -14,14 +23,29 @@ const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaMana
 const groundingMetrics = require('../../src/services/grounding/metrics');
 const { deliveryMetricsService } = require('../../src/services/notification/DeliveryMetricsService');
 const { firestoreWriteMetricsService } = require('../../src/services/storage/FirestoreWriteMetricsService');
+const persistentWriteHealthSchema = require('../../src/openapi/openapi.json')
+	.components.schemas.PersistentWriteDomainHealth;
+const backgroundTimerStatsSchema = require('../../src/openapi/openapi.json')
+	.components.schemas.BackgroundTimerStats;
 const { getPromptService } = require('../../src/services/prompts');
 const { signalClassMetrics } = require('../../src/services/alerts/signalClassifier');
+const groundingService = require('../../src/services/grounding/grounding');
 const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
+const { resetAdminAuthReadinessForTesting } = require('../../src/lib/adminAuth');
 const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
 const newsAnalysisStorageService = require('../../src/services/storage/NewsAnalysisStorageService');
 const promptReadiness = require('../../src/services/prompts/promptReadiness');
 const symbolAnalysisStorageService = require('../../src/services/storage/SymbolAnalysisStorageService');
 const { getRoutes } = require('../../src/routes');
+
+const defaultCircuitBreaker = Object.freeze({
+	state: 'closed',
+	consecutiveFailures: 0,
+	openedAt: null,
+	lastStateChangeAt: null,
+	failureThreshold: 5,
+	cooldownMs: 60000,
+});
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
 	type: 'pkcs1',
@@ -35,6 +59,15 @@ const validFirestoreServiceAccountJson = JSON.stringify({
 });
 
 describe('Status endpoints', () => {
+	function expectNullHealthFieldsAllowedBySchema(domainHealth) {
+		for (const field of ['lastSuccessAt', 'lastFailureAt', 'lastFailureCategory']) {
+			const value = domainHealth[field];
+			const property = persistentWriteHealthSchema.properties[field];
+			expect(property.type).toContain(value === null ? 'null' : 'string');
+			if (property.enum) expect(property.enum).toContain(value);
+		}
+	}
+
 	let savedEnv;
 	let savedTradingViewRuntimeStatus;
 	let savedTradingViewVolumeRuntimeStatus;
@@ -42,6 +75,42 @@ describe('Status endpoints', () => {
 	let app;
 	let tempDir;
 	let promptStatusSpies = [];
+	beforeAll(async () => {
+		for (let attempt = 0; attempt < 10; attempt++) {
+			const candidateServer = http.createServer((req, res) => {
+				if (currentApp) {
+					currentApp(req, res);
+				} else {
+					res.writeHead(500);
+					res.end('App not initialized');
+				}
+			});
+			await new Promise((resolve) => candidateServer.listen(0, '127.0.0.1', resolve));
+			const port = candidateServer.address().port;
+			try {
+				const probeRes = await new Promise((resolve, reject) => {
+					const req = http.get(`http://127.0.0.1:${port}/healthcheck-probe`, (res) => {
+						let data = '';
+						res.on('data', (c) => { data += c; });
+						res.on('end', () => resolve({ status: res.statusCode, data }));
+					});
+					req.on('error', reject);
+				});
+				if (probeRes.status !== 400 && !probeRes.data.includes('explicit proxy')) {
+					persistentServer = candidateServer;
+					break;
+				}
+			} catch (_) {}
+			await new Promise((resolve) => candidateServer.close(resolve));
+		}
+	});
+
+	afterAll(async () => {
+		if (persistentServer) {
+			await new Promise((resolve) => persistentServer.close(resolve));
+			persistentServer = null;
+		}
+	});
 
 	beforeEach(() => {
 		savedEnv = saveEnv();
@@ -120,6 +189,7 @@ describe('Status endpoints', () => {
 		groundingMetrics.resetForTesting();
 		deliveryMetricsService.resetForTesting();
 		firestoreWriteMetricsService.resetForTesting();
+		resetAdminAuthReadinessForTesting();
 		tradingViewMcpService.runtimeStatus = savedTradingViewRuntimeStatus;
 		tradingViewMcpService.volumeRuntimeStatus = savedTradingViewVolumeRuntimeStatus;
 		tradingViewMcpService.enrichmentEvents = savedTradingViewEnrichmentEvents;
@@ -137,7 +207,61 @@ describe('Status endpoints', () => {
 		expect(response.body.error).toBe('Unauthorized: Missing API key');
 	});
 
+	it('exposes persistent-write health on both status aliases without provider errors', async () => {
+		const providerMessage = 'credential=super-secret Firestore failure';
+		firestoreWriteMetricsService.recordPersistentWriteFailure(
+			'alertStorage',
+			Object.assign(new Error(providerMessage), { code: 7 }),
+		);
+
+		const status = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		const capabilities = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(status.status).toBe(200);
+		expect(status.body.dependencies.persistentWriteHealth.byDomain.alertStorage).toMatchObject({
+			success: 0,
+			failure: 1,
+			failureRate: 1,
+			lastFailureCategory: 'firestore_permission_denied',
+			status: 'degraded',
+		});
+		expect(status.body.dependencies.persistentWriteHealth.byDomain.newsDedup).toMatchObject({
+			success: 0,
+			failure: 0,
+			status: 'unconfigured',
+		});
+		expectNullHealthFieldsAllowedBySchema(status.body.dependencies.persistentWriteHealth.byDomain.newsDedup);
+		expect(capabilities.body.dependencies.persistentWriteHealth.byDomain)
+			.toEqual(status.body.dependencies.persistentWriteHealth.byDomain);
+		expect(status.body.dependencies).not.toHaveProperty('firestoreWriteMetrics');
+		expect(status.text).not.toContain(providerMessage);
+		expect(capabilities.text).not.toContain(providerMessage);
+	});
+
+	it('returns healthy persistent-write null fields accepted by the OpenAPI schema', async () => {
+		firestoreWriteMetricsService.recordPersistentWriteSuccess('signalOutcomes');
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		const health = response.body.dependencies.persistentWriteHealth.byDomain.signalOutcomes;
+		expect(health.status).toBe('ok');
+		expect(health.lastFailureAt).toBeNull();
+		expect(health.lastFailureCategory).toBeNull();
+		expectNullHealthFieldsAllowedBySchema(health);
+	});
+
 	it('returns machine-readable status on /api/status', async () => {
+		process.env.WORKER_STARTUP_JITTER_MS = '1000';
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		process.env.SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS = '125';
+		remoteConfigService._setRemoteOverridesForTesting({ WORKER_STARTUP_JITTER_MS: 2000 }, Date.now());
 		const response = await request(app)
 			.get('/api/status')
 			.set('x-api-key', 'status-key');
@@ -151,6 +275,11 @@ describe('Status endpoints', () => {
 		});
 		expect(response.body.service).not.toHaveProperty('timestamp');
 		expect(response.body.featureFlags.telegramBot).toBe(true);
+		expect(response.body.featureFlags.priceQuoteCache).toBe(true);
+		expect(response.body.dependencies.priceQuoteCache).toMatchObject({
+			enabled: true, mode: 'in-memory', storage: 'memory',
+			ttlMs: { crypto: 15000, equity: 60000 }, maxEntriesPerBucket: 256,
+		});
 		expect(response.body.readiness).toEqual(expect.objectContaining({
 			status: 'pending',
 			ready: false,
@@ -159,17 +288,31 @@ describe('Status endpoints', () => {
 			}),
 		}));
 		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: true, status: 'ready' });
+		expect(response.body.dependencies.startupJitter).toEqual({
+			global: 2000,
+			signalOutcome: 125,
+			redrive: 2000,
+			scannerPreset: 2000,
+			remoteConfig: 2000,
+		});
 		expect(response.body.dependencies.gemini).toEqual({
 			enabled: true,
 			configured: true,
 			ready: true,
 			status: 'ready',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.geminiQuota).toEqual({
 			enabled: true,
 			configured: true,
 			ready: true,
 			status: 'ready',
+			windowStartedAt: null,
+			windowDurationMs: 60000,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			lastExhaustedAt: null,
+			quotaStatus: 'healthy',
 			cooldownActive: false,
 			remainingCooldownMs: 0,
 			lastTriggeredAt: null,
@@ -191,7 +334,7 @@ describe('Status endpoints', () => {
 			misses: 0,
 			failures: 0,
 		});
-		expect(response.body.dependencies.tradingViewMcp).toEqual({
+		expect(response.body.dependencies.tradingViewMcp).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: true,
 			ready: false,
@@ -202,6 +345,10 @@ describe('Status endpoints', () => {
 			lastErrorCategory: null,
 			successCount: 0,
 			failureCount: 0,
+			timeoutMs: 12000,
+			timeoutSource: 'default',
+			enrichmentBudgetMs: 12000,
+			enrichmentBudgetSource: 'default',
 			circuitBreaker: {
 				state: 'closed',
 				consecutiveFailures: 0,
@@ -210,8 +357,27 @@ describe('Status endpoints', () => {
 				failureThreshold: 5,
 				cooldownMs: 600000,
 			},
+			warmup: {
+				enabled: true,
+				running: false,
+				intervalMs: 600000,
+				timeoutMs: 60000,
+				lastProbeAt: null,
+				lastSuccessAt: null,
+				lastFailureAt: null,
+				lastDurationMs: null,
+				lastStatus: 'not_attempted',
+				lastErrorReason: null,
+				consecutiveFailures: 0,
+				totalProbes: 0,
+				successCount: 0,
+				failureCount: 0,
+			},
 			errorCategoryCounts: {
 				circuit_breaker_open: 0,
+				provider_unavailable: 0,
+				upstream_tool_error: 0,
+				not_found: 0,
 				http_5xx: 0,
 				http_4xx: 0,
 				timeout: 0,
@@ -219,7 +385,14 @@ describe('Status endpoints', () => {
 				request_failed: 0,
 			},
 			toolMetrics: {},
-		});
+		}));
+		expect(response.body.dependencies.tradingViewMcp.mcpTools).toEqual(expect.objectContaining({
+			discoveredSource: expect.any(String),
+			wired: expect.objectContaining({
+				coin_analysis: expect.objectContaining({ wired: true }),
+				top_gainers: expect.objectContaining({ wired: true }),
+			}),
+		}));
 		expect(response.body.dependencies.braveSearch).toEqual({
 			enabled: false,
 			configured: false,
@@ -233,7 +406,72 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			scope: 'webhook',
 		});
+		expect(response.body.dependencies.adminApiKey).toEqual(expect.objectContaining({
+			scope: 'admin',
+		}));
+		expect(response.body.dependencies.binanceTradingApiKey).toEqual(expect.objectContaining({
+			scope: 'binance-trading',
+		}));
+	});
+
+	it('reports preset destination routing support without exposing destination data', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.presetBoundDestinations).toBe(true);
+		expect(response.body.dependencies.presetBoundDestinations).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			channels: ['telegram', 'whatsapp', 'discord'],
+			maxDestinationsPerChannel: 20,
+		});
+		expect(response.text).not.toMatch(/telegramChatIds|whatsappChatIds|discordWebhookUrls/);
+	});
+
+	it('publishes supported Binance Spot order types without changing the feature flag shape', async () => {
+		const supportedOrderTypes = [
+			'MARKET',
+			'LIMIT',
+			'LIMIT_MAKER',
+			'STOP_LOSS',
+			'STOP_LOSS_LIMIT',
+			'TAKE_PROFIT',
+			'TAKE_PROFIT_LIMIT',
+			'BRACKET_LIMIT',
+		];
+		for (const path of ['/api/status', '/api/capabilities']) {
+			const response = await request(app).get(path).set('x-api-key', 'status-key');
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.binanceTrading).toEqual(expect.any(Boolean));
+			expect(response.body.dependencies.binanceTrading.supportedOrderTypes).toEqual(supportedOrderTypes);
+		}
+	});
+
+	it('exposes only numeric background timer counts on both status aliases', async () => {
+		const status = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+		const capabilities = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(status.status).toBe(200);
+		expect(capabilities.status).toBe(200);
+		const stats = status.body.dependencies.backgroundTimers;
+		expect(Object.keys(stats).sort()).toEqual(['drained', 'failed', 'registered']);
+		for (const [field, value] of Object.entries(stats)) {
+			expect(Number.isInteger(value)).toBe(true);
+			expect(value).toBeGreaterThanOrEqual(0);
+			expect(backgroundTimerStatsSchema.properties[field].type).toBe('integer');
+		}
+		expect(capabilities.body.dependencies.backgroundTimers).toEqual(stats);
+		expect(status.text).not.toMatch(/notification-redrive|idempotency-cleanup|lease-renewal/);
 	});
 
 	it('exposes rolling alert-path MCP enrichment rates', async () => {
@@ -277,6 +515,114 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.tradingViewConfluenceEnrichment).toBe(true);
+	});
+
+	it('exposes deliveryHealth as an empty object when NotificationManager is not initialized', async () => {
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body).toHaveProperty('deliveryHealth');
+		expect(response.body.deliveryHealth).toEqual({});
+	});
+
+	it('exposes MCP tool inventory under dependencies.tradingViewMcp.mcpTools using the static fallback catalog', async () => {
+		const originalFetch = tradingViewMcpService.mcpToolInventory._fetch;
+		tradingViewMcpService.mcpToolInventory._fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+		tradingViewMcpService.mcpToolInventory._resetForTesting();
+		tradingViewMcpService.mcpToolInventory._url = 'https://example.test/mcp';
+		try {
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			const mcpTools = response.body.dependencies.tradingViewMcp.mcpTools;
+			expect(mcpTools).toBeDefined();
+			expect(mcpTools.discoveredSource).toBe('fallback-static-catalog');
+			expect(Array.isArray(mcpTools.discovered)).toBe(true);
+			expect(mcpTools.discovered).toEqual(expect.arrayContaining([
+				'coin_analysis',
+				'combined_analysis',
+				'multi_timeframe_analysis',
+				'volume_confirmation_analysis',
+				'top_gainers',
+				'top_losers',
+				'volume_breakout_scanner',
+				'smart_volume_scanner',
+				'bollinger_scan',
+				'backtest_strategy',
+				'compare_strategies',
+				'walk_forward_backtest_strategy',
+				'multi_agent_analysis',
+				'market_snapshot',
+				'rating_filter',
+				'consecutive_candles_scan',
+				'advanced_candle_pattern',
+			]));
+			expect(mcpTools.wired.coin_analysis).toEqual(expect.objectContaining({
+				wired: true,
+				callers: ['enrichFromSignal', 'alert/grounding'],
+				lastSuccessAt: null,
+				lastFailureAt: null,
+			}));
+			expect(mcpTools.wired.top_gainers).toEqual(expect.objectContaining({
+				wired: true,
+				callers: ['marketScanner'],
+			}));
+			expect(mcpTools.wired.backtest_strategy).toEqual(expect.objectContaining({ wired: false }));
+			expect(mcpTools.wired.multi_agent_analysis).toEqual(expect.objectContaining({ wired: false }));
+			expect(typeof mcpTools.discoveredAt).toBe('string');
+		} finally {
+			tradingViewMcpService.mcpToolInventory._fetch = originalFetch;
+		}
+	});
+
+	it('records per-tool telemetry in the MCP tool inventory after a successful call', async () => {
+		const originalCallTool = tradingViewMcpService._callTool;
+		tradingViewMcpService._callTool = jest.fn().mockResolvedValue({
+			price_data: { current_price: 70000 },
+		});
+		try {
+			await tradingViewMcpService.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1D',
+			});
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			const coinTelemetry = response.body.dependencies.tradingViewMcp.mcpTools.wired.coin_analysis;
+			expect(coinTelemetry.lastSuccessAt).not.toBeNull();
+		} finally {
+			tradingViewMcpService._callTool = originalCallTool;
+		}
+	});
+
+	it('returns an empty wired inventory when TradingView MCP enrichment is disabled and discovery fails', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
+		const originalFetch = tradingViewMcpService.mcpToolInventory._fetch;
+		tradingViewMcpService.mcpToolInventory._fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+		tradingViewMcpService.mcpToolInventory._resetForTesting();
+		tradingViewMcpService.mcpToolInventory._url = 'https://example.test/mcp';
+		try {
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			const mcpTools = response.body.dependencies.tradingViewMcp.mcpTools;
+			expect(mcpTools.discoveredSource).toBe('fallback-static-catalog');
+			expect(mcpTools.discovered).toEqual(expect.arrayContaining(['coin_analysis', 'multi_agent_analysis']));
+			expect(mcpTools.wired.coin_analysis.wired).toBe(true);
+			expect(mcpTools.wired.multi_agent_analysis.wired).toBe(false);
+		} finally {
+			tradingViewMcpService.mcpToolInventory._fetch = originalFetch;
+		}
 	});
 
 	it('reports scanner presets as ephemeral when no Firestore gate is enabled', async () => {
@@ -466,10 +812,11 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.cloudflareAig.enabled).toBe(false);
 	});
 
-	it('reports Cloudflare AI Gateway when enabled', async () => {
+	it('reports Cloudflare AI Gateway as ready only when it is actually the routed provider', async () => {
 		process.env.ENABLE_CLOUDFLARE_AIG = 'true';
 		process.env.CF_AIG_TOKEN = 'cloudflare-token';
 		process.env.CF_AIG_BASE_URL = 'https://gateway.ai.cloudflare.com/v1/xyz/default/compat';
+		process.env.MODEL_PROVIDER = 'cloudflare';
 
 		const response = await request(app)
 			.get('/api/status')
@@ -480,8 +827,124 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.cloudflareAig).toEqual({
 			enabled: true,
 			configured: true,
+			routed: true,
+			provider: 'cloudflare',
 			ready: true,
 			status: 'ready',
+		});
+	});
+
+	it('reports Firebase admin auth as disabled by default', async () => {
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firebaseAdminAuth).toBe(false);
+		expect(response.body.dependencies.adminAuth).toMatchObject({
+			enabled: false,
+			provider: null,
+			signIn: null,
+			verifierConfigured: false,
+			browserConfigConfigured: false,
+			ready: false,
+			status: 'disabled',
+			verificationSuccessCount: 0,
+			verifierUnavailableCount: 0,
+			consecutiveFailures: 0,
+			lastSuccessAt: null,
+			lastUnavailableAt: null,
+		});
+	});
+
+	it('reports Firebase admin auth when enabled but not yet proven by a sign-in', async () => {
+		process.env.ENABLE_FIREBASE_ADMIN_AUTH = 'true';
+		process.env.FIREBASE_WEB_API_KEY = 'web-key';
+		process.env.FIREBASE_AUTH_DOMAIN = 'test-project.firebaseapp.com';
+		process.env.FIREBASE_PROJECT_ID = 'test-project';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.firebaseAdminAuth).toBe(true);
+		expect(response.body.dependencies.adminAuth).toMatchObject({
+			enabled: true,
+			provider: 'firebase',
+			signIn: 'email-password',
+			verifierConfigured: true,
+			browserConfigConfigured: true,
+			apiKeyFallbackConfigured: true,
+			ready: false,
+			status: 'unverified',
+		});
+	});
+
+	it('never leaks Firebase Web configuration values through the status payload', async () => {
+		process.env.ENABLE_FIREBASE_ADMIN_AUTH = 'true';
+		process.env.FIREBASE_WEB_API_KEY = 'web-key-that-must-not-leak';
+		process.env.FIREBASE_AUTH_DOMAIN = 'test-project.firebaseapp.com';
+		process.env.FIREBASE_PROJECT_ID = 'test-project';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(JSON.stringify(response.body.dependencies.adminAuth))
+			.not.toContain('web-key-that-must-not-leak');
+		expect(JSON.stringify(response.body.dependencies.adminAuth))
+			.not.toContain('test-project.firebaseapp.com');
+	});
+
+	/**
+	 * Issue #1115: `ENABLE_CLOUDFLARE_AIG` does not select the runtime provider —
+	 * `MODEL_PROVIDER` does. Deriving `ready` from env-var presence alone made the
+	 * documented enablement steps report `ready: true` while `MODEL_PROVIDER=gemini`
+	 * sent 100% of LLM traffic straight to Google and zero requests touched the
+	 * gateway. Credentials present but not routed must not read as ready.
+	 */
+	it('does not report Cloudflare AI Gateway as ready when credentials are present but it is not the routed provider', async () => {
+		process.env.ENABLE_CLOUDFLARE_AIG = 'true';
+		process.env.CF_AIG_TOKEN = 'cloudflare-token';
+		process.env.CF_AIG_BASE_URL = 'https://gateway.ai.cloudflare.com/v1/xyz/default/compat';
+		process.env.MODEL_PROVIDER = 'gemini';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.cloudflareAig).toBe(true);
+		expect(response.body.dependencies.cloudflareAig).toEqual({
+			enabled: true,
+			configured: true,
+			routed: false,
+			provider: 'gemini',
+			ready: false,
+			status: 'inactive',
+		});
+	});
+
+	it('does not report Cloudflare AI Gateway as ready when it is the routed provider but credentials are missing', async () => {
+		process.env.ENABLE_CLOUDFLARE_AIG = 'true';
+		process.env.MODEL_PROVIDER = 'cloudflare';
+		delete process.env.CF_AIG_TOKEN;
+		delete process.env.CF_AIG_BASE_URL;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.cloudflareAig).toEqual({
+			enabled: true,
+			configured: false,
+			routed: true,
+			provider: 'cloudflare',
+			ready: false,
+			status: 'misconfigured',
 		});
 	});
 
@@ -591,6 +1054,28 @@ describe('Status endpoints', () => {
 		expect(response.body.featureFlags.signalClassMarker).toBe(false);
 	});
 
+	it('reports telegram command rate limiting as enabled by default in featureFlags and dependencies.telegram', async () => {
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.telegramCommandRateLimiting).toBe(true);
+		expect(response.body.dependencies.telegram.commandRateLimiting).toBe(true);
+	});
+
+	it('reports telegram command rate limiting as disabled when explicitly disabled', async () => {
+		process.env.ENABLE_TELEGRAM_COMMAND_RATE_LIMITING = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.telegramCommandRateLimiting).toBe(false);
+		expect(response.body.dependencies.telegram.commandRateLimiting).toBe(false);
+	});
+
 	it('omits signal classification metrics until an alert has been classified', async () => {
 		signalClassMetrics.reset();
 
@@ -667,6 +1152,60 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.alertSignalRepeatSuppression.enabled).toBe(true);
 	});
 
+	it('reports global alert budget as enabled by default with the default capacity', async () => {
+		delete process.env.GLOBAL_ALERT_BUDGET_PER_24H;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.globalAlertBudget).toBe(true);
+		expect(response.body.dependencies.globalAlertBudget).toEqual(expect.objectContaining({
+			enabled: true,
+			used: 0,
+			capacity: 500,
+			remaining: 500,
+			resetAt: expect.any(String),
+		}));
+	});
+
+	it('reports global alert budget as disabled when capacity is set to 0', async () => {
+		process.env.GLOBAL_ALERT_BUDGET_PER_24H = '0';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.globalAlertBudget).toBe(false);
+		expect(response.body.dependencies.globalAlertBudget).toEqual(expect.objectContaining({
+			enabled: false,
+			used: 0,
+			capacity: 0,
+			remaining: 0,
+			resetAt: expect.any(String),
+		}));
+	});
+
+	it('reports global alert budget with a custom capacity', async () => {
+		process.env.GLOBAL_ALERT_BUDGET_PER_24H = '100';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.globalAlertBudget).toBe(true);
+		expect(response.body.dependencies.globalAlertBudget).toEqual(expect.objectContaining({
+			enabled: true,
+			used: 0,
+			capacity: 100,
+			remaining: 100,
+			resetAt: expect.any(String),
+		}));
+	});
+
 	it('reports alert cross-timeframe suppression as disabled by default', async () => {
 		delete process.env.ENABLE_ALERT_CROSS_TF_SUPPRESSION;
 		delete process.env.ALERT_CROSS_TF_WINDOW_MS;
@@ -737,6 +1276,80 @@ describe('Status endpoints', () => {
 
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.alertHtfRender).toBe(false);
+	});
+
+	it('reports symbol analysis multi-agent feature flag as false by default', async () => {
+		delete process.env.ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT;
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.symbolAnalysisMultiAgent).toBe(false);
+	});
+
+	it('reports symbol analysis multi-agent feature flag as true when enabled via env', async () => {
+		process.env.ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT = 'true';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.symbolAnalysisMultiAgent).toBe(true);
+	});
+
+	it('reports symbol analysis multi-agent feature flag as true when enabled via remote config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		remoteConfigService._setRemoteOverridesForTesting(
+			{ ENABLE_SYMBOL_ANALYSIS_MULTI_AGENT: true },
+			Date.now()
+		);
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.symbolAnalysisMultiAgent).toBe(true);
+	});
+
+	it('reports api-only mode feature flag as false by default', async () => {
+		delete process.env.ENABLE_API_ONLY_MODE;
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.apiOnlyMode).toBe(false);
+	});
+
+	it('reports api-only mode feature flag as true when enabled via env', async () => {
+		process.env.ENABLE_API_ONLY_MODE = 'true';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.apiOnlyMode).toBe(true);
+	});
+
+	it('reports api-only mode feature flag as true when enabled via remote config', async () => {
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		remoteConfigService._setRemoteOverridesForTesting(
+			{ ENABLE_API_ONLY_MODE: true },
+			Date.now()
+		);
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.apiOnlyMode).toBe(true);
 	});
 
 	it('reports safe Firebase Remote Config load metadata without values and honest readiness', async () => {
@@ -886,6 +1499,28 @@ describe('Status endpoints', () => {
 		expect(JSON.stringify(response.body.dependencies.langfusePrompts)).not.toContain('pk-lf-status-public');
 	});
 
+	it('exposes sanitized durable prompt drift status on /api/status', async () => {
+		const { promptDriftService } = require('../../src/services/prompts/PromptDriftService');
+		promptStatusSpies.push(jest.spyOn(promptDriftService, 'refresh').mockResolvedValue(true));
+		promptStatusSpies.push(jest.spyOn(promptDriftService, 'getStatus').mockReturnValue({
+			durableReadReady: true,
+			driftCount24h: 2,
+			lastDriftDetectedAt: '2026-10-28T08:00:00.000Z',
+			lastDriftPromptName: 'alert-enrichment',
+		}));
+
+		const response = await request(app).get('/api/status').set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(promptDriftService.refresh).toHaveBeenCalled();
+		expect(response.body.dependencies.promptLifecycle).toEqual({
+			durableReadReady: true,
+			driftCount24h: 2,
+			lastDriftDetectedAt: '2026-10-28T08:00:00.000Z',
+			lastDriftPromptName: 'alert-enrichment',
+		});
+	});
+
 	it('exposes prompt-resolution telemetry on /api/capabilities with per-prompt resolved source', async () => {
 		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
 		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
@@ -1009,6 +1644,10 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.signalOutcomeWorker).toMatchObject({
 			role: 'worker',
 			running: false,
+			breakdownBucketCap: 100,
+			lastBreakdownBucketCount: 0,
+			lastBreakdownTruncated: false,
+			breakdownTruncationCount: 0,
 			lastRunScannedCount: 0,
 			lastRunPendingCount: 0,
 			lastRunErrorCount: 0,
@@ -1118,6 +1757,7 @@ describe('Status endpoints', () => {
 			lastSuccessAt: null,
 			lastFailureAt: null,
 			lastErrorReason: null,
+			circuitBreaker: defaultCircuitBreaker,
 			supportedExchanges: ['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD'],
 			timeoutMs: 5000,
 			rpm: 0,
@@ -1849,6 +2489,7 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'misconfigured',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.geminiQuota).toEqual(expect.objectContaining({
 			enabled: true,
@@ -1856,6 +2497,26 @@ describe('Status endpoints', () => {
 			ready: false,
 			status: 'misconfigured',
 		}));
+	});
+
+	it('reports Gemini grounding configured when the model comes from Remote Config', async () => {
+		process.env.MODEL_PROVIDER = 'gemini';
+		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+		delete process.env.GEMINI_MODEL_NAME;
+		remoteConfigService._setRemoteOverridesForTesting({ GEMINI_MODEL_NAME: 'published-model' }, Date.now());
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.gemini).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			circuitBreaker: defaultCircuitBreaker,
+		});
 	});
 
 	it('reports Gemini quota status as degraded when active cooldown is in effect', async () => {
@@ -1875,6 +2536,12 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: false,
 			status: 'degraded',
+			windowStartedAt: expect.any(String),
+			windowDurationMs: 60000,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 1,
+			lastExhaustedAt: expect.any(String),
+			quotaStatus: 'exhausted',
 			cooldownActive: true,
 			remainingCooldownMs: expect.any(Number),
 			lastTriggeredAt: expect.any(String),
@@ -1908,6 +2575,12 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: false,
 			status: 'disabled',
+			windowStartedAt: null,
+			windowDurationMs: 60000,
+			requestsInWindow: 0,
+			exhaustedEventsInWindow: 0,
+			lastExhaustedAt: null,
+			quotaStatus: 'healthy',
 			cooldownActive: false,
 			remainingCooldownMs: 0,
 			lastTriggeredAt: null,
@@ -1940,6 +2613,7 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 	});
 
@@ -1977,6 +2651,7 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.newsMonitorLlm).toEqual({
 			enabled: true,
@@ -2008,6 +2683,7 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'disabled',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.braveSearch).toEqual({
 			enabled: true,
@@ -2097,6 +2773,7 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'disabled',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.newsMonitorLlm).toEqual({
 			enabled: true,
@@ -2125,6 +2802,7 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'disabled',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.newsMonitorLlm).toEqual({
 			enabled: true,
@@ -2217,7 +2895,7 @@ describe('Status endpoints', () => {
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.marketScanner).toBe(true);
 		expect(response.body.featureFlags.tradingViewMcpEnrichment).toBe(false);
-		expect(response.body.dependencies.tradingViewMcp).toEqual({
+		expect(response.body.dependencies.tradingViewMcp).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: true,
 			ready: false,
@@ -2228,6 +2906,10 @@ describe('Status endpoints', () => {
 			lastErrorCategory: null,
 			successCount: 0,
 			failureCount: 0,
+			timeoutMs: 12000,
+			timeoutSource: 'default',
+			enrichmentBudgetMs: 12000,
+			enrichmentBudgetSource: 'default',
 			circuitBreaker: {
 				state: 'closed',
 				consecutiveFailures: 0,
@@ -2236,15 +2918,37 @@ describe('Status endpoints', () => {
 				failureThreshold: 5,
 				cooldownMs: 600000,
 			},
+			mcpTools: expect.objectContaining({
+				discoveredSource: 'fallback-static-catalog',
+			}),
+			warmup: {
+				enabled: true,
+				running: false,
+				intervalMs: 600000,
+				timeoutMs: 60000,
+				lastProbeAt: null,
+				lastSuccessAt: null,
+				lastFailureAt: null,
+				lastDurationMs: null,
+				lastStatus: 'not_attempted',
+				lastErrorReason: null,
+				consecutiveFailures: 0,
+				totalProbes: 0,
+				successCount: 0,
+				failureCount: 0,
+			},
 			errorCategoryCounts: {
 				circuit_breaker_open: 0,
+				provider_unavailable: 0,
+				upstream_tool_error: 0,
+				not_found: 0,
 				http_5xx: 0,
 				http_4xx: 0,
 				timeout: 0,
 				invalid_response: 0,
 				request_failed: 0,
 			},
-		});
+		}));
 	});
 
 	it('keeps observed MCP readiness visible after an always-mounted consumer uses it', async () => {
@@ -2778,6 +3482,11 @@ describe('Status endpoints', () => {
 		expect(response.status).toBe(200);
 		expect(response.body.service.environment).toBe('preview');
 		expect(response.body.featureFlags.telegramBot).toBe(true);
+		expect(response.body.featureFlags.priceQuoteCache).toBe(true);
+		expect(response.body.dependencies.priceQuoteCache).toMatchObject({
+			enabled: true, mode: 'in-memory', storage: 'memory',
+			ttlMs: { crypto: 15000, equity: 60000 }, maxEntriesPerBucket: 256,
+		});
 		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: false, status: 'disabled' });
 		expect(response.body.dependencies.telegram.ready).toBe(false);
 	});
@@ -2893,6 +3602,47 @@ describe('Status endpoints', () => {
 			mode: 'in-memory',
 			backend: null,
 		});
+	});
+
+	it('reports newsMonitorCache metrics under dependencies when ENABLE_NEWS_MONITOR is true', async () => {
+		process.env.ENABLE_NEWS_MONITOR = 'true';
+		process.env.ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.newsMonitorCache).toBeDefined();
+		expect(response.body.dependencies.newsMonitorCache).toEqual({
+			enabled: true,
+			configured: true,
+			ready: true,
+			status: 'ready',
+			mode: 'in-memory',
+			backend: null,
+			metrics: expect.objectContaining({
+				hits: expect.any(Number),
+				misses: expect.any(Number),
+				hitRate: expect.any(Number),
+				totalEntries: expect.any(Number),
+				evictions: expect.any(Number),
+				estimatedMemoryBytes: expect.any(Number),
+				lastHitAt: null,
+				lastMissAt: null,
+			}),
+		});
+	});
+
+	it('omits newsMonitorCache from dependencies when ENABLE_NEWS_MONITOR is false', async () => {
+		process.env.ENABLE_NEWS_MONITOR = 'false';
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.newsMonitorCache).toBeUndefined();
 	});
 
 	it('reports Cloudflare as the primary news monitor provider and fallback model as configured', async () => {
@@ -3257,6 +4007,66 @@ describe('Status endpoints', () => {
 		}));
 	});
 
+	describe('discord source routing feature flag', () => {
+		afterEach(() => {
+			delete process.env.ENABLE_DISCORD_SOURCE_ROUTING;
+			delete process.env.DISCORD_SOURCE_ROUTING_JSON;
+		});
+
+		it('reports discordSourceRouting as disabled when env var is not set', async () => {
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.discordSourceRouting).toBe(false);
+			expect(response.body.dependencies.discordSourceRouting).toEqual(expect.objectContaining({
+				enabled: false,
+				configured: false,
+				status: 'disabled',
+			}));
+		});
+
+		it('reports discordSourceRouting as misconfigured when enabled without routes', async () => {
+			process.env.ENABLE_DISCORD_SOURCE_ROUTING = 'true';
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.discordSourceRouting).toBe(true);
+			expect(response.body.dependencies.discordSourceRouting).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: false,
+				status: 'misconfigured',
+				routesConfigured: 0,
+			}));
+		});
+
+		it('reports discordSourceRouting as ready when enabled with valid JSON routes', async () => {
+			process.env.ENABLE_DISCORD_SOURCE_ROUTING = 'true';
+			process.env.DISCORD_SOURCE_ROUTING_JSON = JSON.stringify({
+				scanner: 'https://discord.com/api/webhooks/111/scanner',
+				'news-monitor': 'https://discord.com/api/webhooks/222/news',
+				default: 'https://discord.com/api/webhooks/000/default',
+			});
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.discordSourceRouting).toBe(true);
+			expect(response.body.dependencies.discordSourceRouting).toEqual(expect.objectContaining({
+				enabled: true,
+				configured: true,
+				status: 'ready',
+				routesConfigured: 3,
+				hasDefault: true,
+				keys: expect.arrayContaining(['default', 'scanner', 'news-monitor']),
+			}));
+		});
+	});
+
 	it('omits firestoreWriteMetrics when no writes have been recorded', async () => {
 		const response = await request(app)
 			.get('/api/status')
@@ -3447,6 +4257,103 @@ describe('Status endpoints', () => {
 				successRate: 0,
 				uptimeSince: expect.any(String),
 			}),
+		});
+	});
+
+	// Issue #1118: ENABLE_BINANCE_ORDER_AUDIT gates BinanceOrderAuditService, so the
+	// status payload must let an operator distinguish "audit off", "audit on and
+	// storing", and "audit on but storage unconfigured".
+	describe('Binance order audit observability (issue #1118)', () => {
+		it('reports the audit flag as disabled by default', async () => {
+			delete process.env.ENABLE_BINANCE_ORDER_AUDIT;
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.binanceOrderAudit).toBe(false);
+			// `configured` reports Firestore credential readiness, so an operator can
+			// see "credentials present but audit off" instead of a bare `false`.
+			expect(response.body.dependencies.binanceOrderAudit).toEqual({
+				enabled: false,
+				configured: true,
+				ready: false,
+				status: 'disabled',
+				collection: 'binanceOrderAudit',
+				retentionDays: 30,
+			});
+		});
+
+		it('reports the audit flag on /api/capabilities when enabled', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+
+			const response = await request(app)
+				.get('/api/capabilities')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.binanceOrderAudit).toBe(true);
+			expect(response.body.dependencies.binanceOrderAudit.enabled).toBe(true);
+			expect(response.body.dependencies.binanceOrderAudit.ready).toBe(true);
+			expect(response.body.dependencies.binanceOrderAudit.status).toBe('ready');
+			expect(response.body.dependencies.binanceOrderAudit.collection).toBe('binanceOrderAudit');
+		});
+
+		it('reports misconfigured when enabled without Firestore credentials', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+			delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+			delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.binanceOrderAudit).toBe(true);
+			expect(response.body.dependencies.binanceOrderAudit).toEqual({
+				enabled: true,
+				configured: false,
+				ready: false,
+				status: 'misconfigured',
+				collection: 'binanceOrderAudit',
+				retentionDays: 30,
+			});
+		});
+
+		it('never exposes credentials or operator identifiers in the audit dependency block', async () => {
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'true';
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(Object.keys(response.body.dependencies.binanceOrderAudit).sort()).toEqual([
+				'collection',
+				'configured',
+				'enabled',
+				'ready',
+				'retentionDays',
+				'status',
+			]);
+			expect(response.text).not.toContain('status-key');
+		});
+
+		it('honors the Remote Config override over a conflicting environment value', async () => {
+			// The audit service resolves Remote Config before process.env. A remote
+			// override must therefore win, so flipping the flag in Firebase actually
+			// turns the reported flag instead of silently being ignored.
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			process.env.ENABLE_BINANCE_ORDER_AUDIT = 'false';
+			remoteConfigService._setRemoteOverridesForTesting({ ENABLE_BINANCE_ORDER_AUDIT: true }, Date.now());
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			expect(response.body.featureFlags.binanceOrderAudit).toBe(true);
 		});
 	});
 });

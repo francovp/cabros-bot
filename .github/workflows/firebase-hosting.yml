@@ -13,9 +13,14 @@ permissions:
   contents: read
   pull-requests: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build_and_preview_or_deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       # SHA-pinned to full 40-char commit refs (supply-chain hardening, GH-803).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -30,7 +35,7 @@ jobs:
       - name: Build hosting assets
         run: pnpm run build:hosting
       - name: Deploy preview channel for PR
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]' }}
         uses: FirebaseExtended/action-hosting-deploy@500ac625ca2dd40cbd15f7659af953801858032a # v0
         with:
           repoToken: '${{ secrets.GITHUB_TOKEN }}'

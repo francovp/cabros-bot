@@ -1,12 +1,20 @@
 'use strict';
 
-/* global document, window */
+/* global document, window, globalThis */
+
+const i18n = (typeof window !== 'undefined' && (window.CabrosAdminI18n || window.i18n))
+	|| (typeof globalThis !== 'undefined' && (globalThis.CabrosAdminI18n || globalThis.i18n))
+	|| { t: (k, opts) => (opts && opts.default !== undefined ? opts.default : k), resolveLocale: () => 'en', getLocale: () => 'en', setLocale: () => 'en' };
 
 const VIEWS = {
 	status: [{ method: 'GET', path: '/api/status', label: 'Refresh status' }],
 	presets: [
 		{ method: 'GET', path: '/api/scanner-presets', label: 'Load presets' },
 		{ method: 'POST', path: '/api/scanner-presets', label: 'Create preset' },
+	],
+	subscribers: [
+		{ method: 'GET', path: '/api/alert-subscribers', label: 'Load subscribers' },
+		{ method: 'POST', path: '/api/alert-subscribers', label: 'Create subscriber' },
 	],
 	jobs: [{ method: 'POST', path: '/api/jobs/tradingview-analysis', label: 'Create job' }],
 	analysis: [
@@ -71,6 +79,17 @@ const VIEW_ACTIONS = {
 			confirm: 'Delete this scanner preset?',
 		},
 	],
+	subscribers: [
+		{ method: 'PATCH', path: '/api/alert-subscribers/{id}', label: 'Update subscriber' },
+		{
+			method: 'POST', path: '/api/alert-subscribers/{id}/test', label: 'Test subscriber ping',
+			confirm: 'Send test webhook ping to this subscriber?',
+		},
+		{
+			method: 'DELETE', path: '/api/alert-subscribers/{id}', label: 'Delete subscriber',
+			confirm: 'Delete this alert subscriber webhook?',
+		},
+	],
 };
 
 const STATUS_DEFINITION = { method: 'GET', path: '/api/status', label: 'Refresh status' };
@@ -107,6 +126,8 @@ const DISPLAY_LABELS = {
 	idempotencyStorage: 'Idempotency storage',
 	scannerPresetStorage: 'Scanner preset storage',
 	symbolAnalysisStorage: 'Symbol analysis storage',
+	alertSubscribers: 'Alert subscribers',
+	alertSubscriberStorage: 'Alert subscriber storage',
 	cloudflareAig: 'Cloudflare AI Gateway',
 };
 
@@ -118,6 +139,7 @@ const VIEW_TITLES = {
 	alerts: 'Alerts',
 	outcomes: 'Outcomes',
 	presets: 'Presets',
+	subscribers: 'Subscribers',
 	jobs: 'Jobs',
 	orders: 'Orders',
 	analysis: 'Analysis',
@@ -197,6 +219,70 @@ const readConsoleParams = () => {
 	}
 };
 
+const safeDecodeURIComponent = (value) => {
+	if (typeof value !== 'string') return '';
+	try {
+		return decodeURIComponent(value);
+	} catch (_) {
+		return value;
+	}
+};
+
+const readConsoleHash = () => {
+	try {
+		const location = getWindowLocation();
+		return location && typeof location.hash === 'string' ? location.hash : '';
+	} catch (_) {
+		return '';
+	}
+};
+
+const parseConsoleHash = (rawHash) => {
+	if (!rawHash || typeof rawHash !== 'string') return null;
+	const trimmed = rawHash.replace(/^#\/?/, '').replace(/\/+$/, '').trim();
+	if (!trimmed) return null;
+
+	const alertTradeMatch = trimmed.match(/^alerts\/([^/]+)(?:\/trade)?$/i);
+	if (alertTradeMatch) {
+		return {
+			view: 'alerts',
+			alertId: safeDecodeURIComponent(alertTradeMatch[1]),
+			raw: rawHash,
+		};
+	}
+
+	const tradeMatch = trimmed.match(/^trade(?:\/([^/]+))?$/i);
+	if (tradeMatch) {
+		if (tradeMatch[1]) {
+			return {
+				view: 'alerts',
+				alertId: safeDecodeURIComponent(tradeMatch[1]),
+				raw: rawHash,
+			};
+		}
+		return {
+			view: 'trading',
+			raw: rawHash,
+		};
+	}
+
+	const normalizedView = CONSOLE_VIEW_NAMES.find(
+		(v) => v.toLowerCase() === trimmed.toLowerCase().replace(/[-_]/g, ''),
+	);
+	if (normalizedView) {
+		return {
+			view: normalizedView,
+			raw: rawHash,
+		};
+	}
+
+	return {
+		view: trimmed,
+		unrecognised: true,
+		raw: rawHash,
+	};
+};
+
 const resolveConsoleView = (value) => {
 	const name = typeof value === 'string' ? value.trim() : '';
 	return CONSOLE_VIEW_NAMES.includes(name) ? name : DEFAULT_CONSOLE_VIEW;
@@ -204,13 +290,29 @@ const resolveConsoleView = (value) => {
 
 const readConsoleUrlState = () => {
 	const params = readConsoleParams();
+	const hashState = parseConsoleHash(readConsoleHash());
+
+	if (hashState) {
+		const view = resolveConsoleView(hashState.view);
+		return {
+			view,
+			viewRequested: true,
+			viewRecognised: !hashState.unrecognised && CONSOLE_VIEW_NAMES.includes(view),
+			alertId: hashState.alertId || null,
+			params,
+			hash: hashState.raw,
+		};
+	}
+
 	const requested = params.get('view');
 	const view = resolveConsoleView(requested);
 	return {
 		view,
 		viewRequested: requested !== null,
 		viewRecognised: view === requested,
+		alertId: null,
 		params,
+		hash: '',
 	};
 };
 
@@ -227,7 +329,7 @@ const filterParamsForView = (view, params) => {
 	return carried;
 };
 
-const buildConsoleUrl = (view, filterParams = {}) => {
+const buildConsoleUrl = (view, filterParams = {}, explicitHash = null) => {
 	const location = getWindowLocation();
 	let pathname = '';
 	try {
@@ -240,12 +342,27 @@ const buildConsoleUrl = (view, filterParams = {}) => {
 		const ownsFilterScope = Object.keys(FILTER_SCOPE_VIEWS).some((scope) => key.startsWith(`${scope}.`));
 		if (key !== 'view' && !ownsFilterScope) params.set(key, value);
 	});
+	if (typeof i18n !== 'undefined') {
+		const currentLang = i18n.getLocale();
+		if (params.has('lang') || currentLang !== 'en') {
+			if (currentLang === 'en') {
+				params.delete('lang');
+			} else {
+				params.set('lang', currentLang);
+			}
+		}
+	}
 	params.set('view', view);
 	Object.entries(filterParams).forEach(([key, value]) => {
 		if (value !== undefined && value !== null && value !== '') params.set(key, value);
 	});
 	const search = params.toString();
-	return `${pathname}${search ? `?${search}` : ''}`;
+	const base = `${pathname}${search ? `?${search}` : ''}`;
+	if (explicitHash) {
+		const formattedHash = explicitHash.startsWith('#') ? explicitHash : `#${explicitHash}`;
+		return `${base}${formattedHash}`;
+	}
+	return base;
 };
 
 const writeConsoleUrl = (url, { replace = false } = {}) => {
@@ -431,14 +548,18 @@ const createLoadingState = (label) => {
 		className: 'loading-state',
 		attributes: { role: 'status' },
 	});
+	const translated = (typeof i18n !== 'undefined' && i18n.t(label)) || label;
 	wrap.append(
 		element('span', { className: 'spinner', attributes: { 'aria-hidden': 'true' } }),
-		element('span', { text: label }),
+		element('span', { text: translated }),
 	);
 	return wrap;
 };
 
-const createEmptyState = (text) => element('p', { className: 'empty-state', text });
+const createEmptyState = (text) => element('p', {
+	className: 'empty-state',
+	text: (typeof i18n !== 'undefined' && i18n.t(text)) || text,
+});
 
 const formatRelativeTime = (value, now = Date.now()) => {
 	const date = new Date(value);
@@ -485,18 +606,24 @@ const copyToClipboard = async (text, button) => {
 	} catch (_) {
 		copied = false;
 	}
-	button.textContent = copied ? 'Copied!' : 'Copy unavailable';
+	button.textContent = copied
+		? (typeof i18n !== 'undefined' ? i18n.t('actions.copied', { default: 'Copied!' }) : 'Copied!')
+		: (typeof i18n !== 'undefined' ? i18n.t('actions.copyUnavailable', { default: 'Copy unavailable' }) : 'Copy unavailable');
 	setTimeout(() => {
 		button.textContent = original;
 	}, 2000);
 };
 
 const createCopyButton = (getText, label = 'Copy') => {
-	const button = element('button', { text: label });
+	const isDetails = label === 'Copy details' || label === 'actions.copyDetails';
+	const displayLabel = typeof i18n !== 'undefined'
+		? (label === 'Copy details' ? i18n.t('actions.copyDetails') : i18n.t(label, { default: label }))
+		: label;
+	const button = element('button', { text: displayLabel });
 	button.type = 'button';
 	button.className = 'copy-button';
 	button.addEventListener('click', () => copyToClipboard(
-		label === 'Copy details'
+		isDetails
 			? window.CabrosAdminComponents.plainText(window.CabrosAdminComponents.present(JSON.parse((typeof getText === 'function' ? getText() : getText) || 'null'), false, getElement('api-key')?.value || ''))
 			: typeof getText === 'function' ? String(getText() ?? '') : String(getText ?? ''),
 		button,
@@ -537,11 +664,11 @@ const loadFirebaseSdk = () => {
 	return firebaseSdkPromise;
 };
 
-const showAuthState = (message, isError = false) => {
+const showAuthState = (message, isError = false, options = {}) => {
 	const state = getElement('auth-state');
 	if (state) {
 		state.className = isError ? 'response-error' : 'request-state';
-		state.textContent = message;
+		state.textContent = (typeof i18n !== 'undefined' && i18n.t(message, options)) || message;
 	}
 };
 
@@ -612,13 +739,14 @@ const showSignedOutState = () => {
 	clearCredentialError();
 	showAuthState('Sign in to continue.');
 	const view = getElement('view');
-	if (view) view.replaceChildren(element('p', { className: 'request-state', text: 'Sign in required.' }));
+	if (view) view.replaceChildren(element('p', { className: 'request-state', text: typeof i18n !== 'undefined' ? i18n.t('Sign in required.') : 'Sign in required.' }));
 };
 
 const showSignedInState = () => {
 	setHidden('auth-form', true);
 	setHidden('sign-out', false);
-	showAuthState(`Signed in as ${authState.user.email || 'admin'}.`);
+	const user = authState.user.email || 'admin';
+	showAuthState('auth.signedInAs', false, { user, default: `Signed in as ${user}.` });
 };
 
 const setupFirebaseAuth = async (config) => {
@@ -671,7 +799,7 @@ const setupFirebaseAuth = async (config) => {
 				const requested = readConsoleUrlState();
 				navigateToView(
 					requested.viewRequested ? requested.view : FIREBASE_SIGN_IN_LANDING_VIEW,
-					{ history: 'replace' },
+					{ history: 'replace', alertId: requested.alertId, hash: requested.hash },
 				);
 			} catch (error) {
 				disconnectSse();
@@ -1050,7 +1178,13 @@ const showResult = (output, serialized) => {
 };
 
 const addField = (form, labelText, name, options = {}) => {
-	const label = element('label', { text: labelText });
+	const currentLang = typeof i18n !== 'undefined' ? i18n.getLocale() : 'en';
+	const dict = typeof i18n !== 'undefined' && i18n.locales ? i18n.locales[currentLang] : null;
+	const key = `filters.${name}`;
+	const translatedText = typeof i18n !== 'undefined'
+		? (dict && dict[key] ? i18n.t(key) : i18n.t(labelText, { default: labelText }))
+		: labelText;
+	const label = element('label', { text: translatedText });
 	const input = element(options.tag || 'input');
 	input.name = name;
 	Object.entries(options).forEach(([key, value]) => {
@@ -1092,7 +1226,12 @@ const displayLabel = (value) => DISPLAY_LABELS[value] || String(value)
 	.replace(/[-_]/g, ' ')
 	.replace(/\b\w/g, (letter) => letter.toUpperCase());
 
-const displayStatus = (value) => STATUS_LABELS[value] || displayLabel(value || 'unknown');
+const displayStatus = (value) => {
+	const key = String(value || 'unknown').toLowerCase();
+	const translated = typeof i18n !== 'undefined' ? i18n.t(`status.${key}`) : null;
+	if (translated && translated !== `status.${key}`) return translated;
+	return STATUS_LABELS[value] || displayLabel(value || 'unknown');
+};
 
 const statusTone = (value) => ['ready', 'disabled', 'misconfigured'].includes(value) ? value : 'unknown';
 
@@ -1118,6 +1257,7 @@ const statusNeedsAttention = (detail) => hasStatus({ status: effectiveStatus(det
 const statusDetailFields = [
 	['configured', 'Configured'],
 	['enabled', 'Enabled'],
+	['routed', 'Routed'],
 	['environment', 'Environment'],
 	['allowedSymbols', 'Allowed symbols'],
 	['maxNotionalConfigured', 'Max notional configured'],
@@ -1723,6 +1863,22 @@ const sentimentBadge = (enrichment) => {
 	});
 };
 
+const sessionBadge = (session) => {
+	if (!session || typeof session !== 'string') return null;
+	const norm = session.trim().toLowerCase();
+	if (norm === 'unknown' || norm === '24/7') return null;
+	const tones = {
+		regular: 'status-ready',
+		pre: 'status-active',
+		post: 'status-disabled',
+		closed: 'status-danger',
+	};
+	return element('span', {
+		className: `status-badge ${tones[norm] || 'status-unknown'}`,
+		text: `Sesión: ${norm}`,
+	});
+};
+
 const deliveryChips = (results) => {
 	const wrap = element('div', { className: 'chip-grid delivery-chips' });
 	(Array.isArray(results) ? results : []).forEach((result) => {
@@ -1774,6 +1930,21 @@ const appendRiskRows = (dl, data) => [
 	dl.append(element('dt', { text: label }), element('dd', { text: String(value) }));
 });
 
+const buildTradeUrl = (alertId) => {
+	const tradeHash = `#/alerts/${encodeURIComponent(String(alertId))}/trade`;
+	const loc = getWindowLocation();
+	const origin = (loc && loc.origin) ? loc.origin : '';
+	const pathname = (loc && loc.pathname) ? loc.pathname : '/admin';
+	const search = (loc && loc.search) ? loc.search : '';
+	return `${origin}${pathname}${search}${tradeHash}`;
+};
+
+const appendTradeLinkCopyButton = (container, alertId) => {
+	if (!container || !alertId) return;
+	const tradeUrl = buildTradeUrl(alertId);
+	container.append(createCopyButton(tradeUrl, 'Copy trade link'));
+};
+
 const createAlertDetailPanel = (alert) => {
 	const panel = element('article', { className: 'operation-card alert-detail' });
 	const headCopy = element('div');
@@ -1781,6 +1952,7 @@ const createAlertDetailPanel = (alert) => {
 	if (alert && alert.id) {
 		const idLine = element('p', { className: 'mono-line', text: String(alert.id) });
 		idLine.append(createCopyButton(String(alert.id), 'Copy ID'));
+		appendTradeLinkCopyButton(idLine, alert.id);
 		headCopy.append(idLine);
 	}
 	const badges = element('div', { className: 'badge-row' });
@@ -1790,6 +1962,8 @@ const createAlertDetailPanel = (alert) => {
 	const data = asObject(alert && alert.enrichmentData);
 	const sentimentNode = sentimentBadge(data);
 	if (sentimentNode) badges.append(sentimentNode);
+	const sessionNode = sessionBadge(alert && alert.session);
+	if (sessionNode) badges.append(sessionNode);
 	const head = element('div', { className: 'section-heading' });
 	head.append(headCopy, badges);
 	panel.append(head);
@@ -1866,6 +2040,7 @@ const createAlertDetailPanel = (alert) => {
 	if (data.truncated === true) {
 		panel.append(element('p', { className: 'request-state', text: 'Enrichment content was truncated.' }));
 	}
+	panel.append(createTradeTicket({ alert, defaultOrigin: 'admin_alert' }));
 	return panel;
 };
 
@@ -1890,6 +2065,7 @@ const createAlertCard = (alert, { onSelect, isSelected = false, registerCheckbox
 	if (alert && alert.id) {
 		const idLine = element('p', { className: 'mono-line', text: String(alert.id) });
 		idLine.append(createCopyButton(String(alert.id), 'Copy ID'));
+		appendTradeLinkCopyButton(idLine, alert.id);
 		headCopy.append(idLine);
 	}
 	const badges = element('div', { className: 'badge-row' });
@@ -1899,6 +2075,8 @@ const createAlertCard = (alert, { onSelect, isSelected = false, registerCheckbox
 		: element('span', { className: 'status-badge status-disabled', text: 'Plain' }));
 	const sentimentNode = sentimentBadge(asObject(alert && alert.enrichmentData));
 	if (sentimentNode) badges.append(sentimentNode);
+	const sessionNode = sessionBadge(alert && alert.session);
+	if (sessionNode) badges.append(sessionNode);
 	const head = element('div', { className: 'section-heading' });
 	head.append(headCopy, badges);
 	card.append(head);
@@ -1993,6 +2171,257 @@ const renderStatusCards = (container, entries, emptyText, { detailed = false } =
 	});
 };
 
+const renderSystemIssuesWarning = (container, { dependencies, deliverySummary, jobsData, outcomesData, status }) => {
+	container.replaceChildren();
+	const issues = [];
+
+	(dependencies || []).forEach(([name, detail]) => {
+		if (statusNeedsAttention(detail)) {
+			const status = effectiveStatus(detail);
+			issues.push({
+				label: `${displayLabel(name)}: ${displayStatus(status)}`,
+				detail: detail.provider ? `Provider: ${detail.provider}` : (detail.error || 'Check configuration and service credentials.'),
+				tone: statusTone(status),
+			});
+		}
+	});
+	if (!deliverySummary?.summary?.delivery) {
+		issues.push({
+			label: 'Delivery metrics unavailable',
+			detail: 'Alert storage may be disabled or the summary request failed.',
+			tone: 'unknown',
+		});
+	}
+	if (!Array.isArray(jobsData?.jobs)) {
+		issues.push({
+			label: 'Job metrics unavailable',
+			detail: 'The jobs request did not return a list.',
+			tone: 'unknown',
+		});
+	}
+	if (status?.featureFlags?.signalOutcomeTracking && !Array.isArray(outcomesData?.outcomes)) {
+		issues.push({
+			label: 'Outcome metrics unavailable',
+			detail: 'The outcome request did not return a list.',
+			tone: 'unknown',
+		});
+	}
+	const newsMonitorEnabled = status?.dependencies?.newsMonitor?.enabled ?? status?.featureFlags?.newsMonitor ?? true;
+	if (newsMonitorEnabled && (status?.dependencies?.newsMonitor?.paused || status?.featureFlags?.newsMonitorPaused)) {
+		issues.push({
+			label: 'News monitor paused',
+			detail: 'News ingestion and analysis are paused.',
+			tone: 'unknown',
+		});
+	}
+
+	if (deliverySummary && deliverySummary.summary && deliverySummary.summary.delivery) {
+		const { totalFailure, byChannel } = deliverySummary.summary.delivery;
+		if (Number(totalFailure) > 0) {
+			const channelFailures = Object.entries(asObject(byChannel))
+				.filter(([, stats]) => Number(stats.failure) > 0)
+				.map(([ch, stats]) => `${displayLabel(ch)} (${stats.failure} failed)`)
+				.join(', ');
+			issues.push({
+				label: `Delivery alerts had ${totalFailure} failure${totalFailure === 1 ? '' : 's'}`,
+				detail: channelFailures || 'Check webhook destinations and channel settings.',
+				tone: 'danger',
+			});
+		}
+	}
+
+	const jobs = Array.isArray(jobsData?.jobs) ? jobsData.jobs : [];
+	const failedJobs = jobs.filter((j) => j.status === 'failed');
+	if (failedJobs.length > 0) {
+		issues.push({
+			label: `${failedJobs.length} background job${failedJobs.length === 1 ? '' : 's'} failed`,
+			detail: 'Inspect the Jobs view for error details and retry options.',
+			tone: 'misconfigured',
+		});
+	}
+
+	if (!issues.length) {
+		const healthyCard = element('div', { className: 'dashboard-healthy-card' });
+		healthyCard.append(
+			element('span', { className: 'status-badge status-ready', text: 'Healthy' }),
+			element('span', { text: 'All configured services and delivery channels operating normally.' }),
+		);
+		container.append(healthyCard);
+		return;
+	}
+
+	const grid = element('div', { className: 'status-grid' });
+	issues.forEach((issue) => {
+		const card = element('article', { className: 'status-card' });
+		const copy = element('div');
+		copy.append(
+			element('strong', { text: issue.label }),
+			element('small', { text: issue.detail }),
+		);
+		const badge = element('span', {
+			className: `status-badge status-${issue.tone}`,
+			text: issue.tone === 'danger' ? 'Error' : 'Warning',
+		});
+		card.append(copy, badge);
+		grid.append(card);
+	});
+	container.append(grid);
+};
+
+const renderDeliveryHealthDashboard = (container, deliverySummary) => {
+	container.replaceChildren();
+	if (!deliverySummary || !deliverySummary.summary || !deliverySummary.summary.delivery) {
+		container.append(createEmptyState('No recent delivery metrics reported or alert storage disabled.'));
+		return;
+	}
+	const summary = deliverySummary.summary;
+	const delivery = summary.delivery || {};
+	const totalSuccess = Number(delivery.totalSuccess) || 0;
+	const totalFailure = Number(delivery.totalFailure) || 0;
+	const totalDeliveries = totalSuccess + totalFailure;
+	const successRate = totalDeliveries > 0 ? Math.round((totalSuccess / totalDeliveries) * 100) : 100;
+
+	const metricsGrid = element('div', { className: 'metric-grid' });
+	metricsGrid.append(
+		createMetricCard('Total alerts', summary.totalAlerts ?? 0, 'In monitored window'),
+		createMetricCard('Successful deliveries', totalSuccess, `${successRate}% success rate`),
+		createMetricCard('Failed deliveries', totalFailure, totalFailure > 0 ? 'Requires attention' : '0 failures'),
+		createMetricCard('Overall delivery rate', `${successRate}%`, `${totalSuccess}/${totalDeliveries} delivered`),
+	);
+
+	const channels = Object.entries(asObject(delivery.byChannel));
+	const channelGrid = element('div', { className: 'status-grid' });
+	if (!channels.length) {
+		channelGrid.append(createEmptyState('No channel delivery stats reported.'));
+	} else {
+		channels.forEach(([channelName, stats]) => {
+			const card = element('article', { className: 'status-card' });
+			const copy = element('div');
+			const chTotal = Number(stats.total) || (Number(stats.success) || 0) + (Number(stats.failure) || 0);
+			const chSuccess = Number(stats.success) || 0;
+			const chFailure = Number(stats.failure) || 0;
+			const chRate = chTotal > 0 ? Math.round((chSuccess / chTotal) * 100) : 100;
+			copy.append(
+				element('strong', { text: displayLabel(channelName) }),
+				element('small', { text: `${chSuccess} success · ${chFailure} failed (${chRate}%)` }),
+			);
+			const badge = element('span', {
+				className: `status-badge ${chFailure > 0 ? 'status-misconfigured' : 'status-ready'}`,
+				text: `${chRate}%`,
+			});
+			card.append(copy, badge);
+			channelGrid.append(card);
+		});
+	}
+
+	container.append(metricsGrid, channelGrid);
+};
+
+const renderActiveWorkDashboard = (container, { jobsData, outcomesData, status }) => {
+	container.replaceChildren();
+	const trackingEnabled = Boolean(status?.featureFlags?.signalOutcomeTracking);
+	const jobsAvailable = Array.isArray(jobsData?.jobs);
+	const outcomesAvailable = Array.isArray(outcomesData?.outcomes);
+	const jobs = jobsAvailable ? jobsData.jobs : [];
+	const inFlightJobs = jobs.filter((j) => ['pending', 'processing'].includes(j.status));
+	const completedJobs = jobs.filter((j) => j.status === 'completed');
+	const failedJobs = jobs.filter((j) => j.status === 'failed');
+
+	const outcomes = outcomesAvailable ? outcomesData.outcomes : [];
+	const pendingOutcomes = outcomes.filter((o) => o.outcomeEvaluated === false
+		&& Object.values(asObject(o.outcomes)).some((window) => window?.status === 'pending'));
+	const evaluatedOutcomes = outcomes.filter((o) => Object.values(asObject(o.outcomes))
+		.some((window) => window?.status === 'evaluated'));
+
+	const pendingCountLabel = trackingEnabled
+		? (outcomesAvailable ? pendingOutcomes.length : '—')
+		: '—';
+	const pendingDetailLabel = trackingEnabled
+		? (outcomesAvailable ? `${evaluatedOutcomes.length} evaluated signals` : 'Outcome metrics unavailable')
+		: 'Outcome tracking disabled';
+
+	const metricsGrid = element('div', { className: 'metric-grid' });
+	metricsGrid.append(
+		createMetricCard('In-flight jobs', inFlightJobs.length, `${completedJobs.length} completed · ${failedJobs.length} failed`),
+		createMetricCard('Pending outcomes', pendingCountLabel, pendingDetailLabel),
+		createMetricCard('Outcome tracking', trackingEnabled ? 'Active' : 'Disabled', 'Signal evaluation'),
+		createMetricCard('Worker health', displayStatus(status?.dependencies?.signalOutcomeWorker?.status || 'disabled'), 'Background worker'),
+	);
+
+	const workList = element('div', { className: 'form-fields' });
+	if (inFlightJobs.length > 0) {
+		const jobGroup = element('div');
+		jobGroup.append(element('strong', { text: `Active background jobs (${inFlightJobs.length}):` }));
+		inFlightJobs.slice(0, 5).forEach((job) => {
+			const item = element('div', { className: 'mono-line' });
+			item.append(
+				element('span', { className: 'status-badge status-active', text: job.status }),
+				element('span', { text: `${job.jobId} · ${job.type || 'analysis'}` }),
+			);
+			jobGroup.append(item);
+		});
+		workList.append(jobGroup);
+	}
+	if (pendingOutcomes.length > 0) {
+		const outcomeGroup = element('div');
+		outcomeGroup.append(element('strong', { text: `Pending signal evaluations (${pendingOutcomes.length}):` }));
+		pendingOutcomes.slice(0, 5).forEach((outcome) => {
+			const item = element('div', { className: 'mono-line' });
+			item.append(
+				element('span', { className: 'status-badge status-active', text: 'pending' }),
+				element('span', { text: `${outcome.symbol || outcome.id} · waiting evaluation` }),
+			);
+			outcomeGroup.append(item);
+		});
+		workList.append(outcomeGroup);
+	}
+
+	if (!jobsAvailable) {
+		workList.append(createEmptyState('Job metrics unavailable; retry after dependencies recover.'));
+	}
+	if (trackingEnabled && !outcomesAvailable) {
+		workList.append(createEmptyState('Outcome metrics unavailable; retry after dependencies recover.'));
+	}
+
+	if (!inFlightJobs.length && !pendingOutcomes.length && jobsAvailable && (!trackingEnabled || outcomesAvailable)) {
+		workList.append(createEmptyState(trackingEnabled
+			? 'No in-flight background jobs or pending outcome evaluations.'
+			: 'No in-flight background jobs.'));
+	}
+
+	container.append(metricsGrid, element('p', { className: 'request-state', text: 'Counts reflect the latest 20 jobs and outcomes.' }), workList);
+};
+
+const renderRecentAlertsDashboard = (container, alertsData) => {
+	container.replaceChildren();
+	const alerts = Array.isArray(alertsData?.alerts) ? alertsData.alerts : [];
+	if (!alerts.length) {
+		container.append(createEmptyState('No recent alerts stored or alert storage disabled.'));
+		return;
+	}
+	const alertsList = element('div', { className: 'form-fields' });
+	alerts.slice(0, 10).forEach((alert) => {
+		const card = element('article', { className: 'alert-card status-card' });
+		const header = element('div');
+		const symbolOrSource = alert.symbol || alert.source || alert.id || 'Alert';
+		const chips = deliveryChips(alert.deliveryResults);
+		header.append(
+			element('strong', { text: symbolOrSource }),
+			element('small', { text: `${alert.enriched ? 'Enriched' : 'Plain'} · ${alert.receivedAt ? new Date(alert.receivedAt).toLocaleString() : 'Recent'}` }),
+		);
+		const badge = element('span', {
+			className: `status-badge ${alert.enriched ? 'status-ready' : 'status-disabled'}`,
+			text: alert.enriched ? 'Enriched' : 'Plain',
+		});
+		card.append(header, badge);
+		if (chips.children.length > 0) {
+			card.append(chips);
+		}
+		alertsList.append(card);
+	});
+	container.append(alertsList);
+};
+
 const renderStatusDependencies = (container, entries, filter = 'all', search = '') => {
 	const query = String(search).trim().toLowerCase();
 	const filtered = entries
@@ -2057,37 +2486,37 @@ const createStatusExplorer = () => {
 	const dashboard = element('div', { className: 'dashboard' });
 	const hero = element('section', { className: 'dashboard-hero' });
 	const heroCopy = element('div');
-	const lastChecked = element('p', { className: 'request-state', text: 'Waiting for live status…' });
+	const lastChecked = element('p', { className: 'request-state', text: i18n.t('Waiting for live status…') });
 	heroCopy.append(
-		element('p', { className: 'eyebrow', text: 'Runtime status' }),
-		element('h2', { text: 'Status' }),
-		element('p', { text: 'Inspect dependency readiness, delivery channels and worker health.' }),
+		element('p', { className: 'eyebrow', text: i18n.t('status.eyebrow', { default: 'Runtime status' }) }),
+		element('h2', { text: i18n.t('views.status') }),
+		element('p', { text: i18n.t('status.description', { default: 'Inspect dependency readiness, delivery channels and worker health.' }) }),
 		lastChecked,
 	);
-	const refreshButton = element('button', { className: 'button-primary', text: 'Refresh status' });
+	const refreshButton = element('button', { className: 'button-primary', text: i18n.t('actions.refreshStatus') });
 	refreshButton.type = 'button';
 	hero.append(heroCopy, refreshButton);
 
 	const metrics = element('div', { className: 'metric-grid' });
-	metrics.append(element('p', { className: 'request-state', text: 'Loading live status…' }));
+	metrics.append(element('p', { className: 'request-state', text: i18n.t('Loading live status…') }));
 	const channelGrid = element('div', { className: 'status-grid' });
 	const dependencyGrid = element('div', { className: 'status-grid' });
 	const featureGrid = element('div', { className: 'chip-grid' });
-	const searchLabel = element('label', { text: 'Search dependencies' });
+	const searchLabel = element('label', { text: i18n.t('filters.searchDependencies') });
 	const search = element('input');
 	search.name = 'dependency-search';
 	search.type = 'search';
-	search.placeholder = 'Name, provider or status';
+	search.placeholder = i18n.t('status.searchPlaceholder', { default: 'Name, provider or status' });
 	searchLabel.append(search);
-	const toneLabel = element('label', { text: 'Filter by status' });
+	const toneLabel = element('label', { text: i18n.t('filters.filterByStatus') });
 	const tone = element('select');
 	tone.name = 'dependency-tone';
 	[
-		['all', 'All statuses'],
-		['attention', 'Needs attention'],
-		['ready', 'Ready'],
-		['disabled', 'Disabled'],
-		['unknown', 'Unknown'],
+		['all', i18n.t('status.all')],
+		['attention', i18n.t('status.attention')],
+		['ready', i18n.t('status.ready')],
+		['disabled', i18n.t('status.disabled')],
+		['unknown', i18n.t('status.unknown')],
 	].forEach(([value, text]) => {
 		const option = element('option', { text });
 		option.value = value;
@@ -2097,13 +2526,13 @@ const createStatusExplorer = () => {
 	const filters = element('div', { className: 'status-filter-bar' });
 	filters.append(searchLabel, toneLabel);
 
-	const statusOutput = element('div', { className: 'response-block', text: 'No status response yet.' });
+	const statusOutput = element('div', { className: 'response-block', text: i18n.t('No status response yet.') });
 	let lastRawStatus = '';
-	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy details');
+	const rawCopyButton = createCopyButton(() => lastRawStatus, i18n.t('actions.copyDetails'));
 	rawCopyButton.hidden = true;
 	const rawStatus = element('details', { className: 'raw-status' });
 	rawStatus.append(
-		element('summary', { text: 'Response details' }),
+		element('summary', { text: i18n.t('Response details') }),
 		rawCopyButton,
 		statusOutput,
 	);
@@ -2116,10 +2545,10 @@ const createStatusExplorer = () => {
 	dashboard.append(
 		hero,
 		metrics,
-		section('Delivery channels', channelGrid),
-		section('Dependency filters', filters),
-		section('Dependency health', dependencyGrid),
-		section('Enabled capabilities', featureGrid),
+		section(i18n.t('status.deliveryChannels', { default: 'Delivery channels' }), channelGrid),
+		section(i18n.t('status.dependencyFilters', { default: 'Dependency filters' }), filters),
+		section(i18n.t('status.dependencyHealth', { default: 'Dependency health' }), dependencyGrid),
+		section(i18n.t('status.enabledCapabilities', { default: 'Enabled capabilities' }), featureGrid),
 		rawStatus,
 	);
 
@@ -2170,9 +2599,9 @@ const createDiagnosticsView = () => {
 		lastChecked,
 	);
 	const heroActions = element('div', { className: 'selftest-actions' });
-	const refreshButton = element('button', { className: 'button-ghost', text: 'Refresh report' });
+	const refreshButton = element('button', { className: 'button-ghost', text: typeof i18n !== 'undefined' ? i18n.t('actions.refreshReport', { default: 'Refresh report' }) : 'Refresh report' });
 	refreshButton.type = 'button';
-	const runButton = element('button', { className: 'button-primary', text: 'Run self-test' });
+	const runButton = element('button', { className: 'button-primary', text: typeof i18n !== 'undefined' ? i18n.t('actions.runSelfTest', { default: 'Run self-test' }) : 'Run self-test' });
 	runButton.type = 'button';
 	heroActions.append(refreshButton, runButton);
 	hero.append(heroCopy, heroActions);
@@ -2247,10 +2676,10 @@ const createOverviewDashboard = () => {
 	const dashboard = element('div', { className: 'dashboard' });
 	const hero = element('section', { className: 'dashboard-hero' });
 	const heroCopy = element('div');
-	const lastChecked = element('p', { className: 'request-state', text: 'Waiting for live status…' });
+	const lastChecked = element('p', { className: 'request-state', text: typeof i18n !== 'undefined' ? i18n.t('Waiting for live status…') : 'Waiting for live status…' });
 	heroCopy.append(
 		element('p', { className: 'eyebrow', text: 'Live control plane' }),
-		element('h2', { text: 'Operational overview' }),
+		element('h2', { text: typeof i18n !== 'undefined' ? i18n.t('views.operationalOverview', { default: 'Operational overview' }) : 'Operational overview' }),
 		element('p', { text: 'A quick read on service readiness, enabled capabilities and delivery health.' }),
 		element('p', {
 			className: 'dashboard-subtitle',
@@ -2258,22 +2687,44 @@ const createOverviewDashboard = () => {
 		}),
 		lastChecked,
 	);
-	const refreshButton = element('button', { className: 'button-primary', text: 'Refresh dashboard' });
-	refreshButton.type = 'button';
-	hero.append(heroCopy, refreshButton);
+	const controls = element('div', { className: 'dashboard-controls' });
+	const intervalLabel = element('label', { className: 'interval-select-label', text: 'Auto-refresh ' });
+	const intervalSelect = element('select');
+	[
+		{ label: '30s (default)', value: 30000 },
+		{ label: '10s', value: 10000 },
+		{ label: '60s', value: 60000 },
+		{ label: 'Off', value: 0 },
+	].forEach(({ label, value }) => {
+		const opt = element('option', { text: label });
+		opt.value = String(value);
+		if (value === 30000) opt.selected = true;
+		intervalSelect.append(opt);
+	});
+	intervalLabel.append(intervalSelect);
 
+	const refreshButton = element('button', { className: 'button-primary', text: typeof i18n !== 'undefined' ? i18n.t('actions.refreshDashboard', { default: 'Refresh dashboard' }) : 'Refresh dashboard' });
+	refreshButton.type = 'button';
+	controls.append(intervalLabel, refreshButton);
+	hero.append(heroCopy, controls);
+
+	const issuesContainer = element('div', { className: 'dashboard-section' });
 	const metrics = element('div', { className: 'metric-grid' });
-	metrics.append(element('p', { className: 'request-state', text: 'Loading live status…' }));
+	metrics.append(element('p', { className: 'request-state', text: typeof i18n !== 'undefined' ? i18n.t('Loading live status…') : 'Loading live status…' }));
 	const channelGrid = element('div', { className: 'status-grid' });
 	const dependencyGrid = element('div', { className: 'status-grid' });
 	const featureGrid = element('div', { className: 'chip-grid' });
-	const statusOutput = element('div', { className: 'response-block', text: 'No status response yet.' });
+	const deliveryHealthContainer = element('div');
+	const activeWorkContainer = element('div');
+	const recentAlertsContainer = element('div');
+
+	const statusOutput = element('div', { className: 'response-block', text: typeof i18n !== 'undefined' ? i18n.t('No status response yet.') : 'No status response yet.' });
 	let lastRawStatus = '';
 	const rawCopyButton = createCopyButton(() => lastRawStatus, 'Copy details');
 	rawCopyButton.hidden = true;
 	const rawStatus = element('details', { className: 'raw-status' });
 	rawStatus.append(
-		element('summary', { text: 'Response details' }),
+		element('summary', { text: typeof i18n !== 'undefined' ? i18n.t('Response details') : 'Response details' }),
 		rawCopyButton,
 		statusOutput,
 	);
@@ -2285,33 +2736,149 @@ const createOverviewDashboard = () => {
 	};
 	dashboard.append(
 		hero,
+		section('System issues & warnings', issuesContainer),
 		metrics,
+		section('Delivery health', deliveryHealthContainer),
+		section('Active work', activeWorkContainer),
+		section('Recent alerts', recentAlertsContainer),
 		section('Delivery channels', channelGrid),
 		section('Dependency health', dependencyGrid),
 		section('Enabled capabilities', featureGrid),
 		rawStatus,
 	);
 
-	const loadStatus = async () => {
+	let pollTimer = null;
+	let pollIntervalMs = 30000;
+	let dashboardVersion = 0;
+	let inFlight = false;
+	let lastSupplementaryAt = -Infinity;
+	let supplementaryBackoffUntil = 0;
+	let supplementaryData = [undefined, undefined, undefined, undefined];
+
+	const stopPoll = () => {
+		if (pollTimer) {
+			clearTimeout(pollTimer);
+			pollTimer = null;
+		}
+	};
+
+	const schedulePoll = () => {
+		stopPoll();
+		if (pollIntervalMs > 0) {
+			pollTimer = setTimeout(() => {
+				if (!inFlight) {
+					loadDashboard();
+				}
+			}, pollIntervalMs);
+		}
+	};
+
+	intervalSelect.addEventListener('change', () => {
+		pollIntervalMs = Number(intervalSelect.value) || 0;
+		schedulePoll();
+	});
+
+	detachActiveViewPoll = () => {
+		dashboardVersion += 1;
+		stopPoll();
+	};
+
+	const fetchSilent = (definition, query) => {
+		const dummyButton = element('button');
+		const dummyOutput = element('pre');
+		return sendRequest({
+			definition,
+			path: definition.path,
+			query,
+			button: dummyButton,
+			output: dummyOutput,
+			isCurrent: () => dashboardEpoch === dashboardVersion,
+			captureResponseData: (_data, response) => {
+				if (response.status !== 429) return;
+				const retryAfterSeconds = Number(response.headers?.get('retry-after'));
+				const delayMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+					? Math.ceil(retryAfterSeconds * 1000) : 15 * 60 * 1000;
+				supplementaryBackoffUntil = Math.max(supplementaryBackoffUntil, Date.now() + delayMs);
+			},
+		}).catch(() => null);
+	};
+
+	let dashboardEpoch = 0;
+	const loadDashboard = async ({ forceSupplementary = false } = {}) => {
+		dashboardEpoch = ++dashboardVersion;
+		stopPoll();
+		inFlight = true;
 		lastRawStatus = '';
 		rawCopyButton.hidden = true;
-		const status = await sendRequest({
+
+		const currentEpoch = dashboardEpoch;
+		const isCurrentEpoch = () => currentEpoch === dashboardVersion;
+		let statusCode;
+		let statusOutcome;
+
+		const statusPromise = sendRequest({
 			definition: STATUS_DEFINITION,
 			path: STATUS_DEFINITION.path,
 			button: refreshButton,
 			output: statusOutput,
+			isCurrent: isCurrentEpoch,
+			captureResponseStatus: (code) => { statusCode = code; },
+			captureOutcome: (outcome) => { statusOutcome = outcome; },
 		});
-		if (status && typeof status === 'object') {
+
+		// These four routes share the default 100 requests per 15 minutes bucket.
+		// Poll them at most once a minute, leaving headroom for other admin actions.
+		const now = Date.now();
+		const supplementaryDue = now >= supplementaryBackoffUntil
+			&& (forceSupplementary || now - lastSupplementaryAt >= 60000);
+		if (supplementaryDue) lastSupplementaryAt = now;
+		const supplementaryPromise = supplementaryDue
+			? Promise.all([
+				fetchSilent({ method: 'GET', path: '/api/alerts/summary' }),
+				fetchSilent({ method: 'GET', path: '/api/jobs' }, { limit: '20' }),
+				fetchSilent({ method: 'GET', path: '/api/outcomes' }, { limit: '20' }),
+				fetchSilent({ method: 'GET', path: '/api/alerts' }, { limit: '10' }),
+			])
+			: Promise.resolve(supplementaryData);
+
+		const [status, latestSupplementary] = await Promise.all([
+			statusPromise,
+			supplementaryPromise,
+		]);
+
+		inFlight = false;
+		if (!isCurrentEpoch()) return;
+		if (supplementaryDue) supplementaryData = latestSupplementary;
+		const [deliverySummary, jobsData, outcomesData, alertsData] = supplementaryData;
+
+		if (status && typeof status === 'object' && status.service) {
 			lastRawStatus = JSON.stringify(status);
 			rawCopyButton.hidden = false;
+			const dependencies = statusEntries(status.dependencies);
+			const channels = statusEntries(status.deliveryChannels);
+
 			renderStatusDashboard({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked }, status);
+			renderSystemIssuesWarning(issuesContainer, { dependencies, deliverySummary, jobsData, outcomesData, status });
+			renderDeliveryHealthDashboard(deliveryHealthContainer, deliverySummary);
+			renderActiveWorkDashboard(activeWorkContainer, { jobsData, outcomesData, status });
+			renderRecentAlertsDashboard(recentAlertsContainer, alertsData);
+
 		} else {
 			renderStatusUnavailable({ metrics, channelGrid, dependencyGrid, featureGrid, lastChecked });
+			issuesContainer.replaceChildren(createEmptyState('Dashboard data unavailable while status is unavailable.'));
+			deliveryHealthContainer.replaceChildren();
+			activeWorkContainer.replaceChildren();
+			recentAlertsContainer.replaceChildren();
+		}
+		if ((status && typeof status === 'object' && status.service)
+			|| statusCode >= 500
+			|| [REQUEST_OUTCOMES.TIMED_OUT, REQUEST_OUTCOMES.NETWORK_ERROR].includes(statusOutcome)) {
+			schedulePoll();
 		}
 	};
-	refreshButton.addEventListener('click', () => { loadStatus(); });
+	refreshButton.addEventListener('click', () => { loadDashboard({ forceSupplementary: true }); });
 	if (getElement('api-key')?.value || (authState.enabled && authState.user)) {
-		loadStatus();
+		loadDashboard();
 	} else {
 		metrics.replaceChildren(element('p', { className: 'request-state', text: 'Enter an API key to load live status.' }));
 	}
@@ -2455,6 +3022,130 @@ const sendRequest = async ({
 	}
 };
 
+const createAlertPreviewForm = () => {
+	const definition = { method: 'POST', path: '/api/admin/test-alert', requiredRole: 'admin.operator' };
+	const form = element('form', { className: 'operation-card alert-preview-form' });
+	form.append(element('h3', { text: 'Alert preview' }));
+	const message = addField(form, 'Message text', 'text', { tag: 'textarea', required: true, maxLength: 20000 });
+	const channels = element('fieldset');
+	channels.append(element('legend', { text: 'Channels' }));
+	const checks = ['telegram', 'whatsapp', 'discord'].map((channel) => {
+		const label = element('label', { text: channel });
+		const input = element('input');
+		input.type = 'checkbox';
+		input.name = channel;
+		input.checked = channel === 'telegram';
+		label.prepend(input);
+		channels.append(label);
+		return input;
+	});
+	form.append(channels);
+	const telegramChatId = addField(form, 'Telegram test chat ID', 'telegramChatId', { type: 'text' });
+	const whatsappChatId = addField(form, 'WhatsApp test chat ID', 'whatsappChatId', { type: 'text' });
+	const discordWebhookUrl = addField(form, 'Discord test webhook URL', 'discordWebhookUrl', { type: 'password', autocomplete: 'off' });
+	const previewButton = element('button', { text: 'Render preview' });
+	previewButton.type = 'submit';
+	const sendButton = element('button', { text: 'Send test' });
+	sendButton.type = 'button';
+	const output = element('p', { className: 'response-block', text: 'Compose a message to preview it.' });
+	output.setAttribute('aria-live', 'polite');
+	const panels = element('div', { className: 'alert-preview-panels' });
+	const panelText = new Map();
+	['telegram', 'whatsapp', 'discord'].forEach((channel) => {
+		const panel = element('section', { className: 'alert-preview-panel' });
+		panel.append(element('h4', { text: channel }));
+		const body = element('pre', { text: 'No preview yet.' });
+		panel.append(body);
+		panels.append(panel);
+		panelText.set(channel, body);
+	});
+	const warnings = element('p', { className: 'request-state' });
+	form.append(previewButton, sendButton, output, warnings, panels);
+
+	const historyKey = authState.enabled && authState.user?.uid
+		? `cabros-alert-previews:${authState.user.uid}` : null;
+	const history = element('div', { className: 'alert-preview-history' });
+	form.append(history);
+	const readHistory = () => {
+		try {
+			if (!historyKey || !window.localStorage) return [];
+			const saved = JSON.parse(window.localStorage.getItem(historyKey) || '[]');
+			return Array.isArray(saved) ? saved.filter((entry) => typeof entry === 'string').slice(0, 5) : [];
+		} catch { return []; }
+	};
+	const renderHistory = () => {
+		history.replaceChildren(element('h4', { text: 'Recent previews' }));
+		readHistory().forEach((entry) => {
+			const button = element('button', { text: entry.slice(0, 80) });
+			button.type = 'button';
+			button.addEventListener('click', () => { message.value = entry; });
+			history.append(button);
+		});
+	};
+	const saveHistory = () => {
+		try {
+			if (!historyKey || !window.localStorage) return;
+			window.localStorage.setItem(historyKey, JSON.stringify([message.value, ...readHistory().filter((entry) => entry !== message.value)].slice(0, 5)));
+			renderHistory();
+		} catch { /* Browser storage may be disabled. */ }
+	};
+	renderHistory();
+
+	const buildBody = (dryRun) => {
+		const selected = checks.filter((input) => input.checked).map((input) => input.name);
+		if (!selected.length) throw new Error('Select at least one channel.');
+		if (!dryRun) {
+			if (selected.includes('telegram') && !telegramChatId.value.trim()) throw new Error('Telegram test chat ID is required.');
+			if (selected.includes('whatsapp') && !whatsappChatId.value.trim()) throw new Error('WhatsApp test chat ID is required.');
+			if (selected.includes('discord') && !discordWebhookUrl.value.trim()) throw new Error('Discord test webhook URL is required.');
+		}
+		const body = { text: message.value.trim(), channels: selected, dryRun, testMode: true };
+		if (telegramChatId.value.trim()) body.telegramChatId = telegramChatId.value.trim();
+		if (whatsappChatId.value.trim()) body.whatsappChatId = whatsappChatId.value.trim();
+		if (!dryRun && discordWebhookUrl.value.trim()) body.discordWebhookUrl = discordWebhookUrl.value.trim();
+		return body;
+	};
+	const submit = async (dryRun) => {
+		if (!message.value.trim()) {
+			showError(output, 'Enter message text.');
+			return;
+		}
+		let body;
+		try {
+			body = buildBody(dryRun);
+		} catch (error) {
+			showError(output, error.message);
+			return;
+		}
+		if (!dryRun && !window.confirm('Send this [TEST] alert to the specified test destinations?')) return;
+		const data = await sendRequest({
+			definition, path: definition.path, body,
+			button: dryRun ? previewButton : sendButton, output,
+			formatResponse: ({ data: result }) => dryRun
+				? 'Preview rendered; no alert sent.'
+				: (result?.ok
+					? 'Test alert dispatched.'
+					: `Test alert delivery failed.\n${JSON.stringify(result?.results || [], null, 2)}`),
+			captureResponseData: (result) => {
+				if (!result?.ok || !dryRun) return;
+				panelText.forEach((node, channel) => {
+					node.textContent = channel === 'discord' && result.formatted?.discord?.payloads
+						? JSON.stringify(result.formatted.discord.payloads, null, 2)
+						: (result.formatted?.[channel]?.text || 'Not selected.');
+				});
+				warnings.textContent = (result.markdownWarnings || []).map((line) => `Telegram line ${line}: check MarkdownV2 markup`).join(' · ');
+			},
+		});
+		if (data?.ok && dryRun) saveHistory();
+	};
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		return submit(true);
+	});
+	sendButton.addEventListener('click', () => submit(false));
+	return form;
+};
+
 const createAlertListForm = () => {
 	const definition = { method: 'GET', path: '/api/alerts', label: 'Load alerts' };
 	const form = element('form', { className: 'operation-card' });
@@ -2464,24 +3155,44 @@ const createAlertListForm = () => {
 	);
 	const limit = addField(form, 'Limit', 'limit', { type: 'number', min: 1, max: 100, value: 50 });
 	const before = addField(form, 'Before cursor', 'before', { placeholder: 'nextBefore from the previous page' });
-	const source = addField(form, 'Source', 'source', { placeholder: 'webhook' });
-	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
-	registerFilterScope('alerts.list', { limit, before, source, enriched });
+	const source = addField(form, 'Source', 'source', { placeholder: 'Any source, including custom values' });
+	source.setAttribute('list', 'alert-source-options');
+	const sourceOptions = element('datalist', { attributes: { id: 'alert-source-options' } });
 	[
-		['', 'All alerts'],
-		['true', 'Enriched only'],
-		['false', 'Not enriched'],
+		['', typeof i18n !== 'undefined' ? i18n.t('filters.allSources', { default: 'All sources' }) : 'All sources'],
+		['webhook-alert', 'Webhook alert'],
+		['webhook-message', 'Webhook message'],
+		['webhook', 'Webhook (legacy)'],
+		['news-monitor', 'News monitor'],
+		['market-scanner', 'Market scanner'],
+		['expanded-analysis', 'Expanded analysis'],
+		['test-alert', 'Test alert'],
+	].forEach(([value, text]) => {
+		const option = element('option', { text });
+		option.value = value;
+		sourceOptions.append(option);
+	});
+	form.append(sourceOptions);
+	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
+	[
+		['', typeof i18n !== 'undefined' ? i18n.t('filters.allAlerts', { default: 'All alerts' }) : 'All alerts'],
+		['true', typeof i18n !== 'undefined' ? i18n.t('filters.enrichedOnly', { default: 'Enriched only' }) : 'Enriched only'],
+		['false', typeof i18n !== 'undefined' ? i18n.t('filters.notEnriched', { default: 'Not enriched' }) : 'Not enriched'],
 	].forEach(([value, text]) => {
 		const option = element('option', { text });
 		option.value = value;
 		enriched.append(option);
 	});
+	const activeFilters = element('p', { className: 'active-filters', text: typeof i18n !== 'undefined' ? i18n.t('filters.activeFiltersNone', { default: 'Active filters: none' }) : 'Active filters: none' });
+	const clearFilters = element('button', { text: typeof i18n !== 'undefined' ? i18n.t('actions.clearFilters', { default: 'Clear filters' }) : 'Clear filters' });
+	clearFilters.type = 'button';
+	clearFilters.disabled = true;
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
-	const prev = element('button', { text: 'Previous page' });
+	const prev = element('button', { text: typeof i18n !== 'undefined' ? i18n.t('actions.prevPage', { default: 'Previous page' }) : 'Previous page' });
 	prev.type = 'button';
 	prev.disabled = true;
-	const next = element('button', { text: 'Next page' });
+	const next = element('button', { text: typeof i18n !== 'undefined' ? i18n.t('actions.nextPage', { default: 'Next page' }) : 'Next page' });
 	next.type = 'button';
 	next.disabled = true;
 	const output = element('div', { className: 'response-block', text: 'No request sent.' });
@@ -2524,7 +3235,7 @@ const createAlertListForm = () => {
 
 	batchToolbar.append(selectAllLabel, selectionCount, batchReplayButton, batchExportButton, batchDeleteButton, batchOutput);
 
-	form.append(button, prev, next, output, batchToolbar, alertList, rawToggle);
+	form.append(activeFilters, button, clearFilters, prev, next, output, batchToolbar, alertList, rawToggle);
 
 	let currentAlerts = [];
 	const selectedAlertIds = new Set();
@@ -2753,7 +3464,32 @@ const createAlertListForm = () => {
 		rawCopyButton.hidden = true;
 		output.textContent = 'Filters changed — load alerts to refresh.';
 		if (clearCursor) before.value = '';
+		updateActiveFilters();
 	};
+	const updateActiveFilters = () => {
+		const active = [];
+		if (source.value) active.push(`source=${source.value}`);
+		if (enriched.value) active.push(`enriched=${enriched.value}`);
+		if (active.length === 0) {
+			activeFilters.textContent = typeof i18n !== 'undefined'
+				? i18n.t('filters.activeFiltersNone', { default: 'Active filters: none' })
+				: 'Active filters: none';
+			clearFilters.disabled = true;
+		} else {
+			const label = typeof i18n !== 'undefined'
+				? i18n.t('filters.activeFilters', { filters: active.join(', '), default: `Active filters: ${active.join(', ')}` })
+				: `Active filters: ${active.join(', ')}`;
+			activeFilters.textContent = label;
+			clearFilters.disabled = false;
+		}
+	};
+	registerFilterScope('alerts.list', { limit, before, source, enriched }, updateActiveFilters);
+	clearFilters.addEventListener('click', () => {
+		source.value = '';
+		enriched.value = '';
+		resetPagination({ clearCursor: true });
+		syncConsoleUrlFromFilters();
+	});
 	[limit, source, enriched].forEach((field) => {
 		field.addEventListener('input', () => resetPagination({ clearCursor: true }));
 		field.addEventListener('change', () => resetPagination({ clearCursor: true }));
@@ -2805,9 +3541,9 @@ const resetFilterScopes = () => {
 	activeFilterScopes = [];
 };
 
-const registerFilterScope = (scope, fields) => {
+const registerFilterScope = (scope, fields, onRestore) => {
 	if (FILTER_SCOPE_VIEWS[scope]) {
-		activeFilterScopes.push({ scope, fields: { ...fields } });
+		activeFilterScopes.push({ scope, fields: { ...fields }, onRestore });
 	}
 	return fields;
 };
@@ -2832,7 +3568,7 @@ const collectFilterParams = (view) => {
 
 const applyFilterParams = (params) => {
 	if (!params) return;
-	activeFilterScopes.forEach(({ scope, fields }) => {
+	activeFilterScopes.forEach(({ scope, fields, onRestore }) => {
 		Object.entries(fields).forEach(([name, input]) => {
 			const key = `${scope}.${name}`;
 			if (!input || !params.has(key)) return;
@@ -2840,6 +3576,7 @@ const applyFilterParams = (params) => {
 			if (input.type === 'checkbox') input.checked = value === 'true';
 			else input.value = value;
 		});
+		if (typeof onRestore === 'function') onRestore();
 	});
 };
 
@@ -2870,9 +3607,9 @@ const addAlertReportFilters = (form, { requiredWindow = false, scope } = {}) => 
 	const source = addField(form, 'Source', 'source', { placeholder: 'webhook' });
 	const enriched = addField(form, 'Enriched', 'enriched', { tag: 'select' });
 	[
-		['', 'All alerts'],
-		['true', 'Enriched only'],
-		['false', 'Not enriched'],
+		['', typeof i18n !== 'undefined' ? i18n.t('filters.allAlerts', { default: 'All alerts' }) : 'All alerts'],
+		['true', typeof i18n !== 'undefined' ? i18n.t('filters.enrichedOnly', { default: 'Enriched only' }) : 'Enriched only'],
+		['false', typeof i18n !== 'undefined' ? i18n.t('filters.notEnriched', { default: 'Not enriched' }) : 'Not enriched'],
 	].forEach(([value, text]) => {
 		const option = element('option', { text });
 		option.value = value;
@@ -3050,11 +3787,16 @@ const renderAlertSummaryBlocks = (data) => {
 	if (fields.length) {
 		const section = element('section', { className: 'dashboard-section' });
 		section.append(element('h3', { text: 'Risk metadata coverage' }));
+		const coverageRows = fields.map(([field, info]) => [field, info, coverage.denominator]);
+		if (coverage.directionEchoRate && typeof coverage.directionEchoRate === 'object') {
+			const echo = asObject(coverage.directionEchoRate);
+			coverageRows.push(['directionEchoRate', { populated: echo.echoed, percentage: echo.percentage }, echo.total]);
+		}
 		section.append(createResultTable('Risk metadata coverage', [
 			['Field', ([field]) => displayLabel(field)],
-			['Populated', ([, info]) => `${formatJobValue(asObject(info).populated)} / ${formatJobValue(coverage.denominator)}`],
+			['Populated', ([, info, denominator]) => `${formatJobValue(asObject(info).populated)} / ${formatJobValue(denominator)}`],
 			['Coverage', ([, info]) => `${formatJobValue(asObject(info).percentage)}%`],
-		], fields).scroll);
+		], coverageRows).scroll);
 		wrap.append(section);
 	}
 	return wrap;
@@ -3340,7 +4082,7 @@ const createOutcomeCard = (outcome) => {
 	}
 
 	const outcomesMap = asObject(outcome && outcome.outcomes);
-	const windowKeys = ['1h', '4h', '1D', '1W'];
+	const windowKeys = Object.keys(outcomesMap);
 	const windowsGrid = element('div', { className: 'outcome-windows-grid' });
 	windowKeys.forEach((winKey) => {
 		const win = outcomesMap[winKey] || outcomesMap[winKey.toLowerCase()] || null;
@@ -3435,10 +4177,10 @@ const createOutcomesListForm = () => {
 	const exchange = addField(form, 'Exchange', 'exchange', { placeholder: 'BINANCE' });
 	const status = addField(form, 'Status', 'status', { tag: 'select' });
 	[
-		['', 'All statuses'],
-		['pending', 'Pending'],
-		['evaluated', 'Evaluated'],
-		['unavailable', 'Unavailable'],
+		['', typeof i18n !== 'undefined' ? i18n.t('filters.allStatuses', { default: 'All statuses' }) : 'All statuses'],
+		['pending', typeof i18n !== 'undefined' ? i18n.t('filters.pending', { default: 'Pending' }) : 'Pending'],
+		['evaluated', typeof i18n !== 'undefined' ? i18n.t('filters.evaluated', { default: 'Evaluated' }) : 'Evaluated'],
+		['unavailable', typeof i18n !== 'undefined' ? i18n.t('filters.unavailable', { default: 'Unavailable' }) : 'Unavailable'],
 	].forEach(([value, text]) => {
 		const option = element('option', { text });
 		option.value = value;
@@ -3446,7 +4188,7 @@ const createOutcomesListForm = () => {
 	});
 	const windowField = addField(form, 'Window', 'window', { tag: 'select' });
 	[
-		['', 'All windows'],
+		['', typeof i18n !== 'undefined' ? i18n.t('filters.allWindows', { default: 'All windows' }) : 'All windows'],
 		['1h', '1h'],
 		['4h', '4h'],
 		['1D', '1D'],
@@ -3464,10 +4206,10 @@ const createOutcomesListForm = () => {
 
 	const button = element('button', { text: definition.label });
 	button.type = 'submit';
-	const prev = element('button', { text: 'Previous page' });
+	const prev = element('button', { text: typeof i18n !== 'undefined' ? i18n.t('actions.prevPage', { default: 'Previous page' }) : 'Previous page' });
 	prev.type = 'button';
 	prev.disabled = true;
-	const next = element('button', { text: 'Next page' });
+	const next = element('button', { text: typeof i18n !== 'undefined' ? i18n.t('actions.nextPage', { default: 'Next page' }) : 'Next page' });
 	next.type = 'button';
 	next.disabled = true;
 	const output = element('div', { className: 'response-block', text: 'No request sent.' });
@@ -3918,6 +4660,12 @@ const formatOrderEnvironment = (environment) => {
 			text: 'Environment: testnet',
 		});
 	}
+	if (environment === 'demo') {
+		return element('span', {
+			className: 'status-badge status-ready',
+			text: 'Environment: demo',
+		});
+	}
 	return element('span', {
 		className: 'status-badge status-disabled',
 		text: `Environment: ${formatOrderValue(environment)}`,
@@ -4023,6 +4771,553 @@ const ORDER_LIST_QUERY_VALIDATION = {
 };
 
 const trimFormValue = (value) => (value === undefined || value === null ? '' : String(value).trim());
+
+function parseAlertTradeCandidate(alert) {
+	if (!alert || typeof alert !== 'object') {
+		return { symbol: '', side: 'BUY', price: '', setupType: null };
+	}
+
+	const enrichment = asObject(alert.enrichmentData);
+	let rawSymbol = alert.symbol || enrichment.symbol || enrichment.asset || enrichment.ticker || '';
+	const text = typeof alert.text === 'string' ? alert.text : '';
+
+	if (!rawSymbol && text) {
+		const symbolMatch = text.match(/(?:^|\s)(?:([A-Z_]+):)?([A-Z0-9._-]{3,20})(?:\s*\(|\s+)/i);
+		if (symbolMatch) {
+			rawSymbol = symbolMatch[2];
+		}
+	}
+
+	let symbol = String(rawSymbol).trim().toUpperCase();
+	if (symbol.includes(':')) {
+		symbol = symbol.split(':').pop().trim().toUpperCase();
+	}
+
+	let side = 'BUY';
+	const candidateText = `${alert.signal || ''} ${enrichment.signal || ''} ${text}`;
+	const buyMatch = candidateText.match(/\b(COMPRA|BUY)\b/i);
+	const sellMatch = candidateText.match(/\b(VENTA|SELL)\b/i);
+	if (buyMatch && !sellMatch) side = 'BUY';
+	else if (sellMatch && !buyMatch) side = 'SELL';
+	else if (buyMatch && sellMatch) {
+		side = buyMatch.index < sellMatch.index ? 'BUY' : 'SELL';
+	}
+
+	let price = '';
+	if (alert.price != null && Number.isFinite(Number(alert.price)) && Number(alert.price) > 0) {
+		price = String(alert.price);
+	} else if (enrichment.price != null && Number.isFinite(Number(enrichment.price)) && Number(enrichment.price) > 0) {
+		price = String(enrichment.price);
+	} else if (enrichment.current_price != null && Number.isFinite(Number(enrichment.current_price)) && Number(enrichment.current_price) > 0) {
+		price = String(enrichment.current_price);
+	} else if (text) {
+		const priceMatch = text.match(/(?:precio|price|entry|at)\s*[:=]?\s*\$?([0-9]+(?:\.[0-9]+)?)/i);
+		if (priceMatch) {
+			price = priceMatch[1];
+		}
+	}
+
+	const setupType = enrichment.setup_type || enrichment.setupType || alert.setupType || null;
+
+	return {
+		symbol,
+		side,
+		price,
+		setupType: setupType ? String(setupType).trim().toLowerCase() : null,
+	};
+}
+
+function createTradeTicket({ alert, position, defaultOrigin = 'manual', onOrderSubmitted } = {}) {
+	const panel = element('article', { className: 'operation-card trade-ticket' });
+	const candidate = alert ? parseAlertTradeCandidate(alert) : {
+		symbol: position && position.symbol ? String(position.symbol).trim().toUpperCase() : '',
+		side: position ? 'SELL' : 'BUY',
+		price: position && (position.markPrice || position.currentPrice) ? String(position.markPrice || position.currentPrice) : '',
+		setupType: null,
+	};
+
+	let initialQuantity = '';
+	let initialQuoteOrderQty = '50';
+	if (position && position.quantity) {
+		initialQuantity = String(position.quantity);
+		initialQuoteOrderQty = '';
+	}
+
+	const heading = element('h4', { text: alert ? 'Trade this alert' : (position ? `Close position (${position.symbol})` : 'Trade ticket') });
+	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: testnet' });
+	panel.append(heading, environmentBadge);
+
+	if (alert && alert.id) {
+		const alertMeta = element('p', { className: 'mono-line', text: `Linked alert: ${alert.id}` });
+		panel.append(alertMeta);
+	}
+
+	const form = element('form', { className: 'ticket-form' });
+	const symbolField = addField(form, 'Symbol', 'ticket-symbol', {
+		placeholder: 'e.g. BTCUSDT',
+		value: candidate.symbol,
+		required: true,
+	});
+	const sideField = addField(form, 'Side', 'ticket-side', { tag: 'select' });
+	['BUY', 'SELL'].forEach((s) => {
+		const opt = element('option', { text: s });
+		opt.value = s;
+		sideField.append(opt);
+	});
+	sideField.value = candidate.side;
+
+	const typeField = addField(form, 'Type', 'ticket-type', { tag: 'select' });
+	['LIMIT', 'MARKET'].forEach((t) => {
+		const opt = element('option', { text: t });
+		opt.value = t;
+		typeField.append(opt);
+	});
+	typeField.value = candidate.price ? 'LIMIT' : 'MARKET';
+
+	const priceField = addField(form, 'Price', 'ticket-price', {
+		placeholder: 'e.g. 50000.00',
+		value: candidate.price,
+	});
+
+	const quantityField = addField(form, 'Quantity', 'ticket-quantity', {
+		placeholder: 'e.g. 0.001',
+		value: initialQuantity,
+	});
+
+	const quoteQtyField = addField(form, 'Quote Order Qty (USDT)', 'ticket-quote-qty', {
+		placeholder: 'e.g. 50',
+		value: initialQuoteOrderQty,
+	});
+
+	const syncTypeFields = () => {
+		const isLimit = typeField.value === 'LIMIT';
+		priceField.disabled = !isLimit;
+		if (isLimit) {
+			quoteQtyField.disabled = true;
+			quoteQtyField.value = '';
+			quantityField.disabled = false;
+		} else {
+			priceField.disabled = true;
+			priceField.value = '';
+			quoteQtyField.disabled = false;
+			quantityField.disabled = false;
+		}
+	};
+	typeField.addEventListener('change', syncTypeFields);
+	syncTypeFields();
+
+	const actions = element('div', { className: 'ticket-actions' });
+	const dryRunBtn = element('button', { text: 'Validate (Dry Run)', className: 'trade-dry-run-btn' });
+	dryRunBtn.type = 'button';
+
+	const confirmInput = element('input', {
+		className: 'ticket-confirm-input',
+		placeholder: 'Type "CONFIRM" to enable live order',
+	});
+	confirmInput.type = 'text';
+	confirmInput.disabled = true;
+
+	const submitBtn = element('button', {
+		text: 'Submit Live Order',
+		className: 'trade-submit-btn',
+	});
+	submitBtn.type = 'button';
+	submitBtn.disabled = true;
+
+	const output = element('div', { className: 'response-block ticket-output', text: 'No validation run yet.' });
+	const validationNotice = element('div', { className: 'ticket-validation-notice' });
+
+	actions.append(dryRunBtn, confirmInput, submitBtn);
+	form.append(actions, validationNotice, output);
+	panel.append(form);
+
+	let currentEnv = 'testnet';
+	let dryRunSuccessful = false;
+
+	const updateEnvironmentBadge = (env) => {
+		currentEnv = env || currentEnv;
+		environmentBadge.replaceChildren(formatOrderEnvironment(currentEnv));
+		checkSubmitReadiness();
+	};
+
+	const checkSubmitReadiness = () => {
+		const isOperator = typeof canPerformMutation === 'function' ? canPerformMutation() : true;
+		const isConfirmed = confirmInput.value.trim() === 'CONFIRM';
+		const isLiveBlocked = currentEnv === 'live';
+
+		if (!isOperator) {
+			submitBtn.disabled = true;
+			submitBtn.title = 'Requires admin.operator role';
+			return;
+		}
+		if (isLiveBlocked) {
+			submitBtn.disabled = true;
+			submitBtn.title = 'Live trading is disabled on tickets (testnet/demo only until #769)';
+			return;
+		}
+		if (!dryRunSuccessful) {
+			submitBtn.disabled = true;
+			submitBtn.title = 'Run Dry Run validation first';
+			return;
+		}
+		if (!isConfirmed) {
+			submitBtn.disabled = true;
+			submitBtn.title = 'Type "CONFIRM" to enable submission';
+			return;
+		}
+
+		submitBtn.disabled = false;
+		submitBtn.title = 'Submit order to Binance';
+	};
+
+	checkSubmitReadiness();
+	confirmInput.addEventListener('input', checkSubmitReadiness);
+
+	const buildOrderPayload = (dryRun) => {
+		const sym = trimFormValue(symbolField.value).toUpperCase();
+		const side = sideField.value;
+		const type = typeField.value;
+		const payload = {
+			symbol: sym,
+			side,
+			type,
+			dryRun,
+		};
+		if (alert && alert.id) {
+			payload.alertId = String(alert.id).trim();
+			payload.origin = 'admin_alert';
+		} else if (defaultOrigin) {
+			payload.origin = defaultOrigin;
+		}
+		if (candidate.setupType) {
+			payload.setupType = candidate.setupType;
+		}
+		if (type === 'LIMIT') {
+			const pr = trimFormValue(priceField.value);
+			if (pr) payload.price = pr;
+			const qty = trimFormValue(quantityField.value);
+			if (qty) payload.quantity = qty;
+		} else {
+			const quote = trimFormValue(quoteQtyField.value);
+			const qty = trimFormValue(quantityField.value);
+			if (quote) payload.quoteOrderQty = quote;
+			else if (qty) payload.quantity = qty;
+		}
+		return payload;
+	};
+
+	dryRunBtn.addEventListener('click', async () => {
+		dryRunSuccessful = false;
+		confirmInput.disabled = true;
+		confirmInput.value = '';
+		submitBtn.disabled = true;
+		validationNotice.replaceChildren();
+
+		const payload = buildOrderPayload(true);
+		if (!ORDER_LIST_QUERY_VALIDATION.symbol(payload.symbol)) {
+			showError(output, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
+			return;
+		}
+
+		const definition = {
+			method: 'POST',
+			path: '/api/trading/binance/orders',
+			label: 'Dry Run Order',
+			requiredRole: 'admin.operator',
+		};
+
+		const data = await sendRequest({
+			definition,
+			path: definition.path,
+			body: payload,
+			button: dryRunBtn,
+			output,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+
+		if (data && data.success) {
+			dryRunSuccessful = true;
+			if (data.environment) updateEnvironmentBadge(data.environment);
+			validationNotice.replaceChildren(
+				element('p', { className: 'status-badge status-ready', text: `Dry run passed (${data.environment || currentEnv})` })
+			);
+			confirmInput.disabled = false;
+			checkSubmitReadiness();
+		} else {
+			dryRunSuccessful = false;
+			validationNotice.replaceChildren(
+				element('p', { className: 'status-badge status-danger', text: 'Dry run failed' })
+			);
+		}
+	});
+
+	submitBtn.addEventListener('click', async () => {
+		if (submitBtn.disabled) return;
+		const payload = buildOrderPayload(false);
+		const nonce = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+		const basePrefix = alert && alert.id ? String(alert.id).trim() : 'manual';
+		const idempotencyKey = `${basePrefix}-${payload.side.toLowerCase()}-${nonce}`;
+
+		payload.idempotencyKey = idempotencyKey;
+
+		const definition = {
+			method: 'POST',
+			path: '/api/trading/binance/orders',
+			label: 'Submit Live Order',
+			requiredRole: 'admin.operator',
+		};
+
+		submitBtn.disabled = true;
+		dryRunBtn.disabled = true;
+
+		const data = await sendRequest({
+			definition,
+			path: definition.path,
+			body: payload,
+			headers: { 'idempotency-key': idempotencyKey },
+			button: submitBtn,
+			output,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+
+		dryRunBtn.disabled = false;
+		if (data && data.success) {
+			validationNotice.replaceChildren(
+				element('p', { className: 'status-badge status-ready', text: `Order placed: #${data.order?.orderId || 'submitted'}` })
+			);
+			if (typeof onOrderSubmitted === 'function') onOrderSubmitted(data);
+		}
+	});
+
+	return panel;
+}
+
+const createSpotBracketForm = () => {
+	const form = element('form', { className: 'operation-card trade-ticket' });
+	form.append(
+		element('h3', { text: 'Place Spot bracket' }),
+		element('code', { text: 'POST /api/trading/binance/orders · BRACKET_LIMIT' }),
+		element('p', {
+			className: 'hint',
+			text: 'A LIMIT entry arms a Spot OTOCO take-profit and stop-limit pair after it fills. Review every level before submitting.',
+		}),
+	);
+	const symbol = addField(form, 'Symbol', 'bracket-symbol', { placeholder: 'BTCUSDT', required: true });
+	const side = addField(form, 'Entry side', 'bracket-side', { tag: 'select' });
+	['BUY', 'SELL'].forEach((value) => {
+		const option = element('option', { text: value });
+		option.value = value;
+		side.append(option);
+	});
+	const quantity = addField(form, 'Quantity', 'bracket-quantity', { placeholder: 'e.g. 0.001', required: true });
+	const entryPrice = addField(form, 'Entry limit price', 'bracket-entry-price', { placeholder: 'e.g. 60000.00', required: true });
+	const stopPrice = addField(form, 'Stop trigger price', 'bracket-stop-price', { placeholder: 'From alert invalidation level', required: true });
+	const stopLimitPrice = addField(form, 'Stop limit price', 'bracket-stop-limit-price', { placeholder: 'Set the limit price for the stop exit', required: true });
+	const takeProfitPrice = addField(form, 'Take-profit price', 'bracket-take-profit-price', { placeholder: 'From alert target level', required: true });
+	const timeInForce = addField(form, 'Time in force', 'bracket-time-in-force', { tag: 'select' });
+	['GTC', 'IOC', 'FOK'].forEach((value) => {
+		const option = element('option', { text: value });
+		option.value = value;
+		timeInForce.append(option);
+	});
+	timeInForce.value = 'GTC';
+
+	const loadLatestButton = element('button', { text: 'Load latest alert levels' });
+	loadLatestButton.type = 'button';
+	const latestAlertStatus = element('p', { className: 'request-state', text: 'No alert levels loaded.' });
+	form.append(loadLatestButton, latestAlertStatus);
+	const environmentBadge = element('p', { className: 'order-environment', text: 'Environment: testnet' });
+	const dryRunButton = element('button', { text: 'Validate bracket (Dry Run)' });
+	dryRunButton.type = 'button';
+	const confirmInput = addField(form, 'Type CONFIRM to enable live submission', 'bracket-confirm', {
+		placeholder: 'CONFIRM',
+	});
+	confirmInput.disabled = true;
+	const submitButton = element('button', { text: 'Submit live bracket' });
+	submitButton.type = 'button';
+	submitButton.disabled = true;
+	const validationNotice = element('div', { className: 'ticket-validation-notice' });
+	const output = element('div', { className: 'response-block ticket-output', text: 'No validation run yet.' });
+	form.append(environmentBadge, dryRunButton, submitButton, validationNotice, output);
+
+	let currentEnvironment = 'testnet';
+	let formVersion = 0;
+	let dryRunSuccessful = false;
+	let liveIdempotencyKey = null;
+	let latestAlert = null;
+	let latestCandidate = null;
+	const updateEnvironment = (value) => {
+		currentEnvironment = value || currentEnvironment;
+		environmentBadge.replaceChildren(formatOrderEnvironment(currentEnvironment));
+		checkSubmitReadiness();
+	};
+	const checkSubmitReadiness = () => {
+		const isOperator = typeof canPerformMutation === 'function' ? canPerformMutation() : true;
+		if (!isOperator || currentEnvironment === 'live' || !dryRunSuccessful || confirmInput.value.trim() !== 'CONFIRM') {
+			submitButton.disabled = true;
+			submitButton.title = currentEnvironment === 'live'
+				? 'Live submissions are disabled in the admin ticket'
+				: 'Validate the bracket, then type CONFIRM to enable submission';
+			return;
+		}
+		submitButton.disabled = false;
+		submitButton.title = 'Submit the validated Spot bracket';
+	};
+	const invalidateValidation = () => {
+		formVersion += 1;
+		dryRunSuccessful = false;
+		liveIdempotencyKey = null;
+		confirmInput.value = '';
+		confirmInput.disabled = true;
+		submitButton.disabled = true;
+		validationNotice.replaceChildren();
+		output.className = 'response-block request-state';
+		output.textContent = 'Inputs changed. Validate the bracket again before submitting.';
+	};
+	[symbol, side, quantity, entryPrice, stopPrice, stopLimitPrice, takeProfitPrice, timeInForce].forEach((field) => {
+		field.addEventListener(field === side || field === timeInForce ? 'change' : 'input', invalidateValidation);
+	});
+	confirmInput.addEventListener('input', checkSubmitReadiness);
+	symbol.addEventListener('input', () => {
+		latestAlert = null;
+		latestCandidate = null;
+		entryPrice.value = '';
+		stopPrice.value = '';
+		stopLimitPrice.value = '';
+		takeProfitPrice.value = '';
+		latestAlertStatus.textContent = 'Symbol changed. Load alert levels again if needed.';
+	});
+	form.addEventListener('submit', (event) => event.preventDefault());
+
+	const buildPayload = (dryRun) => {
+		const payload = {
+			symbol: trimFormValue(symbol.value).toUpperCase(),
+			side: side.value,
+			type: 'BRACKET_LIMIT',
+			quantity: trimFormValue(quantity.value),
+			price: trimFormValue(entryPrice.value),
+			stopPrice: trimFormValue(stopPrice.value),
+			stopLimitPrice: trimFormValue(stopLimitPrice.value),
+			takeProfitPrice: trimFormValue(takeProfitPrice.value),
+			timeInForce: timeInForce.value,
+			dryRun,
+		};
+		const alertSymbol = latestAlert && (
+			(latestCandidate && latestCandidate.symbol)
+			|| trimFormValue(latestAlert.symbol || (latestAlert.enrichmentData && latestAlert.enrichmentData.symbol)).toUpperCase()
+		);
+		if (latestAlert && latestAlert.id && alertSymbol === payload.symbol) {
+			payload.alertId = String(latestAlert.id).trim();
+			payload.origin = 'admin_alert';
+			if (latestCandidate && latestCandidate.setupType) payload.setupType = latestCandidate.setupType;
+		}
+		return payload;
+	};
+
+	loadLatestButton.addEventListener('click', async () => {
+		const requestedVersion = formVersion;
+		const symbolValue = trimFormValue(symbol.value).toUpperCase();
+		if (!ORDER_LIST_QUERY_VALIDATION.symbol(symbolValue)) {
+			showError(latestAlertStatus, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
+			return;
+		}
+		const data = await sendRequest({
+			definition: { method: 'GET', path: '/api/alerts', label: 'Load latest alert levels', requiredRole: 'admin.viewer' },
+			path: '/api/alerts',
+			query: { symbol: symbolValue, limit: '1' },
+			button: loadLatestButton,
+			output: latestAlertStatus,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+		if (requestedVersion !== formVersion || trimFormValue(symbol.value).toUpperCase() !== symbolValue) {
+			return;
+		}
+		const alert = data && Array.isArray(data.alerts) ? data.alerts[0] : null;
+		if (!alert) {
+			latestAlert = null;
+			latestCandidate = null;
+			latestAlertStatus.textContent = `No stored alert found for ${symbolValue}.`;
+			return;
+		}
+		const candidate = parseAlertTradeCandidate(alert);
+		if (candidate.symbol && candidate.symbol !== symbolValue) {
+			latestAlertStatus.textContent = 'The latest alert did not match the requested symbol.';
+			return;
+		}
+		const enrichment = asObject(alert.enrichmentData);
+		const traderIntent = asObject(alert.traderIntent);
+		const validPrice = (...values) => values.map(trimFormValue).find((value) => (
+			/^\d+(?:\.\d+)?$/.test(value) && Number.isFinite(Number(value)) && Number(value) > 0
+		)) || '';
+		const invalidation = validPrice(traderIntent.invalidation, enrichment.invalidation_level, enrichment.invalidationLevel);
+		const target = validPrice(traderIntent.target, enrichment.target_level, enrichment.targetLevel);
+		latestAlert = alert;
+		latestCandidate = candidate;
+		if (candidate.side) side.value = candidate.side;
+		if (candidate.price) entryPrice.value = candidate.price;
+		if (invalidation) stopPrice.value = invalidation;
+		if (target) takeProfitPrice.value = target;
+		invalidateValidation();
+		latestAlertStatus.textContent = invalidation && target
+			? `Loaded ${alert.id || 'latest alert'}; set the stop-limit price and review all levels.`
+			: `Loaded ${alert.id || 'latest alert'}, but it has no complete invalidation/target pair.`;
+	});
+
+	dryRunButton.addEventListener('click', async () => {
+		invalidateValidation();
+		const currentVersion = formVersion;
+		const payload = buildPayload(true);
+		if (!ORDER_LIST_QUERY_VALIDATION.symbol(payload.symbol)) {
+			showError(output, 'Symbol must be a Binance Spot symbol such as BTCUSDT.');
+			return;
+		}
+		const data = await sendRequest({
+			definition: { method: 'POST', path: '/api/trading/binance/orders', label: 'Validate Spot bracket', requiredRole: 'admin.operator' },
+			path: '/api/trading/binance/orders',
+			body: payload,
+			button: dryRunButton,
+			output,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+		if (data && data.success && currentVersion === formVersion) {
+			dryRunSuccessful = true;
+			updateEnvironment(data.environment);
+			validationNotice.replaceChildren(element('p', {
+				className: 'status-badge status-ready',
+				text: `Bracket validated (${data.environment || currentEnvironment}); the pending OCO exits arm after the LIMIT entry fills.`,
+			}));
+			confirmInput.disabled = false;
+			checkSubmitReadiness();
+		}
+	});
+
+	submitButton.addEventListener('click', async () => {
+		if (submitButton.disabled) return;
+		const payload = buildPayload(false);
+		if (!liveIdempotencyKey) {
+			liveIdempotencyKey = `bracket-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+		}
+		payload.idempotencyKey = liveIdempotencyKey;
+		const data = await sendRequest({
+			definition: { method: 'POST', path: '/api/trading/binance/orders', label: 'Submit live bracket', requiredRole: 'admin.operator' },
+			path: '/api/trading/binance/orders',
+			body: payload,
+		headers: { 'idempotency-key': liveIdempotencyKey },
+			button: submitButton,
+			output,
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+		if (data && data.success) {
+			submitButton.disabled = true;
+			validationNotice.replaceChildren(element('p', {
+				className: 'status-badge status-ready',
+				text: `Bracket submitted: #${data.orderList?.orderListId || 'submitted'}`,
+			}));
+		}
+	});
+
+	return form;
+};
 
 const createOrderListForm = () => {
 	const definition = { method: 'GET', path: '/api/trading/binance/orders', label: 'Load recent orders' };
@@ -5406,6 +6701,355 @@ const addPresetStructuredFields = (form, contract, operation) => {
 	syncBody();
 };
 
+const createSubscriberSummary = (subscriber, { onEdit, onTest, onDelete }) => {
+	const card = element('div', { className: 'operation-card subscriber-card' });
+	const header = element('div', { className: 'preset-card-header' });
+	const title = element('h4', { text: subscriber.url || 'Unnamed subscriber' });
+	const isEnabled = subscriber.enabled !== false;
+	const statusBadge = element('span', {
+		className: `status-badge ${isEnabled ? 'status-ready' : 'status-disabled'}`,
+		text: isEnabled ? 'Active' : 'Disabled',
+	});
+	header.append(title, statusBadge);
+	card.append(header);
+
+	if (subscriber.description) {
+		card.append(element('p', { className: 'job-meta', text: subscriber.description }));
+	}
+
+	const chips = element('div', { className: 'chip-grid' });
+	if (subscriber.hasSecret) {
+		chips.append(element('span', { className: 'status-badge status-ready', text: 'HMAC Signed' }));
+	}
+	if (subscriber.filter && typeof subscriber.filter === 'object') {
+		if (Array.isArray(subscriber.filter.symbols) && subscriber.filter.symbols.length) {
+			chips.append(element('span', {
+				className: 'capability-chip',
+				text: `Symbols: ${subscriber.filter.symbols.join(', ')}`,
+			}));
+		}
+		if (Array.isArray(subscriber.filter.sources) && subscriber.filter.sources.length) {
+			chips.append(element('span', {
+				className: 'capability-chip',
+				text: `Sources: ${subscriber.filter.sources.join(', ')}`,
+			}));
+		}
+	}
+	if (chips.children.length) card.append(chips);
+
+	if (subscriber.lastDeliveryAt || subscriber.lastDeliveryStatus) {
+		const dl = element('dl', { className: 'status-detail-list' });
+		if (subscriber.lastDeliveryStatus) {
+			dl.append(element('dt', { text: 'Last delivery status' }), element('dd', { text: subscriber.lastDeliveryStatus }));
+		}
+		if (subscriber.lastDeliveryAt) {
+			const dd = element('dd');
+			dd.append(createTimestamp(subscriber.lastDeliveryAt));
+			dl.append(element('dt', { text: 'Last delivery' }), dd);
+		}
+		card.append(dl);
+	}
+
+	const actions = element('div', { className: 'preset-actions' });
+	const testBtn = element('button', { text: 'Test Ping', className: 'button-primary' });
+	testBtn.type = 'button';
+	testBtn.setAttribute('aria-label', `Test subscriber ping ${subscriber.id}`);
+	const editBtn = element('button', { text: 'Edit' });
+	editBtn.type = 'button';
+	editBtn.setAttribute('aria-label', `Edit subscriber ${subscriber.id}`);
+	const deleteBtn = element('button', { text: 'Delete', className: 'destructive-action' });
+	deleteBtn.type = 'button';
+	deleteBtn.setAttribute('aria-label', `Delete subscriber ${subscriber.id}`);
+
+	const isOperator = canPerformMutation();
+	if (!isOperator) {
+		testBtn.disabled = true;
+		testBtn.title = 'Requires admin.operator role';
+		editBtn.disabled = true;
+		editBtn.title = 'Requires admin.operator role';
+		deleteBtn.disabled = true;
+		deleteBtn.title = 'Requires admin.operator role';
+	}
+
+	const output = element('div', { className: 'response-block', text: '' });
+	output.hidden = true;
+	let lastRawJson = '';
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastRawJson, 'Copy details');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.hidden = true;
+	rawToggle.append(element('summary', { text: 'Test details' }), rawCopyButton, rawOutput);
+
+	testBtn.addEventListener('click', () => {
+		onTest(subscriber, testBtn, card, output, rawToggle, rawOutput, rawCopyButton, (rawJson) => {
+			lastRawJson = rawJson;
+		});
+	});
+	editBtn.addEventListener('click', () => {
+		onEdit(subscriber);
+	});
+	deleteBtn.addEventListener('click', () => {
+		onDelete(subscriber, deleteBtn, card);
+	});
+
+	actions.append(testBtn, editBtn, deleteBtn);
+	card.append(actions, output, rawToggle);
+
+	return card;
+};
+
+const createSubscriberListForm = (contract, { onEdit, onStorageUpdate }) => {
+	const definition = { method: 'GET', path: '/api/alert-subscribers', label: 'Load subscribers' };
+	const form = element('form', { className: 'operation-card subscriber-list-panel' });
+
+	const titleRow = element('div', { className: 'section-heading' });
+	const title = element('h3', { text: 'Alert subscribers' });
+	const storageBadge = element('span', { className: 'status-badge status-unknown', text: 'Storage: checking…' });
+	titleRow.append(title, storageBadge);
+	const route = element('code', { text: `${definition.method} ${definition.path}` });
+	form.append(titleRow, route);
+
+	const updateStorageBadge = (storage) => {
+		if (!storage || typeof storage !== 'object') return;
+		const mode = String(storage.mode || 'unknown');
+		const backend = String(storage.backend || 'unknown');
+		const isDurable = mode.toLowerCase() === 'durable';
+		storageBadge.className = `status-badge ${isDurable ? 'status-ready' : 'status-disabled'}`;
+		storageBadge.textContent = `${displayLabel(mode)} · ${displayLabel(backend)}`;
+	};
+
+	const button = element('button', { text: definition.label });
+	button.type = 'submit';
+
+	const listContainer = element('div', { className: 'form-fields subscriber-list' });
+	const output = element('div', { className: 'response-block', text: 'No request sent.' });
+
+	let lastListRawJson = '';
+	const rawOutput = element('div', { className: 'response-block' });
+	const rawCopyButton = createCopyButton(() => lastListRawJson, 'Copy details');
+	rawCopyButton.hidden = true;
+	const rawToggle = element('details', { className: 'raw-status' });
+	rawToggle.hidden = true;
+	rawToggle.append(element('summary', { text: 'Subscribers details' }), rawCopyButton, rawOutput);
+
+	form.append(button, listContainer, output, rawToggle);
+
+	const onTestSubscriber = async (subscriber, testBtn, card, cardOutput, cardRawToggle, cardRawOutput, cardRawCopy, setRawJson) => {
+		const testDef = {
+			method: 'POST',
+			path: '/api/alert-subscribers/{id}/test',
+			label: 'Test subscriber ping',
+			confirm: 'Send test webhook ping to this subscriber?',
+			requiredRole: 'admin.operator',
+		};
+		setRawJson('');
+		cardRawToggle.hidden = true;
+		cardOutput.hidden = false;
+		cardOutput.className = 'response-block request-state';
+		cardOutput.textContent = 'Sending test ping…';
+		try {
+			const data = await sendRequest({
+				definition: testDef,
+				path: `/api/alert-subscribers/${encodeURIComponent(subscriber.id)}/test`,
+				button: testBtn,
+				output: cardOutput,
+				formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+			});
+			if (!data) {
+				cardOutput.hidden = true;
+				return;
+			}
+			const rawJson = JSON.stringify(data, null, 2);
+			setRawJson(rawJson);
+			showResult(cardRawOutput, rawJson);
+			cardRawCopy.hidden = false;
+			cardRawToggle.hidden = false;
+		} catch (error) {
+			showError(cardOutput, error.message);
+		}
+	};
+
+	const onDeleteSubscriber = async (subscriber, deleteBtn, card) => {
+		const deleteDef = {
+			method: 'DELETE',
+			path: '/api/alert-subscribers/{id}',
+			label: 'Delete subscriber',
+			confirm: 'Delete this alert subscriber webhook?',
+			requiredRole: 'admin.operator',
+		};
+		try {
+			const data = await sendRequest({
+				definition: deleteDef,
+				path: `/api/alert-subscribers/${encodeURIComponent(subscriber.id)}`,
+				button: deleteBtn,
+				output,
+			});
+			if (data && data.success) {
+				card.remove();
+				if (data.storage) {
+					updateStorageBadge(data.storage);
+					if (typeof onStorageUpdate === 'function') onStorageUpdate(data.storage);
+				}
+				await loadSubscribers();
+			}
+		} catch (error) {
+			showError(output, error.message);
+		}
+	};
+
+	const loadSubscribers = async () => {
+		listContainer.replaceChildren(element('div', { className: 'loading-state', text: 'Loading subscribers…' }));
+		rawToggle.hidden = true;
+		try {
+			const data = await sendRequest({
+				definition,
+				path: definition.path,
+				button,
+				output,
+				formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+			});
+			if (!data) {
+				listContainer.replaceChildren();
+				return;
+			}
+			if (data.storage) {
+				updateStorageBadge(data.storage);
+				if (typeof onStorageUpdate === 'function') onStorageUpdate(data.storage);
+			}
+			lastListRawJson = JSON.stringify(data, null, 2);
+			showResult(rawOutput, lastListRawJson);
+			rawCopyButton.hidden = false;
+			rawToggle.hidden = false;
+
+			const subscribers = Array.isArray(data.subscribers) ? data.subscribers : [];
+			listContainer.replaceChildren();
+			if (!subscribers.length) {
+				listContainer.append(createEmptyState('No alert subscribers found.'));
+				return;
+			}
+			subscribers.forEach((subscriber) => {
+				const card = createSubscriberSummary(subscriber, {
+					onEdit,
+					onTest: onTestSubscriber,
+					onDelete: onDeleteSubscriber,
+				});
+				listContainer.append(card);
+			});
+		} catch (error) {
+			showError(output, error.message);
+		}
+	};
+
+	form.refresh = () => loadSubscribers();
+	form.updateStorage = (storage) => updateStorageBadge(storage);
+
+	form.addEventListener('submit', (event) => {
+		event.preventDefault();
+		Promise.resolve(loadSubscribers()).catch(() => {});
+	});
+
+	return form;
+};
+
+const addSubscriberStructuredFields = (form, contract, operation) => {
+	const bodyExample = getBodyExample(contract, operation) || {};
+	let isAdvancedDirty = false;
+
+	const urlInput = addField(form, 'Target URL', 'url', {
+		required: true,
+		placeholder: 'https://example.com/alerts/webhook',
+		value: bodyExample.url || '',
+	});
+
+	const secretInput = addField(form, 'Signing Secret (HMAC-SHA256)', 'secret', {
+		type: 'password',
+		placeholder: 'Optional signing secret',
+		value: bodyExample.secret || '',
+	});
+
+	const descInput = addField(form, 'Description', 'description', {
+		placeholder: 'e.g. My trading webhook bridge',
+		value: bodyExample.description || '',
+	});
+
+	const symbolsInput = addField(form, 'Filter symbols (comma-separated)', 'filterSymbols', {
+		placeholder: 'e.g. BTCUSDT, ETHUSDT',
+		value: (bodyExample.filter && Array.isArray(bodyExample.filter.symbols)) ? bodyExample.filter.symbols.join(', ') : '',
+	});
+
+	const sourcesInput = addField(form, 'Filter sources (comma-separated)', 'filterSources', {
+		placeholder: 'e.g. webhook-alert',
+		value: (bodyExample.filter && Array.isArray(bodyExample.filter.sources)) ? bodyExample.filter.sources.join(', ') : '',
+	});
+
+	const enabledLabel = element('label', { className: 'checkbox-label' });
+	const enabledCb = element('input', { type: 'checkbox' });
+	enabledCb.name = 'enabled';
+	enabledCb.checked = bodyExample.enabled !== false;
+	enabledLabel.append(enabledCb, element('span', { text: 'Subscriber enabled' }));
+	form.append(enabledLabel);
+
+	const syncBody = () => {
+		if (isAdvancedDirty) return;
+		const symbols = symbolsInput.value.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
+		const sources = sourcesInput.value.split(',').map((s) => s.trim()).filter(Boolean);
+		const filter = {};
+		if (symbols.length) filter.symbols = symbols;
+		if (sources.length) filter.sources = sources;
+
+		const body = {
+			url: urlInput.value.trim(),
+			enabled: enabledCb.checked,
+		};
+		if (secretInput.value) body.secret = secretInput.value;
+		if (descInput.value.trim()) body.description = descInput.value.trim();
+		if (Object.keys(filter).length) body.filter = filter;
+
+		if (form.elements.body) {
+			form.elements.body.value = JSON.stringify(body, null, 2);
+		}
+	};
+
+	[urlInput, secretInput, descInput, symbolsInput, sourcesInput].forEach((input) => {
+		input.addEventListener('input', () => {
+			isAdvancedDirty = false;
+			syncBody();
+		});
+	});
+	enabledCb.addEventListener('change', () => {
+		isAdvancedDirty = false;
+		syncBody();
+	});
+
+	if (form.elements.body) {
+		form.elements.body.addEventListener('input', () => {
+			isAdvancedDirty = true;
+		});
+	}
+
+	form.populateSubscriber = (subscriber) => {
+		isAdvancedDirty = false;
+		if (form.elements['path-id'] && subscriber.id) {
+			form.elements['path-id'].value = subscriber.id;
+		}
+		urlInput.value = subscriber.url || '';
+		secretInput.value = '';
+		descInput.value = subscriber.description || '';
+		enabledCb.checked = subscriber.enabled !== false;
+		if (subscriber.filter && typeof subscriber.filter === 'object') {
+			symbolsInput.value = Array.isArray(subscriber.filter.symbols) ? subscriber.filter.symbols.join(', ') : '';
+			sourcesInput.value = Array.isArray(subscriber.filter.sources) ? subscriber.filter.sources.join(', ') : '';
+		} else {
+			symbolsInput.value = '';
+			sourcesInput.value = '';
+		}
+		syncBody();
+	};
+
+	syncBody();
+};
+
 const createOperationForm = (contract, definition, options = {}) => {
 	const operation = getOperation(contract, definition);
 	const form = element('form', { className: 'operation-card' });
@@ -5416,12 +7060,16 @@ const createOperationForm = (contract, definition, options = {}) => {
 
 	const isPresetUpsert = (definition.path === '/api/scanner-presets' && definition.method === 'POST') ||
 		(definition.path === '/api/scanner-presets/{id}' && definition.method === 'PUT');
+	const isSubscriberUpsert = (definition.path === '/api/alert-subscribers' && definition.method === 'POST') ||
+		(definition.path === '/api/alert-subscribers/{id}' && (definition.method === 'PUT' || definition.method === 'PATCH'));
 
 	if (definition.method === 'GET' || getParameters(contract, operation).some((parameter) => parameter.in === 'query')) {
 		addObjectField(form, 'Filters', 'query', getQueryExample(contract, operation), contract, getQuerySchema(contract, operation));
 	}
 	if (isPresetUpsert) {
 		addPresetStructuredFields(form, contract, operation);
+	} else if (isSubscriberUpsert) {
+		addSubscriberStructuredFields(form, contract, operation);
 	} else if (definition.method !== 'GET' && operation && operation.requestBody) {
 		addObjectField(form, 'Request options', 'body', getBodyExample(contract, operation), contract, getBodySchema(contract, operation));
 	}
@@ -5561,7 +7209,13 @@ const playgroundInputCache = new Map();
 const playgroundHistory = [];
 const sanitizeForHistory = (text) => {
 	if (!text || typeof text !== 'string') return text;
-	return text.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization)['"]?\s*[:=]\s*['"]?)[^'"\s,}\]]+/gi, '$1[REDACTED]');
+	if (typeof window !== 'undefined' && window.CabrosAdminRequest && typeof window.CabrosAdminRequest.sanitizeForHistory === 'function') {
+		return window.CabrosAdminRequest.sanitizeForHistory(text);
+	}
+	return text
+		.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization|discordWebhookUrl|webhookUrl)['"]?\s*[:=]\s*)(['"])(?:(?!\2).)*\2/gi, '$1$2[REDACTED]$2')
+		.replace(/(['"]?(?:api[_-]?key|secret|token|password|authorization|discordWebhookUrl|webhookUrl)['"]?\s*[:=]\s*)(?!['"])[^'"\s,}\]&]+/gi, '$1[REDACTED]')
+		.replace(/(https?:\/\/(?:[a-zA-Z0-9-]+\.)?discord(?:app)?\.com\/api\/webhooks\/)\d+(?:\/(?!\[REDACTED\])[^'"?\s/]*)?/gi, '$1[REDACTED]/[REDACTED]');
 };
 
 const renderPlayground = (contract, view) => {
@@ -7200,6 +8854,7 @@ const createTradingView = (contract) => {
 	const outcomesDefinition = { method: 'GET', path: '/api/outcomes', label: 'Load signal records' };
 	const auditDefinition = { method: 'GET', path: '/api/trading/binance/orders/audit', label: 'Load order audit' };
 	const ledgerDefinition = { method: 'GET', path: TRADING_LEDGER_PATH, label: 'Load trade ledger' };
+	const positionsDefinition = { method: 'GET', path: '/api/trading/positions', label: 'Load open positions' };
 	const statusDefinition = { method: 'GET', path: '/api/status', label: 'Load trading environment' };
 
 	const wrap = element('section', { className: 'dashboard trading-view' });
@@ -7249,8 +8904,14 @@ const createTradingView = (contract) => {
 
 	const realPanelHost = element('div');
 	const realOutput = element('div', { className: 'response-block', text: '' });
+	const positionsPanel = createTradingPanelShell('positions-panel', 'Open positions',
+		'Durable positions from recorded fills.');
+	const positionsHost = element('div', { className: 'positions-host' });
+	const positionsTicketHost = element('div', { className: 'positions-ticket-host' });
+	const positionsOutput = element('div', { className: 'response-block', text: '' });
+	positionsPanel.append(positionsHost, positionsTicketHost, positionsOutput);
 	const analyticsOutput = element('div', { className: 'response-block', text: '' });
-	main.append(paperPanel, realPanelHost, realOutput);
+	main.append(paperPanel, realPanelHost, positionsPanel, realOutput);
 
 	const curveHost = element('div');
 	const barsHost = element('div');
@@ -7453,6 +9114,77 @@ const createTradingView = (contract) => {
 		formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
 	});
 
+	const renderPositions = (positions) => {
+		positionsHost.replaceChildren();
+		positionsTicketHost.replaceChildren();
+		const openList = positions.filter((p) => p && Number(p.quantity) > 0);
+		if (!openList.length) {
+			positionsHost.append(createEmptyState('No open positions recorded.'));
+			return;
+		}
+		const table = createResultTable('Open positions', [
+			['Symbol', (p) => formatOrderValue(p && p.symbol)],
+			['Quantity', (p) => formatOrderValue(p && p.quantity)],
+			['Entry price', (p) => formatOrderValue(p && p.entryPrice)],
+			['Mark price', (p) => formatOrderValue(p && (p.currentPrice || p.markPrice))],
+			['Unrealized P&L', (p) => formatTradingPercent(p && p.unrealizedPnl)],
+			['Action', (p) => {
+				const closeBtn = element('button', { text: 'Close', className: 'position-close-btn' });
+				closeBtn.type = 'button';
+				closeBtn.addEventListener('click', async () => {
+					closeBtn.disabled = true;
+					let sellQty = String(p.quantity);
+					try {
+						const balanceData = await sendRequest({
+							definition: { method: 'GET', path: '/api/trading/binance/account/balances', label: 'Query balance' },
+							path: '/api/trading/binance/account/balances',
+							query: { symbol: p.symbol, refresh: 'true' },
+							button: closeBtn,
+							output: positionsOutput,
+							formatResponse: () => '',
+						});
+						if (balanceData && Array.isArray(balanceData.balances)) {
+							const baseAsset = p.symbol.replace(/USDT$|BUSD$|USDC$/, '');
+							const match = balanceData.balances.find((b) => b.asset === baseAsset);
+							if (match && match.free && Number(match.free) < Number(sellQty)) {
+								sellQty = String(match.free);
+							}
+						}
+					} catch (err) {
+						console.warn('Could not query balance for position close:', err);
+					}
+					closeBtn.disabled = false;
+					const ticket = createTradeTicket({
+						position: { ...p, quantity: sellQty },
+						defaultOrigin: 'manual',
+						onOrderSubmitted: () => loadAll(),
+					});
+					positionsTicketHost.replaceChildren(ticket);
+				});
+				return closeBtn;
+			}],
+		], openList, 'data-table data-table-scroll');
+		positionsHost.append(table.scroll);
+	};
+
+	const loadPositions = (current) => {
+		if (!contract || !contract.paths || !contract.paths['/api/trading/positions']) {
+			positionsHost.replaceChildren(createEmptyState('Positions API not available in contract.'));
+			return Promise.resolve();
+		}
+		return sendRequest({
+			definition: positionsDefinition,
+			path: positionsDefinition.path,
+			button: refresh,
+			output: positionsOutput,
+			isCurrent: () => current === generation,
+			captureResponseData: (data) => {
+				renderPositions(Array.isArray(data && data.positions) ? data.positions : []);
+			},
+			formatResponse: ({ summary, status, elapsed }) => `${summary}\nHTTP ${status} · ${elapsed} ms`,
+		});
+	};
+
 	const loadAll = () => {
 		const current = ++generation;
 		refresh.disabled = true;
@@ -7461,6 +9193,7 @@ const createTradingView = (contract) => {
 			loadPaper(current),
 			loadSignals(current),
 			loadAudit(current),
+			loadPositions(current),
 			renderRealPnlPanel(contract, ledgerDefinition, {}, refresh)
 				.then((panel) => realPanelHost.replaceChildren(panel)),
 		]).then(() => {
@@ -7521,12 +9254,15 @@ const renderView = async (name) => {
 			view.append(createNewsMonitorView());
 			return;
 		}
-		view.append(element('h2', { text: name[0].toUpperCase() + name.slice(1) }));
+		const headingKey = `views.${name}`;
+		const headingText = typeof i18n !== 'undefined' ? i18n.t(headingKey) : null;
+		view.append(element('h2', { text: (headingText && headingText !== headingKey) ? headingText : (name[0].toUpperCase() + name.slice(1)) }));
 		if (name === 'trading') {
 			view.append(createTradingView(contract));
 			return;
 		}
 		if (name === 'alerts') {
+			view.append(createAlertPreviewForm());
 			view.append(createAlertListForm());
 			view.append(createAlertSummaryForm(), createAlertExportForm());
 			VIEW_ACTIONS.alerts.forEach((definition) => view.append(createOperationForm(contract, definition)));
@@ -7548,6 +9284,7 @@ const renderView = async (name) => {
 			return;
 		}
 		if (name === 'orders') {
+			view.append(createSpotBracketForm());
 			view.append(createOrderListForm());
 			view.append(createOrderLookupForm());
 			return;
@@ -7605,6 +9342,59 @@ const renderView = async (name) => {
 			});
 			return;
 		}
+		if (name === 'subscribers') {
+			let updateForm = null;
+			let listForm = null;
+			const onEdit = (subscriber) => {
+				if (updateForm && typeof updateForm.populateSubscriber === 'function') {
+					updateForm.populateSubscriber(subscriber);
+					if (typeof updateForm.scrollIntoView === 'function') {
+						updateForm.scrollIntoView({ behavior: 'smooth' });
+					}
+					if (updateForm.elements?.url && typeof updateForm.elements.url.focus === 'function') {
+						updateForm.elements.url.focus();
+					}
+				}
+			};
+			const onStorageUpdate = (storage) => {
+				if (listForm && typeof listForm.updateStorage === 'function') {
+					listForm.updateStorage(storage);
+				}
+			};
+			const onSubscriberMutated = async (storage) => {
+				if (storage) onStorageUpdate(storage);
+				if (listForm && typeof listForm.refresh === 'function') {
+					await listForm.refresh();
+				}
+			};
+			listForm = createSubscriberListForm(contract, { onEdit, onStorageUpdate });
+			view.append(listForm);
+
+			VIEWS.subscribers.forEach((definition) => {
+				if (definition.method === 'GET') return;
+				const form = createOperationForm(contract, definition, {
+					onStorageUpdate: onSubscriberMutated,
+					onSuccess: () => {
+						if (listForm && typeof listForm.refresh === 'function') listForm.refresh();
+					},
+				});
+				view.append(form);
+			});
+
+			VIEW_ACTIONS.subscribers.forEach((definition) => {
+				const form = createOperationForm(contract, definition, {
+					onStorageUpdate: onSubscriberMutated,
+					onSuccess: () => {
+						if (listForm && typeof listForm.refresh === 'function') listForm.refresh();
+					},
+				});
+				if (definition.method === 'PATCH' || definition.method === 'PUT') {
+					updateForm = form;
+				}
+				view.append(form);
+			});
+			return;
+		}
 		if (name === 'analysis') {
 			const definitions = [...(VIEWS[name] || []), ...(VIEW_ACTIONS[name] || [])];
 			definitions.forEach((definition) => {
@@ -7632,7 +9422,35 @@ const renderView = async (name) => {
 	}
 };
 
-const navigateToView = (name, { history: historyMode = 'push' } = {}) => {
+const handleAlertDeepLink = (alertId) => {
+	if (!alertId || typeof document === 'undefined' || !document) return;
+	const viewNode = document.getElementById('view');
+	if (!viewNode) return;
+	const alertInput = (typeof viewNode.querySelector === 'function')
+		? (viewNode.querySelector('input[name="path-alertId"]') || viewNode.querySelector('input[name=path-alertId]'))
+		: null;
+	if (alertInput) {
+		alertInput.value = alertId;
+		let form = alertInput.parentNode;
+		while (form && form.tagName !== 'FORM') {
+			form = form.parentNode;
+		}
+		if (form) {
+			if (typeof form.dispatch === 'function') {
+				form.dispatch('submit');
+			} else if (typeof form.requestSubmit === 'function') {
+				form.requestSubmit();
+			} else if (typeof form.dispatchEvent === 'function') {
+				const event = (typeof Event === 'function')
+					? new Event('submit', { cancelable: true, bubbles: true })
+					: { type: 'submit' };
+				form.dispatchEvent(event);
+			}
+		}
+	}
+};
+
+const navigateToView = (name, { history: historyMode = 'push', alertId = null, hash = null } = {}) => {
 	if (authState.enabled && !authState.user) return showSignedOutState();
 	const target = resolveConsoleView(name);
 	currentConsoleView = target;
@@ -7640,17 +9458,34 @@ const navigateToView = (name, { history: historyMode = 'push' } = {}) => {
 	setViewTitle(target);
 	if (historyMode !== 'none') {
 		const carried = historyMode === 'push' ? {} : filterParamsForView(target, readConsoleParams());
-		writeConsoleUrl(buildConsoleUrl(target, carried), { replace: historyMode === 'replace' });
+		let targetHash = hash;
+		if (!targetHash) {
+			if (target === 'alerts' && alertId) {
+				targetHash = `#/alerts/${encodeURIComponent(String(alertId))}/trade`;
+			} else if (historyMode === 'replace') {
+				const currentHashState = parseConsoleHash(readConsoleHash());
+				if (currentHashState && !currentHashState.unrecognised && currentHashState.view === target) {
+					targetHash = currentHashState.raw;
+				}
+			}
+		}
+		writeConsoleUrl(buildConsoleUrl(target, carried, targetHash), { replace: historyMode === 'replace' });
 	}
 	return renderView(target).then(() => {
 		applyFilterParams(readConsoleParams());
 		bindFilterScopeListeners();
 		moveFocusToView(target);
+		const activeUrlState = readConsoleUrlState();
+		const targetAlertId = alertId || (activeUrlState.view === 'alerts' ? activeUrlState.alertId : null);
+		if (target === 'alerts' && targetAlertId) {
+			handleAlertDeepLink(targetAlertId);
+		}
 	});
 };
 
 const handleConsolePopState = () => {
-	navigateToView(readConsoleUrlState().view, { history: 'none' });
+	const state = readConsoleUrlState();
+	navigateToView(state.view, { history: 'none', alertId: state.alertId });
 };
 
 const canonicaliseConsoleUrl = () => {
@@ -7668,10 +9503,15 @@ const markActiveView = (name) => {
 
 const setViewTitle = (name) => {
 	if (typeof document === 'undefined' || !document) return;
-	const label = VIEW_TITLES[name] || (name ? name[0].toUpperCase() + name.slice(1) : '');
+	const viewKey = `views.${name}`;
+	const translated = typeof i18n !== 'undefined' ? i18n.t(viewKey) : null;
+	const label = (translated && translated !== viewKey) ? translated : (VIEW_TITLES[name] || (name ? name[0].toUpperCase() + name.slice(1) : ''));
 	document.title = label ? `${label} · ${CONSOLE_TITLE_BASE}` : CONSOLE_TITLE_BASE;
 	const status = getElement('view-status');
-	if (status) status.textContent = label ? `${label} view` : '';
+	if (status) {
+		const suffix = (typeof i18n !== 'undefined' && i18n.t('shell.viewSuffix')) || 'view';
+		status.textContent = label ? `${label} ${suffix}` : '';
+	}
 };
 
 const moveFocusToView = (name) => {
@@ -7766,6 +9606,62 @@ const setupLegacyConsole = ({ persist = true } = {}) => {
 	});
 };
 
+const BANNER_FETCH_TIMEOUT_MS = 4000;
+
+const fetchEnvironmentBanner = async () => {
+	if (!window.fetch || typeof AbortController === 'undefined') return null;
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), BANNER_FETCH_TIMEOUT_MS);
+	try {
+		const base = getApiBaseUrl();
+		const url = `${base || ''}/api/banner`;
+		const response = await fetch(url, {
+			method: 'GET',
+			signal: controller.signal,
+			headers: { Accept: 'application/json' },
+		});
+		if (!response.ok) return null;
+		return await response.json();
+	} catch (_) {
+		return null;
+	} finally {
+		clearTimeout(timer);
+	}
+};
+
+const renderEnvironmentBanner = (banner) => {
+	const host = getElement('environment-banner');
+	if (!host) return;
+	if (!banner || !banner.environment) {
+		host.hidden = true;
+		host.replaceChildren();
+		return;
+	}
+	const isPreviewLike = String(banner.environment).toLowerCase() !== 'production';
+	if (!isPreviewLike) {
+		host.hidden = true;
+		host.replaceChildren();
+		return;
+	}
+	const tone = String(banner.environment).toLowerCase() === 'development' ? 'danger' : 'warning';
+	host.dataset.tone = tone;
+	const label = element('div');
+	label.append(element('strong', { text: `${banner.environment} deployment` }));
+	if (banner.commit) label.append(element('span', { text: ' · commit ' }), element('code', { text: String(banner.commit).slice(0, 8) }));
+	if (banner.name) label.append(element('span', { text: ` · ${banner.name}` }));
+	const actions = element('div', { className: 'banner-actions' });
+	const copyButton = element('button', { type: 'button', className: 'banner-copy', text: 'Copy preview URL' });
+	copyButton.addEventListener('click', () => copyToClipboard(getApiBaseUrl() || window.location.origin, copyButton));
+	actions.append(copyButton);
+	host.replaceChildren(label, actions);
+	host.hidden = false;
+};
+
+const initializeEnvironmentBanner = async () => {
+	const banner = await fetchEnvironmentBanner();
+	if (banner) renderEnvironmentBanner(banner);
+};
+
 const setupSidebarToggle = () => {
 	const toggle = getElement('toggle-sidebar');
 	const shell = getElement('console-shell');
@@ -7774,7 +9670,9 @@ const setupSidebarToggle = () => {
 	const apply = (collapsed) => {
 		if (collapsed) shell.setAttribute('data-sidebar', 'collapsed');
 		else shell.removeAttribute('data-sidebar');
-		toggle.textContent = collapsed ? LABELS.collapsed : LABELS.expanded;
+		toggle.textContent = collapsed
+			? (typeof i18n !== 'undefined' ? i18n.t('shell.expandSidebar') : LABELS.collapsed)
+			: (typeof i18n !== 'undefined' ? i18n.t('shell.collapseSidebar') : LABELS.expanded);
 		toggle.setAttribute('aria-pressed', collapsed ? 'true' : 'false');
 	};
 	let initialCollapsed = false;
@@ -7795,13 +9693,111 @@ const setupSidebarToggle = () => {
 	});
 };
 
+const updateShellTranslations = () => {
+	if (typeof document === 'undefined' || !document) return;
+	const query = (sel) => (typeof document.querySelector === 'function'
+		? document.querySelector(sel)
+		: (document.querySelectorAll ? document.querySelectorAll(sel)[0] : null));
+
+	const eyebrow = query('.brand-lockup .eyebrow');
+	if (eyebrow) eyebrow.textContent = i18n.t('shell.operations');
+
+	const navButtons = typeof document.querySelectorAll === 'function' ? document.querySelectorAll('[data-view]') : [];
+	navButtons.forEach((btn) => {
+		const view = btn.dataset?.view;
+		const navText = typeof btn.querySelector === 'function'
+			? btn.querySelector('.nav-text')
+			: (btn.querySelectorAll ? btn.querySelectorAll('.nav-text')[0] : null);
+		if (navText && view) {
+			const key = `nav.${view}`;
+			const text = i18n.t(key);
+			if (text && text !== key) navText.textContent = text;
+		}
+	});
+
+	const navLabel = query('.console-nav .nav-label');
+	if (navLabel) navLabel.textContent = i18n.t('shell.workspace');
+	const sidebarNote = query('.sidebar-note');
+	if (sidebarNote) sidebarNote.textContent = i18n.t('shell.sidebarNote');
+
+	const topbarEyebrow = query('.topbar .eyebrow');
+	if (topbarEyebrow) topbarEyebrow.textContent = i18n.t('shell.operatorWorkspace');
+	const topbarTitle = query('.topbar .topbar-title');
+	if (topbarTitle) topbarTitle.textContent = i18n.t('shell.topbarTitle');
+
+	const clearKey = getElement('clear-key');
+	if (clearKey) clearKey.textContent = i18n.t('shell.clearKey');
+
+	const toggle = getElement('toggle-sidebar');
+	const shell = getElement('console-shell');
+	if (toggle && shell) {
+		const collapsed = typeof shell.getAttribute === 'function'
+			? shell.getAttribute('data-sidebar') === 'collapsed'
+			: shell.attributes?.['data-sidebar'] === 'collapsed';
+		toggle.textContent = collapsed ? i18n.t('shell.expandSidebar') : i18n.t('shell.collapseSidebar');
+	}
+
+	const authTitle = getElement('firebase-auth-title');
+	if (authTitle) authTitle.textContent = i18n.t('auth.adminSignIn');
+	const emailLabel = query('label[for="auth-email"]');
+	if (emailLabel) emailLabel.textContent = i18n.t('auth.email');
+	const passLabel = query('label[for="auth-password"]');
+	if (passLabel) passLabel.textContent = i18n.t('auth.password');
+	const signInBtn = getElement('sign-in');
+	if (signInBtn) signInBtn.textContent = i18n.t('auth.signIn');
+	const signOutBtn = getElement('sign-out');
+	if (signOutBtn) signOutBtn.textContent = i18n.t('auth.signOut');
+
+	const connTitle = getElement('connection-title');
+	if (connTitle) connTitle.textContent = i18n.t('auth.sessionAccess');
+	const connChip = query('#legacy-connection .security-chip');
+	if (connChip) connChip.textContent = i18n.t('auth.sessionOnly');
+	const apiKeyLabel = query('label[for="api-key"]');
+	if (apiKeyLabel) apiKeyLabel.textContent = i18n.t('auth.apiKey');
+	const saveKeyBtn = getElement('save-key');
+	if (saveKeyBtn) saveKeyBtn.textContent = i18n.t('auth.useKeyForSession');
+
+	const langSelect = getElement('admin-lang');
+	if (langSelect) langSelect.value = i18n.getLocale();
+
+	if (typeof currentConsoleView === 'string') {
+		setViewTitle(currentConsoleView);
+	}
+};
+
 document.addEventListener('DOMContentLoaded', async () => {
+	const initialLocale = i18n.resolveLocale();
+	i18n.setLocale(initialLocale, { persist: false });
+	if (typeof document !== 'undefined' && document && document.documentElement) {
+		document.documentElement.lang = initialLocale;
+		document.documentElement.setAttribute('lang', initialLocale);
+	}
+
+	const langSelect = getElement('admin-lang');
+	if (langSelect) {
+		langSelect.value = initialLocale;
+		langSelect.addEventListener('change', (event) => {
+			const newLocale = i18n.setLocale(event.target.value);
+			if (typeof document !== 'undefined' && document && document.documentElement) {
+				document.documentElement.lang = newLocale;
+				document.documentElement.setAttribute('lang', newLocale);
+			}
+			updateShellTranslations();
+			if (typeof currentConsoleView === 'string') {
+				const state = readConsoleUrlState();
+				navigateToView(currentConsoleView, { history: 'replace', alertId: state.alertId });
+			}
+		});
+	}
+	updateShellTranslations();
+
 	const view = getElement('view');
 	if (view) view.replaceChildren(createLoadingState('Checking authentication…'));
 	document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => navigateToView(button.dataset.view)));
 	setupSidebarToggle();
 	if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
 		window.addEventListener('popstate', handleConsolePopState);
+		window.addEventListener('hashchange', handleConsolePopState);
 	}
 	canonicaliseConsoleUrl();
 
@@ -7816,6 +9812,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 		disconnectSse();
 	});
 
+	initializeEnvironmentBanner();
 	const config = await loadAuthConfig();
 	if (config.enabled) {
 		await setupFirebaseAuth(config);
@@ -7827,6 +9824,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 	setHidden('legacy-connection', false);
 	setupLegacyConsole();
 	if (getElement('api-key')?.value) setupSseStream();
-	navigateToView(readConsoleUrlState().view, { history: 'none' });
+	const initialRequested = readConsoleUrlState();
+	navigateToView(initialRequested.view, { history: 'none', alertId: initialRequested.alertId });
 
 });

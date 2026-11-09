@@ -3,7 +3,7 @@
 [![Node.js CI](https://github.com/francovp/cabros-bot/actions/workflows/node.js.yml/badge.svg)](https://github.com/francovp/cabros-bot/actions/workflows/node.js.yml)
 [![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen.svg)](https://github.com/francovp/cabros-bot)
 [![License: ISC](https://img.shields.io/badge/License-ISC-blue.svg)](https://opensource.org/licenses/ISC)
-[![Node Version](https://img.shields.io/badge/node-%3E%3D24.18.0%20%3C25-brightgreen.svg)](https://nodejs.org/)
+[![Node Version](https://img.shields.io/badge/node-%3E%3D24.18.0%20%3C27-brightgreen.svg)](https://nodejs.org/)
 
 A high-performance crypto, equity, and market intelligence bot service built with Node.js and Express. It connects incoming TradingView alerts and scheduled event monitors with Gemini Grounding, TradingView MCP analysis, and Binance Spot execution, dispatching formatted alerts concurrently across Telegram, WhatsApp, and Discord.
 
@@ -14,7 +14,7 @@ A high-performance crypto, equity, and market intelligence bot service built wit
 ## Core Capabilities
 
 - **Multi-Channel Alert Dispatch**: Broadcast alerts concurrently across Telegram, WhatsApp (GreenAPI), and Discord Webhooks with channel-specific Markdown escaping, URL shortening, independent retries, and dead-letter queue redrive. Operator admin pages fail over to the other configured channels — preferring whichever is actually healthy — when the primary Telegram admin destination cannot be delivered, and `GET /api/status` reports `adminPaging` health so a silent operator path is never mistaken for a working one.
-- **TradingView MCP Integration**: Connects to the remote TradingView MCP Streamable HTTP service to fetch multi-timeframe oscillators, moving averages, pivot points, and technical summaries (`coin_analysis`).
+- **TradingView MCP Integration**: Connects to the remote TradingView MCP Streamable HTTP service to fetch multi-timeframe oscillators, moving averages, pivot points, and technical summaries (`coin_analysis`), with optional process-local TTL caching for successful identical tool calls.
 - **AI Grounding & Prompt Management**: Enriches raw signals with Google Gemini Grounding (sentiment, key insights, technical levels, news sources) backed by Langfuse prompt management and token cost budgets.
 - **News Monitoring & Event Detection**: Scans crypto and equity symbols on a schedule, scores news confidence, applies persistent deduplication, and falls back to Binance/Twelve Data real-time prices.
 - **Binance Spot Trading**: Validates, tests, and places spot orders with strict exchange filters, balance verification, and idempotent client order tracking.
@@ -42,18 +42,30 @@ Comprehensive guides and technical documentation are maintained inside the [`doc
 | **[Telegram Commands](docs/commands.md)** | Interactive bot commands (`/help`, `/precio`, `/cryptobot`, `/analisis`, `/scanner`, `/jobs`, `/noticias`), throttling, and forum topic routing. |
 | **[News Monitoring](docs/news-monitor.md)** | Event detection engine, confidence scoring, persistent deduplication, secondary LLM refinement, and volume throttling. |
 | **[Observability & Monitoring](docs/monitoring.md)** | Sentry runtime error monitoring (005), health probes, external uptime monitoring, production smoke probes, structured JSON logging, structured per-request HTTP access logs, and Firestore write/read metrics. |
+| **[Operator Runbook](RUNBOOK.md)** | Incident checklists and mitigation runbooks for 12 paging surfaces (Gemini 429 burst, Telegram/Discord/WhatsApp exhaustion, TradingView MCP black-hole, Binance order rejection, Firestore credential rotation, dead background workers, and rate-limit storms). |
 | **[Deployment & Operations](docs/deployment.md)** | Render.com web services and BullMQ workers, preview PR environments, ngrok local tunneling, and Docker/Devcontainer. |
 | **[Troubleshooting Guide](docs/troubleshooting.md)** | Diagnostic checklists and recovery runbooks for news monitoring, messaging channels, URL shortening, and retries. |
 | **[Firestore Backup & Restore](docs/firestore-backup-and-restore.md)** | Procedures and scripts for backing up and restoring Firestore operational collections. |
 | **[SDK Major Drift Audit](docs/runtime-sdk-major-drift-audit.md)** | Dependency audit and version compatibility policy across Node.js runtime and SDKs. |
 
----
+- `WEBHOOK_API_KEY` - API key used to secure `/api/*` webhook endpoints. Required in production-like environments (`NODE_ENV=production`, Render, Vercel, Railway), where endpoints fail-closed with HTTP 503 if unset. When configured, clients must provide the key via the `x-api-key` header (or the `api-key` query parameter)
+- `WEBHOOK_SIGNING_SECRET` - Optional shared secret for HMAC-SHA256 verification on inbound `POST /api/webhook/alert` requests. Environment-only because it is a credential; it is excluded from Firebase Remote Config
+- `WEBHOOK_SIGNING_TOLERANCE_MS` - Maximum request timestamp age in milliseconds for HMAC verification (default: `300000`). Environment-only because it controls authentication/replay protection; it is excluded from Firebase Remote Config
+- When signing is enabled, send `x-webhook-timestamp` as Unix milliseconds and `x-webhook-signature: sha256=<hex digest>`. Sign the exact string `timestamp + "\\n" + method + "\\n" + path/query + "\\n" + raw request body`; missing headers return `401 WEBHOOK_SIGNATURE_MISSING`, and invalid/expired signatures return `403 WEBHOOK_SIGNATURE_INVALID`. API-key-only behavior is unchanged when `WEBHOOK_SIGNING_SECRET` is unset
+- Signed requests must not use `Content-Encoding: gzip`/`deflate`: the signature covers the post-inflation body bytes captured by the server, so compressed bodies are explicitly rejected with `400 WEBHOOK_SIGNATURE_COMPRESSED_BODY`.
+- Enabling `WEBHOOK_SIGNING_SECRET` breaks browser-console calls until console signing exists: the admin console does not sign requests, so console webhook calls will fail with `401 WEBHOOK_SIGNATURE_MISSING` while signing is enabled.
+- `ENABLE_FIREBASE_ADMIN_AUTH` - Enable opt-in Firebase email/password authentication for the browser admin console (`false` by default)
+- `FIREBASE_WEB_API_KEY` - Public Firebase Web API key used by the browser sign-in flow; not a service-account credential
+- `FIREBASE_AUTH_DOMAIN` - Public Firebase Auth domain used by the browser sign-in flow
+- `FIREBASE_DATABASE_URL` - Public Firebase Realtime Database URL used by the browser configuration
+- `FIREBASE_APP_ID` - Public Firebase Web app ID (optional for Auth, recommended)
+- `FIREBASE_WEB_CONFIG_JSON` - Optional JSON alternative containing the public Firebase Web config (`apiKey`, `authDomain`, `projectId`, and optional `appId`)
 
 ## Quick Start
 
 ### 1. Prerequisites
 
-- **Node.js**: `>=24.18.0 <25` (enforced via `.node-version` and `package.json` engines)
+- **Node.js**: `>=24.18.0 <27` (enforced via `.node-version` and `package.json` engines)
 - **Package Manager**: `pnpm` (`pnpm@10.34.1` recommended)
 - **Telegram Bot Token**: Created via [@BotFather](https://t.me/botfather)
 
@@ -68,9 +80,31 @@ cd cabros-bot
 pnpm install --frozen-lockfile
 ```
 
-### 3. Environment Configuration
+### 3. Environment Configuration & Setup Wizard
 
-Create a local `.env` file based on `.env.example`:
+The fastest path to a working deployment is the first-run wizard. It walks you through Telegram essentials, mints a `WEBHOOK_API_KEY`, and writes a working `.env` with strict `0o600` file permissions — no manual copy-paste from `.env.example`:
+
+```bash
+# Interactive (recommended for first-time setup)
+pnpm run wizard
+
+# Non-interactive / minimal (CI, codegen, fresh container)
+pnpm run wizard -- --non-interactive --minimal
+
+# In another terminal, smoke-test /healthcheck and /api/status against your running server
+pnpm run wizard:test
+```
+
+The interactive wizard steps through each configuration section:
+- **Telegram Bot (`BOT_TOKEN`)**: Token from [@BotFather](https://t.me/BotFather). When provided, `ENABLE_TELEGRAM_BOT` is automatically set to `true`. Press Enter to skip if running webhook-only.
+- **Telegram Chat (`TELEGRAM_CHAT_ID`)**: Channel or personal chat ID for alerts (use `/start` in your bot chat to discover it).
+- **Webhook API Key (`WEBHOOK_API_KEY`)**: Auto-generates a secure 32-byte base64url credential for incoming webhooks. Printed once for your records.
+- **Job Callback Secret (`JOB_CALLBACK_SIGNING_SECRET`)**: Auto-generates a secret used to sign asynchronous background task callbacks.
+- **WhatsApp Alerts (optional)**: Opt-in setup for GreenAPI notifications (`WHATSAPP_API_URL`, `WHATSAPP_API_KEY`, `WHATSAPP_CHAT_ID`).
+
+The wizard is **idempotent** — re-running it preserves existing `.env` values and only prompts for missing ones. Before overwriting, it automatically backs up existing `.env` files to `.env.wizard.bak`. Generated keys are created client-side and never sent across the network.
+
+Alternatively, create a local `.env` file manually based on `.env.example`:
 
 ```bash
 cp .env.example .env
@@ -87,6 +121,8 @@ WEBHOOK_API_KEY=your_secret_api_key
 # Web server port
 PORT=3000
 ```
+
+`WEBHOOK_API_KEY` authenticates webhook ingest. Set `ADMIN_API_KEY` to scope admin/operator API-key access to a separate header-only credential, and `BINANCE_TRADING_API_KEY` to give Binance trading routes their own header-only credential. For backward compatibility, each surface falls back to the existing credential only while its dedicated key is unset.
 
 Validate your configuration with the built-in diagnostic doctor:
 
@@ -125,13 +161,15 @@ curl "http://localhost:3000/ready?depth=dependencies"
 
 ## API Endpoints Summary
 
-All webhook and mutation endpoints require the `x-api-key` header (configured via `WEBHOOK_API_KEY`). Browser admin endpoints support Firebase ID tokens (`Authorization: Bearer <token>`).
+Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID tokens (`Authorization: Bearer <token>`) or `ADMIN_API_KEY` when configured, with legacy `WEBHOOK_API_KEY` fallback. Binance trading routes accept `BINANCE_TRADING_API_KEY` when configured, otherwise they use admin authentication. Dedicated keys are header-only.
 
 | Method | Path | Description | Documentation |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/healthcheck` | Process liveness probe; `?deep=true` = channel readiness, `?depth=readiness` = dependency report (advisory, always 200) | [API Reference](docs/api-reference.md#get-healthcheck) |
 | `GET` | `/ready` | Bootstrap gate; `?depth=dependencies` adds a fail-closed dependency probe | [API Reference](docs/api-reference.md#get-ready) |
-| `GET` | `/api/status` | Comprehensive system capabilities & dependency matrix | [API Reference](docs/api-reference.md#get-apistatus) |
+| `GET` | `/livez` | Public web process liveness, no dependency I/O | [API Reference](docs/api-reference.md#get-livez-and-get-readyz) |
+| `GET` | `/readyz` | Public web bootstrap + drain + cached dependency readiness (200/503) | [API Reference](docs/api-reference.md#get-livez-and-get-readyz) |
+| `GET` | `/api/status` | System capabilities, deployment build metadata (`commit`, `full`, `repo`, `environment`, `uptimeSeconds`), and dependency matrix | [API Reference](docs/api-reference.md#get-apistatus) |
 | `GET` | `/api/public/status` | Safe public subset of capabilities & channel statuses | [API Reference](docs/api-reference.md#get-apipublicstatus) |
 | `POST` | `/api/webhook/alert` | Ingest and dispatch alert to configured channels | [Webhook Alerts](docs/webhooks.md#post-apiwebhookalert) |
 | `POST` | `/api/webhook/expanded-analysis-alert` | TradingView MCP technical analysis report | [Webhook Alerts](docs/webhooks.md#post-apiwebhookexpanded-analysis-alert) |
@@ -144,20 +182,61 @@ All webhook and mutation endpoints require the `x-api-key` header (configured vi
 | `GET` | `/api/jobs/:jobId` | Poll background job progress and retrieve result | [Jobs API](docs/jobs.md#get-apijobsjobid) |
 | `POST` | `/api/news-monitor` | Trigger symbol news scanning & event detection | [News Monitoring](docs/news-monitor.md) |
 | `POST` | `/api/trading/binance/orders/preview` | Pre-trade Binance Spot cost & slippage preview | [API Reference](docs/api-reference.md#post-apitradingbinanceorderspreview) |
+| `POST` | `/api/trading/binance/orders` | Operator-gated Binance Spot market, limit, contingent, and native `BRACKET_LIMIT` OTOCO orders | [API Reference](docs/api-reference.md#post-apitradingbinanceorders) |
+| `GET`/`DELETE` | `/api/trading/binance/orders` | Read recent orders or reconcile order lists; cancel a single order | [API Reference](docs/api-reference.md#post-apitradingbinanceorders) |
 | `GET` | `/api/trading/binance/account/balances` | Read-only Binance Spot balances for allowed assets | [API Reference](docs/api-reference.md#get-apitradingbinanceaccountbalances) |
+| `GET`/`POST` | `/api/trading/binance/pause` | Read or activate the operator runtime kill-switch for Binance Spot orders | [API Reference](docs/api-reference.md) |
+| `POST` | `/api/trading/binance/resume` | Clear the operator runtime kill-switch and resume Binance Spot order flow | [API Reference](docs/api-reference.md) |
+| `GET` | `/api/trading/binance/reconciliation` | List ambiguous auto-trade reservations requiring reconciliation | [API Reference](docs/api-reference.md#get-apitradingbinancereconciliation) |
+| `GET`/`POST` | `/api/trading/binance/reconciliation/:reservationId` | Read or resolve an ambiguous auto-trade reservation as placed or not_placed | [API Reference](docs/api-reference.md#post-apitradingbinancereconciliationreservationid) |
+| `GET` | `/api/trading/positions` | Query open Binance trading positions with mark prices and unrealized P&L | [API Reference](docs/api-reference.md#get-apitradingpositions) |
+
+`POST /api/webhook/alert` and `POST /api/webhook/symbol-analysis` accept an optional request-level `traderIntent` object. `entry` and `horizon` (`1h`, `4h`, `1D`, or `1W`) are required; `side` (`BUY`/`SELL`) is required when `target` or `invalidation` is present. Complete plans are persisted and evaluated independently from the bot setup, and `/api/outcomes/summary` reports the additive `byTraderPlan` block.
+| `GET` | `/api/trading/pnl/summary` | Realized & unrealized P&L, ROI %, win rate, drawdown, and equity series | [API Reference](docs/api-reference.md#get-apitradingpnlsummary) |
+| `GET` | `/api/trading/trades` | Historical trade fills and closed round trips with pagination | [API Reference](docs/api-reference.md#get-apitradingtrades) |
 | `GET` | `/api/alerts` | Query stored alerts with pagination & filtering | [Stored Alerts](docs/alerts.md#get-apialerts) |
 | `GET` | `/api/alerts/summary` | Analytics & delivery success rate metrics | [Stored Alerts](docs/alerts.md#get-apialertssummary) |
+| `POST` | `/api/alerts/:alertId/acknowledge` | Record a trader acknowledgement (took/skipped/no-trade/snoozed) for a stored alert | [Stored Alerts](docs/alerts.md#post-apialertsalertidacknowledge) |
+| `GET` | `/api/alerts/:alertId/acknowledgements/breakdown` | Zero-safe per-action acknowledgement counts for a stored alert | [Stored Alerts](docs/alerts.md#get-apialertsalertidacknowledgementsbreakdown) |
 | `POST` | `/api/alerts/:alertId/replay` | Dry-run or live replay of stored alert | [Stored Alerts](docs/alerts.md#post-apialertsalertidreplay) |
 | `GET` | `/api/outcomes` | Query signal outcomes with multi-window returns | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomes) |
-| `GET` | `/api/outcomes/summary` | Expectancy, win rate, and performance summary | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomessummary) |
+| `GET` | `/api/outcomes/summary` | Expectancy, win rate, filters, and optional bounded symbol/setup breakdowns | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomessummary) |
+| `GET` | `/api/outcomes/trend` | Query daily outcome snapshot metrics (hit rate, wins, losses, MFE, MAE) over time | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomestrend) |
+| `GET` | `/api/outcomes/{outcomeId}` | Retrieve one sanitized signal outcome | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomesoutcomeid) |
+| `GET` | `/api/outcomes/export` | Export bounded signal outcomes as JSONL or CSV | [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomesexport) |
+| `GET` | `/api/pretrade-check` | Pre-trade decision-support snapshot (price + outcome hit-rate) for one symbol | [OpenAPI Spec](/openapi.json) |
+| `GET` | `/api/portfolio/snapshot` | Implied-paper portfolio snapshot from recent alerts | [OpenAPI Spec](/openapi.json) |
+| `GET`/`POST` | `/api/alert-subscribers` | Manage outbound alert subscriber webhooks with HMAC and SSRF guards | [OpenAPI Spec](/openapi.json) |
+| `GET` | `/api/research/strategies` | Compare 6 TradingView MCP strategies (RSI, Bollinger, MACD, EMA Cross, Supertrend, Donchian) for one symbol | [OpenAPI Spec](/openapi.json) |
+| `POST` | `/api/research/walk-forward` | Run out-of-sample walk-forward validation for a strategy to detect overfitting | [OpenAPI Spec](/openapi.json) |
+| `POST` | `/api/research/backtest` | Run historical backtest for a strategy with commission and slippage | [OpenAPI Spec](/openapi.json) |
 
-Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`.
+Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`. CI coverage guards (`tests/unit/postman-collection.test.js` and `tests/unit/openapi-contract.test.js`) enforce that every mounted `/api` route appears in both OpenAPI and `CabrosBot.postman_collection.json`, and that every unique endpoint path referenced in README API documentation exists in `src/openapi/openapi.json`.
+
+`dependencies.persistentWriteHealth` is always present on `/api/status` and `/api/capabilities`. It reports process-local success/failure counts for alert storage, signal outcomes, notification redrive, and persistent news dedup. Each domain is `unconfigured` until a write is observed, `degraded` when the latest 100 attempts fail above 5% or a failure occurred in the last five minutes, and otherwise `ok`. Counters reset on process restart; only closed error categories are exposed, never provider messages.
+
+`deliveryHealth` reports per-channel successful and failed alert deliveries observed by the web process's in-memory `NotificationManager`. Each channel includes `lastSuccessAt`, `lastFailureAt`, and `firstObservedAt` timestamps; unused channels are omitted and counters reset on process restart. Worker-process deliveries are not included in this process-local block. `/api/capabilities` returns the same field.
+
+The scanner-preset scheduler enforces a 60-second minimum between runs of the same preset, even when `nextRunAt` is in the past. `/api/status` and `/api/capabilities` expose `dependencies.scannerPresetScheduler.lastRunDeferredByFloorCount` for due presets deferred by this floor.
 
 `POST /api/webhook/message` truncates inbound text above `GENERIC_MESSAGE_MAX_LENGTH` (integer, default `4000`, range `1`-`20000`). A fresh valid Firebase Remote Config value takes precedence over the environment value; invalid environment values use the default, while invalid Remote Config values are ignored so the environment/default remains effective. Response truncation metadata remains conditional on clipping.
 
+Telegram chats can use `/watchlist add BTCUSDT,ETHUSDT,NASDAQ:NVDA`, `/watchlist remove BTCUSDT`, `/watchlist` (or `/watchlist list`), and `/watchlist clear` to manage up to 50 symbols. `POST /api/webhook/alert` and `POST /api/webhook/message` accept `requireWatchlistMatch: true` to suppress delivery to a Telegram chat when a known alert symbol misses that chat's list. The response records `{ "channel": "telegram", "success": false, "skipped": "watchlist" }`. No list, an unknown symbol, or a storage read failure allows delivery; WhatsApp and Discord are unchanged. The list is process-local by default; `ENABLE_FIRESTORE_WATCHLIST=true` persists it in Firestore using existing credentials. During a Firestore write outage, changes fall back to process memory and may be lost on restart before recovery. This storage-mode gate is environment-only and excluded from Firebase Remote Config because live changes would split state across replicas.
+
+`ENABLE_ALERT_DECISION_AUDIT` (default `false`) opts stored webhook alerts into a bounded audit of parsing, enrichment, gates, and channel dispatch. It is request-time tunable through Firebase Remote Config. `GET /api/alerts/summary?includeDecisionRollup=true` adds gate counts; `GET /api/alerts/export?includeDecision=true` includes per-alert audit fields, including the CSV column only when explicitly requested. See [Stored Alerts API](docs/alerts.md).
+
+`ENABLE_REQUEST_VALIDATION` (default `true`; only the literal value `false` disables it) enables runtime OpenAPI 3.1 validation for webhook request bodies and query/path parameters. Malformed requests are rejected with a structured `400 VALIDATION_ERROR` carrying only the input location, sanitized JSON Pointer path, and schema keyword before reaching handler execution or claiming idempotency keys. Existing valid JSON and the alert endpoint's documented `text/plain` request remain supported. This request-security gate is environment-only and excluded from Firebase Remote Config.
+
+`GET /api/admin/events` streams real-time operator updates (job progress, scanner results, alert delivery events, and delivery failures) over Server-Sent Events (SSE). The endpoint is enabled by default (`ENABLE_ADMIN_SSE=true`; process-startup gate, environment-only). SSE stream concurrency, total server capacity, keepalive cadence, and slow-client backpressure drain timeouts are runtime tunable through Firebase Remote Config.
+
 | Variable | Type | Default | Bounds | Description |
 | :--- | :--- | :--- | :--- | :--- |
+| `ADMIN_SSE_MAX_CLIENT_CONNECTIONS` | Integer | `5` | `1`-`20` | Maximum concurrent SSE event streams per client key (IP, API key, or Firebase UID) on `GET /api/admin/events`. Older streams from the same client are gracefully evicted when exceeded. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored. |
+| `ADMIN_SSE_MAX_TOTAL_CONNECTIONS` | Integer | `100` | `10`-`1000` | Maximum total active SSE event streams allowed across all clients on `GET /api/admin/events`. New connections are rejected with 503 Service Unavailable when exceeded. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored. |
+| `ADMIN_SSE_HEARTBEAT_MS` | Integer | `30000` | `5000`-`120000` | Heartbeat interval in milliseconds for SSE comment keepalive frames (`:keepalive`). Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored. |
+| `ADMIN_SSE_DRAIN_TIMEOUT_MS` | Integer | `15000` | `1000`-`60000` | Maximum time in milliseconds to wait for a backpressured SSE client socket to drain before eviction. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored. |
 | `GENERIC_MESSAGE_MAX_LENGTH` | Integer | `4000` | `1`-`20000` | Maximum inbound characters before generic message webhook truncation. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored, leaving the environment/default effective. |
+| `TRADE_LEDGER_MAX_SCAN` | Integer | `5000` | `1`-`20000` | Maximum durable trade fills scanned per positions or P&L summary calculation. Fresh valid Remote Config overrides the environment value; invalid Remote Config is ignored, leaving the environment/default effective. |
 
 ---
 
@@ -169,14 +248,39 @@ When the Telegram bot is enabled (`ENABLE_TELEGRAM_BOT=true`), the bot provides 
 | :--- | :--- | :--- |
 | `/help`, `/start` | None | Displays command list and argument help. |
 | `/precio` | `<symbol>` | Real-time crypto (Binance) or equity (Twelve Data) price quote. |
+| `/check`, `/pretrade`, `/setup` | `<symbol>` | Pre-trade snapshot: current price plus 7-day outcome hit-rate for one symbol. |
 | `/alerta`, `/alert` | `<symbol> <op> <price>` | Creates a user-defined price-threshold alert. Also `/alerta list` and `/alerta cancel <id>`. |
 | `/cryptobot` | `id` | Displays the current Telegram chat ID. |
 | `/analisis` | `<symbols>` | Runs quick TradingView technical analysis for specified symbols. |
 | `/scanner` | `[options]` | Executes market scanner sweep across preconfigured assets. |
 | `/jobs` | `[jobId]` | Inspects status or lists active background analysis jobs. |
 | `/noticias` | `[options]` | Trigger news monitoring analysis for specified crypto/equity tickers. |
+| `/reactions`, `/reacciones` | `<symbol>` | Returns top 3 setups by trader reaction approval over the last 7 days. |
+| `/version` | None | Confirms running build SHA, platform environment, and uptime. Sourced from the same `build` object as `GET /api/capabilities`. |
+| `/digest` | `[--dry-run]` | Daily trader digest of the previous UTC day (alerts by source/channel, matured 1D outcome hit-rate, top scanner hits, top winners, LLM spend). `--dry-run` returns the formatted digest without sending or persisting. Rate-limited to once per 5 minutes per chat; sends require `ENABLE_DAILY_DIGEST=true` plus durable `ENABLE_FIRESTORE_DIGEST_RUNS=true` and `TELEGRAM_DIGEST_CHAT_ID`. |
 
 See the [Telegram Commands Reference](docs/commands.md) for aliases, throttling rules, and examples.
+
+### Daily digest sample
+
+With `ENABLE_DAILY_DIGEST=true` and `DIGEST_DELIVERY_HOUR_UTC=13`, the digest is delivered once per UTC day to `TELEGRAM_DIGEST_CHAT_ID`. `/api/status` exposes `dependencies.dailyDigest`. A sample MarkdownV2 digest:
+
+```
+*📊 Daily Digest — 2026-11-07*
+
+*Alertas:* 12
+*Por fuente:* webhook 9 · market-scanner 3
+*Por canal:* telegram 12/12
+*Outcomes (maduros 1D):* hit-rate 55.0% | elegibles 10 / evaluados 8 / pendientes 2
+
+*Top scanner hits:*
+1. BINANCE:BTCUSDT
+
+*Top outcome winners:*
+1. NASDAQ:NVDA R=2.10
+
+*Gasto LLM:* $0.0123
+```
 
 ---
 
@@ -209,11 +313,29 @@ A job created from WhatsApp is routed with `channels: ['whatsapp']` and the orig
 
 ## Key Runtime Notes
 
+### Worker Startup Jitter
+
+Background workers wait a random delay in `[0, configured maximum]` before their first sweep, refresh, or reconciliation after startup. Later intervals are unchanged, and webhook requests and alert delivery start without this delay. The default maximum is 5 seconds and every value is bounded to 30 seconds. `WORKER_STARTUP_JITTER_MS=0` disables jitter globally.
+
+The published template uses `useInAppDefault` for all five settings when no remote value is configured. An explicit Remote Config value overrides its fallback even when it equals `5000`; precedence is per-worker environment, per-worker Remote Config, global Remote Config, then global environment and the schema default. `WORKER_STARTUP_JITTER_MS=0` remains the global kill switch.
+
+| Variable | Default | Range | Purpose |
+| :--- | :--- | :--- | :--- |
+| `WORKER_STARTUP_JITTER_MS` | `5000` | `0`–`30000` | Global startup-jitter bound for background workers. |
+| `SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS` | `5000` | `0`–`30000` | Signal outcome worker override. |
+| `NOTIFICATION_REDRIVE_WORKER_STARTUP_JITTER_MS` | `5000` | `0`–`30000` | Notification redrive worker override. |
+| `SCANNER_PRESET_SCHEDULER_STARTUP_JITTER_MS` | `5000` | `0`–`30000` | Scanner preset scheduler override. |
+| `REMOTE_CONFIG_REFRESH_JITTER_MS` | `5000` | `0`–`30000` | Firebase Remote Config refresh override. |
+
+All five settings are non-secret and Firebase Remote Config eligible. `/api/status` and `/api/capabilities` report their effective bounds under `dependencies.startupJitter` (`global`, `signalOutcome`, `redrive`, `scannerPreset`, `remoteConfig`).
+
+The Remote Config bootstrap fetch uses environment values because the published template must load before its values can be read. After bootstrap, the `REMOTE_CONFIG_REFRESH_JITTER_MS` override resolves through per-worker environment, per-worker Remote Config, global Remote Config, global environment, then its schema default; it offsets only the first scheduled refresh.
+
 ### Multi-Channel Notification Dispatch
 Notifications are dispatched concurrently across enabled channels. For Discord, transient rate limits and server errors are retried according to `DISCORD_MAX_RETRIES` and bounded by `DISCORD_MAX_TOTAL_RETRY_WAIT_MS`. Long messages exceeding platform limits are automatically split into sequential chunks with preserved markdown formatting. See [Multi-Channel Alerts Guide](docs/notifications.md).
 
 ### AI Provider Routing & Grounding
-When configuring AI providers, `MODEL_PROVIDER=cloudflare` selects Cloudflare runtime routing, whereas `ENABLE_CLOUDFLARE_AIG` only exposes Cloudflare readiness in status/capabilities. Gemini Grounding provides web search citations and confidence scores for market alerts. See [AI Grounding & Prompts](docs/ai-grounding.md).
+When configuring AI providers, `MODEL_PROVIDER` accepts `gemini`, `azure`, `openrouter`, or `cloudflare`; `MODEL_PROVIDER=cloudflare` selects Cloudflare runtime routing, whereas `ENABLE_CLOUDFLARE_AIG` only exposes Cloudflare readiness in status/capabilities. Because the flag alone does not route traffic, `dependencies.cloudflareAig` reports `provider` and `routed` alongside `ready`: credentials present while another provider is selected yield `ready: false` and `status: "inactive"`, so an operator can never read `ready` as proof that requests traverse the gateway. Gemini Grounding provides web search citations and confidence scores for market alerts. `GEMINI_MODEL_NAME`, `GEMINI_MODEL_NAME_FALLBACK`, and `GROUNDING_MODEL_NAME` are non-secret model selectors supported by Firebase Remote Config. A published value takes precedence; its environment value is the fallback before the schema default. Remote values must be strings of at most 128 characters matching `[A-Za-z0-9][A-Za-z0-9._/-]*`. `pnpm run doctor` defers the primary Gemini model check when Remote Config can supply it, validates the selected provider's required credentials and configured HTTP URLs, and requires the Brave key when forced search is enabled. Runtime readiness validates the loaded models required by active search and generation paths and fails when the selected provider or forced search is misconfigured. API keys, provider routing, Brave endpoints, and the `FORCE_BRAVE_SEARCH` control remain environment-only. See [AI Grounding & Prompts](docs/ai-grounding.md) and [Environment Configuration](docs/environment-configuration.md).
 
 ### Sentiment Score Calibration
 
@@ -237,6 +359,19 @@ The news monitor endpoint reports volume throttling status in its response paylo
 }
 ```
 - `throttled` - The number of symbols skipped during the execution sweep because the rate limit window was reached. See [News Monitoring Guide](docs/news-monitor.md).
+
+### Inline Chart Attachments (opt-in)
+`ENABLE_CHART_ATTACHMENTS=true` attaches a rendered chart PNG next to alert notifications so traders can see the setup without leaving chat. **Disabled by default**; with the flag off, delivery is unchanged.
+
+- **Requirements** — a chart renders only when the alert carries `chartBars` (finite, OHLC-consistent `{open,high,low,close,volume}` bars) plus a `symbol`. Anything else falls through to text-only delivery. ≤5 bars render a 220×60 sparkline; ≥6 render a 600×400 candlestick chart with a volume strip and dashed entry/target/stop overlays.
+- **No native dependency** — charts are encoded with a PNG writer over Node's built-in `zlib` plus a small raster canvas, so **nothing is added to `package.json`**. Note that `chartjs-node-canvas`, suggested in the original proposal, is a *native* binding requiring cairo/pango and would add a build step to the production image.
+- **Channel support** — Telegram uses `sendPhoto` (1024-char caption; overflow becomes follow-up messages). WhatsApp uses GreenAPI `sendFileByUpload` with a **single attempt only**, since uploads have no idempotency key and a retry could duplicate the attachment. Discord webhooks accept only remote image URLs, so Discord always falls back to text and logs `chart attachment skipped: discord`.
+- **Fail-open** — every failure mode (feature off, unusable data, render error, budget exceeded, upload rejection) logs a `console.warn` and delivers the unchanged text. A chart can never block or fail an alert.
+- **Render budget** — `CHART_RENDER_TIMEOUT_MS` (default `5000`) is enforced by a cooperative deadline polled between bars, not only a timer, because a `setTimeout` cannot preempt synchronous drawing.
+- **Cache** — buffers are cached by `(symbol, timeframe, rangeKey)` for `CHART_CACHE_TTL_SECONDS` (default `300`, bounded to 200 entries; `0` disables).
+- **Status** — `/api/status` and `/api/capabilities` expose `featureFlags.chartAttachments` and `dependencies.chartRenderer` (`ready`, `lastErrorCategory`, render/cache/failure counters, `channels` map). Counters reset on process restart.
+
+All three variables (`ENABLE_CHART_ATTACHMENTS`, `CHART_RENDER_TIMEOUT_MS`, `CHART_CACHE_TTL_SECONDS`) are Firebase Remote Config eligible.
 
 ### User-Defined Price Threshold Alerts
 
@@ -339,6 +474,28 @@ If `status` is `unreachable`, roll the web service back to `local` first — in 
 | `JOB_QUEUE_CONNECT_TIMEOUT_MS` | `5000` | positive | Broker connect timeout for the queue connection. |
 | `JOB_QUEUE_PROBE_TIMEOUT_MS` | `5000` | `1`–`120000` | Startup readiness-probe deadline. Environment-only — a safety deadline, excluded from Firebase Remote Config. |
 
+### Scanner Preset Destinations
+
+Scanner presets can save multiple Telegram, WhatsApp, and Discord destinations. A new preset defaults to `mode: "inherit"`, which keeps the existing broadcast behavior. Set `mode: "preset"` with at least one destination to restrict delivery to the saved recipients; each channel accepts up to 20 validated destination values. Older presets without a mode keep their existing legacy routing.
+
+```json
+{
+  "name": "Private BTC Watchlist",
+  "mode": "preset",
+  "destinations": {
+    "telegramChatIds": ["-1001234567890"],
+    "whatsappChatIds": ["56912345678@c.us"],
+    "discordWebhookUrls": ["https://discord.com/api/webhooks/123456789012345678/example-token"]
+  }
+}
+```
+
+Manual runs and scheduled runs share the same routing rules. A manual run can override the saved destination for a channel with the existing `telegramChatId`, `whatsappChatId`, or `discordWebhookUrl` request field; `channels` filters the preset's configured destinations. If the filter matches no configured destination, the route returns `400 INVALID_REQUEST` before scanning or job creation. Set `runAsyncJob: true` on `POST /api/scanner-presets/:id/run` to submit through the existing market-scanner job path and receive `202 Accepted`; runs stay synchronous by default. If `dryRun` is true, the request returns its preview without submitting a job.
+
+Preset API responses include configured Telegram and WhatsApp chat IDs, but omit Discord webhook URLs and tokens. `destinations.discordWebhookCount` reports the number of saved Discord webhooks.
+
+`GET /api/status` and `/api/capabilities` report `featureFlags.presetBoundDestinations` and the non-sensitive `dependencies.presetBoundDestinations` capability. Destination values are not included in those status responses or in the async job acceptance response. The direct `/api/webhook/market-scanner-alert` endpoint continues using its request routing and does not read preset destinations.
+
 ### Signal Outcome Single-Evaluator Guarantee
 
 `ENABLE_SIGNAL_OUTCOME_TRACKING=true` is enabled in production. It gates three things at once — recording signals on the alert path, the evaluation sweep, and the whole `/api/outcomes` surface — so it is pinned in `render.yaml` rather than left to the Render dashboard, where an operator reading the repo could not tell which process was actually enabled.
@@ -364,11 +521,25 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
 
 `lastRunAt` advancing with a non-zero `lastRunEvaluatedCount` is the evidence that the sweep actually ran. The flag alone proves nothing: it reports what was configured, not what executed.
 
+`GET /api/outcomes/calibration` also needs two `tradingSignalOutcomes` composite indexes when its capped recent sample needs source-specific recovery: `source ASC, receivedAt DESC` and `source ASC, confidenceScoreOrigin ASC, receivedAt DESC`. Deploy them with `firebase deploy --only firestore:indexes --project <project-id>` and wait for both to reach `READY` in Firebase Console before deploying the application change; recovery returns `503 STORAGE_UNAVAILABLE` while a required index is unavailable. See [Signal Outcomes](docs/signal-outcomes.md#get-apioutcomescalibration).
+
 | Variable | Default | Bounds | Purpose |
 | :--- | :--- | :--- | :--- |
 | `ENABLE_SIGNAL_OUTCOME_TRACKING` | `false` | — | Master gate for recording, sweeping and `/api/outcomes`. Environment-only. |
+| `ENABLE_TELEGRAM_REACTION_AGGREGATION` | `false` | — | Aggregate Telegram message reactions into signal quality scores. |
 | `SIGNAL_OUTCOME_WORKER_ROLE` | `web` | `web`/`worker`/`disabled` | Which entrypoint may start the sweep. Environment-only. |
 | `SIGNAL_OUTCOME_EVALUATION_LEASE_MS` | `120000` | `10000`–`600000` | Distributed sweep lease duration. Environment-only. |
+
+### Signal Outcome Daily Rollups and Trend (#749)
+
+`GET /api/outcomes/trend` queries pre-aggregated daily outcome cohorts over a time range (default 30 days, max 180 days). Daily snapshots are computed and finalized by `SignalOutcomeDailyRollupService` following cohort maturity windows (`1h`, `4h`, `1D`, `1W`) and stored in the `tradingSignalOutcomesDaily` Firestore collection.
+
+| Remote Config parameter | Environment/default fallback | Bounds | Purpose |
+| --- | --- | --- | --- |
+| `SIGNAL_OUTCOME_ROLLUP_ENABLED` | `true` | boolean | Opt-in runtime gate for computing daily signal outcome rollups during scheduled evaluation sweeps. |
+| `SIGNAL_OUTCOME_ROLLUP_TTL_DAYS` | `180` | integer `30`–`365` | Retention policy in days for `tradingSignalOutcomesDaily` documents before Firestore native TTL deletion. |
+
+Both settings are non-secret runtime tuning parameters supported by Firebase Remote Config. Fresh published values override environment/default values.
 
 ### Langfuse Dynamic Prompt Readiness
 
@@ -409,15 +580,18 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" \
 
 **`schemaDrift` is a rollout signal, not a failure.** A Langfuse `alert-enrichment` prompt that has not been republished after a local-fallback contract change (for example the #1031 reference anchors or the #1254 setup evidence and omission rubric) is reported under `dependencies.langfuse.schemaDrift` with the missing markers listed. Use the [`langfuse-prompt-sync`](.agents/skills/langfuse-prompt-sync/SKILL.md) skill to publish. `promptProvenance` on each stored enriched alert carries the same signal per record.
 
+Issue #750 adds `dependencies.promptLifecycle`: the last 24 hours of distinct drifted prompt-name/version transitions, loaded from Firestore across restarts. Drift emits a `prompt-drift` Sentry event and never supplies risk fields to signal-outcome analytics. `PROMPT_FALLBACK_ON_DRIFT=true` serves the local alert-enrichment prompt when drift is detected (default `false`; Firebase Remote Config eligible). The Firestore `promptDriftEvents.expiresAt` TTL is 30 days; deploy `firestore.indexes.json` to enable cleanup. Moving the Langfuse production label to a known-good version rolls back a remote prompt.
+
 | Variable | Default | Purpose |
 | :--- | :--- | :--- |
 | `ENABLE_LANGFUSE_PROMPTS` | `false` (`render.yaml`: `true` on web + jobs worker) | Master gate for Langfuse prompt resolution. Environment-only — a process-startup gate. |
+| `PROMPT_FALLBACK_ON_DRIFT` | `false` | Boolean. Serve the local alert-enrichment prompt when Langfuse schema drift is detected; an active Firebase Remote Config value overrides the environment value. |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | — | Project credentials. **Secrets**: Render dashboard only, never a checked-in file. |
 | `LANGFUSE_BASE_URL` | `https://cloud.langfuse.com` | Region or self-hosted host. Environment-only — an external destination. |
 | `LANGFUSE_PROMPT_LABEL` | `production` in prod-like envs, `latest` elsewhere | Which label to fetch. Environment-only. |
 | `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` | `0` for `latest`, `60` otherwise (`render.yaml` pins `300`) | Langfuse SDK prompt cache TTL. Environment-only. |
 
-All five are **environment-only** for Remote Config parity: credentials are secrets, `LANGFUSE_BASE_URL` is an external destination, and the gate and label are resolved once at startup.
+The five Langfuse connection settings are **environment-only** for Remote Config parity: credentials are secrets, `LANGFUSE_BASE_URL` is an external destination, and the gate and label are resolved once at startup. `PROMPT_FALLBACK_ON_DRIFT` is a separate, non-secret runtime setting eligible for Remote Config.
 
 ### Equity Market Data Readiness
 
@@ -452,7 +626,43 @@ Setting the variable is **necessary but not sufficient**, because this layer is 
 
 `expiresAt` on each document is only honoured once Firestore's TTL policy exists, so run `bash ops/configure-operational-collection-retention.sh` once per Firebase project; until then the collection grows without bound. Rollback is `false` plus a redeploy — no code change. See [Environment Configuration](docs/environment-configuration.md#verifying-idempotency-storage-is-actually-durable).
 
+### Firebase Admin Auth Readiness
+`ENABLE_FIREBASE_ADMIN_AUTH=true` lets the `/admin` console authenticate with Firebase ID tokens instead of pasting `WEBHOOK_API_KEY` into the browser. `admin.viewer` authorizes reads, `admin.operator` authorizes mutations, and `verifyIdToken(token, true)` fails closed for expired, revoked, disabled, malformed, or wrong-project tokens. Webhook paths are unaffected and still require the API key.
+
+`GET /api/status` and `GET /api/capabilities` expose `featureFlags.firebaseAdminAuth` (the gate) and a non-sensitive `dependencies.adminAuth` block built by `getAdminAuthStatus()`. `verifierConfigured` reports credential **shape** only — the server holds something it *could* verify with — so `ready` is deliberately **not** derived from it. `ready` requires an observed successful `verifyIdToken()`:
+
+| `status` | Meaning |
+| :--- | :--- |
+| `disabled` | `ENABLE_FIREBASE_ADMIN_AUTH` is not `true`. |
+| `misconfigured` | Enabled, but the server has no verifier credentials. |
+| `unverified` | Configured, but no token has verified yet. Not a failure — and not health. It is the normal state right after every deploy. |
+| `ready` | A Firebase ID token has actually verified. |
+| `degraded` | Defensive, not routine: credential shape is complete but the Firebase Admin SDK could not produce an Auth instance (`ADMIN_AUTH_UNAVAILABLE`). An access decision still fails closed. |
+
+`degraded` is ranked **below** `misconfigured`, so it can only surface while `verifierConfigured` is `true`. A deployment that simply has no verifier credentials reports `misconfigured`, never `degraded`, and never inflates `verifierUnavailableCount` in a state that hides it: the absent-credential case is a configuration verdict, not an outage.
+
+**A rejected bearer token is never recorded.** Expired, revoked, wrong-project and random-garbage tokens are indistinguishable to `verifyIdToken()`, so counting them would let any unauthenticated caller flip the dependency to `degraded` with a single request — turning a monitoring surface into a one-request DoS. Only a verifier that cannot be *reached* degrades the block. A verified token **without** an admin role counts as a success, because the token verified and the role decision is an authorization outcome, not a dependency fault.
+
+`getAdminAuthStatus()` is booleans and counters only — the Firebase Web config stays behind `/admin/auth-config` and is never echoed into a status payload, and `/api/public/status` uses an explicit three-dependency allow-list that does not include this block. Counters are process-local and reset on restart, so `unverified` after a deploy is expected. See [API Reference](docs/api-reference.md#get-apistatus).
+
+### Admin Console Localization
+
+The `/admin` console supports both English (`en`, default) and Spanish (`es`) to match the bot's primary user language. Operators can switch language via the `<select id="admin-lang">` control in the brand lockup, the `?lang=es` / `?lang=en` URL parameter, or `localStorage.admin_lang`. Spanish localization covers section titles, action controls, empty/error states, status row labels (`ready`, `degraded`, `unconfigured`, `disabled`, `misconfigured`), and query filter forms, while updating `<html lang>`. See [API Reference](docs/api-reference.md#firebase-hosting-for-admin-console).
+
+The Alerts view includes an operator-only alert preview. `Render preview` calls `POST /api/admin/test-alert` with `dryRun: true` and `testMode: true` to show the marked Telegram MarkdownV2, WhatsApp text, and Discord content payloads without delivery or alert storage. Discord payloads reflect the 2,000-character delivery chunks. Potentially invalid Telegram markup lines are flagged. `Send test` requires an explicit test destination for every selected channel and confirmation, sends a `[TEST]` message through those channels, and skips alert storage; the existing live-send rate limits still apply. Firebase-signed-in operators can restore their last five message drafts from local browser storage, keyed by Firebase UID. Destination overrides and credentials are not stored there.
+
 ### Durable News-Monitor Analysis Records
+
+News and scanner defaults can be tuned with a fresh published Firebase Remote Config value. Explicit request symbols/exchanges still win. The checked-in template uses `useInAppDefault: true` for these four keys, preserving deployment settings until an operator publishes an override.
+
+| Parameter | Application fallback | Runtime behavior |
+| --- | --- | --- |
+| `NEWS_SYMBOLS_CRYPTO` | Environment value or empty list | Comma-separated crypto defaults for news webhook and scheduler; a published empty string clears them. |
+| `NEWS_SYMBOLS_STOCKS` | Environment value or empty list | Comma-separated stock defaults for news webhook and scheduler; a published empty string clears them. |
+| `MARKET_SCANNER_DEFAULT_EXCHANGE` | Environment value or `BINANCE` | Any non-empty TradingView exchange; applies to scanner requests and new presets, normalized to uppercase. Existing saved presets keep their exchange. |
+| `MARKET_SCANNER_TIMEOUT_MS` | Environment value or `90000` | Published values must be integers `1000`–`120000` ms; invalid or stale overrides fall back to existing environment parsing. |
+
+`ENABLE_NEWS_MONITOR`, `ENABLE_NEWS_MONITOR_TEST_MODE`, and `SCANNER_PRESET_SCHEDULER_WORKER_ROLE` remain environment-only startup/test/worker gates. Publishing this template does not enable news monitoring or start another worker.
 
 `ENABLE_FIRESTORE_NEWS_ANALYSIS=true` is enabled in production by `render.yaml` on the **web service only** (previews off), so every analyzed symbol is recorded in the `news_analysis` collection and `GET /api/news-monitor/analyses` and `GET /api/news-monitor/summary` have an audit trail to read. Previews stay off because a PR preview shares the production Firestore project.
 
@@ -567,13 +777,38 @@ Every run resolves to exactly one named outcome (`ok`, `down`, `stale`, `degrade
 
 Set the `PRODUCTION_REQUIRE_ENABLED_FLAGS` repository variable to a comma-separated flag list; it defaults to empty, so it adds no failure mode until you enable it. Every failure message ends with `(probed <base_url>)`, so a misconfigured target is never mistaken for a real outage. See [Observability & Monitoring](docs/monitoring.md#production-smoke-probe).
 
+### Backlog Hygiene Automation
+
+The opt-in `.github/workflows/backlog-hygiene.yml` workflow periodically audits and normalizes GitHub issue metadata using `scripts/backlog-hygiene.js`:
+- **Status label normalization**: Ensures exactly one status label (`status/needs-triage`, `status/ready`, `status/in-progress`, `status/blocked`) is present without demoting issues under review.
+- **Duplicate detection**: Flags possible duplicate open/closed issues via lexical + label overlap similarity (>0.7 threshold).
+- **Stale `agent-working` retirement**: Identifies issues carrying `agent-working` for >14 days without referencing PRs or active commits and applies `stale/agent-working`.
+- **Scheduled execution toggle**: By default, the workflow is manual `workflow_dispatch` only. Scheduled runs (monthly) are gated by setting the repository variable `BACKLOG_HYGIENE_CRON` (e.g. `0 4 1 * *`).
+- Run dry-run locally:
+  ```bash
+  pnpm run hygiene:backlog --dry-run
+  ```
+
 ### TradingView Confluence Enrichment
 
-`ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true` are declared `true` in `render.yaml` on the **web service only** (previews off) — and production is **not** yet running them: as of this writing `featureFlags.tradingViewConfluenceEnrichment` reports `false` live (issue #1109), because the enablement needs a Blueprint apply plus a redeploy onto a current build, and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` is inert while its parent gate is off. Treat the Blueprint entry as intent and `/api/status` as reality; the check above is how you tell them apart. Together the flags add an optional `combined_analysis` call to each enriched alert webhook followed by a `multi_timeframe_analysis` call. Both are fail-open: a failure never blocks alert delivery, and it is recorded as a `partial` enrichment rather than a dropped alert.
+`ENABLE_TRADINGVIEW_CONFLUENCE_ENRICHMENT=true` and `ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME=true` are declared `true` in `render.yaml` on the **web service only** (previews off). Treat the Blueprint entry as intent and `/api/status` as runtime state. The confluence flag enables an optional `combined_analysis` call; the independent multi-timeframe flag enables `multi_timeframe_analysis`, whether or not confluence is enabled. Both are fail-open: a failure or budget skip never blocks alert delivery and marks the enrichment as `partial`.
 
-`ENABLE_TRADINGVIEW_CONFLUENCE_MULTI_TIMEFRAME` is nested **inside** the confluence gate, so it is inert until confluence enrichment is on — the two flags cannot disagree. Both keys need a web-service declaration in `render.yaml` even though they are only ever read on the web service, because the worker block mirrors them with `fromService` and a mirror whose source is never declared resolves to nothing.
+The two gates can be enabled independently. Both keys need a web-service declaration in `render.yaml` even though they are only read on the web service, because the worker block mirrors them with `fromService` and a mirror whose source is never declared resolves to nothing.
 
-**The enrichment budget decides how much of this actually runs.** `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` (default `12000`) is the ceiling for the whole webhook enrichment path. Whenever volume confirmation *or* confluence is enabled, the base `coin_analysis` call is reserved 75% of it and the optional calls share what remains — a single split, not a cumulative one, so enabling confluence does not shrink the base slice further when volume confirmation is also on. (Note that `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` is **not** declared in `render.yaml`, so which slice production actually reserves is not verifiable from the repository; the single-ternary conclusion above is a property of the code and holds either way.) Both confluence calls share one deadline of `min(8000, remaining budget)`, so with the default budget the second (`multi_timeframe_analysis`) call is commonly cut short and the alert is stored as `tradingViewEnrichmentStatus: "partial"`. Raise `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` (Remote Config eligible, max `120000`) if you want both to complete — but note the webhook request deadline (`REQUEST_TIMEOUT_MS`, default `30000`) bounds the whole request, so the budget cannot usefully exceed it.
+Signals without an exchange use `TRADINGVIEW_MCP_DEFAULT_EXCHANGE` (default `BINANCE`); a fresh Firebase Remote Config value overrides the environment fallback. `TRADINGVIEW_MCP_URL` remains environment-only because it selects the upstream endpoint.
+
+Successful identical MCP calls can be cached per process by enabling `ENABLE_TRADINGVIEW_MCP_CACHE` (default `false`) and tuning `TRADINGVIEW_MCP_CACHE_TTL_MS` (default `90000`, valid range `10000`-`600000`). Both settings are non-secret runtime controls supported by Firebase Remote Config.
+
+**The enrichment budget decides how much of this actually runs.** `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` (default `12000`) is the ceiling for the whole webhook enrichment path. Whenever volume confirmation, confluence, or multi-timeframe enrichment is enabled, the base `coin_analysis` call is reserved up to 75% of it and the optional calls share what remains — a single split, not a cumulative one. Unspent time from a fast base call rolls over into the remaining budget envelope (`budgetDeadlineAt`). `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION` is **not** declared in `render.yaml`, so which slice production actually reserves is not verifiable from the repository.
+
+**Optional calls use a decoupled per-call deadline model rather than sharing a single timer.** Optional calls run sequentially:
+1. Volume confirmation (if enabled) calculates `remainingBudgetMs = budgetDeadlineAt - Date.now()` and bounds its attempt by `min(TRADINGVIEW_MCP_TIMEOUT_MS, remainingBudgetMs)`.
+2. Confluence enrichment (`combined_analysis`, if enabled) derives a dedicated deadline: `min(8000, remaining budget)`. Its timer is promptly cleared in `finally` upon completion or failure.
+3. Multi-timeframe analysis (`multi_timeframe_analysis`, if enabled) derives its own fresh per-call deadline from whatever budget remains at that moment: `min(8000, remaining budget)`. Its timer is also isolated and cleared in `finally`.
+
+Both confluence calls combine their per-call timeout with the overall budget signal via `AbortSignal.any`, so an exhausted total budget aborts in-flight work immediately. If the remaining budget is already exhausted (`<= 0`) before a call starts, the call is skipped without issuing network requests, recording `{ budgetExhausted: true }` and storing the alert with `tradingViewEnrichmentStatus: "partial"`.
+
+**Tuning guidance for operators:** With the default `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS = 12000`, the base reservation leaves a minimum guaranteed optional envelope of 3,000ms (25%). If base analysis completes quickly (e.g. 2,000ms), up to 10,000ms rolls over to optional calls. However, if base analysis takes its full 9,000ms allocation, the remaining 3,000ms is shared across all enabled optional calls. Because both `combined_analysis` and `multi_timeframe_analysis` can each use up to 8,000ms, running both with a 3,000ms remaining envelope commonly starves or cuts short the second call. If you enable both confluence and multi-timeframe analysis, scale `TRADINGVIEW_MCP_ENRICHMENT_BUDGET_MS` toward `20000`-`24000ms` (Remote Config eligible, max `120000`) so both calls have sufficient budget even when base analysis is slow. Note that `REQUEST_TIMEOUT_MS` (default `30000`) bounds the entire webhook request, so the enrichment budget should remain comfortably below the request timeout.
 
 **The primary base attempt gets the whole base sub-budget, and retries only run while the remainder can still fund one.** `callCoinAnalysis` is three sequential HTTP hops (`initialize`, `notifications/initialized`, `tools/call`), each bounded by `TRADINGVIEW_MCP_TIMEOUT_MS`, so attempt 1 is sized at `min(TRADINGVIEW_MCP_TIMEOUT_MS, remaining base budget)` rather than a slice of it. A retry is issued only while the residual can still afford a window that completes the tool call — `min(25% of TRADINGVIEW_MCP_TIMEOUT_MS, half the base sub-budget)`. When it cannot, the last real failure is returned immediately: no backoff is paid, and **the declined retry is never charged to the circuit breaker**. That last part matters more than the latency it saves — a client-side deadline is not provider evidence, and counting these as failures opened the breaker against a healthy host and suppressed enrichment for the full `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` (issue #948). A primary attempt that burns its whole viable window is still charged, so a genuinely slow or hung provider still trips the breaker and pages.
 
@@ -591,11 +826,11 @@ curl -s -H "x-api-key: $WEBHOOK_API_KEY" https://<host>/api/capabilities \
 - Counters (`attemptedCount`/`appliedCount`/`failedCount`/`skippedNonViableCount`) are **cumulative since process start**; only the percentile basis is bounded, and `sampledCount` reports how many durations back `p50Ms`/`p95Ms`/`maxMs`. So the applied-rate comparison stays valid on a long-lived process.
 - All-zero with `enabled: true` is expected right after a deploy; counters are process-local.
 
-Setting the flag is **necessary but not sufficient**, because the layer is fail-open: a confluence call that fails looks identical in delivery terms to one that was never attempted. `dependencies.tradingViewMcp.enrichment.confluence` reports the observed window — `attemptedCount`, `appliedCount`, `failedCount`, `budgetExhaustedCount`, `lastAppliedAt` and a closed-enum `lastFailureCategory`.
+Enabling either gate is **necessary but not sufficient**, because the layer is fail-open: an optional analysis call that fails looks identical in delivery terms to one that was never attempted. `dependencies.tradingViewMcp.enrichment.confluence` reports the observed window — `attemptedCount`, `appliedCount`, `failedCount`, `budgetExhaustedCount`, `lastAppliedAt` and a closed-enum `lastFailureCategory`. Its `enabled` field reports only the `combined_analysis` gate; independently enabled MTF calls can increment the counters while `enabled` is false.
 
-**These counters are per *call*, not per alert.** One alert enrichment issues up to two confluence calls (`combined_analysis`, then `multi_timeframe_analysis` when multi-timeframe mode is on), so a single alert can move `attemptedCount` by 2. Every issued call records exactly one outcome, which is what makes `appliedCount + failedCount <= attemptedCount` hold — including the budget-starved case, where `combined_analysis` applied, `multi_timeframe_analysis` failed, and the result is `appliedCount + failedCount == attemptedCount`. `budgetExhaustedCount` counts stages skipped because the budget was already spent, which is *not* a call and therefore not an attempt. Do not read these counters as alert counts or compare them 1:1 against `enrichment.alertPath.totalCount`.
+**These counters are per *call*, not per alert.** One alert enrichment can issue `combined_analysis`, `multi_timeframe_analysis`, or both, because their gates are independent; a single alert can move `attemptedCount` by 2. Every issued call records exactly one outcome, which is what makes `appliedCount + failedCount <= attemptedCount` hold — including the budget-starved case, where `combined_analysis` applied, `multi_timeframe_analysis` failed, and the result is `appliedCount + failedCount == attemptedCount`. `budgetExhaustedCount` counts stages skipped because the budget was already spent, which is *not* a call and therefore not an attempt. Do not read these counters as alert counts or compare them 1:1 against `enrichment.alertPath.totalCount`.
 
-Counters are process-local and reset on restart, so `enabled: true` with every counter at `0` is the expected state right after a deploy. `enrichment.alertPath` remains the aggregate over the whole webhook path and cannot attribute an outcome to confluence specifically.
+Counters are process-local and reset on restart, so `enabled: true` with every counter at `0` is the expected state right after a deploy. `enrichment.alertPath` remains the aggregate over the whole webhook path and cannot attribute an outcome to optional analysis specifically.
 
 Verify after the Blueprint is applied:
 
@@ -626,6 +861,28 @@ The window is **leading-edge**, so the added latency is exactly `ALERT_BURST_WIN
 ### Market Scanner MCP Fast-Fail Gate
 `POST /api/webhook/market-scanner-alert` checks the process-local TradingView MCP status before running its sequential scans. If the status is `degraded` with `http_5xx`, `request_failed`, or `circuit_breaker_open` **and** the circuit breaker still reports `state: "open"`, it skips every scan and returns `502 TRADINGVIEW_MCP_UNAVAILABLE` with each scan as `status: "skipped"`. The endpoint returns `502` in two shapes: `TRADINGVIEW_MCP_UNAVAILABLE` (skipped, nothing attempted) and `ALL_SCANS_FAILED` (attempted, all failed). The gate keys on the breaker's time-based state so that after `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` elapses the next request is allowed through as a recovery probe — a transient outage self-heals without a restart. See [Webhook Alerts](docs/webhooks.md#post-apiwebhookmarket-scanner-alert).
 
+Ranked scanner output includes an optional ATR sizing hint when ATR and price are available and the model stop is below 100% of entry. `suggestedStopPct = (ATR / price) × 100 × SCANNER_ATR_MULTIPLIER` and `suggestedPositionPct = min(100, SCANNER_ACCOUNT_RISK_PCT / suggestedStopPct × 100)`. Both settings support Firebase Remote Config (`2` and `1` by default). For a 6% stop at 1% target account risk, the hint is 16.67% of capital; the 100% cap avoids suggesting leverage. The report labels its ATR stop as a separate scenario from the existing Stop Loss and marks it as an estimate to check against liquidity, fees, and risk. Completed async jobs retain the sizing settings used when their report was built.
+
+### Symbol Alias Resolver (#845)
+
+- The static alias table lives in `src/services/symbols/aliases.json` (one entry per symbol, multiple aliases per entry, canonical `EXCHANGE:SYMBOL` identifier). Operators can extend the table without touching code paths.
+- `POST /api/symbols/resolve` (operator auth) — accepts `{ query, defaultExchange?, maxResults? }` and returns `{ matches, normalizedQuery, totalEntries, query }`. Empty matches are a successful 200 response, never a 5xx.
+- `GET /api/symbols/aliases` (operator auth) — returns the full static alias table in deterministic order so admins can audit it.
+- Telegram `/resolve <query>` command — replies with the top 1–3 candidates and a copyable canonical identifier. Hint to use `/analisis EXCHANGE:SYMBOL` after the match.
+- `featureFlags.symbolAliasResolver` (default `true` when the static table loads) and `dependencies.symbolAliasResolver` (`enabled`, `totalEntries`) are surfaced in `/api/status` and `/api/capabilities` without secrets.
+- `DISABLE_SYMBOL_ALIAS_RESOLVER=true` opt-out flag (escape hatch — keeps the route mounted but reports `enabled: false` so production can roll back without code changes). The flag is `environment-only` (operator opt-out toggle, not Remote-Config eligible).
+- The existing `/api/webhook/expanded-analysis-alert`, `/api/webhook/market-scanner-alert`, `/api/webhook/volume-confirmation`, `/api/webhook/symbol-analysis`, and `/api/jobs/tradingview-analysis` endpoints keep their strict `EXCHANGE:SYMBOL` validation — the resolver is a new lookup surface, not a parser override. Un-mapped tickers still surface `INVALID_REQUEST` to preserve current behavior.
+
+### Market-Calendar Holiday and Half-Day Delivery Gating
+
+`ENABLE_MARKET_CALENDAR_GATING=true` gates alert delivery against the static U.S. equity market schedule (`src/services/marketCalendar/data/usMarketHolidays.json`). When enabled and the resolved exchange is closed (full-day holiday, half-day outside the early-close window, weekend, or weekday outside any session window), alert delivery is suppressed and routed to `NotificationRedriveService` with a structured dead-letter reason (`market_holiday`, `market_half_day_outside_window`, or `market_closed`). Crypto venues (Binance, Coinbase, Kraken, etc.) are 24/7 and never suppressed. The gate is fail-open: classifier errors or unknown venues permit delivery.
+
+| Variable | Default | Purpose |
+| :--- | :--- | :--- |
+| `ENABLE_MARKET_CALENDAR_GATING` | `false` | Master gate for U.S. equity calendar suppression. Environment-only. |
+
+`/api/status` and `/api/capabilities` report `featureFlags.marketCalendarGating` and `dependencies.marketCalendar` (`enabled`, `gatesDelivery`, `dataset`).
+
 ---
 
 ## Running Tests
@@ -648,8 +905,17 @@ pnpm test -- tests/unit/alert-handler.test.js
 # Run opt-in Firestore emulator integration suite (requires local Firebase emulator)
 pnpm run test:firebase
 
+# Run the opt-in k6 load test and dependency-outage drill (requires k6)
+pnpm test:perf
+
+# Include the 30-minute soak profile and /diag memory/event-loop samples
+pnpm test:perf -- --soak
+
 # Run linter
 pnpm run lint
+
+# Set up a secondary git worktree with symlinked node_modules and shared caches
+pnpm run setup:worktree
 ```
 
 ---
@@ -688,11 +954,11 @@ Every protected `/api` response (success and throttled) carries the standard `X-
 
 | Header | Value |
 |---|---|
-| `X-RateLimit-Limit` | Max requests per window for the active bucket (`RATE_LIMIT_MAX` or `1000` for `/api/webhook/alert` and `/api/webhook/message`). |
+| `X-RateLimit-Limit` | Max requests per window for the active bucket: heavy 5, trading 10, standard 30, light 100 per 60 seconds; otherwise `RATE_LIMIT_MAX` or the 1,000-request webhook-ingest bucket. |
 | `X-RateLimit-Remaining` | Requests remaining in the current window. Zero on a throttled response. |
 | `X-RateLimit-Reset` | Unix timestamp (seconds) when the current window resets. |
 
-Throttled (`429`) responses additionally include the existing `Retry-After` header (seconds) and the `retryAfterSeconds` field in the JSON body. `/healthcheck`, `/ready`, and static asset routes are exempt — the global rate limiter is mounted after them in `app.js`.
+Dedicated limits use independent per-endpoint buckets keyed by the existing API-key hash and trusted client IP. Heavy routes are expanded analysis, market scanner, symbol analysis, and news monitor; trading covers Binance order reads, writes, and previews; standard covers volume-confirmation; light covers `/api/status` and `/api/capabilities`. All webhook and news-monitor ingest requests also share an aggregate 1,000-request bucket per `RATE_LIMIT_WINDOW_MS`; mapped webhook tiers enforce both limits. Alert and message ingest use the aggregate bucket without an additional tier. Other routes use `RATE_LIMIT_WINDOW_MS` and `RATE_LIMIT_MAX`. Throttled (`429`) responses include the `Retry-After` header and the positive `retryAfterSeconds` field in the standard retryable `RATE_LIMITED` error envelope. `/healthcheck`, `/ready`, `/livez`, `/readyz`, `/openapi.json`, `/docs`, and static assets are mounted before the rate limiter in `app.js` and are exempt.
 
 ## Architecture Overview
 
@@ -733,6 +999,67 @@ See [Architecture Guide](docs/deployment.md) and [Notifications Guide](docs/noti
 
 ---
 
+## Telegram deep-link enrollment
+
+With `ENABLE_CHAT_ENROLLMENTS=true`, chats must still be authorized by `TELEGRAM_ALLOWED_CHAT_IDS` (or its existing `TELEGRAM_CHAT_ID` fallback). `/start` stores an opt-in chat enrollment in Firestore when configured and falls back to memory during storage outages. The enrollment record expires after `CHAT_ENROLLMENT_RETENTION_DAYS` (default 90). The `watch=` payload also adds symbols to the chat's `/watchlist`.
+
+Telegram accepts only URL-safe start parameters. Use `encodeStartPayload` from `src/controllers/commands/handlers/start/startPayload.js` to encode `lang=es|en`, `watch=SYMBOL1,SYMBOL2`, `ref=SOURCE`, or combined tokens. Examples:
+
+```text
+https://t.me/<bot>?start=enroll
+https://t.me/<bot>?start=v1_bGFuZz1lbg
+https://t.me/<bot>?start=v1_d2F0Y2g9QlRDVVNEVCxFVEhVU0RU
+https://t.me/<bot>?startgroup=enroll
+```
+
+`GET /api/enrollments` requires admin viewer access for bounded aggregate counts. Its optional `limit` accepts one positive decimal integer string (default 200, clamped to 1000); exponent, hex, fractional, empty, and repeated values return `400 INVALID_REQUEST`. Errors use the standard `success`, `error`, `code`, `requestId`, and `retryable` envelope. Re-enrollment preserves omitted language, watchlist, and referral preferences, including when a preliminary Firestore read fails. `partial=true` means more documents may exist beyond the scan limit, so `count` is not a total. An admin operator may add `includeChatIds=true` to view per-chat records. Deep-link enrollment does not grant command authorization. Deploy the `chatEnrollments.expiresAt` Firestore TTL policy from `firestore.indexes.json` before enabling durable storage.
+
+`includeChatIds` accepts a single `true` or `false`; invalid or repeated values return `400 INVALID_REQUEST`. Enrollment reads feed the shared Firestore read-health metrics with sanitized failure categories and recovery. When a newer durable enrollment supersedes an update, the response and cache reflect that stored record.
+
+### Operator Runbook
+
+Production pages from `TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID`, Sentry, or the smoke probe all point at one document: [RUNBOOK.md](./RUNBOOK.md). It covers 12 incident classes (Gemini 429 burst, Telegram/Discord exhaustion, WhatsApp GreenAPI outage, TradingView MCP black-hole, Binance order rejection, Firestore credential rotation, dead signal-outcome/scanner/redrive workers, rate-limit storms, and Telegram deep-link onboarding) with a fixed `Symptoms → First check → Mitigation → Verification → Postmortem` template per section. Run `pnpm test -- tests/integration/runbook-links.test.js` to confirm the runbook still covers every `TelegramService` error category and Sentry tag.
+
 ## License
 
 This project is licensed under the ISC License.
+
+### /precio quote cache
+
+Successful `/precio` quotes use a bounded process-local LRU cache. Repeated requests within the TTL skip provider calls and their Sentry spans; expired entries fetch again, and provider errors are never cached. Equity keys include the exchange. Crypto entries include the existing optional 24-hour ticker context and bare-price fallback. Each replica has its own cache, so replies may differ within the configured TTL; this cache is for chat quotes, not order execution or outcome pricing.
+
+| Remote Config parameter | Environment/default fallback | Bounds | Purpose |
+| --- | --- | --- | --- |
+| `PRICE_CACHE_TTL_MS_CRYPTO` | `15000` | `1000`–`600000` | Crypto quote TTL in milliseconds. |
+| `PRICE_CACHE_TTL_MS_EQUITY` | `60000` | `1000`–`600000` | Equity quote TTL in milliseconds. |
+| `PRICE_CACHE_MAX_ENTRIES_PER_BUCKET` | `256` | `1`–`10000` | Maximum entries per crypto/equity bucket. |
+
+All three are non-secret runtime tuning settings supported by Firebase Remote Config. Fresh published values override environment values; invalid values retain the environment/default fallback. `/api/status` and `/api/capabilities` expose `featureFlags.priceQuoteCache` and sanitized `dependencies.priceQuoteCache` counters and effective configuration. No credentials, destinations, startup gates, or authentication controls are added.
+
+### GET /api/metrics
+
+Protected Node.js process health endpoint. Requires admin API-key access or a Firebase ID token with the `admin.viewer` role. Reports memory bytes, cumulative CPU microseconds, event-loop lag in milliseconds, uptime in seconds, and Node.js/process metadata. Collection is lazy; no polling or sampling runs between requests.
+
+
+### Exact webhook alert coalescing (#751)
+
+| Remote Config parameter | Environment/default fallback | Bounds | Purpose |
+| --- | --- | --- | --- |
+| `ENABLE_ALERT_COALESCE` | `false` | boolean | Opt-in exact body/query coalescing on `POST /api/webhook/alert` |
+| `ALERT_COALESCE_WINDOW_MS` | `5000` | integer `1`–`60000` | Duplicate window from the original reservation, milliseconds |
+
+Fresh valid Remote Config values override environment/default values. Both settings are non-secret runtime tuning. No credentials, auth controls, destinations or startup gates are added; those remain environment-only.
+
+Identical payloads with identical effective destinations wait for an in-flight original, then receive HTTP 200 `{ "success": true, "coalesced": true, "originalRequestId": "original-id", "requestId": "duplicate-id" }` only after every requested channel succeeds. Distinct routing, metadata or query options are distinct requests. Failed, partial, skipped or empty delivery releases the reservation so a retry can deliver; a partial retry may repeat an already successful channel. Duplicates skip enrichment, persistence and outcome recording. Dry-run, auto-trade, symbol/destination fanout, watchlist routing and asynchronous subscribers bypass coalescing. Expanded analysis and Telegram command limits retain their existing behavior.
+
+The cache retains only SHA-256 fingerprints and request IDs, is bounded to 10000 entries per process and evicts least-recently-used entries. Replicas do not share it; restarts, capacity eviction and 180-second pending expiry can allow duplicate delivery. Waiting requests honor their HTTP deadline or disconnect signal; expired waiters do not resume enrichment or delivery. No cross-replica exactly-once guarantee is provided.
+
+### Deployment environment banner
+
+`GET /api/banner` is a public read-only snapshot of `environment`, full `commit`, `name`, and nullable ISO 8601 `deployedAt` (host-provided commit date, never a deployment ID). Its environment resolver is shared with `/api/status`; it does not load provider readiness or credentials. Non-production `/admin` consoles display a sticky warning and a copy button for the selected backend origin.
+
+| Remote Config parameter | Environment/default fallback | Purpose |
+| --- | --- | --- |
+| `ENABLE_ENVIRONMENT_BANNER` | `true` | Emit optional `X-Cabros-Environment`, eight-character `X-Cabros-Commit` (when available), and `X-Cabros-Service` response headers. Rechecked on every request, including errors and healthchecks. |
+
+The template uses `useInAppDefault: true` to preserve deployment fallbacks until an explicit remote value is published. This non-secret display setting controls response headers; the public snapshot and console remain available when headers are disabled. Existing `ENABLE_MESSAGE_FOOTER_METADATA` independently controls alert footer metadata, including `(env: preview @ abcdef12)` in non-production environments. Production messages keep their current footer. Credentials, authentication, security controls, destinations, and startup gates remain environment-only.

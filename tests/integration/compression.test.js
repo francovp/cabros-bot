@@ -6,6 +6,25 @@ const { createCompressionMiddleware } = require('../../src/lib/compression');
 const app = require('../../app');
 
 describe('HTTP Response Compression Integration', () => {
+	it('leaves large JSON uncompressed when explicitly disabled at startup', async () => {
+		const priorValue = process.env.ENABLE_RESPONSE_COMPRESSION;
+		process.env.ENABLE_RESPONSE_COMPRESSION = 'false';
+		let disabledApp;
+		try {
+			jest.isolateModules(() => {
+				disabledApp = require('../../app');
+			});
+			const res = await request(disabledApp)
+				.get('/openapi.json')
+				.set('Accept-Encoding', 'gzip');
+			expect(res.status).toBe(200);
+			expect(res.headers['content-encoding']).toBeUndefined();
+		} finally {
+			if (priorValue === undefined) delete process.env.ENABLE_RESPONSE_COMPRESSION;
+			else process.env.ENABLE_RESPONSE_COMPRESSION = priorValue;
+		}
+	});
+
 	it('compresses large JSON responses (> 1KB) with gzip when client accepts it', async () => {
 		const res = await request(app)
 			.get('/openapi.json')

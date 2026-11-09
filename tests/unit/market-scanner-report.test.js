@@ -9,6 +9,28 @@ const {
 } = require('../../src/services/tradingview/marketScannerReport');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
 
+describe('ranked ATR sizing report', () => {
+	const results = [{ scan: 'top_gainers', status: 'success', items: [{
+		symbol: 'BINANCE:BTCUSDT', changePercent: 4,
+		indicators: { close: 50000, RSI: 62, ATR: 1500 },
+	}] }];
+
+	it('shows the capital percentage and a decision-support note only when ranked', () => {
+		const ranked = buildMarketScannerReport(results, { ranked: true });
+		expect(ranked).toContain('Pos: 16.67% @ 1.00% risk');
+		expect(ranked).toContain('Tamaño orientativo');
+		expect(ranked).toContain('Stop Loss anterior puede diferir');
+		const unranked = buildMarketScannerReport(results);
+		expect(unranked).not.toContain('Position Sizing');
+	});
+
+	it('does not present a capped ATR scenario as exact risk at the displayed Stop Loss', () => {
+		const report = buildMarketScannerReport(results, { ranked: true, atrMultiplier: 0.1 });
+		expect(report).toContain('Pos: 100.00% @ ≤1.00% risk');
+		expect(report).toContain('Stop Loss anterior puede diferir');
+	});
+});
+
 describe('Market Scanner Report', () => {
 	const originalEnv = process.env;
 

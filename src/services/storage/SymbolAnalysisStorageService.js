@@ -5,6 +5,8 @@ const admin = require('firebase-admin');
 const { isFirestoreConfigured } = require('./firestoreConfig');
 const { initializeFirebaseAdminApp } = require('./firebaseAdminCredentials');
 const { classifyFirestoreError, describeFirestoreErrorCategory } = require('./firestoreErrorCategories');
+const { getDeploymentIdentity } = require('../../lib/deploymentEnvironment');
+const { validateTraderIntent } = require('../../lib/traderIntent');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RETENTION_DAYS = 7;
@@ -307,7 +309,7 @@ function formatSymbolAnalysisDoc(doc) {
 	const receivedAt = getDocTimestamp(data.receivedAt) || createdAt;
 	const action = data.action || data.decision?.action || 'NO_TRADE';
 
-	return {
+	const result = {
 		id,
 		requestId: data.requestId || id,
 		symbol: data.symbol || '',
@@ -335,6 +337,17 @@ function formatSymbolAnalysisDoc(doc) {
 		createdAt,
 		expiresAt: getDocTimestamp(data.expiresAt),
 	};
+
+	if (data.deployment && typeof data.deployment === 'object') {
+		result.deployment = {
+			platform: typeof data.deployment.platform === 'string' ? data.deployment.platform : null,
+			gitSha: typeof data.deployment.gitSha === 'string' ? data.deployment.gitSha : null,
+			service: typeof data.deployment.service === 'string' ? data.deployment.service : null,
+			runtimeVersion: typeof data.deployment.runtimeVersion === 'string' ? data.deployment.runtimeVersion : null,
+		};
+	}
+
+	return result;
 }
 
 /**
@@ -394,6 +407,7 @@ async function recordAnalysis(record = {}) {
 		const multiTimeframe = Boolean(record.multiTimeframe);
 		const analysisStatus = String(record.analysisStatus || 'complete').trim();
 		const processingTimeMs = record.processingTimeMs !== undefined ? numberOrNull(record.processingTimeMs) : undefined;
+		const traderIntent = validateTraderIntent(record.traderIntent);
 
 		const dataToSave = stripUndefinedFieldsDeep({
 			id,
@@ -416,11 +430,13 @@ async function recordAnalysis(record = {}) {
 			multiTimeframe,
 			analysisStatus,
 			processingTimeMs,
+			traderIntent,
 			analysis: record.analysis || '',
 			alertText: record.alertText || '',
 			receivedAt: admin.firestore.FieldValue.serverTimestamp(),
 			createdAt: admin.firestore.FieldValue.serverTimestamp(),
 			expiresAt: buildRetentionExpiryTimestamp(),
+			deployment: getDeploymentIdentity(),
 		});
 
 		await firestore.collection(COLLECTION_NAME).doc(id).set(dataToSave);

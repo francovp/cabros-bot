@@ -55,7 +55,7 @@ describe('security workflows', () => {
     expect(globalAllowlist).not.toMatch(/^\s*paths\s*=/m);
   });
 
-  it.each(['node.js.yml', 'env-drift-check.yml'])(
+  it.each(['node.js.yml', 'env-drift-check.yml', 'skills-ci.yml'])(
     'limits %s to read-only repository contents',
     (name) => {
       expect(readWorkflow(name)).toMatch(/permissions:\s*\n\s+contents: read/);

@@ -14,6 +14,19 @@ For specific domain APIs, see:
 
 The canonical API contract is served publicly at [`/openapi.json`](http://localhost:80/openapi.json), with interactive Swagger UI at [`/docs`](http://localhost:80/docs), and the operator console at [`/admin`](http://localhost:80/admin). Use those endpoints for request schemas, response shapes, examples, and the current route inventory. Protected `/api` operations still require `x-api-key`; documentation and admin console assets are exempt from the global rate limit budget and never expose configured credentials.
 
+### GET /livez and GET /readyz
+
+`GET /livez` returns `200 {"status":"alive","uptimeMs":42500}` without dependency I/O, including during drain. `GET /readyz` returns `200` with `status: "ready"` or `503` with `status: "not_ready"` and a `checks` array of `{name, status}`. Both web probes are public and exempt from the API rate limiter. Query parameters are ignored and no request body is needed.
+
+Readiness combines bootstrap completion, the current process drain flag, and the existing cached, bounded dependency probes for Firestore, Gemini, TradingView MCP, Binance and Telegram. Names match those probes; `bootstrap`, `processLifecycle` and `dependencies` expose aggregate gates. Each check is `ready`, `unconfigured` (dependency skipped), or `fail`. At least one considered dependency must be healthy and every considered dependency must be healthy; all dependencies disabled returns 503, preserving the existing dependency-readiness verdict. Dependency results share the existing five-second cache; bootstrap and drain are checked after collection on every request. Provider errors and configuration are never exposed.
+
+Telegram being intentionally disabled in previews/API-only mode alone does not fail the web probe. Failed required Telegram startup still fails bootstrap. Worker health stays heartbeat-based; no worker HTTP listener is added. Existing `/healthcheck` and `/ready` response contracts and the production `healthCheckPath` remain unchanged. Operators can evaluate the new probes before changing platform routing; `/livez` is the dedicated liveness surface for new consumers.
+
+Example degraded response:
+```json
+{"status":"not_ready","checks":[{"name":"bootstrap","status":"ready"},{"name":"processLifecycle","status":"fail"},{"name":"dependencies","status":"ready"},{"name":"firestore","status":"ready"}]}
+```
+
 ### GET /healthcheck
 
 Liveness health check endpoint. The default behavior returns 200 with `uptime` only.
@@ -139,11 +152,22 @@ Machine-readable runtime status for operational tooling. This endpoint uses the 
 
 The response intentionally exposes only non-sensitive booleans and metadata: service identity, version, commit, environment, feature-flag state, delivery channel readiness, and dependency readiness/configuration status. Secret values such as bot tokens, API keys, DSNs, chat IDs, and provider URLs are not returned.
 
+The response also exposes deployment build metadata under `build`:
+- `commit`: Short 7-character commit SHA of the deployed revision, or `null` if unresolvable.
+- `full`: Full commit SHA when provided by platform-injected variables, otherwise `null`.
+- `repo`: Repository owner/slug (e.g. `francovp/cabros-bot`), or `null`.
+- `platform`: Deployed platform identity (`render`, `vercel`, `railway`), or `'unknown'`.
+- `environment`: Derived runtime environment (`production`, `preview`, `development`), or `'unknown'`.
+- `startedAt`: ISO-8601 timestamp when the process started.
+- `uptimeSeconds`: Integer seconds since process start (`process.uptime()`).
+
+When `ENABLE_NEWS_MONITOR=true`, `dependencies.newsMonitorCache` reports cache readiness, deduplication mode and backend, plus hit/miss totals, hit rate, current non-expired entries, evictions, approximate memory usage, and the last hit/miss timestamps. The block is omitted when the news monitor is disabled. These counters are process-local and reset on restart; the memory figure estimates serialized payload size plus key and entry overhead for resident entries, including expired entries still held until retrieval or cleanup. Durable deduplication readiness remains available under `dependencies.newsMonitorDedup`.
+
 For `ENABLE_NEWS_MONITOR=true`, the payload also reports the primary LLM dependency used by that flow as `dependencies.newsMonitorLlm`, including the resolved provider (`gemini`, `azure`, or `openrouter`) and whether that provider is actually configured for runtime use. When `FORCE_BRAVE_SEARCH=true`, the payload also exposes `dependencies.braveSearch` so the forced search path can be monitored independently of Gemini. When `ENABLE_GEMINI_GROUNDING=true` and `MODEL_PROVIDER=gemini`, `dependencies.gemini` requires both `GEMINI_API_KEY` and `GEMINI_MODEL_NAME`, matching the runtime path used for grounded alert generation. `dependencies.geminiQuota` reports whether a Gemini quota cooldown is active, bounded remaining cooldown duration, trigger counters, Brave search fallback events during cooldown, and grounding request telemetry counters (`totalRequests`, `successRequests`, `failureRequests`, `timeoutRequests`) without exposing prompts, error bodies, or provider credentials. `dependencies.groundingCoalescing` reports the bounded equity-alert search sharing window and hit/miss/failure counters. Firestore readiness treats `GOOGLE_APPLICATION_CREDENTIALS` as configured only when the referenced credential file exists and is readable.
 
 When `ENABLE_TRADINGVIEW_VOLUME_CONFIRMATION=true`, `featureFlags.tradingViewVolumeConfirmation` reports the gate value and `dependencies.tradingViewVolumeConfirmation` reports readiness only when the configured TradingView MCP endpoint and its parent MCP enrichment gate are active.
 
-TradingView dependency readiness is runtime-derived and fail-open: `configured` reflects the effective endpoint, while `status` starts as `unknown` and changes to `ready` or `degraded` after an MCP operation. `lastErrorCategory` is sanitized to categories such as `timeout`, `http_5xx`, `http_4xx`, `invalid_response`, `provider_unavailable`, or `request_failed`; terminal provider outages do not consume the retry chain, and `lastHttpStatusCode` exposes the last observed HTTP status without returning provider response bodies or URLs from `/api/status`.
+TradingView dependency readiness is runtime-derived and fail-open: `configured` reflects the effective endpoint, while `status` starts as `unknown` and changes to `ready` or `degraded` after an MCP operation. `lastErrorCategory` is sanitized to categories such as `timeout`, `http_5xx`, `http_4xx`, `invalid_response`, `provider_unavailable`, `upstream_tool_error`, `not_found`, or `request_failed`; terminal provider outages do not consume the retry chain, and `lastHttpStatusCode` exposes the last observed HTTP status without returning provider response bodies or URLs from `/api/status`.
 
 When `ENABLE_FIRESTORE_JOB_STORAGE=true`, `featureFlags.firestoreJobStorage` reports the async-job persistence gate and `dependencies.firestoreJobStorage` reports readiness using the configured Firestore credentials. The legacy `ENABLE_FIRESTORE_ALERT_STORAGE=true` gate also reports job storage as enabled because it activates the same runtime persistence path.
 
@@ -159,6 +183,8 @@ When `ENABLE_ALERT_SYNTH_BURST_AGGREGATION=true`, `/api/webhook/alert` buffers a
 `dependencies.signalClassClassification` exposes in-memory counters for signal classification on the `POST /api/webhook/alert` ingest path. `featureFlags.signalClassMarker` only states that the badge marker is *allowed* to render; this block states whether alerts are *actually* being classified, so a silent regression back to 100% `unknown` is detectable instead of looking healthy. The section is omitted entirely until at least one alert has been classified and resets on process restart, mirroring the `firestoreWriteMetrics` pattern. Counters report `totalAlerts`, `classifiedAlerts`, `unknownAlerts`, `populationRate` (`classifiedAlerts / totalAlerts`, so a sustained `0` means nothing is being classified), and a per-class `byClass` breakdown. Only enum class names and counts are exposed — never alert text, symbols, or chat IDs. Historical records are **not** backfilled; the counters describe the current process window only.
 
 `dependencies.firestoreWriteMetrics` exposes in-memory per-domain Firestore write counters for `AlertStorageService.saveAlert`/`saveReplayAttempt` and `JobRepository.save`. The section is omitted entirely until at least one write has been recorded and resets on process restart, mirroring the existing `deliveryMetrics` pattern. Counters report `writesAttempted`, `writesSucceeded`, `writesFailed`, overall `successRate`, and a per-domain `byDomain` breakdown with sanitized counts so silent persistence failures can be detected without exposing provider responses or credentials.
+
+`dependencies.persistentWriteHealth` is always present and reports bounded process-local success/failure counts for `alertStorage`, `signalOutcomes`, `notificationRedrive`, and `newsDedup`. Each domain is `unconfigured` until a write is observed, `degraded` when the latest 100 attempts fail above 5% or any failure occurred in the last five minutes, and otherwise `ok`. The domain also exposes last-success/failure timestamps and one of four closed failure categories; provider messages and payloads are never returned. Counters reset on process restart. Sustained failures page Sentry once per active domain/category incident after at least 50 attempts and a failure rate above 20%, then re-arm after recovery.
 
 ### Firestore read health (issue #1285)
 
@@ -195,7 +221,9 @@ Stored-alert read endpoints answer `503` with a machine-readable `category` so a
 
 `GET /ready?depth=dependencies` runs the same indexed `alerts` read (bounded to one document) in its Firestore probe, so a missing index fails the gate closed instead of only surfacing on the admin console. The probe replaced `listCollections()`, which is a metadata call that never executes a collection query and therefore could not observe this class of fault. See [Observability & Monitoring](monitoring.md) and [Troubleshooting](troubleshooting.md).
 
-`featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports whether the Cloudflare AI Gateway credentials are configured and ready. Runtime provider selection is controlled separately by `MODEL_PROVIDER=cloudflare`; set both values when status/capability telemetry should match active Cloudflare routing.
+`featureFlags.cloudflareAig` reports `ENABLE_CLOUDFLARE_AIG`, while `dependencies.cloudflareAig` reports Cloudflare AI Gateway readiness **including whether the gateway is actually in the runtime request path**. `dependencies.cloudflareAig.provider` is the selected `MODEL_PROVIDER` and `dependencies.cloudflareAig.routed` reports whether that provider is `cloudflare`.
+
+`ENABLE_CLOUDFLARE_AIG` is a telemetry-visibility flag only; it does not route LLM traffic — `MODEL_PROVIDER` does. Setting the flag plus credentials while another provider is selected leaves every request on that provider, so the block reports `ready: false` with `status: "inactive"` rather than claiming readiness. `status` is `ready` only when the gateway is enabled, credentialed, and routed; `misconfigured` when it is routed but credentials are missing; `disabled` when the flag is off.
 
 `notificationChannelIntent` reports the operator-intent view of notification channel configuration (`telegram`, `whatsapp`, `discord`). It mirrors `NotificationChannel.isConfigured()`: a channel counts as `configured` when its enable flag is set **and** its required credentials/chat id/webhook are present — the same `ready` semantics `dependencyStatus` already uses. A channel with a webhook URL present but its enable flag off therefore reports as **not** configured, which is the same verdict the zero-channel admin page reaches because both call that one method. The view answers the question the zero-channel page exists to raise — a channel the operator never set up (`unconfigured`) versus one that is set up but currently failing. The page reports the same two sets, so an operator can reconcile an alert from the page and `/api/status` without inspecting credentials. Only channel names are exposed; never tokens, webhook URLs, or chat IDs.
 
@@ -209,7 +237,32 @@ The dedicated worker also persists the same non-sensitive heartbeat to `workerHe
 
 `GET /api/capabilities` is an alias for the same payload.
 
+`featureFlags.firebaseAdminAuth` reports `ENABLE_FIREBASE_ADMIN_AUTH`, the gate for opt-in Firebase ID-token authentication on the browser admin console. `dependencies.adminAuth` reports the shape and observed health of that trust domain: `provider`, `signIn`, `browserConfigConfigured` (the console can render a sign-in form), `verifierConfigured` (the server holds credentials to verify tokens), `apiKeyFallbackConfigured` (the legacy `WEBHOOK_API_KEY` path is still accepted), `ready`, `status`, and the `verificationSuccessCount`/`verifierUnavailableCount`/`consecutiveFailures` counters with `lastSuccessAt`/`lastUnavailableAt`.
+
+`verifierConfigured` is credential **shape** only, so `ready` is never derived from it — the same rule this service already applies to `firebaseRemoteConfig.ready`, `equityMarketData.ready`, and Firestore `readHealth`. `ready` is true only after a `verifyIdToken()` call has actually succeeded in this process, and `status` is `disabled` (gate off), `misconfigured` (gate on without verifier credentials), `unverified` (shape complete, no sign-in observed yet), `ready`, or `degraded`. Gate state and knowably-absent credentials take precedence over observed health, counters reset on process restart — so `unverified` is the normal state right after a deploy — and a successful verification clears `consecutiveFailures` without needing a restart.
+
+`degraded` is a defensive state ranked below `misconfigured`, so it is only ever reported while `verifierConfigured` is `true`: the credentials are shaped correctly but the Firebase Admin SDK still could not produce an Auth instance. A deployment with no verifier credentials at all reports `misconfigured` and hides its `verifierUnavailableCount` behind that verdict, so do not read a growing `verifierUnavailableCount` alongside `status: "misconfigured"` as a live outage.
+
+A **rejected** bearer token never records a failure. `verifyIdToken()` rejects an expired token, a revoked token, a wrong-project token, and a random `Bearer <garbage>` string with the same indistinguishable rejection, so recording it would let any unauthenticated caller force a false `degraded` verdict with a single request. Only verifier unavailability (`ADMIN_AUTH_UNAVAILABLE`) degrades the dependency. A verified token that simply lacks an admin role is recorded as a success, because the token verified and the role decision is an authorization outcome.
+
+`dependencies.adminAuth` returns booleans and counters only. The Firebase Web configuration is served by `/admin/auth-config` and is never echoed into a status payload, and `/api/public/status` does not include this block at all.
+
 When configured, `featureFlags.binanceTrading` and `dependencies.binanceTrading` expose only the non-sensitive execution gate, selected `testnet`/`demo`/`live` environment, allow-listed symbols, and readiness state.
+
+`featureFlags.binanceOrderAudit` reports `ENABLE_BINANCE_ORDER_AUDIT` (environment value or Remote Config override), and `dependencies.binanceOrderAudit` reports the audit trail's readiness, Firestore collection, and retention days:
+
+```json
+"binanceOrderAudit": {
+  "enabled": false,
+  "configured": true,
+  "ready": false,
+  "status": "disabled",
+  "collection": "binanceOrderAudit",
+  "retentionDays": 30
+}
+```
+
+`configured` reports Firestore credential readiness independently of the gate, so the pair is diagnostic rather than redundant: `enabled: false` with `configured: true` means "audit is off although credentials exist" (turn it on when you want the trail), while `enabled: true` with `configured: false` reports `status: "misconfigured"` — orders still execute but produce **no** audit record, which is the state worth alerting on. `status` is `ready` only when both hold. `ready` is credential readiness only (`enabled && configured`) and does not prove a write has succeeded, since audit writes are fail-open and a failed write is dropped with a warning. The block never exposes an operator identifier (stored only as a PBKDF2 hash), an exchange credential, or an API key. See [Environment Configuration](environment-configuration.md#binance-order-mutation-audit).
 
 ### GET /api/public/status
 
@@ -262,6 +315,7 @@ The `/admin` console is deployed as a static site on Firebase Hosting for the `c
 - **Shareable URLs**: the active view and report filters live in the query string. `?view=<name>` selects one of `overview`, `status`, `alerts`, `outcomes`, `presets`, `jobs`, `orders`, `analysis`, or `playground`; filter fields are namespaced per form as `<scope>.<field>` (for example `?view=alerts&alerts.summary.from=2026-08-01T00:00&alerts.summary.limit=500`). Scope prefixes keep the Alerts summary and export filter sets independent because they are separate forms with separate defaults. Browser Back/Forward move between views without a page reload, a refresh preserves the view and its filters, and an unrecognized `view` value falls back to `overview` and rewrites the URL rather than rendering a blank workspace. A shared link still respects authentication: an unauthenticated deep link shows the sign-in card and issues no API request until sign-in.
 - **CORS & CSP Policy**: Backend CORS permits requests from the explicit allowlist (`https://cabros-bot.web.app`, `https://cabros-bot.firebaseapp.com`, `https://cabros-bot-production.up.railway.app`, `http://localhost:*`, and optional `CORS_ALLOWED_ORIGINS`), and Helmet CSP allows `connect-src` to Google Auth, Firebase Hosting origins, and the backend origin.
 - **CI/CD Deployment**: `.github/workflows/firebase-hosting.yml` automatically deploys pull requests to ephemeral Firebase preview channels and deploys the `live` channel on releases merged to `master`.
+- **Console Localization (`en` / `es`)**: The `/admin` console supports bilingual localization matching the bot's primary user language (`es`) and default English (`en`). Operators can toggle languages via the brand lockup selector (`<select id="admin-lang">`), the `?lang=es` or `?lang=en` URL query parameter, or `localStorage.admin_lang` (with fallback to `navigator.language` / `en`). Section titles, common actions, empty and error states, status row labels (`ready`, `degraded`, `unconfigured`, `disabled`, `misconfigured`), and filter form labels update dynamically while maintaining synchronization with `<html lang>`.
 - **Browser verification**: With the local console open in Playwright CLI, run `playwright-cli run-code --filename=scripts/check-admin-browser.js`. The check visits contract operations, edits and restores fields, submits to intercepted API responses, and checks mobile overflow. Screenshots are saved under `output/playwright/`.
 - **Local Testing**: Run `pnpm run build:hosting` then `firebase emulators:start --only hosting` to test the static hosting deployment locally on port 5000.
 - **Rollback**: In the Firebase Console (Hosting > Release history) or via Firebase CLI: `firebase hosting:rollback` / `firebase hosting:clone cabros-bot:previous_version cabros-bot:live`.
@@ -360,6 +414,16 @@ The `/admin` console is deployed as a static site on Firebase Hosting for the `c
 
 ## Trading Endpoints
 
+### POST /api/trading/binance/orders
+
+The existing operator-gated Spot order route supports `MARKET`, `LIMIT`, `LIMIT_MAKER`, `STOP_LOSS`, `STOP_LOSS_LIMIT`, `TAKE_PROFIT`, and `TAKE_PROFIT_LIMIT`. `trailingDelta` is an integer BIPS offset and must fit the symbol's side/type-specific Binance `TRAILING_DELTA` filter. `GET` lists recent orders or looks up one order with `orderId` / `origClientOrderId`; it also reconciles an OTOCO list with `orderListId` / `listClientOrderId` (exactly one identifier per request). `DELETE` cancels one order using exactly one supported single-order identifier.
+
+For market-executed contingent BUYs (`STOP_LOSS` and `TAKE_PROFIT`), the configured notional cap uses `quantity × max(averagePrice, stopPrice)`. A trailing-only BUY without a fixed `stopPrice` fails closed because its trigger has no bounded price. This is a pre-trade estimate; a market fill can still slip beyond its trigger price. Limit-executed contingent orders use their limit `price` for the cap check.
+
+`BRACKET_LIMIT` submits one native Spot OTOCO order list with a LIMIT entry and pending OCO exits, armed by Binance after the entry fills. For a BUY entry, the take-profit is a pending-above `LIMIT_MAKER` and the protective stop is a pending-below `STOP_LOSS_LIMIT`; for a SELL entry, the protective stop is pending-above `STOP_LOSS_LIMIT` and the take-profit is pending-below `TAKE_PROFIT_LIMIT` (using `takeProfitPrice` as both trigger and limit). It requires `quantity`, `price`, `stopPrice`, `stopLimitPrice`, `takeProfitPrice`, and `timeInForce: GTC`. `BRACKET_MARKET` and Futures-only order types are unsupported. Live brackets require a durable Firestore idempotency reservation before the single exchange submission; unavailable storage fails closed and an ambiguous result must be reconciled before retrying with the same key.
+
+Bracket lifecycle detail has no expiry while pending or partially filled. Once terminal, `expiresAt` is set to one hour after the observed terminal transition and Firestore TTL cleanup is asynchronous; the permanent reservation remains keyed by the SHA-256 idempotency-key hash. The `/admin` Orders view has an operator-only bracket form whose latest-alert prices remain editable suggestions. No new environment or Firebase Remote Config setting is required.
+
 ### POST /api/trading/binance/orders/preview
 
 `POST /api/trading/binance/orders/preview` returns a pre-trade cost preview without ever calling `submitNewOrder`. It is exposed behind the existing `admin.viewer`/`admin.operator` flow (API-key or Firebase bearer) and fails closed if neither mechanism is configured, mirroring the live endpoint.
@@ -393,3 +457,29 @@ Query parameters are all optional:
 An `asset` or `symbol` outside the configured allow-list is rejected with `400 INVALID_ORDER_REQUEST` *before* any provider call, so the endpoint cannot be used to probe arbitrary balances. `ENABLE_BINANCE_TRADING=false` returns `403 FEATURE_DISABLED`; missing credentials return `503 BINANCE_TRADING_UNAVAILABLE`; a Binance timeout, network error or unclassified provider failure returns `502 BINANCE_BALANCE_QUERY_FAILED`. The 502 body and the structured log line carry only the sanitized message — no API key, signature, or raw Binance payload.
 
 Responses are cached in-process for a few seconds so an operator console polling the endpoint cannot spike Binance request weight. See [`BINANCE_BALANCE_CACHE_MS`](environment-configuration.md#binance-spot-order-execution) for the bound and its Remote Config parity.
+
+### GET /api/trading/binance/reconciliation
+
+`GET /api/trading/binance/reconciliation` lists indeterminate auto-trade reservations requiring manual operator reconciliation. Mounted behind `admin.viewer`/`admin.operator` access (API-key or Firebase bearer).
+
+Query parameters:
+- `symbol` — restrict to a single trading symbol (e.g. `BTCUSDT`).
+- `status` — filter by reservation status (default: `ambiguous`).
+- `limit` — integer limit (default: 50, maximum: 100).
+
+Returns `{ success: true, reservations: [...], count, ambiguousCount }`.
+
+### POST /api/trading/binance/reconciliation/:reservationId
+
+`POST /api/trading/binance/reconciliation/:reservationId` resolves an ambiguous auto-trade reservation as `placed` or `not_placed`. Mounted behind `admin.operator` access with idempotency middleware.
+
+Request body:
+- `resolvedAs` (`placed` | `not_placed`, required)
+- `orderId` (integer, optional)
+- `notes` (string, optional)
+
+Behavior:
+- When resolved as `not_placed`: marks status as `failed`, clears both Firestore and in-memory repeat suppression cooldowns so subsequent valid signals are not blocked, pages admin chat if configured, and audits the mutation.
+- When resolved as `placed`: marks status as `submitted`, updates `orderId`, retains repeat suppression cooldown, and audits the mutation.
+- Fully idempotent: repeat calls with identical determinations return `{ success: true, idempotent: true, action: 'already_resolved', reservation }`. Conflicting determinations fail closed with `409 CONFLICT`.
+

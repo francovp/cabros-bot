@@ -1,5 +1,7 @@
 /* global AbortController */
 
+const { resolveRemoteOverride } = require('../../../../services/remoteConfig/resolveRemoteOverride');
+const { sendErrorFrom } = require('../../../../lib/errorEnvelope');
 const { tradingViewMcpService } = require('../../../../services/tradingview/TradingViewMcpService');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const {
@@ -11,7 +13,7 @@ const {
 } = require('../../../../services/tradingview/marketScannerReport');
 const {
 	getNotificationManager,
-	initializeNotificationServices,
+	getOrInitializeNotificationManager,
 } = require('../alert/alert');
 const sentryService = require('../../../../services/monitoring/SentryService');
 const {
@@ -49,14 +51,17 @@ function resolveDryRun(req) {
 
 function postMarketScannerAlert(botOrGetter) {
 	return async (req, res) => {
-		const requestId = resolveRequestId(req);
-		const startTime = Date.now();
+		const requestId = (req && req.requestId) || resolveRequestId(req);
+		const startTime = (req && typeof req.startTime === 'number' && Number.isFinite(req.startTime))
+			? req.startTime
+			: Date.now();
 
 		try {
 			if (!getRuntimeConfig().ENABLE_MARKET_SCANNER) {
-				return res.status(404).json({
+				return sendErrorFrom(res, 404, {
 					error: 'Market scanner is not enabled',
 					code: 'FEATURE_DISABLED',
+					requestId,
 				});
 			}
 
@@ -96,7 +101,7 @@ function postMarketScannerAlert(botOrGetter) {
 
 			if (successfulScans.length === 0) {
 				const timeoutError = timedOut;
-				return res.status(timeoutError ? 504 : 502).json({
+				return sendErrorFrom(res, timeoutError ? 504 : 502, {
 					success: false,
 					ranked: parsed.ranked === true,
 					includeMultiTimeframe: parsed.includeMultiTimeframe === true,
@@ -140,7 +145,7 @@ function postMarketScannerAlert(botOrGetter) {
 
 			let notificationManager = getNotificationManager();
 			if (!notificationManager) {
-				notificationManager = await initializeNotificationServices(resolveBot(botOrGetter));
+				notificationManager = await getOrInitializeNotificationManager(resolveBot(botOrGetter));
 			}
 
 			const deliveryResults = await sendWithNotificationRouting(
@@ -214,7 +219,7 @@ function postMarketScannerAlert(botOrGetter) {
 			});
 		} catch (error) {
 			if (error instanceof NotificationRoutingValidationError) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: error.message,
 					code: 'INVALID_REQUEST',
 					requestId,
@@ -222,7 +227,7 @@ function postMarketScannerAlert(botOrGetter) {
 			}
 
 			if (error instanceof MarketScannerRequestError) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: error.message,
 					code: error.code,
 					requestId,
@@ -241,7 +246,7 @@ function postMarketScannerAlert(botOrGetter) {
 				},
 			});
 
-			return res.status(500).json({
+			return sendErrorFrom(res, 500, {
 				error: 'Internal server error. Please try again later.',
 				code: 'INTERNAL_ERROR',
 				requestId,
@@ -375,11 +380,12 @@ function compactScanResults(results, includeScores = false) {
 		};
 
 		if (includeScores && Array.isArray(result.items) && result.items.length > 0) {
-			compact.scores = prepareMarketScannerItems(result, true).map((item) => ({
+			compact.scores = prepareMarketScannerItems(result, true, resolvePositionSizingOptions()).map((item) => ({
 				symbol: item.symbol,
 				score: item._score,
 				reason: item._scoreReason,
 				...(item._trendConfluence ? { trendConfluence: item._trendConfluence } : {}),
+				...(item._positionSizing ? { positionSizing: item._positionSizing } : {}),
 			}));
 		}
 
@@ -405,7 +411,36 @@ function buildSummary(scanResults, deliveryResults) {
 	};
 }
 
+function resolvePositionSizingOptions() {
+	const runtimeConfig = getRuntimeConfig();
+	const atrMultiplier = parsePositiveEnvFloat(runtimeConfig.SCANNER_ATR_MULTIPLIER);
+	const accountRiskPct = parsePositiveEnvFloat(runtimeConfig.SCANNER_ACCOUNT_RISK_PCT);
+	const options = {};
+	if (atrMultiplier !== null) {
+		options.atrMultiplier = atrMultiplier;
+	}
+	if (accountRiskPct !== null) {
+		options.accountRiskPct = accountRiskPct;
+	}
+	return options;
+}
+
+function parsePositiveEnvFloat(value) {
+	if ((typeof value !== 'string' && typeof value !== 'number') || (typeof value === 'string' && value.trim() === '')) {
+		return null;
+	}
+	const numeric = Number(value);
+	if (!Number.isFinite(numeric) || numeric <= 0) {
+		return null;
+	}
+	return numeric;
+}
+
 function getMarketScannerTimeoutMs() {
+	const remoteTimeout = resolveRemoteOverride('MARKET_SCANNER_TIMEOUT_MS');
+	if (remoteTimeout !== undefined) {
+		return remoteTimeout;
+	}
 	const parsedTimeout = parseInt(process.env.MARKET_SCANNER_TIMEOUT_MS || `${DEFAULT_SCANNER_TIMEOUT_MS}`, 10);
 
 	if (!Number.isFinite(parsedTimeout) || parsedTimeout <= 0) {

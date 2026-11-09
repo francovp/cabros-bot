@@ -2,6 +2,7 @@
 
 const sentryService = require('../../services/monitoring/SentryService');
 const symbolAnalysisStorageService = require('../../services/storage/SymbolAnalysisStorageService');
+const { sendErrorFrom, STANDARD_ERROR_CODES } = require('../../lib/errorEnvelope');
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -55,7 +56,7 @@ function parseOptionalTimestamp(rawValue, name) {
 async function listSymbolAnalyses(req, res) {
 	return handleAsync(req, res, '/api/symbol-analyses', async () => {
 		if (!symbolAnalysisStorageService.isEnabled()) {
-			return res.status(403).json({
+			return sendErrorFrom(res, 403, {
 				error: 'Symbol analysis storage feature is disabled. Set ENABLE_SYMBOL_ANALYSIS_STORAGE=true to enable.',
 				code: 'FEATURE_DISABLED',
 			});
@@ -63,7 +64,7 @@ async function listSymbolAnalyses(req, res) {
 
 		const limit = parseLimit(req.query.limit, DEFAULT_LIMIT, MAX_LIMIT);
 		if (limit === null) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: `Invalid limit. Use an integer between 1 and ${MAX_LIMIT}.`,
 				code: 'INVALID_REQUEST',
 			});
@@ -71,16 +72,16 @@ async function listSymbolAnalyses(req, res) {
 
 		const from = parseOptionalTimestamp(req.query.from, 'from');
 		if (from.error) {
-			return res.status(400).json(from.error);
+			return sendErrorFrom(res, 400, from.error);
 		}
 
 		const to = parseOptionalTimestamp(req.query.to, 'to');
 		if (to.error) {
-			return res.status(400).json(to.error);
+			return sendErrorFrom(res, 400, to.error);
 		}
 
 		if (from.value && to.value && new Date(from.value) > new Date(to.value)) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: 'Invalid time window. from must be before or equal to to.',
 				code: 'INVALID_REQUEST',
 			});
@@ -90,7 +91,7 @@ async function listSymbolAnalyses(req, res) {
 		if (req.query.action !== undefined) {
 			action = parseAction(req.query.action);
 			if (!action) {
-				return res.status(400).json({
+				return sendErrorFrom(res, 400, {
 					error: 'Invalid action. Supported values are BUY, SELL, or NO_TRADE.',
 					code: 'INVALID_REQUEST',
 				});
@@ -135,7 +136,7 @@ async function listSymbolAnalyses(req, res) {
 async function summarizeSymbolAnalyses(req, res) {
 	return handleAsync(req, res, '/api/symbol-analyses/summary', async () => {
 		if (!symbolAnalysisStorageService.isEnabled()) {
-			return res.status(403).json({
+			return sendErrorFrom(res, 403, {
 				error: 'Symbol analysis storage feature is disabled. Set ENABLE_SYMBOL_ANALYSIS_STORAGE=true to enable.',
 				code: 'FEATURE_DISABLED',
 			});
@@ -143,7 +144,7 @@ async function summarizeSymbolAnalyses(req, res) {
 
 		const limit = parseLimit(req.query.limit, DEFAULT_SUMMARY_LIMIT, MAX_SUMMARY_LIMIT);
 		if (limit === null) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: `Invalid limit. Use an integer between 1 and ${MAX_SUMMARY_LIMIT}.`,
 				code: 'INVALID_REQUEST',
 			});
@@ -151,16 +152,16 @@ async function summarizeSymbolAnalyses(req, res) {
 
 		const from = parseOptionalTimestamp(req.query.from, 'from');
 		if (from.error) {
-			return res.status(400).json(from.error);
+			return sendErrorFrom(res, 400, from.error);
 		}
 
 		const to = parseOptionalTimestamp(req.query.to, 'to');
 		if (to.error) {
-			return res.status(400).json(to.error);
+			return sendErrorFrom(res, 400, to.error);
 		}
 
 		if (from.value && to.value && new Date(from.value) > new Date(to.value)) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: 'Invalid time window. from must be before or equal to to.',
 				code: 'INVALID_REQUEST',
 			});
@@ -212,27 +213,27 @@ function handleAsync(req, res, endpoint, handler) {
 		});
 
 		if (statusCode === 503) {
-			return res.status(503).json({
+			return sendErrorFrom(res, 503, {
 				error: error.message,
 				code: 'STORAGE_UNAVAILABLE',
 			});
 		}
 
 		if (statusCode === 403) {
-			return res.status(403).json({
+			return sendErrorFrom(res, 403, {
 				error: error.message,
 				code: 'FEATURE_DISABLED',
 			});
 		}
 
 		if (statusCode === 400) {
-			return res.status(400).json({
+			return sendErrorFrom(res, 400, {
 				error: error.message,
 				code: 'INVALID_REQUEST',
 			});
 		}
 
-		return res.status(500).json({
+		return sendErrorFrom(res, 500, {
 			error: 'Internal server error',
 			code: 'INTERNAL_ERROR',
 		});

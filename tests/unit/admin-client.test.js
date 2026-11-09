@@ -99,6 +99,10 @@ class FakeElement {
 		if (name === 'name') this.name = String(value);
 	}
 
+	getAttribute(name) {
+		return Object.prototype.hasOwnProperty.call(this.attributes, name) ? this.attributes[name] : null;
+	}
+
 	removeAttribute(name) {
 		delete this.attributes[name];
 	}
@@ -159,6 +163,10 @@ class FakeElement {
 			return false;
 		});
 	}
+
+	querySelector(selector) {
+		return this.querySelectorAll(selector)[0] || null;
+	}
 }
 
 const findAll = (root, predicate) => {
@@ -199,9 +207,10 @@ class FakeAbortController {
 	}
 }
 
-const response = (body, status = 200) => ({
+const response = (body, status = 200, headers = {}) => ({
 	ok: status >= 200 && status < 300,
 	status,
+	headers: { get: (name) => headers[name.toLowerCase()] ?? null },
 	json: async () => body,
 	text: async () => JSON.stringify(body),
 });
@@ -267,7 +276,7 @@ const createControllableStream = () => {
 	};
 };
 
-function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', firebase, location = {} }) {
+function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', firebase, location = {}, environmentBanner = null }) {
 	const body = new FakeElement('body');
 	const elementsById = {};
 	[
@@ -286,11 +295,13 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		['clear-key', 'button', { type: 'button' }],
 		['connection-form', 'form', {}],
 		['view', 'section', {}],
+		['environment-banner', 'section', { hidden: true }],
 		['view-status', 'p', { role: 'status' }],
 		['sse-status', 'div', { role: 'status' }],
 		['sse-label', 'span', {}],
 		['console-shell', 'div', {}],
 		['toggle-sidebar', 'button', { type: 'button' }],
+		['admin-lang', 'select', {}],
 	].forEach(([id, tag, attributes]) => {
 		const node = new FakeElement(tag);
 		node.id = id;
@@ -300,7 +311,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		elementsById[id] = node;
 		body.append(node);
 	});
-	['overview', 'status', 'diagnostics', 'alerts', 'outcomes', 'presets', 'jobs', 'orders', 'analysis', 'newsMonitor', 'trading', 'playground'].forEach((view) => {
+	['overview', 'status', 'diagnostics', 'alerts', 'outcomes', 'presets', 'subscribers', 'jobs', 'orders', 'analysis', 'newsMonitor', 'trading', 'playground'].forEach((view) => {
 		const button = new FakeElement('button');
 		button.dataset.view = view;
 		body.append(button);
@@ -325,6 +336,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		createElementNS: (_namespaceURI, tag) => new FakeElement(tag),
 		getElementById: (id) => elementsById[id],
 		querySelectorAll: (selector) => body.querySelectorAll(selector),
+		querySelector: (selector) => body.querySelectorAll(selector)[0] || null,
 		addEventListener: (type, listener) => { documentListeners[type] = listener; },
 		execCommand: () => false,
 		get title() {
@@ -369,6 +381,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		URL,
 		URLSearchParams,
 		fetch: jest.fn(async (url, options) => {
+			if (url.endsWith('/api/banner')) return response(environmentBanner);
 			if (url === '/admin/auth-config' && !firebase) return response({ enabled: false, configured: false });
 			return fetchImpl(url, options);
 		}),
@@ -409,6 +422,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 	// shared `window` object that admin.js reads. Order mirrors the deferred <script> order
 	// in index.html.
 	[
+		'i18n.js',
 		'admin-charts.js',
 		'admin-diagnostics.js',
 		'admin-newsmonitor.js',
@@ -420,6 +434,12 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 
 	const dispatchPopState = async () => {
 		for (const listener of windowListeners.popstate || []) await listener({ type: 'popstate' });
+		await flush();
+	};
+
+	const dispatchHashChange = async (newHash) => {
+		if (newHash !== undefined) windowLocation.hash = newHash;
+		for (const listener of windowListeners.hashchange || []) await listener({ type: 'hashchange' });
 		await flush();
 	};
 
@@ -437,6 +457,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		historyCalls,
 		location: windowLocation,
 		dispatchPopState,
+		dispatchHashChange,
 	};
 }
 
@@ -446,6 +467,67 @@ async function selectView(browser, name) {
 }
 
 describe('admin browser client', () => {
+	it('renders an alert preview without dispatching a live test send', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {
+				ok: true, dryRun: true, persisted: false,
+				formatted: { telegram: { text: 'BTC\\.USDT' } },
+			}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+		const form = findForm(browser.elementsById.view, 'Alert preview');
+		expect(form).toBeDefined();
+		expect(findAll(form, (node) => node.name === 'telegram')[0].type).toBe('checkbox');
+		form.elements.text.value = 'BTC.USDT';
+		await form.dispatch('submit');
+		await flush();
+		const calls = browser.context.fetch.mock.calls.filter(([url]) => url === '/api/admin/test-alert');
+		expect(calls).toHaveLength(1);
+		expect(JSON.parse(calls[0][1].body)).toEqual(expect.objectContaining({ text: 'BTC.USDT', dryRun: true, testMode: true }));
+		expect(form.textContent).toContain('BTC\\.USDT');
+	});
+
+	it('reports a failed test send even when the endpoint returns HTTP 200', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {
+				ok: false, dryRun: false, results: [{ channel: 'telegram', success: false, error: { code: 'DELIVERY_FAILED' } }],
+			}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+		const form = findForm(browser.elementsById.view, 'Alert preview');
+		form.elements.text.value = 'Test message';
+		form.elements.telegramChatId.value = '123456789';
+		await findButton(form, 'Send test').dispatch('click');
+		await flush();
+		expect(form.textContent).toContain('Test alert delivery failed');
+		expect(form.textContent).toContain('DELIVERY_FAILED');
+		expect(form.textContent).not.toContain('Test alert dispatched');
+	});
+
+	it('requires an explicit test destination before sending', async () => {
+		const browser = createBrowser({ storedKey: 'test-key', fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}) });
+		await flush();
+		await selectView(browser, 'alerts');
+		const form = findForm(browser.elementsById.view, 'Alert preview');
+		form.elements.text.value = 'Test message';
+		await findButton(form, 'Send test').dispatch('click');
+		await flush();
+		expect(form.textContent).toContain('Telegram test chat ID is required');
+		expect(browser.context.fetch.mock.calls.filter(([url]) => url === '/api/admin/test-alert')).toHaveLength(0);
+	});
+
+	it('renders the Alerts view when browser storage is blocked', async () => {
+		const browser = createBrowser({ fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}) });
+		Object.defineProperty(browser.context.window, 'localStorage', { get() { throw new Error('Storage blocked'); } });
+		await flush();
+		await selectView(browser, 'alerts');
+		expect(findForm(browser.elementsById.view, 'Alert preview')).toBeDefined();
+	});
+
 	it('uses visual controls instead of editable JSON throughout the console', async () => {
 		const browser = createBrowser({ fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}) });
 		await flush();
@@ -1967,6 +2049,126 @@ describe('admin browser client', () => {
 		expect(requests.at(-1)[0]).toBe('/api/alerts?limit=10&before=cursor-2&source=webhook');
 	});
 
+	it('exposes source suggestions while preserving custom alert sources', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		const sourceInput = listForm.elements.source;
+		const enrichedSelect = listForm.elements.enriched;
+		expect(sourceInput.tagName).toBe('INPUT');
+		expect(sourceInput.attributes.list).toBe('alert-source-options');
+		expect(enrichedSelect.tagName).toBe('SELECT');
+		const sourceOptions = find(listForm, (node) => node.tagName === 'DATALIST');
+		expect(sourceOptions.attributes.id).toBe('alert-source-options');
+		const sourceValues = sourceOptions.children.map((option) => option.value);
+		expect(sourceValues).toEqual([
+			'', 'webhook-alert', 'webhook-message', 'webhook', 'news-monitor',
+			'market-scanner', 'expanded-analysis', 'test-alert',
+		]);
+		const enrichedValues = enrichedSelect.children.map((option) => option.value);
+		expect(enrichedValues).toEqual(['', 'true', 'false']);
+	});
+
+	it('renders an active-filters header that reflects the current selection', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		const activeFilters = find(listForm, (node) => node.className === 'active-filters');
+		expect(activeFilters).toBeDefined();
+		expect(activeFilters.textContent).toBe('Active filters: none');
+
+		listForm.elements.source.value = 'webhook';
+		await listForm.elements.source.dispatch('change');
+		await flush();
+		expect(activeFilters.textContent).toContain('source=webhook');
+
+		listForm.elements.enriched.value = 'true';
+		await listForm.elements.enriched.dispatch('change');
+		await flush();
+		expect(activeFilters.textContent).toContain('source=webhook');
+		expect(activeFilters.textContent).toContain('enriched=true');
+	});
+
+	it('restores alert filter controls and summary from the URL', async () => {
+		const search = '?view=alerts&alerts.list.source=webhook-message&alerts.list.enriched=false&alerts.list.before=cursor-2';
+		const browser = createBrowser({
+			location: { search },
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		const activeFilters = find(listForm, (node) => node.className === 'active-filters');
+		const clearButton = findButton(listForm, 'Clear filters');
+
+		expect(listForm.elements.source.value).toBe('webhook-message');
+		expect(listForm.elements.enriched.value).toBe('false');
+		expect(listForm.elements.before.value).toBe('cursor-2');
+		expect(activeFilters.textContent).toBe('Active filters: source=webhook-message, enriched=false');
+		expect(clearButton.disabled).toBe(false);
+		expect(browser.location.search).toBe(search);
+	});
+
+	it('removes restored alert filters and cursor from the URL when cleared', async () => {
+		const browser = createBrowser({
+			location: {
+				search: '?view=alerts&alerts.list.source=news-monitor&alerts.list.enriched=false&alerts.list.before=cursor-2',
+			},
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		const clearButton = findButton(listForm, 'Clear filters');
+		expect(clearButton.disabled).toBe(false);
+
+		await clearButton.dispatch('click');
+		await flush();
+
+		expect(listForm.elements.source.value).toBe('');
+		expect(listForm.elements.enriched.value).toBe('');
+		expect(listForm.elements.before.value).toBe('');
+		const params = new URLSearchParams(browser.location.search);
+		['alerts.list.source', 'alerts.list.enriched', 'alerts.list.before'].forEach((key) => {
+			expect(params.has(key)).toBe(false);
+		});
+	});
+
+	it('clears all filter selections when the Clear filters button is clicked', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alerts');
+		listForm.elements.source.value = 'news-monitor';
+		await listForm.elements.source.dispatch('change');
+		await flush();
+		listForm.elements.enriched.value = 'false';
+		await listForm.elements.enriched.dispatch('change');
+		await flush();
+
+		const clearButton = findButton(listForm, 'Clear filters');
+		expect(clearButton.disabled).toBe(false);
+		await clearButton.dispatch('click');
+		await flush();
+
+		expect(listForm.elements.source.value).toBe('');
+		expect(listForm.elements.enriched.value).toBe('');
+		const activeFilters = find(listForm, (node) => node.className === 'active-filters');
+		expect(activeFilters.textContent).toBe('Active filters: none');
+		expect(clearButton.disabled).toBe(true);
+	});
+
 	it('renders dedicated alert analytics and export forms with safe defaults', async () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
@@ -2494,6 +2696,69 @@ describe('admin browser client', () => {
 		expect(editBtn.title).toBe('Requires admin.operator role');
 		expect(deleteBtn.disabled).toBe(true);
 		expect(deleteBtn.title).toBe('Requires admin.operator role');
+	});
+
+	it('renders dedicated alert subscriber controls and structured fields', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}),
+		});
+		await flush();
+
+		await selectView(browser, 'subscribers');
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alert-subscribers');
+		const createForm = findForm(browser.elementsById.view, 'POST /api/alert-subscribers');
+		const updateForm = findForm(browser.elementsById.view, 'PATCH /api/alert-subscribers/{id}');
+
+		expect(listForm).toBeDefined();
+		expect(createForm).toBeDefined();
+		expect(updateForm).toBeDefined();
+
+		expect(createForm.elements.url).toBeDefined();
+		expect(createForm.elements.secret).toBeDefined();
+		expect(createForm.elements.description).toBeDefined();
+		expect(createForm.elements.filterSymbols).toBeDefined();
+		expect(createForm.elements.filterSources).toBeDefined();
+		expect(createForm.elements.enabled).toBeDefined();
+	});
+
+	it('renders subscribers as structured cards with HMAC badge, filters, and actions', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/alert-subscribers') {
+					return response({
+						success: true,
+						storage: { mode: 'durable', backend: 'firestore' },
+						subscribers: [
+							{
+								id: 'sub_test_1',
+								url: 'https://example.com/webhook',
+								description: 'Test Webhook Subscriber',
+								enabled: true,
+								hasSecret: true,
+								filter: { symbols: ['BTCUSDT'], sources: ['webhook-alert'] },
+								lastDeliveryStatus: 'success',
+								lastDeliveryAt: '2026-03-30T12:00:00.000Z',
+							},
+						],
+					});
+				}
+				return response({});
+			},
+		});
+		await flush();
+
+		await selectView(browser, 'subscribers');
+		const listForm = findForm(browser.elementsById.view, 'GET /api/alert-subscribers');
+		await listForm.dispatch('submit');
+		await flush();
+
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('https://example.com/webhook');
+		expect(viewText).toContain('Test Webhook Subscriber');
+		expect(viewText).toContain('HMAC Signed');
+		expect(viewText).toContain('Symbols: BTCUSDT');
+		expect(viewText).toContain('Sources: webhook-alert');
 	});
 
 	it('loads recent jobs with bounded status, type, and limit filters', async () => {
@@ -4062,6 +4327,8 @@ describe('admin browser client', () => {
 		const browser = createBrowser({
 			fetchImpl: async (url) => {
 				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts/summary')) return response({ summary: { delivery: { totalFailure: 0, byChannel: {} } } });
+				if (url.startsWith('/api/jobs')) return response({ jobs: [] });
 				if (url === '/api/status') {
 					statusCalls += 1;
 					if (statusCalls === 1) return response(status);
@@ -4078,6 +4345,7 @@ describe('admin browser client', () => {
 		const copyButton = findButton(browser.elementsById.view, 'Copy details');
 		expect(copyButton).toBeDefined();
 		expect(copyButton.hidden).toBe(false);
+		expect(browser.elementsById.view.textContent).toContain('All configured services and delivery channels operating normally');
 
 		const refreshButton = findButton(browser.elementsById.view, 'Refresh dashboard');
 		await refreshButton.dispatch('click');
@@ -4085,6 +4353,8 @@ describe('admin browser client', () => {
 
 		expect(statusCalls).toBe(2);
 		expect(copyButton.hidden).toBe(true);
+		expect(browser.elementsById.view.textContent).not.toContain('All configured services and delivery channels operating normally');
+		expect(browser.elementsById.view.textContent).toContain('Dashboard data unavailable');
 	});
 
 	it('sends job actions confirmed during an in-flight auto-refresh', async () => {
@@ -5344,6 +5614,190 @@ describe('admin browser client', () => {
 		const last = requests.at(-1);
 		expect(last[0]).toBe('/api/trading/binance/orders?symbol=BTCUSDT&limit=5');
 		expect(last[1].headers['x-api-key']).toBe('session-secret');
+	});
+
+	it('prefills and dry-runs a Spot bracket from the latest same-symbol alert', async () => {
+		const requests = [];
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				requests.push([url, options]);
+				if (url.startsWith('/api/alerts?')) {
+					return response({
+						success: true,
+						alerts: [{
+							id: 'alert-latest-btc',
+							symbol: 'BTCUSDT',
+							receivedAt: '2026-10-25T20:00:00.000Z',
+							text: 'BUY BTCUSDT at 60000',
+							enrichmentData: {
+								current_price: '60000',
+								invalidation_level: '58000',
+								target_level: '64000',
+								setup_type: 'breakout',
+							},
+						}],
+					});
+				}
+				if (url === '/api/trading/binance/orders') {
+					return response({ success: true, dryRun: true, environment: 'testnet', orderList: {} });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const form = findForm(browser.elementsById.view, 'Place Spot bracket');
+		form.elements['bracket-symbol'].value = 'BTCUSDT';
+		await findButton(form, 'Load latest alert levels').dispatch('click');
+		await flush();
+
+		expect(requests[0][0]).toBe('/api/alerts?symbol=BTCUSDT&limit=1');
+		expect(form.elements['bracket-side'].value).toBe('BUY');
+		expect(form.elements['bracket-entry-price'].value).toBe('60000');
+		expect(form.elements['bracket-stop-price'].value).toBe('58000');
+		expect(form.elements['bracket-take-profit-price'].value).toBe('64000');
+		form.elements['bracket-quantity'].value = '0.001';
+		form.elements['bracket-stop-limit-price'].value = '57900';
+
+		await findButton(form, 'Validate bracket (Dry Run)').dispatch('click');
+		await flush();
+		const dryRun = requests.at(-1);
+		expect(dryRun[0]).toBe('/api/trading/binance/orders');
+		expect(JSON.parse(dryRun[1].body)).toMatchObject({
+			symbol: 'BTCUSDT',
+			side: 'BUY',
+			type: 'BRACKET_LIMIT',
+			quantity: '0.001',
+			price: '60000',
+			stopPrice: '58000',
+			stopLimitPrice: '57900',
+			takeProfitPrice: '64000',
+			timeInForce: 'GTC',
+			dryRun: true,
+			alertId: 'alert-latest-btc',
+			origin: 'admin_alert',
+			setupType: 'breakout',
+		});
+	});
+
+	it('discards pending alert prefills when symbol changes before alert lookup completes', async () => {
+		let releaseAlert;
+		const pendingAlert = new Promise((resolve) => { releaseAlert = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url.startsWith('/api/alerts')) return pendingAlert;
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const form = findForm(browser.elementsById.view, 'Place Spot bracket');
+		form.elements['bracket-symbol'].value = 'BTCUSDT';
+		const loadingAlert = findButton(form, 'Load latest alert levels').dispatch('click');
+		await flush();
+
+		form.elements['bracket-symbol'].value = 'ETHUSDT';
+		await form.elements['bracket-symbol'].dispatch('input');
+
+		releaseAlert(response({
+			success: true,
+			alerts: [{
+				id: 'alert-latest-btc',
+				symbol: 'BTCUSDT',
+				enrichmentData: { symbol: 'BTCUSDT', invalidation_level: '58000', target_level: '64000' },
+				traderIntent: { side: 'BUY', entryPrice: '60000', invalidation: '58000', target: '64000' },
+			}],
+		}));
+		await loadingAlert;
+		await flush();
+
+		expect(form.elements['bracket-symbol'].value).toBe('ETHUSDT');
+		expect(form.elements['bracket-entry-price'].value).toBe('');
+		expect(form.elements['bracket-stop-price'].value).toBe('');
+		expect(form.elements['bracket-take-profit-price'].value).toBe('');
+	});
+
+	it('does not enable live submission when a bracket changes during dry-run validation', async () => {
+		let releaseValidation;
+		const pendingValidation = new Promise((resolve) => { releaseValidation = resolve; });
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/trading/binance/orders') return pendingValidation;
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const form = findForm(browser.elementsById.view, 'Place Spot bracket');
+		form.elements['bracket-symbol'].value = 'BTCUSDT';
+		form.elements['bracket-quantity'].value = '0.001';
+		form.elements['bracket-entry-price'].value = '60000';
+		form.elements['bracket-stop-price'].value = '58000';
+		form.elements['bracket-stop-limit-price'].value = '57900';
+		form.elements['bracket-take-profit-price'].value = '64000';
+		const validation = findButton(form, 'Validate bracket (Dry Run)').dispatch('click');
+		await flush();
+
+		form.elements['bracket-stop-price'].value = '57000';
+		await form.elements['bracket-stop-price'].dispatch('input');
+		releaseValidation(response({ success: true, dryRun: true, environment: 'testnet', orderList: {} }));
+		await validation;
+		await flush();
+
+		expect(form.elements['bracket-confirm'].disabled).toBe(true);
+		expect(findButton(form, 'Submit live bracket').disabled).toBe(true);
+		expect(find(form, (node) => node.className.includes('ticket-validation-notice')).textContent).toBe('');
+	});
+
+	it('reuses the same bracket idempotency key after an ambiguous submission response', async () => {
+		const liveRequests = [];
+		let liveAttempts = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url, options) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/trading/binance/orders') {
+					const body = JSON.parse(options.body);
+					if (body.dryRun) return response({ success: true, dryRun: true, environment: 'testnet', orderList: {} });
+					liveRequests.push([url, options]);
+					liveAttempts += 1;
+					return liveAttempts === 1
+						? response({ success: false, code: 'BINANCE_ORDER_STATUS_UNKNOWN' }, 503)
+						: response({ success: true, dryRun: false, environment: 'testnet', orderList: { orderListId: 77 } }, 201);
+				}
+				return response({});
+			},
+		});
+		await flush();
+		await selectView(browser, 'orders');
+
+		const form = findForm(browser.elementsById.view, 'Place Spot bracket');
+		form.elements['bracket-symbol'].value = 'BTCUSDT';
+		form.elements['bracket-quantity'].value = '0.001';
+		form.elements['bracket-entry-price'].value = '60000';
+		form.elements['bracket-stop-price'].value = '58000';
+		form.elements['bracket-stop-limit-price'].value = '57900';
+		form.elements['bracket-take-profit-price'].value = '64000';
+		await findButton(form, 'Validate bracket (Dry Run)').dispatch('click');
+		await flush();
+		form.elements['bracket-confirm'].value = 'CONFIRM';
+		await form.elements['bracket-confirm'].dispatch('input');
+		const submit = findButton(form, 'Submit live bracket');
+		await submit.dispatch('click');
+		await flush();
+		await submit.dispatch('click');
+		await flush();
+
+		expect(liveRequests).toHaveLength(2);
+		const firstBody = JSON.parse(liveRequests[0][1].body);
+		const secondBody = JSON.parse(liveRequests[1][1].body);
+		expect(secondBody.idempotencyKey).toBe(firstBody.idempotencyKey);
+		expect(liveRequests[1][1].headers['idempotency-key']).toBe(liveRequests[0][1].headers['idempotency-key']);
 	});
 
 	it('rejects exponent notation and canonicalizes integer order limits', async () => {
@@ -7538,6 +7992,63 @@ describe('structured analysis forms', () => {
 			expect(playground.elements.body.value).toContain('[REDACTED]');
 		});
 
+		it('redacts Discord webhook URLs in request history and restored body (#1159)', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url.includes('/api/webhook/alert')) {
+						return response({ success: true, messageId: 'm-102' });
+					}
+					return response({});
+				},
+			});
+			await flush();
+			browser.elementsById['api-key'].value = 'test-key';
+			await selectView(browser, 'playground');
+			await flush();
+
+			const playground = find(browser.elementsById.view, (node) => node.tagName === 'FORM'
+				&& node.textContent.includes('Operations'));
+			const select = find(playground, (node) => node.tagName === 'SELECT');
+
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('POST /api/webhook/alert')).value;
+			await select.dispatch('change');
+			const liveToken = 'super-secret-discord-token-xyz';
+			const liveWebhookId = '9876543210';
+			playground.elements.body.value = JSON.stringify({
+				message: 'Breakout alert',
+				discordWebhookUrl: `https://discord.com/api/webhooks/${liveWebhookId}/${liveToken}`,
+			});
+			await playground.dispatch('submit');
+			await flush();
+
+			const historyItems = findAll(playground, (n) => n.className === 'history-item');
+			expect(historyItems.length).toBe(1);
+
+			// Verify webhook token and ID are redacted from history and playground text
+			expect(playground.textContent).not.toContain(liveToken);
+			expect(playground.textContent).not.toContain(liveWebhookId);
+
+			// Change the current form to another operation to clear inputs
+			select.value = find(select, (o) => o.tagName === 'OPTION' && o.textContent.includes('GET /api/alerts —')).value;
+			await select.dispatch('change');
+			expect(playground.elements.body).toBeUndefined();
+
+			// Restore from history
+			const restoreBtn = find(historyItems[0], (n) => n.tagName === 'BUTTON' && n.textContent === 'Restore');
+			await restoreBtn.dispatch('click');
+			await flush();
+
+			// Form should be back to POST /api/webhook/alert with restored body
+			const currentSelected = find(select, (o) => o.value === select.value);
+			expect(currentSelected.textContent).toContain('POST /api/webhook/alert');
+			expect(playground.elements.body).toBeDefined();
+			expect(playground.elements.body.value).toContain('Breakout alert');
+			expect(playground.elements.body.value).not.toContain(liveToken);
+			expect(playground.elements.body.value).not.toContain(liveWebhookId);
+			expect(playground.elements.body.value).toContain('[REDACTED]');
+		});
+
 		it('records the submitted query payload when operations change mid-flight', async () => {
 			let releaseRequest;
 			const pendingRequest = new Promise((resolve) => { releaseRequest = resolve; });
@@ -8173,6 +8684,247 @@ describe('structured analysis forms', () => {
 			expect(requests.some((url) => url.startsWith('https://cabros-bot-production.up.railway.app/'))).toBe(true);
 			expect(browser.location.search).toContain('backend=https%3A%2F%2Fcabros-bot-production.up.railway.app');
 			expect(browser.location.search).toContain('view=outcomes');
+		});
+
+		it('navigates directly to views via hash routes (#/trading, #/status, #jobs)', async () => {
+			const browserTrading = createBrowser({
+				location: { hash: '#/trading' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserTrading.titleHistory.at(-1)).toMatch(/Trading/);
+			expect(find(browserTrading.body, (node) => node.dataset.view === 'trading').attributes['aria-current']).toBe('page');
+
+			const browserStatus = createBrowser({
+				location: { hash: '#/status' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserStatus.titleHistory.at(-1)).toMatch(/Status/);
+			expect(find(browserStatus.body, (node) => node.dataset.view === 'status').attributes['aria-current']).toBe('page');
+
+			const browserJobs = createBrowser({
+				location: { hash: '#jobs' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserJobs.titleHistory.at(-1)).toMatch(/Jobs/);
+			expect(find(browserJobs.body, (node) => node.dataset.view === 'jobs').attributes['aria-current']).toBe('page');
+		});
+
+		it('supports hashchange navigation between views', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
+
+			await browser.dispatchHashChange('#/trading');
+			expect(browser.titleHistory.at(-1)).toMatch(/Trading/);
+			expect(find(browser.body, (node) => node.dataset.view === 'trading').attributes['aria-current']).toBe('page');
+
+			await browser.dispatchHashChange('#/diagnostics');
+			expect(browser.titleHistory.at(-1)).toMatch(/Diagnostics/);
+			expect(find(browser.body, (node) => node.dataset.view === 'diagnostics').attributes['aria-current']).toBe('page');
+		});
+
+		it('deep-links to alert trade prefill via #/alerts/:alertId/trade', async () => {
+			const browser = createBrowser({
+				location: { hash: '#/alerts/alert-deep-99/trade' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					if (url === '/api/alerts/alert-deep-99') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-deep-99',
+								text: 'BINANCE:ETHUSDT(1H) COMPRA precio: 3200',
+								symbol: 'BINANCE:ETHUSDT',
+								price: '3200',
+								signal: 'COMPRA',
+								enriched: false,
+							},
+						});
+					}
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+
+			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
+			expect(find(browser.body, (node) => node.dataset.view === 'alerts').attributes['aria-current']).toBe('page');
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			expect(detailForm).toBeDefined();
+			expect(detailForm.elements['path-alertId'].value).toBe('alert-deep-99');
+
+			const ticket = find(detailForm, (node) => node.className && node.className.includes('trade-ticket'));
+			expect(ticket).toBeDefined();
+			expect(ticket.textContent).toContain('Trade this alert');
+			expect(ticket.textContent).toContain('Linked alert: alert-deep-99');
+		});
+
+		it('falls back to overview on unrecognised hash and canonicalises URL', async () => {
+			const browser = createBrowser({
+				location: { hash: '#/non-existent-view' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+
+			expect(browser.titleHistory.at(-1)).toMatch(/Overview/);
+			expect(find(browser.body, (node) => node.dataset.view === 'overview').attributes['aria-current']).toBe('page');
+			expect(browser.historyCalls.some((call) => call.mode === 'replace' && call.url.includes('view=overview'))).toBe(true);
+		});
+
+		it('supports alternative hash routes (#/trade, #/trade/:alertId, #/alerts/:alertId, and trailing slashes)', async () => {
+			// #/trade/ with trailing slash -> trading view
+			const browserTrade = createBrowser({
+				location: { hash: '#/trade/' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserTrade.titleHistory.at(-1)).toMatch(/Trading/);
+			expect(find(browserTrade.body, (node) => node.dataset.view === 'trading').attributes['aria-current']).toBe('page');
+
+			// #/status/ with trailing slash -> status view
+			const browserStatusSlash = createBrowser({
+				location: { hash: '#/status/' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserStatusSlash.titleHistory.at(-1)).toMatch(/Status/);
+			expect(find(browserStatusSlash.body, (node) => node.dataset.view === 'status').attributes['aria-current']).toBe('page');
+
+			// #/trade/:alertId -> alerts view with prefill
+			const browserTradeAlert = createBrowser({
+				location: { hash: '#/trade/alert-trade-123' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					if (url === '/api/alerts/alert-trade-123') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-trade-123',
+								text: 'BINANCE:BTCUSDT(4H) COMPRA precio: 65000',
+								symbol: 'BINANCE:BTCUSDT',
+								price: '65000',
+								signal: 'COMPRA',
+								enriched: false,
+							},
+						});
+					}
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserTradeAlert.titleHistory.at(-1)).toMatch(/Alerts/);
+			const detailFormTrade = findForm(browserTradeAlert.elementsById.view, 'GET /api/alerts/{alertId}');
+			expect(detailFormTrade).toBeDefined();
+			expect(detailFormTrade.elements['path-alertId'].value).toBe('alert-trade-123');
+
+			// #/alerts/:alertId (without /trade suffix) -> alerts view with prefill
+			const browserAlertNoSuffix = createBrowser({
+				location: { hash: '#/alerts/alert-plain-456' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					if (url === '/api/alerts/alert-plain-456') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-plain-456',
+								text: 'BINANCE:SOLUSDT(1D) VENTA precio: 150',
+								symbol: 'BINANCE:SOLUSDT',
+								price: '150',
+								signal: 'VENTA',
+								enriched: false,
+							},
+						});
+					}
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browserAlertNoSuffix.titleHistory.at(-1)).toMatch(/Alerts/);
+			const detailFormPlain = findForm(browserAlertNoSuffix.elementsById.view, 'GET /api/alerts/{alertId}');
+			expect(detailFormPlain).toBeDefined();
+			expect(detailFormPlain.elements['path-alertId'].value).toBe('alert-plain-456');
+		});
+
+		it('safely handles malformed percent-encoded hash without throwing URIError', async () => {
+			const browser = createBrowser({
+				location: { hash: '#/alerts/%/trade' },
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+			expect(browser.titleHistory.at(-1)).toMatch(/Alerts/);
+		});
+
+		it('renders Copy trade link button and preserves search parameters in copied URL', async () => {
+			const browser = createBrowser({
+				location: {
+					pathname: '/admin',
+					search: '?backend=https%3A%2F%2Fcabros-bot-production.up.railway.app&lang=es',
+					hash: '#/alerts/alert-copy-1',
+				},
+				fetchImpl: async (url) => {
+					if (url.endsWith('/openapi.json')) return response(contract);
+					if (url.endsWith('/api/alerts/alert-copy-1')) {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-copy-1',
+								text: 'BINANCE:BTCUSDT COMPRA',
+								symbol: 'BINANCE:BTCUSDT',
+								price: '60000',
+								signal: 'COMPRA',
+								enriched: false,
+							},
+						});
+					}
+					return response({ enabled: false, configured: false });
+				},
+			});
+			await flush();
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			expect(detailForm).toBeDefined();
+
+			const copyButton = find(detailForm, (node) => node.tagName === 'BUTTON' && node.textContent === 'Copy trade link');
+			expect(copyButton).toBeDefined();
+
+			let copiedPayload = null;
+			browser.context.navigator = {
+				clipboard: {
+					writeText: async (text) => { copiedPayload = text; },
+				},
+			};
+			await copyButton.dispatch('click');
+			await flush();
+			expect(copiedPayload).toContain('/admin?backend=https%3A%2F%2Fcabros-bot-production.up.railway.app&lang=es#/alerts/alert-copy-1/trade');
 		});
 	});
 
@@ -9070,4 +9822,637 @@ describe('structured analysis forms', () => {
 		});
 	});
 
+	describe('trade this alert ticket and position close (issue #1276)', () => {
+		it('prefills trade ticket from alert with Binance pair, parsed signal side, alert price, and default quote size', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/alerts/alert-trade-1') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-trade-1',
+								text: 'BINANCE:BTCUSDT(1H) COMPRA precio: 65000.50',
+								symbol: 'BINANCE:BTCUSDT',
+								price: '65000.50',
+								signal: 'COMPRA',
+								enriched: false,
+							},
+						});
+					}
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'alerts');
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			detailForm.elements['path-alertId'].value = 'alert-trade-1';
+			await detailForm.dispatch('submit');
+			await flush();
+
+			const ticket = find(detailForm, (node) => node.className && node.className.includes('trade-ticket'));
+			expect(ticket).toBeDefined();
+			expect(ticket.textContent).toContain('Trade this alert');
+			expect(ticket.textContent).toContain('Linked alert: alert-trade-1');
+			expect(ticket.textContent).toContain('Environment: testnet');
+
+			const symbolInput = find(ticket, (n) => n.name === 'ticket-symbol');
+			expect(symbolInput.value).toBe('BTCUSDT');
+
+			const sideSelect = find(ticket, (n) => n.name === 'ticket-side');
+			expect(sideSelect.value).toBe('BUY');
+
+			const typeSelect = find(ticket, (n) => n.name === 'ticket-type');
+			expect(typeSelect.value).toBe('LIMIT');
+
+			const priceInput = find(ticket, (n) => n.name === 'ticket-price');
+			expect(priceInput.value).toBe('65000.50');
+		});
+
+		it('parses VENTA signal side from alert text and does not infer from sentiment', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/alerts/alert-sell-1') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-sell-1',
+								text: 'BINANCE:ETHUSDT(4H) VENTA at 3500',
+								symbol: 'BINANCE:ETHUSDT',
+								price: '3500',
+								enrichmentData: { sentiment: 'bullish' },
+								enriched: true,
+							},
+						});
+					}
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'alerts');
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			detailForm.elements['path-alertId'].value = 'alert-sell-1';
+			await detailForm.dispatch('submit');
+			await flush();
+
+			const ticket = find(detailForm, (node) => node.className && node.className.includes('trade-ticket'));
+			const sideSelect = find(ticket, (n) => n.name === 'ticket-side');
+			expect(sideSelect.value).toBe('SELL');
+		});
+
+		it('executes dryRun first, displays validated order, and requires typing CONFIRM for live submission', async () => {
+			const orderRequests = [];
+			const browser = createBrowser({
+				fetchImpl: async (url, options = {}) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/alerts/alert-trade-2') {
+						return response({
+							success: true,
+							alert: {
+								id: 'alert-trade-2',
+								text: 'BINANCE:BTCUSDT(1H) COMPRA 60000',
+								symbol: 'BTCUSDT',
+								price: '60000',
+								enriched: false,
+							},
+						});
+					}
+					if (url === '/api/trading/binance/orders' && options.method === 'POST') {
+						const body = JSON.parse(options.body);
+						orderRequests.push({ body, headers: options.headers });
+						return response({
+							success: true,
+							dryRun: body.dryRun,
+							environment: 'testnet',
+							order: { orderId: 9988, symbol: 'BTCUSDT', side: body.side, type: body.type },
+						});
+					}
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'alerts');
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			detailForm.elements['path-alertId'].value = 'alert-trade-2';
+			await detailForm.dispatch('submit');
+			await flush();
+
+			const ticket = find(detailForm, (node) => node.className && node.className.includes('trade-ticket'));
+			const dryRunBtn = find(ticket, (n) => n.className && n.className.includes('trade-dry-run-btn'));
+			const submitBtn = find(ticket, (n) => n.className && n.className.includes('trade-submit-btn'));
+			const confirmInput = find(ticket, (n) => n.className && n.className.includes('ticket-confirm-input'));
+
+			expect(submitBtn.disabled).toBe(true);
+			expect(confirmInput.disabled).toBe(true);
+
+			// Click dry run
+			const qtyInput = find(ticket, (n) => n.name === 'ticket-quantity');
+			qtyInput.value = '0.001';
+			await dryRunBtn.dispatch('click');
+			await flush();
+
+			expect(orderRequests).toHaveLength(1);
+			expect(orderRequests[0].body.dryRun).toBe(true);
+			expect(orderRequests[0].body.alertId).toBe('alert-trade-2');
+			expect(orderRequests[0].body.origin).toBe('admin_alert');
+			expect(ticket.textContent).toContain('Dry run passed');
+			expect(confirmInput.disabled).toBe(false);
+			expect(submitBtn.disabled).toBe(true);
+
+			// Partial confirmation keeps submit disabled
+			confirmInput.value = 'CONFIR';
+			await confirmInput.dispatch('input');
+			expect(submitBtn.disabled).toBe(true);
+
+			// Exact "CONFIRM" enables submit
+			confirmInput.value = 'CONFIRM';
+			await confirmInput.dispatch('input');
+			expect(submitBtn.disabled).toBe(false);
+
+			// Click submit
+			await submitBtn.dispatch('click');
+			await flush();
+
+			expect(orderRequests).toHaveLength(2);
+			expect(orderRequests[1].body.dryRun).toBe(false);
+			expect(orderRequests[1].body.alertId).toBe('alert-trade-2');
+			expect(orderRequests[1].body.origin).toBe('admin_alert');
+			expect(orderRequests[1].body.idempotencyKey).toMatch(/^alert-trade-2-buy-[0-9a-z-]+$/);
+			expect(ticket.textContent).toContain('Order placed: #9988');
+		});
+
+		it('disables live submit when environment is live', async () => {
+			const browser = createBrowser({
+				fetchImpl: async (url, options = {}) => {
+					if (url === '/openapi.json') return response(contract);
+					if (url === '/api/alerts/alert-live') {
+						return response({
+							success: true,
+							alert: { id: 'alert-live', text: 'BTCUSDT COMPRA 50000', price: '50000', symbol: 'BTCUSDT' },
+						});
+					}
+					if (url === '/api/trading/binance/orders') {
+						return response({
+							success: true,
+							dryRun: true,
+							environment: 'live',
+						});
+					}
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'alerts');
+
+			const detailForm = findForm(browser.elementsById.view, 'GET /api/alerts/{alertId}');
+			detailForm.elements['path-alertId'].value = 'alert-live';
+			await detailForm.dispatch('submit');
+			await flush();
+
+			const ticket = find(detailForm, (node) => node.className && node.className.includes('trade-ticket'));
+			const dryRunBtn = find(ticket, (n) => n.className && n.className.includes('trade-dry-run-btn'));
+			const submitBtn = find(ticket, (n) => n.className && n.className.includes('trade-submit-btn'));
+			const confirmInput = find(ticket, (n) => n.className && n.className.includes('ticket-confirm-input'));
+
+			const qtyInput = find(ticket, (n) => n.name === 'ticket-quantity');
+			qtyInput.value = '0.001';
+			await dryRunBtn.dispatch('click');
+			await flush();
+
+			expect(ticket.textContent).toContain('Environment: live');
+			confirmInput.value = 'CONFIRM';
+			await confirmInput.dispatch('input');
+
+			expect(submitBtn.disabled).toBe(true);
+			expect(submitBtn.title).toContain('Live trading is disabled');
+		});
+
+		it('renders open positions in trading view and Close button prefills sell order with sellable quantity', async () => {
+			const queried = [];
+			const browser = createBrowser({
+				fetchImpl: async (url) => {
+					queried.push(url);
+					if (url === '/openapi.json') return response(contract);
+					if (url.startsWith('/api/status')) {
+						return response({
+							dependencies: { binanceTrading: { environment: 'testnet', maxNotionalConfigured: true } },
+						});
+					}
+					if (url.startsWith('/api/outcomes/summary')) return response({ summary: {} });
+					if (url.startsWith('/api/outcomes')) return response({ outcomes: [] });
+					if (url.startsWith('/api/trading/binance/orders/audit')) return response({ audit: [] });
+					if (url.startsWith('/api/trading/positions')) {
+						return response({
+							success: true,
+							positions: [
+								{ symbol: 'BTCUSDT', quantity: '0.05', entryPrice: '50000', markPrice: '55000', unrealizedPnl: 250 },
+							],
+						});
+					}
+					if (url.startsWith('/api/trading/binance/account/balances')) {
+						return response({
+							success: true,
+							balances: [
+								{ asset: 'BTC', free: '0.04', locked: '0.01' },
+								{ asset: 'USDT', free: '1000', locked: '0' },
+							],
+						});
+					}
+					return response({});
+				},
+			});
+			await flush();
+			await selectView(browser, 'trading');
+			await flush();
+
+			expect(queried.some((u) => u.startsWith('/api/trading/positions'))).toBe(true);
+			const positionsPanel = find(browser.elementsById.view, (n) => n.className && n.className.includes('positions-panel'));
+			expect(positionsPanel).toBeDefined();
+			expect(positionsPanel.textContent).toContain('BTCUSDT');
+			expect(positionsPanel.textContent).toContain('0.05');
+
+			const closeBtn = find(positionsPanel, (n) => n.className && n.className.includes('position-close-btn'));
+			expect(closeBtn).toBeDefined();
+
+			await closeBtn.dispatch('click');
+			await flush();
+
+			expect(queried.some((u) => u.startsWith('/api/trading/binance/account/balances'))).toBe(true);
+			const ticket = find(positionsPanel, (n) => n.className && n.className.includes('trade-ticket'));
+			expect(ticket).toBeDefined();
+			expect(ticket.textContent).toContain('Close position (BTCUSDT)');
+
+			const symbolInput = find(ticket, (n) => n.name === 'ticket-symbol');
+			expect(symbolInput.value).toBe('BTCUSDT');
+
+			const sideSelect = find(ticket, (n) => n.name === 'ticket-side');
+			expect(sideSelect.value).toBe('SELL');
+
+			const qtyInput = find(ticket, (n) => n.name === 'ticket-quantity');
+			// Clamped to free balance of 0.04 from 0.05 position
+			expect(qtyInput.value).toBe('0.04');
+		});
+	});
+
+	it('renders a unified operational dashboard combining status, delivery health, active work, recent alerts, and issue warnings', async () => {
+		const status = {
+			service: { name: 'cabros-bot', version: '0.1.0', environment: 'production', commit: 'abc12345' },
+			featureFlags: { telegramBot: true, signalOutcomeTracking: true, marketScanner: false },
+			deliveryChannels: {
+				telegram: { enabled: true, status: 'ready' },
+				whatsapp: { enabled: false, status: 'disabled' },
+			},
+			dependencies: {
+				telegram: { enabled: true, configured: true, ready: true, status: 'ready' },
+				tradingViewMcp: { enabled: true, configured: false, ready: false, status: 'misconfigured' },
+				signalOutcomeWorker: { enabled: true, configured: true, ready: true, status: 'ready' },
+			},
+		};
+		const summary = {
+			success: true,
+			summary: {
+				totalAlerts: 15,
+				delivery: {
+					totalSuccess: 12,
+					totalFailure: 3,
+					byChannel: {
+						telegram: { total: 10, success: 9, failure: 1 },
+						whatsapp: { total: 5, success: 3, failure: 2 },
+					},
+				},
+			},
+		};
+		const jobs = {
+			success: true,
+			jobs: [
+				{ jobId: 'job-101', status: 'processing', type: 'analysis' },
+				{ jobId: 'job-102', status: 'completed', type: 'scanner' },
+				{ jobId: 'job-103', status: 'failed', type: 'analysis' },
+			],
+		};
+		const outcomes = {
+			success: true,
+			outcomes: [
+				{ id: 'out-1', symbol: 'BINANCE:BTCUSDT', outcomeEvaluated: false, outcomes: { '1h': { status: 'pending' } } },
+				{ id: 'out-2', symbol: 'BINANCE:ETHUSDT', outcomeEvaluated: true, outcomes: { '1h': { status: 'evaluated' } } },
+			],
+		};
+		const alerts = {
+			alerts: [
+				{
+					id: 'alt-01',
+					enriched: true,
+					receivedAt: '2026-08-30T12:00:00.000Z',
+					deliveryResults: [{ channel: 'telegram', success: true }],
+				},
+			],
+		};
+
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				if (url.startsWith('/api/alerts/summary')) return response(summary);
+				if (url.startsWith('/api/jobs')) return response(jobs);
+				if (url.startsWith('/api/outcomes')) return response(outcomes);
+				if (url.startsWith('/api/alerts')) return response(alerts);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		const viewText = browser.elementsById.view.textContent;
+		// System Health
+		expect(viewText).toContain('Operational overview');
+		expect(viewText).toContain('cabros-bot');
+		expect(viewText).toContain('2 enabled');
+		// Issues / Warnings Panel
+		expect(viewText).toContain('TradingView MCP');
+		expect(viewText).toContain('Delivery alerts had 3 failures');
+		expect(viewText).toContain('1 background job failed');
+		// Delivery Health Panel
+		expect(viewText).toContain('Delivery health');
+		expect(viewText).toContain('15');
+		expect(viewText).toContain('12');
+		expect(viewText).toContain('80%');
+		expect(viewText).toContain('Telegram');
+		// Active Work Panel
+		expect(viewText).toContain('Active work');
+		expect(viewText).toContain('Counts reflect the latest 20 jobs and outcomes');
+		expect(viewText).toContain('In-flight jobs1');
+		expect(viewText).toContain('Pending outcomes1');
+		expect(viewText).toContain('1 evaluated signals');
+		expect(viewText).toContain('job-101 · analysis');
+		expect(viewText).toContain('pendingBINANCE:BTCUSDT');
+		expect(viewText).toContain('BINANCE:BTCUSDT');
+		// Recent Alerts Panel
+		expect(viewText).toContain('Recent alerts');
+		expect(viewText).toContain('Enriched');
+		expect(viewText).toContain('alt-01');
+		expect(viewText).toContain(new Date('2026-08-30T12:00:00.000Z').toLocaleString());
+	});
+
+	it('auto-refreshes operational dashboard on configured interval and detaches cleanly', async () => {
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') {
+					statusCalls++;
+					return response({ service: { name: 'cabros-bot' } });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		expect(statusCalls).toBe(1);
+		expect([...browser.timerDelays.values()]).toContain(30000);
+
+		// Fire auto-refresh timer
+		for (const fireTimer of browser.timers.values()) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+
+		// Switch view to detach
+		await selectView(browser, 'status');
+		await flush();
+		expect(browser.timers.size).toBe(0);
+	});
+
+	it('retries operational dashboard polling after a transient status failure', async () => {
+		let statusCalls = 0;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') {
+					statusCalls += 1;
+					return statusCalls === 2
+						? response({ error: 'temporary failure' }, 503)
+						: response({ service: { name: 'cabros-bot' }, dependencies: {} });
+				}
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(2);
+		expect([...browser.timerDelays.values()]).toContain(30000);
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(statusCalls).toBe(3);
+	});
+
+	it('budgets supplementary dashboard polling and backs off after a 429', async () => {
+		let now = 1000000;
+		const calls = [];
+		let summaryStatus = 200;
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				calls.push(url);
+				if (url === '/api/status') return response({ service: { name: 'cabros-bot' } });
+				if (url.startsWith('/api/alerts/summary')) return response({ summary: { delivery: {} } }, summaryStatus, { 'retry-after': '120' });
+				if (url.startsWith('/api/jobs')) return response({ jobs: [] });
+				if (url.startsWith('/api/outcomes')) return response({ outcomes: [] });
+				return response({ alerts: [] });
+			},
+		});
+		browser.context.Date = class extends Date { static now() { return now; } };
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+		for (let i = 0; i < 3; i++) {
+			now += 30000;
+			for (const fireTimer of [...browser.timers.values()]) fireTimer();
+			await flush();
+		}
+		expect(calls.filter((url) => url.startsWith('/api/alerts/summary'))).toHaveLength(2);
+		summaryStatus = 429;
+		now += 30000;
+		for (const fireTimer of [...browser.timers.values()]) fireTimer();
+		await flush();
+		expect(calls.filter((url) => url.startsWith('/api/alerts/summary'))).toHaveLength(3);
+		for (let i = 0; i < 3; i++) {
+			now += 30000;
+			for (const fireTimer of [...browser.timers.values()]) fireTimer();
+			await flush();
+		}
+		expect(calls.filter((url) => url.startsWith('/api/alerts/summary'))).toHaveLength(3);
+	});
+
+	it('marks outcome metrics unavailable instead of claiming an empty queue', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response({ service: { name: 'cabros-bot' }, featureFlags: { signalOutcomeTracking: true } });
+				if (url.startsWith('/api/alerts/summary')) return response({ summary: { delivery: { totalFailure: 0 } } });
+				if (url.startsWith('/api/jobs')) return response({ jobs: [] });
+				if (url.startsWith('/api/outcomes')) return response({ error: 'unavailable' }, 503);
+				return response({ alerts: [] });
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('Outcome metrics unavailable');
+		expect(viewText).not.toContain('No in-flight background jobs or pending outcome evaluations');
+		expect(viewText).not.toContain('All configured services and delivery channels operating normally');
+	});
+
+	it('renders healthy state when all dependencies are ready and 0 failures occur', async () => {
+		const status = {
+			service: { name: 'cabros-bot', version: '0.1.0' },
+			dependencies: {
+				telegram: { enabled: true, ready: true, status: 'ready' },
+				persistentWriteHealth: { window: { durationMs: 60000 }, byDomain: {} },
+			},
+		};
+		const summary = {
+			success: true,
+			summary: {
+				totalAlerts: 5,
+				delivery: { totalSuccess: 5, totalFailure: 0, byChannel: { telegram: { total: 5, success: 5, failure: 0 } } },
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				if (url.startsWith('/api/alerts/summary')) return response(summary);
+				if (url.startsWith('/api/jobs')) return response({ jobs: [] });
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('All configured services and delivery channels operating normally');
+		expect(viewText).not.toContain('Persistent Write Health: Unknown');
+	});
+
+	it('renders fail-open graceful fallbacks when supplementary data endpoints fail or are disabled', async () => {
+		const status = {
+			service: { name: 'cabros-bot', version: '0.1.0' },
+			featureFlags: { telegramBot: true },
+			deliveryChannels: { telegram: { enabled: true, status: 'ready' } },
+			dependencies: { telegram: { enabled: true, ready: true, status: 'ready' } },
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				if (url.startsWith('/api/alerts/summary')) return response({ error: 'Service Unavailable' }, 503);
+				if (url.startsWith('/api/jobs')) return response({ error: 'Feature disabled' }, 403);
+				if (url.startsWith('/api/outcomes')) return response({ error: 'Feature disabled' }, 403);
+				if (url.startsWith('/api/alerts')) return response({ error: 'Feature disabled' }, 403);
+				return response({});
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('Operational overview');
+		expect(viewText).toContain('No recent delivery metrics reported or alert storage disabled');
+		expect(viewText).toContain('Delivery metrics unavailable');
+		expect(viewText).not.toContain('All configured services and delivery channels operating normally');
+		expect(viewText).toContain('Job metrics unavailable');
+		expect(viewText).toContain('No recent alerts stored or alert storage disabled');
+	});
+
+	it('renders available jobs independently of outcome tracking status', async () => {
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response({ service: { name: 'cabros-bot' }, featureFlags: { signalOutcomeTracking: false } });
+				if (url.startsWith('/api/alerts/summary')) return response({ summary: { delivery: { totalFailure: 0 } } });
+				if (url.startsWith('/api/jobs')) return response({ jobs: [{ jobId: 'job-123', status: 'processing', type: 'analysis' }] });
+				if (url.startsWith('/api/outcomes')) return response({ error: 'disabled' }, 403);
+				return response({ alerts: [] });
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('Active background jobs (1)');
+		expect(viewText).toContain('job-123');
+		expect(viewText).toContain('Outcome tracking disabled');
+		expect(viewText).not.toContain('Outcome metrics unavailable');
+		expect(viewText).not.toContain('retry after dependencies recover');
+	});
+
+	it('warns when news monitor is paused instead of declaring healthy', async () => {
+		const status = {
+			service: { name: 'cabros-bot', version: '0.1.0' },
+			featureFlags: { newsMonitor: true, newsMonitorPaused: true },
+			dependencies: {
+				telegram: { enabled: true, ready: true, status: 'ready' },
+				newsMonitor: { enabled: true, paused: true },
+			},
+		};
+		const browser = createBrowser({
+			fetchImpl: async (url) => {
+				if (url === '/openapi.json') return response(contract);
+				if (url === '/api/status') return response(status);
+				if (url.startsWith('/api/alerts/summary')) return response({ summary: { delivery: { totalFailure: 0 } } });
+				if (url.startsWith('/api/jobs')) return response({ jobs: [] });
+				return response({ alerts: [] });
+			},
+		});
+		await flush();
+		browser.elementsById['api-key'].value = 'test-key';
+		await selectView(browser, 'overview');
+		await flush();
+		const viewText = browser.elementsById.view.textContent;
+		expect(viewText).toContain('News monitor paused');
+		expect(viewText).not.toContain('All configured services and delivery channels operating normally');
+	});
+});
+
+
+describe('admin environment banner', () => {
+	it('renders custom staging metadata and copies the selected API base without a query string', async () => {
+		const browser = createBrowser({
+			location: { search: '?backend=https%3A%2F%2Fopenclaw.tail5e4271.ts.net' },
+			environmentBanner: { environment: 'staging-eu', commit: null, name: 'bot' },
+			fetchImpl: async (url) => url.endsWith('/api/banner')
+				? response({ environment: 'staging-eu', commit: null, name: 'bot' })
+				: response({}),
+		});
+		await flush();
+		const host = browser.elementsById['environment-banner'];
+		expect(host.hidden).toBe(false);
+		expect(host.textContent).toContain('staging-eu');
+		expect(host.textContent).not.toContain('null');
+		const writeText = jest.fn().mockResolvedValue(undefined);
+		browser.context.navigator = { clipboard: { writeText } };
+		const button = find(host, (node) => node.tagName === 'BUTTON');
+		await button.dispatch('click');
+		expect(writeText).toHaveBeenCalledWith('https://openclaw.tail5e4271.ts.net');
+	});
 });

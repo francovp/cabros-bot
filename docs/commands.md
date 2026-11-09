@@ -13,6 +13,22 @@ Display the list of available Telegram bot commands, argument syntax, and aliase
 /help
 ```
 
+### /version
+
+Confirms running build SHA, platform environment (Render, Vercel, Railway, unknown), and process uptime. Sourced from the same `build` object surfaced by `GET /api/capabilities`.
+
+**Example:**
+```
+/version
+```
+
+**Response:**
+```
+cabros-bot abcdef1 (render, uptime 2h 15m)
+
+Build details: /api/capabilities
+```
+
 ### /precio `<symbol>`
 
 Get real-time price for crypto pairs (Binance) or equities/stocks (Twelve Data).
@@ -37,6 +53,17 @@ Telegram bot utility command to get current Telegram chat ID.
 **Example:**
 ```
 /cryptobot id
+```
+
+### /history `<symbol>` (alias: `/alertas`)
+
+List recent stored alerts from Telegram when `ENABLE_FIRESTORE_ALERT_STORAGE=true`. Results include symbol, status, and timestamps.
+
+**Examples:**
+```
+/history
+/history BTCUSDT limit=10
+/alertas estado failed limit=20
 ```
 
 ### /analisis `<symbols>` (alias: `/analysis`)

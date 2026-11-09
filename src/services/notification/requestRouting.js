@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('node:crypto');
+
 const VALID_CHANNELS = ['telegram', 'whatsapp', 'discord'];
 
 // Strict format patterns for chat IDs. These run only when strictChatIds is
@@ -264,7 +266,7 @@ function escapeRegExp(value) {
  * @param {Object} symbolRoutes - Normalized `symbolRoutes` map from parseNotificationRouting.
  * @returns {Array<{symbol: string, channels: string[]|undefined}>} Ordered, deduplicated matches.
  */
-function resolveSymbolRouteDispatches(text, symbolRoutes, routing = {}) {
+function resolveSymbolRouteDispatches(text, symbolRoutes, routing = {}, includeRouteKeys = false) {
 	if (!symbolRoutes) {
 		return null;
 	}
@@ -314,7 +316,8 @@ function resolveSymbolRouteDispatches(text, symbolRoutes, routing = {}) {
 	);
 
 	const dispatches = [];
-	const seen = new Set();
+	const dispatchByKey = new Map();
+	const referenceSets = new Map();
 	let match;
 	while ((match = combined.exec(text)) !== null) {
 		const referenceKey = match.groups?.qualified || match.groups?.bare;
@@ -323,16 +326,28 @@ function resolveSymbolRouteDispatches(text, symbolRoutes, routing = {}) {
 			combined.lastIndex += 1;
 			continue;
 		}
-		if (seen.has(referenceKey)) {
+		const bareExchange = match.groups?.bare
+			? text.slice(Math.max(0, match.index - 17), match.index).match(/([A-Za-z][A-Za-z0-9_]{1,15}):$/)?.[1]
+			: null;
+		const matchedReference = bareExchange ? `${bareExchange}:${referenceKey}` : referenceKey;
+		const existing = dispatchByKey.get(referenceKey);
+		if (existing) {
+			if (includeRouteKeys && !referenceSets.get(referenceKey).has(matchedReference)) {
+				referenceSets.get(referenceKey).add(matchedReference);
+				existing.references.push(matchedReference);
+			}
 			continue;
 		}
-		seen.add(referenceKey);
-		dispatches.push({
+		const dispatch = {
+			...(includeRouteKeys ? { routeKey: referenceKey, references: [matchedReference] } : {}),
 			// Report the bare symbol (`NVDA`) even for an exchange-qualified route key
 			// (`NASDAQ:NVDA`) so delivery results stay readable and stable.
 			symbol: referenceKey.includes(':') ? referenceKey.split(':').pop() : referenceKey,
 			channels: symbolRoutes[referenceKey].channels || routing.channels,
-		});
+		};
+		dispatchByKey.set(referenceKey, dispatch);
+		if (includeRouteKeys) referenceSets.set(referenceKey, new Set([matchedReference]));
+		dispatches.push(dispatch);
 	}
 
 	return dispatches.length > 0 ? dispatches : null;
@@ -418,6 +433,39 @@ async function sendWithNotificationRouting(notificationManager, alert, routing =
 		return results.flat();
 	}
 
+	if (routing.destinations) {
+		const destinationFields = {
+			telegram: ['telegramChatIds', 'telegramChatId'],
+			whatsapp: ['whatsappChatIds', 'whatsappChatId'],
+			discord: ['discordWebhookUrls', 'discordWebhookUrl'],
+		};
+		const channelNames = routing.channels || Object.entries(destinationFields)
+			.filter(([channel, [field]]) => channel && Array.isArray(routing.destinations[field]) && routing.destinations[field].length > 0)
+			.map(([channel]) => channel);
+		if (channelNames.length === 0) {
+			return [];
+		}
+
+		validateNotificationRouting(notificationManager, { ...routing, channels: channelNames });
+		const results = await Promise.all(channelNames.flatMap((channel) => {
+			const [destinationListField, destinationField] = destinationFields[channel] || [];
+			const recipients = routing.destinations[destinationListField];
+			if (!Array.isArray(recipients) || recipients.length === 0) {
+				// Preset-bound routing must never fall through to a channel's broadcast
+				// default when the selected channel has no saved recipient.
+				return [];
+			}
+			return recipients.map((recipient) => notificationManager.sendToChannels({
+				...alertPayload,
+				[destinationField]: recipient,
+			}, [channel], {
+				...options,
+				redriveRecipientKey: crypto.createHash('sha256').update(String(recipient)).digest('hex'),
+			}));
+		}));
+		return results.flat();
+	}
+
 	if (routing.channels) {
 		// Late defensive backstop: fail-fast ordering should have already
 		// validated channel availability before any expensive work ran.
@@ -487,6 +535,16 @@ function getRequestedChannels(notificationManager, routing = {}, text) {
 
 	if (routing.channels) {
 		return routing.channels;
+	}
+	if (routing.destinations) {
+		const destinationChannelByField = {
+			telegramChatIds: 'telegram',
+			whatsappChatIds: 'whatsapp',
+			discordWebhookUrls: 'discord',
+		};
+		return Object.entries(destinationChannelByField)
+			.filter(([field]) => Array.isArray(routing.destinations[field]) && routing.destinations[field].length > 0)
+			.map(([, channel]) => channel);
 	}
 
 	return enabledChannels;

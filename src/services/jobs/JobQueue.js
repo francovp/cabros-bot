@@ -1,5 +1,7 @@
 'use strict';
 
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+
 const QUEUE_NAME = 'tradingview-jobs';
 const JOB_NAME = 'tradingview-job';
 const DEFAULT_ATTEMPTS = 5;
@@ -110,15 +112,16 @@ class JobQueue {
 
 		try {
 			const queue = await this._getQueue();
+			const config = getRuntimeConfig();
 			await queue.add(
 				JOB_NAME,
 				{ jobId },
 				{
 					jobId,
-					attempts: getPositiveInteger(process.env.JOB_QUEUE_ATTEMPTS, DEFAULT_ATTEMPTS, 20),
+					attempts: getPositiveInteger(config.JOB_QUEUE_ATTEMPTS ?? process.env.JOB_QUEUE_ATTEMPTS, DEFAULT_ATTEMPTS, 50),
 					backoff: {
 						type: 'exponential',
-						delay: getPositiveInteger(process.env.JOB_QUEUE_BACKOFF_MS, DEFAULT_BACKOFF_MS),
+						delay: getPositiveInteger(config.JOB_QUEUE_BACKOFF_MS ?? process.env.JOB_QUEUE_BACKOFF_MS, DEFAULT_BACKOFF_MS, 300000),
 					},
 					removeOnComplete: { count: 1000 },
 					removeOnFail: { count: 1000 },
@@ -200,7 +203,7 @@ class JobQueue {
 			},
 			{
 				connection,
-				concurrency: getPositiveInteger(process.env.JOB_QUEUE_CONCURRENCY, DEFAULT_CONCURRENCY, 20),
+				concurrency: getPositiveInteger(getRuntimeConfig().JOB_QUEUE_CONCURRENCY ?? process.env.JOB_QUEUE_CONCURRENCY, DEFAULT_CONCURRENCY, 100),
 			},
 		);
 
@@ -300,7 +303,11 @@ class JobQueue {
 		}
 
 		const probe = (async () => {
-			const timeoutMs = getPositiveInteger(process.env.JOB_QUEUE_PROBE_TIMEOUT_MS, DEFAULT_PROBE_TIMEOUT_MS, 120000);
+			const timeoutMs = getPositiveInteger(
+				getRuntimeConfig().JOB_QUEUE_PROBE_TIMEOUT_MS ?? process.env.JOB_QUEUE_PROBE_TIMEOUT_MS,
+				DEFAULT_PROBE_TIMEOUT_MS,
+				120000,
+			);
 			try {
 				await withTimeout(this._getQueue(), timeoutMs);
 				this._markBrokerReachable();
@@ -490,7 +497,11 @@ class JobQueue {
 	_createRedisConnection(forWorker) {
 		const Redis = this.RedisClass || require('ioredis');
 		return new Redis(process.env.REDIS_URL, {
-			connectTimeout: getPositiveInteger(process.env.JOB_QUEUE_CONNECT_TIMEOUT_MS, 5000),
+			connectTimeout: getPositiveInteger(
+				getRuntimeConfig().JOB_QUEUE_CONNECT_TIMEOUT_MS ?? process.env.JOB_QUEUE_CONNECT_TIMEOUT_MS,
+				5000,
+				60000,
+			),
 			lazyConnect: true,
 			maxRetriesPerRequest: forWorker ? null : 1,
 		});

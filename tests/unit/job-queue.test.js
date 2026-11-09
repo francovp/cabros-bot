@@ -487,5 +487,81 @@ describe('JobQueue', () => {
 			await expect(queue.probeBrokerReadiness()).resolves.toMatchObject({ reachable: false });
 			expect(() => queue.getStatus({})).not.toThrow();
 		});
+
+		it('uses JOB_QUEUE_ATTEMPTS and JOB_QUEUE_BACKOFF_MS from Remote Config / env for enqueue', async () => {
+			const add = jest.fn().mockResolvedValue({ id: 'job-123' });
+			const waitUntilReady = jest.fn().mockResolvedValue(undefined);
+			const queueClient = { add, waitUntilReady, close: jest.fn() };
+			const QueueClass = jest.fn(() => queueClient);
+			const RedisClass = jest.fn(() => ({ disconnect: jest.fn() }));
+
+			process.env = {
+				...savedEnv,
+				JOB_EXECUTION_MODE: 'render-worker',
+				REDIS_URL: 'redis://queue.example:6379',
+				JOB_QUEUE_ATTEMPTS: '8',
+				JOB_QUEUE_BACKOFF_MS: '45000',
+			};
+
+			const queue = new JobQueue({ QueueClass, RedisClass });
+			await queue.enqueue('job-123');
+
+			expect(add).toHaveBeenCalledWith(
+				'tradingview-job',
+				{ jobId: 'job-123' },
+				expect.objectContaining({
+					jobId: 'job-123',
+					attempts: 8,
+					backoff: {
+						type: 'exponential',
+						delay: 45000,
+					},
+				}),
+			);
+		});
+
+		it('uses JOB_QUEUE_CONCURRENCY from Remote Config / env when creating worker', () => {
+			const WorkerClass = jest.fn();
+			const RedisClass = jest.fn(() => ({ disconnect: jest.fn() }));
+
+			process.env = {
+				...savedEnv,
+				JOB_EXECUTION_MODE: 'render-worker',
+				REDIS_URL: 'redis://queue.example:6379',
+				JOB_QUEUE_CONCURRENCY: '4',
+			};
+
+			const queue = new JobQueue({ WorkerClass, RedisClass });
+			queue.createWorker(jest.fn());
+
+			expect(WorkerClass).toHaveBeenCalledWith(
+				'tradingview-jobs',
+				expect.any(Function),
+				expect.objectContaining({
+					concurrency: 4,
+				}),
+			);
+		});
+
+		it('uses JOB_QUEUE_CONNECT_TIMEOUT_MS when configuring Redis client', () => {
+			const RedisClass = jest.fn();
+
+			process.env = {
+				...savedEnv,
+				JOB_EXECUTION_MODE: 'render-worker',
+				REDIS_URL: 'redis://queue.example:6379',
+				JOB_QUEUE_CONNECT_TIMEOUT_MS: '8000',
+			};
+
+			const queue = new JobQueue({ RedisClass });
+			queue._createRedisConnection();
+
+			expect(RedisClass).toHaveBeenCalledWith(
+				'redis://queue.example:6379',
+				expect.objectContaining({
+					connectTimeout: 8000,
+				}),
+			);
+		});
 	});
 });

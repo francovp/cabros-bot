@@ -60,6 +60,10 @@ describe('telegramAlertActions', () => {
 			expect(ACTION_CALLBACK_REGEX.test('x:alert-123')).toBe(true);
 			expect(ACTION_CALLBACK_REGEX.test('vu:alert-123')).toBe(true);
 			expect(ACTION_CALLBACK_REGEX.test('vd:alert-123')).toBe(true);
+			expect(ACTION_CALLBACK_REGEX.test('kt:alert-123')).toBe(true);
+			expect(ACTION_CALLBACK_REGEX.test('ks:alert-123')).toBe(true);
+			expect(ACTION_CALLBACK_REGEX.test('kn:alert-123')).toBe(true);
+			expect(ACTION_CALLBACK_REGEX.test('kz:alert-123')).toBe(true);
 		});
 
 		it('rejects unknown action codes and malformed alert ids', () => {
@@ -161,6 +165,24 @@ describe('telegramAlertActions', () => {
 			const ctx = makeContext('vu:alert-vote-up');
 			await handleAlertAction(ctx);
 			expect(ctx.answerCbQuery).toHaveBeenCalledWith('👍 Gracias por tu feedback', { show_alert: false });
+		});
+
+		it('handles acknowledgement take by persisting the trader action', async () => {
+			const alertAcknowledgementService = require('../../src/services/storage/AlertAcknowledgementService');
+			jest.spyOn(alertStorageService, 'getAlertById').mockResolvedValue({ id: 'alert-ack-1', symbol: 'BTCUSDT', exchange: 'BINANCE' });
+			const saveSpy = jest.spyOn(alertAcknowledgementService, 'saveAcknowledgement').mockResolvedValue({ ackId: 'alert-ack-1__x', storage: 'memory' });
+			const ctx = makeContext('kt:alert-ack-1');
+			await handleAlertAction(ctx);
+			expect(saveSpy).toHaveBeenCalledWith(expect.objectContaining({ alertId: 'alert-ack-1', chatId: '100', action: 'took_trade', symbol: 'BTCUSDT', exchange: 'BINANCE' }));
+			expect(ctx.answerCbQuery).toHaveBeenCalledWith('✅ Registrado: tomaste esta señal', { show_alert: false });
+			saveSpy.mockRestore();
+		});
+
+		it('replies alert not found for acknowledgement when the stored alert is missing', async () => {
+			jest.spyOn(alertStorageService, 'getAlertById').mockResolvedValue(null);
+			const ctx = makeContext('ks:alert-ack-missing');
+			await handleAlertAction(ctx);
+			expect(ctx.reply).toHaveBeenCalledWith('Alerta no encontrada o ya expirada');
 		});
 
 		it('handles vote down by acknowledging the feedback', async () => {

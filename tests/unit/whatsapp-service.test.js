@@ -544,5 +544,23 @@ describe('WhatsAppService', () => {
 			expect(missingChatService.isConfigured()).toBe(false);
 		});
 	});
+
+	describe('_formatAlert', () => {
+		it('forwards session and signalClass to formatter', async () => {
+			const mockFormatter = {
+				format: jest.fn().mockReturnValue('formatted text'),
+				formatEnriched: jest.fn().mockResolvedValue('formatted enriched'),
+			};
+			const svc = new WhatsAppService({
+				formatter: mockFormatter,
+			});
+
+			await svc._formatAlert({ text: 'plain alert', session: 'regular', signalClass: 'A' });
+			expect(mockFormatter.format).toHaveBeenCalledWith('plain alert', { signalClass: 'A', session: 'regular' });
+
+			await svc._formatAlert({ text: 'enriched alert', enriched: { summary: 'data' }, session: 'post', signalClass: 'B' });
+			expect(mockFormatter.formatEnriched).toHaveBeenCalledWith({ summary: 'data' }, { signalClass: 'B', session: 'post' });
+		});
+	});
 });
 

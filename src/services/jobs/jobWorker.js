@@ -2,6 +2,9 @@
 
 const { jobQueue } = require('./JobQueue');
 const { JobService } = require('./JobService');
+const { applyStartupJitter, resolveStartupJitterMs } = require('../../lib/startupJitter');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 function getWorkerId() {
 	return process.env.RENDER_INSTANCE_ID
@@ -80,6 +83,7 @@ async function startJobWorker({
 	service = new JobService(),
 	botOrGetter = null,
 	workerId = getWorkerId(),
+	unref = true,
 } = {}) {
 	const isQueueMode = typeof queue?.isEnabled === 'function' && queue.isEnabled();
 	const mode = isQueueMode ? 'render-worker' : (process.env.JOB_EXECUTION_MODE || 'local');
@@ -97,78 +101,129 @@ async function startJobWorker({
 		}
 
 		let stopped = false;
-		const worker = queue.createWorker(
-			(jobId) => service.processQueuedJob(jobId, botOrGetter, workerId),
-			{
-				onFailed: (job, error) => {
-					const jobId = job && job.data && job.data.jobId;
-					const claimAttempt = Number(error && error.claimAttempt);
-					const attempt = Number.isFinite(claimAttempt) ? claimAttempt : null;
-					if (!jobId) {
-						return undefined;
-					}
-
-					if (hasAttemptsRemaining(job)) {
-						if (attempt === null) {
-							return undefined;
-						}
-						return service.releaseQueuedJob(jobId, workerId, error, attempt);
-					}
-
-					return finalizeFailedJob(service, job, workerId, error, attempt);
-				},
-			},
-		);
-
-		if (worker && typeof worker.waitUntilReady === 'function') {
-			await worker.waitUntilReady();
+		let worker = null;
+		let reconciliationTimer = null;
+		const startupAbortController = new AbortController();
+		const startupJitterMs = resolveStartupJitterMs({
+			globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+			globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+		});
+		if (startupJitterMs > 0) {
+			console.info(`[JobWorker] Applying startup jitter (${startupJitterMs}ms max)`);
 		}
 
-		let reconciliationTimer = null;
-		if (service && typeof service.reconcileQueuedJobs === 'function') {
-			const reconcileQueuedJobs = async () => {
-				try {
-					await service.reconcileQueuedJobs();
-				} catch (error) {
-					console.warn('[JobWorker] Queued-job reconciliation failed:', error.message);
-				}
-			};
+		const reconcileQueuedJobs = async () => {
+			try {
+				await service.reconcileQueuedJobs();
+			} catch (error) {
+				console.warn('[JobWorker] Queued-job reconciliation failed:', error.message);
+			}
+		};
 
+		const scheduleReconciliation = () => {
+			if (typeof service.reconcileQueuedJobs !== 'function' || stopped) {
+				return;
+			}
 			void reconcileQueuedJobs();
-			reconciliationTimer = globalThis.setInterval(() => {
-				void reconcileQueuedJobs();
-			}, JOB_QUEUE_RECONCILIATION_INTERVAL_MS);
+			reconciliationTimer = createManagedInterval(
+				'job-worker-reconciliation',
+				() => reconcileQueuedJobs(),
+				JOB_QUEUE_RECONCILIATION_INTERVAL_MS,
+			);
 			if (typeof reconciliationTimer.unref === 'function') {
 				reconciliationTimer.unref();
 			}
-		}
+		};
 
-		return {
-			worker,
+		const activateWorker = async () => {
+			if (stopped) {
+				return;
+			}
+			worker = queue.createWorker(
+				(jobId) => service.processQueuedJob(jobId, botOrGetter, workerId),
+				{
+					onFailed: (job, error) => {
+						const jobId = job && job.data && job.data.jobId;
+						const claimAttempt = Number(error && error.claimAttempt);
+						const attempt = Number.isFinite(claimAttempt) ? claimAttempt : null;
+						if (!jobId) {
+							return undefined;
+						}
+
+						if (hasAttemptsRemaining(job)) {
+							if (attempt === null) {
+								return undefined;
+							}
+							return service.releaseQueuedJob(jobId, workerId, error, attempt);
+						}
+
+						return finalizeFailedJob(service, job, workerId, error, attempt);
+					},
+				},
+			);
+
+			if (worker && typeof worker.waitUntilReady === 'function') {
+				await worker.waitUntilReady();
+			}
+			scheduleReconciliation();
+		};
+
+		const waitForStartupJitter = async () => {
+			try {
+				await applyStartupJitter(startupJitterMs, {
+					unref,
+					signal: startupAbortController.signal,
+				});
+			} catch (error) {
+				if (!startupAbortController.signal.aborted) {
+					console.warn('[JobWorker] Startup jitter failed:', error.message);
+				}
+			}
+			if (!stopped) {
+				return activateWorker();
+			}
+			return undefined;
+		};
+		const ready = startupJitterMs > 0 ? waitForStartupJitter() : activateWorker();
+		void ready.catch(() => {});
+
+		const runtime = {
+			get worker() {
+				return worker;
+			},
 			workerId,
+			ready,
 			stop: async () => {
 				if (stopped) {
 					return;
 				}
 				stopped = true;
+				startupAbortController.abort();
 				if (reconciliationTimer) {
-					globalThis.clearInterval(reconciliationTimer);
+					reconciliationTimer.clear();
 				}
-				await queue.closeWorker(worker);
+				if (worker) {
+					await queue.closeWorker(worker);
+				}
 				if (service && typeof service.waitForCallbacks === 'function') {
 					await service.waitForCallbacks();
 				}
 			},
 		};
+		return runtime;
 	}
 
 	// firestore-poller mode
 	let stopped = false;
 	let pollingTimer = null;
 	let activePollPromise = null;
+	const startupAbortController = new AbortController();
 	const inFlightJobs = new Set();
-	const maxAttempts = Number(process.env.JOB_QUEUE_ATTEMPTS) > 0
-		? Math.min(Number(process.env.JOB_QUEUE_ATTEMPTS), 20)
+	const configuredAttempts = Number(
+		getRuntimeConfig().JOB_QUEUE_ATTEMPTS ?? process.env.JOB_QUEUE_ATTEMPTS,
+	);
+	const maxAttempts = configuredAttempts > 0
+		? Math.min(configuredAttempts, 50)
 		: 5;
 
 	const pollOnce = async () => {
@@ -251,21 +306,45 @@ async function startJobWorker({
 			await pollOnce();
 			scheduleNextPoll();
 		}, intervalMs);
-		if (typeof pollingTimer.unref === 'function') {
+		if (unref !== false && typeof pollingTimer.unref === 'function') {
 			pollingTimer.unref();
 		}
 	};
-	scheduleNextPoll();
+	const startupJitterMs = resolveStartupJitterMs({
+		globalEnvVar: 'WORKER_STARTUP_JITTER_MS',
+		globalRuntimeKey: 'WORKER_STARTUP_JITTER_MS',
+	});
+	let ready;
+	if (startupJitterMs > 0) {
+		console.info(`[JobWorker] Applying startup jitter (${startupJitterMs}ms max)`);
+		ready = applyStartupJitter(startupJitterMs, {
+			unref,
+			signal: startupAbortController.signal,
+		})
+			.then(() => scheduleNextPoll())
+			.catch((error) => {
+				if (!startupAbortController.signal.aborted) {
+					console.warn('[JobWorker] Startup jitter failed:', error.message);
+					scheduleNextPoll();
+				}
+			});
+		void ready.catch(() => {});
+	} else {
+		scheduleNextPoll();
+		ready = Promise.resolve();
+	}
 
 	return {
 		worker: null,
 		workerId,
+		ready,
 		pollOnce,
 		stop: async () => {
 			if (stopped) {
 				return;
 			}
 			stopped = true;
+			startupAbortController.abort();
 			if (pollingTimer) {
 				globalThis.clearTimeout(pollingTimer);
 				pollingTimer = null;

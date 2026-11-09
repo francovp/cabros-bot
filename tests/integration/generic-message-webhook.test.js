@@ -1,14 +1,16 @@
-/* global jest, describe, it, beforeEach, afterEach, expect */
+/* global jest, describe, it, beforeEach, afterEach, expect, saveEnv, restoreEnv */
 
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { idempotencyService } = require('../../src/services/storage/IdempotencyService');
 const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
+const { watchlistService } = require('../../src/services/watchlist/WatchlistService');
 
 jest.mock('../../src/services/storage/AlertStorageService', () => ({
 	saveAlert: jest.fn().mockResolvedValue('stored-message-id'),
+	extractSymbolAndExchange: jest.requireActual('../../src/services/storage/AlertStorageService').extractSymbolAndExchange,
 }));
 
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
@@ -36,7 +38,9 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 		idempotencyService.clear();
+		watchlistService.lists.clear();
 
 		mockBot = {
 			telegram: {
@@ -67,6 +71,35 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 	// ---------------------------------------------------------------------------
 	// Success cases
 	// ---------------------------------------------------------------------------
+	it('returns the standardized error envelope when unexpected processing fails', async () => {
+		const runtimeConfigSpy = jest.spyOn(remoteConfigService, 'getRuntimeConfig').mockImplementation(() => {
+			throw new Error('runtime configuration unavailable');
+		});
+		const consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+		let res;
+		try {
+			res = await request(app)
+				.post('/api/webhook/message')
+				.set('x-api-key', 'test-key')
+				.set('x-request-id', 'msg-error-500')
+				.send({ message: 'Force an unexpected error', channels: ['telegram'] })
+				.expect(500);
+		} finally {
+			runtimeConfigSpy.mockRestore();
+			consoleErrorSpy.mockRestore();
+		}
+
+		expect(res.body).toEqual(expect.objectContaining({
+			success: false,
+			error: 'Internal server error',
+			code: 'INTERNAL_ERROR',
+			requestId: 'msg-error-500',
+			retryable: true,
+		}));
+		expect(res.headers['x-request-id']).toBe(res.body.requestId);
+	});
+
 	it('sends a message to telegram only', async () => {
 		const res = await request(app)
 			.post('/api/webhook/message')
@@ -90,6 +123,39 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			channels: ['telegram'],
 			deliveryResults: res.body.results,
 		}));
+	});
+
+	it('skips only Telegram when an opted-in known symbol misses the chat watchlist', async () => {
+		await watchlistService.add('123456789', ['BTCUSDT']);
+		const res = await request(app)
+			.post('/api/webhook/message').set('x-api-key', 'test-key')
+			.send({ message: 'BINANCE:ETHUSDT buy', requireWatchlistMatch: true })
+			.expect(200);
+		expect(res.body.results).toEqual(expect.arrayContaining([
+			expect.objectContaining({ channel: 'telegram', skipped: 'watchlist' }),
+			expect.objectContaining({ channel: 'whatsapp', success: true }),
+		]));
+		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+		expect(global.fetch).toHaveBeenCalledTimes(1);
+	});
+
+	it('rejects a non-boolean watchlist flag', async () => {
+		await request(app).post('/api/webhook/message').set('x-api-key', 'test-key')
+			.send({ message: 'BINANCE:ETHUSDT buy', requireWatchlistMatch: 'true' }).expect(400);
+		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
+	});
+
+	it('applies the same Telegram-only watchlist gate to alert webhook', async () => {
+		await watchlistService.add('123456789', ['BTCUSDT']);
+		const res = await request(app)
+			.post('/api/webhook/alert').set('x-api-key', 'test-key')
+			.send({ text: 'BINANCE:ETHUSDT buy', requireWatchlistMatch: true })
+			.expect(200);
+		expect(res.body.results).toEqual(expect.arrayContaining([
+			expect.objectContaining({ channel: 'telegram', skipped: 'watchlist' }),
+			expect.objectContaining({ channel: 'whatsapp', success: true }),
+		]));
+		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
 	});
 
 	it('sends a message to whatsapp only', async () => {
@@ -129,6 +195,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			ok: true,
 			json: async () => ({ id: 'discord-msg-789' }),
 		});
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		const res = await request(app)
@@ -145,7 +212,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		expect(alertStorageService.saveAlert).toHaveBeenCalledWith(
 			expect.not.objectContaining({
 				discordWebhookUrl: expect.anything(),
-			})
+			}),
 		);
 	});
 
@@ -173,6 +240,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			ok: true,
 			json: async () => ({ id: 'discord-msg-789' }),
 		});
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		const res = await request(app)
@@ -218,6 +286,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 	it('returns 400 when discordWebhookUrl path lacks webhook ID and token', async () => {
 		process.env.ENABLE_DISCORD_ALERTS = 'true';
 		process.env.DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/123/token';
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		const res = await request(app)
@@ -241,6 +310,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			ok: true,
 			json: async () => ({ id: 'discord-msg-1' }),
 		});
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		await request(app)
@@ -265,10 +335,13 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			})
 			.expect(409);
 
-		expect(conflictRes.body).toEqual({
+		expect(conflictRes.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
 			error: expect.stringContaining('different payload'),
 			code: 'IDEMPOTENCY_CONFLICT',
-		});
+		}));
 	});
 
 	it('replays a sequential request without redispatching selected Telegram, WhatsApp, and Discord channels', async () => {
@@ -278,6 +351,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			ok: true,
 			json: async () => ({ idMessage: 'provider-message-123', id: 'provider-message-123' }),
 		});
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 		global.fetch.mockClear();
 
@@ -336,6 +410,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			ok: true,
 			json: async () => ({ idMessage: 'provider-validation-123', id: 'provider-validation-123' }),
 		});
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		global.fetch = jest.fn().mockImplementation(async () => {
@@ -394,10 +469,13 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.send(conflictingPayload)
 			.expect(409);
 
-		expect(conflict.body).toEqual({
+		expect(conflict.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
 			error: expect.stringContaining('different payload'),
 			code: 'IDEMPOTENCY_CONFLICT',
-		});
+		}));
 	});
 
 	it('rejects a non-string body idempotency key before dispatch', async () => {
@@ -407,10 +485,13 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.send({ message: 'Invalid key type', channels: ['telegram'], idempotencyKey: {} })
 			.expect(400);
 
-		expect(response.body).toEqual({
+		expect(response.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
 			error: 'Idempotency key must be a non-empty string',
 			code: 'INVALID_REQUEST',
-		});
+		}));
 		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
 	});
 
@@ -421,10 +502,13 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.send({ message: 'Invalid array key', channels: ['telegram'], idempotencyKey: ['key-a'] })
 			.expect(400);
 
-		expect(response.body).toEqual({
+		expect(response.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
 			error: 'Idempotency key must be a non-empty string',
 			code: 'INVALID_REQUEST',
-		});
+		}));
 		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
 	});
 
@@ -435,10 +519,13 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.send({ message: 'Invalid null key', channels: ['telegram'], idempotencyKey: null })
 			.expect(400);
 
-		expect(response.body).toEqual({
+		expect(response.body).toEqual(expect.objectContaining({
+			success: false,
+			retryable: false,
+			requestId: expect.any(String),
 			error: 'Idempotency key must be a non-empty string',
 			code: 'INVALID_REQUEST',
-		});
+		}));
 		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
 	});
 
@@ -450,6 +537,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			json: async () => ({ id: 'discord-msg-789' }),
 		});
 
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 
 		const res = await request(app)
@@ -459,7 +547,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			.expect(200);
 
 		expect(res.body.success).toBe(true);
-		expect(res.body.results).toEqual([
+		expect(res.body.results).toMatchObject([
 			{
 				success: true,
 				channel: 'discord',
@@ -467,6 +555,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 				messageId: 'discord-msg-789',
 				messageIds: ['discord-msg-789'],
 				messageCount: 1,
+				attemptCount: 1,
 			},
 		]);
 		expect(mockBot.telegram.sendMessage).not.toHaveBeenCalled();
@@ -489,6 +578,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 			return { ok: true, json: async () => ({ idMessage: 'wa-msg-456' }) };
 		});
 
+		resetNotificationManagerForTesting();
 		await initializeNotificationServices(mockBot);
 		global.fetch.mockClear();
 
@@ -965,7 +1055,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		);
 		expect(truncationWarnings.length).toBe(0);
 		warnSpy.mockRestore();
-		});
+	});
 
 	// Chunk estimation & dryValidate mode (GH-614)
 	// ---------------------------------------------------------------------------
@@ -1266,6 +1356,7 @@ describe('POST /api/webhook/message - Generic message webhook', () => {
 		it('surfaces resolved destination overrides but never the Discord webhook credential', async () => {
 			process.env.ENABLE_DISCORD_ALERTS = 'true';
 			process.env.DISCORD_WEBHOOK_URL = VALID_DISCORD_WEBHOOK;
+			resetNotificationManagerForTesting();
 			await initializeNotificationServices(mockBot);
 
 			const res = await request(app)
