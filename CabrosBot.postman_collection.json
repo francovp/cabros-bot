@@ -596,7 +596,7 @@
               "value": "application/json; charset=utf-8"
             }
           ],
-          "body": "{\"ready\":false,\"failClosed\":false,\"checkedAt\":\"2026-08-31T02:30:05.000Z\",\"latencyMs\":3011,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":84},\"gemini\":{\"ready\":false,\"error\":\"timeout_after_3000ms\",\"latencyMs\":3000},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":22},\"binance\":{\"ready\":false,\"error\":\"binance_http_451\",\"latencyMs\":124},\"telegram\":{\"ready\":false,\"enabled\":false,\"skipped\":true,\"reason\":\"telegram_disabled\"}}}"
+          "body": "{\"ready\":false,\"failClosed\":false,\"checkedAt\":\"2026-08-31T02:30:05.000Z\",\"latencyMs\":3011,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":84},\"gemini\":{\"ready\":false,\"errorCode\":\"timeout_after_3000ms\",\"latencyMs\":3000},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":22},\"binance\":{\"ready\":false,\"errorCode\":\"binance_http_451\",\"latencyMs\":124},\"telegram\":{\"ready\":false,\"enabled\":false,\"skipped\":true,\"reason\":\"telegram_disabled\"}}}"
         }
       ]
     },
@@ -645,7 +645,7 @@
               "value": "application/json; charset=utf-8"
             }
           ],
-          "body": "{\"ready\":false,\"failClosed\":true,\"status\":\"ready\",\"bootstrapReady\":true,\"components\":{\"telegramBot\":{\"status\":\"disabled\"},\"notificationServices\":{\"status\":\"ready\"},\"newsMonitor\":{\"status\":\"disabled\"}},\"checkedAt\":\"2026-08-31T02:30:05.000Z\",\"latencyMs\":3011,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":84},\"gemini\":{\"ready\":false,\"error\":\"timeout_after_3000ms\",\"latencyMs\":3000},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":22},\"binance\":{\"ready\":false,\"error\":\"binance_http_451\",\"latencyMs\":124},\"telegram\":{\"ready\":false,\"enabled\":false,\"skipped\":true,\"reason\":\"telegram_not_initialized\"}}}"
+          "body": "{\"ready\":false,\"failClosed\":true,\"status\":\"ready\",\"bootstrapReady\":true,\"components\":{\"telegramBot\":{\"status\":\"disabled\"},\"notificationServices\":{\"status\":\"ready\"},\"newsMonitor\":{\"status\":\"disabled\"}},\"checkedAt\":\"2026-08-31T02:30:05.000Z\",\"latencyMs\":3011,\"dependencies\":{\"firestore\":{\"ready\":true,\"backend\":\"firestore\",\"latencyMs\":84},\"gemini\":{\"ready\":false,\"errorCode\":\"timeout_after_3000ms\",\"latencyMs\":3000},\"tradingViewMcp\":{\"ready\":true,\"backend\":\"tradingview_mcp\",\"latencyMs\":22},\"binance\":{\"ready\":false,\"errorCode\":\"binance_http_451\",\"latencyMs\":124},\"telegram\":{\"ready\":false,\"enabled\":false,\"skipped\":true,\"reason\":\"telegram_not_initialized\"}}}"
         }
       ]
     },

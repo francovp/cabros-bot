@@ -478,7 +478,7 @@
                         "gemini": {
                           "ready": false,
                           "latencyMs": 3001,
-                          "error": "timeout_after_3000ms"
+                          "errorCode": "timeout_after_3000ms"
                         },
                         "tradingViewMcp": {
                           "ready": true,
@@ -601,7 +601,7 @@
                       "startedAt": "2026-08-31T02:29:52.000Z",
                       "completedAt": "2026-08-31T02:29:53.000Z",
                       "failedAt": null,
-                      "error": null,
+                      "errorCode": null,
                       "components": {
                         "telegramBot": {
                           "status": "disabled"
@@ -646,7 +646,7 @@
                       "startedAt": "2026-08-31T02:29:50.000Z",
                       "completedAt": null,
                       "failedAt": null,
-                      "error": null,
+                      "errorCode": null,
                       "components": {
                         "telegramBot": {
                           "status": "pending"
@@ -688,7 +688,7 @@
                         },
                         "gemini": {
                           "ready": false,
-                          "error": "timeout_after_3000ms",
+                          "errorCode": "timeout_after_3000ms",
                           "latencyMs": 3000
                         },
                         "tradingViewMcp": {
@@ -698,7 +698,7 @@
                         },
                         "binance": {
                           "ready": false,
-                          "error": "binance_http_451",
+                          "errorCode": "binance_http_451",
                           "latencyMs": 124
                         },
                         "telegram": {
@@ -14858,11 +14858,12 @@
             ],
             "format": "date-time"
           },
-          "error": {
+          "errorCode": {
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "description": "Stable machine code for the bootstrap failure (e.g. TELEGRAM_POLLING_CONFLICT, TELEGRAM_BOOTSTRAP_FAILED, BOOTSTRAP_TIMEOUT, BOOTSTRAP_FAILED). Raw provider error text is never exposed on this public surface (#1296); full detail is logged server-side."
           },
           "components": {
             "type": "object",
@@ -24949,7 +24950,7 @@
       },
       "ReadinessDependencyStatus": {
         "type": "object",
-        "description": "Per-dependency status block. Disabled dependencies are reported as `skipped: true`; failing dependencies include a sanitized `error` string and the per-dep latency.",
+        "description": "Per-dependency status block. Disabled dependencies are reported as `skipped: true`; failing dependencies include a stable machine-readable `errorCode` (never raw provider text) and the per-dep latency. Stable codes include `TELEGRAM_POLLING_CONFLICT`, `timeout_after_<ms>`, and dependency-specific tokens (#1296).",
         "properties": {
           "ready": {
             "type": "boolean"
@@ -24969,8 +24970,9 @@
           "latencyMs": {
             "type": "number"
           },
-          "error": {
-            "type": "string"
+          "errorCode": {
+            "type": "string",
+            "description": "Stable machine code (e.g. TELEGRAM_POLLING_CONFLICT). Free-text provider messages are never returned on public surfaces."
           }
         }
       },

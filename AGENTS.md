@@ -3150,6 +3150,18 @@ Opt-in `ENABLE_DAILY_DIGEST=true` delivers a previous-UTC-day MarkdownV2 digest 
 
 **Coverage**: `tests/unit/daily-digest.test.js` (day boundaries, aggregation, dry-run, degraded when durable runs disabled, already-sent lease contention, ambiguous no-retry, before-hour skip, no chat-id leakage), `tests/integration/daily-digest.test.js` (full previous-day sections in order, Telegram length bound, status projection), `src/openapi/openapi.json` (`DailyDigestDependency` + sample payload), `CabrosBot.postman_collection.json` ("Get Status - daily digest").
 
+## Preview Credential Scope and Sanitized Readiness (Issue #1296)
+
+PR previews must never hold production secrets: each preview needs preview-scoped `BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and `WEBHOOK_API_KEY` (distinct from production), set in the Render dashboard; `render.yaml` declares `WEBHOOK_API_KEY` (`sync: false`) for dashboard visibility and documents the scope rule in comments. Operator follow-up after scoping: rotate `BOT_TOKEN` and `WEBHOOK_API_KEY`, since prior previews held them; silently keep production keys out of previews.
+
+`isPreviewEnvironment()` is platform-agnostic: besides Vercel preview, Render PR (`RENDER=true` + `IS_PULL_REQUEST=true`), and Railway PR names, OpenClaw PR previews at `openclaw.tail5e4271.ts.net/cabros-bot-pr-<N>` are detected via `OPENCLAW_PREVIEW=true`, `OPENCLAW_PREVIEW_NAME`/`OPENCLAW_BRANCH_NAME` values containing a `pr-<number>` pattern, or `IS_PULL_REQUEST=true` **with** an `OPENCLAW_HOST` marker (a bare `IS_PULL_REQUEST` alone is deliberately not preview evidence, so a misconfigured production host is not misclassified). This is what stops the 409 `getUpdates` contention: previews no longer start Telegram polling (`getTelegramBootstrapConfig().shouldStartTelegramBot` is false in any preview environment) and preview WhatsApp routing prefers `WHATSAPP_PREVIEW_CHAT_ID`.
+
+Public readiness surfaces are stable-code only. `bootstrapReadiness` stores `errorCode` (`TELEGRAM_POLLING_CONFLICT`, `TELEGRAM_BOOTSTRAP_FAILED`, `BOOTSTRAP_TIMEOUT`, `BOOTSTRAP_FAILED`) instead of raw error text; raw detail is logged server-side via `console.error`. `GET /ready`, `GET /ready?depth=dependencies`, and `GET /healthcheck?depth=readiness` project dependency errors through `toPublicErrorCode()`/`projectDependenciesForPublic()` in `src/controllers/readiness.js`: Telegram 409/`getUpdates` text maps to `TELEGRAM_POLLING_CONFLICT`, already-stable tokens (`timeout_after_<ms>`, `binance_http_451`, …) pass through, and any other free-text provider message collapses to `DEPENDENCY_PROBE_FAILED`. Internal `collectReadiness()` results are unchanged (unit tests pin `error: 'boom'`). Both response schemas (`BootstrapReadiness.error`, `ReadinessDependencyStatus.error`) were replaced with `errorCode`.
+
+**Coverage**: `tests/unit/deployment-environment.test.js` (OpenClaw `IS_PULL_REQUEST` + `OPENCLAW_HOST` marker, name markers, bare `IS_PULL_REQUEST` not preview), `tests/unit/readiness-public-projection.test.js` (code mapping + projection), `tests/integration/readiness-endpoint.test.js` + `tests/integration/healthcheck-readiness.test.js` (HTTP no-raw-text contract), `tests/unit/postman-collection.test.js` + `tests/unit/openapi-contract.test.js` (published contract).
+
+No new environment variable, Remote Config key, endpoint, or feature flag was added; reachability documentation lives in this section.
+
 ## Pre-flight Cost Estimation (Issue #745)
 
 `dryRun=cost` (or `?estimate=true`) on `/api/news-monitor`, `/api/jobs/tradingview-analysis`, `/api/webhook/expanded-analysis-alert`, and `/api/webhook/market-scanner-alert`, plus `POST /api/operations/estimate` with `{ operation, ...operationBody }`, returns a `costEstimate` with `tokensIn`, `tokensOut`, `estimatedTotalTokens`, `estimatedCostUsd`, `providerBreakdown[]`, `externalCosts[]`, `quotaImpact`, `perSymbol[]`, and `assumptions`, without invoking Gemini, TradingView MCP, Brave Search, Firestore, or remote Langfuse. Owner decision (option 1): LLM costs are a documented rough upper bound (`ceil(chars / 4)` input + configured output budgets); TradingView MCP and Brave costs are `unknown` (null), never `$0`.
@@ -3162,4 +3174,5 @@ Opt-in `ENABLE_DAILY_DIGEST=true` delivers a previous-UTC-day MarkdownV2 digest 
 No public alert, notification, persistence, or analytics contract changed; `dryRun=true` behavior is byte-identical.
 
 **Coverage**: `tests/unit/cost-estimation.test.js` (zero-call guarantee, per-symbol math, per-model lookup, Remote Config fallback, quotaImpact, operation selector, status), `tests/integration/cost-estimation-endpoint.test.js` (operations/estimate + four dryRun=cost endpoints), `tests/unit/postman-collection.test.js`, `tests/unit/openapi-contract.test.js`, and `tests/unit/remote-config-service.test.js`.
+
 

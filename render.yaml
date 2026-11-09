@@ -13,11 +13,19 @@ services:
   healthCheckPath: /ready
   pullRequestPreviewsEnabled: true
   envVars:
+  # Preview credential scope (#1296): previews must receive preview-scoped
+  # secrets, never production values. Set distinct preview values for
+  # BOT_TOKEN / TELEGRAM_CHAT_ID / WEBHOOK_API_KEY in the Render dashboard so
+  # a live preview cannot act on the production bot identity or accept the
+  # production webhook key. The app additionally suppresses Telegram polling
+  # in any preview environment (isPreviewEnvironment covers OpenClaw).
   - key: TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID
     sync: false
   - key: BOT_TOKEN
     sync: false
   - key: TELEGRAM_CHAT_ID
+    sync: false
+  - key: WEBHOOK_API_KEY
     sync: false
   - key: FIREBASE_PROJECT_ID
     value: cabros-bot
