@@ -16338,6 +16338,13 @@
               "null"
             ]
           },
+          "timeframe": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Parsed chart timeframe (e.g. \"4h\") persisted alongside chartBars/chartSymbol so replay re-renders the chart with the same label instead of the 1h default."
+          },
           "signalClass": {
             "type": "string",
             "enum": [
