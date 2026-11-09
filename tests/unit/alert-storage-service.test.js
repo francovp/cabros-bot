@@ -5432,6 +5432,44 @@ describe('chart inputs persistence (GH-799 follow-up)', () => {
 		}
 	});
 
+	it('persists the chart timeframe on the stored document', async () => {
+		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+		mockAdd.mockResolvedValueOnce({ id: 'doc-chart-timeframe' });
+		const bars = [
+			{ open: 100, high: 102, low: 99, close: 101, volume: 10 },
+			{ open: 101, high: 103, low: 100, close: 102, volume: 12 },
+		];
+		await AlertStorageService.saveAlert({
+			text: 'BINANCE:BTCUSDT (4h) COMPRA',
+			chartBars: bars,
+			chartSymbol: 'BTCUSDT',
+			timeframe: '4h',
+		});
+		expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({ timeframe: '4h' }));
+	});
+
+	it('surfaces timeframe on read from the stored document', async () => {
+		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
+		mockDocGet.mockResolvedValueOnce(buildDocSnapshot('alert-chart-tf', {
+			receivedAt: buildTimestamp(new Date().toISOString()),
+			text: 'BINANCE:BTCUSDT (4h) COMPRA',
+			enriched: false,
+			enrichmentData: null,
+			tokenUsage: null,
+			channels: ['telegram'],
+			deliveryResults: [{ channel: 'telegram', success: true }],
+			source: 'webhook',
+			timeframe: '4h',
+			chartBars: [
+				{ open: 100, high: 102, low: 99, close: 101 },
+				{ open: 101, high: 103, low: 100, close: 102 },
+			],
+			chartSymbol: 'BTCUSDT',
+		}));
+		const result = await AlertStorageService.getAlertById('alert-chart-tf');
+		expect(result.timeframe).toBe('4h');
+	});
+
 	it('does not persist malformed chartBars', async () => {
 		const id = await AlertStorageService.saveAlert({
 			text: 'no charts here',

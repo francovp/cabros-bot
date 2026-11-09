@@ -1068,6 +1068,7 @@ function replayAlert(botOrGetter) {
 				traderIntent: storedAlert.traderIntent || undefined,
 				chartBars: storedAlert.chartBars || undefined,
 				chartSymbol: storedAlert.chartSymbol || undefined,
+				timeframe: storedAlert.timeframe || undefined,
 				replay: {
 					originalAlertId: alertId,
 					idempotencyKey: idempotencyKey.trim(),
@@ -1253,6 +1254,7 @@ function batchReplayAlerts(botOrGetter) {
 						session: storedAlert.session || undefined,
 						chartBars: storedAlert.chartBars || undefined,
 						chartSymbol: storedAlert.chartSymbol || undefined,
+						timeframe: storedAlert.timeframe || undefined,
 						replay: {
 							originalAlertId: alertId,
 							idempotencyKey: alertIdempotencyKey,

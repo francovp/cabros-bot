@@ -425,6 +425,7 @@ function formatAlertDocument(doc, options = {}) {
 	}
 	if (Array.isArray(data.chartBars)) docObj.chartBars = data.chartBars;
 	if (typeof data.chartSymbol === 'string' && data.chartSymbol.trim()) docObj.chartSymbol = data.chartSymbol;
+	if (typeof data.timeframe === 'string' && data.timeframe.trim()) docObj.timeframe = data.timeframe;
 	if (includeEnrichmentSummary) {
 		docObj.enrichmentSummary = docObj.enrichmentData;
 	}
@@ -2305,6 +2306,7 @@ async function saveAlertInternal(params = {}) {
 		traderIntent,
 		chartBars,
 		chartSymbol,
+		timeframe: chartTimeframe,
 		alertId: providedAlertId,
 	} = params;
 	if (!isEnabled()) {
@@ -2386,6 +2388,9 @@ async function saveAlertInternal(params = {}) {
 		}
 		if (typeof chartSymbol === 'string' && chartSymbol.trim()) {
 			document.chartSymbol = chartSymbol.trim().toUpperCase().slice(0, 20);
+		}
+		if (typeof chartTimeframe === 'string' && chartTimeframe.trim()) {
+			document.timeframe = chartTimeframe.trim().slice(0, 20);
 		}
 		const collectedTelegramMessageIds = new Set();
 		if (Array.isArray(params.telegramMessageIds)) {

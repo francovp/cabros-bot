@@ -1193,6 +1193,7 @@ function postAlert(botOrGetter) {
 				signalClass: alert.signalClass,
 				chartBars: alert.chartBars || null,
 				chartSymbol: alert.chartSymbol || null,
+				timeframe: alert.timeframe || null,
 				source: body.source || 'webhook-alert',
 				telegramChatId: routing.telegramChatId,
 				telegramThreadId: routing.telegramThreadId,
