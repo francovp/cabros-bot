@@ -181,6 +181,7 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `GET` | `/api/jobs` | List recent background jobs with status & progress | [Jobs API](docs/jobs.md#get-apijobs) |
 | `GET` | `/api/jobs/:jobId` | Poll background job progress and retrieve result | [Jobs API](docs/jobs.md#get-apijobsjobid) |
 | `POST` | `/api/news-monitor` | Trigger symbol news scanning & event detection | [News Monitoring](docs/news-monitor.md) |
+| `POST` | `/api/operations/estimate` | Pre-flight cost estimate with zero billable calls (Issue #745) | [OpenAPI Spec](/openapi.json) |
 | `POST` | `/api/trading/binance/orders/preview` | Pre-trade Binance Spot cost & slippage preview | [API Reference](docs/api-reference.md#post-apitradingbinanceorderspreview) |
 | `POST` | `/api/trading/binance/orders` | Operator-gated Binance Spot market, limit, contingent, and native `BRACKET_LIMIT` OTOCO orders | [API Reference](docs/api-reference.md#post-apitradingbinanceorders) |
 | `GET`/`DELETE` | `/api/trading/binance/orders` | Read recent orders or reconcile order lists; cancel a single order | [API Reference](docs/api-reference.md#post-apitradingbinanceorders) |
@@ -210,6 +211,17 @@ Webhook ingest uses `WEBHOOK_API_KEY`. Admin/operator routes accept Firebase ID 
 | `GET` | `/api/research/strategies` | Compare 6 TradingView MCP strategies (RSI, Bollinger, MACD, EMA Cross, Supertrend, Donchian) for one symbol | [OpenAPI Spec](/openapi.json) |
 | `POST` | `/api/research/walk-forward` | Run out-of-sample walk-forward validation for a strategy to detect overfitting | [OpenAPI Spec](/openapi.json) |
 | `POST` | `/api/research/backtest` | Run historical backtest for a strategy with commission and slippage | [OpenAPI Spec](/openapi.json) |
+
+Pre-flight cost estimation (Issue #745): pass `dryRun=cost` (or `?estimate=true`) on `/api/news-monitor`, `/api/jobs/tradingview-analysis`, `/api/webhook/expanded-analysis-alert`, `/api/webhook/market-scanner-alert`, or call `POST /api/operations/estimate` with `{ operation, ...operationBody }`, to receive a `costEstimate` with `tokensIn`, `tokensOut`, `estimatedTotalTokens`, `estimatedCostUsd`, `providerBreakdown`, `externalCosts`, and `quotaImpact`. The estimator makes zero billable calls (no Gemini, TradingView MCP, Brave Search, Firestore, or remote Langfuse). Input tokens use a rough upper bound (`ceil(chars / 4)`); output tokens use configured budgets. TradingView MCP and Brave costs are reported as `unknown` (null), never $0. Gated by `ENABLE_DRY_RUN_COST` (default `true`). Rates come from Remote Config `LLM_COST_RATES_JSON` with env fallback and bundled `PRICING_PER_1M` defaults; `/api/status` exposes `dependencies.costEstimation`.
+
+| Remote Config parameter | Environment/default fallback | Bounds | Purpose |
+| --- | --- | --- | --- |
+| `ENABLE_DRY_RUN_COST` | `true` | boolean | Opt-in gate for `dryRun=cost` and `POST /api/operations/estimate`. |
+| `COST_ESTIMATION_OUTPUT_TOKENS_NEWS` | `400` | integer `10`-`8000` | Output-token budget per news symbol for cost estimation. |
+| `COST_ESTIMATION_OUTPUT_TOKENS_ANALYSIS` | `800` | integer `10`-`8000` | Output-token budget per expanded-analysis symbol for cost estimation. |
+| `COST_ESTIMATION_OUTPUT_TOKENS_SCANNER` | `600` | integer `10`-`8000` | Output-token budget per scanner candidate for cost estimation. |
+| `COST_ESTIMATION_DAILY_QUOTA_TOKENS` | `1000000` | integer `1000`-`100000000` | Daily token quota denominator for `quotaImpact` percent. |
+| `LLM_COST_RATES_JSON` | empty | JSON `{model:{input,output}}` per 1M tokens | Public per-model LLM rate overrides; empty preserves bundled `PRICING_PER_1M`. |
 
 Interactive Swagger documentation is available at `/docs`, and OpenAPI 3.1 schema is published at `/openapi.json`. CI coverage guards (`tests/unit/postman-collection.test.js` and `tests/unit/openapi-contract.test.js`) enforce that every mounted `/api` route appears in both OpenAPI and `CabrosBot.postman_collection.json`, and that every unique endpoint path referenced in README API documentation exists in `src/openapi/openapi.json`.
 
@@ -960,6 +972,17 @@ Every protected `/api` response (success and throttled) carries the standard `X-
 | `X-RateLimit-Reset` | Unix timestamp (seconds) when the current window resets. |
 
 Dedicated limits use independent per-endpoint buckets keyed by the existing API-key hash and trusted client IP. Heavy routes are expanded analysis, market scanner, symbol analysis, and news monitor; trading covers Binance order reads, writes, and previews; standard covers volume-confirmation; light covers `/api/status` and `/api/capabilities`. All webhook and news-monitor ingest requests also share an aggregate 1,000-request bucket per `RATE_LIMIT_WINDOW_MS`; mapped webhook tiers enforce both limits. Alert and message ingest use the aggregate bucket without an additional tier. Other routes use `RATE_LIMIT_WINDOW_MS` and `RATE_LIMIT_MAX`. Throttled (`429`) responses include the `Retry-After` header and the positive `retryAfterSeconds` field in the standard retryable `RATE_LIMITED` error envelope. `/healthcheck`, `/ready`, `/livez`, `/readyz`, `/openapi.json`, `/docs`, and static assets are mounted before the rate limiter in `app.js` and are exempt.
+
+### Structured audit logging (#740)
+
+Structured audit logging emits compliance and operational audit records for security-sensitive operations (authentication failures, order placement/lifecycle mutations, operator config changes, and alert replays) through structured JSON logging with `stream: 'audit'`.
+
+| Variable | Default | Accepted values | Classification | Purpose |
+|---|---|---|---|---|
+| `ENABLE_AUDIT_LOGGING` | `true` | `true`, `false` | Environment-only (security control) | Master switch for structured security audit events. Set strictly to `'false'` to disable. Excluded from Remote Config. |
+| `AUDIT_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` | Environment-only | Console log level at which audit events are emitted (defaults to `info`). |
+
+Audit records preserve sensitive data hygiene by masking client IPs (`a.b.c.x`, `loopback`, `ipv6-redacted`), redacting API keys and bearer tokens, stripping URL query strings containing credentials, and masking personal destination segments (`/api/preferences/:channel/:chatId`).
 
 ## Architecture Overview
 

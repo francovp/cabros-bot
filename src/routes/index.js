@@ -22,6 +22,7 @@ const {
 	postRetryJob,
 	postRetryFailedJob,
 } = require('../controllers/webhooks/handlers/jobs/jobs');
+const { postOperationEstimate } = require('../controllers/operations/estimate');
 const {
 	listAlerts,
 	getAlertById,
@@ -160,6 +161,9 @@ function getRoutes(botOrGetter) {
 	router.put('/scanner-presets/:id', ...adminWrite, updatePreset);
 	router.delete('/scanner-presets/:id', ...adminWrite, deletePreset);
 	router.post('/scanner-presets/:id/run', ...adminWrite, idempotencyMiddleware, postRunPreset(botOrGetter));
+
+	// Issue #745 — pre-flight cost estimate. validateApiKey keeps admin tier; no idempotency (probes mutate nothing).
+	router.post('/operations/estimate', validateApiKey, postOperationEstimate);
 
 	// Strategy research (TradingView MCP backtest / compare / walk-forward).
 	// Gated by validateApiKey plus the ENABLE_STRATEGY_RESEARCH feature flag:

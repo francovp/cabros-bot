@@ -13,10 +13,35 @@ const { binanceOrderAuditService } = require('../../services/trading/BinanceOrde
 const { tradeLedgerService } = require('../../services/trading/TradeLedgerService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const autoTradeReservationService = require('../../services/trading/AutoTradeReservationService');
+const { auditLog, AUDIT_CATEGORIES } = require('../../lib/auditLogger');
+
+function resolveDryRun(body) {
+	if (body && body.dryRun !== undefined) {
+		if (body.dryRun === false || body.dryRun === 'false') return false;
+		if (body.dryRun === true || body.dryRun === 'true') return true;
+	}
+	return true;
+}
 
 async function postBinanceOrder(req, res) {
 	const startTime = Date.now();
 	const idempotencyKey = getIdempotencyKey(req);
+	auditLog(
+		AUDIT_CATEGORIES.ORDER_SUBMITTED,
+		null,
+		'binance_order',
+		{
+			symbol: req.body?.symbol,
+			side: req.body?.side,
+			type: req.body?.type,
+			quantity: req.body?.quantity ?? null,
+			quoteOrderQty: req.body?.quoteOrderQty ?? null,
+			price: req.body?.price ?? null,
+			dryRun: resolveDryRun(req.body),
+		},
+		'submitted',
+		req,
+	);
 	try {
 		const result = await binanceOrderService.placeOrder(req.body, {
 			idempotencyKey,
@@ -35,6 +60,24 @@ async function postBinanceOrder(req, res) {
 		} catch {
 			// Audit logging is best effort; never turn a confirmed order into a false failure.
 		}
+
+		auditLog(
+			AUDIT_CATEGORIES.ORDER_COMPLETED,
+			null,
+			'binance_order',
+			{
+				symbol: resultOrder?.symbol || resultOrderList?.symbol || req.body?.symbol,
+				side: resultOrder?.side || req.body?.side,
+				type: resultOrder?.type || req.body?.type,
+				status: result.dryRun ? 'dry_run' : (resultOrder?.status || resultOrderList?.listOrderStatus || 'COMPLETED'),
+				binanceOrderId: resultOrder?.orderId ?? resultOrderList?.orderListId ?? null,
+				clientOrderId: resultOrder?.clientOrderId ?? resultOrderList?.listClientOrderId ?? null,
+				dryRun: Boolean(result.dryRun),
+				processingMs,
+			},
+			'success',
+			req,
+		);
 
 		binanceOrderAuditService.recordMutation({
 			req,
@@ -99,9 +142,26 @@ async function postBinanceOrder(req, res) {
 			|| req.body?.clientOrderId
 			|| (req.body?.type !== 'BRACKET_LIMIT' && idempotencyKey ? deriveClientOrderId(idempotencyKey, req.body) : null);
 
+		const isAmbiguous = error.code === 'BINANCE_ORDER_STATUS_UNKNOWN';
+		auditLog(
+			isAmbiguous ? AUDIT_CATEGORIES.ORDER_AMBIGUOUS : AUDIT_CATEGORIES.ORDER_REJECTED,
+			null,
+			'binance_order',
+			{
+				symbol: req.body?.symbol,
+				side: req.body?.side || null,
+				type: req.body?.type || null,
+				errorCode: error.code || 'BINANCE_ORDER_FAILED',
+				error: error.message || String(error),
+				dryRun: resolveDryRun(req.body),
+				processingMs,
+			},
+			isAmbiguous ? 'ambiguous' : 'rejected',
+			req,
+		);
+
 		if (error instanceof BinanceOrderRequestError || error instanceof BinanceOrderServiceError) {
 			console.warn('[BinanceOrdersController] order rejected', { code: error.code });
-			const isAmbiguous = error.code === 'BINANCE_ORDER_STATUS_UNKNOWN';
 			const status = isAmbiguous ? 'ambiguous' : 'rejected';
 			binanceOrderAuditService.recordMutation({
 				req,

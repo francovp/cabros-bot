@@ -109,6 +109,12 @@ The Remote Config model-selector defaults use the deployment's in-app values, pr
 - `ENABLE_TOKEN_COST_BUDGET` - Enable daily LLM token cost tracking and budget limits (`true` or `false`, default: `false`; Remote Config supported)
 - `TOKEN_COST_DAILY_BUDGET_USD` - Maximum daily spend in USD before LLM calls fail open safely (default: `5.00`, range `0.01`-`10000.00`; Remote Config supported)
 - `TOKEN_COST_WARN_THRESHOLD_PCT` - Percentage of daily budget that triggers an admin Telegram alert (default: `80`, range `1`-`100`; Remote Config supported)
+- `ENABLE_DRY_RUN_COST` - Enable pre-flight cost estimation (`dryRun=cost`) and `POST /api/operations/estimate` (default: `true`; Remote Config supported)
+- `COST_ESTIMATION_OUTPUT_TOKENS_NEWS` - Output-token budget per news symbol for cost estimation (default: `400`, range `10`-`8000`; Remote Config supported)
+- `COST_ESTIMATION_OUTPUT_TOKENS_ANALYSIS` - Output-token budget per expanded-analysis symbol (default: `800`, range `10`-`8000`; Remote Config supported)
+- `COST_ESTIMATION_OUTPUT_TOKENS_SCANNER` - Output-token budget per scanner candidate (default: `600`, range `10`-`8000`; Remote Config supported)
+- `COST_ESTIMATION_DAILY_QUOTA_TOKENS` - Daily token quota denominator for quotaImpact (default: `1000000`, range `1000`-`100000000`; Remote Config supported)
+- `LLM_COST_RATES_JSON` - Public per-model LLM rate overrides as JSON `{model:{input,output}}` per 1M tokens (default: empty; Remote Config supported)
 
 #### Cloudflare AI Gateway
 
@@ -520,6 +526,8 @@ Real-time administrative events (job progress, scanner results, alert delivery e
 
 The endpoint tiers use separate per-endpoint buckets keyed by the existing API-key hash and trusted client IP; URL query strings, trailing slashes, and case do not change the bucket. All webhook and news-monitor ingest paths share a finite aggregate bucket of 1,000 requests per `RATE_LIMIT_WINDOW_MS`; mapped webhook tiers are applied in addition to this aggregate ceiling. These request-rate limits are security controls, remain environment-only, and are intentionally excluded from Firebase Remote Config. `/healthcheck`, `/ready`, `/openapi.json`, `/docs`, `/admin`, and associated static assets are mounted before the rate limiter and remain exempt.
 - `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production). The logger automatically masks sensitive plain-object keys, bare-scalar secrets preceded by sensitive labels, URL query secrets, embedded JSON strings, Authorization/Bearer credentials, Telegram bot tokens, Discord webhook tokens, OpenAI keys, and dynamically registered request-scoped secrets via `registerSecretValue` / `clearSecretValue`.
+- `ENABLE_AUDIT_LOGGING` - Enable structured audit logging for security-sensitive operations (default: `true`; set exactly `false` to disable). Emits structured audit events (`AUTH_FAILURE`, `ORDER_SUBMITTED`, `ORDER_COMPLETED`, `ORDER_REJECTED`, `ADMIN_ACTION`, `CONFIG_CHANGE`) with logical stream `audit`. This is an environment-only security and compliance control, excluded from Firebase Remote Config per the documented policy that security gates stay environment-only.
+- `AUDIT_LOG_LEVEL` - Console log level for audit events (default: `info`; allowed: `debug`, `info`, `warn`, `error`).
 - `SERVICE_NAME` - Optional service name included in JSON logs (default: package name or `cabros-bot`)
 
 #### News Monitoring (003-news-monitor)

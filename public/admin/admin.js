@@ -38,6 +38,10 @@ const VIEWS = {
 			method: 'POST', path: '/api/news-monitor', label: 'News monitor',
 			renderSuccess: (data) => newsMonitorResults(data),
 		},
+		{
+			method: 'POST', path: '/api/operations/estimate', label: 'Cost estimate (dryRun=cost)',
+			renderSuccess: (data) => costEstimateResult(data),
+		},
 	],
 };
 
@@ -1842,6 +1846,27 @@ const analysisReportResult = (data) => {
 	const chips = deliveryChips(data.deliveryResults);
 	if (chips.children.length) wrap.append(chips);
 	return wrap.children.length ? wrap : null;
+};
+
+const costEstimateResult = (data) => {
+	const estimate = (data && data.costEstimate) || null;
+	if (!estimate) return null;
+	const wrap = element('div', { className: 'dashboard analysis-report' });
+	wrap.append(element('h4', { text: 'Cost estimate (preview)' }));
+	wrap.append(element('p', { className: 'job-meta', text: 'Pre-flight estimate with zero billable calls. Input tokens use a rough upper bound (chars / 4); MCP/search costs are unknown, not $0. Actual rate may differ.' }));
+	const chips = element('div', { className: 'chip-grid' });
+	const items = [
+		[`Tokens: ${estimate.tokensIn || 0} in / ${estimate.tokensOut || 0} out`, ''],
+		[`Estimated cost: $${estimate.estimatedCostUsd || 0}`, 'status-ready'],
+		[`Quota: ${estimate.quotaImpact && estimate.quotaImpact.summary ? estimate.quotaImpact.summary : 'n/a'}`, ''],
+		[`Model: ${estimate.model || 'unknown'}`, ''],
+	];
+	items.forEach(([text, tone]) => chips.append(element('span', { className: `capability-chip ${tone}`, text })));
+	wrap.append(chips);
+	if (Array.isArray(estimate.warnings) && estimate.warnings.length) {
+		estimate.warnings.forEach((warning) => wrap.append(element('p', { text: String(warning) })));
+	}
+	return wrap;
 };
 
 const asFiniteNumber = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : null);
@@ -7153,6 +7178,7 @@ const PLAYGROUND_STRUCTURED_RENDERERS = {
 	'POST /api/webhook/market-scanner-alert': (data) => analysisReportResult(data),
 	'POST /api/webhook/volume-confirmation': (data) => volumeConfirmationResult(data),
 	'POST /api/news-monitor': (data) => newsMonitorResults(data),
+	'POST /api/operations/estimate': (data) => costEstimateResult(data),
 	'GET /api/alerts/{alertId}': (data) => (data && data.alert ? createAlertDetailPanel(data.alert) : null),
 	'GET /api/alerts': (data) => {
 		if (!data || !Array.isArray(data.alerts) || !data.alerts.length) return null;

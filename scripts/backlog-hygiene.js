@@ -46,6 +46,7 @@ const STATUS_LABELS = [
 function parseArgs(argv = process.argv.slice(2)) {
 	const options = {
 		dryRun: true,
+		closeVerified: false,
 		repo: '',
 		reportPath: 'backlog-report.md',
 		limit: 200,
@@ -59,6 +60,8 @@ function parseArgs(argv = process.argv.slice(2)) {
 			options.dryRun = false;
 		} else if (arg === '--dry-run') {
 			options.dryRun = true;
+		} else if (arg === '--close-verified') {
+			options.closeVerified = true;
 		} else if (arg === '--repo' && i + 1 < argv.length) {
 			options.repo = argv[++i];
 		} else if (arg === '--report' && i + 1 < argv.length) {
@@ -261,6 +264,148 @@ async function fetchSentryEventCount(tag, options = {}) {
 }
 
 /**
+ * Detects open issues and PRs that have already landed on master via another PR/commit.
+ */
+function findImplementedOnMaster(items, options = {}) {
+	let commitLogs = options.commitLogs;
+	if (!commitLogs) {
+		try {
+			const execFn = options.execGit || execFileSync;
+			commitLogs = execFn('git', ['log', 'origin/master', '--oneline', '-n', '500'], {
+				encoding: 'utf8',
+				stdio: 'pipe',
+			})
+				.split('\n')
+				.filter(Boolean);
+		} catch {
+			commitLogs = [];
+		}
+	}
+
+	const implemented = [];
+	for (const item of items) {
+		const isPr = Boolean(item.headRefName || item.isPr);
+		const num = item.number;
+		const numRegex = new RegExp(`(?:#|gh-|cb-|closes\\s+#|fixes\\s+#)${num}\\b`, 'i');
+
+		for (const commitLine of commitLogs) {
+			if (numRegex.test(commitLine)) {
+				implemented.push({
+					number: num,
+					title: item.title,
+					type: isPr ? 'pr' : 'issue',
+					matchedCommit: commitLine.trim(),
+				});
+				break;
+			}
+		}
+	}
+	return implemented;
+}
+
+/**
+ * Detects older open Dependabot PRs superseded by newer ones or conflicting with 40-char SHA pinning.
+ */
+function findSupersededDependabotPrs(openPrs, options = {}) {
+	const superseded = [];
+	const dependabotPrs = openPrs.filter(
+		(pr) =>
+			(pr.headRefName || '').startsWith('dependabot/') ||
+			(pr.title || '').toLowerCase().includes('dependabot')
+	);
+
+	const groups = new Map();
+	for (const pr of dependabotPrs) {
+		const branch = pr.headRefName || '';
+		let depKey = null;
+
+		const npmMatch = branch.match(/^dependabot\/npm_and_yarn\/(.+)-([0-9.]+)/);
+		const actionMatch = branch.match(/^dependabot\/github_actions\/(.+)-([0-9.]+)/);
+
+		if (npmMatch) {
+			depKey = `npm:${npmMatch[1]}`;
+		} else if (actionMatch) {
+			depKey = `action:${actionMatch[1]}`;
+		} else {
+			const titleMatch = (pr.title || '').match(/bump\s+([^\s]+)\s+from/i);
+			if (titleMatch) {
+				depKey = `pkg:${titleMatch[1]}`;
+			}
+		}
+
+		if (depKey) {
+			if (!groups.has(depKey)) groups.set(depKey, []);
+			groups.get(depKey).push(pr);
+		}
+
+		// Check if it is a tag-based GitHub action bump while 40-char SHA pinning is enforced (GH-803)
+		if (actionMatch && (options.enforceShaPinning ?? true)) {
+			superseded.push({
+				number: pr.number,
+				title: pr.title,
+				branch: pr.headRefName,
+				reason: 'Tag-bump conflicts with 40-char commit SHA action pinning policy (GH-803)',
+			});
+		}
+	}
+
+	for (const [, prList] of groups.entries()) {
+		if (prList.length > 1) {
+			prList.sort((a, b) => a.number - b.number);
+			const newest = prList[prList.length - 1];
+			for (let i = 0; i < prList.length - 1; i += 1) {
+				const older = prList[i];
+				if (!superseded.some((s) => s.number === older.number)) {
+					superseded.push({
+						number: older.number,
+						title: older.title,
+						branch: older.headRefName,
+						reason: `Superseded by newer open PR #${newest.number} (${newest.title})`,
+					});
+				}
+			}
+		}
+	}
+
+	return superseded;
+}
+
+/**
+ * Detects automated bot noise issues (e.g. virgin-trainee-dev non-suggestions, greetings, SHIPPED summaries).
+ */
+function findBotNoiseSuggestions(issues) {
+	const noise = [];
+	for (const issue of issues) {
+		const title = issue.title || '';
+		const body = issue.body || '';
+
+		const isSuggestion =
+			title.startsWith('Unaddressed suggestion:') || body.includes('<!-- source-suggestion-id=');
+		if (!isSuggestion) continue;
+
+		const isGreeting =
+			body.includes("Hello! I'm the Virgin Trainee bot") ||
+			body.includes('Hi @francovp') ||
+			body.includes('This PR looks super cool');
+		const isShippedSummary =
+			body.includes('SHIPPED: PR #') ||
+			body.includes('was squash-merged as') ||
+			title.includes('SHIPPED: PR #');
+
+		if (isGreeting || isShippedSummary) {
+			noise.push({
+				number: issue.number,
+				title: issue.title,
+				reason: isGreeting
+					? 'Automated bot greeting/introduction without actionable suggestion'
+					: 'Automated issue created from merged PR SHIPPED summary',
+			});
+		}
+	}
+	return noise;
+}
+
+/**
  * Generates Markdown report summarizing backlog hygiene state.
  */
 function generateBacklogReport(stats) {
@@ -311,6 +456,32 @@ function generateBacklogReport(stats) {
 		lines.push('## Needs Triage Queue');
 		for (const t of stats.needsTriageQueue.slice(0, 20)) {
 			lines.push(`- #${t.number}: ${t.title}`);
+		}
+		lines.push('');
+	}
+
+	if (stats.implementedOnMaster && stats.implementedOnMaster.length > 0) {
+		lines.push('## Implemented on `master` (Ready to Close)');
+		for (const item of stats.implementedOnMaster) {
+			lines.push(
+				`- #${item.number} (${item.type}): "${item.title || ''}" → Matched commit: ${item.matchedCommit}`
+			);
+		}
+		lines.push('');
+	}
+
+	if (stats.supersededDependabotPrs && stats.supersededDependabotPrs.length > 0) {
+		lines.push('## Superseded Dependabot PRs');
+		for (const pr of stats.supersededDependabotPrs) {
+			lines.push(`- PR #${pr.number}: "${pr.title || ''}" → ${pr.reason}`);
+		}
+		lines.push('');
+	}
+
+	if (stats.botNoiseSuggestions && stats.botNoiseSuggestions.length > 0) {
+		lines.push('## Bot Noise / Unactionable Suggestions');
+		for (const b of stats.botNoiseSuggestions) {
+			lines.push(`- #${b.number}: "${b.title || ''}" → ${b.reason}`);
 		}
 		lines.push('');
 	}
@@ -524,13 +695,83 @@ async function runBacklogHygiene(options = {}) {
 		}
 	}
 
-	// 5. Generate report
+	// 5. Detect implemented on master, superseded Dependabot PRs, and bot noise
+	const allItemsForMaster = [
+		...openIssues.map((i) => ({ ...i, isPr: false })),
+		...openPrs.map((p) => ({ ...p, isPr: true })),
+	];
+	const implementedOnMaster = findImplementedOnMaster(allItemsForMaster, {
+		execGit: options.execGit,
+		commitLogs: options.commitLogs,
+	});
+	const supersededDependabotPrs = findSupersededDependabotPrs(openPrs);
+	const botNoiseSuggestions = findBotNoiseSuggestions(openIssues);
+
+	let closedVerifiedCount = 0;
+	if (options.closeVerified && !dryRun) {
+		for (const item of implementedOnMaster) {
+			try {
+				const closeCmd = item.type === 'pr' ? 'pr' : 'issue';
+				const closeArgs = [
+					closeCmd,
+					'close',
+					String(item.number),
+					'--comment',
+					`Closed as completed. Already implemented on master (matched commit: ${item.matchedCommit}).`,
+				];
+				if (repo) closeArgs.push('--repo', repo);
+				execGh(closeArgs);
+				closedVerifiedCount++;
+			} catch (err) {
+				console.warn(`[backlog-hygiene] Failed to close verified item #${item.number}:`, err.message);
+			}
+		}
+		for (const pr of supersededDependabotPrs) {
+			try {
+				const closeArgs = [
+					'pr',
+					'close',
+					String(pr.number),
+					'--comment',
+					`Closing as superseded. ${pr.reason}.`,
+				];
+				if (repo) closeArgs.push('--repo', repo);
+				execGh(closeArgs);
+				closedVerifiedCount++;
+			} catch (err) {
+				console.warn(`[backlog-hygiene] Failed to close superseded PR #${pr.number}:`, err.message);
+			}
+		}
+		for (const b of botNoiseSuggestions) {
+			try {
+				const closeArgs = [
+					'issue',
+					'close',
+					String(b.number),
+					'--reason',
+					'not planned',
+					'--comment',
+					`<!-- suggestion-addressed -->\nClosed as bot noise. ${b.reason}.`,
+				];
+				if (repo) closeArgs.push('--repo', repo);
+				execGh(closeArgs);
+				closedVerifiedCount++;
+			} catch (err) {
+				console.warn(`[backlog-hygiene] Failed to close bot noise issue #${b.number}:`, err.message);
+			}
+		}
+	}
+
+	// 6. Generate report
 	const reportMarkdown = generateBacklogReport({
 		countsByStatus,
 		countsByPriority,
 		duplicates,
 		staleAgentWorking,
 		needsTriageQueue,
+		implementedOnMaster,
+		supersededDependabotPrs,
+		botNoiseSuggestions,
 	});
 
 	if (options.reportPath) {
@@ -545,6 +786,10 @@ async function runBacklogHygiene(options = {}) {
 		staleAgentWorkingCount: staleAgentWorking.length,
 		needsTriageCount: needsTriageQueue.length,
 		sentryAppendedCount,
+		implementedOnMasterCount: implementedOnMaster.length,
+		supersededDependabotPrsCount: supersededDependabotPrs.length,
+		botNoiseSuggestionsCount: botNoiseSuggestions.length,
+		closedVerifiedCount,
 	};
 }
 
@@ -566,6 +811,9 @@ module.exports = {
 	findDuplicates,
 	findStaleAgentWorking,
 	fetchSentryEventCount,
+	findImplementedOnMaster,
+	findSupersededDependabotPrs,
+	findBotNoiseSuggestions,
 	generateBacklogReport,
 	runBacklogHygiene,
 };

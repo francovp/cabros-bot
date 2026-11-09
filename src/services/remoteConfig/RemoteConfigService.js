@@ -227,6 +227,43 @@ const PARAMETER_SCHEMA = Object.freeze({
 	TOKEN_COST_DAILY_BUDGET_USD: { type: 'number', defaultValue: 5.0, min: 0.01, max: 10000 },
 	TOKEN_COST_WARN_THRESHOLD_PCT: { type: 'number', defaultValue: 80, integer: true, min: 1, max: 100 },
 	ENABLE_MAINTENANCE_MODE: { type: 'boolean', defaultValue: false },
+	// Issue #745 — pre-flight cost estimation. Non-secret runtime tuning; the
+	// rate table is public pricing data and ships useInAppDefault in the
+	// Firebase template so publishing preserves env/default fallbacks.
+	ENABLE_DRY_RUN_COST: { type: 'boolean', defaultValue: true },
+	COST_ESTIMATION_OUTPUT_TOKENS_NEWS: { type: 'number', defaultValue: 400, integer: true, min: 10, max: 8000 },
+	COST_ESTIMATION_OUTPUT_TOKENS_ANALYSIS: { type: 'number', defaultValue: 800, integer: true, min: 10, max: 8000 },
+	COST_ESTIMATION_OUTPUT_TOKENS_SCANNER: { type: 'number', defaultValue: 600, integer: true, min: 10, max: 8000 },
+	COST_ESTIMATION_DAILY_QUOTA_TOKENS: { type: 'number', defaultValue: 1000000, integer: true, min: 1000, max: 100000000 },
+	LLM_COST_RATES_JSON: {
+		type: 'string',
+		defaultValue: '',
+		allowEmpty: true,
+		validate: (value) => {
+			if (value === '') {
+				return true;
+			}
+			try {
+				const parsed = JSON.parse(value);
+				if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+					return false;
+				}
+				for (const rate of Object.values(parsed)) {
+					if (!rate || typeof rate !== 'object') {
+						return false;
+					}
+					const input = Number(rate.input);
+					const output = Number(rate.output);
+					if (!Number.isFinite(input) || !Number.isFinite(output) || input < 0 || output < 0 || input > 1000 || output > 1000) {
+						return false;
+					}
+				}
+				return true;
+			} catch (error) {
+				return false;
+			}
+		},
+	},
 	// Issue #721 — Firestore storage gates. Each is resolved per call (the gate is
 	// checked before the cached `db` handle), so a remote value flips it at runtime
 	// rather than only at process start. Consumers must read `remote ?? env`, never

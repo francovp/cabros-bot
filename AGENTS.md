@@ -3161,3 +3161,18 @@ Public readiness surfaces are stable-code only. `bootstrapReadiness` stores `err
 **Coverage**: `tests/unit/deployment-environment.test.js` (OpenClaw `IS_PULL_REQUEST` + `OPENCLAW_HOST` marker, name markers, bare `IS_PULL_REQUEST` not preview), `tests/unit/readiness-public-projection.test.js` (code mapping + projection), `tests/integration/readiness-endpoint.test.js` + `tests/integration/healthcheck-readiness.test.js` (HTTP no-raw-text contract), `tests/unit/postman-collection.test.js` + `tests/unit/openapi-contract.test.js` (published contract).
 
 No new environment variable, Remote Config key, endpoint, or feature flag was added; reachability documentation lives in this section.
+
+## Pre-flight Cost Estimation (Issue #745)
+
+`dryRun=cost` (or `?estimate=true`) on `/api/news-monitor`, `/api/jobs/tradingview-analysis`, `/api/webhook/expanded-analysis-alert`, and `/api/webhook/market-scanner-alert`, plus `POST /api/operations/estimate` with `{ operation, ...operationBody }`, returns a `costEstimate` with `tokensIn`, `tokensOut`, `estimatedTotalTokens`, `estimatedCostUsd`, `providerBreakdown[]`, `externalCosts[]`, `quotaImpact`, `perSymbol[]`, and `assumptions`, without invoking Gemini, TradingView MCP, Brave Search, Firestore, or remote Langfuse. Owner decision (option 1): LLM costs are a documented rough upper bound (`ceil(chars / 4)` input + configured output budgets); TradingView MCP and Brave costs are `unknown` (null), never `$0`.
+
+- `src/services/cost/CostEstimationService.js` is pure and synchronous; `src/lib/dryRunRequest.js` owns `resolveDryRunCost` so the idempotency bypass and handlers agree on probes. Cost probes never reserve or cache idempotency keys.
+- Rates come from Remote Config `LLM_COST_RATES_JSON` (public `{model:{input,output}}` per 1M) with env fallback and bundled `PRICING_PER_1M` defaults (`ratesSource: remote|environment|default`). Malformed JSON degrades to defaults.
+- `/api/status` exposes `featureFlags.costEstimation` and `dependencies.costEstimation` (`enabled/configured/ready/status/source/ratesSource/model/operations`). No secrets are logged or returned.
+- The admin console Analysis view includes `POST /api/operations/estimate` ("Cost estimate (dryRun=cost)") with a renderer showing tokens, estimated cost, quota impact, and warnings; generated `public/admin/` assets are committed via `pnpm run build:hosting`.
+
+No public alert, notification, persistence, or analytics contract changed; `dryRun=true` behavior is byte-identical.
+
+**Coverage**: `tests/unit/cost-estimation.test.js` (zero-call guarantee, per-symbol math, per-model lookup, Remote Config fallback, quotaImpact, operation selector, status), `tests/integration/cost-estimation-endpoint.test.js` (operations/estimate + four dryRun=cost endpoints), `tests/unit/postman-collection.test.js`, `tests/unit/openapi-contract.test.js`, and `tests/unit/remote-config-service.test.js`.
+
+

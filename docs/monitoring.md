@@ -364,3 +364,33 @@ kept so those paths stay searchable during triage.
 **Tuning.** The middleware has no configuration of its own. Raise or lower
 verbosity with `LOG_LEVEL`, and exempt additional probe paths with
 `REQUEST_DEADLINE_EXEMPT_PATHS` — the logging skip list follows it.
+
+## Structured Audit Logging (GH-740)
+
+Structured audit logging emits compliance and operational audit records for security-sensitive operations (authentication failures, order placement/lifecycle mutations, operator config changes, and alert replays) through structured JSON logging with `stream: 'audit'`.
+
+### Monitored Audit Events
+
+- `AUTH_FAILURE`: Failed authentication attempts (missing/invalid API keys, missing/invalid Firebase ID tokens, role authorization rejections)
+- `ORDER_SUBMITTED`: Binance Spot order placement attempts (live and dry-run)
+- `ORDER_COMPLETED`: Successful Binance Spot order placement confirmations
+- `ORDER_REJECTED`: Rejected Binance Spot order submissions
+- `ORDER_AMBIGUOUS`: Order submissions where exchange status is unknown (e.g. timeout on placement)
+- `CONFIG_CHANGE`: Trading pause/resume runtime controls and operator state changes
+- `ALERT_REPLAY`: Single and batch alert replay executions with delivery counts
+
+### Configuration
+
+| Variable | Default | Accepted values | Classification | Purpose |
+|---|---|---|---|---|
+| `ENABLE_AUDIT_LOGGING` | `true` | `true`, `false` | Environment-only (security control) | Master switch for structured security audit events. Set strictly to `'false'` to disable. Excluded from Remote Config. |
+| `AUDIT_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` | Environment-only | Console log level at which audit events are emitted (defaults to `info`). |
+
+### Privacy & Sanitization Controls
+
+Audit records preserve sensitive data hygiene:
+- **Client IP masking**: IPv4 addresses are masked to subnet blocks (e.g. `192.0.2.x`), loopback addresses (`127.0.0.1`, `::1`) are normalized to `loopback`, and IPv6 addresses are masked as `ipv6-redacted`.
+- **Query string stripping**: Query parameters (including percent-encoded strings like `?api%2Dkey=...`) are stripped from request paths before audit emission.
+- **Personal destination masking**: Personal chat destinations in paths (e.g. `/api/preferences/:channel/:chatId`) are masked to `:redacted`.
+- **Secret redaction**: API keys, bearer tokens, and credentials are never recorded in audit payloads.
+
