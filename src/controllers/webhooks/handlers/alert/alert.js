@@ -691,6 +691,7 @@ function postAlert(botOrGetter) {
 				signalClass,
 				...(parsedSignal && parsedSignal.exchange ? { exchange: parsedSignal.exchange } : {}),
 				...(parsedSignal?.symbol ? { symbol: parsedSignal.symbol } : {}),
+				...(parsedSignal?.timeframe ? { timeframe: parsedSignal.timeframe } : {}),
 				...(session ? { session } : {}),
 				...(traderIntent ? { traderIntent } : {}),
 				...(chartBars.length >= 2 && chartSymbol ? { chartBars, chartSymbol } : {}),
