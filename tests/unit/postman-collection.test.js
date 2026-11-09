@@ -400,6 +400,19 @@ describe('Postman collection contract', () => {
 		});
 	});
 
+	it('documents Sentry runtime diagnostics in request-ID status examples', () => {
+		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
+		const status = findItem(collection.item, 'Get Status');
+		const sentry = JSON.parse(status.response[0].body).dependencies.sentry;
+
+		for (const name of ['Get Status (request ID echo)', 'Get Status (request ID omitted)']) {
+			const item = findItem(collection.item, name);
+			const response = item.response.find(({ name: responseName }) => responseName === 'Success');
+			expect(item.request.description).toBe(status.request.description);
+			expect(JSON.parse(response.body).dependencies.sentry).toEqual(sentry);
+		}
+	});
+
 	it('documents bounded Gemini quota telemetry and only reachable quota states', () => {
 		const collection = JSON.parse(fs.readFileSync(collectionPath, 'utf8'));
 		const statusBody = JSON.parse(findItem(collection.item, 'Get Status').response[0].body);

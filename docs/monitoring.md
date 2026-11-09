@@ -27,6 +27,8 @@ When enabled, it also forwards configured console levels to Sentry Logs using th
 - **Optional Tracing/Spans**: Enable transaction traces plus custom spans for alert processing, news analysis, and multi-channel delivery
 - **Graceful Degradation**: Works without affecting existing fallback mechanisms
 
+The protected `GET /api/status` response exposes `dependencies.sentry.runtime` with the effective environment, release, trace sample rate, tracing-enabled state, and DSN host/project routing. It omits DSN credentials, path prefixes, and query parameters. An unset trace sample rate remains disabled; use this diagnostic to confirm the deployed value before comparing route latency.
+
 ### Configuration
 
 ```bash
@@ -37,7 +39,7 @@ SENTRY_DSN=https://key@o123.ingest.sentry.io/456
 # Optional: Explicit environment (auto-derived if not set)
 SENTRY_ENVIRONMENT=production
 
-# Optional: Explicit release (derived from RENDER_GIT_COMMIT or VERCEL_GIT_COMMIT_SHA if not set)
+# Optional: Explicit release (derived from deployment commit metadata or local Git SHA when available)
 SENTRY_RELEASE=v1.2.3
 
 # Optional: Privacy control (default: true = include alert text)
@@ -46,7 +48,7 @@ SENTRY_SEND_ALERT_CONTENT=false
 # Optional: Error sampling (default: 1.0 = 100%)
 SENTRY_SAMPLE_RATE_ERRORS=1.0
 
-# Optional: Trace sampling (leave unset to disable tracing)
+# Optional: Trace sampling (unset disables tracing; 0 sends no traces)
 SENTRY_TRACES_SAMPLE_RATE=0.1
 
 # Optional: Console log levels captured as Sentry Logs (default: warn,error)

@@ -119,7 +119,7 @@ const FEATURE_NAMES = {
 };
 
 const {
-	getDeploymentCommit,
+	getDeploymentIdentity,
 	getDeploymentRepoSlug,
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
@@ -177,7 +177,7 @@ class SentryService {
 			return process.env.SENTRY_RELEASE;
 		}
 
-		const deploymentCommit = getDeploymentCommit();
+		const deploymentCommit = getDeploymentIdentity().gitSha;
 		if (deploymentCommit) {
 			const shortCommit = deploymentCommit.substring(0, 7);
 			const repoSlug = getDeploymentRepoSlug();
@@ -257,8 +257,8 @@ class SentryService {
 		const dsn = process.env.SENTRY_DSN || undefined;
 		const enabled = process.env.ENABLE_SENTRY === 'true' && !!dsn;
 		const tracesSampleRate = this._parseOptionalSampleRate(process.env.SENTRY_TRACES_SAMPLE_RATE);
-		// Profiling requires tracing; only parse profile rate when tracing is enabled
-		const profileSessionSampleRate = tracesSampleRate !== undefined
+		// Profiling requires active tracing; a zero trace rate disables it.
+		const profileSessionSampleRate = tracesSampleRate > 0
 			? this._parseOptionalSampleRate(process.env.SENTRY_PROFILE_SESSION_SAMPLE_RATE)
 			: undefined;
 
@@ -314,8 +314,8 @@ class SentryService {
 					const extra = [Sentry.consoleLoggingIntegration({ levels: this.config.consoleLogLevels })];
 					// Add profiling integration only when tracing + profiling are both enabled
 					if (
-						this.config.tracesSampleRate !== undefined &&
-						this.config.profileSessionSampleRate !== undefined
+						this.config.tracesSampleRate > 0 &&
+						this.config.profileSessionSampleRate > 0
 					) {
 						extra.push(nodeProfilingIntegration());
 					}
@@ -336,8 +336,8 @@ class SentryService {
 
 			// Profiling: attach profileSessionSampleRate and profileLifecycle only when tracing is on
 			if (
-				this.config.tracesSampleRate !== undefined &&
-				this.config.profileSessionSampleRate !== undefined
+				this.config.tracesSampleRate > 0 &&
+				this.config.profileSessionSampleRate > 0
 			) {
 				initOptions.profileSessionSampleRate = this.config.profileSessionSampleRate;
 				initOptions.profileLifecycle = 'trace';
@@ -352,7 +352,7 @@ class SentryService {
 				lastInitError: undefined,
 			};
 
-			const profilingStatus = this.config.profileSessionSampleRate !== undefined
+			const profilingStatus = this.isProfilingEnabled()
 				? `enabled (rate=${this.config.profileSessionSampleRate})`
 				: 'disabled';
 			console.info(
@@ -381,7 +381,9 @@ class SentryService {
 	 * @returns {boolean}
 	 */
 	isTracingEnabled() {
-		return this.state.enabled && !!this.config && this.config.tracesSampleRate !== undefined;
+		return this.state.enabled && !!this.config
+			&& this.config.tracesSampleRate !== undefined
+			&& this.config.tracesSampleRate > 0;
 	}
 
 	/**
@@ -389,7 +391,9 @@ class SentryService {
 	 * @returns {boolean}
 	 */
 	isProfilingEnabled() {
-		return this.isTracingEnabled() && !!this.config && this.config.profileSessionSampleRate !== undefined;
+		return this.isTracingEnabled() && !!this.config
+			&& this.config.profileSessionSampleRate !== undefined
+			&& this.config.profileSessionSampleRate > 0;
 	}
 
 	/**
@@ -398,6 +402,48 @@ class SentryService {
 	 */
 	getState() {
 		return { ...this.state };
+	}
+
+	/**
+	 * Get non-secret effective runtime settings for the protected status endpoint.
+	 * DSN credentials, path prefixes, and query parameters are deliberately omitted.
+	 * @returns {{initialized: boolean, environment: string|null, release: string|null, tracesSampleRate: number|null, tracingEnabled: boolean, dsnRouting: {configured: boolean, host: string|null, projectId: string|null}}}
+	 */
+	getRuntimeDiagnostics() {
+		const config = this.config;
+		const dsnRouting = {
+			configured: Boolean(config && config.dsn),
+			host: null,
+			projectId: null,
+		};
+
+		if (dsnRouting.configured) {
+			try {
+				const parsedDsn = new URL(config.dsn);
+				const lastPathSegment = parsedDsn.pathname.split('/').filter(Boolean).pop();
+				if (['http:', 'https:'].includes(parsedDsn.protocol)) {
+					dsnRouting.host = parsedDsn.host || null;
+					dsnRouting.projectId = lastPathSegment && /^\d+$/.test(lastPathSegment)
+						? lastPathSegment
+						: null;
+				}
+			} catch {
+				// Keep malformed DSNs out of status while still showing that a value was configured.
+			}
+		}
+
+		const tracesSampleRate = config && config.tracesSampleRate !== undefined
+			? config.tracesSampleRate
+			: null;
+
+		return {
+			initialized: this.state.enabled,
+			environment: config ? config.environment : null,
+			release: config && config.release ? config.release : null,
+			tracesSampleRate,
+			tracingEnabled: this.state.enabled && tracesSampleRate !== null && tracesSampleRate > 0,
+			dsnRouting,
+		};
 	}
 
 	/**
