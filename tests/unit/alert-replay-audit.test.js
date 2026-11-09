@@ -135,6 +135,59 @@ describe('Alert Replay Audit Logging (GH-740)', () => {
 				channels: ['telegram'],
 				dryRun: false,
 				replayId: 'replay-doc-789',
+				successCount: 1,
+				failureCount: 0,
+			}),
+		});
+	});
+
+	it('audits ADMIN_ACTION with failure when live replay delivery fails on all channels', async () => {
+		alertStorageService.getAlertById = jest.fn().mockResolvedValue({
+			id: 'alert-fail',
+			text: 'ETH Breakout alert',
+			channels: ['telegram'],
+		});
+		alertStorageService.saveReplayAttempt = jest.fn().mockResolvedValue('replay-doc-fail');
+
+		const mockNotificationManager = {
+			sendToChannels: jest.fn().mockResolvedValue([{ channel: 'telegram', success: false, error: 'Chat not found' }]),
+		};
+		alertHandler.getNotificationManager = jest.fn(() => mockNotificationManager);
+
+		const req = {
+			params: { alertId: 'alert-fail' },
+			body: {
+				channels: ['telegram'],
+				dryRun: false,
+			},
+			headers: {
+				'x-idempotency-key': 'idemp-replay-fail-1',
+				'x-api-key': 'admin-key',
+			},
+			requestId: 'req-replay-fail-1',
+			ip: '127.0.0.1',
+		};
+		const res = {
+			status: jest.fn().mockReturnThis(),
+			json: jest.fn(),
+		};
+
+		const handler = replayAlert();
+		await handler(req, res);
+
+		const replayAudit = auditEvents.find((e) => e.requestId === 'req-replay-fail-1');
+		expect(replayAudit).toMatchObject({
+			stream: 'audit',
+			category: 'ADMIN_ACTION',
+			action: 'alert_replay',
+			result: 'failure',
+			requestId: 'req-replay-fail-1',
+			details: expect.objectContaining({
+				alertId: 'alert-fail',
+				channels: ['telegram'],
+				dryRun: false,
+				successCount: 0,
+				failureCount: 1,
 			}),
 		});
 	});

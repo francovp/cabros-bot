@@ -1126,6 +1126,13 @@ function replayAlert(botOrGetter) {
 				responseBody.reEnrichedData = reEnriched ? newEnrichmentData : null;
 			}
 
+			const successCount = Array.isArray(results) ? results.filter((r) => r && r.success === true).length : 0;
+			const totalChannels = Array.isArray(results) ? results.length : channels.length;
+			const failureCount = totalChannels - successCount;
+			const auditResult = successCount === totalChannels && totalChannels > 0
+				? 'success'
+				: (successCount > 0 ? 'partial_success' : 'failure');
+
 			auditLog(
 				AUDIT_CATEGORIES.ADMIN_ACTION,
 				null,
@@ -1136,8 +1143,10 @@ function replayAlert(botOrGetter) {
 					dryRun: false,
 					reEnrich: Boolean(reEnrichRequested),
 					replayId,
+					successCount,
+					failureCount,
 				},
-				'success',
+				auditResult,
 				req,
 			);
 
