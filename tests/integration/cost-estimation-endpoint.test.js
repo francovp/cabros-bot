@@ -104,6 +104,21 @@ describe('Cost estimation endpoints (Issue #745)', () => {
 		expect(res.body.costEstimate.operation).toBe('expanded-analysis-alert');
 	});
 
+	it('dryRun=cost on /api/jobs/tradingview-analysis resolves default symbols when omitted', async () => {
+		process.env.EXPANDED_ANALYSIS_ALERT_SYMBOLS = 'BINANCE:BTCUSDT,BINANCE:ETHUSDT';
+		const res = await request(mount())
+			.post('/api/jobs/tradingview-analysis?dryRun=cost')
+			.set('x-api-key', 'test-key')
+			.send({ type: 'expanded-analysis' });
+		expect(res.status).toBe(200);
+		expect(res.body.dryRun).toBe('cost');
+		expect(res.body.costEstimate.operation).toBe('expanded-analysis-alert');
+		expect(res.body.costEstimate.perSymbol.length).toBe(2);
+		expect(res.body.costEstimate.perSymbol.map((p) => p.symbol)).toEqual(
+			expect.arrayContaining(['BINANCE:BTCUSDT', 'BINANCE:ETHUSDT']),
+		);
+	});
+
 		it('dryRun=cost returns 404 FEATURE_DISABLED when cost estimation is disabled', async () => {
 		process.env.ENABLE_DRY_RUN_COST = 'false';
 		const res = await request(mount())

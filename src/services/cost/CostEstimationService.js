@@ -28,6 +28,7 @@ const DEFAULTS = Object.freeze({
 	analysisOutputTokens: 800,
 	scannerOutputTokens: 600,
 	dailyQuotaTokens: 1000000,
+	newsContextTokens: 0,
 });
 
 // Canonical operations from the issue + owner decision. Aliases map to canonical.
@@ -252,6 +253,7 @@ function resolveNumbers(runtimeConfig = resolveRuntimeConfig()) {
 		analysisOutputTokens: pick('COST_ESTIMATION_OUTPUT_TOKENS_ANALYSIS', DEFAULTS.analysisOutputTokens, 10, 8000),
 		scannerOutputTokens: pick('COST_ESTIMATION_OUTPUT_TOKENS_SCANNER', DEFAULTS.scannerOutputTokens, 10, 8000),
 		dailyQuotaTokens: pick('COST_ESTIMATION_DAILY_QUOTA_TOKENS', DEFAULTS.dailyQuotaTokens, 1000, 100000000),
+		newsContextTokens: pick('COST_ESTIMATION_NEWS_CONTEXT_TOKENS', DEFAULTS.newsContextTokens, 0, 8000),
 	};
 }
 
@@ -331,12 +333,19 @@ function estimate(options = {}) {
 	let externalCosts = [];
 	let outputBudgetKind = null;
 
+	let contextAllowanceTokens = 0;
 	if (operation === 'news-monitor') {
 		// News handler validates up to 100 symbols; estimate the full accepted batch.
 		const crypto = normalizeSymbols(body.crypto || options.crypto, 100);
 		const stocks = normalizeSymbols(body.stocks || options.stocks, 100);
 		const merged = symbols.length > 0 ? symbols.slice(0, 100) : [...crypto, ...stocks].slice(0, 100);
-		const inputPerSymbol = estimateInputTokensForChars(NEWS_PROMPT_CHARS + NEWS_QUERY_CHARS);
+		const rawContext = body.groundedContext || body.context || options.groundedContext || options.context || options.contextText;
+		const contextTokensFromText = typeof rawContext === 'string' ? estimateTokensForText(rawContext) : 0;
+		const contextAllowance = Number.isFinite(options.contextAllowanceTokens)
+			? Math.max(0, Number(options.contextAllowanceTokens))
+			: (Number.isFinite(options.contextTokens) ? Math.max(0, Number(options.contextTokens)) : numbers.newsContextTokens);
+		contextAllowanceTokens = contextTokensFromText > 0 ? contextTokensFromText : contextAllowance;
+		const inputPerSymbol = estimateInputTokensForChars(NEWS_PROMPT_CHARS + NEWS_QUERY_CHARS) + contextAllowanceTokens;
 		const outputPerSymbol = numbers.newsOutputTokens;
 		calls = merged.length * 2;
 		outputBudgetKind = 'COST_ESTIMATION_OUTPUT_TOKENS_NEWS';
@@ -433,6 +442,7 @@ function estimate(options = {}) {
 			outputTokensPerCall: tokensOut > 0 ? Math.round(tokensOut / Math.max(1, calls)) : 0,
 			ratesSource,
 			estimateOnly: 'Estimate only — actual rate may differ; MCP/search costs are unknown, not $0.',
+			...(contextAllowanceTokens > 0 ? { contextAllowanceTokens } : {}),
 		},
 	};
 }

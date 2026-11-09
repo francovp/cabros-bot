@@ -86,6 +86,29 @@ describe('CostEstimationService (Issue #745)', () => {
 			expect(estimate.tokensIn).toBe(1032);
 			expect(estimate.tokensOut).toBe(400);
 		});
+
+		it('accounts for explicit grounded context or configured context allowance in news input tokens', () => {
+			const baseline = costEstimationService.estimate({ operation: 'news-monitor', symbols: ['BTCUSDT'] });
+			expect(baseline.tokensIn).toBe(1032);
+
+			// Explicit text context in body
+			const withContext = costEstimationService.estimate({
+				operation: 'news-monitor',
+				symbols: ['BTCUSDT'],
+				body: { groundedContext: 'Short market summary text about Bitcoin.' },
+			});
+			expect(withContext.tokensIn).toBeGreaterThan(baseline.tokensIn);
+			expect(withContext.assumptions.contextAllowanceTokens).toBeGreaterThan(0);
+
+			// Configured context allowance via options
+			const withAllowance = costEstimationService.estimate({
+				operation: 'news-monitor',
+				symbols: ['BTCUSDT'],
+				contextAllowanceTokens: 500,
+			});
+			expect(withAllowance.tokensIn).toBe(1032 + 500);
+			expect(withAllowance.assumptions.contextAllowanceTokens).toBe(500);
+		});
 	});
 
 	describe('per-model cost lookup and Remote Config fallback', () => {
