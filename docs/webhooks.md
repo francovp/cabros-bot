@@ -258,6 +258,8 @@ This endpoint returns `502` in two distinct shapes:
 
 ### POST /api/webhook/alert
 
+Optional `requireWatchlistMatch: true` filters the resolved Telegram chat against its `/watchlist` for a known alert symbol. A mismatch adds `{ "channel": "telegram", "success": false, "skipped": "watchlist" }` to `results`; it is not a delivery failure or redrive candidate. Missing watchlist, unknown symbol, and storage read failure allow delivery. WhatsApp and Discord routing is unchanged. Non-boolean values return `400 INVALID_REQUEST`.
+
 Send alert via webhook. Accepts either JSON or plain text.
 
 Optional headers:
@@ -453,6 +455,8 @@ Rules:
   at all. The buffer is in-process, so a multi-replica deployment may aggregate partially.
 
 ### POST /api/webhook/message
+
+The same optional `requireWatchlistMatch: true` applies to a parseable symbol in `message`. It filters only Telegram; unknown symbols and missing or unreadable lists deliver normally. Non-boolean values return `400 INVALID_REQUEST`.
 
 Deliver a generic, non-alert message to the enabled notification channels. Use this when the payload is
 operator-authored automation output rather than a TradingView alert or scanner run.

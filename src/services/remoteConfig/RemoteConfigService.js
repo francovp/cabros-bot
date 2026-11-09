@@ -19,6 +19,15 @@ const MAX_LOAD_TIMEOUT_MS = 30 * 1000;
 const MAX_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 const PARAMETER_SCHEMA = Object.freeze({
+	ENABLE_ALERT_COALESCE: { type: 'boolean', defaultValue: false },
+	ALERT_COALESCE_WINDOW_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
+	PROMPT_FALLBACK_ON_DRIFT: { type: 'boolean', defaultValue: false },
+	NEWS_SYMBOLS_CRYPTO: { type: 'string', defaultValue: '', allowEmpty: true },
+	NEWS_SYMBOLS_STOCKS: { type: 'string', defaultValue: '', allowEmpty: true },
+	MARKET_SCANNER_DEFAULT_EXCHANGE: {
+		type: 'string', defaultValue: 'BINANCE', validate: (value) => value.length > 0,
+	},
+	MARKET_SCANNER_TIMEOUT_MS: { type: 'number', defaultValue: 90000, integer: true, min: 1000, max: 120000 },
 	NEWS_ALERT_THRESHOLD: { type: 'number', defaultValue: 0.7, min: 0, max: 1 },
 	NEWS_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1000, max: 120000 },
 	NEWS_GEMINI_CONCURRENCY: { type: 'number', defaultValue: Infinity, integer: true, min: 1, max: 50 },
@@ -35,10 +44,13 @@ const PARAMETER_SCHEMA = Object.freeze({
 	TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS: { type: 'number', defaultValue: 600000, integer: true, min: 1000, max: 86400000 },
 	TRADINGVIEW_MCP_PAGE_COOLDOWN_MS: { type: 'number', defaultValue: 3600000, integer: true, min: 1000, max: 86400000 },
 	TRADINGVIEW_MCP_CACHE_TTL_MS: { type: 'number', defaultValue: 90000, integer: true, min: 10000, max: 600000 },
+	CIRCUIT_BREAKER_THRESHOLD: { type: 'number', defaultValue: 5, integer: true, min: 1, max: 100 },
+	CIRCUIT_BREAKER_COOLDOWN_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 86400000 },
 	ENABLE_TRADINGVIEW_MCP_WARMUP: { type: 'boolean', defaultValue: true },
 	TRADINGVIEW_MCP_WARMUP_INTERVAL_MS: { type: 'number', defaultValue: 600000, integer: true, min: 60000, max: 3600000 },
 	TRADINGVIEW_MCP_WARMUP_TIMEOUT_MS: { type: 'number', defaultValue: 60000, integer: true, min: 5000, max: 120000 },
 	ENABLE_MESSAGE_FOOTER_METADATA: { type: 'boolean', defaultValue: true },
+	ENABLE_ENVIRONMENT_BANNER: { type: 'boolean', defaultValue: true },
 	GROUNDING_MAX_SOURCES: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	GROUNDING_TIMEOUT_MS: { type: 'number', defaultValue: 30000, integer: true, min: 1, max: 120000 },
 	GROUNDING_MAX_LENGTH: { type: 'number', defaultValue: 2000, integer: true, min: 1, max: 10000 },
@@ -66,6 +78,10 @@ const PARAMETER_SCHEMA = Object.freeze({
 	URL_SHORTENER_CACHE_MAX_ENTRIES: { type: 'number', defaultValue: 1000, integer: true, min: 1, max: 100000 },
 	URL_SHORTENER_SERVICE_FAILURES_MAX_ENTRIES: { type: 'number', defaultValue: 32, integer: true, min: 1, max: 1024 },
 	BINANCE_FETCH_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
+	// Strategy research (TradingView MCP backtest / compare / walk-forward).
+	// Default false: these endpoints call paid upstream MCP tools.
+	ENABLE_STRATEGY_RESEARCH: { type: 'boolean', defaultValue: false },
+	STRATEGY_RESEARCH_CACHE_TTL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 0, max: 86400000 },
 	BINANCE_BALANCE_CACHE_MS: { type: 'number', defaultValue: 3000, integer: true, min: 1000, max: 60000 },
 	TRADINGVIEW_MCP_DEFAULT_EXCHANGE: {
 		type: 'string',
@@ -80,6 +96,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	EXPANDED_ANALYSIS_ALERT_TIMEOUT_MS: { type: 'number', defaultValue: 60000, integer: true, min: 1, max: 120000 },
 	EXPANDED_ANALYSIS_ALERT_CONCURRENCY: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 10 },
 	SYMBOL_ANALYSIS_MIN_RISK_REWARD_RATIO: { type: 'number', defaultValue: 1.5, min: 0.1, max: 10 },
+	SCANNER_ATR_MULTIPLIER: { type: 'number', defaultValue: 2, min: 0.1, max: 10 },
+	SCANNER_ACCOUNT_RISK_PCT: { type: 'number', defaultValue: 1, min: 0.01, max: 5 },
 	DISCORD_MAX_RETRIES: { type: 'number', defaultValue: 2, integer: true, min: 0, max: 10 },
 	DISCORD_FALLBACK_RETRY_DELAY_MS: { type: 'number', defaultValue: 500, integer: true, min: 1, max: 30000 },
 	DISCORD_MAX_RETRY_DELAY_MS: { type: 'number', defaultValue: 5000, integer: true, min: 1, max: 60000 },
@@ -100,6 +118,8 @@ const PARAMETER_SCHEMA = Object.freeze({
 	SIGNAL_OUTCOME_MAX_RETRY_ATTEMPTS: { type: 'number', defaultValue: 3, integer: true, min: 1, max: 20 },
 	SIGNAL_OUTCOME_MAX_RETRY_AGE_MS: { type: 'number', defaultValue: 604800000, integer: true, min: 60000, max: 2592000000 },
 	SIGNAL_OUTCOME_RETENTION_DAYS: { type: 'number', defaultValue: 365, integer: true, min: 1, max: 3650 },
+	SIGNAL_OUTCOME_ROLLUP_ENABLED: { type: 'boolean', defaultValue: true },
+	SIGNAL_OUTCOME_ROLLUP_TTL_DAYS: { type: 'number', defaultValue: 180, integer: true, min: 30, max: 365 },
 	SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES: {
 		type: 'string',
 		defaultValue: '',
@@ -131,12 +151,20 @@ const PARAMETER_SCHEMA = Object.freeze({
 	ENABLE_MARKET_SCANNER: { type: 'boolean', defaultValue: false },
 	ENABLE_NEWS_MONITOR_PERSISTENT_DEDUP: { type: 'boolean', defaultValue: false },
 	ZERO_CHANNEL_ALERT_COOLDOWN_MS: { type: 'number', defaultValue: 300000, integer: true, min: 1000, max: 86400000 },
+	ADMIN_PAGE_DEDUP_TTL_MS: { type: 'number', defaultValue: 300000, integer: true, min: 0, max: 86400000 },
 	ENABLE_API_ONLY_MODE: { type: 'boolean', defaultValue: false },
 	ENABLE_ALERT_HTF_RENDER: { type: 'boolean', defaultValue: true },
 	ENABLE_SIGNAL_CLASS_MARKER: { type: 'boolean', defaultValue: true },
+	ENABLE_CHART_ATTACHMENTS: { type: 'boolean', defaultValue: false },
+	CHART_RENDER_TIMEOUT_MS: { type: 'number', defaultValue: 5000, integer: true, min: 100, max: 60000 },
+	CHART_CACHE_TTL_SECONDS: { type: 'number', defaultValue: 300, integer: true, min: 0, max: 86400 },
 	ENABLE_EQUITY_SESSION_TAG: { type: 'boolean', defaultValue: true },
 	ENABLE_ALERT_SIGNAL_REPEAT_SUPPRESSION: { type: 'boolean', defaultValue: false },
 	ALERT_SIGNAL_COOLDOWN_BARS: { type: 'number', defaultValue: 1, integer: true, min: 1, max: 10 },
+	GLOBAL_ALERT_BUDGET_PER_24H: { type: 'number', defaultValue: 500, integer: true, min: 0, max: 1000000 },
+	PRICE_CACHE_TTL_MS_CRYPTO: { type: 'number', defaultValue: 15000, integer: true, min: 1000, max: 600000 },
+	PRICE_CACHE_TTL_MS_EQUITY: { type: 'number', defaultValue: 60000, integer: true, min: 1000, max: 600000 },
+	PRICE_CACHE_MAX_ENTRIES_PER_BUCKET: { type: 'number', defaultValue: 256, integer: true, min: 1, max: 10000 },
 	ENABLE_MIN_ALERT_CONTEXT: { type: 'boolean', defaultValue: false },
 	MIN_ALERT_PROVISIONAL_STOP_PERCENT: { type: 'number', defaultValue: 2.5, min: 0.1, max: 20 },
 	MIN_ALERT_PROVISIONAL_TARGET_PERCENT: { type: 'number', defaultValue: 5.0, min: 0.1, max: 40 },
@@ -294,6 +322,9 @@ function parseBoolean(value, fallback) {
 }
 
 function parseString(value, schema, fallback) {
+	if (value === '' && schema.allowEmpty) {
+		return '';
+	}
 	if (value === undefined || value === null || value === '') {
 		return fallback;
 	}
@@ -496,14 +527,15 @@ function getRemoteValue(config, key, schema) {
 			return { present: false };
 		}
 		const raw = value.asString();
-		// A blank remote value carries no tuning, so it is an absent override
+		// Except for symbol lists that explicitly allow clearing their defaults,
+		// a blank remote value carries no tuning, so it is an absent override
 		// rather than a malformed one. The published template ships
 		// `SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES` as an intentional empty string,
 		// which is that parameter's own schema default; reporting it as invalid
 		// would pin `lastErrorCategory: "invalid_value"` on every load and mask a
 		// genuinely malformed value. `buildDefaultConfig()` already supplies the
 		// default for any parameter the template leaves blank.
-		if (typeof raw === 'string' && raw.trim() === '') {
+		if (typeof raw === 'string' && raw.trim() === '' && !schema.allowEmpty) {
 			return { present: false };
 		}
 		const parsed = parseValue(raw, schema, undefined);

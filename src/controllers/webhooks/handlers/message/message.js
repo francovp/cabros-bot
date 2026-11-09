@@ -10,7 +10,6 @@ const {
 	VALID_CHANNELS,
 	NotificationRoutingValidationError,
 	parseNotificationRouting,
-	sendWithNotificationRouting,
 	getDeliveredChannels,
 	getRequestedChannels,
 	assertChannelsAvailable,
@@ -20,6 +19,7 @@ const { isRecognisedDryRunValue, resolveDryRun } = require('../../../../lib/dryR
 const { STANDARD_ERROR_CODES, sendError } = require('../../../../lib/errorEnvelope');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
 const remoteConfigService = require('../../../../services/remoteConfig/RemoteConfigService');
+const { validateWatchlistFlag, sendWithWatchlistRouting } = require('../../../../services/watchlist/watchlistRouting');
 const MAX_MESSAGE_LENGTH = 4000;
 
 function assertRecognisedDryRunFlag(value, source) {
@@ -61,6 +61,7 @@ function validateMessageRequest(body, query, maxMessageLength = MAX_MESSAGE_LENG
 	assertRecognisedDryRunFlag(query && query.dryRun, 'query');
 
 	const routing = parseNotificationRouting(body);
+	routing.requireWatchlistMatch = validateWatchlistFlag(body.requireWatchlistMatch);
 
 	const originalLength = message.length;
 	const truncated = originalLength > maxMessageLength;
@@ -187,7 +188,7 @@ function postMessage(botOrGetter) {
 				requestId,
 			};
 
-			const results = await sendWithNotificationRouting(
+			const results = await sendWithWatchlistRouting(
 				notificationManager,
 				alert,
 				routing,

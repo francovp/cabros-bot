@@ -10,6 +10,8 @@ const {
 	deriveFallbackTradePlan,
 	calculateFallbackRiskLevels,
 } = require('../../../../services/tradingview/fallbackTradePlan');
+const { appendEnvironmentFooter } = require('../../../../lib/environmentBanner');
+
 const {
 	toPositiveFiniteNumber,
 	computeDeterministicRiskReward,
@@ -450,9 +452,11 @@ function mergeEnrichmentData(text, geminiEnriched, mcpEnriched, parsedSignal = n
 		const modelName = geminiBackticked[0] || groundingModelName;
 		const groundingFromGemini = geminiBackticked[1] || groundingModelName;
 		const groundingProviders = mergeUnique([groundingFromGemini], ['tradingview-mcp'], 8);
-		const extraText = isMessageFooterMetadataEnabled()
-			? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${groundingProviders.join('`, `')}` + '`'
-			: '';
+		const extraText = appendEnvironmentFooter(
+			isMessageFooterMetadataEnabled()
+				? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${groundingProviders.join('`, `')}` + '`'
+				: '',
+		);
 		const priorityMcpInsights = extractPriorityMcpInsights(mcp);
 		const emptyConfluence = mcp.confluenceData && !hasConfluenceEvidence(mcp.confluenceData);
 		const remainingMcpInsights = Array.isArray(mcp.insights)
@@ -624,9 +628,9 @@ async function enrichWithGemini(text, tokenUsage) {
 	const enableFooter = isMessageFooterMetadataEnabled();
 	const groundingModelName = getGroundingModelName();
 	const modelName = modelUsed || groundingModelName;
-	const extraText = enableFooter
+	const extraText = appendEnvironmentFooter(enableFooter
 		? '*Model used*: ' + '`' + `${modelName}` + '`' + '\n*Grounding*: ' + '`' + `${groundingModelName}` + '`'
-		: '';
+		: '');
 
 	const hasSentiment = typeof sentiment === 'string' || typeof sentiment_score === 'number';
 	const guarded = hasSentiment ? applySignCoherenceGuard(sentiment, sentiment_score) : null;
@@ -777,7 +781,7 @@ async function enrichAlert(alert, options = {}) {
 					levelsSource: 'derived-quote',
 					sources: [],
 					truncated: false,
-					extraText: '*Model used*: `derived-quote`',
+					extraText: appendEnvironmentFooter('*Model used*: `derived-quote`'),
 				});
 			}
 			throw withProviderOutcomes(new Error('TradingView MCP enrichment failed'));
@@ -915,7 +919,7 @@ async function enrichAlert(alert, options = {}) {
 				levelsSource: 'derived-quote',
 				sources: [],
 				truncated: false,
-				extraText: '*Model used*: `derived-quote`',
+				extraText: appendEnvironmentFooter('*Model used*: `derived-quote`'),
 			});
 		}
 

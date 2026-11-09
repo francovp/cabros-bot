@@ -9,16 +9,18 @@ const sentryService = require('../../../../services/monitoring/SentryService');
 const { TokenUsageTracker, tokenCostBudgetService } = require('../../../../lib/tokenUsage');
 const { trackBackgroundTask } = require('../../../../lib/backgroundTaskTracker');
 const alertStorageService = require('../../../../services/storage/AlertStorageService');
+const alertAcknowledgementService = require('../../../../services/storage/AlertAcknowledgementService');
+const { getCalibratedRiskMetadata } = require('../../../../services/prompts/promptRiskMetadata');
 const {
 	NotificationRoutingValidationError,
 	parseNotificationRouting,
 	validateNotificationRouting,
 	assertChannelsAvailable,
-	sendWithNotificationRouting,
 	getRequestedChannels,
 	getDeliveredChannels,
 	resolveSymbolRouteDispatches,
 } = require('../../../../services/notification/requestRouting');
+const { validateWatchlistFlag, sendWithWatchlistRouting } = require('../../../../services/watchlist/watchlistRouting');
 const { getRuntimeConfig } = require('../../../../services/remoteConfig/RemoteConfigService');
 const { resolveRequestId } = require('../../../../lib/requestDeadline');
 const { resolveDryRun } = require('../../../../lib/dryRunRequest');
@@ -38,6 +40,8 @@ const { classifySignal } = require('../../../../services/alerts/signalClassifier
 const { notificationRedriveService } = require('../../../../services/notification/NotificationRedriveService');
 const { isPreviewEnvironment } = require('../../../../lib/deploymentEnvironment');
 const { alertSubscriberDeliveryService } = require('../../../../services/subscribers/AlertSubscriberDeliveryService');
+const { alertSubscriberService } = require('../../../../services/subscribers/AlertSubscriberService');
+const { alertCoalescer, fingerprint: coalesceFingerprint } = require('../../../../services/alerts/alertCoalescer');
 const { buildReplyMarkup } = require('../../../../services/alerts/telegramAlertKeyboard');
 const { routeAlertToOrder, isEnabled: isAutoTradeEnabled } = require('../../../../services/trading/AlertSignalRouter');
 const {
@@ -133,6 +137,7 @@ function getNotificationManagerBootstrapStatus() {
  */
 function resetNotificationManagerForTesting() {
 	bootstrapResetForTesting();
+	alertCoalescer.reset();
 }
 
 function resolveBot(botOrGetter) {
@@ -609,10 +614,12 @@ function postAlert(botOrGetter) {
 		let alertText = '';
 		let alert = null;
 		let notificationManager = null;
+		let coalesceReservation = null;
 
 		try {
 			const requestSpan = sentryService.getActiveSpan();
 			const routing = parseNotificationRouting(typeof body === 'object' ? body : undefined);
+			routing.requireWatchlistMatch = validateWatchlistFlag(body && body.requireWatchlistMatch);
 			const traderIntent = validateTraderIntent(
 				typeof body === 'object' && body ? body.traderIntent : undefined,
 			);
@@ -667,12 +674,27 @@ function postAlert(botOrGetter) {
 			const parsedSignal = parseTradingViewSignal(text);
 			const session = parsedSignal?.session
 				|| (parsedSignal?.exchange && isEquityExchange(parsedSignal.exchange) ? classifySession({ exchange: parsedSignal.exchange, symbol: parsedSignal.symbol }) : undefined);
+			// Chart attachments (GH-799) need the validated bars to reach delivery.
+			// Only finite OHLCV-shaped bars are forwarded; malformed data falls
+			// back to text-only delivery in the renderer. Bounded to 60 bars.
+			const chartBars = Array.isArray(body?.chartBars)
+				? body.chartBars.filter((bar) => bar && typeof bar === 'object'
+					&& [bar.open, bar.high, bar.low, bar.close].every((v) => Number.isFinite(Number(v)))).slice(-60)
+				: [];
+			const chartSymbol = typeof body?.chartSymbol === 'string' && body.chartSymbol.trim()
+				? body.chartSymbol.trim().toUpperCase()
+				: (typeof body?.symbol === 'string' && body.symbol.trim() ? body.symbol.trim().toUpperCase()
+					: (typeof parsedSignal?.symbol === 'string' && parsedSignal.symbol.trim() ? parsedSignal.symbol.trim().toUpperCase() : undefined));
 			alert = {
 				text,
 				source,
 				signalClass,
+				...(parsedSignal && parsedSignal.exchange ? { exchange: parsedSignal.exchange } : {}),
+				...(parsedSignal?.symbol ? { symbol: parsedSignal.symbol } : {}),
+				...(parsedSignal?.timeframe ? { timeframe: parsedSignal.timeframe } : {}),
 				...(session ? { session } : {}),
 				...(traderIntent ? { traderIntent } : {}),
+				...(chartBars.length >= 2 && chartSymbol ? { chartBars, chartSymbol } : {}),
 				...truncation,
 			};
 
@@ -701,6 +723,32 @@ function postAlert(botOrGetter) {
 				const bot = resolveBot(botOrGetter);
 				notificationManager = bootstrapGetInitialized() || await bootstrapGetOrInitialize(bot);
 				assertChannelsAvailable(notificationManager, routing);
+			}
+
+			// Subscribers complete asynchronously, so channel success cannot prove
+			// their delivery. Alternate routing and order side effects bypass this cache.
+			try {
+				const config = getRuntimeConfig();
+				if (config.ENABLE_ALERT_COALESCE === true && !dryRun && !autoTradeRequested
+					&& !routing.symbolRoutes && !routing.destinations && !routing.requireWatchlistMatch) {
+					const subscribers = alertSubscriberService.getStorageStatus();
+					if (!subscribers.enabled && subscribers.activeCount === 0) {
+						notificationManager = notificationManager || bootstrapGetInitialized()
+							|| await bootstrapGetOrInitialize(resolveBot(botOrGetter));
+						validateNotificationRouting(notificationManager, routing);
+						const channels = getRequestedChannels(notificationManager, routing, alert.text);
+						const destinations = channels.map(channel => getCooldownChannelIdentity(channel, routing));
+						const key = coalesceFingerprint({ body, query: req.query, destinations });
+						coalesceReservation = await alertCoalescer.acquire(key, requestId, config.ALERT_COALESCE_WINDOW_MS, req.requestDeadlineSignal);
+						if (req.requestDeadlineSignal?.aborted) return;
+						if (coalesceReservation?.originalRequestId) {
+							return res.json({ success: true, coalesced: true,
+								originalRequestId: coalesceReservation.originalRequestId, requestId });
+						}
+					}
+				}
+			} catch (_) {
+				// Optional cache failures never block alert delivery.
 			}
 
 			const tokenUsage = new TokenUsageTracker('grounding');
@@ -756,6 +804,9 @@ function postAlert(botOrGetter) {
 					const dryRunPersistence = alertStorageService.saveAlert({
 						requestId,
 						text: alert.text,
+						chartBars: alert.chartBars || null,
+						chartSymbol: alert.chartSymbol || null,
+						timeframe: alert.timeframe || parsedSignal?.timeframe || null,
 						enriched,
 						enrichmentData: alert.enriched || null,
 						tokenUsage: tokenUsageJSON,
@@ -900,12 +951,15 @@ function postAlert(botOrGetter) {
 				const telegramEnabled = process.env.ENABLE_TELEGRAM_BOT === 'true';
 				const telegramRequested = requestedChannels.length === 0
 					|| requestedChannels.includes('telegram');
+				const ackEnabled = typeof alertAcknowledgementService.isEnabled === 'function'
+					&& alertAcknowledgementService.isEnabled();
 				if (storageEnabled && telegramEnabled && telegramRequested && !suppressedRepeat) {
 					inlineAlertId = uuidv4();
 					const replyMarkup = buildReplyMarkup({
 						alertId: inlineAlertId,
 						hasEnrichment: Boolean(alert.enriched),
 						includeReplay: true,
+						includeAcknowledgements: ackEnabled,
 					});
 					if (replyMarkup) {
 						inlineReplyMarkup = replyMarkup;
@@ -931,7 +985,7 @@ function postAlert(botOrGetter) {
 						parsedSignal,
 						alert,
 						routing: deliveryRouting,
-						deliver: async (overrides = {}) => sendWithNotificationRouting(
+						deliver: async (overrides = {}) => sendWithWatchlistRouting(
 							notificationManager,
 							overrides.alert || alert,
 							deliveryRouting,
@@ -959,12 +1013,17 @@ function postAlert(botOrGetter) {
 				throw error;
 			}
 			const deliveredChannels = suppressedRepeat ? [] : getDeliveredChannels(results);
+			try {
+				alertCoalescer.finish(coalesceReservation, !suppressedRepeat && requestedChannels.length > 0
+					&& requestedChannels.every(channel => deliveredChannels.includes(channel))
+					&& results.length > 0 && results.every(result => result?.success === true && !result.skipped));
+			} catch (_) { /* Cache errors fail open. */ }
 			const zeroChannelRedriveExpected = requestedChannels.length === 0
 			&& !notificationManager.isIntentionalApiOnly();
 			const keepFailedForRedrive = notificationRedriveService.isEnabled()
 			&& notificationRedriveService.getWorkerRole() !== 'disabled'
 			&& (notificationRedriveService.getWorkerRole() === 'web' || notificationRedriveService.hasDurableStore())
-			&& (results.some((result) => result && !result.success) || zeroChannelRedriveExpected);
+				&& (results.some((result) => result && !result.success && !result.skipped) || zeroChannelRedriveExpected);
 			// A reservation that notified nobody must not swallow the next real signal
 			// on another timeframe, unless the redrive queue owns the retry.
 			if (crossReservation && !keepFailedForRedrive) {
@@ -977,7 +1036,7 @@ function postAlert(botOrGetter) {
 			}
 			if (reservation) {
 				const failedChannelNames = new Set(
-					results.filter((result) => result && !result.success).map((result) => result.channel),
+					results.filter((result) => result && !result.success && !result.skipped).map((result) => result.channel),
 				);
 				const supersededReservationChannels = new Set();
 				if (notificationRedriveService.isEnabled() && failedChannelNames.size > 0) {
@@ -1135,6 +1194,9 @@ function postAlert(botOrGetter) {
 				suppressedRepeat,
 				suppressionReason,
 				signalClass: alert.signalClass,
+				chartBars: alert.chartBars || null,
+				chartSymbol: alert.chartSymbol || null,
+				timeframe: alert.timeframe || null,
 				source: body.source || 'webhook-alert',
 				telegramChatId: routing.telegramChatId,
 				telegramThreadId: routing.telegramThreadId,
@@ -1184,11 +1246,12 @@ function postAlert(botOrGetter) {
 							? alert.enriched.price_data.current_price
 							: null;
 
-					const riskMetadata = alert.enriched && typeof alert.enriched === 'object' ? {
-						invalidation_level: alert.enriched.invalidation_level !== undefined ? alert.enriched.invalidation_level : alert.enriched.invalidationLevel,
-						target_level: alert.enriched.target_level !== undefined ? alert.enriched.target_level : alert.enriched.targetLevel,
-						setup_type: alert.enriched.setup_type !== undefined ? alert.enriched.setup_type : alert.enriched.setupType,
-						risk_reward_ratio: alert.enriched.risk_reward_ratio !== undefined ? alert.enriched.risk_reward_ratio : alert.enriched.riskRewardRatio,
+					const safeRiskMetadata = getCalibratedRiskMetadata(alert.enriched);
+					const riskMetadata = safeRiskMetadata ? {
+						invalidation_level: safeRiskMetadata.invalidation_level !== undefined ? safeRiskMetadata.invalidation_level : safeRiskMetadata.invalidationLevel,
+						target_level: safeRiskMetadata.target_level !== undefined ? safeRiskMetadata.target_level : safeRiskMetadata.targetLevel,
+						setup_type: safeRiskMetadata.setup_type !== undefined ? safeRiskMetadata.setup_type : safeRiskMetadata.setupType,
+						risk_reward_ratio: safeRiskMetadata.risk_reward_ratio !== undefined ? safeRiskMetadata.risk_reward_ratio : safeRiskMetadata.riskRewardRatio,
 					} : null;
 
 					const stopLevel = riskMetadata && typeof riskMetadata.invalidation_level === 'number' && Number.isFinite(riskMetadata.invalidation_level) && riskMetadata.invalidation_level > 0
@@ -1288,6 +1351,10 @@ function postAlert(botOrGetter) {
 				details: (upstreamEnvelope && upstreamEnvelope.details) || undefined,
 			});
 			res.status(status).json(envelope);
+		} finally {
+			try {
+				if (coalesceReservation?.entry?.pending) alertCoalescer.finish(coalesceReservation, false);
+			} catch (_) { /* Cache errors fail open. */ }
 		}
 	};
 }

@@ -149,7 +149,7 @@ function buildBurstGroupKey({ parsedSignal, routing } = {}) {
 		return null;
 	}
 	// Per-symbol channel routing cannot be represented by one synthetic message.
-	if (routing && routing.symbolRoutes) {
+	if (routing && (routing.symbolRoutes || routing.requireWatchlistMatch)) {
 		return null;
 	}
 	// An explicitly empty channel list is malformed routing; never buffer it.

@@ -3,7 +3,47 @@ const {
 	rankScannerItems,
 	numberOrNull,
 	resolveTrendConfluence,
+	computePositionSizing,
 } = require('../../src/services/tradingview/marketScannerScoring');
+
+describe('ATR position sizing', () => {
+	const item = { symbol: 'BINANCE:BTCUSDT', indicators: { close: 50000, ATR: 1500 } };
+
+	it('returns a capital percentage that risks 1% at a 6% stop', () => {
+		const sizing = computePositionSizing(item);
+		expect(sizing).toEqual(expect.objectContaining({
+			atr: 1500,
+			atrPercent: 3,
+			suggestedStopPct: 6,
+			suggestedPositionPct: 16.67,
+		}));
+		expect(sizing.suggestedPositionPct * sizing.suggestedStopPct / 100).toBeCloseTo(1, 2);
+	});
+
+	it('omits sizing without a valid ATR and price', () => {
+		expect(computePositionSizing({ indicators: { close: 100 } })).toBeNull();
+		expect(computePositionSizing({ indicators: { ATR: 2 } })).toBeNull();
+	});
+
+	it('caps a tight-stop position at unlevered capital', () => {
+		const sizing = computePositionSizing({ indicators: { close: 100, ATR: 0.1 } });
+		expect(sizing.suggestedStopPct).toBe(0.2);
+		expect(sizing.suggestedPositionPct).toBe(100);
+	});
+
+	it('uses the same close and ATR source as the report when fields disagree', () => {
+		const sizing = computePositionSizing({ price: 200, atr: 10, indicators: { close: 100, ATR: 2 } });
+		expect(sizing.atr).toBe(2);
+		expect(sizing.atrPercent).toBe(2);
+		expect(sizing.suggestedStopPct).toBe(4);
+		expect(sizing.suggestedPositionPct).toBe(25);
+	});
+
+	it('omits an ATR stop at or beyond the whole entry price', () => {
+		expect(computePositionSizing({ indicators: { close: 100, ATR: 50 } })).toBeNull();
+		expect(computePositionSizing({ indicators: { close: 100, ATR: 60 } })).toBeNull();
+	});
+});
 
 describe('Market Scanner Scoring', () => {
 	describe('scoreScannerItem', () => {

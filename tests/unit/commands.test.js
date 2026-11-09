@@ -20,6 +20,7 @@ jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 		getScannerErrorCategoryCounts: jest.fn(() => ({})),
 		getToolMetrics: jest.fn(() => ({})),
 		getVolumeConfirmationStatus: jest.fn(() => ({ status: 'ready' })),
+		getStrategyResearchStatus: jest.fn(() => ({ status: 'disabled' })),
 	},
 }));
 

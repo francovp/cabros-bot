@@ -34,6 +34,7 @@ const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { fireAndForget } = require('../../lib/fireAndForget');
 const { firestoreWriteMetricsService } = require('./FirestoreWriteMetricsService');
+const { getCalibratedRiskMetadata } = require('../prompts/promptRiskMetadata');
 const {
 	classifyFirestoreError,
 	describeFirestoreErrorCategory,
@@ -293,8 +294,10 @@ function canInitializeFirestore() {
 	}
 
 	return isEnabled()
+		|| process.env.ENABLE_FIRESTORE_DIGEST_RUNS === 'true'
 		|| process.env.ENABLE_AUTO_TRADE === 'true'
 		|| process.env.ENABLE_FIRESTORE_SCANNER_PRESETS === 'true'
+		|| process.env.ENABLE_FIRESTORE_WATCHLIST === 'true'
 		|| process.env.ENABLE_FIRESTORE_JOB_STORAGE === 'true'
 		|| process.env.ENABLE_SIGNAL_OUTCOME_TRACKING === 'true'
 		|| process.env.ENABLE_FIREBASE_REMOTE_CONFIG === 'true'
@@ -420,6 +423,9 @@ function formatAlertDocument(doc, options = {}) {
 	if (data.traderIntent && typeof data.traderIntent === 'object') {
 		docObj.traderIntent = data.traderIntent;
 	}
+	if (Array.isArray(data.chartBars)) docObj.chartBars = data.chartBars;
+	if (typeof data.chartSymbol === 'string' && data.chartSymbol.trim()) docObj.chartSymbol = data.chartSymbol;
+	if (typeof data.timeframe === 'string' && data.timeframe.trim()) docObj.timeframe = data.timeframe;
 	if (includeEnrichmentSummary) {
 		docObj.enrichmentSummary = docObj.enrichmentData;
 	}
@@ -858,10 +864,11 @@ function getPromptProvenanceGroup(coverage, provenance) {
 }
 
 function recordRiskMetadataCoverageByProvenance(coverage, enrichmentData, side) {
-	recordRiskMetadataCoverage(coverage, enrichmentData, side);
 	const provenance = normalizePromptProvenance(enrichmentData && enrichmentData.promptProvenance);
+	const calibratedData = getCalibratedRiskMetadata(enrichmentData);
+	recordRiskMetadataCoverage(coverage, calibratedData, side);
 	const group = getPromptProvenanceGroup(coverage, provenance);
-	recordRiskMetadataCoverage(group, enrichmentData, side);
+	recordRiskMetadataCoverage(group, calibratedData, side);
 }
 
 function finalizeRiskMetadataCoverageByProvenance(coverage) {
@@ -1560,7 +1567,7 @@ function addDeliverySummary(summary, deliveryResults) {
 	}
 
 	for (const result of deliveryResults) {
-		if (!result || typeof result !== 'object') {
+		if (!result || typeof result !== 'object' || result.skipped) {
 			continue;
 		}
 
@@ -1588,7 +1595,7 @@ function addBucketDeliverySummary(bucket, deliveryResults) {
 	}
 
 	for (const result of deliveryResults) {
-		if (!result || typeof result !== 'object') {
+		if (!result || typeof result !== 'object' || result.skipped) {
 			continue;
 		}
 
@@ -1615,7 +1622,7 @@ function summarizeDeliveryResults(deliveryResults) {
 		return [];
 	}
 
-	return deliveryResults.map((result) => ({
+	return deliveryResults.filter((result) => result && !result.skipped).map((result) => ({
 		channel: typeof result.channel === 'string' ? result.channel : null,
 		success: Boolean(result.success),
 		messageId: typeof result.messageId === 'string' ? result.messageId : null,
@@ -2189,8 +2196,8 @@ function emitAlertDeliveryEvents(params, alertId = null) {
 	if (!params) return;
 	try {
 		const deliveryResults = params.deliveryResults || [];
-		const successful = deliveryResults.filter((r) => r && r.success);
-		const failed = deliveryResults.filter((r) => r && !r.success);
+		const successful = deliveryResults.filter((r) => r && r.success && !r.skipped);
+		const failed = deliveryResults.filter((r) => r && !r.success && !r.skipped);
 
 		if (successful.length > 0) {
 			adminSseService.broadcast('alert-delivered', {
@@ -2297,6 +2304,9 @@ async function saveAlertInternal(params = {}) {
 		session,
 		decision,
 		traderIntent,
+		chartBars,
+		chartSymbol,
+		timeframe: chartTimeframe,
 		alertId: providedAlertId,
 	} = params;
 	if (!isEnabled()) {
@@ -2359,6 +2369,29 @@ async function saveAlertInternal(params = {}) {
 		};
 		const sanitizedTraderIntent = validateTraderIntent(traderIntent);
 		if (sanitizedTraderIntent) document.traderIntent = sanitizedTraderIntent;
+		// Chart inputs are bounded and normalized so replay can re-render the
+		// same PNG instead of silently falling back to text-only delivery.
+		if (Array.isArray(chartBars)) {
+			const sanitizedBars = chartBars
+				.filter((bar) => bar && typeof bar === 'object'
+					&& [bar.open, bar.high, bar.low, bar.close].every((v) => Number.isFinite(Number(v))))
+				.map((bar) => {
+					const entry = {
+						open: Number(bar.open), high: Number(bar.high), low: Number(bar.low), close: Number(bar.close),
+					};
+					const volume = Number(bar.volume);
+					if (Number.isFinite(volume) && volume >= 0) entry.volume = volume;
+					return entry;
+				})
+				.slice(-60);
+			if (sanitizedBars.length >= 2) document.chartBars = sanitizedBars;
+		}
+		if (typeof chartSymbol === 'string' && chartSymbol.trim()) {
+			document.chartSymbol = chartSymbol.trim().toUpperCase().slice(0, 20);
+		}
+		if (typeof chartTimeframe === 'string' && chartTimeframe.trim()) {
+			document.timeframe = chartTimeframe.trim().slice(0, 20);
+		}
 		const collectedTelegramMessageIds = new Set();
 		if (Array.isArray(params.telegramMessageIds)) {
 			for (const mid of params.telegramMessageIds) {

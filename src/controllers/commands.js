@@ -1,4 +1,6 @@
 const { fetchSymbolPrice } = require('./commands/handlers/core/fetchPriceCryptoSymbol');
+const { watchlistCommand } = require('./commands/handlers/watchlist');
+const { createStartCommand } = require('./commands/handlers/start/startCommand');
 const { userPriceAlertCmd } = require('./commands/handlers/core/userPriceAlertHandler');
 const { reactionsSymbol } = require('./commands/handlers/reactionsSymbol');
 const { jobService } = require('../services/jobs/JobService');
@@ -6,8 +8,10 @@ const { getNewsMonitor } = require('./webhooks/handlers/newsMonitor/newsMonitor'
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const signalOutcomeService = require('../services/storage/SignalOutcomeService');
 const alertStorageService = require('../services/storage/AlertStorageService');
+const alertAcknowledgementService = require('../services/storage/AlertAcknowledgementService');
 const sentryService = require('../services/monitoring/SentryService');
 const { getTelegramCommandMenu } = require('../lib/telegramCommandMenu');
+const pretradeCheck = require('./pretradeCheck/pretradeCheck');
 const { resolveSymbolQuery } = require('../services/symbols/aliasResolver');
 const { isChatAuthorized } = require('../lib/telegramCommandAuth');
 const { chatPreferenceService } = require('../services/preferences/ChatPreferenceService');
@@ -61,11 +65,13 @@ async function getTradingViewReadinessWarning() {
 }
 
 const DEFAULT_TELEGRAM_COMMAND_RATE_LIMITS = Object.freeze({
+	start: { max: 5, windowMs: 60_000 },
 	precio: { max: 10, windowMs: 60_000 },
 	analisis: { max: 3, windowMs: 3_600_000 },
 	scanner: { max: 3, windowMs: 3_600_000 },
 	noticias: { max: 3, windowMs: 3_600_000 },
 	preferencias: { max: 20, windowMs: 60_000 },
+	watchlist: { max: 20, windowMs: 60_000 },
 	filtro: { max: 20, windowMs: 60_000 },
 	silencio: { max: 20, windowMs: 60_000 },
 	umbral: { max: 20, windowMs: 60_000 },
@@ -722,6 +728,9 @@ const OUTCOME_SYMBOL_PATTERN = /^[A-Z0-9._-]{1,30}$/;
 // the handler open indefinitely behind a large Firestore scan.
 const OUTCOMES_COMMAND_TIMEOUT_MS = 8000;
 
+const PRETRADE_COMMAND_TIMEOUT_MS = 6000;
+const PRETRADE_COMMAND_HIT_RATE_LIMIT = 100;
+
 function escapeOutcomeText(value) {
 	return String(value).replace(/([_*[\]()~`>#+\-=|{}.!\\])/g, '\\$1');
 }
@@ -750,6 +759,60 @@ const outcomesCommand = async (context) => {
 			await context.reply(
 				'El seguimiento de resultados de señales está desactivado — pide a un operador que active ENABLE_SIGNAL_OUTCOME_TRACKING',
 			);
+			return;
+		}
+
+		if (rawSymbol.toLowerCase() === 'trend' || rawSymbol.toLowerCase() === 'tendencia') {
+			let days = 7;
+			const requestedDays = parseInt(args.positionals[1] || args.options.days, 10);
+			if (!isNaN(requestedDays) && requestedDays > 0) {
+				days = Math.min(Math.max(requestedDays, 1), 180);
+			}
+			const toDate = new Date().toISOString().slice(0, 10);
+			const fromDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+			const trendResult = await withTimeout(
+				(signal) => signalOutcomeService.getOutcomesTrend({
+					window: '1D',
+					bucket: 'all',
+					from: fromDate,
+					to: toDate,
+					signal,
+				}),
+				OUTCOMES_COMMAND_TIMEOUT_MS,
+				'outcome trend read timed out',
+			);
+			const trend = Array.isArray(trendResult && trendResult.trend) ? trendResult.trend : [];
+			if (trend.length === 0) {
+				await context.reply(
+					'Sin snapshots diarios de resultados todavía \\(los snapshots se generan para cohortes maduras\\)',
+					{ parse_mode: 'MarkdownV2' },
+				);
+				return;
+			}
+			const header = `*📈 Tendencia de resultados \\(últimos ${days} días, ventana 1D\\)*\n\n`;
+			const chunks = [];
+			let currentChunk = header;
+
+			for (const point of trend) {
+				const rate = point.hitRatePercent !== null ? `${escapeOutcomeText(point.hitRatePercent.toFixed(1))}%` : 'n/d';
+				const mfe = point.avgMfe !== null ? `${escapeOutcomeText(`${point.avgMfe >= 0 ? '+' : ''}${point.avgMfe.toFixed(1)}%`)}` : 'n/d';
+				const mae = point.avgMae !== null ? `${escapeOutcomeText(`${point.avgMae.toFixed(1)}%`)}` : 'n/d';
+				const line = `• *${escapeOutcomeText(point.date)}*: ${rate} acierto \\(${point.wins}/${point.sampleSize}\\) \\| MFE: ${mfe} \\| MAE: ${mae}\n`;
+
+				if (currentChunk.length + line.length > 4000) {
+					chunks.push(currentChunk.trimEnd());
+					currentChunk = line;
+				} else {
+					currentChunk += line;
+				}
+			}
+			if (currentChunk.trim()) {
+				chunks.push(currentChunk.trimEnd());
+			}
+
+			for (const chunk of chunks) {
+				await context.reply(chunk, { parse_mode: 'MarkdownV2' });
+			}
 			return;
 		}
 
@@ -783,7 +846,28 @@ const outcomesCommand = async (context) => {
 			);
 			return;
 		}
-		await context.reply(formatOutcomesMessage(parsed.symbol, outcomes), { parse_mode: 'MarkdownV2' });
+		let ackFooter = null;
+		try {
+			if (alertAcknowledgementService.isEnabled()) {
+				const ackSummary = await withTimeout(
+					() => alertAcknowledgementService.summarizeAcknowledgements({
+						symbol: parsed.symbol,
+						exchange: parsed.exchange,
+					}),
+					OUTCOMES_COMMAND_TIMEOUT_MS,
+					'acknowledgement summary timed out',
+				);
+				if (ackSummary && ackSummary.total > 0) {
+					ackFooter = {
+						took: ackSummary.breakdown ? (ackSummary.breakdown.took_trade || 0) : 0,
+						total: ackSummary.total,
+					};
+				}
+			}
+		} catch (_) {
+			ackFooter = null;
+		}
+		await context.reply(formatOutcomesMessage(parsed.symbol, outcomes, ackFooter), { parse_mode: 'MarkdownV2' });
 	} catch (error) {
 		console.error('[commands] /outcomes failed:', error.message);
 		const isExpectedError = Boolean(
@@ -837,6 +921,75 @@ function parseOutcomeSymbol(rawSymbol) {
 	return { symbol: symbolPart, exchange: undefined };
 }
 
+const pretradeCheckCommand = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
+	const chatId = getChatId(context);
+	const args = parseCommandArgs(context);
+	const rawSymbol = (args.positionals[0] || '').trim();
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.check',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/check',
+			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
+			'query.symbol': rawSymbol || 'missing',
+		},
+	});
+
+	try {
+		const parsed = pretradeCheck.parseSymbol(rawSymbol);
+		if (!parsed) {
+			await context.reply(
+				'Uso: `/check <simbolo>` — por ejemplo `/check BTCUSDT` o `/check BINANCE:BTCUSDT`',
+				{ parse_mode: 'MarkdownV2' },
+			);
+			return;
+		}
+
+		const payload = await withTimeout(
+			(signal) => pretradeCheck.composePretradeCheck({
+				parsedSymbol: parsed,
+				limit: PRETRADE_COMMAND_HIT_RATE_LIMIT,
+				requestId: 'tg-check',
+				signal,
+			}),
+			PRETRADE_COMMAND_TIMEOUT_MS,
+			'pre-trade check timed out',
+		);
+		await context.reply(pretradeCheck.formatPretradeCheckMessage(payload), { parse_mode: 'MarkdownV2' });
+	} catch (error) {
+		console.error('[commands] /check failed:', error.message);
+		const isExpectedError = Boolean(
+			error.isUserFriendly
+			|| error.name === 'AbortError'
+			|| error.name === 'TimeoutError'
+			|| error.code === 'TIMEOUT',
+		);
+		if (!isExpectedError) {
+			sentryService.captureRuntimeError({
+				channel: 'telegram',
+				error,
+				extra: {
+					command: 'check',
+					chatId,
+					symbol: rawSymbol,
+				},
+			});
+		}
+		try {
+			await context.reply('No pude generar el pre-trade check ahora mismo. Intenta nuevamente más tarde.');
+		} catch (replyError) {
+			console.error('Failed to send /check error reply:', replyError);
+		}
+	} finally {
+		sentryService.endSpan(commandSpan);
+	}
+};
+
 async function withTimeout(asyncFn, timeoutMs, message) {
 	const ac = new AbortController();
 	let timer;
@@ -858,11 +1011,15 @@ async function withTimeout(asyncFn, timeoutMs, message) {
 	}
 }
 
-function formatOutcomesMessage(symbol, outcomes) {
+function formatOutcomesMessage(symbol, outcomes, ackFooter = null) {
 	const lines = [
 		`*📊 Rendimiento reciente — ${escapeOutcomeText(symbol)}*`,
 		'',
 	];
+	if (ackFooter && typeof ackFooter.took === 'number' && typeof ackFooter.total === 'number' && ackFooter.total > 0) {
+		lines.push(`✅ Tú tomaste ${ackFooter.took} de ${ackFooter.total} señales con acknowledgment para ${escapeOutcomeText(symbol)}`);
+		lines.push('');
+	}
 	const configuredLabels = typeof signalOutcomeService.getOutcomeWindowLabels === 'function'
 		? signalOutcomeService.getOutcomeWindowLabels()
 		: {};
@@ -1152,7 +1309,10 @@ function buildHelpMessage() {
 		'  _Opciones: `crypto=BTCUSDT,ETHUSDT`, `stocks=NVDA`_',
 		'• `/outcomes <simbolo>` — Rendimiento reciente de señales evaluadas \\(alias: `/rendimiento`\\)',
 		'  _Ej: `/outcomes BINANCE:BTCUSDT`_',
+		'• `/check <simbolo>` — Pre\\-trade check \\(precio \\+ hit\\-rate\\) \\(alias: `/pretrade`, `/setup`\\)',
+		'  _Ej: `/check BINANCE:BTCUSDT` o `/check NVDA`_',
 		'• `/preferencias` — Preferencias de alertas para este chat \\(símbolos, silencio, umbral, categorías\\)',
+		'• `/watchlist` — Gestiona símbolos de interés para este chat',
 		'  _Comandos rápidos: `/filtro`, `/silencio`, `/umbral`, `/categorias`_',
 		'• `/jobs [jobId]` — Lista jobs recientes o muestra su estado \\(alias: `/trabajos`\\)',
 		'• `/history [simbolo] [limit]` — Consulta alertas recientes \\(alias: `/alertas`; admite `status=failed|partial|delivered`\\)',
@@ -1280,6 +1440,8 @@ const helpCmd = async (context) => {
 	}
 };
 
+const startCmd = createStartCommand({ captureRuntimeError: sentryService.captureRuntimeError.bind(sentryService) });
+
 function getChatId(context) {
 	return context.update && context.update.message && context.update.message.chat && context.update.message.chat.id;
 }
@@ -1378,6 +1540,70 @@ const reactionsCommand = async (context) => {
 	return reactionsSymbol(context);
 };
 
+const DIGEST_COMMAND_RATE_LIMIT_MS = 5 * 60 * 1000;
+const digestCommandBuckets = new Map();
+
+const digestCmd = async (context) => {
+	if (isMaintenanceModeEnabled()) {
+		await sendMaintenanceReply(context);
+		return;
+	}
+	const chatId = getChatId(context);
+	const { dailyDigestService, previousUtcDay } = require('../services/digest');
+	const args = parseCommandArgs(context);
+	const dryRun = args.positionals.includes('--dry-run') || args.options.dryRun === 'true' || args.options.dryRun === true;
+	const commandSpan = sentryService.startInactiveSpan({
+		name: 'telegram.command.digest',
+		op: 'bot.command',
+		forceTransaction: true,
+		attributes: {
+			'telegram.command': '/digest',
+			'telegram.chat_id': chatId ? String(chatId) : 'unknown',
+			'telegram.dry_run': Boolean(dryRun),
+		},
+	});
+	try {
+		if (!dailyDigestService.isEnabled()) {
+			await context.reply('El digest diario está desactivado — pide a un operador que active ENABLE_DAILY_DIGEST');
+			return;
+		}
+		if (chatId === undefined || chatId === null) {
+			await context.reply('No pude identificar el chat de origen.');
+			return;
+		}
+		const now = Date.now();
+		const key = String(chatId);
+		const recent = (digestCommandBuckets.get(key) || []).filter((ts) => now - ts < DIGEST_COMMAND_RATE_LIMIT_MS);
+		if (recent.length >= 1) {
+			const retryAfterSec = Math.max(1, Math.ceil((recent[0] + DIGEST_COMMAND_RATE_LIMIT_MS - now) / 1000));
+			await context.reply(`demasiadas solicitudes para /digest. Intenta nuevamente en ${retryAfterSec} s.`);
+			return;
+		}
+		recent.push(now);
+		digestCommandBuckets.set(key, recent);
+		const day = previousUtcDay(new Date());
+		const result = await dailyDigestService.runDigestForDay(day, { dryRun, chatId: String(chatId) });
+		if (dryRun) {
+			await context.reply(result.text, { parse_mode: 'MarkdownV2' });
+			return { ...result, chatId: String(chatId) };
+		}
+		if (result.sent) {
+			await context.reply(`Digest ${result.dateStr} enviado.`);
+		} else {
+			await context.reply(`Digest no enviado (${result.reason || 'sin resultado'}).`);
+		}
+		return { ...result, chatId: String(chatId) };
+	} catch (error) {
+		console.error('[commands] /digest failed:', error.message);
+		sentryService.captureRuntimeError({ channel: 'telegram', error, extra: { command: 'digest', chatId } });
+		try {
+			await context.reply('No pude generar el digest ahora mismo. Intenta nuevamente más tarde.');
+		} catch {}
+	} finally {
+		sentryService.endSpan(commandSpan);
+	}
+};
+
 const versionCmd = async (context, env = process.env) => {
 	if (isMaintenanceModeEnabled()) {
 		await sendMaintenanceReply(context);
@@ -1423,6 +1649,7 @@ const versionCmd = async (context, env = process.env) => {
 };
 
 module.exports = {
+	watchlistCommand,
 	getPrice,
 	userPriceAlertCmd,
 	cryptoBotCmd,
@@ -1432,7 +1659,9 @@ module.exports = {
 	alertHistoryCommand,
 	newsMonitorCmd,
 	helpCmd,
+	startCmd,
 	outcomesCommand,
+	pretradeCheckCommand,
 	resolveCmd,
 	reactionsCommand,
 	reactionsSymbol,
@@ -1454,4 +1683,6 @@ module.exports = {
 	telegramMaintenanceMode,
 	setWarningReplyTimeoutMsForTest,
 	resolveJobRouting,
+	digestCmd,
+	digestCommandBuckets,
 };

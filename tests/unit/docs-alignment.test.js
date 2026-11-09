@@ -51,11 +51,15 @@ const ENVIRONMENT_CLASSIFICATIONS = {
 	NODE_ENV: 'platform-injected runtime mode',
 	RENDER_GIT_COMMIT: 'platform-injected release metadata',
 	RENDER_GIT_REPO_SLUG: 'platform-injected release metadata',
+	RAILWAY_DEPLOYMENT_ID: 'platform-injected deployment metadata',
 	RAILWAY_ENVIRONMENT_NAME: 'platform-injected deployment metadata',
+	RAILWAY_GIT_COMMIT_DATE: 'platform-injected release metadata',
 	RAILWAY_GIT_COMMIT_SHA: 'platform-injected release metadata',
 	RAILWAY_GIT_PULL_REQUEST_NUMBER: 'platform-injected deployment metadata',
 	RAILWAY_GIT_REPO_NAME: 'platform-injected release metadata',
 	RAILWAY_GIT_REPO_OWNER: 'platform-injected release metadata',
+	RENDER_DEPLOY_ID: 'platform-injected deployment metadata',
+	RENDER_GIT_COMMIT_DATE: 'platform-injected release metadata',
 	RENDER_INSTANCE_ID: 'platform-injected runtime metadata',
 	RENDER_SERVICE_ID: 'platform-injected runtime metadata',
 	RENDER_SERVICE_NAME: 'platform-injected runtime metadata',
@@ -63,6 +67,9 @@ const ENVIRONMENT_CLASSIFICATIONS = {
 	RAILWAY_SERVICE_NAME: 'platform-injected runtime metadata',
 	SIGNAL_OUTCOME_EVALUATION_CADENCE_MS: 'deprecated compatibility alias',
 	SOURCE_VERSION: 'platform-injected release metadata',
+	VERCEL_DEPLOYMENT_ID: 'platform-injected deployment metadata',
+	VERCEL_GIT_COMMIT_DATE: 'platform-injected release metadata',
+	VERCEL_GIT_COMMIT_SHA: 'platform-injected release metadata',
 };
 
 function getEnvironmentReadsFromContent(content) {
@@ -304,6 +311,13 @@ describe('Node.js runtime contract', () => {
     expect(workflow).toContain('node-version-file: .node-version');
     expect(workflow).not.toMatch(/node-version:\s*20\b/i);
     expect(devcontainer).toContain(`FROM node:${nodeVersion}`);
+  });
+
+  test('the CI emulator cache key tracks the pinned firebase-tools version', () => {
+    const workflow = fs.readFileSync(path.join(repoRoot, '.github/workflows/node.js.yml'), 'utf8');
+    const packageJson = require(path.join(repoRoot, 'package.json'));
+
+    expect(workflow).toContain(`key: firebase-tools-${packageJson.devDependencies['firebase-tools']}-`);
   });
 
   test('maintained documentation does not advertise Node.js 20', () => {

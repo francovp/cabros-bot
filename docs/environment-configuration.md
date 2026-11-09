@@ -10,7 +10,7 @@
 - `TELEGRAM_CHAT_ID` - Telegram chat ID where alerts are sent
 - `ENABLE_TELEGRAM_BOT` - Enable Telegram bot (`true` or `false`)
 - `ENABLE_TELEGRAM_COMMAND_RATE_LIMITING` - Enable per-chat throttling for expensive Telegram commands (`true` by default; security control, excluded from Remote Config)
-- `TELEGRAM_COMMAND_RATE_LIMITS_JSON` - Optional JSON overrides for per-command `max` and `windowMs`; defaults are `/precio` 10 per 60 seconds and `/analisis`, `/scanner`, `/noticias` 3 per hour. Values are bounded to `max` 1-1000 and `windowMs` 1-86400000; invalid values use defaults (security control, excluded from Remote Config)
+- `TELEGRAM_COMMAND_RATE_LIMITS_JSON` - Optional JSON overrides for per-command `max` and `windowMs`; defaults are `/precio` 10 per 60 seconds, `/watchlist` 20 per 60 seconds, and `/analisis`, `/scanner`, `/noticias` 3 per hour. Values are bounded to `max` 1-1000 and `windowMs` 1-86400000; invalid values use defaults (security control, excluded from Remote Config)
 
 ### Optional Variables
 
@@ -24,6 +24,7 @@
 
 #### Security
 
+- `ENABLE_REQUEST_VALIDATION` - Runtime OpenAPI 3.1 validation for the six protected webhook POST endpoints (`/api/webhook/alert`, `/message`, `/expanded-analysis-alert`, `/market-scanner-alert`, `/volume-confirmation`, and `/symbol-analysis`). Default: `true`; only the literal value `false` disables this middleware, while existing handler checks remain active. Validation runs after the app rate limiter, API-key authentication, and maintenance gate, before idempotency reservation and handler execution. This is a request-security gate, so it is environment-only and excluded from Firebase Remote Config.
 - `WEBHOOK_API_KEY` - API key for webhook ingest, including `/api/webhook/*` and `/api/news-monitor`. Required in production-like environments (`NODE_ENV=production`, Render, Vercel, Railway), where webhook endpoints fail closed with HTTP 503 if unset. The legacy `api-key` query parameter is deprecated ([GH-756](https://github.com/francovp/cabros-bot/issues/756)); query strings may leak through reverse-proxy access logs, so a one-time warning is emitted on use. When the dedicated keys below are unset, this remains the backward-compatible admin or Binance credential fallback.
 - `ADMIN_API_KEY` - Optional dedicated secret for admin/operator routes. When configured, it is accepted only through the `x-api-key` header and replaces `WEBHOOK_API_KEY` for API-key authentication on those routes; Firebase ID-token auth remains available. When unset, admin API-key auth keeps the legacy webhook-key behavior. Environment-only; excluded from Firebase Remote Config.
 - `BINANCE_TRADING_API_KEY` - Optional dedicated secret for Binance trading routes. When configured, it is accepted only through the `x-api-key` header and is the only API-key credential accepted on that surface. When unset, admin authentication remains the fallback. Environment-only; excluded from Firebase Remote Config.
@@ -71,6 +72,8 @@ To report a vulnerability, see [`SECURITY.md`](../SECURITY.md) — the project d
 - `NOTIFICATION_REDRIVE_MAX_AGE_MS` - Maximum lifespan of dead-letter records before expiration (default: `3600000`, Remote Config supported)
 - Firestore-backed `notificationDeadLetters` records use `expiresAt`; run `bash ops/configure-operational-collection-retention.sh` once per project to enable native TTL and optionally backfill legacy records.
 - `ZERO_CHANNEL_ALERT_COOLDOWN_MS` - Cooldown between admin notifications when all channels are disabled in milliseconds (default: `300000`, Remote Config supported)
+- `ADMIN_PAGE_DEDUP_TTL_MS` - TTL for admin paging deduplication in milliseconds (default: `300000`, 0 disables deduplication, Remote Config supported)
+- `GLOBAL_ALERT_BUDGET_PER_24H` - In-process rolling 24h cap on successful per-channel alert deliveries (default: `500`, 0 disables cap, Remote Config supported, range: `0`–`1000000`)
 - `ENABLE_API_ONLY_MODE` - Declare intentional API-only mode without notification delivery, suppressing zero-channel alerts and dead-letters (default: `false`, Remote Config supported)
 - `ENABLE_MAINTENANCE_MODE` - Remotely toggleable incident response kill switch (`true` or `false`, default: `false`, Remote Config supported). When active, gates incoming webhook alerts and bot commands with HTTP 503 while preserving `/healthcheck` and `/api/status`.
 
@@ -125,7 +128,10 @@ Enabled in production (`render.yaml`: `value: true`, `previewValue: false` on th
 - `LANGFUSE_BASE_URL` - Langfuse base URL (default: `https://cloud.langfuse.com`). Must be an HTTP(S) URL; only its host is reported by `/api/status`. Environment-only: an external destination.
 - `LANGFUSE_PROMPT_LABEL` - Prompt label to fetch (default: `latest` in local/dev/test, `production` in production-like environments; `render.yaml` pins `production`). Environment-only.
 - `LANGFUSE_PROMPT_CACHE_TTL_SECONDS` - Prompt cache TTL in seconds (default: `0` for `latest`, `60` for `production`; `render.yaml` pins `300`). Must be a non-negative integer. Environment-only.
+- `PROMPT_FALLBACK_ON_DRIFT` - When `true`, use the local `alert-enrichment` prompt if its Langfuse version lacks required schema or calibration markers. Default `false` keeps the existing remote-prompt behavior. Firebase Remote Config eligible: a non-secret runtime safety setting; the published template defaults to `false` and overrides the environment until changed and republished.
 - Optional local prompt overrides: `SEARCH_QUERY_PROMPT`, `GEMINI_SYSTEM_PROMPT`, `ALERT_ENRICHMENT_SYSTEM_PROMPT`, `NEWS_ANALYSIS_SYSTEM_PROMPT`, and `CONFIDENCE_ENRICHMENT_SYSTEM_PROMPT`. Unset values use the versioned local fallback files.
+
+`dependencies.promptLifecycle` on authenticated `/api/status` and `/api/capabilities` reports the distinct drifted prompt-name/version transitions detected in the last 24 hours, the latest timestamp, and the prompt name. `durableReadReady=false` means the bounded Firestore read has not succeeded, so the count may be incomplete. Each transition is stored once in Firestore `promptDriftEvents` with an `expiresAt` timestamp 30 days later; deploy `firestore.indexes.json` to enable native TTL. The count measures new drifted versions, not alert volume. Drift writes and Sentry reporting are fail open. Roll back a bad remote version by moving the Langfuse production label to a known-good version; enabling `PROMPT_FALLBACK_ON_DRIFT` is an additional local-file fallback.
 
 ##### Verifying Langfuse prompts are actually resolving
 
@@ -205,6 +211,8 @@ Unlike equity market data, this feature **does** run a bounded startup probe (5s
 - `SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES` - Optional comma-separated first-success provider chain (`mcp`, `binance`, `twelve-data`, `gemini`); empty preserves the existing crypto (`mcp,binance,gemini`) and equity (`twelve-data`) defaults. Active chains are reported under `dependencies.signalOutcomeWorker.entryPriceSources`.
 - `SIGNAL_OUTCOME_WINDOWS` - Ordered comma-separated evaluation windows (`1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1D`, `1W`, or `1M`; default: `1h,4h,1D,1W`). Invalid, duplicate, or empty values fall back to the default. Remote Config eligible.
 - `SIGNAL_OUTCOME_WINDOW_LABELS` - Optional JSON object mapping configured window keys to display labels (default: empty; omitted labels use the window key). Remote Config eligible.
+- `SIGNAL_OUTCOME_ROLLUP_ENABLED` - Enable automatic daily outcome rollup computation during scheduled worker sweeps (`true` or `false`, default: `true`). Remote Config eligible.
+- `SIGNAL_OUTCOME_ROLLUP_TTL_DAYS` - Retention for `tradingSignalOutcomesDaily` records in days (`30`-`365`, default: `180`). Remote Config eligible.
 - `ENABLE_EQUITY_MARKET_DATA` - Opt in to equity/forex/index outcome evaluation for `NASDAQ`, `BATS`, `NYSE`, `AMEX`, `NYSE ARCA`, `FX_IDC`, and `SPCFD` signals (`true` or `false`, default: `false`)
 - `EQUITY_MARKET_DATA_PROVIDER` - Equity provider name; currently `twelve-data`
 - `TWELVE_DATA_API_KEY` - Twelve Data API key; sent in the `Authorization` header and never returned by status endpoints
@@ -399,7 +407,7 @@ The Remote Config bootstrap fetch uses environment values because the published 
 
 `GET /api/status` and `GET /api/capabilities` expose the effective values at `dependencies.startupJitter` as `global`, `signalOutcome`, `redrive`, `scannerPreset`, and `remoteConfig`.
 
-The allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `GENERIC_MESSAGE_MAX_LENGTH` (integer `1`-`20000`, default `4000`), `SIGNAL_OUTCOME_WINDOWS`, `SIGNAL_OUTCOME_WINDOW_LABELS`, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), the five startup-jitter settings (integer `0`-`30000`, default `5000`), `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_MAINTENANCE_MODE` (an operational incident-response kill switch), per-chat user preferences (`ENABLE_FIRESTORE_CHAT_PREFERENCES`, `CHAT_PREFERENCES_RETENTION_DAYS` between `1` and `365`, `CHAT_PREFERENCES_CACHE_TTL_MS` between `1000` and `3600000`), and the five Firestore storage gates (`ENABLE_FIRESTORE_ALERT_STORAGE`, `ENABLE_FIRESTORE_ALERT_SUBSCRIBERS`, `ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_FIRESTORE_JOB_STORAGE`, `ENABLE_FIRESTORE_SCANNER_PRESETS`, all boolean, default `false`). Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, permanent security controls, route/security gates, and Telegram destinations are never read from Remote Config.
+The allow-list contains news thresholds, timeouts, concurrency, quota retries, TradingView timeouts/retries, `GENERIC_MESSAGE_MAX_LENGTH` (integer `1`-`20000`, default `4000`), `SIGNAL_OUTCOME_WINDOWS`, `SIGNAL_OUTCOME_WINDOW_LABELS`, `SIGNAL_OUTCOME_RETENTION_DAYS` (retention in days between `1` and `3650`, default `365`), the five startup-jitter settings (integer `0`-`30000`, default `5000`), `ENABLE_MESSAGE_FOOTER_METADATA`, `ENABLE_ENVIRONMENT_BANNER` (boolean, default `true`, optional response headers only; template uses `useInAppDefault`), `ENABLE_MAINTENANCE_MODE` (an operational incident-response kill switch), per-chat user preferences (`ENABLE_FIRESTORE_CHAT_PREFERENCES`, `CHAT_PREFERENCES_RETENTION_DAYS` between `1` and `365`, `CHAT_PREFERENCES_CACHE_TTL_MS` between `1000` and `3600000`), and the five Firestore storage gates (`ENABLE_FIRESTORE_ALERT_STORAGE`, `ENABLE_FIRESTORE_ALERT_SUBSCRIBERS`, `ENABLE_FIRESTORE_IDEMPOTENCY`, `ENABLE_FIRESTORE_JOB_STORAGE`, `ENABLE_FIRESTORE_SCANNER_PRESETS`, all boolean, default `false`). Remote values are parsed as numbers/booleans and must satisfy the existing finite, integer, positive, and range constraints. Credentials, API keys, webhook authentication, permanent security controls, route/security gates, and Telegram destinations are never read from Remote Config.
 
 ##### Storage gates resolve `remote ?? env`, not `env || remote`
 
@@ -508,6 +516,7 @@ Real-time administrative events (job progress, scanner results, alert delivery e
 - `RATE_LIMIT_TIER_TRADING_MAX` - Per-endpoint maximum for Binance order reads, writes, and previews (default: `10` requests per 60 seconds; invalid values use the default).
 - `RATE_LIMIT_TIER_STANDARD_MAX` - Per-endpoint maximum for the volume-confirmation webhook (default: `30` requests per 60 seconds; invalid values use the default). All webhook and news-monitor ingest paths also share a 1,000-request aggregate bucket per `RATE_LIMIT_WINDOW_MS`; mapped webhook tiers enforce both limits, while alert and message use only the aggregate bucket.
 - `RATE_LIMIT_TIER_LIGHT_MAX` - Per-endpoint maximum for status and capabilities endpoints (default: `100` requests per 60 seconds; invalid values use the default).
+- `ENABLE_RESPONSE_COMPRESSION` - Response gzip compression for eligible payloads above 1 KB (default: enabled; set exactly `false` to disable). This is environment-only because middleware is mounted at process startup, before Firebase Remote Config loads. The threshold remains 1024 bytes and the compression level remains 6.
 
 The endpoint tiers use separate per-endpoint buckets keyed by the existing API-key hash and trusted client IP; URL query strings, trailing slashes, and case do not change the bucket. All webhook and news-monitor ingest paths share a finite aggregate bucket of 1,000 requests per `RATE_LIMIT_WINDOW_MS`; mapped webhook tiers are applied in addition to this aggregate ceiling. These request-rate limits are security controls, remain environment-only, and are intentionally excluded from Firebase Remote Config. `/healthcheck`, `/ready`, `/openapi.json`, `/docs`, `/admin`, and associated static assets are mounted before the rate limiter and remain exempt.
 - `LOG_LEVEL` - Structured JSON log verbosity (`debug`, `info`, `warn`, `error`, `silent`; defaults to `debug` in development and `info` in production). The logger automatically masks sensitive plain-object keys, bare-scalar secrets preceded by sensitive labels, URL query secrets, embedded JSON strings, Authorization/Bearer credentials, Telegram bot tokens, Discord webhook tokens, OpenAI keys, and dynamically registered request-scoped secrets via `registerSecretValue` / `clearSecretValue`.
@@ -517,8 +526,8 @@ The endpoint tiers use separate per-endpoint buckets keyed by the existing API-k
 
 - `ENABLE_NEWS_MONITOR` - Enable news monitoring endpoint (`true` or `false`, default: `false`)
 - `ENABLE_NEWS_MONITOR_CLASSIFIER` - Re-check Gemini `none` headlines with classifier.dev (`true` or `false`, default: `false`). Sends the symbol and generated headline externally; this privacy gate is environment-only and excluded from Firebase Remote Config.
-- `NEWS_SYMBOLS_CRYPTO` - Default crypto symbols if not provided in request (comma-separated, e.g., `BTCUSDT,ETHUSD`)
-- `NEWS_SYMBOLS_STOCKS` - Default stock symbols if not provided in request (comma-separated)
+- `NEWS_SYMBOLS_CRYPTO` - Default crypto symbols if not provided in request (comma-separated, e.g., `BTCUSDT,ETHUSD`). Fresh published Remote Config overrides the environment for webhook and scheduler; an empty published string clears the list.
+- `NEWS_SYMBOLS_STOCKS` - Default stock symbols if not provided in request (comma-separated). Fresh published Remote Config overrides the environment for webhook and scheduler; an empty published string clears the list.
 - `NEWS_ALERT_THRESHOLD` - Confidence score threshold for sending alerts (default: `0.7`, range 0.0-1.0)
 - `NEWS_CACHE_TTL_HOURS` - Cache time-to-live for deduplication (default: `6` hours)
 - `NEWS_CACHE_MAX_ENTRIES` - Maximum in-memory news-cache entries before LRU eviction (default: `5000`, range `1`-`1000000`; Remote Config supported)
@@ -534,6 +543,9 @@ The endpoint tiers use separate per-endpoint buckets keyed by the existing API-k
 - `NEWS_MAX_ALERTS_PER_WINDOW_MS` - Sliding volume-window duration (default: `300000` ms / 5 minutes, range: `1000`-`3600000`; Remote Config supported)
 - `ENABLE_BINANCE_PRICE_CHECK` - Enable Binance crypto price fetching (`true` or `false`, default: `false`)
 - `BINANCE_DATA_BASE_URL` - Optional custom Binance market-data host for public data (klines, ticker, avgPrice), e.g. `https://data-api.binance.vision` (default: unset / `https://api.binance.com`)
+- `PRICE_CACHE_TTL_MS_CRYPTO` — `/precio` crypto TTL (default `15000` ms; integer `1000`–`600000`; Remote Config supported).
+- `PRICE_CACHE_TTL_MS_EQUITY` — `/precio` equity TTL (default `60000` ms; integer `1000`–`600000`; Remote Config supported).
+- `PRICE_CACHE_MAX_ENTRIES_PER_BUCKET` — process-local LRU capacity per provider bucket (default `256`; integer `1`–`10000`; Remote Config supported). Each replica caches independently.
 - `BINANCE_FETCH_TIMEOUT_MS` - Binance price request timeout (default: `5000` ms)
 
 #### Binance Spot Order Execution
@@ -626,8 +638,8 @@ Audit writes are fail-open: a failed audit write is logged as a warning and neve
 #### TradingView Market Scanner Alerts
 
 - `ENABLE_MARKET_SCANNER` - Enable market scanner endpoint (`true` or `false`, default: `false`)
-- `MARKET_SCANNER_DEFAULT_EXCHANGE` - Default exchange when not provided in request (default: `BINANCE`)
-- `MARKET_SCANNER_TIMEOUT_MS` - Timeout in milliseconds for scanner webhook process (default: `90000`, max `120000`)
+- `MARKET_SCANNER_DEFAULT_EXCHANGE` - Default exchange when not provided in request (default: `BINANCE`). Remote Config supports any non-empty TradingView identifier; requests and saved presets retain their explicit exchange.
+- `MARKET_SCANNER_TIMEOUT_MS` - Timeout in milliseconds for scanner webhook and synchronous preset runs (default: `90000`, max `120000`). Published Remote Config values must be integers `1000`–`120000`; invalid or stale values preserve legacy environment parsing. These four news/scanner template keys use `useInAppDefault: true` until explicitly configured.
 
 #### Scanner Preset Storage
 
@@ -808,3 +820,7 @@ AZURE_LLM_MODEL=openai/gpt-5-mini
 # enriched_confidence = min(gemini_confidence, llm_confidence)
 # Prevents false positives from LLM hallucination
 ```
+
+## Exact alert coalescing
+
+`ENABLE_ALERT_COALESCE=false` and `ALERT_COALESCE_WINDOW_MS=5000` (integer 1–60000) are Remote Config eligible, non-secret runtime tuning settings for POST /api/webhook/alert only. See the README for delivery, bypass and process-local limits. No auth, destination or startup controls are added.

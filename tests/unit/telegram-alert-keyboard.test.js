@@ -97,7 +97,34 @@ describe('telegramAlertKeyboard', () => {
 				ACTION_DISMISS: 'x',
 				ACTION_VOTE_UP: 'vu',
 				ACTION_VOTE_DOWN: 'vd',
+				ACTION_TAKE: 'kt',
+				ACTION_SKIP: 'ks',
+				ACTION_NO_TRADE: 'kn',
+				ACTION_SNOOZE: 'kz',
 			});
+		});
+	});
+
+	describe('acknowledgement buttons', () => {
+		it('adds four acknowledgement buttons when includeAcknowledgements is true', () => {
+			const markup = buildReplyMarkup({ alertId: 'alert-abc-123', hasEnrichment: true, includeReplay: true, includeAcknowledgements: true });
+			const rows = markup.inline_keyboard;
+			const callbacks = rows.flat().map((button) => button.callback_data);
+			expect(callbacks).toContain('kt:alert-abc-123');
+			expect(callbacks).toContain('ks:alert-abc-123');
+			expect(callbacks).toContain('kn:alert-abc-123');
+			expect(callbacks).toContain('kz:alert-abc-123');
+			expect(rows).toHaveLength(5);
+		});
+
+		it('omits acknowledgement buttons by default', () => {
+			const markup = buildReplyMarkup({ alertId: 'alert-abc-123', hasEnrichment: true, includeReplay: true });
+			const callbacks = markup.inline_keyboard.flat().map((button) => button.callback_data.split(':')[0]);
+			expect(callbacks).not.toContain('kt');
+			expect(callbacks).not.toContain('ks');
+			expect(callbacks).not.toContain('kn');
+			expect(callbacks).not.toContain('kz');
+			expect(markup.inline_keyboard).toHaveLength(3);
 		});
 	});
 });

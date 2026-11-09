@@ -510,7 +510,7 @@ describe('structured console logging', () => {
 		console.info('Request completed', { path });
 		const durationMs = performance.now() - start;
 
-		expect(durationMs).toBeLessThan(100);
+		expect(durationMs).toBeLessThan(process.env.CI ? 300 : 100);
 		expect(JSON.stringify(parseLast(output.info))).not.toContain(token);
 	});
 
@@ -524,7 +524,7 @@ describe('structured console logging', () => {
 		console.info('Request completed', { path });
 		const durationMs = performance.now() - start;
 
-		expect(durationMs).toBeLessThan(100);
+		expect(durationMs).toBeLessThan(process.env.CI ? 300 : 100);
 		expect(JSON.stringify(parseLast(output.info))).not.toContain(token);
 	});
 

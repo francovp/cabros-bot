@@ -8,9 +8,53 @@ const remoteConfigService = require('../remoteConfig/RemoteConfigService');
 const { trackBackgroundTask } = require('../../lib/backgroundTaskTracker');
 const { notificationRedriveService } = require('./NotificationRedriveService');
 const { deliveryMetricsService } = require('./DeliveryMetricsService');
+const { adminPagingDeduplicator } = require('./adminPagingDeduplicator');
 const { chatPreferenceService } = require('../preferences/ChatPreferenceService');
 const NotificationChannel = require('./NotificationChannel');
 const { registerAdminPagingManager } = require('./adminPagingStatus');
+const { evaluateDeliveryGate } = require('../marketCalendar/notificationGate');
+const {
+	globalAlertBudget,
+	notifyAdminBudgetExceeded,
+} = require('../notifications/globalAlertBudget');
+
+function buildBudgetRejectedResult(channelName, reservation) {
+	return {
+		success: false,
+		channel: channelName,
+		error: `Global alert budget exceeded: ${reservation.used}/${reservation.capacity} in last 24h`,
+		statusCode: 429,
+		errorCode: 'ALERT_BUDGET_EXCEEDED',
+		errorCategory: 'budget_exceeded',
+		attemptCount: 0,
+		durationMs: 0,
+		budget: {
+			enabled: true,
+			used: reservation.used,
+			capacity: reservation.capacity,
+			remaining: reservation.remaining,
+			resetAt: reservation.resetAt,
+		},
+	};
+}
+
+function isBudgetRejection(result) {
+	return result && result.errorCode === 'ALERT_BUDGET_EXCEEDED';
+}
+
+function tagBudgetSpanAttributes(span, reservation) {
+	if (!span || typeof span.setAttribute !== 'function') {
+		return;
+	}
+	try {
+		span.setAttribute('alert.budget.enabled', reservation.allowed !== false || reservation.used > 0);
+		span.setAttribute('alert.budget.used', reservation.used);
+		span.setAttribute('alert.budget.capacity', reservation.capacity);
+		span.setAttribute('alert.budget.remaining', reservation.remaining);
+	} catch (_error) {
+		// Fail-open: never break delivery on Sentry attribute errors.
+	}
+}
 
 const DEFAULT_ZERO_CHANNEL_ALERT_COOLDOWN_MS = 300000;
 
@@ -414,7 +458,7 @@ class NotificationManager {
 	 * @param {string} params.pageType - Page identifier used for telemetry only
 	 * @returns {Promise<{delivered: boolean, channel: string|null, attempts: Array<{channel: string, success: boolean, error?: string, category?: string, attemptCount?: number, statusCode?: number|null}>}>}
 	 */
-	async _dispatchAdminPage({ message, pageType }) {
+	async _dispatchAdminPage({ message, pageType, pagingFingerprint, dedupChecked }) {
 		const attempts = [];
 		const adminChatId = process.env.TELEGRAM_ADMIN_NOTIFICATIONS_CHAT_ID;
 		const telegramService = this.channels.get('telegram');
@@ -426,6 +470,8 @@ class NotificationManager {
 				result = await telegramService.send({
 					text: message,
 					telegramChatId: adminChatId,
+					pagingFingerprint,
+					dedupChecked,
 				});
 			} catch (error) {
 				result = { success: false, error: error.message };
@@ -548,7 +594,30 @@ class NotificationManager {
 			...(requestId ? [`Request ID: ${requestId}`] : []),
 		].join('\n');
 
-		await this._dispatchAdminPage({ message, pageType: 'delivery-failure' });
+		const failedChannels = failures.map(result => result.channel).filter(Boolean).sort().join(',');
+		const primaryFailure = failures[0] || {};
+		const category = primaryFailure.category || (failures.some(f => f.statusCode === 429) ? 'RATE_LIMITED' : 'PROVIDER_ERROR');
+		const errorCode = primaryFailure.statusCode || primaryFailure.errorCode || (primaryFailure.error ? String(primaryFailure.error).slice(0, 30) : 'unknown');
+
+		const deduplicator = this.adminPagingDeduplicator || adminPagingDeduplicator;
+		const fingerprint = deduplicator.computeFingerprint({
+			category,
+			channel: failedChannels,
+			requestId: requestId || 'none',
+			errorCode,
+		});
+
+		if (deduplicator.shouldSuppress(fingerprint)) {
+			console.info(`[NotificationManager] Admin delivery failure notification suppressed by deduplicator: ${fingerprint}`);
+			return;
+		}
+
+		await this._dispatchAdminPage({
+			message,
+			pageType: 'delivery-failure',
+			pagingFingerprint: fingerprint,
+			dedupChecked: true,
+		});
 	}
 
 	async notifyAdminOfZeroChannels(alert, options = {}) {
@@ -609,6 +678,41 @@ class NotificationManager {
 			return [];
 		}
 
+		// Market-calendar delivery gate: opt-in suppression when the alert's
+		// resolved exchange is closed (full-day holiday, half-day outside
+		// window, weekend, or weekday outside any session window). Routes the
+		// alert to the dead-letter queue with a structured `reason` for audit
+		// and replay. Fail-open when disabled, missing exchange, or classifier
+		// error. The gate still evaluates on redrive replays (holding the
+		// alert) but never writes a fresh dead letter for them, so replay
+		// cannot reset backoff/attempts.
+		const gate = evaluateDeliveryGate(alert, options);
+		if (gate.suppress) {
+			console.info('[NotificationManager] Suppressed by market calendar', gate.reason, gate.sessionState && gate.sessionState.state);
+			if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(
+					{ ...alert, _marketCalendarGate: { suppress: true, reason: gate.reason, sessionState: gate.sessionState, exchange: gate.exchange } },
+					channelNames.map((name) => ({
+						channel: name,
+						success: false,
+						error: gate.reason,
+						errorCode: gate.reason,
+						skipped: true,
+					})),
+					options,
+				)).catch((error) => {
+					console.warn('[NotificationManager] Failed to record market-calendar dead-letter:', error.message);
+				});
+			}
+			return channelNames.map((name) => ({
+				channel: name,
+				success: false,
+				error: gate.reason,
+				errorCode: gate.reason,
+				skipped: true,
+			}));
+		}
+
 		const channels = channelNames
 			.map(name => {
 				const ch = this.channels.get(name);
@@ -644,6 +748,39 @@ class NotificationManager {
 	async sendToAll(alert, options = {}) {
 		const enabledChannels = Array.from(this.channels.values()).filter((ch) => ch.isEnabled());
 		const startTime = Date.now();
+
+		// Market-calendar delivery gate: opt-in suppression when the alert's
+		// resolved exchange is closed (full-day holiday, half-day outside
+		// window, weekend, or weekday outside any session window). Routes the
+		// alert to the dead-letter queue with a structured `reason` for audit
+		// and replay. Fail-open when disabled, missing exchange, or classifier
+		// error.
+		const gate = evaluateDeliveryGate(alert, options);
+		if (gate.suppress) {
+			console.info('[NotificationManager] Suppressed by market calendar', gate.reason, gate.sessionState && gate.sessionState.state);
+			const candidateChannels = enabledChannels.length > 0
+				? enabledChannels.map((ch) => ch.name)
+				: Array.from(this.channels.keys());
+			const syntheticResults = candidateChannels.map((channelName) => ({
+				channel: channelName,
+				success: false,
+				error: gate.reason,
+				errorCode: gate.reason,
+				skipped: true,
+			}));
+			if (!options.isRedrive && notificationRedriveService.isEnabled()) {
+				trackBackgroundTask(
+					notificationRedriveService.recordDeliveryResults(
+						{ ...alert, _marketCalendarGate: { suppress: true, reason: gate.reason, sessionState: gate.sessionState, exchange: gate.exchange } },
+						syntheticResults,
+						options,
+					),
+				).catch((error) => {
+					console.warn('[NotificationManager] Failed to record market-calendar dead-letter:', error.message);
+				});
+			}
+			return syntheticResults;
+		}
 
 		if (enabledChannels.length === 0) {
 			if (this.isIntentionalApiOnly()) {
@@ -767,6 +904,32 @@ class NotificationManager {
 								filterReason: prefCheck.reason,
 							};
 						}
+
+						if (!options.dryRun) {
+							const reservation = globalAlertBudget.reserve();
+							tagBudgetSpanAttributes(sendSpan, reservation);
+							if (!reservation.allowed) {
+								console.warn(`[NotificationManager] ${ch.name} blocked: global alert budget exceeded (${reservation.used}/${reservation.capacity})`);
+								sentryService.captureExternalFailure({
+									channel: ch.name,
+									external: {
+										provider: 'global-alert-budget',
+										attemptCount: 0,
+										durationMs: 0,
+										lastErrorMessage: `ALERT_BUDGET_EXCEEDED (${reservation.used}/${reservation.capacity})`,
+										lastErrorCode: 'ALERT_BUDGET_EXCEEDED',
+									},
+								});
+								trackBackgroundTask(notifyAdminBudgetExceeded({
+									used: reservation.used,
+									capacity: reservation.capacity,
+									resetAt: reservation.resetAt,
+									telegramService: this.channels.get('telegram'),
+								})).catch(() => {});
+								return buildBudgetRejectedResult(ch.name, reservation);
+							}
+						}
+
 						const channelSignal = options.signalByChannel?.[ch.name];
 						let signal = options.signal;
 						if (isSpecificDispatch) {
@@ -862,7 +1025,7 @@ class NotificationManager {
 			} : (correlationId ? { requestId: correlationId } : undefined));
 
 		for (const result of formattedResults) {
-			if (result && !result.success && result.error) {
+			if (result && !result.success && result.error && !isBudgetRejection(result)) {
 				const providerMap = {
 					telegram: 'telegram-api',
 					whatsapp: 'whatsapp-greenapi',
@@ -887,7 +1050,7 @@ class NotificationManager {
 		const isRedriveIneligible = this._isRedriveIneligible(alert, options);
 
 		if (!isRedriveIneligible && notificationRedriveService.isEnabled()) {
-			const failedResults = formattedResults.filter(result => result && !result.success);
+			const failedResults = formattedResults.filter(result => result && !result.success && !isBudgetRejection(result));
 			if (failedResults.length > 0) {
 				trackBackgroundTask(notificationRedriveService.recordDeliveryResults(alert, formattedResults, options)).catch((error) => {
 					console.warn('[NotificationManager] Failed to record dead-letters for redrive:', error.message);
@@ -895,9 +1058,12 @@ class NotificationManager {
 			}
 		}
 
-		trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults, options)).catch((error) => {
-			console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
-		});
+		const realFailures = formattedResults.filter(result => result && !result.success && !isBudgetRejection(result));
+		if (realFailures.length > 0) {
+			trackBackgroundTask(this.notifyAdminOfFailures(alert, formattedResults, options)).catch((error) => {
+				console.error('[NotificationManager] Unexpected admin notification failure:', error.message);
+			});
+		}
 
 		this._recordDeliveryMetrics(formattedResults, totalDurationMs);
 

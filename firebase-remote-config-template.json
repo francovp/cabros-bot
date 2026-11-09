@@ -1,5 +1,12 @@
 {
   "parameters": {
+    "PROMPT_FALLBACK_ON_DRIFT": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Use the local alert-enrichment prompt when the Langfuse version fails schema checks",
+      "valueType": "BOOLEAN"
+    },
     "NEWS_ALERT_THRESHOLD": {
       "defaultValue": {
         "value": "0.7"
@@ -112,6 +119,20 @@
       "description": "TTL for successful process-local TradingView MCP tool results in milliseconds",
       "valueType": "NUMBER"
     },
+    "CIRCUIT_BREAKER_THRESHOLD": {
+      "defaultValue": {
+        "value": "5"
+      },
+      "description": "Consecutive external API provider failures before circuit breaker opens",
+      "valueType": "NUMBER"
+    },
+    "CIRCUIT_BREAKER_COOLDOWN_MS": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Cooldown duration in milliseconds before circuit breaker allows half-open probe",
+      "valueType": "NUMBER"
+    },
     "ENABLE_TRADINGVIEW_MCP_WARMUP": {
       "defaultValue": {
         "value": "true"
@@ -138,6 +159,13 @@
         "value": "true"
       },
       "description": "Enable metadata footer on outgoing messages",
+      "valueType": "BOOLEAN"
+    },
+    "ENABLE_ENVIRONMENT_BANNER": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Enable optional X-Cabros-* deployment response headers. Non-secret runtime display setting; useInAppDefault preserves the environment/default fallback (true). Does not gate the public snapshot or footer metadata.",
       "valueType": "BOOLEAN"
     },
     "GROUNDING_MAX_SOURCES": {
@@ -413,6 +441,20 @@
       "description": "Retention window in days for tradingSignalOutcomes documents before expiration and cleanup",
       "valueType": "NUMBER"
     },
+    "SIGNAL_OUTCOME_ROLLUP_ENABLED": {
+      "defaultValue": {
+        "value": "true"
+      },
+      "description": "Enable daily outcome snapshot rollups for trend analytics",
+      "valueType": "BOOLEAN"
+    },
+    "SIGNAL_OUTCOME_ROLLUP_TTL_DAYS": {
+      "defaultValue": {
+        "value": "180"
+      },
+      "description": "Retention window in days for tradingSignalOutcomesDaily snapshot documents before expiration",
+      "valueType": "NUMBER"
+    },
     "SIGNAL_OUTCOME_ENTRY_PRICE_SOURCES": {
       "defaultValue": {
         "value": ""
@@ -425,6 +467,20 @@
         "value": "8"
       },
       "description": "Rate limit ceiling in requests per minute for equity market data provider requests",
+      "valueType": "NUMBER"
+    },
+    "SCANNER_ATR_MULTIPLIER": {
+      "defaultValue": {
+        "value": "2"
+      },
+      "description": "ATR multiple for ranked scanner sizing stop distance (0.1-10)",
+      "valueType": "NUMBER"
+    },
+    "SCANNER_ACCOUNT_RISK_PCT": {
+      "defaultValue": {
+        "value": "1"
+      },
+      "description": "Target percent of capital at risk for ranked scanner hints (0.01-5)",
       "valueType": "NUMBER"
     },
     "NOTIFICATION_REDRIVE_INTERVAL_MS": {
@@ -553,6 +609,13 @@
       "description": "Cooldown between admin notifications when all channels are disabled in milliseconds",
       "valueType": "NUMBER"
     },
+    "ADMIN_PAGE_DEDUP_TTL_MS": {
+      "defaultValue": {
+        "value": "300000"
+      },
+      "description": "TTL for admin paging deduplication in milliseconds (0 to disable)",
+      "valueType": "NUMBER"
+    },
     "ENABLE_API_ONLY_MODE": {
       "defaultValue": {
         "value": "false"
@@ -574,6 +637,27 @@
       "description": "Enable rendering signal classification marker prefix on alert notifications",
       "valueType": "BOOLEAN"
     },
+    "ENABLE_CHART_ATTACHMENTS": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable attaching a rendered chart PNG to alert notifications on channels that support inline image delivery",
+      "valueType": "BOOLEAN"
+    },
+    "CHART_RENDER_TIMEOUT_MS": {
+      "defaultValue": {
+        "value": "5000"
+      },
+      "description": "Wall-clock budget for a single chart render before falling back to text-only delivery",
+      "valueType": "NUMBER"
+    },
+    "CHART_CACHE_TTL_SECONDS": {
+      "defaultValue": {
+        "value": "300"
+      },
+      "description": "TTL for the in-process chart render cache keyed by symbol, timeframe and range key",
+      "valueType": "NUMBER"
+    },
     "ENABLE_EQUITY_SESSION_TAG": {
       "defaultValue": {
         "value": "true"
@@ -593,6 +677,13 @@
         "value": "1"
       },
       "description": "Cooldown length in alert-timeframe bars for same-signal repeat suppression",
+      "valueType": "NUMBER"
+    },
+    "GLOBAL_ALERT_BUDGET_PER_24H": {
+      "defaultValue": {
+        "value": "500"
+      },
+      "description": "Rolling 24-hour alert-delivery budget capacity (0 disables budget)",
       "valueType": "NUMBER"
     },
     "ENABLE_MIN_ALERT_CONTEXT": {
@@ -889,6 +980,20 @@
       "description": "Maintenance mode toggle to pause webhooks and commands during incidents",
       "valueType": "BOOLEAN"
     },
+    "ENABLE_STRATEGY_RESEARCH": {
+      "defaultValue": {
+        "value": "false"
+      },
+      "description": "Enable TradingView MCP strategy research endpoints (compare_strategies, walk_forward_backtest_strategy, backtest_strategy)",
+      "valueType": "BOOLEAN"
+    },
+    "STRATEGY_RESEARCH_CACHE_TTL_MS": {
+      "defaultValue": {
+        "value": "300000"
+      },
+      "description": "In-memory cache TTL for TradingView MCP strategy research results",
+      "valueType": "NUMBER"
+    },
     "JOB_BACKLOG_ALERT_THRESHOLD_MS": {
       "defaultValue": {
         "value": "900000"
@@ -949,6 +1054,69 @@
       "conditionalValues": {},
       "description": "Enable durable Firestore persistence for alert subscriber webhooks. Ships with useInAppDefault so publishing this template yields NO remote override for this key and the deployment value decides. Without it the Admin SDK reports the defaultValue with source 'remote', which would silently override render.yaml.",
       "valueType": "BOOLEAN"
+    },
+    "PRICE_CACHE_TTL_MS_CRYPTO": {
+      "defaultValue": {
+        "value": "15000"
+      },
+      "description": "Process-local TTL in milliseconds for cached /precio crypto (Binance) quotes",
+      "valueType": "NUMBER"
+    },
+    "PRICE_CACHE_TTL_MS_EQUITY": {
+      "defaultValue": {
+        "value": "60000"
+      },
+      "description": "Process-local TTL in milliseconds for cached /precio equity (Twelve Data) quotes",
+      "valueType": "NUMBER"
+    },
+    "PRICE_CACHE_MAX_ENTRIES_PER_BUCKET": {
+      "defaultValue": {
+        "value": "256"
+      },
+      "description": "Maximum number of cached entries per bucket in the /precio price cache (LRU eviction)",
+      "valueType": "NUMBER"
+    },
+    "ENABLE_ALERT_COALESCE": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Opt-in process-local exact payload coalescing on POST /api/webhook/alert",
+      "valueType": "BOOLEAN"
+    },
+    "ALERT_COALESCE_WINDOW_MS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Exact alert coalescing window in milliseconds; integer 1-60000",
+      "valueType": "NUMBER"
+    },
+    "NEWS_SYMBOLS_CRYPTO": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Default comma-separated crypto symbols for news analysis; empty disables crypto defaults",
+      "valueType": "STRING"
+    },
+    "NEWS_SYMBOLS_STOCKS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Default comma-separated stock symbols for news analysis; empty disables stock defaults",
+      "valueType": "STRING"
+    },
+    "MARKET_SCANNER_DEFAULT_EXCHANGE": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Default non-empty TradingView exchange for scanner requests and new presets",
+      "valueType": "STRING"
+    },
+    "MARKET_SCANNER_TIMEOUT_MS": {
+      "defaultValue": {
+        "useInAppDefault": true
+      },
+      "description": "Scanner operation timeout in milliseconds (integer 1000-120000; application default 90000)",
+      "valueType": "NUMBER"
     }
   },
   "version": {

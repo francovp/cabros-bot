@@ -34,9 +34,9 @@ describe('Request Deadline Middleware (unit)', () => {
 		expect(res.getHeader('X-Request-Id')).toBeUndefined();
 	});
 
-	test('exempts /ready, /openapi.json, /docs by default', () => {
+	test('exempts readiness, liveness and documentation paths by default', () => {
 		process.env.REQUEST_TIMEOUT_MS = '5000';
-		for (const path of ['/ready', '/openapi.json', '/docs']) {
+		for (const path of ['/ready', '/livez', '/readyz', '/openapi.json', '/docs']) {
 			const req = httpMocks.createRequest({ method: 'GET', url: path });
 			const res = httpMocks.createResponse();
 			const next = jest.fn();

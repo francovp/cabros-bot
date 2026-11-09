@@ -29,6 +29,7 @@ const backgroundTimerStatsSchema = require('../../src/openapi/openapi.json')
 	.components.schemas.BackgroundTimerStats;
 const { getPromptService } = require('../../src/services/prompts');
 const { signalClassMetrics } = require('../../src/services/alerts/signalClassifier');
+const groundingService = require('../../src/services/grounding/grounding');
 const equityMarketDataService = require('../../src/services/storage/EquityMarketDataService');
 const { resetAdminAuthReadinessForTesting } = require('../../src/lib/adminAuth');
 const idempotencyStorageService = require('../../src/services/storage/IdempotencyStorageService');
@@ -37,6 +38,15 @@ const promptReadiness = require('../../src/services/prompts/promptReadiness');
 const symbolAnalysisStorageService = require('../../src/services/storage/SymbolAnalysisStorageService');
 const sentryService = require('../../src/services/monitoring/SentryService');
 const { getRoutes } = require('../../src/routes');
+
+const defaultCircuitBreaker = Object.freeze({
+	state: 'closed',
+	consecutiveFailures: 0,
+	openedAt: null,
+	lastStateChangeAt: null,
+	failureThreshold: 5,
+	cooldownMs: 60000,
+});
 
 const testPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({
 	type: 'pkcs1',
@@ -311,6 +321,11 @@ describe('Status endpoints', () => {
 		});
 		expect(response.body.service).not.toHaveProperty('timestamp');
 		expect(response.body.featureFlags.telegramBot).toBe(true);
+		expect(response.body.featureFlags.priceQuoteCache).toBe(true);
+		expect(response.body.dependencies.priceQuoteCache).toMatchObject({
+			enabled: true, mode: 'in-memory', storage: 'memory',
+			ttlMs: { crypto: 15000, equity: 60000 }, maxEntriesPerBucket: 256,
+		});
 		expect(response.body.readiness).toEqual(expect.objectContaining({
 			status: 'pending',
 			ready: false,
@@ -331,6 +346,7 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.geminiQuota).toEqual({
 			enabled: true,
@@ -364,7 +380,7 @@ describe('Status endpoints', () => {
 			misses: 0,
 			failures: 0,
 		});
-		expect(response.body.dependencies.tradingViewMcp).toEqual({
+		expect(response.body.dependencies.tradingViewMcp).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: true,
 			ready: false,
@@ -415,7 +431,14 @@ describe('Status endpoints', () => {
 				request_failed: 0,
 			},
 			toolMetrics: {},
-		});
+		}));
+		expect(response.body.dependencies.tradingViewMcp.mcpTools).toEqual(expect.objectContaining({
+			discoveredSource: expect.any(String),
+			wired: expect.objectContaining({
+				coin_analysis: expect.objectContaining({ wired: true }),
+				top_gainers: expect.objectContaining({ wired: true }),
+			}),
+		}));
 		expect(response.body.dependencies.braveSearch).toEqual({
 			enabled: false,
 			configured: false,
@@ -548,6 +571,104 @@ describe('Status endpoints', () => {
 		expect(response.status).toBe(200);
 		expect(response.body).toHaveProperty('deliveryHealth');
 		expect(response.body.deliveryHealth).toEqual({});
+	});
+
+	it('exposes MCP tool inventory under dependencies.tradingViewMcp.mcpTools using the static fallback catalog', async () => {
+		const originalFetch = tradingViewMcpService.mcpToolInventory._fetch;
+		tradingViewMcpService.mcpToolInventory._fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+		tradingViewMcpService.mcpToolInventory._resetForTesting();
+		tradingViewMcpService.mcpToolInventory._url = 'https://example.test/mcp';
+		try {
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			const mcpTools = response.body.dependencies.tradingViewMcp.mcpTools;
+			expect(mcpTools).toBeDefined();
+			expect(mcpTools.discoveredSource).toBe('fallback-static-catalog');
+			expect(Array.isArray(mcpTools.discovered)).toBe(true);
+			expect(mcpTools.discovered).toEqual(expect.arrayContaining([
+				'coin_analysis',
+				'combined_analysis',
+				'multi_timeframe_analysis',
+				'volume_confirmation_analysis',
+				'top_gainers',
+				'top_losers',
+				'volume_breakout_scanner',
+				'smart_volume_scanner',
+				'bollinger_scan',
+				'backtest_strategy',
+				'compare_strategies',
+				'walk_forward_backtest_strategy',
+				'multi_agent_analysis',
+				'market_snapshot',
+				'rating_filter',
+				'consecutive_candles_scan',
+				'advanced_candle_pattern',
+			]));
+			expect(mcpTools.wired.coin_analysis).toEqual(expect.objectContaining({
+				wired: true,
+				callers: ['enrichFromSignal', 'alert/grounding'],
+				lastSuccessAt: null,
+				lastFailureAt: null,
+			}));
+			expect(mcpTools.wired.top_gainers).toEqual(expect.objectContaining({
+				wired: true,
+				callers: ['marketScanner'],
+			}));
+			expect(mcpTools.wired.backtest_strategy).toEqual(expect.objectContaining({ wired: false }));
+			expect(mcpTools.wired.multi_agent_analysis).toEqual(expect.objectContaining({ wired: false }));
+			expect(typeof mcpTools.discoveredAt).toBe('string');
+		} finally {
+			tradingViewMcpService.mcpToolInventory._fetch = originalFetch;
+		}
+	});
+
+	it('records per-tool telemetry in the MCP tool inventory after a successful call', async () => {
+		const originalCallTool = tradingViewMcpService._callTool;
+		tradingViewMcpService._callTool = jest.fn().mockResolvedValue({
+			price_data: { current_price: 70000 },
+		});
+		try {
+			await tradingViewMcpService.callCoinAnalysis({
+				symbol: 'BTCUSDT',
+				exchange: 'BINANCE',
+				timeframe: '1D',
+			});
+
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			const coinTelemetry = response.body.dependencies.tradingViewMcp.mcpTools.wired.coin_analysis;
+			expect(coinTelemetry.lastSuccessAt).not.toBeNull();
+		} finally {
+			tradingViewMcpService._callTool = originalCallTool;
+		}
+	});
+
+	it('returns an empty wired inventory when TradingView MCP enrichment is disabled and discovery fails', async () => {
+		process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'false';
+		const originalFetch = tradingViewMcpService.mcpToolInventory._fetch;
+		tradingViewMcpService.mcpToolInventory._fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+		tradingViewMcpService.mcpToolInventory._resetForTesting();
+		tradingViewMcpService.mcpToolInventory._url = 'https://example.test/mcp';
+		try {
+			const response = await request(app)
+				.get('/api/status')
+				.set('x-api-key', 'status-key');
+
+			expect(response.status).toBe(200);
+			const mcpTools = response.body.dependencies.tradingViewMcp.mcpTools;
+			expect(mcpTools.discoveredSource).toBe('fallback-static-catalog');
+			expect(mcpTools.discovered).toEqual(expect.arrayContaining(['coin_analysis', 'multi_agent_analysis']));
+			expect(mcpTools.wired.coin_analysis.wired).toBe(true);
+			expect(mcpTools.wired.multi_agent_analysis.wired).toBe(false);
+		} finally {
+			tradingViewMcpService.mcpToolInventory._fetch = originalFetch;
+		}
 	});
 
 	it('reports scanner presets as ephemeral when no Firestore gate is enabled', async () => {
@@ -1077,6 +1198,60 @@ describe('Status endpoints', () => {
 		expect(response.body.dependencies.alertSignalRepeatSuppression.enabled).toBe(true);
 	});
 
+	it('reports global alert budget as enabled by default with the default capacity', async () => {
+		delete process.env.GLOBAL_ALERT_BUDGET_PER_24H;
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.globalAlertBudget).toBe(true);
+		expect(response.body.dependencies.globalAlertBudget).toEqual(expect.objectContaining({
+			enabled: true,
+			used: 0,
+			capacity: 500,
+			remaining: 500,
+			resetAt: expect.any(String),
+		}));
+	});
+
+	it('reports global alert budget as disabled when capacity is set to 0', async () => {
+		process.env.GLOBAL_ALERT_BUDGET_PER_24H = '0';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.globalAlertBudget).toBe(false);
+		expect(response.body.dependencies.globalAlertBudget).toEqual(expect.objectContaining({
+			enabled: false,
+			used: 0,
+			capacity: 0,
+			remaining: 0,
+			resetAt: expect.any(String),
+		}));
+	});
+
+	it('reports global alert budget with a custom capacity', async () => {
+		process.env.GLOBAL_ALERT_BUDGET_PER_24H = '100';
+
+		const response = await request(app)
+			.get('/api/capabilities')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.featureFlags.globalAlertBudget).toBe(true);
+		expect(response.body.dependencies.globalAlertBudget).toEqual(expect.objectContaining({
+			enabled: true,
+			used: 0,
+			capacity: 100,
+			remaining: 100,
+			resetAt: expect.any(String),
+		}));
+	});
+
 	it('reports alert cross-timeframe suppression as disabled by default', async () => {
 		delete process.env.ENABLE_ALERT_CROSS_TF_SUPPRESSION;
 		delete process.env.ALERT_CROSS_TF_WINDOW_MS;
@@ -1370,6 +1545,28 @@ describe('Status endpoints', () => {
 		expect(JSON.stringify(response.body.dependencies.langfusePrompts)).not.toContain('pk-lf-status-public');
 	});
 
+	it('exposes sanitized durable prompt drift status on /api/status', async () => {
+		const { promptDriftService } = require('../../src/services/prompts/PromptDriftService');
+		promptStatusSpies.push(jest.spyOn(promptDriftService, 'refresh').mockResolvedValue(true));
+		promptStatusSpies.push(jest.spyOn(promptDriftService, 'getStatus').mockReturnValue({
+			durableReadReady: true,
+			driftCount24h: 2,
+			lastDriftDetectedAt: '2026-10-28T08:00:00.000Z',
+			lastDriftPromptName: 'alert-enrichment',
+		}));
+
+		const response = await request(app).get('/api/status').set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(promptDriftService.refresh).toHaveBeenCalled();
+		expect(response.body.dependencies.promptLifecycle).toEqual({
+			durableReadReady: true,
+			driftCount24h: 2,
+			lastDriftDetectedAt: '2026-10-28T08:00:00.000Z',
+			lastDriftPromptName: 'alert-enrichment',
+		});
+	});
+
 	it('exposes prompt-resolution telemetry on /api/capabilities with per-prompt resolved source', async () => {
 		process.env.ENABLE_LANGFUSE_PROMPTS = 'true';
 		process.env.LANGFUSE_PUBLIC_KEY = 'pk-lf-status-public';
@@ -1606,6 +1803,7 @@ describe('Status endpoints', () => {
 			lastSuccessAt: null,
 			lastFailureAt: null,
 			lastErrorReason: null,
+			circuitBreaker: defaultCircuitBreaker,
 			supportedExchanges: ['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD'],
 			timeoutMs: 5000,
 			rpm: 0,
@@ -2337,6 +2535,7 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'misconfigured',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.geminiQuota).toEqual(expect.objectContaining({
 			enabled: true,
@@ -2362,6 +2561,7 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 	});
 
@@ -2459,6 +2659,7 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 	});
 
@@ -2496,6 +2697,7 @@ describe('Status endpoints', () => {
 			configured: true,
 			ready: true,
 			status: 'ready',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.newsMonitorLlm).toEqual({
 			enabled: true,
@@ -2527,6 +2729,7 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'disabled',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.braveSearch).toEqual({
 			enabled: true,
@@ -2616,6 +2819,7 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'disabled',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.newsMonitorLlm).toEqual({
 			enabled: true,
@@ -2644,6 +2848,7 @@ describe('Status endpoints', () => {
 			configured: false,
 			ready: false,
 			status: 'disabled',
+			circuitBreaker: defaultCircuitBreaker,
 		});
 		expect(response.body.dependencies.newsMonitorLlm).toEqual({
 			enabled: true,
@@ -2736,7 +2941,7 @@ describe('Status endpoints', () => {
 		expect(response.status).toBe(200);
 		expect(response.body.featureFlags.marketScanner).toBe(true);
 		expect(response.body.featureFlags.tradingViewMcpEnrichment).toBe(false);
-		expect(response.body.dependencies.tradingViewMcp).toEqual({
+		expect(response.body.dependencies.tradingViewMcp).toEqual(expect.objectContaining({
 			enabled: true,
 			configured: true,
 			ready: false,
@@ -2759,6 +2964,9 @@ describe('Status endpoints', () => {
 				failureThreshold: 5,
 				cooldownMs: 600000,
 			},
+			mcpTools: expect.objectContaining({
+				discoveredSource: 'fallback-static-catalog',
+			}),
 			warmup: {
 				enabled: true,
 				running: false,
@@ -2786,7 +2994,7 @@ describe('Status endpoints', () => {
 				invalid_response: 0,
 				request_failed: 0,
 			},
-		});
+		}));
 	});
 
 	it('keeps observed MCP readiness visible after an always-mounted consumer uses it', async () => {
@@ -3320,6 +3528,11 @@ describe('Status endpoints', () => {
 		expect(response.status).toBe(200);
 		expect(response.body.service.environment).toBe('preview');
 		expect(response.body.featureFlags.telegramBot).toBe(true);
+		expect(response.body.featureFlags.priceQuoteCache).toBe(true);
+		expect(response.body.dependencies.priceQuoteCache).toMatchObject({
+			enabled: true, mode: 'in-memory', storage: 'memory',
+			ttlMs: { crypto: 15000, equity: 60000 }, maxEntriesPerBucket: 256,
+		});
 		expect(response.body.deliveryChannels.telegram).toEqual({ enabled: false, status: 'disabled' });
 		expect(response.body.dependencies.telegram.ready).toBe(false);
 	});

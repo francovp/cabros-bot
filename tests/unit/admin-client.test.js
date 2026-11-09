@@ -276,7 +276,7 @@ const createControllableStream = () => {
 	};
 };
 
-function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', firebase, location = {} }) {
+function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', firebase, location = {}, environmentBanner = null }) {
 	const body = new FakeElement('body');
 	const elementsById = {};
 	[
@@ -295,6 +295,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		['clear-key', 'button', { type: 'button' }],
 		['connection-form', 'form', {}],
 		['view', 'section', {}],
+		['environment-banner', 'section', { hidden: true }],
 		['view-status', 'p', { role: 'status' }],
 		['sse-status', 'div', { role: 'status' }],
 		['sse-label', 'span', {}],
@@ -380,6 +381,7 @@ function createBrowser({ fetchImpl, confirm = () => true, storedKey = '', fireba
 		URL,
 		URLSearchParams,
 		fetch: jest.fn(async (url, options) => {
+			if (url.endsWith('/api/banner')) return response(environmentBanner);
 			if (url === '/admin/auth-config' && !firebase) return response({ enabled: false, configured: false });
 			return fetchImpl(url, options);
 		}),
@@ -465,6 +467,67 @@ async function selectView(browser, name) {
 }
 
 describe('admin browser client', () => {
+	it('renders an alert preview without dispatching a live test send', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {
+				ok: true, dryRun: true, persisted: false,
+				formatted: { telegram: { text: 'BTC\\.USDT' } },
+			}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+		const form = findForm(browser.elementsById.view, 'Alert preview');
+		expect(form).toBeDefined();
+		expect(findAll(form, (node) => node.name === 'telegram')[0].type).toBe('checkbox');
+		form.elements.text.value = 'BTC.USDT';
+		await form.dispatch('submit');
+		await flush();
+		const calls = browser.context.fetch.mock.calls.filter(([url]) => url === '/api/admin/test-alert');
+		expect(calls).toHaveLength(1);
+		expect(JSON.parse(calls[0][1].body)).toEqual(expect.objectContaining({ text: 'BTC.USDT', dryRun: true, testMode: true }));
+		expect(form.textContent).toContain('BTC\\.USDT');
+	});
+
+	it('reports a failed test send even when the endpoint returns HTTP 200', async () => {
+		const browser = createBrowser({
+			storedKey: 'test-key',
+			fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {
+				ok: false, dryRun: false, results: [{ channel: 'telegram', success: false, error: { code: 'DELIVERY_FAILED' } }],
+			}),
+		});
+		await flush();
+		await selectView(browser, 'alerts');
+		const form = findForm(browser.elementsById.view, 'Alert preview');
+		form.elements.text.value = 'Test message';
+		form.elements.telegramChatId.value = '123456789';
+		await findButton(form, 'Send test').dispatch('click');
+		await flush();
+		expect(form.textContent).toContain('Test alert delivery failed');
+		expect(form.textContent).toContain('DELIVERY_FAILED');
+		expect(form.textContent).not.toContain('Test alert dispatched');
+	});
+
+	it('requires an explicit test destination before sending', async () => {
+		const browser = createBrowser({ storedKey: 'test-key', fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}) });
+		await flush();
+		await selectView(browser, 'alerts');
+		const form = findForm(browser.elementsById.view, 'Alert preview');
+		form.elements.text.value = 'Test message';
+		await findButton(form, 'Send test').dispatch('click');
+		await flush();
+		expect(form.textContent).toContain('Telegram test chat ID is required');
+		expect(browser.context.fetch.mock.calls.filter(([url]) => url === '/api/admin/test-alert')).toHaveLength(0);
+	});
+
+	it('renders the Alerts view when browser storage is blocked', async () => {
+		const browser = createBrowser({ fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}) });
+		Object.defineProperty(browser.context.window, 'localStorage', { get() { throw new Error('Storage blocked'); } });
+		await flush();
+		await selectView(browser, 'alerts');
+		expect(findForm(browser.elementsById.view, 'Alert preview')).toBeDefined();
+	});
+
 	it('uses visual controls instead of editable JSON throughout the console', async () => {
 		const browser = createBrowser({ fetchImpl: async (url) => response(url === '/openapi.json' ? contract : {}) });
 		await flush();
@@ -10368,5 +10431,28 @@ describe('structured analysis forms', () => {
 		const viewText = browser.elementsById.view.textContent;
 		expect(viewText).toContain('News monitor paused');
 		expect(viewText).not.toContain('All configured services and delivery channels operating normally');
+	});
+});
+
+
+describe('admin environment banner', () => {
+	it('renders custom staging metadata and copies the selected API base without a query string', async () => {
+		const browser = createBrowser({
+			location: { search: '?backend=https%3A%2F%2Fopenclaw.tail5e4271.ts.net' },
+			environmentBanner: { environment: 'staging-eu', commit: null, name: 'bot' },
+			fetchImpl: async (url) => url.endsWith('/api/banner')
+				? response({ environment: 'staging-eu', commit: null, name: 'bot' })
+				: response({}),
+		});
+		await flush();
+		const host = browser.elementsById['environment-banner'];
+		expect(host.hidden).toBe(false);
+		expect(host.textContent).toContain('staging-eu');
+		expect(host.textContent).not.toContain('null');
+		const writeText = jest.fn().mockResolvedValue(undefined);
+		browser.context.navigator = { clipboard: { writeText } };
+		const button = find(host, (node) => node.tagName === 'BUTTON');
+		await button.dispatch('click');
+		expect(writeText).toHaveBeenCalledWith('https://openclaw.tail5e4271.ts.net');
 	});
 });

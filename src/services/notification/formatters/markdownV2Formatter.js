@@ -62,6 +62,30 @@ function smartEscapeMarkdownV2(text) {
 	return text;
 }
 
+function findPotentialInvalidLines(text = '') {
+	const reserved = new Set(SPECIAL_CHARS.filter((char) => char !== '\\'));
+	return String(text).split('\n').flatMap((line, index) => {
+		let escaped = false;
+		let punctuation = false;
+		let underscores = 0;
+		let asterisks = 0;
+		for (const char of line) {
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			if (char === '\\') {
+				escaped = true;
+				continue;
+			}
+			if (reserved.has(char)) punctuation = true;
+			if (char === '_') underscores += 1;
+			if (char === '*') asterisks += 1;
+		}
+		return punctuation || underscores % 2 || asterisks % 2 ? [index + 1] : [];
+	});
+}
+
 function formatTokenUsageMarkdown(tokenUsage) {
 	if (!tokenUsage) return '';
 	const input = Number(tokenUsage.inputTokens) || 0;
@@ -398,6 +422,7 @@ MarkdownV2Formatter.formatSignalClassMarker = (signalClass, options = {}) => for
 
 module.exports = MarkdownV2Formatter;
 module.exports.smartEscapeMarkdownV2 = smartEscapeMarkdownV2;
+module.exports.findPotentialInvalidLines = findPotentialInvalidLines;
 module.exports.escapeRiskFieldValue = escapeRiskFieldValue;
 module.exports.formatSignalClassMarker = (signalClass, options = {}) => formatSignalClassMarker(signalClass, { markdownV2: true, ...options });
 

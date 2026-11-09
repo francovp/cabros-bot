@@ -260,8 +260,148 @@ function scoreScannerItem(item, scanType, options = {}) {
 	if (trendConfluence) {
 		result.trendConfluence = trendConfluence;
 	}
+	const positionSizing = computePositionSizing(item, options);
+	if (positionSizing) {
+		result.positionSizing = positionSizing;
+	}
 
 	return result;
+}
+
+/**
+ * Default ATR multiplier for stop distance. The position sizing hint sets the
+ * stop at `atrMultiplier * ATR` away from entry; the default of 2.0 reflects a
+ * common intraday setup where the stop is twice the average true range.
+ */
+const DEFAULT_ATR_MULTIPLIER = 2.0;
+
+/**
+ * Default account risk percentage per trade (1% by default). Position size is
+ * derived as `(accountRiskPct / suggestedStopPct) * 100` because both inputs
+ * are percentages. The result is capped at 100% of capital (no leverage).
+ */
+const DEFAULT_ACCOUNT_RISK_PCT = 1.0;
+
+/**
+ * Compute volatility-adjusted position sizing hints from MCP indicators.
+ *
+ * Returns null when the inputs are insufficient (no ATR or no positive price)
+ * so the caller can fall through to the regular scanner output without
+ * breaking scoring, persistence, or report rendering. A rejected or missing
+ * ATR never crashes the pipeline.
+ *
+ * The returned object intentionally exposes raw numeric values (rounded) so
+ * downstream report renderers and the `/api/webhook/market-scanner-alert`
+ * response can format them with their own locale; only the derived
+ * `suggestedPositionPct` is rounded to two decimals because it is the only
+ * percentage the report formats inline.
+ *
+ * @param {Object} item - Scanner item from MCP result
+ * @param {Object} [options] - Optional position-sizing options
+ * @param {number} [options.atrMultiplier] - Stop distance in multiples of ATR
+ * @param {number} [options.accountRiskPct] - Account risk percentage per trade
+ * @returns {null | { atr: number, atrPercent: number, suggestedStopPct: number, suggestedPositionPct: number, minRiskRewardRatio: number|null }}
+ */
+function computePositionSizing(item = {}, options = {}) {
+	const atrMultiplier = numberOrNull(options.atrMultiplier);
+	const accountRiskPct = numberOrNull(options.accountRiskPct);
+
+	const atr = resolveAtr(item);
+	const price = resolvePrice(item);
+
+	if (atr === null || atr <= 0 || price === null || price <= 0) {
+		return null;
+	}
+
+	const atrPercent = (atr / price) * 100;
+	if (!Number.isFinite(atrPercent) || atrPercent <= 0) {
+		return null;
+	}
+
+	const effectiveAtrMultiplier = (atrMultiplier === null || atrMultiplier <= 0)
+		? DEFAULT_ATR_MULTIPLIER
+		: atrMultiplier;
+	const suggestedStopPct = atrPercent * effectiveAtrMultiplier;
+	// A spot/long ATR stop at 100% or more would be at or below zero.
+	if (!Number.isFinite(suggestedStopPct) || suggestedStopPct >= 100) {
+		return null;
+	}
+
+	const effectiveAccountRiskPct = (accountRiskPct === null || accountRiskPct <= 0)
+		? DEFAULT_ACCOUNT_RISK_PCT
+		: accountRiskPct;
+	const uncappedPositionPct = (effectiveAccountRiskPct / suggestedStopPct) * 100;
+	const suggestedPositionPct = Math.min(100, uncappedPositionPct);
+
+	const minRiskRewardRatio = resolveMinRiskRewardRatio(item);
+
+	return {
+		atr: roundTo(atr, 6),
+		atrPercent: roundTo(atrPercent, 4),
+		suggestedStopPct: roundTo(suggestedStopPct, 4),
+		suggestedPositionPct: Number.isFinite(suggestedPositionPct) && suggestedPositionPct > 0
+			? roundTo(suggestedPositionPct, 2)
+			: null,
+		minRiskRewardRatio: minRiskRewardRatio === null
+			? null
+			: roundTo(minRiskRewardRatio, 2),
+	};
+}
+
+function resolveAtr(item = {}) {
+	const candidates = [
+		item.indicators?.atr,
+		item.indicators?.ATR,
+		item.atr,
+		item.ATR,
+	];
+	for (const candidate of candidates) {
+		const numeric = numberOrNull(candidate);
+		if (numeric !== null && numeric > 0) {
+			return numeric;
+		}
+	}
+	return null;
+}
+
+function resolvePrice(item = {}) {
+	const candidates = [
+		item.indicators?.close,
+		item.close,
+		item.price,
+		item.indicators?.price,
+	];
+	for (const candidate of candidates) {
+		const numeric = numberOrNull(candidate);
+		if (numeric !== null && numeric > 0) {
+			return numeric;
+		}
+	}
+	return null;
+}
+
+function resolveMinRiskRewardRatio(item = {}) {
+	const candidates = [
+		item.minRiskRewardRatio,
+		item.min_risk_reward_ratio,
+		item.riskRewardRatio,
+		item.indicators?.riskRewardRatio,
+	];
+	for (const candidate of candidates) {
+		const numeric = numberOrNull(candidate);
+		if (numeric !== null && numeric > 0) {
+			return numeric;
+		}
+	}
+	return null;
+}
+
+function roundTo(value, decimals) {
+	if (!Number.isFinite(value)) {
+		return null;
+	}
+	const factor = 10 ** decimals;
+	return Math.round(value * factor) / factor;
 }
 
 /**
@@ -278,12 +418,13 @@ function rankScannerItems(items, scanType, options = {}) {
 	}
 
 	const scored = items.map((item) => {
-		const { score, reason, trendConfluence } = scoreScannerItem(item, scanType, options);
+		const { score, reason, trendConfluence, positionSizing } = scoreScannerItem(item, scanType, options);
 		return {
 			...item,
 			_score: score,
 			_scoreReason: reason,
 			...(trendConfluence ? { _trendConfluence: trendConfluence } : {}),
+			...(positionSizing ? { _positionSizing: positionSizing } : {}),
 		};
 	});
 
@@ -489,6 +630,9 @@ module.exports = {
 	scoreScannerItem,
 	rankScannerItems,
 	resolveTrendConfluence,
+	computePositionSizing,
+	DEFAULT_ATR_MULTIPLIER,
+	DEFAULT_ACCOUNT_RISK_PCT,
 	normalizeTrendDirection,
 	normalizeConfluenceStatus,
 	numberOrNull,

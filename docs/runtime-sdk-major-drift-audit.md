@@ -36,7 +36,7 @@ Per the alignment plan in GH-1170:
 | `ioredis` | `5.11.1` | `6.0.0` | Redis client backing BullMQ queue & worker | **Compatibility Hold** | 2026-12-31 |
 | `openai` | `4.104.0` | `7.20.0` | `src/services/grounding/cloudflareAiGateway.js` | **Compatibility Hold** | 2026-12-31 |
 | `binance` | `2.15.22` | `3.6.5` | Crypto price lookup, gated Spot order execution | **Compatibility Hold** | 2026-12-31 |
-| `undici` | `6.28.0` | `8.10.2` | Native fetch dispatcher & connection pool agent | **Compatibility Hold** | 2026-12-31 |
+| `undici` | `6.29.0` | `8.11.2` | Native fetch dispatcher & connection pool agent | **Compatibility Hold** | 2026-12-31 |
 | `uuid` | `11.1.1` | `14.0.2` | Request tracing, job IDs, idempotency deduplication | **Compatibility Hold** | 2026-12-31 |
 | `helmet` | `7.2.0` | `8.3.0` | Express security headers & CSP middleware | **Compatibility Hold** | 2026-12-31 |
 | `dotenv` | `16.6.1` | `18.0.1` | Application environment initialization | **Compatibility Hold** | 2026-12-31 |
@@ -61,6 +61,7 @@ Per the alignment plan in GH-1170:
 - **Compatibility Hold Rationale:** Firestore write sanitization (stripping `undefined` properties), idempotency claims, and transaction leases are battle-tested on v12.
 - **Revisit Trigger:** Node engine upgrade or Firebase Admin v12 end-of-life.
 - **Verification Requirement:** `pnpm test:firebase` against local emulator suite, test ID-token verification, test Remote Config retrieval and publishing.
+- **Advisory Note (#872):** The critical `protobufjs` RCE (`GHSA-xq3m-2v4x-88gg`) on the Firestore wire decoder is cleared by a pinned transitive version, **not** by this migration. The 12 → 14 move relocates `admin.credential` to top-level `cert`/`applicationDefault` and drops `admin.firestore` as a property, breaking every storage service at runtime while the mocked test suite stays green. See Section 4.1.
 
 ### 3.3. `bullmq` (5.81.3 → 6.x) & `ioredis` (5.11.1 → 6.x)
 - **Role:** Asynchronous job queue for background TradingView technical analysis and Render worker processing.
@@ -86,11 +87,11 @@ Per the alignment plan in GH-1170:
 - **Revisit Trigger:** Binance API protocol migration or Spot API breaking revisions.
 - **Verification Requirement:** `tests/unit/binanceOrders.test.js`, dry-run order validation, filter step-size arithmetic, and price resolution tests.
 
-### 3.6. `undici` (6.28.0 → 8.x)
+### 3.6. `undici` (6.29.0 → 8.x)
 - **Role:** Custom HTTP dispatcher and connection pooling agent for external requests.
 - **Breaking Changes:** v7/v8 modifies Dispatcher pool lifecycle, request options, and error classes.
 - **Risk Assessment:** Medium. Affects global HTTP timeout handling and connection reuse.
-- **Compatibility Hold Rationale:** v6.28.0 is tightly integrated with Node 24 native `fetch` and custom pool configurations.
+- **Compatibility Hold Rationale:** v6.29.0 is tightly integrated with Node 24 native `fetch` and custom pool configurations. Bumped from 6.28.0 by #872 for `GHSA-rfgv-xxqx-mfg5`; still the 6.x line.
 - **Revisit Trigger:** Node.js native fetch upgrades or HTTP/2 requirement changes.
 - **Verification Requirement:** Verify timeout handling, connection keep-alive, and proxy support.
 
@@ -128,6 +129,77 @@ Weekly Dependabot scans will continue to open pull requests for **patch** and **
 
 Any major SDK version upgrade must be conducted via a human- or agent-led migration initiative adhering to the verification checklist outlined in Section 3.
 
+### 4.1 Advisory Remediation Without a Major Migration (Issue #872)
+
+An advisory against a locked version does **not** by itself authorize a semver-major migration.
+Criterion 4 of Section 5 promotes a package for *attention*, but the remedy for most advisories is
+a pinned transitive version, not a framework change. The gate is:
+
+```bash
+pnpm run audit:gate   # must exit 0; equivalent to `pnpm audit --audit-level=high`
+```
+
+The gate is a **separate command, not part of `pnpm test`**, because it queries the npm registry
+while the default Jest suite is documented to need no external network access. CI runs
+`pnpm run audit:gate` as its own step. It exits `1` on any high or critical advisory, and `2` when
+the audit report cannot be parsed — a registry outage must never be reported as a clean tree.
+
+**Where an override is declared.** pnpm 10 reads `overrides` and `auditConfig` from
+`pnpm-workspace.yaml`. The `pnpm` field in `package.json` is *ignored* — pnpm prints a warning and
+silently skips it, so an override placed there is inert while appearing configured.
+`tests/unit/dependency-advisory-remediation.test.js` fails if a `pnpm.overrides` block reappears in
+`package.json`, because that failure mode is invisible until an advisory returns.
+
+**Order of preference.** Escalate in this order, and stop at the first step that clears the
+advisory:
+
+1. **Patch or minor bump of the direct dependency.** Always preferred; no override needed.
+2. **Scoped transitive override** in `pnpm-workspace.yaml` (`parent>child` when a bare name would
+   drag an unrelated major onto a caller). `express>path-to-regexp: 0.1.13` is the worked example:
+   it clears the Express 4 route ReDoS without the Express 5 migration Section 3 treats as a
+   first-party decision.
+3. **Drop an unused optional dependency** with `-`. `binance` declares `webpack`, `ts-loader`,
+   `source-map-loader` and `webpack-cli` as *optional* — they exist to build the published package
+   and are never exercised by consuming it. Removing them deleted 44 packages and, with them, the
+   unpatchable `braces` advisory that no version bump could ever fix.
+4. **`auditConfig.ignoreGhsas`** — last resort, and only with a written reachability argument
+   recorded next to the ignore in `pnpm-workspace.yaml`.
+
+**A pin that fixes an advisory must not break a consumer that calls it.** The `minimatch` case is
+the worked example of why step 2 says *scoped*. Two high ReDoS advisories cover it —
+`GHSA-23c5-xmqv-rm74` (nested `*()` extglobs) and `GHSA-7r86-cg39-jmmj` (non-adjacent GLOBSTAR
+backtracking) — and each is patched on every major line at a *different* floor: `3.x→3.1.4`,
+`5.x→5.1.8`, `6.x→6.2.2`, `9.x→9.0.7`, `10.x→10.2.3`. A bare `minimatch:` override therefore does
+not just choose a version, it forces one major onto every consumer in the tree, and minimatch 10's
+CommonJS entry point is a namespace object rather than the directly-callable export that the 3.x and
+6.x lines ship. `nodemon`, `test-exclude@6` and `superstatic` all call `minimatch(...)` directly, so
+the global pin turned `pnpm run start-dev` into `TypeError: minimatch is not a function` on the first
+watched-file change. Each consumer is instead pinned to its own major at that line's floor
+(`nodemon>minimatch`, `firebase-tools>minimatch`, `test-exclude@6>minimatch`, `superstatic>minimatch`,
+`glob@10>minimatch`), which clears both advisories while leaving every caller's API contract intact.
+This is the same rule as the `firebase-admin` hold one layer down: a dependency's *declared* range is
+part of its contract. Two tests pin it — no bare `minimatch:` override, and `require('minimatch')`
+resolved from nodemon's and superstatic's own directories is still a function.
+
+**An ignore requires a reachability proof, not a risk tolerance.** The single current ignore,
+`GHSA-86w9-cpqp-85rv` (node-forge RSA PKCS#1 v1.5 verification), has no patched release at any
+version. It is suppressed because `firebase-admin` calls exactly one node-forge function —
+`forge.pki.privateKeyFromPem()`, to parse a key we supply ourselves — and never reaches the
+signature-verification path the advisory describes. A test asserts that the call surface stays at
+`forge.pki`, so the justification cannot silently become false after an SDK bump.
+
+**Superseded majors stay held.** Upgrading to clear an advisory would have meant `firebase-admin`
+12 → 14, which relocates `admin.credential` to top-level `cert`/`applicationDefault` and removes
+`admin.firestore` as a property. That is a breaking change across every storage service, and the
+test suite mocks `firebase-admin` — so the migration would have passed CI and broken at runtime.
+The `protobufjs` override clears the same critical advisory (the Firestore wire decoder,
+`GHSA-xq3m-2v4x-88gg`) with no API change, which is why `firebase-admin` remains on 12.x.
+
+**Re-verify after every change to the dependency tree.** `pnpm run audit:gate` re-checks the
+advisory surface, `pnpm test` covers the unit and integration surfaces, and `pnpm test:firebase`
+exercises the real Admin SDK against the emulator — which is the only thing that proves the pinned
+`protobufjs` still decodes Firestore responses correctly. See Section 6, Stage 2.
+
 ---
 
 ## 5. Migration Prioritization Framework
@@ -144,7 +216,9 @@ version gap looks — a two-major gap in a leaf utility outranks a one-major gap
 | 4 | **Security exposure** | Are there advisories against the currently locked version? | The one criterion that can *accelerate* a migration ahead of the normal order. |
 
 Criteria 1–3 set the default sequence. Criterion 4 is an override: a live advisory promotes a
-package immediately and out of order, ahead of anything merely queued behind it.
+package immediately and out of order, ahead of anything merely queued behind it. It promotes
+*attention*, not necessarily a migration — check Section 4.1 first, because for most advisories the
+correct remedy is a pinned transitive version rather than a semver-major move.
 
 Applying the framework yields the sequence already recorded in GH-1170:
 

@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const SwaggerParser = require('@apidevtools/swagger-parser');
+const Ajv2020 = require('ajv/dist/2020');
 const MarkdownV2Formatter = require('../../src/services/notification/formatters/markdownV2Formatter');
 const { getMountedApiOperations } = require('../helpers/api-operations');
 
@@ -16,6 +17,51 @@ function getDocumentedApiOperations(contract) {
 }
 
 describe('OpenAPI contract', () => {
+	it('documents sanitized runtime validation errors for the six webhook routes', () => {
+		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
+		const paths = [
+			'/api/webhook/alert',
+			'/api/webhook/message',
+			'/api/webhook/expanded-analysis-alert',
+			'/api/webhook/market-scanner-alert',
+			'/api/webhook/volume-confirmation',
+			'/api/webhook/symbol-analysis',
+		];
+		const issueSchema = contract.components.schemas.RequestValidationIssue;
+		const errorSchema = contract.components.schemas.RequestValidationError;
+		const response = contract.components.responses.WebhookRequestValidationError;
+
+		expect(issueSchema.required).toEqual(['location', 'path', 'keyword']);
+		expect(issueSchema.additionalProperties).toBe(false);
+		expect(issueSchema.properties.location.enum).toEqual(['body', 'query', 'path']);
+		expect(issueSchema.properties.keyword.description).toContain('contentType');
+		expect(errorSchema.properties.code.const).toBe('VALIDATION_ERROR');
+		const ajv = new Ajv2020({ strict: false });
+		for (const [name, schema] of Object.entries(contract.components.schemas)) {
+			ajv.addSchema(schema, `#/components/schemas/${name}`);
+		}
+		const validateError = ajv.compile(response.content['application/json'].schema);
+		const safeExample = response.content['application/json'].examples.validationError.value;
+		expect(validateError(safeExample)).toBe(true);
+		expect(validateError({
+			...safeExample,
+			details: { ...safeExample.details, rawInput: 'sensitive-value' },
+		})).toBe(false);
+		expect(validateError({
+			...safeExample,
+			details: {
+				errors: [{ ...safeExample.details.errors[0], message: 'sensitive-value' }],
+			},
+		})).toBe(false);
+		expect(response.content['application/json'].examples.validationError.value.details.errors[0])
+			.toEqual({ location: 'body', path: '/text', keyword: 'required' });
+
+		for (const path of paths) {
+			expect(contract.paths[path].post.responses['400'].$ref)
+				.toBe('#/components/responses/WebhookRequestValidationError');
+		}
+	});
+
 	it('documents body-only auto-trade and the live occurrence identity', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const properties = contract.components.schemas.AlertRequest.properties;
@@ -163,6 +209,7 @@ describe('OpenAPI contract', () => {
 			'GET /api/alerts', 'GET /api/alerts/replays', 'GET /api/alerts/summary', 'GET /api/alerts/export',
 			'GET /api/alerts/{alertId}', 'POST /api/alerts/{alertId}/replay',
 			'POST /api/alerts/feedback', 'GET /api/alerts/feedback/summary',
+			'POST /api/alerts/{alertId}/acknowledge', 'GET /api/alerts/{alertId}/acknowledgements/breakdown',
 			'POST /api/alerts/batch/replay', 'POST /api/alerts/batch/export', 'POST /api/alerts/batch/delete',
 			'GET /api/scanner-presets', 'POST /api/scanner-presets',
 			'GET /api/scanner-presets/{id}', 'PUT /api/scanner-presets/{id}',
@@ -174,12 +221,13 @@ describe('OpenAPI contract', () => {
 			'POST /api/jobs/tradingview-analysis', 'GET /api/jobs', 'GET /api/jobs/{jobId}',
 			'POST /api/jobs/{jobId}/cancel', 'POST /api/jobs/{jobId}/retry',
 			'POST /api/jobs/{jobId}/retry-failed', 'GET /api/outcomes', 'GET /api/outcomes/summary',
-			'GET /api/outcomes/calibration', 'GET /api/outcomes/export', 'GET /api/outcomes/{outcomeId}',
+			'GET /api/outcomes/calibration', 'GET /api/outcomes/trend', 'GET /api/outcomes/export', 'GET /api/outcomes/{outcomeId}',
+			'GET /api/portfolio/snapshot', 'GET /api/pretrade-check',
 			'GET /api/symbol-analyses', 'GET /api/symbol-analyses/summary',
 			'GET /api/trading/binance/orders', 'GET /api/trading/binance/orders/audit', 'POST /api/trading/binance/orders', 'DELETE /api/trading/binance/orders',
 			'GET /api/trading/binance/pause', 'POST /api/trading/binance/pause', 'POST /api/trading/binance/resume',
 			'GET /api/trading/binance/reconciliation', 'GET /api/trading/binance/reconciliation/{reservationId}', 'POST /api/trading/binance/reconciliation/{reservationId}',
-			'GET /api/status', 'GET /api/capabilities',
+			'GET /api/status', 'GET /api/capabilities', 'GET /api/enrollments', 'GET /api/metrics',
 			'POST /api/symbols/resolve', 'GET /api/symbols/aliases',
 			'POST /api/trading/binance/orders/preview', 'GET /api/trading/binance/account/balances',
 			'GET /api/trading/positions', 'GET /api/trading/pnl/summary', 'GET /api/trading/trades',
@@ -208,13 +256,18 @@ describe('OpenAPI contract', () => {
 			'POST /api/trading/binance/reconciliation/{reservationId}',
 		]);
 
+		// Public operations opt out of API-key auth by declaring `security: []`.
+		const publicOperations = new Set([
+			'GET /api/banner',
+		]);
+
 		for (const operation of operations) {
 			const operationKey = `${operation.method || 'UNKNOWN'} ${operation.path || ''}`;
 			if (unauthenticatedOperations.has(operationKey)) {
 				expect(operation.security).toBeUndefined();
 				continue;
 			}
-			const expected = [{ ApiKeyHeader: [] }, { ApiKeyQuery: [] }];
+			const expected = publicOperations.has(operationKey) ? [] : [{ ApiKeyHeader: [] }, { ApiKeyQuery: [] }];
 			if (binanceTradingOperations.has(operationKey)) {
 				expected.unshift({ BinanceTradingApiKeyHeader: [] }, { AdminApiKeyHeader: [] });
 			} else if (firebaseAdminOperations.has(operationKey)) {
@@ -246,9 +299,13 @@ describe('OpenAPI contract', () => {
 		const contract = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
 		const expectedRoles = {
 			'GET /api/status': 'admin.viewer',
+			'GET /api/metrics': 'admin.viewer',
 			'GET /api/outcomes': 'admin.viewer',
 			'GET /api/outcomes/summary': 'admin.viewer',
+			'GET /api/pretrade-check': 'admin.viewer',
+			'GET /api/portfolio/snapshot': 'admin.viewer',
 			'GET /api/outcomes/calibration': 'admin.viewer',
+			'GET /api/outcomes/trend': 'admin.viewer',
 			'GET /api/outcomes/export': 'admin.viewer',
 			'GET /api/outcomes/{outcomeId}': 'admin.viewer',
 			'GET /api/symbol-analyses': 'admin.viewer',
@@ -991,7 +1048,7 @@ describe('status dependency contract drift', () => {
 
 	it('documents XRequestIdHeader parameter on every non-probe API operation (issue #1272)', () => {
 		const spec = JSON.parse(fs.readFileSync(contractPath, 'utf8'));
-		const probeRoutes = ['/healthcheck', '/ready'];
+		const probeRoutes = ['/healthcheck', '/ready', '/livez', '/readyz'];
 		const missing = [];
 
 		for (const [routePath, operations] of Object.entries(spec.paths || {})) {
@@ -1050,7 +1107,7 @@ describe('status dependency contract drift', () => {
 		const alertResponses = spec.paths['/api/webhook/alert'].post.responses;
 		const schema = spec.components.schemas.ExpressErrorEnvelope;
 
-		expect(alertResponses['400'].$ref).toBe('#/components/responses/Error');
+		expect(alertResponses['400'].$ref).toBe('#/components/responses/WebhookRequestValidationError');
 		expect(alertResponses['500'].$ref).toBe('#/components/responses/ExpressFallthroughError');
 		expect(schema.required).toEqual(expect.arrayContaining([
 			'success',

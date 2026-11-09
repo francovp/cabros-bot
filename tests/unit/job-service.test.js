@@ -878,11 +878,13 @@ describe('JobService Unit Tests', () => {
 		});
 
 		it('preserves market-scanner enrichment options for background execution', async () => {
+			process.env.SCANNER_ATR_MULTIPLIER = '3';
+			process.env.SCANNER_ACCOUNT_RISK_PCT = '0.5';
 			tradingViewMcpService.callScanTool.mockResolvedValueOnce([
 				{
 					symbol: 'BINANCE:BTCUSDT',
 					changePercent: 3.5,
-					indicators: { close: 65000, RSI: 62 },
+					indicators: { close: 65000, RSI: 62, ATR: 1300 },
 					volume_ratio: 1.8,
 					breakout_type: 'bullish',
 				},
@@ -917,11 +919,15 @@ describe('JobService Unit Tests', () => {
 				signal: expect.any(AbortSignal),
 			});
 			expect(job.alertText).toContain('🔥 HTF ALIGNED 82%');
+			expect(job.alertText).toContain('Pos: 8.33% @ 0.50% risk');
+			process.env.SCANNER_ACCOUNT_RISK_PCT = '2';
+			job = await jobService.getJob(metadata.jobId);
 			expect(job.scanResults[0].scores[0]).toEqual(expect.objectContaining({
 				symbol: 'BINANCE:BTCUSDT',
 				score: expect.any(Number),
 				reason: expect.stringContaining('HTF aligned +10'),
 				trendConfluence: expect.objectContaining({ status: 'aligned', confidence: 82 }),
+				positionSizing: expect.objectContaining({ suggestedStopPct: 6, suggestedPositionPct: 8.33 }),
 			}));
 		});
 

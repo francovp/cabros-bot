@@ -136,6 +136,56 @@ describe('alert request ID resolution and echo', () => {
 			}));
 		});
 
+		it('omits drifted prompt risk fields from signal-outcome analytics while preserving the alert', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			enrichAlert.mockResolvedValue({
+				current_price: 65000,
+				invalidation_level: 63000,
+				target_level: 68000,
+				setup_type: 'breakout',
+				risk_reward_ratio: 2.5,
+				promptProvenance: { name: 'alert-enrichment', source: 'langfuse', version: 43, schemaDriftDetected: true },
+			});
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.recordSignal.mockResolvedValue(null);
+
+			const response = buildResponse();
+			await postAlert({})({ headers: {}, body: { text: 'BINANCE:BTCUSDT (1h) BUY' }, query: { useTradingViewData: 'true' } }, response);
+
+			expect(response.json).toHaveBeenCalled();
+			expect(signalOutcomeService.recordSignal).toHaveBeenCalledWith(expect.objectContaining({
+				price: 65000,
+				stop: null,
+				target: null,
+				invalidationLevel: null,
+				targetLevel: null,
+				setupType: 'tradingview-enrichment',
+				riskRewardRatio: null,
+			}));
+		});
+
+		it('keeps independent MCP levels when the Gemini prompt drifts', async () => {
+			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
+			enrichAlert.mockResolvedValue({
+				current_price: 65000,
+				invalidation_level: 63000,
+				target_level: 68000,
+				setup_type: 'breakout',
+				risk_reward_ratio: 1.5,
+				levelsSource: 'tradingview-mcp',
+				promptProvenance: { name: 'alert-enrichment', source: 'langfuse', version: 43, schemaDriftDetected: true },
+			});
+			signalOutcomeService.isEnabled.mockReturnValue(true);
+			signalOutcomeService.recordSignal.mockResolvedValue(null);
+			await postAlert({})({ headers: {}, body: { text: 'BINANCE:BTCUSDT (1h) BUY' }, query: { useTradingViewData: 'true' } }, buildResponse());
+			expect(signalOutcomeService.recordSignal).toHaveBeenCalledWith(expect.objectContaining({
+				stop: 63000,
+				target: 68000,
+				riskRewardRatio: 1.5,
+				setupType: 'tradingview-enrichment',
+			}));
+		});
+
 		it('normalizes derived quote provenance for Binance fallback prices', async () => {
 			process.env.ENABLE_TRADINGVIEW_MCP_ENRICHMENT = 'true';
 			enrichAlert.mockResolvedValue({
@@ -750,6 +800,26 @@ describe('alert request ID resolution and echo', () => {
 			expect(alertStorageService.saveAlert).toHaveBeenCalledWith(expect.objectContaining({
 				side: 'BUY',
 			}));
+		});
+
+		it('propagates the parsed exchange into the notification payload for gate resolution', async () => {
+			const response = buildResponse();
+			const handler = postAlert({});
+			await handler({
+				headers: {},
+				body: { text: 'NASDAQ:NVDA (1h) BUY' },
+				query: {},
+			}, response);
+
+			const manager = NotificationManager.mock.results
+				.map((r) => r.value)
+				.filter(Boolean)
+				.find((m) => m.sendToAll && m.sendToAll.mock.calls.length > 0);
+			expect(manager).toBeDefined();
+			expect(manager.sendToAll).toHaveBeenCalledWith(
+				expect.objectContaining({ exchange: 'NASDAQ' }),
+				expect.any(Object),
+			);
 		});
 	});
 });

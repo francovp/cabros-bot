@@ -191,6 +191,13 @@ describe('burstAggregator', () => {
 			})).toBeNull();
 		});
 
+		it('bypasses watchlist routing so each symbol is matched independently', () => {
+			expect(buildBurstGroupKey({
+				parsedSignal: signal('BTCUSDT'),
+				routing: { requireWatchlistMatch: true, telegramChatId: '12345' },
+			})).toBeNull();
+		});
+
 		it('bypasses an explicitly empty channel list', () => {
 			expect(buildBurstGroupKey({ parsedSignal: signal('BTCUSDT'), routing: { channels: [] } })).toBeNull();
 		});

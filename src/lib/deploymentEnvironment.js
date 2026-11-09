@@ -16,6 +16,13 @@ function isProductionLikeEnvironment(env = process.env) {
 		|| Boolean(env.RAILWAY_ENVIRONMENT_NAME);
 }
 
+function resolveDeploymentEnvironment(env = process.env) {
+	if (env.SENTRY_ENVIRONMENT) return env.SENTRY_ENVIRONMENT;
+	if (isPreviewEnvironment(env)) return 'preview';
+	if (isProductionLikeEnvironment(env)) return 'production';
+	return env.NODE_ENV || 'development';
+}
+
 function getDeploymentCommit(env = process.env) {
 	return env.RENDER_GIT_COMMIT
 		|| env.VERCEL_GIT_COMMIT_SHA
@@ -221,6 +228,7 @@ function formatVersionMessage(build = {}) {
 }
 
 module.exports = {
+	resolveDeploymentEnvironment,
 	getDeploymentCommit,
 	getDeploymentRepoSlug,
 	getDeploymentPlatform,
