@@ -78,6 +78,7 @@ const newsAnalysisStorageService = require('../services/storage/NewsAnalysisStor
 const {
 	isNewsMonitorPaused,
 	getNewsMonitorPauseState,
+	syncNewsMonitorPauseState,
 } = require('./webhooks/handlers/newsMonitor/pauseState');
 const { getVolumeTracker } = require('./webhooks/handlers/newsMonitor/volumeTracker');
 const { getSelfTestService } = require('./diagnostics/selftest');
@@ -1034,6 +1035,13 @@ async function getApiStatus(req, res) {
 		if (typeof binanceOrderService?.getPauseState === 'function') {
 			try {
 				await binanceOrderService.getPauseState();
+			} catch (_) {
+				// Fail-open for status endpoint
+			}
+		}
+		if (typeof syncNewsMonitorPauseState === 'function') {
+			try {
+				await syncNewsMonitorPauseState();
 			} catch (_) {
 				// Fail-open for status endpoint
 			}

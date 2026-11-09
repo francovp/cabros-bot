@@ -7,7 +7,7 @@ const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { getAnalyzer, setNotificationManager } = require('../../controllers/webhooks/handlers/newsMonitor/analyzer');
 const { getNotificationManager } = require('../../controllers/webhooks/handlers/alert/alert');
-const { isNewsMonitorPaused } = require('../../controllers/webhooks/handlers/newsMonitor/pauseState');
+const { isNewsMonitorPaused, syncNewsMonitorPauseState } = require('../../controllers/webhooks/handlers/newsMonitor/pauseState');
 const alertStorageService = require('../storage/AlertStorageService');
 const sentryService = require('../monitoring/SentryService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
@@ -87,6 +87,9 @@ class NewsMonitorSchedulerService {
 		this.lastRunErrorCount = 0;
 		this.lastError = null;
 		this.isPausedFn = options.isPaused || isNewsMonitorPaused;
+		this.syncPauseStateFn = options.syncPauseState !== undefined
+			? options.syncPauseState
+			: (options.isPaused ? null : syncNewsMonitorPauseState);
 	}
 
 	isEnabled() {
@@ -268,6 +271,14 @@ class NewsMonitorSchedulerService {
 		let executedCount = 0;
 		let errorCount = 0;
 		let lastErrorMessage = null;
+
+		if (typeof this.syncPauseStateFn === 'function') {
+			try {
+				await this.syncPauseStateFn();
+			} catch {
+				// Fail-open: do not throw into the sweep execution
+			}
+		}
 
 		if (!parseEnvBool(process.env.ENABLE_NEWS_MONITOR, false)) {
 			// News monitor is disabled — skip sweep entirely.
