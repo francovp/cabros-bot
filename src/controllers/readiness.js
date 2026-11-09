@@ -50,12 +50,14 @@ async function handleDependencyReadiness(req, res, options) {
 	const overrides = (req && req.app && req.app.locals && req.app.locals.readinessOverrides) || undefined;
 	const respond = (statusCode, body) => res.status(statusCode).json(body);
 	const withBootstrap = (body) => (bootstrap
-		? Object.assign({
+		? Object.assign({}, body, {
 			status: bootstrap.status,
 			components: bootstrap.components,
 			bootstrapReady: bootstrap.ready === true,
-			errorCode: bootstrap.errorCode || null,
-		}, body)
+			// A bootstrap failure is the more specific root cause: keep it when
+			// both failed so the probe failure does not mask it (#1296).
+			errorCode: bootstrap.errorCode || body.errorCode || null,
+		})
 		: body);
 
 	try {
