@@ -139,9 +139,11 @@ function _recordProviderSuccess() {
 	providerReadiness.lastSuccessAt = new Date().toISOString();
 }
 
-function _recordProviderFailure(reason) {
+function _recordProviderFailure(reason, { affectsReadiness = true } = {}) {
 	providerReadiness.requestsFailed += 1;
-	providerReadiness.consecutiveFailures += 1;
+	if (affectsReadiness) {
+		providerReadiness.consecutiveFailures += 1;
+	}
 	providerReadiness.lastFailureAt = new Date().toISOString();
 	providerReadiness.lastErrorReason = typeof reason === 'string' && KNOWN_REASONS.has(reason)
 		? reason
@@ -390,11 +392,17 @@ async function requestJson(path, params, timeoutOverride) {
 	if (!twelveDataCircuitBreaker.canExecute()) {
 		throw new EquityMarketDataError(REASONS.CIRCUIT_BREAKER_OPEN, { status: 503 });
 	}
+	const isHalfOpenProbe = twelveDataCircuitBreaker.isHalfOpen();
 
 	const totalTimeoutMs = timeoutOverride === undefined ? config.timeoutMs : parseTimeout(timeoutOverride);
 	const startMs = Date.now();
 
-	await waitForPacing(totalTimeoutMs);
+	try {
+		await waitForPacing(totalTimeoutMs);
+	} catch (error) {
+		if (isHalfOpenProbe) twelveDataCircuitBreaker.releaseProbe();
+		throw error;
+	}
 
 	const elapsedMs = Date.now() - startMs;
 	const remainingFetchTimeoutMs = Math.max(1, totalTimeoutMs - elapsedMs);
@@ -421,7 +429,7 @@ async function requestJson(path, params, timeoutOverride) {
 		try {
 			body = await response.json();
 		} catch {
-			throw new EquityMarketDataError(REASONS.INVALID_RESPONSE);
+			throw new EquityMarketDataError(REASONS.INVALID_RESPONSE, { status: response.status });
 		}
 
 		if (response.status === 429) {
@@ -457,10 +465,17 @@ async function requestJson(path, params, timeoutOverride) {
 		} else {
 			normalized = new EquityMarketDataError(REASONS.UNAVAILABLE, { cause: error });
 		}
-		if (normalized.reason !== REASONS.NO_DATA && normalized.reason !== REASONS.CIRCUIT_BREAKER_OPEN) {
+		const requestSpecificRejection = normalized.status === 400 || normalized.status === 404;
+		if (normalized.reason !== REASONS.NO_DATA
+			&& normalized.reason !== REASONS.CIRCUIT_BREAKER_OPEN
+			&& !requestSpecificRejection) {
 			twelveDataCircuitBreaker.recordFailure(normalized);
+		} else {
+			twelveDataCircuitBreaker.releaseProbe();
 		}
-		recordReadinessSafely(() => _recordProviderFailure(normalized.reason));
+		recordReadinessSafely(() => _recordProviderFailure(normalized.reason, {
+			affectsReadiness: !requestSpecificRejection,
+		}));
 		throw normalized;
 	} finally {
 		clearTimeout(timeoutId);

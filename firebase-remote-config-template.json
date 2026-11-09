@@ -93,14 +93,14 @@
     },
     "TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD": {
       "defaultValue": {
-        "value": "5"
+        "useInAppDefault": true
       },
       "description": "Consecutive MCP failures required to open the circuit breaker and page operators",
       "valueType": "NUMBER"
     },
     "TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS": {
       "defaultValue": {
-        "value": "600000"
+        "useInAppDefault": true
       },
       "description": "Circuit breaker open cooldown duration in milliseconds before half-open probe",
       "valueType": "NUMBER"
@@ -121,14 +121,14 @@
     },
     "CIRCUIT_BREAKER_THRESHOLD": {
       "defaultValue": {
-        "value": "5"
+        "useInAppDefault": true
       },
       "description": "Consecutive external API provider failures before circuit breaker opens",
       "valueType": "NUMBER"
     },
     "CIRCUIT_BREAKER_COOLDOWN_MS": {
       "defaultValue": {
-        "value": "60000"
+        "useInAppDefault": true
       },
       "description": "Cooldown duration in milliseconds before circuit breaker allows half-open probe",
       "valueType": "NUMBER"

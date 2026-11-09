@@ -526,6 +526,21 @@ Issue #750 adds `dependencies.promptLifecycle`: the last 24 hours of distinct dr
 
 The five Langfuse connection settings are **environment-only** for Remote Config parity: credentials are secrets, `LANGFUSE_BASE_URL` is an external destination, and the gate and label are resolved once at startup. `PROMPT_FALLBACK_ON_DRIFT` is a separate, non-secret runtime setting eligible for Remote Config.
 
+### External API Circuit Breakers (#610)
+
+Gemini grounding, Twelve Data equity data, and TradingView MCP each expose their process-local breaker in `/api/status` and `/api/capabilities` under `dependencies.<provider>.circuitBreaker`. The snapshot includes state, consecutive failures, open/state-change timestamps, failure threshold, and cooldown. `closed` allows requests, `open` fails fast, and `half-open` admits one recovery probe; success closes the breaker and a failed probe reopens it. The state resets on process restart.
+
+The breaker counts provider-wide timeouts, network errors, rate limits, and server failures. Twelve Data 400/404 symbol rejections and empty-data results do not count as provider outages. Gemini query derivation falls back to the raw alert while its breaker is unavailable; TradingView MCP retains its existing operator paging behavior.
+
+| Setting | Type and bounds | Default | Description |
+| --- | --- | ---: | --- |
+| `CIRCUIT_BREAKER_THRESHOLD` | integer, 1–100 | `5` | Consecutive failures before Gemini and Twelve Data breakers open; explicit TradingView fallback when no provider-specific value is set. |
+| `CIRCUIT_BREAKER_COOLDOWN_MS` | integer, 1,000–86,400,000 | `60000` | Open duration before the half-open probe for Gemini and Twelve Data; explicit TradingView fallback when no provider-specific value is set. |
+| `TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD` | integer, 1–100 | `5` | TradingView-specific failure threshold; takes precedence over the generic threshold. |
+| `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` | integer, 1,000–86,400,000 | `600000` | TradingView-specific cooldown; preserves the 10-minute default and takes precedence over the generic cooldown. |
+
+TradingView resolves an explicit provider-specific Remote Config value first, then its provider-specific environment value, then an explicitly configured generic Remote Config value, then the generic environment value, and finally its provider-specific default. A Remote Config value takes precedence over the environment value for the same setting. The Firebase template uses the in-app defaults so an unconfigured provider-specific default does not mask an explicit generic setting.
+
 ### Equity Market Data Readiness
 
 `ENABLE_EQUITY_MARKET_DATA=true` plus `EQUITY_MARKET_DATA_PROVIDER=twelve-data` and `TWELVE_DATA_API_KEY` enables equity outcome evaluation for `BATS`, `NASDAQ`, `NYSE`, `AMEX`, `NYSE ARCA`, `FX_IDC`, and `SPCFD` signals. Setting those variables is **necessary but not sufficient**, so `/api/status` will not report the feature as working on the strength of the key alone.

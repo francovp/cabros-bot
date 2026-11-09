@@ -86,13 +86,13 @@ function getCoalescingStatus() {
  * @returns {Promise<string>} Optimized search query
  */
 async function deriveSearchQuery(alertText, opts = {}) {
-	if (geminiCircuitBreaker.isOpen()) {
-		console.warn('[Grounding] Gemini circuit breaker is OPEN, falling back to raw alert text');
+	if (tokenCostBudgetService.isBudgetExceeded()) {
+		console.warn('[Grounding] Daily token cost budget exceeded, returning raw alert text as search query');
 		return alertText;
 	}
 
-	if (tokenCostBudgetService.isBudgetExceeded()) {
-		console.warn('[Grounding] Daily token cost budget exceeded, returning raw alert text as search query');
+	if (!geminiCircuitBreaker.canExecute()) {
+		console.warn('[Grounding] Gemini circuit breaker is unavailable, falling back to raw alert text');
 		return alertText;
 	}
 
@@ -126,6 +126,8 @@ async function deriveSearchQuery(alertText, opts = {}) {
 		console.warn('[Grounding] Query derivation failed:', error.message);
 		if (!opts.signal?.aborted) {
 			geminiCircuitBreaker.recordFailure(error);
+		} else {
+			geminiCircuitBreaker.releaseProbe();
 		}
 		// Fall back to truncated alert text
 		return alertText;

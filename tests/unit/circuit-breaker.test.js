@@ -113,6 +113,19 @@ describe('CircuitBreaker', () => {
 			expect(cb.getStatus().openedAt).toBeNull();
 		});
 
+		it('releases a half-open probe without counting a provider failure', () => {
+			const cb = new CircuitBreaker({ name: 'test-service', threshold: 1, cooldownMs: 1000 });
+			cb.recordFailure(new Error('provider outage'));
+			cb.openedAt = new Date(Date.now() - 1500).toISOString();
+
+			expect(cb.canExecute()).toBe(true);
+			cb.releaseProbe();
+
+			expect(cb.getState()).toBe('half-open');
+			expect(cb.getStatus().consecutiveFailures).toBe(1);
+			expect(cb.canExecute()).toBe(true);
+		});
+
 		it('transitions from HALF-OPEN to OPEN on failed probe (restarts cooldown)', () => {
 			const cb = new CircuitBreaker({ name: 'test-service', threshold: 2, cooldownMs: 1000 });
 

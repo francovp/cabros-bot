@@ -2837,6 +2837,21 @@ The `virgin-trainee-dev` is in active training. To ensure it evolves and doesn't
 - **Direct Senior Dev Engagement**: When @gigachad-senior-dev asks specific technical questions on PRs, answer them directly with technical precision and architectural rationale rather than generic acknowledgments or repeated question loops.
 - **Clean Worktree Verification**: Automated testing or build validation routines executed by trainee/assistant workflows must leave no unstaged or staged mutations (`git status --porcelain` clean).
 
+## External API Circuit Breakers (Issue #610)
+
+Gemini grounding, Twelve Data equity data, and TradingView MCP use separate process-local breakers. `/api/status` and `/api/capabilities` expose each snapshot as `dependencies.<provider>.circuitBreaker`, including the state, failure count, timestamps, threshold, and cooldown. `closed` allows calls, `open` fails fast, and `half-open` permits only one recovery probe; a successful probe closes the breaker and a failed probe reopens it. State resets on process restart.
+
+Provider timeouts, network errors, rate limits, and server failures count toward the provider breaker. Twelve Data 400/404 symbol rejections and empty-data results do not. Gemini query derivation falls back to the raw alert while its breaker is unavailable. TradingView MCP keeps its existing operator paging path.
+
+| Setting | Type and bounds | Default | Description |
+| --- | --- | ---: | --- |
+| `CIRCUIT_BREAKER_THRESHOLD` | integer, 1–100 | `5` | Consecutive failures before Gemini and Twelve Data breakers open; explicit TradingView fallback when no provider-specific value is set. |
+| `CIRCUIT_BREAKER_COOLDOWN_MS` | integer, 1,000–86,400,000 | `60000` | Open duration before the half-open probe for Gemini and Twelve Data; explicit TradingView fallback when no provider-specific value is set. |
+| `TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD` | integer, 1–100 | `5` | TradingView-specific failure threshold; takes precedence over the generic threshold. |
+| `TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS` | integer, 1,000–86,400,000 | `600000` | TradingView-specific cooldown; preserves the 10-minute default and takes precedence over the generic cooldown. |
+
+TradingView resolves an explicit provider-specific Remote Config value first, then its provider-specific environment value, then an explicitly configured generic Remote Config value, then the generic environment value, and finally its provider-specific default. A Remote Config value takes precedence over the environment value for the same setting. The Firebase template uses the in-app defaults so an unconfigured provider-specific default does not mask an explicit generic setting.
+
 ## Global HTTP Request Timeouts (Issue #609)
 
 The HTTP server applies bounded Node.js timeouts at startup: 10 seconds for headers, 120 seconds for complete requests, and 30 seconds for keep-alive connections. Node enforces `headersTimeout` only when its periodic connection checker fires, so `connectionsCheckingInterval` is also fixed at 5 seconds — with Node's default 30s interval the nominal 10-second header bound is not applied until ~30 seconds. The sweep is aligned to server start, not to each connection, so a connection beginning just after a sweep is first observed on the next one: the **worst-case** slow-header lifetime is `headersTimeout + connectionsCheckingInterval` = **15 seconds**, not exactly 10 (measured 10.9s / 12.9s / 15.0s by sweep phase; `MAX_SLOW_HEADER_LIFETIME_MS` is exported and asserted by the test). Lowering the interval to 1s would tighten this to ~11s at the cost of waking the checker every second for the process lifetime; a hard per-connection deadline would need socket-level timers. `src/lib/serverTimeouts.js` owns the fixed values and `tests/unit/server-timeouts.test.js` verifies the configuration. No new environment variable, endpoint, OpenAPI, Postman, or Remote Config change was required. These transport-level bounds are complementary to the per-request application deadline in `src/lib/requestDeadline.js` (GH-693): the deadline middleware returns a structured `408` per `/api` route, while these server timeouts bound slow or idle clients across all routes (including `/healthcheck` and static assets that the deadline exempts).

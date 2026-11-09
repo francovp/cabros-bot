@@ -119,6 +119,10 @@ class CircuitBreaker {
 		return false;
 	}
 
+	releaseProbe() {
+		this.isProbeInFlight = false;
+	}
+
 	recordSuccess() {
 		this.consecutiveFailures = 0;
 		this.isProbeInFlight = false;

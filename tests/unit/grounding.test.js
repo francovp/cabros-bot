@@ -408,6 +408,35 @@ describe('Grounding Service', () => {
 			expect(genaiClient.llmCallv2).not.toHaveBeenCalled();
 		});
 
+		it('allows only one deriveSearchQuery call as the Gemini half-open probe', async () => {
+			process.env.CIRCUIT_BREAKER_THRESHOLD = '1';
+			process.env.CIRCUIT_BREAKER_COOLDOWN_MS = '1000';
+			const breaker = _getCircuitBreakerForTesting();
+			breaker.recordFailure(new Error('provider outage'));
+			breaker.openedAt = new Date(Date.now() - 1500).toISOString();
+
+			let finishFirstCall;
+			let markFirstCallStarted;
+			const firstCallStarted = new Promise((resolve) => { markFirstCallStarted = resolve; });
+			genaiClient.llmCallv2
+				.mockImplementationOnce(() => new Promise((resolve) => {
+					finishFirstCall = resolve;
+					markFirstCallStarted();
+				}))
+				.mockResolvedValue({ text: 'second provider call should be blocked' });
+
+			const first = deriveSearchQuery('first alert');
+			const second = await deriveSearchQuery('second alert');
+			await firstCallStarted;
+
+			expect(second).toBe('second alert');
+			expect(genaiClient.llmCallv2).toHaveBeenCalledTimes(1);
+
+			finishFirstCall({ text: 'optimized first alert' });
+			await expect(first).resolves.toBe('optimized first alert');
+			expect(getCircuitBreakerStatus().state).toBe('closed');
+		});
+
 		it('transitions to half-open after cooldown and recovers to closed on successful probe', async () => {
 			process.env.CIRCUIT_BREAKER_THRESHOLD = '1';
 			process.env.CIRCUIT_BREAKER_COOLDOWN_MS = '1000';

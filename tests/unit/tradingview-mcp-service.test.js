@@ -2303,6 +2303,89 @@ describe('TradingViewMcpService', () => {
 			expect(service.isBreakerOpen()).toBe(false);
 		});
 
+		it('blocks concurrent TradingView calls while the half-open probe is in flight', async () => {
+			const service = new TradingViewMcpService({ breakerThreshold: 1, breakerCooldownMs: 10000 });
+			service._recordFailure(new Error('provider outage'));
+			service.breakerOpenedAt = new Date(Date.now() - 15000).toISOString();
+
+			let finishFirstCall;
+			const firstOperation = jest.fn(() => new Promise((resolve) => { finishFirstCall = resolve; }));
+			const secondOperation = jest.fn().mockResolvedValue('second call');
+			const first = service._withRuntimeStatus(firstOperation);
+
+			await expect(service._withRuntimeStatus(secondOperation)).rejects.toMatchObject({
+				category: 'circuit_breaker_open',
+			});
+			expect(firstOperation).toHaveBeenCalledTimes(1);
+			expect(secondOperation).not.toHaveBeenCalled();
+
+			finishFirstCall('first call');
+			await expect(first).resolves.toBe('first call');
+			expect(service.getBreakerState()).toBe('closed');
+		});
+
+		it('preserves the ten-minute default and resolves explicit breaker overrides by specificity', () => {
+			const envKeys = [
+				'CIRCUIT_BREAKER_THRESHOLD',
+				'CIRCUIT_BREAKER_COOLDOWN_MS',
+				'TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD',
+				'TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS',
+			];
+			const previousEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+			const getRemoteOverride = remoteConfigService.getRemoteOverride;
+
+			try {
+				remoteConfigService._resetForTesting();
+				envKeys.forEach((key) => delete process.env[key]);
+				remoteConfigService.getRemoteOverride = jest.fn(() => undefined);
+				const service = new TradingViewMcpService();
+
+				expect(service.getConfig()).toMatchObject({ breakerThreshold: 5, breakerCooldownMs: 600000 });
+
+				process.env.CIRCUIT_BREAKER_THRESHOLD = '2';
+				process.env.CIRCUIT_BREAKER_COOLDOWN_MS = '1000';
+				expect(service.getConfig()).toMatchObject({ breakerThreshold: 2, breakerCooldownMs: 1000 });
+
+				remoteConfigService.getRemoteOverride.mockImplementation((key) => ({
+					CIRCUIT_BREAKER_THRESHOLD: 4,
+					CIRCUIT_BREAKER_COOLDOWN_MS: 2000,
+				}[key]));
+				expect(service.getConfig()).toMatchObject({ breakerThreshold: 4, breakerCooldownMs: 2000 });
+
+				process.env.TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD = '3';
+				process.env.TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS = '5000';
+				expect(service.getConfig()).toMatchObject({ breakerThreshold: 3, breakerCooldownMs: 5000 });
+
+				remoteConfigService.getRemoteOverride.mockImplementation((key) => ({
+					TRADINGVIEW_MCP_BREAKER_FAILURE_THRESHOLD: 6,
+					TRADINGVIEW_MCP_BREAKER_COOLDOWN_MS: 6000,
+					CIRCUIT_BREAKER_THRESHOLD: 4,
+					CIRCUIT_BREAKER_COOLDOWN_MS: 2000,
+				}[key]));
+				expect(service.getConfig()).toMatchObject({ breakerThreshold: 6, breakerCooldownMs: 6000 });
+			} finally {
+				envKeys.forEach((key) => {
+					if (previousEnv.get(key) === undefined) delete process.env[key];
+					else process.env[key] = previousEnv.get(key);
+				});
+				remoteConfigService.getRemoteOverride = getRemoteOverride;
+			}
+		});
+
+		it('releases a half-open probe when the operation fails at a local breaker gate', async () => {
+			const service = new TradingViewMcpService({ breakerThreshold: 1, breakerCooldownMs: 10000 });
+			service._recordFailure(new Error('provider outage'));
+			service.breakerOpenedAt = new Date(Date.now() - 15000).toISOString();
+			const localGateError = new Error('nested TradingView operation was blocked');
+			localGateError.category = 'circuit_breaker_open';
+
+			await expect(service._withRuntimeStatus(() => Promise.reject(localGateError)))
+				.rejects.toBe(localGateError);
+			await expect(service._withRuntimeStatus(() => Promise.resolve('recovered')))
+				.resolves.toBe('recovered');
+			expect(service.getBreakerState()).toBe('closed');
+		});
+
 		it('opens circuit breaker after reaching failure threshold and reports degraded in status', async () => {
 			const notifyAdmin = jest.fn().mockResolvedValue(undefined);
 			const service = new TradingViewMcpService({
