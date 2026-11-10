@@ -199,6 +199,32 @@ function validateDiscordWebhookOverride(field, value) {
 	return value;
 }
 
+function validateIdempotencyKeyOverride(value) {
+	if (value === undefined || value === null) {
+		return undefined;
+	}
+
+	if (typeof value !== 'string') {
+		throw new NotificationRoutingValidationError('"idempotencyKey" must be a non-empty string if provided', {
+			field: 'idempotencyKey',
+		});
+	}
+
+	const trimmed = value.trim();
+	if (trimmed.length === 0) {
+		return undefined;
+	}
+
+	// Reasonable upper bound to keep dedupe keys bounded and log-friendly.
+	if (trimmed.length > 256) {
+		throw new NotificationRoutingValidationError('"idempotencyKey" must be at most 256 characters', {
+			field: 'idempotencyKey',
+		});
+	}
+
+	return trimmed;
+}
+
 function normalizeSymbolRouteKey(rawKey) {
 	if (typeof rawKey !== 'string') {
 		throw new NotificationRoutingValidationError('"symbolRoutes" keys must be non-empty symbol strings', {
@@ -381,6 +407,7 @@ function parseNotificationRouting(raw = {}, options = {}) {
 			telegramThreadId: undefined,
 			whatsappChatId: undefined,
 			discordWebhookUrl: undefined,
+			idempotencyKey: undefined,
 			symbolRoutes: undefined,
 		};
 	}
@@ -409,6 +436,7 @@ function parseNotificationRouting(raw = {}, options = {}) {
 		telegramThreadId: validateThreadIdOverride('telegramThreadId', rawThreadId),
 		whatsappChatId,
 		discordWebhookUrl: validateDiscordWebhookOverride('discordWebhookUrl', raw.discordWebhookUrl),
+		idempotencyKey: validateIdempotencyKeyOverride(raw.idempotencyKey),
 		symbolRoutes: normalizeSymbolRoutes(raw.symbolRoutes),
 	};
 }
@@ -464,6 +492,10 @@ async function sendWithNotificationRouting(notificationManager, alert, routing =
 			}));
 		}));
 		return results.flat();
+	}
+
+	if (routing.idempotencyKey) {
+		alertPayload.idempotencyKey = routing.idempotencyKey;
 	}
 
 	if (routing.channels) {

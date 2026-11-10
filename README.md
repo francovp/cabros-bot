@@ -345,6 +345,8 @@ All five settings are non-secret and Firebase Remote Config eligible. `/api/stat
 The Remote Config bootstrap fetch uses environment values because the published template must load before its values can be read. After bootstrap, the `REMOTE_CONFIG_REFRESH_JITTER_MS` override resolves through per-worker environment, per-worker Remote Config, global Remote Config, global environment, then its schema default; it offsets only the first scheduled refresh.
 
 ### Multi-Channel Notification Dispatch
+- **Redrive Idempotency Contract**: Every redrive dispatch threads a deterministic `idempotencyKey` of the form `redrive:<deadLetterId>:<channel>:<attemptNumber>` through `NotificationManager.sendToChannels`. The key is preserved on the redrive Firestore document (`lastIdempotencyKey`) and exposed on every `SendResult.idempotencyKey` so downstream subscribers can dedupe accidental replays even though Telegram has no `sendMessage` idempotency (CB-178). Alert-producing webhooks may also forward an explicit `idempotencyKey` field, which `parseNotificationRouting` validates (≤256 chars) and preserves on the dispatched alert payload.
+
 Notifications are dispatched concurrently across enabled channels. For Discord, transient rate limits and server errors are retried according to `DISCORD_MAX_RETRIES` and bounded by `DISCORD_MAX_TOTAL_RETRY_WAIT_MS`. Long messages exceeding platform limits are automatically split into sequential chunks with preserved markdown formatting. See [Multi-Channel Alerts Guide](docs/notifications.md).
 
 ### AI Provider Routing & Grounding
