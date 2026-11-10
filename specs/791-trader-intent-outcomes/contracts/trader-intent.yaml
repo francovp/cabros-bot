@@ -1,0 +1,54 @@
+components:
+  schemas:
+    TraderIntent:
+      type: object
+      additionalProperties: false
+      required: [entry, horizon]
+      properties:
+        side:
+          type: string
+          enum: [BUY, SELL]
+        entry:
+          type: number
+          exclusiveMinimum: 0
+        invalidation:
+          type: number
+          exclusiveMinimum: 0
+        target:
+          type: number
+          exclusiveMinimum: 0
+        horizon:
+          type: string
+          enum: [1h, 4h, 1D, 1W]
+        notes:
+          type: string
+          minLength: 1
+          maxLength: 500
+    TraderPlanSummary:
+      type: object
+      required: [hitRatePercent, samples, averageRMultiple]
+      properties:
+        hitRatePercent:
+          type: number
+          minimum: 0
+          maximum: 100
+        samples:
+          type: integer
+          minimum: 0
+        averageRMultiple:
+          type: [number, "null"]
+
+requestVariants:
+  webhookAlert:
+    optionalField: traderIntent
+    invalidResponse:
+      status: 400
+      code: INVALID_REQUEST
+  symbolAnalysis:
+    optionalField: traderIntent
+    responseEcho: traderIntent
+
+compatibility:
+  omittedTraderIntent: existing request and response behavior unchanged
+  botDefaultOutcomeFields: unchanged
+  replay: preserves complete stored traderIntent
