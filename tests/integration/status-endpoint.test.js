@@ -38,6 +38,7 @@ const promptReadiness = require('../../src/services/prompts/promptReadiness');
 const symbolAnalysisStorageService = require('../../src/services/storage/SymbolAnalysisStorageService');
 const sentryService = require('../../src/services/monitoring/SentryService');
 const { getRoutes } = require('../../src/routes');
+const { assertWithinBudget } = require('../helpers/perfBudget');
 
 const defaultCircuitBreaker = Object.freeze({
 	state: 'closed',
@@ -304,6 +305,7 @@ describe('Status endpoints', () => {
 	});
 
 	it('returns machine-readable status on /api/status', async () => {
+		const start = process.hrtime.bigint();
 		process.env.WORKER_STARTUP_JITTER_MS = '1000';
 		process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
 		process.env.SIGNAL_OUTCOME_WORKER_STARTUP_JITTER_MS = '125';
@@ -311,6 +313,8 @@ describe('Status endpoints', () => {
 		const response = await request(app)
 			.get('/api/status')
 			.set('x-api-key', 'status-key');
+		const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+		assertWithinBudget('/api/status', durationMs);
 
 		expect(response.status).toBe(200);
 		expect(response.body.service).toEqual({

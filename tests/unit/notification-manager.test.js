@@ -194,29 +194,36 @@ describe('NotificationManager admin failure notifications', () => {
 	});
 
 	it('times each channel individually when calculating fallback durationMs', async () => {
-		const fastTelegram = {
-			name: 'telegram',
-			isEnabled: jest.fn(() => true),
-			send: jest.fn().mockImplementation(() => new Promise((resolve) => {
-				setTimeout(() => resolve({ success: true, channel: 'telegram' }), 10);
-			})),
-		};
-		const slowWhatsapp = {
-			name: 'whatsapp',
-			isEnabled: jest.fn(() => true),
-			send: jest.fn().mockImplementation(() => new Promise((resolve) => {
-				setTimeout(() => resolve({ success: true, channel: 'whatsapp' }), 60);
-			})),
-		};
-		const manager = new NotificationManager(fastTelegram, slowWhatsapp);
+		jest.useFakeTimers();
+		try {
+			const fastTelegram = {
+				name: 'telegram',
+				isEnabled: jest.fn(() => true),
+				send: jest.fn().mockImplementation(() => new Promise((resolve) => {
+					setTimeout(() => resolve({ success: true, channel: 'telegram' }), 10);
+				})),
+			};
+			const slowWhatsapp = {
+				name: 'whatsapp',
+				isEnabled: jest.fn(() => true),
+				send: jest.fn().mockImplementation(() => new Promise((resolve) => {
+					setTimeout(() => resolve({ success: true, channel: 'whatsapp' }), 60);
+				})),
+			};
+			const manager = new NotificationManager(fastTelegram, slowWhatsapp);
 
-		const results = await manager.sendToAll({ text: 'Timing test' });
-		const telegramResult = results.find((r) => r.channel === 'telegram');
-		const whatsappResult = results.find((r) => r.channel === 'whatsapp');
+			const sendPromise = manager.sendToAll({ text: 'Timing test' });
+			await jest.advanceTimersByTimeAsync(70);
+			const results = await sendPromise;
+			const telegramResult = results.find((r) => r.channel === 'telegram');
+			const whatsappResult = results.find((r) => r.channel === 'whatsapp');
 
-		expect(telegramResult.durationMs).toBeLessThan(whatsappResult.durationMs);
-		expect(telegramResult.durationMs).toBeLessThan(50);
-		expect(whatsappResult.durationMs).toBeGreaterThanOrEqual(50);
+			expect(telegramResult.durationMs).toBeLessThan(whatsappResult.durationMs);
+			expect(telegramResult.durationMs).toBeLessThan(50);
+			expect(whatsappResult.durationMs).toBeGreaterThanOrEqual(50);
+		} finally {
+			jest.useRealTimers();
+		}
 	});
 
 	it('returns delivery results without waiting for the admin notification', async () => {

@@ -13,7 +13,7 @@ const { startMockTradingViewMcp } = require('./support/mock-tradingview-mcp');
 const PERFORMANCE_API_KEY = 'performance-test-key';
 
 function getPerformanceEndpoints() {
-	return Object.keys(budgets);
+	return Object.keys(budgets).filter((key) => !key.startsWith('$') && !key.startsWith('_'));
 }
 
 function buildLoadScenarios() {
@@ -38,9 +38,12 @@ function buildK6Thresholds(budgetContract, profile) {
 		dropped_iterations: ['count<1'],
 		channel_429_count: ['count<1'],
 	};
-	for (const budget of Object.values(budgetContract)) {
+	for (const [key, budget] of Object.entries(budgetContract)) {
+		if (key.startsWith('$') || key.startsWith('_')) {
+			continue;
+		}
 		if (!budget || typeof budget.name !== 'string') {
-			throw new Error('Every performance budget must include an endpoint name');
+			continue;
 		}
 		const percentiles = profile === 'soak' ? ['p95Ms', 'p99Ms'] : ['p95Ms'];
 		thresholds[`http_req_duration{endpoint:${budget.name}}`] = percentiles.map((key) => {

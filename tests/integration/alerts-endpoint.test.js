@@ -55,6 +55,7 @@ jest.mock('../../src/services/storage/AlertFeedbackStorageService', () => {
 
 const crypto = require('crypto');
 const request = require('supertest');
+const { assertWithinBudget } = require('../helpers/perfBudget');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const alertStorageService = require('../../src/services/storage/AlertStorageService');
@@ -118,9 +119,12 @@ describe('Alerts API Integration Tests', () => {
 	});
 
 	it('returns 401 when GET /api/alerts lacks a valid api key', async () => {
+		const start = process.hrtime.bigint();
 		const res = await request(app)
 			.get('/api/alerts')
 			.expect(401);
+		const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+		assertWithinBudget('/api/alerts', durationMs);
 
 		expect(res.body.error).toContain('Unauthorized');
 	});
@@ -650,10 +654,13 @@ describe('Alerts API Integration Tests', () => {
 			enrichment: { riskMetadataCoverage },
 		});
 
+		const start = process.hrtime.bigint();
 		const res = await request(app)
 			.get('/api/alerts/summary')
 			.set('x-api-key', 'test-key')
 			.expect(200);
+		const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+		assertWithinBudget('/api/alerts/summary', durationMs);
 
 		expect(res.body.summary.enrichment.riskMetadataCoverage).toEqual(riskMetadataCoverage);
 		expect(res.body.summary.shadowModeMetrics).toBe('No measurements found');

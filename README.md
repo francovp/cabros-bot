@@ -935,6 +935,12 @@ pnpm test -- tests/unit/alert-handler.test.js
 # Run opt-in Firestore emulator integration suite (requires local Firebase emulator)
 pnpm run test:firebase
 
+# Run the per-endpoint latency-budget guard (GH-795)
+pnpm test -- tests/integration/perf-budget.test.js
+# Set PERF_BUDGET_RELAXED=true to downgrade the 2x hard envelope to a warning
+# on slow CI runners.
+PERF_BUDGET_RELAXED=true pnpm test -- tests/integration/perf-budget.test.js
+
 # Run the opt-in k6 load test and dependency-outage drill (requires k6)
 pnpm test:perf
 
@@ -947,6 +953,17 @@ pnpm run lint
 # Set up a secondary git worktree with symlinked node_modules and shared caches
 pnpm run setup:worktree
 ```
+
+The per-endpoint latency budgets live in `tests/performance/budgets.json`
+and are enforced by `tests/helpers/perfBudget.js`. The helper applies a
+1.5x soft envelope (`console.warn` only) and a 2x hard envelope (test
+failure unless `PERF_BUDGET_RELAXED=true`). New routes should add a
+`p95Ms` + `rationale` entry to `budgets.json` so future regressions trip
+the guard before reaching production. The dedicated
+`.github/workflows/perf-budget.yml` workflow runs the integration suite
+on every PR and is currently `continue-on-error: true` while the team
+baselines the numbers; flip it to a hard failure once
+`tests/performance/baselines/` stabilizes.
 
 ---
 

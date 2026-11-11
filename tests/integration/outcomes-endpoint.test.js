@@ -17,6 +17,7 @@ jest.mock('../../src/services/storage/AlertAcknowledgementService', () => ({
 }));
 
 const request = require('supertest');
+const { assertWithinBudget } = require('../helpers/perfBudget');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
 const signalOutcomeService = require('../../src/services/storage/SignalOutcomeService');
@@ -46,9 +47,12 @@ describe('Signal Outcomes API Integration Tests', () => {
 	});
 
 	it('returns 401 when GET /api/outcomes lacks a valid api key', async () => {
+		const start = process.hrtime.bigint();
 		const res = await request(app)
 			.get('/api/outcomes')
 			.expect(401);
+		const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+		assertWithinBudget('/api/outcomes', durationMs);
 
 		expect(res.body.error).toContain('Unauthorized');
 	});
@@ -282,9 +286,12 @@ describe('Signal Outcomes API Integration Tests', () => {
 
 	describe('GET /api/outcomes/summary', () => {
 		it('returns 401 when request lacks a valid api key', async () => {
+			const start = process.hrtime.bigint();
 			const res = await request(app)
 				.get('/api/outcomes/summary')
 				.expect(401);
+			const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+			assertWithinBudget('/api/outcomes/summary', durationMs);
 
 			expect(res.body.error).toContain('Unauthorized');
 		});
