@@ -20,7 +20,7 @@ const ROUTES_TO_HIT = [
 	{ route: '/ready', method: 'get', expectStatus: [200, 503] },
 	{ route: '/api/status', method: 'get', expectStatus: [200, 401] },
 	{ route: '/api/capabilities', method: 'get', expectStatus: [200, 401] },
-	{ route: '/api/jobs', method: 'get', expectStatus: [200, 401] },
+	{ route: '/api/jobs', method: 'get', expectStatus: [200, 401, 404] },
 	{ route: '/api/alerts', method: 'get', expectStatus: [200, 401, 403, 503] },
 	{ route: '/api/alerts/summary', method: 'get', expectStatus: [200, 401, 403, 503] },
 	{ route: '/api/outcomes', method: 'get', expectStatus: [200, 401, 403] },

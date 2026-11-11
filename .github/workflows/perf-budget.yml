@@ -1,4 +1,4 @@
-name: Perf Budget Guard
+name: Performance Budget Guard
 
 on:
   pull_request:
@@ -6,6 +6,14 @@ on:
   push:
     branches: ["master"]
   workflow_dispatch:
+    inputs:
+      soak:
+        description: Run the optional 30-minute soak test
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: '0 3 * * 1'
 
 # Reuse the same minimal permissions the other workflows request (CB-257).
 permissions:
@@ -28,9 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install pnpm
-        uses: pnpm/action-setup@v3
-        with:
-          version: 10
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -46,3 +52,24 @@ jobs:
           BOT_TOKEN: 'perf-budget-dummy-token'
           WEBHOOK_API_KEY: 'perf-budget-test-key'
         run: pnpm test -- tests/integration/perf-budget.test.js --testTimeout=60000
+
+  performance:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - uses: grafana/setup-k6-action@v0.3.1
+      - run: pnpm install --frozen-lockfile
+      - name: Run load and chaos checks
+        if: github.event_name != 'workflow_dispatch' || inputs.soak != true
+        run: pnpm test:perf
+      - name: Run load, soak, and chaos checks
+        if: github.event_name == 'workflow_dispatch' && inputs.soak == true
+        run: pnpm test:perf -- --soak

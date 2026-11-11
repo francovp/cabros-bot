@@ -19,6 +19,16 @@ describe('deployment environment helpers', () => {
 		expect(isPreviewEnvironment({ RENDER: 'true', IS_PULL_REQUEST: 'true' })).toBe(true);
 	});
 
+	it('recognizes OpenClaw preview deployments via bare IS_PULL_REQUEST (no RENDER)', () => {
+		// OpenClaw PR previews set IS_PULL_REQUEST without RENDER.
+		expect(isPreviewEnvironment({ IS_PULL_REQUEST: 'true' })).toBe(false);
+		expect(isPreviewEnvironment({ IS_PULL_REQUEST: 'true', OPENCLAW_PREVIEW: 'true' })).toBe(true);
+		expect(isPreviewEnvironment({ IS_PULL_REQUEST: 'true', OPENCLAW_HOST: 'openclaw.tail5e4271.ts.net' })).toBe(true);
+		expect(isPreviewEnvironment({ OPENCLAW_PREVIEW_NAME: 'cabros-bot-pr-1296' })).toBe(true);
+		expect(isPreviewEnvironment({ IS_PULL_REQUEST: 'false' })).toBe(false);
+		expect(isPreviewEnvironment({})).toBe(false);
+	});
+
 	it('recognizes Railway pull-request environments by their generated name', () => {
 		expect(isPreviewEnvironment({ RAILWAY_ENVIRONMENT_NAME: 'pr-123' })).toBe(true);
 		expect(isPreviewEnvironment({ RAILWAY_ENVIRONMENT_NAME: 'cabros-bot-pr-359' })).toBe(true);

@@ -8,10 +8,19 @@
     "type": "object",
     "required": ["p95Ms", "rationale"],
     "properties": {
+      "name": {
+        "type": "string",
+        "description": "Short identifier for k6 performance harness."
+      },
       "p95Ms": {
         "type": "number",
         "exclusiveMinimum": 0,
         "description": "Documented p95 ceiling for the route in milliseconds."
+      },
+      "p99Ms": {
+        "type": "number",
+        "exclusiveMinimum": 0,
+        "description": "Documented p99 ceiling for the route in milliseconds."
       },
       "rationale": {
         "type": "string",
