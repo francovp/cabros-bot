@@ -1,6 +1,9 @@
 'use strict';
 
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { CircuitBreaker } = require('../../lib/circuitBreaker');
+
+const twelveDataCircuitBreaker = new CircuitBreaker({ name: 'twelve-data' });
 
 const PROVIDER_NAME = 'twelve-data';
 const DEFAULT_BASE_URL = 'https://api.twelvedata.com';
@@ -9,12 +12,15 @@ const MAX_TIMEOUT_MS = 30000;
 const DEFAULT_RPM = 8;
 const SUPPORTED_EXCHANGES = Object.freeze(['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD']);
 const INTERVALS = Object.freeze({
+	'1m': '1min',
 	'5m': '5min',
 	'15m': '15min',
+	'30m': '30min',
 	'1h': '1h',
 	'4h': '4h',
 	'1D': '1day',
 	'1W': '1week',
+	'1M': '1month',
 });
 
 const REASONS = Object.freeze({
@@ -25,12 +31,14 @@ const REASONS = Object.freeze({
 	INVALID_RESPONSE: 'twelve_data_invalid_response',
 	NO_DATA: 'twelve_data_no_data',
 	UNAVAILABLE: 'twelve_data_unavailable',
+	CIRCUIT_BREAKER_OPEN: 'twelve_data_circuit_breaker_open',
 });
 
 const TRANSIENT_REASONS = Object.freeze(new Set([
 	REASONS.RATE_LIMITED,
 	REASONS.TIMEOUT,
 	REASONS.UNAVAILABLE,
+	REASONS.CIRCUIT_BREAKER_OPEN,
 	'binance_unavailable',
 	'market_data_unavailable',
 ]));
@@ -121,15 +129,21 @@ function _resetReadinessForTesting() {
 	providerReadiness.lastErrorReason = null;
 }
 
+function _resetCircuitBreakerForTesting() {
+	twelveDataCircuitBreaker.reset();
+}
+
 function _recordProviderSuccess() {
 	providerReadiness.requestsSucceeded += 1;
 	providerReadiness.consecutiveFailures = 0;
 	providerReadiness.lastSuccessAt = new Date().toISOString();
 }
 
-function _recordProviderFailure(reason) {
+function _recordProviderFailure(reason, { affectsReadiness = true } = {}) {
 	providerReadiness.requestsFailed += 1;
-	providerReadiness.consecutiveFailures += 1;
+	if (affectsReadiness) {
+		providerReadiness.consecutiveFailures += 1;
+	}
 	providerReadiness.lastFailureAt = new Date().toISOString();
 	providerReadiness.lastErrorReason = typeof reason === 'string' && KNOWN_REASONS.has(reason)
 		? reason
@@ -195,7 +209,13 @@ function normalizeSymbol(symbol) {
 	if (!symbol || typeof symbol !== 'string') {
 		return null;
 	}
-	let cleaned = symbol.trim().toUpperCase().replace(/\s*\([A-Za-z0-9]+\)$/, '');
+	let cleaned = symbol.trim().toUpperCase();
+	if (cleaned.endsWith(')')) {
+		const openParenIndex = cleaned.lastIndexOf('(');
+		if (openParenIndex > 0 && /^[A-Za-z0-9]+$/.test(cleaned.slice(openParenIndex + 1, -1))) {
+			cleaned = cleaned.slice(0, openParenIndex).trim();
+		}
+	}
 	if (/^[A-Z]{6}$/.test(cleaned) && !cleaned.includes('/')) {
 		cleaned = `${cleaned.slice(0, 3)}/${cleaned.slice(3)}`;
 	}
@@ -289,6 +309,7 @@ function getConfig() {
 function getStatus() {
 	const config = getConfig();
 	const readiness = _resolveReadiness();
+	const breakerStatus = twelveDataCircuitBreaker.getStatus();
 
 	let status;
 	if (!config.enabled) {
@@ -301,6 +322,10 @@ function getStatus() {
 		status = 'ready';
 	} else {
 		status = READINESS.UNVERIFIED;
+	}
+
+	if (status === 'ready' && breakerStatus.state === 'open') {
+		status = 'degraded';
 	}
 
 	return {
@@ -317,6 +342,7 @@ function getStatus() {
 		lastSuccessAt: providerReadiness.lastSuccessAt,
 		lastFailureAt: providerReadiness.lastFailureAt,
 		lastErrorReason: providerReadiness.lastErrorReason,
+		circuitBreaker: breakerStatus,
 		supportedExchanges: [...SUPPORTED_EXCHANGES],
 		timeoutMs: config.timeoutMs,
 		rpm: config.rpm,
@@ -369,10 +395,23 @@ async function requestJson(path, params, timeoutOverride) {
 		throw new EquityMarketDataError(REASONS.NOT_CONFIGURED);
 	}
 
+	const attempt = typeof twelveDataCircuitBreaker.acquireAttempt === 'function'
+		? twelveDataCircuitBreaker.acquireAttempt()
+		: { allowed: twelveDataCircuitBreaker.canExecute(), token: twelveDataCircuitBreaker.isHalfOpen() ? Symbol('probe') : null };
+	if (!attempt.allowed) {
+		throw new EquityMarketDataError(REASONS.CIRCUIT_BREAKER_OPEN, { status: 503 });
+	}
+	const probeToken = attempt.token;
+
 	const totalTimeoutMs = timeoutOverride === undefined ? config.timeoutMs : parseTimeout(timeoutOverride);
 	const startMs = Date.now();
 
-	await waitForPacing(totalTimeoutMs);
+	try {
+		await waitForPacing(totalTimeoutMs);
+	} catch (error) {
+		if (probeToken) twelveDataCircuitBreaker.releaseProbe(probeToken);
+		throw error;
+	}
 
 	const elapsedMs = Date.now() - startMs;
 	const remainingFetchTimeoutMs = Math.max(1, totalTimeoutMs - elapsedMs);
@@ -399,7 +438,7 @@ async function requestJson(path, params, timeoutOverride) {
 		try {
 			body = await response.json();
 		} catch {
-			throw new EquityMarketDataError(REASONS.INVALID_RESPONSE);
+			throw new EquityMarketDataError(REASONS.INVALID_RESPONSE, { status: response.status });
 		}
 
 		if (response.status === 429) {
@@ -423,6 +462,7 @@ async function requestJson(path, params, timeoutOverride) {
 			throw new EquityMarketDataError(reason, { status: response.status });
 		}
 
+		twelveDataCircuitBreaker.recordSuccess(probeToken);
 		recordReadinessSafely(() => _recordProviderSuccess());
 		return body;
 	} catch (error) {
@@ -434,7 +474,17 @@ async function requestJson(path, params, timeoutOverride) {
 		} else {
 			normalized = new EquityMarketDataError(REASONS.UNAVAILABLE, { cause: error });
 		}
-		recordReadinessSafely(() => _recordProviderFailure(normalized.reason));
+		const requestSpecificRejection = normalized.status === 400 || normalized.status === 404;
+		if (normalized.reason !== REASONS.NO_DATA
+			&& normalized.reason !== REASONS.CIRCUIT_BREAKER_OPEN
+			&& !requestSpecificRejection) {
+			twelveDataCircuitBreaker.recordFailure(normalized, probeToken);
+		} else if (probeToken) {
+			twelveDataCircuitBreaker.releaseProbe(probeToken);
+		}
+		recordReadinessSafely(() => _recordProviderFailure(normalized.reason, {
+			affectsReadiness: !requestSpecificRejection,
+		}));
 		throw normalized;
 	} finally {
 		clearTimeout(timeoutId);
@@ -556,5 +606,8 @@ module.exports = {
 	resolveQueryExchange,
 	_resetPacerForTesting,
 	_resetReadinessForTesting,
+	_resetCircuitBreakerForTesting,
 	_recordProviderSuccess,
+	getCircuitBreakerStatus: () => twelveDataCircuitBreaker.getStatus(),
+	_getCircuitBreakerForTesting: () => twelveDataCircuitBreaker,
 };

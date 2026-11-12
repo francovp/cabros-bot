@@ -1160,6 +1160,19 @@ describe('JobRepository durable claims', () => {
 		}
 	});
 
+	it('resolves claim lease ms with Remote Config override and env fallback', () => {
+		const repository = new JobRepository();
+		expect(repository.getClaimLeaseMs()).toBe(60000);
+
+		process.env.JOB_QUEUE_CLAIM_LEASE_MS = '90000';
+		expect(repository.getClaimLeaseMs()).toBe(90000);
+
+		process.env.JOB_QUEUE_CLAIM_LEASE_MS = 'invalid';
+		expect(repository.getClaimLeaseMs()).toBe(60000);
+
+		delete process.env.JOB_QUEUE_CLAIM_LEASE_MS;
+	});
+
 	// Builds a Firestore double holding `count` processing documents with the given
 	// execution shape, ordered by createdAt ascending.
 	function firestoreOf(count, executionAt, now) {

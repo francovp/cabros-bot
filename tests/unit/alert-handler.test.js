@@ -357,7 +357,7 @@ describe('Alert Handler', () => {
 			sentiment: 'BULLISH',
 			sentiment_score: 0.55,
 			sentiment_score_raw: 0.9,
-			insights: [],
+			insights: ['Bitcoin market rally continues'],
 			sources: [],
 			truncated: false,
 		});
@@ -366,6 +366,21 @@ describe('Alert Handler', () => {
 
 		expect(result.sentiment_score).toBe(0.55);
 		expect(result.sentiment_score_raw).toBe(0.9);
+	});
+
+	it('discards Gemini output that lacks renderable insights/sources/levels', async () => {
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.4,
+			insights: [],
+			sources: [],
+			truncated: false,
+		});
+
+		const result = await enrichAlert({ text: 'Bitcoin rally' });
+
+		expect(result).toBeNull();
+		expect(groundAlert).toHaveBeenCalled();
 	});
 
 	it('should handle empty text', async () => {
@@ -459,6 +474,7 @@ describe('Alert Handler', () => {
 			invalidation_level: '$65000',
 			target_level: '$70000',
 			setup_type: 'trend_continuation',
+			setup_evidence: 'Higher highs and 20 EMA trend support',
 			risk_reward_ratio: 2,
 			sources: [{ title: 'Source 1', url: 'https://example.com' }],
 			truncated: false,
@@ -477,6 +493,7 @@ describe('Alert Handler', () => {
 		expect(result.invalidation_level).toBe('$65000');
 		expect(result.target_level).toBe('$70000');
 		expect(result.setup_type).toBe('trend_continuation');
+		expect(result.setup_evidence).toBe('Higher highs and 20 EMA trend support');
 		expect(result.risk_reward_ratio).toBe(2);
 		expect(result.sources).toEqual([{ title: 'Source 1', url: 'https://example.com' }]);
 		expect(result.extraText).toContain('*Model used*: `gemini-2.5-flash`');
@@ -497,6 +514,7 @@ describe('Alert Handler', () => {
 			invalidation_level: 94,
 			target_level: 112,
 			setup_type: 'trend_continuation',
+			setup_evidence: 'Higher highs and 20 EMA trend support',
 			risk_reward_ratio: 2,
 		});
 		groundAlert.mockResolvedValue({
@@ -511,6 +529,7 @@ describe('Alert Handler', () => {
 			invalidation_level: 94,
 			target_level: 112,
 			setup_type: 'trend_continuation',
+			setup_evidence: 'Higher highs and 20 EMA trend support',
 			risk_reward_ratio: 2,
 		}));
 
@@ -530,11 +549,13 @@ describe('Alert Handler', () => {
 			insights: ['Gemini insight'],
 			sources: [],
 			setup_type: 'breakout',
+			setup_evidence: 'Range breakout on heavy volume',
 		});
 
 		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
 
 		expect(result.setup_type).toBe('breakout');
+		expect(result.setup_evidence).toBe('Range breakout on heavy volume');
 		expect(result).not.toHaveProperty('invalidation_level');
 		expect(result).not.toHaveProperty('target_level');
 		expect(result).not.toHaveProperty('risk_reward_ratio');
@@ -611,7 +632,7 @@ describe('Alert Handler', () => {
 			sentiment: 'BULLISH',
 			sentiment_score: 0.7,
 			insights: ['Confluencia: ALINEADA · Señales Alineadas YES · Confianza: 82', 'MCP secondary insight'],
-			confluenceData: { recommendation: 'ALINEADA', confidence: 82, signals_agree: true },
+			confluenceData: { recommendation: 'ALINEADA', confidence: 82, signals_agree: true, news: { count: 1 } },
 			sources: [],
 			truncated: false,
 		});
@@ -644,6 +665,42 @@ describe('Alert Handler', () => {
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
 
+	it('should omit confluence insight when external evidence is empty', async () => {
+		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+		process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+		tradingViewMcpService.isEnabled.mockReturnValue(true);
+		tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+			original_text: 'BTCUSDT(240) pasó a señal de COMPRA',
+			sentiment: 'BULLISH',
+			sentiment_score: 0.7,
+			insights: ['Confluencia: BUY · Señales Alineadas ✅ · Confianza: HIGH'],
+			confluenceData: {
+				confluence: { recommendation: 'BUY', confidence: 'HIGH', signals_agree: true },
+				news: { count: 0, latest: [] },
+				sentiment: { posts_analyzed: 0 },
+			},
+			sources: [],
+			truncated: false,
+		});
+
+		groundAlert.mockResolvedValue({
+			sentiment: 'BULLISH',
+			sentiment_score: 0.8,
+			insights: ['Gemini insight'],
+			sources: [],
+			truncated: false,
+			modelUsed: 'gemini-2.5-flash',
+		});
+
+		const result = await enrichAlert({ text: 'BTCUSDT(240) pasó a señal de COMPRA' }, { useTradingViewData: true });
+
+		expect(result.insights).not.toContain('Confluencia: BUY · Señales Alineadas ✅ · Confianza: HIGH');
+		expect(result.insights).toContain('Gemini insight');
+
+		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+	});
+
 	it('should prioritize contradictory confluence insight and preserve raw MCP metadata when Gemini fills the insight cap', async () => {
 		const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
 		process.env.ENABLE_GEMINI_GROUNDING = 'true';
@@ -654,7 +711,7 @@ describe('Alert Handler', () => {
 			sentiment: 'NEUTRAL',
 			sentiment_score: 0.1,
 			insights: ['Confluencia contradictoria: SELL · Señales Mixtas ⚠️ · Confianza: 81', 'MCP secondary insight'],
-			confluenceData: { confluence: { recommendation: 'SELL', confidence: 81, signals_agree: false } },
+			confluenceData: { confluence: { recommendation: 'SELL', confidence: 81, signals_agree: false }, news: { count: 1 } },
 			multiTimeframeData: { alignment: 'bearish' },
 			sources: [],
 			truncated: false,
@@ -683,7 +740,10 @@ describe('Alert Handler', () => {
 		expect(result.insights).toHaveLength(6);
 		expect(result.insights[0]).toBe('Confluencia contradictoria: SELL · Señales Mixtas ⚠️ · Confianza: 81');
 		expect(result.insights).not.toContain('Gemini insight 6');
-		expect(result.confluenceData).toEqual({ confluence: { recommendation: 'SELL', confidence: 81, signals_agree: false } });
+		expect(result.confluenceData).toEqual({
+			confluence: { recommendation: 'SELL', confidence: 81, signals_agree: false },
+			news: { count: 1 },
+		});
 		expect(result.multiTimeframeData).toEqual({ alignment: 'bearish' });
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
@@ -906,7 +966,6 @@ describe('Alert Handler', () => {
 			invalidation_level: 83725,
 			target_level: 89250,
 			risk_reward_ratio: 2,
-			setup_type: 'trend_continuation',
 			levelsSource: 'derived-quote',
 		});
 
@@ -916,7 +975,7 @@ describe('Alert Handler', () => {
 		expect(result.invalidation_level).toBeDefined();
 		expect(result.target_level).toBeDefined();
 		expect(result.risk_reward_ratio).toBe(2);
-		expect(result.setup_type).toBe('trend_continuation');
+		expect(result).not.toHaveProperty('setup_type');
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
@@ -1024,7 +1083,6 @@ describe('Alert Handler', () => {
 			invalidation_level: 3120,
 			target_level: 3360,
 			risk_reward_ratio: 2,
-			setup_type: 'trend_continuation',
 			levelsSource: 'derived-quote',
 		});
 
@@ -1036,6 +1094,7 @@ describe('Alert Handler', () => {
 		expect(result.invalidation_level).toBeDefined();
 		expect(result.target_level).toBeDefined();
 		expect(result.risk_reward_ratio).toBe(2);
+		expect(result).not.toHaveProperty('setup_type');
 
 		process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 	});
@@ -1106,7 +1165,7 @@ describe('Alert Handler', () => {
 			expect(result.sentiment_score).toBe(-0.65);
 			expect(result.sentimentConflict).toBe(true);
 			expect(warnSpy).toHaveBeenCalledWith(
-				expect.stringContaining('[Alert] Sentiment conflict between Gemini and TradingView MCP; selecting MCP indicators over LLM prose')
+				expect.stringContaining('[Alert] Sentiment conflict between Gemini and TradingView MCP; selecting MCP indicators over LLM prose'),
 			);
 
 			warnSpy.mockRestore();
@@ -1165,6 +1224,7 @@ describe('Alert Handler', () => {
 						recommendation: 'SELL',
 						confidence: 85,
 					},
+					news: { count: 1 },
 				},
 				sources: [],
 				truncated: false,
@@ -1346,6 +1406,106 @@ describe('Alert Handler', () => {
 
 			expect(result.sentiment).toBe('BEARISH');
 			expect(result.sentiment_score).toBe(-0.5);
+
+			process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+		});
+	});
+
+	describe('Token usage attribution by source', () => {
+		const { TokenUsageTracker } = require('../../src/lib/tokenUsage');
+
+		it('attributes token usage by source when multiple enrichment providers are active (Gemini + MCP)', async () => {
+			const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+			tradingViewMcpService.isEnabled.mockReturnValue(true);
+			tradingViewMcpService.enrichFromAlertText.mockResolvedValue({
+				original_text: 'BINANCE:BTCUSDT(240) pasó a señal de COMPRA',
+				tradingViewEnrichmentApplied: true,
+				sentiment: 'BULLISH',
+				sentiment_score: 0.5,
+				tokenUsage: { inputTokens: 1000, outputTokens: 200 },
+				volumeTokenUsage: { inputTokens: 150, outputTokens: 50 },
+			});
+
+			groundAlert.mockImplementation(async ({ options }) => {
+				if (options && options.tokenUsage) {
+					options.tokenUsage.addUsage({ inputTokens: 800, outputTokens: 400 }, 'gemini-2.5-flash');
+				}
+				return {
+					sentiment: 'BULLISH',
+					sentiment_score: 0.6,
+					insights: ['Gemini insight'],
+					sources: [],
+					truncated: false,
+					modelUsed: 'gemini-2.5-flash',
+				};
+			});
+
+			const tokenUsage = new TokenUsageTracker();
+			await enrichAlert(
+				{ text: 'BINANCE:BTCUSDT(240) pasó a señal de COMPRA' },
+				{ tokenUsage, useTradingViewData: true },
+			);
+
+			const json = tokenUsage.toJSON();
+			expect(json.bySource).toBeDefined();
+			expect(json.bySource.geminiGrounding).toEqual({
+				inputTokens: 800,
+				outputTokens: 400,
+				totalTokens: 1200,
+			});
+			expect(json.bySource.tradingviewMcp).toEqual({
+				inputTokens: 1000,
+				outputTokens: 200,
+				totalTokens: 1200,
+			});
+			expect(json.bySource.volumeConfirmation).toEqual({
+				inputTokens: 150,
+				outputTokens: 50,
+				totalTokens: 200,
+			});
+			expect(json.totalTokens).toBe(2600);
+			expect(json.inputTokens).toBe(1950);
+			expect(json.outputTokens).toBe(650);
+			expect(tokenUsage.formatSummary()).toContain('Total 2600');
+
+			process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
+		});
+
+		it('attributes token usage to geminiGrounding when only Gemini is active', async () => {
+			const previousGeminiFlag = process.env.ENABLE_GEMINI_GROUNDING;
+			process.env.ENABLE_GEMINI_GROUNDING = 'true';
+
+			tradingViewMcpService.isEnabled.mockReturnValue(false);
+
+			groundAlert.mockImplementation(async ({ options }) => {
+				if (options && options.tokenUsage) {
+					options.tokenUsage.addUsage({ inputTokens: 500, outputTokens: 200 });
+				}
+				return {
+					sentiment: 'BULLISH',
+					sentiment_score: 0.5,
+					insights: ['Grounded insight'],
+					sources: [],
+					truncated: false,
+				};
+			});
+
+			const tokenUsage = new TokenUsageTracker();
+			await enrichAlert(
+				{ text: 'BTC update' },
+				{ tokenUsage },
+			);
+
+			const json = tokenUsage.toJSON();
+			expect(json.bySource).toBeDefined();
+			expect(json.bySource.geminiGrounding).toEqual({
+				inputTokens: 500,
+				outputTokens: 200,
+				totalTokens: 700,
+			});
+			expect(json.totalTokens).toBe(700);
 
 			process.env.ENABLE_GEMINI_GROUNDING = previousGeminiFlag;
 		});

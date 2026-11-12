@@ -102,6 +102,92 @@ describe('requestRouting - discordWebhookUrl validation', () => {
 	});
 });
 
+describe('requestRouting - destination arrays', () => {
+	it('sends to every configured recipient with only that recipient in the payload', async () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram']),
+			sendToChannels: jest.fn(({ telegramChatId }, channels) => Promise.resolve([
+				{ success: true, channel: channels[0], recipient: telegramChatId },
+			])),
+			sendToAll: jest.fn(),
+		};
+
+		const results = await sendWithNotificationRouting(notificationManager, { text: 'Preset report' }, {
+			channels: ['telegram'],
+			destinations: { telegramChatIds: ['-1001234567890', '-1009876543210'] },
+		});
+
+		expect(notificationManager.sendToChannels).toHaveBeenCalledTimes(2);
+		expect(notificationManager.sendToChannels.mock.calls.map(([alert]) => alert.telegramChatId))
+			.toEqual(['-1001234567890', '-1009876543210']);
+		expect(notificationManager.sendToAll).not.toHaveBeenCalled();
+		expect(results).toEqual([
+			{ success: true, channel: 'telegram', recipient: '-1001234567890' },
+			{ success: true, channel: 'telegram', recipient: '-1009876543210' },
+		]);
+	});
+
+	it('assigns a stable redrive identity to each bound recipient', async () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram']),
+			sendToChannels: jest.fn().mockResolvedValue([{ success: false, channel: 'telegram' }]),
+			sendToAll: jest.fn(),
+		};
+		const alert = { text: 'Preset report', requestId: 'delivery-1' };
+		const routing = {
+			channels: ['telegram'],
+			destinations: { telegramChatIds: ['-1001234567890', '-1009876543210'] },
+		};
+
+		await sendWithNotificationRouting(notificationManager, alert, routing);
+		const firstKeys = notificationManager.sendToChannels.mock.calls
+			.map(([, , options]) => options.redriveRecipientKey);
+
+		expect(firstKeys).toEqual([
+			expect.stringMatching(/^[a-f0-9]{64}$/),
+			expect.stringMatching(/^[a-f0-9]{64}$/),
+		]);
+		expect(new Set(firstKeys).size).toBe(2);
+
+		notificationManager.sendToChannels.mockClear();
+		await sendWithNotificationRouting(notificationManager, alert, routing);
+		expect(notificationManager.sendToChannels.mock.calls.map(([, , options]) => options.redriveRecipientKey))
+			.toEqual(firstKeys);
+	});
+
+	it('does not broadcast when preset mode has no resolved destinations', async () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram', 'whatsapp']),
+			sendToChannels: jest.fn(),
+			sendToAll: jest.fn(),
+		};
+
+		await sendWithNotificationRouting(notificationManager, { text: 'Preset report' }, {
+			channels: [],
+			destinations: {},
+		});
+
+		expect(notificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(notificationManager.sendToAll).not.toHaveBeenCalled();
+	});
+
+	it('does not use the channel default when preset mode selects a channel without a saved destination', async () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram']),
+			sendToChannels: jest.fn(),
+			sendToAll: jest.fn(),
+		};
+
+		await sendWithNotificationRouting(notificationManager, { text: 'Preset report' }, {
+			channels: ['telegram'],
+			destinations: {},
+		});
+
+		expect(notificationManager.sendToChannels).not.toHaveBeenCalled();
+		expect(notificationManager.sendToAll).not.toHaveBeenCalled();
+	});
+});
+
 describe('requestRouting - strict chat ID validation (opt-in via { strictChatIds: true })', () => {
 	it('accepts numeric Telegram chat IDs and GreenAPI WhatsApp chat IDs when strict is enabled', () => {
 		const result = parseNotificationRouting(
@@ -250,6 +336,60 @@ describe('requestRouting - telegramThreadId validation', () => {
 		);
 	});
 });
+
+describe('requestRouting - idempotencyKey', () => {
+	it('parses a caller-supplied idempotencyKey on the routing result', () => {
+		const result = parseNotificationRouting({
+			text: 'hello',
+			idempotencyKey: 'redrive:abc_telegram:telegram:0',
+		});
+		expect(result.idempotencyKey).toBe('redrive:abc_telegram:telegram:0');
+	});
+
+	it('returns undefined when idempotencyKey is omitted', () => {
+		const result = parseNotificationRouting({ text: 'hello' });
+		expect(result.idempotencyKey).toBeUndefined();
+	});
+
+	it('treats empty and whitespace-only idempotencyKey as undefined', () => {
+		expect(parseNotificationRouting({ idempotencyKey: '' }).idempotencyKey).toBeUndefined();
+		expect(parseNotificationRouting({ idempotencyKey: '   ' }).idempotencyKey).toBeUndefined();
+	});
+
+	it('throws NotificationRoutingValidationError for non-string idempotencyKey', () => {
+		expect(() => parseNotificationRouting({ idempotencyKey: 42 }))
+			.toThrow(NotificationRoutingValidationError);
+		expect(() => parseNotificationRouting({ idempotencyKey: null }))
+			.not.toThrow();
+	});
+
+	it('throws NotificationRoutingValidationError when idempotencyKey exceeds 256 chars', () => {
+		const huge = 'x'.repeat(257);
+		expect(() => parseNotificationRouting({ idempotencyKey: huge }))
+			.toThrow(NotificationRoutingValidationError);
+	});
+
+	it('threads idempotencyKey through sendWithNotificationRouting to the alert payload', async () => {
+		const notificationManager = {
+			getEnabledChannels: jest.fn().mockReturnValue(['telegram']),
+			sendToChannels: jest.fn().mockResolvedValue([]),
+		};
+		await sendWithNotificationRouting(
+			notificationManager,
+			{ text: 'hello' },
+			{ channels: ['telegram'], idempotencyKey: 'redrive:abc_telegram:telegram:0' },
+		);
+		expect(notificationManager.sendToChannels).toHaveBeenCalledWith(
+			expect.objectContaining({
+				text: 'hello',
+				idempotencyKey: 'redrive:abc_telegram:telegram:0',
+			}),
+			['telegram'],
+			{},
+		);
+	});
+});
+
 
 describe('requestRouting - symbolRoutes', () => {
 	it('normalizes per-symbol channel routes', () => {

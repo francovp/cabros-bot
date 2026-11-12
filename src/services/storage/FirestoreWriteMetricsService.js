@@ -1,10 +1,36 @@
 'use strict';
 
 const sentryService = require('../monitoring/SentryService');
+const { redactString } = require('../../lib/logging');
 const {
   FIRESTORE_ERROR_CATEGORIES,
+	classifyFirestoreError,
   isFirestoreErrorCategory,
 } = require('./firestoreErrorCategories');
+
+const PERSISTENT_WRITE_DOMAINS = Object.freeze([
+	'alertStorage',
+	'signalOutcomes',
+	'notificationRedrive',
+	'newsDedup',
+]);
+const PERSISTENT_WRITE_DOMAIN_SET = new Set(PERSISTENT_WRITE_DOMAINS);
+const PERSISTENT_WRITE_HISTORY_LIMIT = 100;
+const PERSISTENT_WRITE_STATUS_FAILURE_RATE = 0.05;
+const PERSISTENT_WRITE_STATUS_RECENT_FAILURE_MS = 5 * 60 * 1000;
+const PERSISTENT_WRITE_SENTRY_ATTEMPTS = 50;
+const PERSISTENT_WRITE_SENTRY_FAILURE_RATE = 0.2;
+const PERSISTENT_WRITE_ERROR_MESSAGE_LIMIT = 120;
+
+const PERSISTENT_ERROR_CATEGORY_BY_FIRESTORE_CATEGORY = Object.freeze({
+	permission_denied: 'firestore_permission_denied',
+	unauthenticated: 'firestore_permission_denied',
+	unavailable: 'firestore_unavailable',
+	deadline_exceeded: 'firestore_unavailable',
+	resource_exhausted: 'firestore_unavailable',
+	invalid_argument: 'firestore_malformed',
+	failed_precondition: 'firestore_malformed',
+});
 
 /**
  * FirestoreWriteMetricsService
@@ -50,7 +76,166 @@ class FirestoreWriteMetricsService {
     this.lastReadAt = null;
     this.lastReadFailureAt = null;
     this.lastReadErrorCategory = null;
+	this.persistentWriteDomains = this._createPersistentWriteDomains();
   }
+
+	_createPersistentWriteDomains() {
+		return new Map(PERSISTENT_WRITE_DOMAINS.map((domain) => [domain, {
+			success: 0,
+			failure: 0,
+			attempts: [],
+			lastSuccessAt: null,
+			lastFailureAt: null,
+			lastFailureCategory: null,
+			lastFailureMessage: null,
+			activeIncidents: new Set(),
+		}]));
+	}
+
+	_persistentErrorCategory(error) {
+		let category = FIRESTORE_ERROR_CATEGORIES.UNKNOWN;
+		try {
+			category = classifyFirestoreError(error);
+		} catch {
+			return 'unknown';
+		}
+		return PERSISTENT_ERROR_CATEGORY_BY_FIRESTORE_CATEGORY[category] || 'unknown';
+	}
+
+	_sanitizePersistentErrorMessage(error) {
+		let message = null;
+		if (typeof error === 'string') {
+			message = error;
+		} else if (error && typeof error.message === 'string') {
+			message = error.message;
+		}
+		if (!message) {
+			return null;
+		}
+		try {
+			return redactString(message).slice(0, PERSISTENT_WRITE_ERROR_MESSAGE_LIMIT);
+		} catch {
+			return '[REDACTED]';
+		}
+	}
+
+	_persistentFailureRate(state, limit = PERSISTENT_WRITE_HISTORY_LIMIT) {
+		const attempts = state.attempts.slice(-limit);
+		if (attempts.length === 0) {
+			return 0;
+		}
+		return attempts.filter((attempt) => !attempt.success).length / attempts.length;
+	}
+
+	_recordPersistentWriteAttempt(domain, success, error = null) {
+		if (!PERSISTENT_WRITE_DOMAIN_SET.has(domain)) {
+			return;
+		}
+		const state = this.persistentWriteDomains.get(domain);
+		const timestamp = new Date().toISOString();
+		if (success) {
+			state.success += 1;
+			state.lastSuccessAt = timestamp;
+		} else {
+			state.failure += 1;
+			state.lastFailureAt = timestamp;
+			state.lastFailureCategory = this._persistentErrorCategory(error);
+			state.lastFailureMessage = this._sanitizePersistentErrorMessage(error);
+		}
+		state.attempts.push({ success, category: success ? null : state.lastFailureCategory, timestamp });
+		if (state.attempts.length > PERSISTENT_WRITE_HISTORY_LIMIT) {
+			state.attempts.splice(0, state.attempts.length - PERSISTENT_WRITE_HISTORY_LIMIT);
+		}
+		this._updatePersistentWriteIncident(domain, state);
+	}
+
+	_updatePersistentWriteIncident(domain, state) {
+		const recentAttempts = state.attempts.slice(-PERSISTENT_WRITE_SENTRY_ATTEMPTS);
+		if (recentAttempts.length < PERSISTENT_WRITE_SENTRY_ATTEMPTS) {
+			return;
+		}
+		const failures = recentAttempts.filter((attempt) => !attempt.success);
+		const failureRate = failures.length / recentAttempts.length;
+		if (failureRate <= PERSISTENT_WRITE_SENTRY_FAILURE_RATE) {
+			state.activeIncidents.clear();
+			return;
+		}
+
+		const category = failures[failures.length - 1]?.category || 'unknown';
+		if (state.activeIncidents.has(category)) {
+			return;
+		}
+		state.activeIncidents.add(category);
+		try {
+			sentryService.captureEvent({
+				event: {
+					type: 'external_failure',
+					channel: domain,
+					feature: 'persistent-write-health',
+					message: 'Persistent Firestore write failure threshold exceeded',
+					external: {
+						provider: 'firestore',
+						lastErrorCode: category,
+					},
+					extra: {
+						failureRate,
+						attempts: recentAttempts.length,
+						failures: failures.length,
+					},
+				},
+			});
+		} catch {
+			// Monitoring failures never affect persistence or alert delivery.
+		}
+	}
+
+	recordPersistentWriteSuccess(domain) {
+		try {
+			this._recordPersistentWriteAttempt(domain, true);
+		} catch {
+			// Metrics are deliberately fail-open.
+		}
+	}
+
+	recordPersistentWriteFailure(domain, error) {
+		try {
+			this._recordPersistentWriteAttempt(domain, false, error);
+		} catch {
+			// Metrics are deliberately fail-open.
+		}
+	}
+
+	getPersistentWriteHealthSnapshot() {
+		const now = Date.now();
+		const byDomain = {};
+		for (const domain of PERSISTENT_WRITE_DOMAINS) {
+			const state = this.persistentWriteDomains.get(domain);
+			const attempts = state.attempts;
+			const failureRate = this._persistentFailureRate(state);
+			const recentFailure = state.lastFailureAt
+				&& now - Date.parse(state.lastFailureAt) <= PERSISTENT_WRITE_STATUS_RECENT_FAILURE_MS;
+			let status = 'unconfigured';
+			if (attempts.length > 0) {
+				status = failureRate > PERSISTENT_WRITE_STATUS_FAILURE_RATE || recentFailure ? 'degraded' : 'ok';
+			}
+			byDomain[domain] = {
+				success: state.success,
+				failure: state.failure,
+				failureRate,
+				lastSuccessAt: state.lastSuccessAt,
+				lastFailureAt: state.lastFailureAt,
+				lastFailureCategory: state.lastFailureCategory,
+				status,
+			};
+		}
+		return {
+			window: {
+				startedAt: new Date(this.windowStartedAt).toISOString(),
+				durationMs: now - this.windowStartedAt,
+			},
+			byDomain,
+		};
+	}
 
   _ensureDomain(domain) {
     let counters = this.domainCounters.get(domain);
@@ -248,6 +433,7 @@ class FirestoreWriteMetricsService {
     this.lastReadFailureAt = null;
     this.lastReadErrorCategory = null;
     this.windowStartedAt = Date.now();
+	this.persistentWriteDomains = this._createPersistentWriteDomains();
   }
 }
 
@@ -256,5 +442,6 @@ const firestoreWriteMetricsService = new FirestoreWriteMetricsService();
 module.exports = {
   FirestoreWriteMetricsService,
   READ_HEALTH,
+	PERSISTENT_WRITE_DOMAINS,
   firestoreWriteMetricsService,
 };

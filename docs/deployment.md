@@ -6,7 +6,7 @@
 
 ### Supported Runtime
 
-The repository pins Node.js `24.18.0` in `.node-version` and bounds `package.json` to `>=24.18.0 <25`. GitHub Actions reads the same file, and Render native services consume the root `.node-version` file. Use that file with your local Node.js version manager.
+The repository pins Node.js `24.18.0` in `.node-version` and bounds `package.json` to `>=24.18.0 <27`. GitHub Actions reads the same file, and Render native services consume the root `.node-version` file. Use that file with your local Node.js version manager.
 
 ### 1. Install Dependencies
 

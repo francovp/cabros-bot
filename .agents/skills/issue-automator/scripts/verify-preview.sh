@@ -11,7 +11,7 @@
 # exists:
 #   https://cabros-bot-cabros-bot-pr-<pr-number>.up.railway.app
 #
-# Production (master):    https://cabros-bot-production.up.railway.app
+# Production (master):    https://cabros-crypto-bot-telegram.onrender.com
 #
 # Usage:
 #   ./verify-preview.sh <PR_NUMBER> [ENDPOINTS_CSV] [EXPECTED_SHA]
@@ -74,7 +74,7 @@ switch_to_francovp
 # Resolve preview/production URL using the GitHub Deployments API helper
 # (falls back to Railway pattern when no GitHub deployment is found)
 if [ "$PR_NUMBER" = "production" ] || [ "$PR_NUMBER" = "prod" ] || [ "$PR_NUMBER" = "master" ]; then
-  PREVIEW_URL="${PRODUCTION_URL:-https://cabros-bot-production.up.railway.app}"
+  PREVIEW_URL="${PRODUCTION_URL:-https://cabros-crypto-bot-telegram.onrender.com}"
   LABEL="production"
   EXPECTED_SHA=""  # SHA check not applicable to production
   DEPLOYMENT_SHA=""

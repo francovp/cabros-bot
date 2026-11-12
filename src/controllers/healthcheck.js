@@ -41,7 +41,7 @@ function getChannelReadinessSnapshot() {
 			enabled: dep.enabled === true,
 			ready: dep.ready === true,
 			status: dep.status || (dep.ready ? 'ready' : 'unknown'),
-			...(dep.error ? { error: dep.error } : {}),
+			...(dep.errorCode ? { errorCode: dep.errorCode } : {}),
 		};
 	}
 	if (statusEvaluationError) {

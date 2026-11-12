@@ -2,14 +2,16 @@
 
 /* global AbortController */
 
+const { resolveRemoteOverride } = require('../remoteConfig/resolveRemoteOverride');
 const crypto = require('crypto');
 const { v4: uuidv4 } = require('uuid');
 const { getAnalyzer, setNotificationManager } = require('../../controllers/webhooks/handlers/newsMonitor/analyzer');
 const { getNotificationManager } = require('../../controllers/webhooks/handlers/alert/alert');
-const { isNewsMonitorPaused } = require('../../controllers/webhooks/handlers/newsMonitor/pauseState');
+const { isNewsMonitorPaused, syncNewsMonitorPauseState } = require('../../controllers/webhooks/handlers/newsMonitor/pauseState');
 const alertStorageService = require('../storage/AlertStorageService');
 const sentryService = require('../monitoring/SentryService');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 
 const COLLECTION_NAME = 'newsMonitorSchedulerLocks';
 
@@ -53,7 +55,7 @@ function parseEnvBool(value, fallback = false) {
 }
 
 function getSymbolsFromEnv(name) {
-	return (process.env[name] || '')
+	return (resolveRemoteOverride(name) ?? process.env[name] ?? '')
 		.split(',')
 		.map((s) => String(s).trim())
 		.filter(Boolean);
@@ -85,6 +87,9 @@ class NewsMonitorSchedulerService {
 		this.lastRunErrorCount = 0;
 		this.lastError = null;
 		this.isPausedFn = options.isPaused || isNewsMonitorPaused;
+		this.syncPauseStateFn = options.syncPauseState !== undefined
+			? options.syncPauseState
+			: (options.isPaused ? null : syncNewsMonitorPauseState);
 	}
 
 	isEnabled() {
@@ -266,6 +271,14 @@ class NewsMonitorSchedulerService {
 		let executedCount = 0;
 		let errorCount = 0;
 		let lastErrorMessage = null;
+
+		if (typeof this.syncPauseStateFn === 'function') {
+			try {
+				await this.syncPauseStateFn();
+			} catch {
+				// Fail-open: do not throw into the sweep execution
+			}
+		}
 
 		if (!parseEnvBool(process.env.ENABLE_NEWS_MONITOR, false)) {
 			// News monitor is disabled — skip sweep entirely.
@@ -527,8 +540,8 @@ class NewsMonitorSchedulerService {
 		const leaseMs = options.leaseMs || this.getLeaseMs();
 		const renewIntervalMs = Math.max(1000, Math.floor(leaseMs / 2));
 		const renewHandle = renewLease
-			? setInterval(() => {
-				renewLease(Date.now()).catch((err) => {
+			? createManagedInterval('news-monitor-lease-renewal', () => {
+				return renewLease(Date.now()).catch((err) => {
 					console.warn('[NewsMonitorScheduler] Lease renew tick failed:', err.message);
 				});
 			}, renewIntervalMs)
@@ -599,7 +612,7 @@ class NewsMonitorSchedulerService {
 			});
 		} finally {
 			clearTimeout(timer);
-			if (renewHandle) clearInterval(renewHandle);
+			if (renewHandle) await renewHandle.stop();
 			this.activeSweepController = null;
 		}
 

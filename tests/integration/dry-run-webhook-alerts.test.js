@@ -3,8 +3,9 @@
 const request = require('supertest');
 const app = require('../../app');
 const { getRoutes } = require('../../src/routes');
-const { initializeNotificationServices } = require('../../src/controllers/webhooks/handlers/alert/alert');
+const { initializeNotificationServices, resetNotificationManagerForTesting } = require('../../src/controllers/webhooks/handlers/alert/alert');
 const { tradingViewMcpService } = require('../../src/services/tradingview/TradingViewMcpService');
+const { assertWithinBudget } = require('../helpers/perfBudget');
 
 jest.mock('../../src/services/tradingview/TradingViewMcpService', () => ({
 	tradingViewMcpService: {
@@ -32,6 +33,7 @@ describe('Dry-run mode for webhook alert endpoints', () => {
 		});
 
 		jest.clearAllMocks();
+		resetNotificationManagerForTesting();
 		tradingViewMcpService.callScanTool.mockResolvedValue({ items: [] });
 
 		mockTelegramSendMessage = jest.fn().mockResolvedValue({ message_id: 'test-msg-id' });
@@ -58,11 +60,14 @@ describe('Dry-run mode for webhook alert endpoints', () => {
 	// ---------------------------------------------------------------------------
 	describe('POST /api/webhook/alert', () => {
 		it('returns dryRun:true via query string and skips delivery', async () => {
+			const start = process.hrtime.bigint();
 			const res = await request(app)
 				.post('/api/webhook/alert?dryRun=true')
 				.set('x-api-key', 'test-key')
 				.send({ text: 'Bitcoin breaks $50,000 mark' })
 				.expect(200);
+			const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
+			assertWithinBudget('/api/webhook/alert', durationMs);
 
 			expect(res.body.success).toBe(true);
 			expect(res.body.dryRun).toBe(true);
@@ -128,6 +133,43 @@ describe('Dry-run mode for webhook alert endpoints', () => {
 				.expect(200);
 
 			expect(res.body.payload.signalClass).toBe('breakout');
+		});
+
+		it('returns sanitized traderIntent in dry-run payload', async () => {
+			const res = await request(app)
+				.post('/api/webhook/alert?dryRun=true')
+				.set('x-api-key', 'test-key')
+				.send({
+					text: 'BINANCE:BTCUSDT (1D) COMPRA',
+					traderIntent: {
+						side: 'BUY', entry: 60500, invalidation: 59000, target: 62000,
+						horizon: '1D', notes: '  Conservative plan  ',
+					},
+				})
+				.expect(200);
+
+			expect(res.body.payload.traderIntent).toEqual({
+				side: 'BUY', entry: 60500, invalidation: 59000, target: 62000,
+				horizon: '1D', notes: 'Conservative plan',
+			});
+			expect(mockTelegramSendMessage).not.toHaveBeenCalled();
+		});
+
+		it('rejects inverted traderIntent before delivery', async () => {
+			const res = await request(app)
+				.post('/api/webhook/alert')
+				.set('x-api-key', 'test-key')
+				.send({
+					text: 'BINANCE:BTCUSDT (1D) COMPRA',
+					traderIntent: {
+						side: 'BUY', entry: 60500, invalidation: 61000, target: 62000, horizon: '1D',
+					},
+				})
+				.expect(400);
+
+			expect(res.body.code).toBe('INVALID_REQUEST');
+			expect(res.body.error).toContain('traderIntent.invalidation');
+			expect(mockTelegramSendMessage).not.toHaveBeenCalled();
 		});
 
 		it('rejects invalid signalClass in request body with 400 INVALID_REQUEST', async () => {

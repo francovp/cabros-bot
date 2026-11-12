@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const admin = require('firebase-admin');
 const alertStorageService = require('../storage/AlertStorageService');
 const sentryService = require('../monitoring/SentryService');
+const { createManagedInterval } = require('../../lib/backgroundTimerRegistry');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { smartEscapeMarkdownV2 } = require('../notification/formatters/markdownV2Formatter');
 
@@ -770,9 +771,11 @@ class UserPriceAlertService {
 			}
 		}
 
-		const renewHandle = setInterval(() => {
-			void this._renewLease(Date.now() + leaseMs);
-		}, Math.max(1000, Math.floor(leaseMs / 2)));
+		const renewHandle = createManagedInterval(
+			'user-price-alert-lease-renewal',
+			() => this._renewLease(Date.now() + leaseMs),
+			Math.max(1000, Math.floor(leaseMs / 2)),
+		);
 		if (typeof renewHandle.unref === 'function') renewHandle.unref();
 
 		try {
@@ -1036,7 +1039,7 @@ class UserPriceAlertService {
 				error,
 			});
 		} finally {
-			clearInterval(renewHandle);
+			await renewHandle.stop();
 			if (firestore && typeof firestore.runTransaction === 'function') {
 				await this._releaseLease(Date.now());
 			}

@@ -144,6 +144,75 @@ describe('Cache Max Entries / LRU Eviction', () => {
 			}
 		});
 
+		it('batch rebuilds the expiry index when a large capacity reduction evicts many entries', async () => {
+			const c = new NewsCache(undefined, { maxEntries: 128 });
+			const mockNow = jest.spyOn(Date, 'now').mockReturnValue(1_000);
+			try {
+				c._setCacheEntry('ACTIVE:price_surge', {
+					timestamp: 0,
+					expiresAt: 2_000,
+					data: { status: 'claiming' },
+				});
+				for (let index = 0; index < 100; index++) {
+					c._setCacheEntry(`ENTRY_${index}:price_surge`, {
+						timestamp: 0,
+						expiresAt: index < 91 ? 1_500 : index < 95 ? 999 : 1_001,
+						data: { index },
+					});
+				}
+				const removeExpirationIndex = jest.spyOn(c, '_removeExpirationIndex');
+
+				c.maxEntries = 10;
+
+				const retainedEntries = Array.from(c.cache.keys());
+				const expectedMemoryBytes = Array.from(c.cache.values())
+					.reduce((total, entry) => total + c._estimatedEntryBytes.get(entry), 0);
+				expect(c.cache.size).toBe(10);
+				expect(c.cache.has('ACTIVE:price_surge')).toBe(true);
+				expect(retainedEntries.slice(1)).toEqual(
+					Array.from({ length: 9 }, (_, index) => `ENTRY_${index + 91}:price_surge`),
+				);
+				expect(removeExpirationIndex).not.toHaveBeenCalled();
+				expect(c._expirationNodesByKey.size).toBe(10);
+				expect(c._expirationRoot.size).toBe(10);
+				expect(c.getMetrics().totalEntries).toBe(6);
+				expect(c.getMetrics().evictions).toBe(91);
+				expect(c._estimatedMemoryBytes).toBe(expectedMemoryBytes);
+
+				c.cleanup();
+				expect(c.cache.size).toBe(6);
+				expect(c._expirationNodesByKey.size).toBe(6);
+				expect(c._expirationRoot.size).toBe(6);
+				expect(c.cache.has('ACTIVE:price_surge')).toBe(true);
+				expect(c.cache.has('ENTRY_95:price_surge')).toBe(true);
+				expect(c.cache.has('ENTRY_99:price_surge')).toBe(true);
+				expect(c.getMetrics()).toEqual(expect.objectContaining({ evictions: 95, totalEntries: 6 }));
+			} finally {
+				c.shutdown();
+				mockNow.mockRestore();
+			}
+		});
+
+		it('keeps individual expiry removals when a small batch would scan a larger index', async () => {
+			const c = new NewsCache(undefined, { maxEntries: 2048 });
+			try {
+				for (let index = 0; index < 2048; index++) {
+					await c.set(`ENTRY_${index}`, EventCategory.PRICE_SURGE, { index });
+				}
+				const removeExpirationIndex = jest.spyOn(c, '_removeExpirationIndex');
+
+				c.maxEntries = 1984;
+
+				expect(c.cache.size).toBe(1984);
+				expect(removeExpirationIndex).toHaveBeenCalledTimes(64);
+				expect(c._expirationNodesByKey.size).toBe(1984);
+				expect(c._expirationRoot.size).toBe(1984);
+				expect(c.getMetrics().evictions).toBe(64);
+			} finally {
+				c.shutdown();
+			}
+		});
+
 		it('evicts over-capacity entries when read via get() after capacity is reduced', async () => {
 			const c = new NewsCache(undefined, { maxEntries: 4 });
 			try {
@@ -277,6 +346,33 @@ describe('Cache Max Entries / LRU Eviction', () => {
 			expect(cache.deliveryLocks.size).toBe(2);
 			expect(cache.deliveryLocks.has('inactive')).toBe(false);
 			expect(cache.deliveryLocks.get('active')?.active).toBe(true);
+		});
+
+		it('rejects claim for an evicted inactive key when deliveryLocks is saturated with active leases', async () => {
+			// Set up key1 as inactive
+			const key1 = 'BTCUSDT:price_surge:delivery:telegram';
+			cache.deliveryLocks.set(key1, {
+				active: false,
+				persistentUntil: 0,
+			});
+			// Set up key2 and key3 as active (size = 3, but deliveryLockMaxEntries = 2)
+			cache.deliveryLocks.set('active1', {
+				active: true,
+				persistentUntil: Date.now() + 60000,
+			});
+			cache.deliveryLocks.set('active2', {
+				active: true,
+				persistentUntil: Date.now() + 60000,
+			});
+
+			// Now key1 was in cache when claimDelivery started, but _evictDeliveryLocksIfOverCapacity evicts key1!
+			// After eviction, key1 is no longer in deliveryLocks, and deliveryLocks.size is 2 (== maxEntries).
+			// Claiming key1 should be rejected because capacity is saturated with active leases!
+			const claimed = await cache.claimDelivery('BTCUSDT', EventCategory.PRICE_SURGE, 'telegram');
+
+			expect(claimed).toBe(false);
+			expect(cache.deliveryLocks.size).toBe(2);
+			expect(cache.deliveryLocks.has(key1)).toBe(false);
 		});
 
 		it('exposes deliveryLocks stats in getStats()', () => {

@@ -7,9 +7,7 @@ const { getPromptService, PromptKeys } = require('../prompts');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 const { registerGlobalUsage, tokenCostBudgetService } = require('../../lib/tokenUsage');
 
-const {
-	GROUNDING_MODEL_NAME,
-} = config;
+const { getGroundingModelName } = require('./runtimeModels');
 
 const DEFAULT_PRICE_FETCH_TIMEOUT_MS = 10000;
 
@@ -168,7 +166,7 @@ async function fetchGeminiPrice(symbol, options = {}) {
 		]);
 
 		if (priceSearchResult && priceSearchResult.usage) {
-			const searchModel = priceSearchResult.modelUsed || GROUNDING_MODEL_NAME || 'gemini';
+			const searchModel = priceSearchResult.modelUsed || getGroundingModelName() || 'gemini';
 			registerGlobalUsage(priceSearchResult.usage, searchModel);
 			if (tokenUsage) {
 				tokenUsage.addUsage(priceSearchResult.usage, searchModel);
