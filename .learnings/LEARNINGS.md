@@ -1,3 +1,78 @@
+## [LRN-20261112-114500-001] correction
+
+**Logged**: 2026-11-12T11:45:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+ETag conditional GET implementation does not avoid Firestore reads — the ETag is computed after the handler runs, so matching If-None-Match cannot prevent the controller from querying Firestore first.
+
+### Details
+On PR #1033, @francovp identified that the current PR computes its ETag in the patched `res.json` / `res.send` after the route handler has run. A matching `If-None-Match` can avoid sending the response body, but it cannot prevent the controller from querying Firestore first. This does not meet the acceptance criterion that the second GET avoid a Firestore read. @francovp presented two options: (1) Keep conditional GET as a bandwidth optimization, relax the no-Firestore-read criterion, and fix the status ETag counter churn and preserve Express ETags when `ENABLE_HTTP_CONDITIONAL_GET=false`; (2) Keep the no-read criterion and define the cache/version consistency contract, including freshness and invalidation behavior across instances, before implementation. Two additional defects: `dependencies.httpCache` counters change the status ETag on every response, and `disableAppEtag` changes Express ETag behavior globally on the first wrapped request even when `ENABLE_HTTP_CONDITIONAL_GET=false`.
+
+### Suggested Action
+When implementing conditional GET for read endpoints, decide upfront whether the goal is bandwidth savings only (post-handler ETag) or true read avoidance (pre-handler version/cache). If read avoidance is required, design a shared version source or cache invalidation strategy across instances with explicit freshness bounds before implementation.
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/controllers/etag.js, src/routes/index.js, tests/integration/etag-endpoint.test.js
+- Tags: backend, etag, conditional-get, firestore, caching, architecture
+- See Also: PR #1033, Issue #862
+- Pattern-Key: harden.conditional_get_contract
+
+---
+
+## [LRN-20261112-114500-002] correction
+
+**Logged**: 2026-11-12T11:45:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Parallel PRs modifying the same function from the same base create coordination overhead and design questions that neither branch answers alone.
+
+### Details
+On PR #1050, @francovp flagged that both PR #1050 (adds `groupBy` and `compare=last7d` to `/api/outcomes/summary`) and PR #1049 (adds detail endpoint `GET /api/outcomes/:outcomeId`) branch from the same merge-base `98be7f7f` and both modify `src/controllers/outcomes/outcomes.js` with zero deletions on either side — parallel branches rather than sequential work. The coordination problem: both change the *shape* of the `summarizeOutcomes` response. Whichever lands second has to reconcile two different response-shape edits inside one function, containing real design questions neither branch answers alone: does `GET /api/outcomes/:outcomeId` bypass aggregation entirely, or is it reachable with `groupBy`/`compare` applied? If `groupBy` is present, is a single `outcomeId` a filter within a group, or a different response contract? Are `groupBy` and `compare=last7d` valid on the summary route only, or also on the routes the other branch adds? Both also touch the same test files.
+
+### Suggested Action
+When parallel PRs modify the same function, coordinate early to settle the response contract deliberately rather than as a merge artifact. Land one first and rebase the other on top. Explicitly define whether new parameters apply to all endpoints or only the summary route.
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/controllers/outcomes/outcomes.js, tests/integration/outcomes-endpoint.test.js, tests/unit/outcomes-controller.test.js
+- Tags: backend, coordination, parallel-prs, api-design, merge-conflicts
+- See Also: PR #1050, PR #1049
+- Pattern-Key: simplify.parallel_pr_coordination
+
+---
+
+## [LRN-20261112-114500-003] correction
+
+**Logged**: 2026-11-12T11:45:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+Secret scanning workflow must be verified to trigger on `pull_request` without path filters to catch secrets in PRs from forks; documentation-only bypass patterns in CI workflows are incomplete without `CHANGELOG*`, `*.rst`, `*.adoc`, `packages/*/docs/**`; LEARNINGS.md churn should be excluded from CI scope evaluation via `paths-ignore`.
+
+### Details
+On PR #1445, @gigachad-senior-dev[bot] provided detailed follow-up review: (1) The `paths-ignore` list misses `CHANGELOG*`, `*.rst`, `*.adoc`, and `packages/*/docs/**` — these bypass patterns should be folded into the PR, not a follow-up. (2) The secret scanning workflow must be verified to trigger on `pull_request` (not just `push`) without path filters, otherwise it won't catch secrets in PRs from forks. (3) Add `act`-based workflow tests in this PR covering: doc-only → Node.js CI skipped + secret scanning runs; doc + code → both run; doc with fake secret → secret scanning detects it. (4) Add `.learnings/**` to `paths-ignore` so future automated learning runs don't trigger CI or pollute diff scope. (5) Use a YAML anchor to deduplicate the `push` and `pull_request` ignore patterns to prevent drift.
+
+### Suggested Action
+When hardening CI workflows for documentation-only changes: verify secret scanning triggers on `pull_request` without path filters; expand bypass patterns to cover all documentation formats and locations; add workflow tests using `act` to prove `paths-ignore` semantics; exclude automation-generated files (`.learnings/**`) from CI triggers; use YAML anchors to deduplicate workflow triggers.
+
+### Metadata
+- Source: github_review
+- Related Files: .github/workflows/node.js.yml, .github/workflows/secret-scanning.yml, .agents/skills/issue-automator/SKILL.md
+- Tags: backend, ci, secret-scanning, documentation, workflow-testing, automation
+- See Also: PR #1445, Issue #1394
+- Pattern-Key: harden.ci_workflow_completeness
+
+---
+
 ## [LRN-20261112-094500-001] correction
 
 **Logged**: 2026-11-12T09:45:00Z
