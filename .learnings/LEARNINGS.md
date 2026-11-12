@@ -1,3 +1,28 @@
+## [LRN-20261112-094500-001] correction
+
+**Logged**: 2026-11-12T09:45:00Z
+**Priority**: medium
+**Status**: pending
+**Area**: trading
+
+### Summary
+Auto-trade SELL order idempotency is already handled by the existing reservation/cooldown layer — adding a new order-level idempotency key is unnecessary and duplicates existing guards.
+
+### Details
+On Issue #1495 (Auto-trade: execute SELL signals as balance-sized MARKET exits), the Virgin Trainee bot suggested adding an idempotency key (hash of alertId + symbol + timestamp bucket) to prevent duplicate SELL intents. @gigachad-senior-dev corrected that the existing reservation layer already returns `skip: 'COOLDOWN_ACTIVE'` or `skip: 'DUPLICATE_SIGNAL_ID'` before order construction, using the same `signalId` (hash of alert payload + symbol + timeframe bucket) plus the side-namespaced cooldown key (`autoTrade:cooldown:${symbol}:SELL`). The reservation TTL covers the worst-case alert-retry window (30s in AlertSignalRouter.js).
+
+### Suggested Action
+When designing idempotency for auto-trade paths, first check the existing reservation/cooldown gates in AlertSignalRouter.js and AutoTradeReservationService.js before proposing new keys. The side-namespaced cooldown and signalId deduplication already handle this.
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/services/trading/AlertSignalRouter.js, src/services/trading/AutoTradeReservationService.js
+- Tags: trading, auto-trade, idempotency, reservations, cooldown
+- See Also: Issue #1495, Issue #955
+- Pattern-Key: simplify.idempotency_reuse
+
+---
+
 ## [LRN-20261106-155000-001] correction
 
 **Logged**: 2026-11-06T15:50:00Z
