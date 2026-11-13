@@ -674,3 +674,41 @@ Review the feedback and adjust engagement strategy accordingly. If this is a tec
 - Last-Seen: 2026-11-11
 
 ---
+
+## [LRN-20261113-154500-001] correction
+
+**Logged**: 2026-11-13T15:45:00Z
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+Batch /precio reply path lacks MarkdownV2 parsing and escaping — latent parse-failure bug when parse_mode is added; plus five P2 findings on pacing, per-lookup bounding, timeframe suffix parsing, single-symbol code path, and documentation.
+
+### Details
+On PR #950 (feat(precio): batch symbol lookups), @francovp identified six findings:
+
+**P1 — MarkdownV2 consistency**: The new batch reply builds its message and sends it bare without `{ parse_mode: 'MarkdownV2' }`, where every other reply in the codebase passes it explicitly. The interpolated `r.symbol` / `r.error` values are unescaped. While Telegram treats the text as plain text today (no parse error), the moment `parse_mode` is added to this call, every symbol containing `.`, `-`, `(`, `)`, or the `•` bullets will fail to parse and Telegram will reject the whole message. This is the same trap that GH-711 was about.
+
+**P2 — Pacing budget**: With production defaults of 8 RPM and a 5-second window, a queued batch of equity lookups exceeds the provider budget, so larger batches will self-throttle or drop.
+
+**P2 — Bound each lookup**: If any single Binance lookup stalls at the client's 5s timeout, `fetchSymbolsPrices` waits for the slowest rather than failing that row independently.
+
+**P2 — Parenthesized timeframe suffixes**: The previously supported `BTCUSDT (1h)` form may not survive `parseSymbolList`, which would be a silent regression for existing users.
+
+**P2 — One-symbol requests**: Should use the parsed token from `parseSymbolList` rather than re-deriving from the raw argument.
+
+**P2 — Documentation**: The new batch syntax is not in `/help` output or the README commands table, so the feature would ship undiscoverable.
+
+@francovp held the PR pending resolution of the P1 and the pacing/bounding questions.
+
+### Suggested Action
+When adding new Telegram reply paths: always apply `parse_mode: 'MarkdownV2'` explicitly and escape all interpolated values with `smartEscapeMarkdownV2`/`markdownV2Formatter` to prevent latent parse failures. For batched external API calls: implement per-item timeouts and pacing awareness so a single slow call does not block the entire batch. Preserve existing user-facing syntax (e.g., parenthesized timeframes) unless explicitly deprecated. Document new CLI syntax in `/help` and README before merge.
+
+### Metadata
+- Source: github_review
+- Related Files: src/controllers/commands/handlers/core/fetchPriceCryptoSymbol.js, src/controllers/commands.js, src/services/telegram/TelegramService.js
+- Tags: backend, telegram, markdownv2, batching, pacing, timeouts, documentation, latent-bug
+- See Also: PR #950, Issue #626, GH-711
+- Pattern-Key: harden.telegram_batch_reply_safety
+---
