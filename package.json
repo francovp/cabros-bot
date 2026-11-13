@@ -84,7 +84,7 @@
     "jest": "^30.5.2",
     "node-mocks-http": "^1.18.1",
     "nodemon": "^2.0.7",
-    "prettier": "^3.8.3",
+    "prettier": "^3.9.9",
     "supertest": "^7.1.4"
   }
 }
