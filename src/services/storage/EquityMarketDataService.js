@@ -1,6 +1,9 @@
 'use strict';
 
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { CircuitBreaker } = require('../../lib/circuitBreaker');
+
+const twelveDataCircuitBreaker = new CircuitBreaker({ name: 'twelve-data' });
 
 const PROVIDER_NAME = 'twelve-data';
 const DEFAULT_BASE_URL = 'https://api.twelvedata.com';
@@ -9,12 +12,15 @@ const MAX_TIMEOUT_MS = 30000;
 const DEFAULT_RPM = 8;
 const SUPPORTED_EXCHANGES = Object.freeze(['BATS', 'NASDAQ', 'NYSE', 'AMEX', 'NYSE ARCA', 'FX_IDC', 'SPCFD']);
 const INTERVALS = Object.freeze({
+	'1m': '1min',
 	'5m': '5min',
 	'15m': '15min',
+	'30m': '30min',
 	'1h': '1h',
 	'4h': '4h',
 	'1D': '1day',
 	'1W': '1week',
+	'1M': '1month',
 });
 
 const REASONS = Object.freeze({
@@ -25,12 +31,14 @@ const REASONS = Object.freeze({
 	INVALID_RESPONSE: 'twelve_data_invalid_response',
 	NO_DATA: 'twelve_data_no_data',
 	UNAVAILABLE: 'twelve_data_unavailable',
+	CIRCUIT_BREAKER_OPEN: 'twelve_data_circuit_breaker_open',
 });
 
 const TRANSIENT_REASONS = Object.freeze(new Set([
 	REASONS.RATE_LIMITED,
 	REASONS.TIMEOUT,
 	REASONS.UNAVAILABLE,
+	REASONS.CIRCUIT_BREAKER_OPEN,
 	'binance_unavailable',
 	'market_data_unavailable',
 ]));
@@ -45,6 +53,19 @@ const STRUCTURAL_REASONS = Object.freeze(new Set([
 	'missing_barrier',
 	'binance_invalid_symbol',
 ]));
+
+/**
+ * Provider readiness states. `unverified` is deliberately distinct from `ready`
+ * (and from `degraded`): before the first observed call there is no evidence the
+ * credentials work, and calling that "ready" is what made this flag lie.
+ */
+const READINESS = Object.freeze({
+	UNVERIFIED: 'unverified',
+	VERIFIED: 'verified',
+	DEGRADED: 'degraded',
+});
+
+const KNOWN_REASONS = new Set(Object.values(REASONS));
 
 function isTransientReason(reason) {
 	return typeof reason === 'string' && TRANSIENT_REASONS.has(reason);
@@ -75,10 +96,78 @@ let pacingQueue = Promise.resolve();
 let lastScheduledAtMs = 0;
 let cooldownUntilMs = 0;
 
+/**
+ * Process-local provider outcome window. Readiness is derived from observed calls
+ * rather than credential shape, so a present-but-broken key (typo, revoked,
+ * quota-exhausted, wrong plan, unreachable region) cannot report itself as ready.
+ * Counters reset on restart and every recorder is fail-open: telemetry must never
+ * block an equity outcome evaluation.
+ */
+const providerReadiness = {
+	requestsAttempted: 0,
+	requestsSucceeded: 0,
+	requestsFailed: 0,
+	consecutiveFailures: 0,
+	lastSuccessAt: null,
+	lastFailureAt: null,
+	lastErrorReason: null,
+};
+
 function _resetPacerForTesting() {
 	pacingQueue = Promise.resolve();
 	lastScheduledAtMs = 0;
 	cooldownUntilMs = 0;
+}
+
+function _resetReadinessForTesting() {
+	providerReadiness.requestsAttempted = 0;
+	providerReadiness.requestsSucceeded = 0;
+	providerReadiness.requestsFailed = 0;
+	providerReadiness.consecutiveFailures = 0;
+	providerReadiness.lastSuccessAt = null;
+	providerReadiness.lastFailureAt = null;
+	providerReadiness.lastErrorReason = null;
+}
+
+function _resetCircuitBreakerForTesting() {
+	twelveDataCircuitBreaker.reset();
+}
+
+function _recordProviderSuccess() {
+	providerReadiness.requestsSucceeded += 1;
+	providerReadiness.consecutiveFailures = 0;
+	providerReadiness.lastSuccessAt = new Date().toISOString();
+}
+
+function _recordProviderFailure(reason, { affectsReadiness = true } = {}) {
+	providerReadiness.requestsFailed += 1;
+	if (affectsReadiness) {
+		providerReadiness.consecutiveFailures += 1;
+	}
+	providerReadiness.lastFailureAt = new Date().toISOString();
+	providerReadiness.lastErrorReason = typeof reason === 'string' && KNOWN_REASONS.has(reason)
+		? reason
+		: REASONS.UNAVAILABLE;
+}
+
+function _resolveReadiness() {
+	if (providerReadiness.consecutiveFailures > 0) {
+		return READINESS.DEGRADED;
+	}
+	if (providerReadiness.requestsSucceeded > 0) {
+		return READINESS.VERIFIED;
+	}
+	return READINESS.UNVERIFIED;
+}
+
+// Telemetry must never be able to fail an equity evaluation: every readiness
+// mutation runs through this guard so a counter error cannot reject a caller.
+function recordReadinessSafely(record) {
+	try {
+		record();
+	} catch (error) {
+		console.warn('[EquityMarketDataService] readiness recording failed:', error && error.message);
+	}
 }
 
 function parseRpm(value) {
@@ -120,7 +209,13 @@ function normalizeSymbol(symbol) {
 	if (!symbol || typeof symbol !== 'string') {
 		return null;
 	}
-	let cleaned = symbol.trim().toUpperCase().replace(/\s*\([A-Za-z0-9]+\)$/, '');
+	let cleaned = symbol.trim().toUpperCase();
+	if (cleaned.endsWith(')')) {
+		const openParenIndex = cleaned.lastIndexOf('(');
+		if (openParenIndex > 0 && /^[A-Za-z0-9]+$/.test(cleaned.slice(openParenIndex + 1, -1))) {
+			cleaned = cleaned.slice(0, openParenIndex).trim();
+		}
+	}
 	if (/^[A-Z]{6}$/.test(cleaned) && !cleaned.includes('/')) {
 		cleaned = `${cleaned.slice(0, 3)}/${cleaned.slice(3)}`;
 	}
@@ -204,11 +299,34 @@ function getConfig() {
 	};
 }
 
+/**
+ * `configured` reports credential *shape* only (gate on, provider selected, key
+ * present). `ready` requires a proven successful provider call, so `configured:
+ * true` never on its own reads as "equity outcomes are working". Gate state wins
+ * over provider health: a disabled or keyless deployment is `disabled` /
+ * `misconfigured` regardless of what an earlier call observed.
+ */
 function getStatus() {
 	const config = getConfig();
-	const status = !config.enabled
-		? 'disabled'
-		: config.configured ? 'ready' : 'misconfigured';
+	const readiness = _resolveReadiness();
+	const breakerStatus = twelveDataCircuitBreaker.getStatus();
+
+	let status;
+	if (!config.enabled) {
+		status = 'disabled';
+	} else if (!config.configured) {
+		status = 'misconfigured';
+	} else if (readiness === READINESS.DEGRADED) {
+		status = 'degraded';
+	} else if (readiness === READINESS.VERIFIED) {
+		status = 'ready';
+	} else {
+		status = READINESS.UNVERIFIED;
+	}
+
+	if (status === 'ready' && breakerStatus.state === 'open') {
+		status = 'degraded';
+	}
 
 	return {
 		provider: config.provider || null,
@@ -216,6 +334,15 @@ function getStatus() {
 		configured: config.configured,
 		ready: status === 'ready',
 		status,
+		readiness,
+		requestsAttempted: providerReadiness.requestsAttempted,
+		requestsSucceeded: providerReadiness.requestsSucceeded,
+		requestsFailed: providerReadiness.requestsFailed,
+		consecutiveFailures: providerReadiness.consecutiveFailures,
+		lastSuccessAt: providerReadiness.lastSuccessAt,
+		lastFailureAt: providerReadiness.lastFailureAt,
+		lastErrorReason: providerReadiness.lastErrorReason,
+		circuitBreaker: breakerStatus,
 		supportedExchanges: [...SUPPORTED_EXCHANGES],
 		timeoutMs: config.timeoutMs,
 		rpm: config.rpm,
@@ -268,16 +395,35 @@ async function requestJson(path, params, timeoutOverride) {
 		throw new EquityMarketDataError(REASONS.NOT_CONFIGURED);
 	}
 
+	const attempt = typeof twelveDataCircuitBreaker.acquireAttempt === 'function'
+		? twelveDataCircuitBreaker.acquireAttempt()
+		: { allowed: twelveDataCircuitBreaker.canExecute(), token: twelveDataCircuitBreaker.isHalfOpen() ? Symbol('probe') : null };
+	if (!attempt.allowed) {
+		throw new EquityMarketDataError(REASONS.CIRCUIT_BREAKER_OPEN, { status: 503 });
+	}
+	const probeToken = attempt.token;
+
 	const totalTimeoutMs = timeoutOverride === undefined ? config.timeoutMs : parseTimeout(timeoutOverride);
 	const startMs = Date.now();
 
-	await waitForPacing(totalTimeoutMs);
+	try {
+		await waitForPacing(totalTimeoutMs);
+	} catch (error) {
+		if (probeToken) twelveDataCircuitBreaker.releaseProbe(probeToken);
+		throw error;
+	}
 
 	const elapsedMs = Date.now() - startMs;
 	const remainingFetchTimeoutMs = Math.max(1, totalTimeoutMs - elapsedMs);
 
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(), remainingFetchTimeoutMs);
+
+	// Counted only once pacing has granted a slot: a local pacing rejection happens
+	// before any network call and is therefore no evidence about the provider.
+	recordReadinessSafely(() => {
+		providerReadiness.requestsAttempted += 1;
+	});
 
 	try {
 		const response = await fetch(buildUrl(path, params), {
@@ -292,7 +438,7 @@ async function requestJson(path, params, timeoutOverride) {
 		try {
 			body = await response.json();
 		} catch {
-			throw new EquityMarketDataError(REASONS.INVALID_RESPONSE);
+			throw new EquityMarketDataError(REASONS.INVALID_RESPONSE, { status: response.status });
 		}
 
 		if (response.status === 429) {
@@ -316,15 +462,30 @@ async function requestJson(path, params, timeoutOverride) {
 			throw new EquityMarketDataError(reason, { status: response.status });
 		}
 
+		twelveDataCircuitBreaker.recordSuccess(probeToken);
+		recordReadinessSafely(() => _recordProviderSuccess());
 		return body;
 	} catch (error) {
+		let normalized;
 		if (error instanceof EquityMarketDataError) {
-			throw error;
+			normalized = error;
+		} else if (error && error.name === 'AbortError') {
+			normalized = new EquityMarketDataError(REASONS.TIMEOUT);
+		} else {
+			normalized = new EquityMarketDataError(REASONS.UNAVAILABLE, { cause: error });
 		}
-		if (error && error.name === 'AbortError') {
-			throw new EquityMarketDataError(REASONS.TIMEOUT);
+		const requestSpecificRejection = normalized.status === 400 || normalized.status === 404;
+		if (normalized.reason !== REASONS.NO_DATA
+			&& normalized.reason !== REASONS.CIRCUIT_BREAKER_OPEN
+			&& !requestSpecificRejection) {
+			twelveDataCircuitBreaker.recordFailure(normalized, probeToken);
+		} else if (probeToken) {
+			twelveDataCircuitBreaker.releaseProbe(probeToken);
 		}
-		throw new EquityMarketDataError(REASONS.UNAVAILABLE, { cause: error });
+		recordReadinessSafely(() => _recordProviderFailure(normalized.reason, {
+			affectsReadiness: !requestSpecificRejection,
+		}));
+		throw normalized;
 	} finally {
 		clearTimeout(timeoutId);
 	}
@@ -427,6 +588,7 @@ module.exports = {
 	PROVIDER_NAME,
 	SUPPORTED_EXCHANGES,
 	REASONS,
+	READINESS,
 	TRANSIENT_REASONS,
 	STRUCTURAL_REASONS,
 	isTransientReason,
@@ -443,4 +605,9 @@ module.exports = {
 	normalizeSymbol,
 	resolveQueryExchange,
 	_resetPacerForTesting,
+	_resetReadinessForTesting,
+	_resetCircuitBreakerForTesting,
+	_recordProviderSuccess,
+	getCircuitBreakerStatus: () => twelveDataCircuitBreaker.getStatus(),
+	_getCircuitBreakerForTesting: () => twelveDataCircuitBreaker,
 };

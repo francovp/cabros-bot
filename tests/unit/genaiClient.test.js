@@ -16,6 +16,7 @@ jest.mock('../../src/services/grounding/config', () => ({
 const genaiClient = require('../../src/services/grounding/genaiClient');
 const sentryService = require('../../src/services/monitoring/SentryService');
 const geminiQuotaManager = require('../../src/services/grounding/geminiQuotaManager');
+const remoteConfigService = require('../../src/services/remoteConfig/RemoteConfigService');
 
 // Mock fetch globally
 global.fetch = jest.fn();
@@ -26,9 +27,48 @@ describe('GenaiClient robustness', () => {
 		// Reset genAI to avoid using the real SDK in tests
 		genaiClient.genAI = { models: { generateContent: jest.fn().mockResolvedValue({}) } };
 		jest.resetAllMocks();
+		remoteConfigService._resetForTesting();
 	});
 
 	describe('Google Search (Default)', () => {
+		it('uses Remote Config model selectors for search and alert enrichment', async () => {
+			const previousRemoteConfigGate = process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+			process.env.ENABLE_FIREBASE_REMOTE_CONFIG = 'true';
+			remoteConfigService._setRemoteOverridesForTesting({
+				GROUNDING_MODEL_NAME: 'remote-grounding-model',
+				GEMINI_MODEL_NAME: 'remote-gemini-model',
+			});
+			genaiClient.genAI.models.generateContent
+				.mockResolvedValueOnce({
+					response: {
+						text: 'Google Answer',
+						candidates: [{ groundingMetadata: { groundingChunks: [{ web: { title: 'Source', uri: 'https://example.com' } }] } }],
+					},
+				})
+				.mockResolvedValueOnce({ response: { text: 'Enriched answer' } });
+
+			try {
+				await genaiClient.search({ query: 'test' });
+				await genaiClient.llmCallv2({ systemPrompt: 'system', userPrompt: 'user' });
+
+				expect(genaiClient.genAI.models.generateContent).toHaveBeenNthCalledWith(
+					1,
+					expect.objectContaining({ model: 'remote-grounding-model' }),
+				);
+				expect(genaiClient.genAI.models.generateContent).toHaveBeenNthCalledWith(
+					2,
+					expect.objectContaining({ model: 'remote-gemini-model' }),
+				);
+			} finally {
+				if (previousRemoteConfigGate === undefined) {
+					delete process.env.ENABLE_FIREBASE_REMOTE_CONFIG;
+				} else {
+					process.env.ENABLE_FIREBASE_REMOTE_CONFIG = previousRemoteConfigGate;
+				}
+				remoteConfigService._resetForTesting();
+			}
+		});
+
 		it('uses Google Search when FORCE_BRAVE_SEARCH is false', async () => {
 			// Mock successful Google Search response
 			genaiClient.genAI.models.generateContent.mockResolvedValueOnce({
@@ -47,6 +87,7 @@ describe('GenaiClient robustness', () => {
 			expect(res.results).toHaveLength(1);
 			expect(res.results[0].title).toBe('G1');
 			expect(res.searchResultText).toBe('Google Answer');
+			expect(geminiQuotaManager.getSnapshot().requestsInWindow).toBe(1);
 
 			// Should not call Brave (fetch)
 			expect(global.fetch).not.toHaveBeenCalled();
@@ -93,6 +134,11 @@ describe('GenaiClient robustness', () => {
 			expect(res.results).toHaveLength(1);
 			expect(res.results[0].title).toBe('BraveQuotaFallback');
 			expect(global.fetch).toHaveBeenCalledTimes(1);
+			expect(geminiQuotaManager.getSnapshot()).toEqual(expect.objectContaining({
+				requestsInWindow: 1,
+				exhaustedEventsInWindow: 1,
+				quotaStatus: 'exhausted',
+			}));
 		});
 
 		it('rethrows Gemini quota exhaustion when requested by caller', async () => {
@@ -398,6 +444,27 @@ describe('GenaiClient robustness', () => {
 	});
 
 	describe('llmCall quota cooldown handling', () => {
+		it('marks wrapped quota errors as already recorded by the provider boundary', async () => {
+			const providerError = Object.assign(new Error('RESOURCE_EXHAUSTED: quota exceeded'), {
+				status: 429,
+				retryDelay: 1000,
+			});
+			genaiClient.genAI.models.generateContent.mockRejectedValueOnce(providerError);
+
+			let wrappedError;
+			try {
+				await genaiClient.llmCall({ prompt: 'test prompt' });
+			} catch (error) {
+				wrappedError = error;
+			}
+
+			expect(wrappedError).toMatchObject({
+				message: expect.stringContaining('RESOURCE_EXHAUSTED'),
+			});
+			geminiQuotaManager.triggerQuotaCooldown(wrappedError);
+			expect(geminiQuotaManager.getSnapshot().exhaustedEventsInWindow).toBe(1);
+		});
+
 		it('throws quota error and does not invoke generateContent when cooldown is active', async () => {
 			geminiQuotaManager.triggerQuotaCooldown({ status: 429, retryDelay: 10000 });
 

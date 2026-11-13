@@ -442,6 +442,104 @@ class WorkerHeartbeatMonitor {
 		}
 	}
 
+	getSignalOutcomeSnapshot() {
+		const cached = this._getCached('signal-outcome');
+		if (cached) return cached;
+
+		let enabled = true;
+		let role = 'web';
+		let intervalMs = 5 * 60 * 1000;
+		try {
+			if (typeof this.getSignalOutcomeWorkerStatus === 'function') {
+				const status = this.getSignalOutcomeWorkerStatus() || {};
+				enabled = status.enabled !== false;
+				role = status.role || 'web';
+				intervalMs = getWorkerIntervalMs(status.intervalMs) || intervalMs;
+			}
+		} catch (error) {
+			this.logger.warn?.(`[WorkerHeartbeatMonitor] signal-outcome worker status read failed: ${error.message}`);
+		}
+
+		if (!enabled) {
+			return {
+				...buildEmptySnapshot('signal-outcome', null),
+				role,
+				enabled: false,
+				intervalMs,
+			};
+		}
+		if (role === 'disabled') {
+			return {
+				worker: 'signal-outcome',
+				health: HEALTH_DISABLED,
+				hasHeartbeat: false,
+				heartbeatAgeMs: null,
+				lastHeartbeatAt: null,
+				lastRunAt: null,
+				role,
+				thresholdMs: null,
+				stalenessMultiplier: getStalenessMultiplier(),
+				enabled: true,
+				intervalMs,
+				error: null,
+				checkedAt: this.now(),
+			};
+		}
+
+		return {
+			...buildEmptySnapshot('signal-outcome', null),
+			role,
+			enabled: true,
+			intervalMs,
+			checkedAt: this.now(),
+		};
+	}
+
+	getScannerPresetSchedulerSnapshot() {
+		const cached = this._getCached('scanner-preset-scheduler');
+		if (cached) return cached;
+
+		let enabled = true;
+		let role = 'web';
+		let intervalMs = 60 * 1000;
+		try {
+			if (typeof this.getScannerPresetSchedulerWorkerStatus === 'function') {
+				const status = this.getScannerPresetSchedulerWorkerStatus() || {};
+				enabled = status.enabled !== false;
+				role = status.role || 'web';
+				intervalMs = getWorkerIntervalMs(status.intervalMs) || intervalMs;
+			}
+		} catch (error) {
+			this.logger.warn?.(`[WorkerHeartbeatMonitor] scanner-preset status read failed: ${error.message}`);
+		}
+
+		if (!enabled || role === 'disabled') {
+			return {
+				worker: 'scanner-preset-scheduler',
+				health: HEALTH_DISABLED,
+				hasHeartbeat: false,
+				heartbeatAgeMs: null,
+				lastHeartbeatAt: null,
+				lastRunAt: null,
+				role,
+				thresholdMs: null,
+				stalenessMultiplier: getStalenessMultiplier(),
+				enabled: false,
+				intervalMs,
+				error: null,
+				checkedAt: this.now(),
+			};
+		}
+
+		return {
+			...buildEmptySnapshot('scanner-preset-scheduler', null),
+			role,
+			enabled: true,
+			intervalMs,
+			checkedAt: this.now(),
+		};
+	}
+
 	async getSignalOutcomeStatus(forceRefresh = false) {
 		if (!forceRefresh) {
 			const cached = this._getCached('signal-outcome');

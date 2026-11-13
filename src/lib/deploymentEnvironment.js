@@ -3,10 +3,34 @@ function isRailwayPreviewEnvironment(env) {
 		|| /(?:^|[-_ ])pr(?:[-_ ]|$)/i.test(env.RAILWAY_ENVIRONMENT_NAME || '');
 }
 
+// OpenClaw PR previews (host openclaw.tail5e4271.ts.net) are not Render PR
+// previews: they carry their own preview markers and IS_PULL_REQUEST without
+// RENDER. They previously classified as production-like, so previews started
+// Telegram polling and shared the production WEBHOOK_API_KEY (#1296/#1286).
+function isOpenClawPreviewEnvironment(env) {
+	const name = env.OPENCLAW_PREVIEW_NAME || env.OPENCLAW_BRANCH_NAME || '';
+	if (typeof name === 'string' && /(?:^|[-_ ])pr[-_ ]?\d+/i.test(name)) {
+		return true;
+	}
+	if (env.OPENCLAW_PREVIEW === 'true' || env.OPENCLAW_IS_PREVIEW === 'true') {
+		return true;
+	}
+	// OpenClaw deployments set a service/host marker alongside the generic
+	// pull-request flag. A bare IS_PULL_REQUEST without any platform marker
+	// is deliberately not treated as OpenClaw evidence (avoid classifying a
+	// misconfigured production host as preview).
+	const hasOpenClawMarker = typeof env.OPENCLAW_HOST === 'string' && env.OPENCLAW_HOST.length > 0;
+	if (env.IS_PULL_REQUEST === 'true' && env.RENDER !== 'true' && hasOpenClawMarker) {
+		return true;
+	}
+	return false;
+}
+
 function isPreviewEnvironment(env = process.env) {
 	return env.VERCEL_ENV === 'preview'
 		|| (env.RENDER === 'true' && env.IS_PULL_REQUEST === 'true')
-		|| isRailwayPreviewEnvironment(env);
+		|| isRailwayPreviewEnvironment(env)
+		|| isOpenClawPreviewEnvironment(env);
 }
 
 function isProductionLikeEnvironment(env = process.env) {
@@ -14,6 +38,13 @@ function isProductionLikeEnvironment(env = process.env) {
 		|| env.RENDER === 'true'
 		|| env.VERCEL_ENV === 'production'
 		|| Boolean(env.RAILWAY_ENVIRONMENT_NAME);
+}
+
+function resolveDeploymentEnvironment(env = process.env) {
+	if (env.SENTRY_ENVIRONMENT) return env.SENTRY_ENVIRONMENT;
+	if (isPreviewEnvironment(env)) return 'preview';
+	if (isProductionLikeEnvironment(env)) return 'production';
+	return env.NODE_ENV || 'development';
 }
 
 function getDeploymentCommit(env = process.env) {
@@ -41,9 +72,197 @@ function getDeploymentRepoSlug(env = process.env) {
 	return vercelRepoSlug || railwayRepoName || 'cabros-bot';
 }
 
+let packageJsonMetadata = null;
+try {
+	packageJsonMetadata = require('../../package.json');
+} catch {
+	packageJsonMetadata = null;
+}
+
+let cachedLocalGitSha = undefined;
+
+function _resetLocalGitShaCache() {
+	cachedLocalGitSha = undefined;
+}
+
+function getLocalGitSha() {
+	if (cachedLocalGitSha !== undefined) {
+		return cachedLocalGitSha;
+	}
+	try {
+		const { execSync } = require('child_process');
+		const sha = execSync('git rev-parse HEAD', {
+			timeout: 1000,
+			stdio: ['ignore', 'pipe', 'ignore'],
+			encoding: 'utf8',
+		}).trim();
+		cachedLocalGitSha = sha && /^[0-9a-f]{7,40}$/i.test(sha) ? sha : null;
+	} catch {
+		cachedLocalGitSha = null;
+	}
+	return cachedLocalGitSha;
+}
+
+function getDeploymentPlatform(env = process.env) {
+	if (!env || typeof env !== 'object') {
+		return null;
+	}
+	if (env.RENDER === 'true' || env.RENDER_SERVICE_ID || env.RENDER_SERVICE_NAME) {
+		return 'render';
+	}
+	if (env.RAILWAY_ENVIRONMENT_NAME || env.RAILWAY_SERVICE_ID || env.RAILWAY_GIT_COMMIT_SHA) {
+		return 'railway';
+	}
+	if (env.VERCEL === '1' || env.VERCEL_ENV) {
+		return 'vercel';
+	}
+	if (env.NODE_ENV === 'test') {
+		return 'test';
+	}
+	if (env === process.env || env.NODE_ENV || env.PORT) {
+		return 'local';
+	}
+	return null;
+}
+
+function getDeploymentService(env = process.env) {
+	if (!env || typeof env !== 'object') {
+		return (packageJsonMetadata && packageJsonMetadata.name) || 'cabros-bot';
+	}
+	const service = env.SERVICE_NAME
+		|| env.RENDER_SERVICE_NAME
+		|| env.RAILWAY_SERVICE_NAME
+		|| (packageJsonMetadata && packageJsonMetadata.name)
+		|| 'cabros-bot';
+	return typeof service === 'string' && service.trim() ? service.trim() : 'cabros-bot';
+}
+
+function getRuntimeVersion() {
+	return (packageJsonMetadata && typeof packageJsonMetadata.version === 'string')
+		? packageJsonMetadata.version
+		: null;
+}
+
+function getDeploymentIdentity(env = process.env) {
+	try {
+		const targetEnv = (env && typeof env === 'object') ? env : process.env;
+		const platform = getDeploymentPlatform(targetEnv);
+		let gitSha = getDeploymentCommit(targetEnv);
+		if (!gitSha && (targetEnv === process.env || targetEnv.RESOLVE_LOCAL_GIT_SHA === 'true')) {
+			gitSha = getLocalGitSha();
+		}
+		const service = getDeploymentService(targetEnv);
+		const runtimeVersion = getRuntimeVersion(targetEnv);
+
+		return {
+			platform: platform || null,
+			gitSha: gitSha || null,
+			service: service || null,
+			runtimeVersion: runtimeVersion || null,
+		};
+	} catch {
+		return {
+			platform: null,
+			gitSha: null,
+			service: 'cabros-bot',
+			runtimeVersion: null,
+		};
+	}
+}
+
+const processStartedAt = new Date().toISOString();
+
+function getBuildInfo(env = process.env) {
+	try {
+		const targetEnv = (env && typeof env === 'object') ? env : process.env;
+		const platform = getDeploymentPlatform(targetEnv);
+		let fullCommit = getDeploymentCommit(targetEnv);
+		if (!fullCommit && (targetEnv === process.env || targetEnv.RESOLVE_LOCAL_GIT_SHA === 'true')) {
+			fullCommit = getLocalGitSha();
+		}
+		let shortCommit = null;
+		if (fullCommit && typeof fullCommit === 'string' && fullCommit.trim().length > 0) {
+			const trimmed = fullCommit.trim();
+			shortCommit = trimmed.length > 7 ? trimmed.slice(0, 7) : trimmed;
+		}
+		const repo = getDeploymentRepoSlug(targetEnv);
+
+		let environment = 'unknown';
+		if (targetEnv.SENTRY_ENVIRONMENT) {
+			environment = targetEnv.SENTRY_ENVIRONMENT;
+		} else if (isPreviewEnvironment(targetEnv)) {
+			environment = 'preview';
+		} else if (platform === 'render') {
+			environment = 'render';
+		} else if (platform === 'vercel') {
+			environment = 'vercel';
+		} else if (platform === 'railway') {
+			environment = 'railway';
+		} else if (isProductionLikeEnvironment(targetEnv)) {
+			environment = 'production';
+		} else if (targetEnv.NODE_ENV) {
+			environment = targetEnv.NODE_ENV;
+		}
+
+		return {
+			name: getDeploymentService(targetEnv),
+			version: getRuntimeVersion(targetEnv),
+			commit: shortCommit || null,
+			full: fullCommit || null,
+			repo: repo || null,
+			platform: platform || 'unknown',
+			environment: environment || 'unknown',
+			startedAt: processStartedAt,
+			uptimeSeconds: Math.floor(process.uptime()),
+		};
+	} catch {
+		return {
+			name: 'cabros-bot',
+			version: null,
+			commit: null,
+			full: null,
+			repo: null,
+			platform: 'unknown',
+			environment: 'unknown',
+			startedAt: processStartedAt,
+			uptimeSeconds: Math.floor(process.uptime()),
+		};
+	}
+}
+
+function formatVersionMessage(build = {}) {
+	const safeBuild = (build && typeof build === 'object') ? build : {};
+	const shortSha = (safeBuild.commit && safeBuild.commit !== 'unknown')
+		? safeBuild.commit
+		: (safeBuild.full ? safeBuild.full.slice(0, 7) : 'unknown');
+	const environment = (safeBuild.environment && safeBuild.environment !== 'unknown')
+		? safeBuild.environment
+		: (safeBuild.platform || 'unknown');
+	const uptimeSeconds = Number.isFinite(safeBuild.uptimeSeconds)
+		? Math.max(0, Math.floor(safeBuild.uptimeSeconds))
+		: Math.max(0, Math.floor(process.uptime()));
+	const hours = Math.floor(uptimeSeconds / 3600);
+	const minutes = Math.floor((uptimeSeconds % 3600) / 60);
+
+	const rawText = `cabros-bot ${shortSha} (${environment}, uptime ${hours}h ${minutes}m)\n\nBuild details: /api/capabilities`;
+	const { smartEscapeMarkdownV2 } = require('../services/notification/formatters/markdownV2Formatter');
+	return smartEscapeMarkdownV2(rawText)
+		.replace(/(?<!\\)_/g, '\\_')
+		.replace(/(?<!\\)\*/g, '\\*');
+}
+
 module.exports = {
+	resolveDeploymentEnvironment,
 	getDeploymentCommit,
 	getDeploymentRepoSlug,
+	getDeploymentPlatform,
+	getDeploymentService,
+	getRuntimeVersion,
+	getDeploymentIdentity,
+	deploymentIdentity: getDeploymentIdentity,
+	getBuildInfo,
+	formatVersionMessage,
 	isPreviewEnvironment,
 	isProductionLikeEnvironment,
+	_resetLocalGitShaCache,
 };

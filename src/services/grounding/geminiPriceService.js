@@ -5,10 +5,9 @@ const genaiClient = require('./genaiClient');
 const geminiQuotaManager = require('./geminiQuotaManager');
 const { getPromptService, PromptKeys } = require('../prompts');
 const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
+const { registerGlobalUsage, tokenCostBudgetService } = require('../../lib/tokenUsage');
 
-const {
-	GROUNDING_MODEL_NAME,
-} = config;
+const { getGroundingModelName } = require('./runtimeModels');
 
 const DEFAULT_PRICE_FETCH_TIMEOUT_MS = 10000;
 
@@ -111,6 +110,11 @@ async function fetchGeminiPrice(symbol, options = {}) {
 		tokenUsage = options;
 	}
 
+	if (tokenCostBudgetService.isBudgetExceeded()) {
+		console.warn(`[geminiPriceService] Daily token cost budget exceeded, skipping Gemini price fetch for ${cleanSymbol}`);
+		return null;
+	}
+
 	const controller = new AbortController();
 	let onParentAbort = null;
 	if (options.signal) {
@@ -161,8 +165,12 @@ async function fetchGeminiPrice(symbol, options = {}) {
 			abortPromise,
 		]);
 
-		if (tokenUsage && priceSearchResult && priceSearchResult.usage) {
-			tokenUsage.addUsage(priceSearchResult.usage, GROUNDING_MODEL_NAME);
+		if (priceSearchResult && priceSearchResult.usage) {
+			const searchModel = priceSearchResult.modelUsed || getGroundingModelName() || 'gemini';
+			registerGlobalUsage(priceSearchResult.usage, searchModel);
+			if (tokenUsage) {
+				tokenUsage.addUsage(priceSearchResult.usage, searchModel);
+			}
 		}
 
 		const parsedJson = extractPriceJson(priceSearchResult?.searchResultText);

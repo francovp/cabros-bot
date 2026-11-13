@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# get-oldest-issue.sh [EXCLUDE_NUMBERS]
+# get-oldest-issue.sh [EXCLUDE_NUMBERS] [--reconsider] [--priority-order]
 # Uses the GitHub CLI (gh) to fetch the oldest open issue for the repository.
 # Optional EXCLUDE_NUMBERS advances the cursor past those issue numbers
 # (comma- or space-separated, e.g. "270,271" or "270 271"). Used by the
@@ -10,7 +10,20 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/gh-auth-utils.sh"
 
-EXCLUDE="${1:-}"
+EXCLUDE=""
+RECONSIDER=false
+PRIORITY_ORDER=false
+for arg in "$@"; do
+  case "$arg" in
+    --reconsider) RECONSIDER=true ;;
+    --priority-order) PRIORITY_ORDER=true ;;
+    --*) echo "Error: unknown option: $arg" >&2; exit 1 ;;
+    *)
+      if [ -n "$EXCLUDE" ]; then echo "Error: provide one EXCLUDE_NUMBERS argument." >&2; exit 1; fi
+      EXCLUDE="$arg"
+      ;;
+  esac
+done
 
 # Ensure gh CLI is installed
 if ! command -v gh &> /dev/null; then
@@ -68,21 +81,41 @@ while [ "$page" -lt "$MAX_PAGES" ]; do
   batch=$(gh issue list --state open --search "$query" --limit 1000 --json number,title,createdAt,labels,url 2>/dev/null)
 
   if [ -z "$batch" ] || [ "$batch" == "[]" ]; then
-    echo "No open issues found."
+    echo "No eligible open issues found."
     exit 0
   fi
 
+  BATCH_COUNT=$(echo "$batch" | jq length)
   cursor=$(echo "$batch" | jq -r 'map(.createdAt) | max')
 
-  # Always exclude issues carrying `need manual PR deploy` or `brainstorming` —
-  # operator has marked them as requiring human intervention or as
-  # idea-stage without implementation intent. These are zero-work skips.
-  batch=$(echo "$batch" | jq -c '
+  # Reconciliation exposes handoffs for a bounded decision audit, never permission
+  # to bypass ownership, credentials, review, or an explicit owner hold.
+  # A full search batch cannot establish global priority order (GitHub search cap).
+  if [ "$PRIORITY_ORDER" = true ] && [ "$BATCH_COUNT" -ge 1000 ]; then
+    echo "Error: priority inventory reached the search cap; paginate REST inventory before selection." >&2
+    exit 1
+  fi
+  batch=$(echo "$batch" | jq -c --argjson reconsider "$RECONSIDER" --argjson priorityOrder "$PRIORITY_ORDER" '
     map(select(
-      (.labels | map(.name | ascii_downcase) | index("need manual pr deploy") | not)
-      and (.labels | map(.name | ascii_downcase) | index("brainstorming") | not)
+      (.labels | map(.name | ascii_downcase) | index("brainstorming") | not)
       and (.labels | map(.name | ascii_downcase) | index("brainstorm") | not)
+      and ($reconsider or (
+        .labels | map(.name | ascii_downcase) |
+        any(. == "need manual pr deploy" or . == "needs_user" or . == "needs_users"
+          or . == "needs user" or . == "human needed" or . == "need user") | not
+      ))
     ))
+    | if $priorityOrder then
+        sort_by([
+          ([.labels[].name | ascii_downcase |
+            if test("^priority/[1-7]($|[^0-9])") then .[9:10] | tonumber
+            elif . == "priority/critical" then 8
+            elif . == "priority/high" then 9
+            elif . == "priority/medium" then 10
+            elif . == "priority/low" then 11
+            else 12 end] | min // 12), .createdAt, .number
+        ])
+      else . end
   ')
 
   if [ -n "$SKIP_LIST" ]; then
@@ -94,7 +127,11 @@ while [ "$page" -lt "$MAX_PAGES" ]; do
     echo "$batch" | jq -c '.[0:1]'
     exit 0
   fi
+  if [ "$BATCH_COUNT" -lt 1000 ]; then
+    echo "No eligible open issues found."
+    exit 0
+  fi
 done
 
-echo "No open issues found."
-exit 0
+echo "Error: issue cursor reached MAX_PAGES; inventory is incomplete." >&2
+exit 1

@@ -4,22 +4,98 @@
  */
 
 const NotificationChannel = require('./NotificationChannel');
-const { sendWithRetry } = require('../../lib/retryHelper');
 const { splitMessageIntoChunks } = require('../../lib/messageHelper');
 const WhatsAppMarkdownFormatter = require('./formatters/whatsappMarkdownFormatter');
 const { isPreviewEnvironment } = require('../../lib/deploymentEnvironment');
+const { sendWithRetry } = require('../../lib/retryHelper');
+const { renderAlertChart } = require('./charts/chartAttachment');
+const { getRuntimeConfig } = require('../remoteConfig/RemoteConfigService');
 
 const GREEN_API_MESSAGE_LIMIT = 20000;
+// GreenAPI renders a file caption as regular WhatsApp text; keeping it well under
+// the message limit avoids a provider-side truncation surprise.
+const MAX_FILE_CAPTION_LENGTH = 1024;
+
+const WHATSAPP_MAX_RETRIES = 3;
+const WHATSAPP_FALLBACK_RETRY_DELAY_MS = 1000;
+const WHATSAPP_MAX_RETRY_DELAY_MS = 10000;
+const WHATSAPP_MAX_TOTAL_RETRY_WAIT_MS = 10000;
+
+const RETRYABLE_CATEGORIES = new Set(['RATE_LIMITED', 'TIMEOUT', 'PROVIDER_ERROR']);
+
+function parseRetryAfterHeader(value) {
+	if (typeof value !== 'string' || !value) {
+		return null;
+	}
+	const trimmed = value.trim();
+	if (!trimmed) {
+		return null;
+	}
+	// Honor decimal seconds and integer seconds, but ignore HTTP-date values.
+	if (/^\d+(\.\d+)?$/.test(trimmed)) {
+		const seconds = Number(trimmed);
+		if (Number.isFinite(seconds) && seconds >= 0) {
+			return Math.max(1, Math.round(seconds * 1000));
+		}
+	}
+	return null;
+}
+
+function isRetryableResult(result) {
+	if (!result) {
+		return true; // Treat thrown errors as retryable transport failures.
+	}
+	if (result.aborted) {
+		return false;
+	}
+	const category = result.category;
+	if (category === 'UNAUTHORIZED' || category === 'CLIENT_ERROR') {
+		return false;
+	}
+	if (category === 'AMBIGUOUS_OUTCOME' || category === 'INVALID_RESPONSE') {
+		return false;
+	}
+	return RETRYABLE_CATEGORIES.has(category);
+}
+
+function extractRetryAfterMs(result) {
+	if (!result) {
+		return null;
+	}
+	const headerValue = typeof result.retryAfterHeader === 'string' ? result.retryAfterHeader : null;
+	return parseRetryAfterHeader(headerValue);
+}
+
+// GreenAPI /sendTemplate 4xx error bodies that indicate the template is definitively broken.
+// On these, we fall back to freeform; other 4xx (auth, rate-limit) remain non-fallback failures.
+const TEMPLATE_FALLBACK_ERROR_PATTERNS = [
+	/template\s+not\s+found/i,
+	/parameter\s+count\s+mismatch/i,
+	/invalid\s+template/i,
+	/template\s+does\s+not\s+exist/i,
+	/unknown\s+template/i,
+];
+
+/**
+ * Determine whether a raw 4xx body string matches a known template-definition error
+ * that should trigger a freeform fallback for this delivery.
+ * @param {string} rawBody
+ * @returns {boolean}
+ */
+function isTemplateFallbackError(rawBody) {
+	if (!rawBody || typeof rawBody !== 'string') return false;
+	return TEMPLATE_FALLBACK_ERROR_PATTERNS.some((re) => re.test(rawBody));
+}
 
 class WhatsAppService extends NotificationChannel {
 	/**
-   * @param {Object} config
-   * @param {string} config.apiUrl - GreenAPI base URL
-   * @param {string} config.apiKey - GreenAPI API key
-   * @param {string} config.chatId - Destination WhatsApp chat/group ID
-   * @param {Object} config.formatter - Message formatter (default: WhatsAppMarkdownFormatter)
-   * @param {Object} config.logger - Logger instance (optional)
-   */
+	 * @param {Object} config
+	 * @param {string} config.apiUrl        - GreenAPI base URL (e.g. https://xxxx.api.green-api.com/waInstance1234/)
+	 * @param {string} config.apiKey        - GreenAPI API key
+	 * @param {string} config.chatId        - Destination WhatsApp chat/group ID
+	 * @param {Object} config.formatter     - Message formatter (default: WhatsAppMarkdownFormatter)
+	 * @param {Object} config.logger        - Logger instance (optional)
+	 */
 	constructor(config = {}) {
 		super();
 		this.name = 'whatsapp';
@@ -33,12 +109,18 @@ class WhatsAppService extends NotificationChannel {
 		this.formatter = config.formatter || new WhatsAppMarkdownFormatter({ urlShortener: this.urlShortener });
 		this.logger = config.logger;
 		this.enabled = false;
+
+		// Template mode counters and last-error tracking for /api/status
+		this._templateSent = 0;
+		this._templateFallbacks = 0;
+		this._lastTemplateError = null;
+		this._lastTemplateErrorAt = null;
 	}
 
 	/**
-   * Validate WhatsApp configuration on startup
-   * @returns {Promise<{valid: boolean, message: string, fields?: Object}>}
-   */
+	 * Validate WhatsApp configuration on startup
+	 * @returns {Promise<{valid: boolean, message: string, fields?: Object}>}
+	 */
 	async validate() {
 		if (process.env.ENABLE_WHATSAPP_ALERTS !== 'true') {
 			this.enabled = false;
@@ -62,11 +144,41 @@ class WhatsAppService extends NotificationChannel {
 	}
 
 	/**
-   * Check if service is enabled
-   * @returns {boolean}
-   */
+	 * Check if service is enabled
+	 * @returns {boolean}
+	 */
 	isEnabled() {
 		return this.enabled;
+	}
+
+	/**
+	 * Check if WhatsApp is configured for alert delivery by operator intent.
+	 * Requires the ENABLE_WHATSAPP_ALERTS flag, API URL, API key, and chat ID.
+	 * @returns {boolean}
+	 */
+	isConfigured() {
+		return (
+			process.env.ENABLE_WHATSAPP_ALERTS === 'true' &&
+			Boolean(this.apiUrl || process.env.WHATSAPP_API_URL) &&
+			Boolean(this.apiKey || process.env.WHATSAPP_API_KEY) &&
+			Boolean(this.chatId || process.env.WHATSAPP_CHAT_ID || process.env.WHATSAPP_PREVIEW_CHAT_ID)
+		);
+	}
+
+	/**
+	 * Return template-mode status (non-secret) for /api/status dependency reporting.
+	 * @returns {{enabled: boolean, templateName: string|null, sent: number, fallbacks: number, lastError: string|null, lastErrorAt: string|null}}
+	 */
+	getTemplateStatus() {
+		const templateName = process.env.WHATSAPP_TEMPLATE_NAME || null;
+		return {
+			enabled: !!templateName,
+			templateName,
+			sent: this._templateSent,
+			fallbacks: this._templateFallbacks,
+			lastError: this._lastTemplateError,
+			lastErrorAt: this._lastTemplateErrorAt,
+		};
 	}
 
 	/**
@@ -127,10 +239,184 @@ class WhatsAppService extends NotificationChannel {
 	}
 
 	/**
-   * Send alert to WhatsApp via GreenAPI with retry logic
-   * @param {Object} alert - Alert object with text and optional enriched content
-   * @returns {Promise<{success: boolean, channel: string, messageId?: string, error?: string, category?: string, attemptCount?: number, durationMs?: number}>}
-   */
+	 * Build the GreenAPI sendTemplate endpoint URL from the freeform base URL.
+	 * GreenAPI base URL format: https://XXXX.api.green-api.com/waInstanceYYYY/
+	 * Template URL format:      https://XXXX.api.green-api.com/waInstanceYYYY/sendTemplate/APIKEY
+	 * @private
+	 * @returns {string|null} Full template URL or null if base URL is not set
+	 */
+	_buildTemplateUrl() {
+		if (!this.apiUrl || !this.apiKey) return null;
+		// Strip any trailing sendMessage path from the base URL, then append sendTemplate
+		const base = this.apiUrl
+			.replace(/\/sendMessage\/?$/i, '')
+			.replace(/\/+$/, '');
+		return `${base}/sendTemplate/${this.apiKey}`;
+	}
+
+	/**
+	 * Extract ordered template parameters from an alert object.
+	 * Missing fields produce an empty string, not an error.
+	 * The parameter order follows WHATSAPP_TEMPLATE_PARAM_ORDER (default: symbol,price,action,setup,timeframe,source).
+	 * @private
+	 * @param {Object} alert - Alert object
+	 * @returns {Array<{default: string}>} GreenAPI params array
+	 */
+	_extractTemplateParams(alert) {
+		const rawOrder = getRuntimeConfig().WHATSAPP_TEMPLATE_PARAM_ORDER;
+		const paramOrder = rawOrder.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+
+		const enriched = alert && typeof alert.enriched === 'object' ? alert.enriched : {};
+		const text = (alert && alert.text) || '';
+
+		// Best-effort extraction helpers — fall back to empty string (never throw)
+		const extractors = {
+			symbol: () => enriched.symbol || (text.match(/\b[A-Z]{2,10}(?:USDT?|BTC|ETH|USD)?\b/)?.[0]) || '',
+			price: () => {
+				const p = enriched.price;
+				if (p !== undefined && p !== null) return String(p);
+				return text.match(/\$[\d,.]+/)?.[0] || '';
+			},
+			action: () => enriched.action || enriched.signal || '',
+			setup: () => enriched.setupType || enriched.setup || '',
+			timeframe: () => enriched.timeframe || '',
+			source: () => (alert && alert.source) || '',
+		};
+
+		return paramOrder.map((key) => {
+			try {
+				const value = extractors[key] ? extractors[key]() : (enriched[key] !== undefined ? String(enriched[key]) : '');
+				return { default: String(value || '') };
+			} catch {
+				return { default: '' };
+			}
+		});
+	}
+
+	/**
+	 * Attempt to send via GreenAPI sendTemplate endpoint.
+	 * Returns { success, templateSent, shouldFallback } where shouldFallback=true means
+	 * the caller should retry as freeform for this one alert.
+	 * @private
+	 * @param {Object} alert
+	 * @param {string} chatId
+	 * @param {AbortSignal|undefined} signal
+	 * @returns {Promise<{success: boolean, channel: string, templateSent?: boolean, shouldFallback?: boolean, messageId?: string, error?: string, category?: string}>}
+	 */
+	async _sendTemplate(alert, chatId, signal) {
+		const templateUrl = this._buildTemplateUrl();
+		if (!templateUrl) {
+			return { success: false, channel: 'whatsapp', error: 'Template URL could not be built', shouldFallback: true };
+		}
+
+		const templateName = process.env.WHATSAPP_TEMPLATE_NAME;
+		const namespace = process.env.WHATSAPP_TEMPLATE_NAMESPACE || '';
+		const languageCode = process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en';
+		const params = this._extractTemplateParams(alert);
+
+		const payload = {
+			chatId,
+			name: templateName,
+			languageCode,
+			params,
+		};
+		if (namespace) {
+			payload.namespace = namespace;
+		}
+
+		const controller = new AbortController();
+		const timeoutId = setTimeout(() => controller.abort(), 10000);
+		const forwardAbort = () => controller.abort(signal?.reason);
+		signal?.addEventListener('abort', forwardAbort, { once: true });
+
+		try {
+			const response = await fetch(templateUrl, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify(payload),
+				signal: controller.signal,
+			});
+
+			const rawText = await response.text().catch(() => '');
+
+			if (!response.ok) {
+				const isFallback = response.status >= 400 && response.status < 500
+					&& response.status !== 401
+					&& response.status !== 429
+					&& isTemplateFallbackError(rawText);
+
+				const sanitizedError = this._sanitizeText(rawText).substring(0, 200)
+					|| `GreenAPI template ${response.status}`;
+
+				this._lastTemplateError = sanitizedError;
+				this._lastTemplateErrorAt = new Date().toISOString();
+				this.logger?.warn?.(`[WhatsApp] Template send failed (${response.status}): ${sanitizedError}. Fallback: ${isFallback}`);
+
+				if (isFallback) {
+					this._templateFallbacks += 1;
+					return { success: false, channel: 'whatsapp', error: sanitizedError, shouldFallback: true };
+				}
+
+				const { category, sanitizedMessage } = this._classifyAndSanitizeHttpError(response.status, rawText);
+				return { success: false, channel: 'whatsapp', error: sanitizedMessage, category };
+			}
+
+			let data;
+			try {
+				data = JSON.parse(rawText);
+			} catch {
+				// Some GreenAPI responses are empty on success
+				data = {};
+			}
+
+			if (data && data.idMessage) {
+				this._templateSent += 1;
+				return {
+					success: true,
+					channel: 'whatsapp',
+					messageId: data.idMessage,
+					messageIds: [data.idMessage],
+					messageCount: 1,
+					templateSent: true,
+				};
+			}
+
+			// Empty 2xx body — treat as success (some GreenAPI instances return 200 with no body)
+			this._templateSent += 1;
+			return {
+				success: true,
+				channel: 'whatsapp',
+				messageId: null,
+				messageCount: 1,
+				templateSent: true,
+			};
+		} catch (err) {
+			if (signal?.aborted) {
+				return { success: false, channel: 'whatsapp', error: signal.reason?.message || 'Operation aborted', aborted: true };
+			}
+			if (err.name === 'AbortError') {
+				this._lastTemplateError = 'Template request timeout (10s)';
+				this._lastTemplateErrorAt = new Date().toISOString();
+				return { success: false, channel: 'whatsapp', error: 'WhatsApp template request timeout (10s)', category: 'TIMEOUT' };
+			}
+			const msg = this._sanitizeText(err.message || String(err));
+			this._lastTemplateError = msg;
+			this._lastTemplateErrorAt = new Date().toISOString();
+			return { success: false, channel: 'whatsapp', error: msg, category: 'PROVIDER_ERROR' };
+		} finally {
+			clearTimeout(timeoutId);
+			signal?.removeEventListener('abort', forwardAbort);
+		}
+	}
+
+	/**
+	 * Send alert to WhatsApp via GreenAPI with retry logic.
+	 * When options.template === true and WHATSAPP_TEMPLATE_NAME is set,
+	 * attempts template delivery first with fail-open fallback to freeform.
+	 * @param {Object} alert   - Alert object with text and optional enriched content
+	 * @param {Object} options - Delivery options (signal, template)
+	 * @returns {Promise<{success: boolean, channel: string, messageId?: string, error?: string, category?: string, attemptCount?: number, durationMs?: number, templateSent?: boolean}>}
+	 */
 	async send(alert, options = {}) {
 		try {
 			if (options.signal?.aborted) {
@@ -138,12 +424,62 @@ class WhatsAppService extends NotificationChannel {
 					success: false,
 					channel: 'whatsapp',
 					error: options.signal.reason?.message || options.signal.reason || 'Operation aborted',
+					category: 'TIMEOUT',
 					aborted: true,
 				};
 			}
+
+			const chatId = (alert && alert.whatsappChatId) || this.chatId;
+			const useTemplate = options.template === true && !!process.env.WHATSAPP_TEMPLATE_NAME;
+
+			// --- Template path ---
+			if (useTemplate) {
+				const templateResult = await this._sendTemplate(alert, chatId, options.signal);
+				if (templateResult.success || !templateResult.shouldFallback) {
+					return templateResult;
+				}
+				// Fall through to freeform delivery for this single alert
+				this.logger?.warn?.('[WhatsApp] Falling back from template to freeform delivery for this alert');
+			}
+
+			// --- Freeform path (default / fallback) ---
 			const formattedText = await this._formatAlert(alert);
 			const messageChunks = splitMessageIntoChunks(formattedText, GREEN_API_MESSAGE_LIMIT);
-			const chatId = alert.whatsappChatId || this.chatId;
+
+			// Chart attachment is strictly additive. When the upload fails or the
+			// feature is off, the text-only chunks below are sent unchanged.
+			const chart = await renderAlertChart(alert);
+			if (chart?.buffer) {
+				// A file upload has no idempotency key, so a retry could duplicate
+				// the attachment. `maxRetries` is the total attempt count, so 1 means
+				// a single try: on failure we fall back to text rather than risk a
+				// double-send.
+				const chartResult = await sendWithRetry(
+					({ signal } = {}) => this._sendChartFile(chart.buffer, formattedText, {
+						chatId,
+						signal,
+					}),
+					1,
+					this.logger,
+					{ signal: options.signal },
+				);
+				if (chartResult.success) {
+					// The caption already carried the first chunk; send only the overflow.
+					// Caption is capped at MAX_FILE_CAPTION_LENGTH while chunks use the
+					// 20k message limit, so a 1k-20k report needs a follow-up for the tail.
+					if (formattedText.length > MAX_FILE_CAPTION_LENGTH) {
+						const remainder = formattedText.slice(MAX_FILE_CAPTION_LENGTH);
+						return this._sendChunkedMessage(splitMessageIntoChunks(remainder, GREEN_API_MESSAGE_LIMIT), chatId, options);
+					}
+					if (messageChunks.length > 1) {
+						return this._sendChunkedMessage(messageChunks.slice(1), chatId, options);
+					}
+					return chartResult;
+				}
+				console.warn('chart-attachments: WhatsApp file upload failed; sending text only', {
+					error: chartResult.error,
+				});
+			}
 
 			if (messageChunks.length > 1) {
 				this.logger?.warn?.(
@@ -152,16 +488,10 @@ class WhatsAppService extends NotificationChannel {
 				return this._sendChunkedMessage(messageChunks, chatId, options);
 			}
 
-			return sendWithRetry(
-				({ signal } = {}) => this._sendMessageChunk(messageChunks[0], {
-					chatId,
-					includePreview: true,
-					signal,
-				}),
-				3,
-				this.logger,
-				{ signal: options.signal },
-			);
+			return this._sendChunkWithRetry(messageChunks[0], {
+				chatId,
+				includePreview: true,
+			}, options);
 		} catch (error) {
 			const errorMsg = this._sanitizeText((error && error.message) || String(error));
 			this.logger?.error?.(`Failed to send to WhatsApp: ${errorMsg}`);
@@ -175,20 +505,285 @@ class WhatsAppService extends NotificationChannel {
 	}
 
 	/**
-   * Format alert text for WhatsApp delivery
-   * @private
-   * @param {Object} alert - Alert object
-   * @returns {Promise<string>} Formatted message
-   */
+	 * Upload a chart PNG through GreenAPI with the report as its caption.
+	 *
+	 * Fail-open: any provider error resolves to `{ success: false }` so the caller
+	 * keeps the text-only delivery path. No side effect is retried blindly — the
+	 * caller's bounded retry budget decides, since a non-idempotent upload cannot
+	 * be assumed safe to repeat.
+	 * @private
+	 * @returns {Promise<{success: boolean, channel: string, messageId?: string, error?: string, category?: string, statusCode?: number}>}
+	 */
+	async _sendChartFile(buffer, caption, { chatId = this.chatId, signal } = {}) {
+		try {
+			if (!this.apiUrl || !this.apiKey) {
+				return { success: false, channel: 'whatsapp', error: 'WhatsApp not configured', category: 'CLIENT_ERROR' };
+			}
+			// GreenAPI file endpoint mirrors the template endpoint: the key is a
+			// path segment, not a header, matching _buildTemplateUrl's convention.
+			const uploadUrl = `${this.apiUrl
+				.replace(/\/sendMessage\/?$/i, '')
+				.replace(/\/+$/, '')}/sendFileByUpload/${this.apiKey}`;
+			const truncatedCaption = caption.length > MAX_FILE_CAPTION_LENGTH
+				? `${caption.slice(0, MAX_FILE_CAPTION_LENGTH)}…`
+				: caption;
+
+			const form = new FormData();
+			form.append('chatId', chatId);
+			if (truncatedCaption) {
+				form.append('caption', truncatedCaption);
+			}
+			form.append('file', new Blob([buffer], { type: 'image/png' }), 'chart.png');
+
+			const controller = new AbortController();
+			const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+			const forwardAbort = () => controller.abort(signal.reason);
+			signal?.addEventListener('abort', forwardAbort, { once: true });
+
+			try {
+				const response = await fetch(uploadUrl, {
+					method: 'POST',
+					body: form,
+					signal: controller.signal,
+				});
+				if (!response.ok) {
+					const rawText = await response.text().catch(() => '');
+					const { category, sanitizedMessage } = this._classifyAndSanitizeHttpError(response.status, rawText);
+					this.logger?.error?.(`GreenAPI file upload error: ${response.status} ${category}`);
+					return {
+						success: false,
+						channel: 'whatsapp',
+						error: sanitizedMessage,
+						category,
+						statusCode: response.status,
+					};
+				}
+				let data;
+				try {
+					data = await response.json();
+				} catch {
+					this.logger?.error?.('GreenAPI file upload returned non-JSON response');
+					return {
+						success: false,
+						channel: 'whatsapp',
+						error: 'WhatsApp provider returned non-JSON response',
+						category: 'INVALID_RESPONSE',
+						statusCode: response.status,
+					};
+				}
+
+				if (data && (data.idFile || data.idMessage || data.messageId)) {
+					return {
+						success: true,
+						channel: 'whatsapp',
+						messageId: data.idFile || data.idMessage || data.messageId,
+					};
+				}
+
+				const rawErr = data?.error || data?.errorMessage || data?.message;
+				if (rawErr) {
+					const errorMsg = this._sanitizeText(String(rawErr));
+					this.logger?.error?.(`GreenAPI file upload response contained error: ${errorMsg}`);
+					return {
+						success: false,
+						channel: 'whatsapp',
+						error: errorMsg,
+						category: 'PROVIDER_ERROR',
+						statusCode: response.status,
+					};
+				}
+
+				return {
+					success: false,
+					channel: 'whatsapp',
+					error: 'WhatsApp provider returned unexpected upload response structure (missing delivery acknowledgement)',
+					category: 'AMBIGUOUS_OUTCOME',
+					statusCode: response.status,
+				};
+			} finally {
+				clearTimeout(timeoutId);
+				signal?.removeEventListener('abort', forwardAbort);
+			}
+		} catch (error) {
+			const errorMsg = this._sanitizeText((error && error.message) || String(error));
+			return {
+				success: false,
+				channel: 'whatsapp',
+				error: errorMsg,
+				category: 'PROVIDER_ERROR',
+			};
+		}
+	}
+
+	/**
+	 * Send a single WhatsApp chunk with a category-aware retry loop.
+	 * Only RATE_LIMITED, TIMEOUT, and 5xx PROVIDER_ERROR responses are retried;
+	 * UNAUTHORIZED, CLIENT_ERROR, AMBIGUOUS_OUTCOME, and INVALID_RESPONSE are
+	 * treated as terminal after the first attempt to prevent duplicate delivery
+	 * and wasted latency (parity with TelegramService / DiscordService).
+	 * @private
+	 * @param {string} message - Pre-formatted WhatsApp payload
+	 * @param {Object} chunkOptions - Chunk delivery options (chatId, includePreview)
+	 * @param {Object} options - Top-level delivery options (signal)
+	 * @returns {Promise<Object>} SendResult with attemptCount/statusCode/category telemetry
+	 */
+	async _sendChunkWithRetry(message, chunkOptions, options = {}) {
+		const startedAt = Date.now();
+		const signal = options.signal;
+		const sendChunk = ({ signal: innerSignal } = {}) => this._sendMessageChunk(message, {
+			...chunkOptions,
+			signal: innerSignal,
+		});
+
+		let lastResult = null;
+		let totalAttempts = 0;
+		let totalWaitMs = 0;
+
+		for (let attempt = 1; attempt <= WHATSAPP_MAX_RETRIES; attempt += 1) {
+			if (signal?.aborted) {
+				return this._finalizeAbortedResult(lastResult, totalAttempts, startedAt, signal);
+			}
+
+			let result;
+			try {
+				result = await sendChunk({ signal });
+			} catch (error) {
+				const isAbort = error?.name === 'AbortError'
+					|| error?.name === 'AbortSignalError'
+					|| (signal && signal.aborted);
+				if (isAbort) {
+					return {
+						success: false,
+						channel: 'whatsapp',
+						error: signal?.reason?.message || signal?.reason || error.message || 'Operation aborted',
+						category: 'TIMEOUT',
+						attemptCount: totalAttempts + 1,
+						durationMs: Date.now() - startedAt,
+						aborted: true,
+					};
+				}
+				// Transport-level throw — treat as retryable PROVIDER_ERROR.
+				result = {
+					success: false,
+					channel: 'whatsapp',
+					error: this._sanitizeText(error?.message || String(error)),
+					category: 'PROVIDER_ERROR',
+				};
+			}
+
+			totalAttempts += 1;
+			lastResult = result;
+
+			if (result.success) {
+				return {
+					...result,
+					attemptCount: totalAttempts,
+					durationMs: Date.now() - startedAt,
+				};
+			}
+
+			if (result.aborted) {
+				return {
+					...result,
+					attemptCount: totalAttempts,
+					durationMs: Date.now() - startedAt,
+				};
+			}
+
+			const isLastAttempt = attempt >= WHATSAPP_MAX_RETRIES;
+			if (!isRetryableResult(result) || isLastAttempt) {
+				return {
+					...result,
+					attemptCount: totalAttempts,
+					durationMs: Date.now() - startedAt,
+				};
+			}
+
+			const headerDelayMs = extractRetryAfterMs(result);
+			const delayMs = Math.min(
+				headerDelayMs ?? WHATSAPP_FALLBACK_RETRY_DELAY_MS * Math.pow(2, attempt - 1),
+				WHATSAPP_MAX_RETRY_DELAY_MS,
+			);
+			if (totalWaitMs + delayMs > WHATSAPP_MAX_TOTAL_RETRY_WAIT_MS) {
+				this.logger?.warn?.(`WhatsApp retry wait (${delayMs}ms) exceeds total budget; aborting retries`);
+				return {
+					...result,
+					attemptCount: totalAttempts,
+					durationMs: Date.now() - startedAt,
+				};
+			}
+
+			this.logger?.warn?.(
+				`WhatsApp send failed (${result.statusCode || result.category || 'transport error'}); retrying in ${delayMs}ms`,
+			);
+
+			try {
+				await this._sleep(delayMs, signal);
+			} catch (abortError) {
+				return this._finalizeAbortedResult(result, totalAttempts, startedAt, signal);
+			}
+			totalWaitMs += delayMs;
+		}
+
+		return {
+			...lastResult,
+			success: false,
+			channel: 'whatsapp',
+			attemptCount: totalAttempts,
+			durationMs: Date.now() - startedAt,
+		};
+	}
+
+	_finalizeAbortedResult(lastResult, attemptCount, startedAt, signal) {
+		return {
+			...lastResult,
+			success: false,
+			channel: 'whatsapp',
+			error: signal?.reason?.message || signal?.reason || lastResult?.error || 'Operation aborted',
+			category: lastResult?.category || 'TIMEOUT',
+			attemptCount,
+			durationMs: Date.now() - startedAt,
+			aborted: true,
+		};
+	}
+
+	_sleep(ms, signal) {
+		if (!ms || ms <= 0) {
+			return Promise.resolve();
+		}
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => {
+				signal?.removeEventListener('abort', onAbort);
+				resolve();
+			}, ms);
+			const onAbort = () => {
+				clearTimeout(timer);
+				const error = new Error(signal?.reason?.message || signal?.reason || 'Operation aborted');
+				error.name = 'AbortError';
+				reject(error);
+			};
+			signal?.addEventListener('abort', onAbort, { once: true });
+		});
+	}
+
+	/**
+
+	 * Format alert text for WhatsApp delivery
+	 * @private
+	 * @param {Object} alert - Alert object
+	 * @returns {Promise<string>} Formatted message
+	 */
 	async _formatAlert(alert) {
 		// Format message for WhatsApp.
 		// If enriched is an object, use formatEnriched (async with URL shortening), otherwise format the text.
+		const signalClass = alert.signalClass || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.signalClass : undefined);
+		const session = alert.session || (alert.enriched && typeof alert.enriched === 'object' ? alert.enriched.session : undefined);
 		let formattedText;
 		if (alert.enriched && typeof alert.enriched === 'object') {
-			formattedText = await this.formatter.formatEnriched(alert.enriched);
+			formattedText = await this.formatter.formatEnriched(alert.enriched, { signalClass, session });
 			console.debug('Formatted enriched WhatsApp message length:', formattedText.length);
 		} else {
-			formattedText = this.formatter.format(alert.enriched || alert.text);
+			formattedText = this.formatter.format(alert.enriched || alert.text, { signalClass, session });
 			console.debug('Formatted WhatsApp message length:', formattedText.length);
 		}
 
@@ -196,14 +791,14 @@ class WhatsAppService extends NotificationChannel {
 	}
 
 	/**
-   * Send a formatted WhatsApp payload through GreenAPI
-   * @private
-   * @param {string} message - Preformatted WhatsApp message
-   * @param {Object} options - Delivery options
+	 * Send a formatted WhatsApp payload through GreenAPI
+	 * @private
+	 * @param {string} message - Preformatted WhatsApp message
+	 * @param {Object} options - Delivery options
 	 * @param {string} options.chatId - Destination WhatsApp chat/group ID
-   * @param {boolean} options.includePreview - Whether to include the custom preview payload
-   * @returns {Promise<{success: boolean, channel: string, messageId?: string, messageIds?: string[], messageCount?: number, error?: string, category?: string, ambiguous?: boolean}>}
-   */
+	 * @param {boolean} options.includePreview - Whether to include the custom preview payload
+	 * @returns {Promise<{success: boolean, channel: string, messageId?: string, messageIds?: string[], messageCount?: number, error?: string, category?: string, ambiguous?: boolean}>}
+	 */
 	async _sendMessageChunk(message, { chatId = this.chatId, includePreview = false, signal } = {}) {
 		try {
 			const payload = {
@@ -238,12 +833,16 @@ class WhatsAppService extends NotificationChannel {
 					const rawText = await response.text().catch(() => '');
 					const { category, sanitizedMessage } = this._classifyAndSanitizeHttpError(response.status, rawText);
 					this.logger?.error?.(`GreenAPI error: ${response.status} ${category}`);
+					const retryAfterHeader = response.status === 429
+						? (response.headers?.get?.('Retry-After') ?? null)
+						: null;
 					return {
 						success: false,
 						channel: 'whatsapp',
 						error: sanitizedMessage,
 						category,
 						statusCode: response.status,
+						retryAfterHeader,
 					};
 				}
 
@@ -331,30 +930,31 @@ class WhatsAppService extends NotificationChannel {
 	}
 
 	/**
-   * Send a WhatsApp message that has been split into multiple chunks.
-   * Each chunk retries independently to avoid duplicating already delivered parts.
-   * @private
-   * @param {Array<string>} messageChunks - Ordered message chunks
+	* Send a WhatsApp message that has been split into multiple chunks.
+	* Each chunk retries independently to avoid duplicating already delivered parts,
+	* and only transient categories (RATE_LIMITED, TIMEOUT, 5xx PROVIDER_ERROR) are
+	* retried — terminal categories stop the chunk loop immediately to prevent
+	* duplicate delivery and waste GreenAPI quota.
+	* @private
+	* @param {Array<string>} messageChunks - Ordered message chunks
 	 * @param {string} chatId - Destination WhatsApp chat/group ID
-   * @returns {Promise<{success: boolean, channel: string, messageId?: string, messageIds?: string[], messageCount?: number, error?: string, category?: string}>}
-   */
+	 * @returns {Promise<{success: boolean, channel: string, messageId?: string, messageIds?: string[], messageCount?: number, error?: string, category?: string}>}
+	 */
 	async _sendChunkedMessage(messageChunks, chatId, options = {}) {
 		const messageIds = [];
 		const startedAt = Date.now();
 		let totalAttempts = 0;
+		const isChunked = messageChunks.length > 1;
+		const resumeFromChunk = Number.isInteger(options.startChunk) && options.startChunk > 0
+			? Math.min(options.startChunk, messageChunks.length - 1)
+			: 0;
 
-		for (let index = 0; index < messageChunks.length; index += 1) {
+		for (let index = resumeFromChunk; index < messageChunks.length; index += 1) {
 			const includePreview = index === 0;
-			const result = await sendWithRetry(
-				({ signal } = {}) => this._sendMessageChunk(messageChunks[index], {
-					chatId,
-					includePreview,
-					signal,
-				}),
-				3,
-				this.logger,
-				{ signal: options.signal },
-			);
+			const result = await this._sendChunkWithRetry(messageChunks[index], {
+				chatId,
+				includePreview,
+			}, options);
 			totalAttempts += result.attemptCount || 1;
 
 			if (!result.success) {
@@ -366,10 +966,15 @@ class WhatsAppService extends NotificationChannel {
 					messageCount: messageIds.length,
 					error: result.error,
 					category: result.category || 'PROVIDER_ERROR',
+					statusCode: result.statusCode,
 					attemptCount: totalAttempts,
 					durationMs: Date.now() - startedAt,
-					splitMessageCount: messageChunks.length,
-					failedPart: index + 1,
+					...(isChunked ? {
+						splitMessageCount: messageChunks.length,
+						failedPart: index + 1,
+						ambiguous: result.ambiguous === true,
+						resumedFromChunk: resumeFromChunk,
+					} : {}),
 				};
 			}
 
@@ -386,9 +991,29 @@ class WhatsAppService extends NotificationChannel {
 			messageCount: messageIds.length,
 			attemptCount: totalAttempts,
 			durationMs: Date.now() - startedAt,
-			splitMessageCount: messageChunks.length,
+			...(isChunked ? {
+				splitMessageCount: messageChunks.length,
+				resumedFromChunk: resumeFromChunk,
+			} : {}),
 		};
 	}
 }
 
 module.exports = WhatsAppService;
+
+/**
+ * Return a static snapshot of the WhatsApp template configuration for /api/status.
+ * Does not expose secrets (WHATSAPP_TEMPLATE_NAME is a non-secret template ID).
+ * Instance-level counters (sent, fallbacks) are not included here since status.js
+ * has no access to the live WhatsAppService instance.
+ * @returns {{enabled: boolean, templateName: string|null, languageCode: string|null}}
+ */
+module.exports.getWhatsAppTemplateStatus = function getWhatsAppTemplateStatus() {
+	const templateName = process.env.WHATSAPP_TEMPLATE_NAME || null;
+	const languageCode = templateName ? (process.env.WHATSAPP_TEMPLATE_LANGUAGE || 'en') : null;
+	return {
+		enabled: !!templateName,
+		templateName,
+		languageCode,
+	};
+};
