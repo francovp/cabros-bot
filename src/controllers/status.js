@@ -71,6 +71,7 @@ const { burstAggregator } = require('../services/alerts/burstAggregator');
 const { userPriceAlertService } = require('../services/alerts/UserPriceAlertService');
 const { alertModeration } = require('../services/alerts/alertModeration');
 const { getCoalescingStatus } = require('../services/grounding/grounding');
+const { workerHeartbeatMonitor } = require('../services/workerHeartbeat/WorkerHeartbeatMonitor');
 const { isFeatureEnabled: isMarketCalendarGatingEnabled, getDatasetMetadata: getMarketCalendarMetadata } = require('../services/marketCalendar/notificationGate');
 const aliasResolver = require('../services/symbols/aliasResolver');
 const { getPromptReadiness } = require('../services/prompts/promptReadiness');
@@ -630,6 +631,9 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 		signalOutcomeWorkerDependency.ready = false;
 		signalOutcomeWorkerDependency.status = 'disabled';
 	}
+	const signalOutcomeHeartbeat = workerHeartbeatMonitor.getSignalOutcomeSnapshot();
+	const scannerPresetSchedulerStatus = scannerPresetSchedulerService.getStatus();
+	const scannerPresetSchedulerHeartbeat = workerHeartbeatMonitor.getScannerPresetSchedulerSnapshot();
 
 	const webhookAuth = {
 		...dependencyStatus({
@@ -861,7 +865,10 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			},
 			alertSubscribers: alertSubscriberService.getStorageStatus(),
 			newsAnalysisStorage: newsAnalysisStorageService.getStorageStatus(),
-			scannerPresetScheduler: scannerPresetSchedulerService.getStatus(),
+			scannerPresetScheduler: {
+				...scannerPresetSchedulerStatus,
+				heartbeat: scannerPresetSchedulerHeartbeat,
+			},
 			chatEnrollments: chatEnrollmentsService.getStorageStatus(),
 			userPriceAlertWorker: userPriceAlertService.getStatus(),
 			newsMonitorScheduler: newsMonitorSchedulerService.getStatus(),
@@ -891,6 +898,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 				leaseMs: signalOutcomeWorkerStatus.leaseMs,
 				lastRunLeaseHeld: signalOutcomeWorkerStatus.lastRunLeaseHeld,
 				leaseHeldSkipCount: signalOutcomeWorkerStatus.leaseHeldSkipCount,
+				heartbeat: signalOutcomeHeartbeat,
 			},
 			notificationRedrive: notificationRedriveService.getStatus({ skipTelemetrySync }),
 			alertSignalRepeatSuppression: {
@@ -1048,6 +1056,16 @@ async function getApiStatus(req, res) {
 			} catch (_) {
 				// Fail-open for status endpoint
 			}
+		}
+		try {
+			await workerHeartbeatMonitor.getSignalOutcomeStatus();
+		} catch (_) {
+			// Fail-open for status endpoint
+		}
+		try {
+			await workerHeartbeatMonitor.getScannerPresetSchedulerStatus();
+		} catch (_) {
+			// Fail-open for status endpoint
 		}
 		return res.status(200).json(getStatus({ skipTelemetrySync: true }));
 	} catch (error) {

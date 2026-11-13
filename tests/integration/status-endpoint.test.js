@@ -38,6 +38,7 @@ const promptReadiness = require('../../src/services/prompts/promptReadiness');
 const symbolAnalysisStorageService = require('../../src/services/storage/SymbolAnalysisStorageService');
 const sentryService = require('../../src/services/monitoring/SentryService');
 const { getRoutes } = require('../../src/routes');
+const { workerHeartbeatMonitor } = require('../../src/services/workerHeartbeat/WorkerHeartbeatMonitor');
 const { assertWithinBudget } = require('../helpers/perfBudget');
 
 const defaultCircuitBreaker = Object.freeze({
@@ -173,6 +174,7 @@ describe('Status endpoints', () => {
 		delete process.env.TRADINGVIEW_MCP_URL;
 		process.env.ENABLE_FIRESTORE_ALERT_STORAGE = 'true';
 		process.env.FIREBASE_SERVICE_ACCOUNT_JSON = validFirestoreServiceAccountJson;
+		workerHeartbeatMonitor._resetForTesting();
 		process.env.ENABLE_SENTRY = 'true';
 		process.env.SENTRY_DSN = 'https://dsn.example';
 		delete process.env.BRAVE_SEARCH_API_KEY;
@@ -1718,6 +1720,53 @@ describe('Status endpoints', () => {
 				crypto: ['mcp', 'binance', 'gemini'],
 				equity: ['twelve-data'],
 			},
+			heartbeat: expect.objectContaining({
+				worker: 'signal-outcome',
+				role: 'worker',
+				enabled: true,
+				stalenessMultiplier: expect.any(Number),
+				thresholdMs: expect.any(Number),
+				checkedAt: expect.any(Number),
+			}),
+		});
+	});
+
+	it('marks signal-outcome worker heartbeat as missing when no heartbeat document exists', async () => {
+		process.env.ENABLE_SIGNAL_OUTCOME_TRACKING = 'true';
+		process.env.SIGNAL_OUTCOME_WORKER_ROLE = 'worker';
+		// Reset monitor cache so a stale cached snapshot does not mask the missing state.
+		workerHeartbeatMonitor._resetForTesting();
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.signalOutcomeWorker.heartbeat).toMatchObject({
+			worker: 'signal-outcome',
+			role: 'worker',
+			enabled: true,
+			hasHeartbeat: false,
+			health: 'missing',
+		});
+	});
+
+	it('reports scanner-preset scheduler heartbeat with role-aware health', async () => {
+		process.env.ENABLE_SCANNER_PRESET_SCHEDULER = 'true';
+		process.env.SCANNER_PRESET_SCHEDULER_WORKER_ROLE = 'worker';
+		workerHeartbeatMonitor._resetForTesting();
+
+		const response = await request(app)
+			.get('/api/status')
+			.set('x-api-key', 'status-key');
+
+		expect(response.status).toBe(200);
+		expect(response.body.dependencies.scannerPresetScheduler.heartbeat).toMatchObject({
+			worker: 'scanner-preset-scheduler',
+			role: 'worker',
+			enabled: true,
+			stalenessMultiplier: expect.any(Number),
+			checkedAt: expect.any(Number),
 		});
 	});
 
