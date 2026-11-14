@@ -252,6 +252,11 @@ function getRoutes(botOrGetter) {
 		return res.status(200).json(getEnvironmentBannerPayload());
 	});
 
+	const { getDemoAlert, getDemoOutcomes, getDemoScanner } = require('../controllers/demo');
+	router.get('/demo/alert', validateApiKey, getDemoAlert());
+	router.get('/demo/outcomes', validateApiKey, getDemoOutcomes());
+	router.get('/demo/scanner', validateApiKey, getDemoScanner());
+
 	return router;
 }
 

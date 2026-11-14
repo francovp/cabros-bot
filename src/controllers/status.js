@@ -39,6 +39,7 @@ function getChartRendererStatus() {
 }
 const { tradingViewMcpService } = require('../services/tradingview/TradingViewMcpService');
 const { binanceOrderService } = require('../services/trading/BinanceOrderService');
+const { getDemoStatus } = require('./demo');
 const { binanceOrderAuditService } = require('../services/trading/BinanceOrderAuditService');
 const autoTradeReservationService = require('../services/trading/AutoTradeReservationService');
 const { tradeLedgerService } = require('../services/trading/TradeLedgerService');
@@ -725,6 +726,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			alertHtfRender: runtimeConfig.ENABLE_ALERT_HTF_RENDER,
 			alertModeration: alertModeration.isEnabled(),
 			whatsappCommands: whatsAppCommandBridgeService.isEnabled(),
+			demoMode: isEnabled(process.env.ENABLE_DEMO_MODE),
 			globalAlertBudget: globalAlertBudget.isEnabled(),
 			portfolioAnalytics: portfolioAnalyticsService.isEnabled(),
 			marketCalendarGating: isMarketCalendarGatingEnabled(env),
@@ -930,6 +932,7 @@ function getStatus({ skipTelemetrySync = false, env = process.env } = {}) {
 			},
 			alertFeedback: alertFeedbackStorageService.getStatus(),
 			jobExecutionQueue: jobExecutionQueueStatus,
+			demo: getDemoStatus(),
 			binanceTrading: {
 				enabled: binanceTradingStatus.enabled,
 				configured: binanceTradingStatus.configured,
